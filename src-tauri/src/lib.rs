@@ -36,6 +36,10 @@
 mod chains;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
+/// Where each command runs when another computer drives this station: at the shack, here,
+/// refused here, starts TX or stops TX. Test-only until the remote client reads it.
+#[cfg(test)]
+mod command_classes;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
