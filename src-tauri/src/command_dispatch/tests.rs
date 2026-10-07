@@ -645,9 +645,12 @@ fn the_rate_cap_refuses_past_its_count_in_a_second() {
 #[test]
 fn a_whole_save_from_an_older_copy_is_refused() {
     let shack = shack();
+    // A list save, too, is checked on the whole store where no copy of it is kept, as here.
     let saves: Vec<&str> = STORES
         .iter()
-        .filter(|(_, store, access)| *store == Store::Settings && *access == Access::WholeSave)
+        .filter(|(_, store, access)| {
+            *store == Store::Settings && matches!(access, Access::WholeSave | Access::PartSave)
+        })
         .map(|(name, ..)| *name)
         .collect();
     assert_eq!(saves.len(), 7, "{saves:?}");
@@ -1360,5 +1363,242 @@ fn the_runner_is_tauris_own_dispatch_for_the_main_window() {
         answered.recv_timeout(Duration::from_secs(5)),
         Ok(false),
         "a request from another address is refused"
+    );
+}
+
+// --- A list save is checked on its own list (the operator's ruling of 2026-10-07) ----------------
+
+/// A shack on a real Engine with a roster of two radios, and the Engine.
+fn real_shack() -> (Dispatcher<ShackStores>, crate::SharedEngine) {
+    let mut engine = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+    engine.add_radio();
+    let engine: crate::SharedEngine = Arc::new(Mutex::new(engine));
+    let shack = Dispatcher::new(ShackStores {
+        engine: Arc::clone(&engine),
+    });
+    (shack, engine)
+}
+
+/// The shack's own screen does something, through the Engine's own verbs as its commands do.
+fn at_the_shack(engine: &crate::SharedEngine, act: impl FnOnce(&mut tempo_app::engine::Engine)) {
+    act(&mut crate::engine_lock(engine));
+}
+
+/// A radio's whole patch as the settings page sends it, with its serial port set to `port`.
+fn patch_with_port(
+    engine: &crate::SharedEngine,
+    port: &str,
+) -> (u32, tempo_app::settings::RadioProfilePatch) {
+    let radio = crate::engine_lock(engine).settings().radios[0].clone();
+    let mut patch: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(serde_json::to_value(&radio).unwrap()).unwrap();
+    patch.serial_port = port.to_string();
+    (radio.id, patch)
+}
+
+/// A computer reads the settings, as call `id`: the revision of its copy.
+fn read_copy(shack: &Dispatcher<ShackStores>, id: u64) -> Revision {
+    let Admission::Run { ticket, .. } =
+        shack.admit(&controller(), call(id, "get_settings", json!({})))
+    else {
+        panic!("admitted")
+    };
+    ticket
+        .finish(Ok(json!({})))
+        .revision
+        .expect("a read answers with its revision")
+}
+
+/// What becomes of a list or whole save as call `id`, made from the copy at `base`.
+fn saving(
+    shack: &Dispatcher<ShackStores>,
+    id: u64,
+    cmd: &str,
+    args: Value,
+    base: &Revision,
+) -> String {
+    kind(&shack.admit(&controller(), save(id, cmd, args, base.as_str())))
+}
+
+fn macros() -> Value {
+    json!({"profiles": [], "active": "Everyday"})
+}
+
+/// ★ "Check only that list": after a QSY at the shack, a list save made from the copy loaded before
+/// it is admitted (the RTTY macros, the blocked calls), since its own list is as the copy had it,
+/// while the whole form from the same copy is still refused. CONTROL: once the shack changes the
+/// blocked calls, the blocked-calls save from that copy is refused.
+#[test]
+fn a_list_save_is_checked_on_its_own_list() {
+    let (shack, engine) = real_shack();
+    let copy = read_copy(&shack, 1);
+    at_the_shack(&engine, |e| e.set_frequency(14.080, "20m", "RTTY"));
+    assert_ne!(
+        shack.inner.stores.revision(Store::Settings),
+        Some(copy.clone()),
+        "premise: the QSY changed the settings"
+    );
+    assert_eq!(saving(&shack, 2, "set_rtty_macros", macros(), &copy), "run");
+    assert_eq!(
+        saving(&shack, 3, "set_blocked_calls", json!({"calls": []}), &copy),
+        "run"
+    );
+    assert_eq!(
+        saving(&shack, 4, "set_settings", json!({}), &copy),
+        refused(Refusal::ChangedAtShack),
+        "the whole form is all one part"
+    );
+    at_the_shack(&engine, |e| e.set_blocked_calls(vec!["K1ABC".to_string()]));
+    assert_eq!(
+        saving(&shack, 5, "set_blocked_calls", json!({"calls": []}), &copy),
+        refused(Refusal::ChangedAtShack)
+    );
+}
+
+/// ★ A radio's profile save is checked on the fields its patch writes: the radio's bands changed
+/// at the shack leave it admitted, and its serial port changed there refuses it. The bands are a
+/// part of their own. CONTROL: a radio neither the copy nor the shack has is no part to differ.
+#[test]
+fn a_radio_save_is_checked_on_what_it_writes() {
+    let (shack, engine) = real_shack();
+    let (radio, patch) = patch_with_port(&engine, "COM3");
+    let copy = read_copy(&shack, 1);
+    let profile_save = json!({"id": radio, "patch": patch});
+    at_the_shack(&engine, |e| {
+        e.set_radio_bands(radio, vec!["20m".to_string()])
+    });
+    assert_eq!(
+        saving(
+            &shack,
+            2,
+            "update_radio_profile",
+            profile_save.clone(),
+            &copy
+        ),
+        "run"
+    );
+    assert_eq!(
+        saving(
+            &shack,
+            3,
+            "set_radio_bands",
+            json!({"id": radio, "bands": ["40m"]}),
+            &copy
+        ),
+        refused(Refusal::ChangedAtShack),
+        "the bands changed at the shack"
+    );
+    let (_, moved) = patch_with_port(&engine, "COM9");
+    at_the_shack(&engine, |e| e.update_radio_profile(radio, moved));
+    assert_eq!(
+        saving(&shack, 4, "update_radio_profile", profile_save, &copy),
+        refused(Refusal::ChangedAtShack)
+    );
+    let elsewhere = json!({"id": radio + 1000, "patch": {"serialPort": "COM3"}});
+    assert_eq!(
+        saving(&shack, 5, "update_radio_profile", elsewhere, &copy),
+        "run",
+        "no such radio in the copy nor now: the save changes nothing"
+    );
+}
+
+/// ★ The revision a list save answers with is the computer's copy with that list as saved, never
+/// the shack's whole settings: a second list save from it is checked on its own list again, so
+/// a list the shack changed meanwhile is refused, and one it did not is admitted. CONTROL: that
+/// revision is not the shack's own, which has a QSY the copy never had.
+#[test]
+fn after_a_list_save_the_copy_is_its_own_with_that_list_saved() {
+    let (shack, engine) = real_shack();
+    let radio = crate::engine_lock(&engine).settings().radios[0].id;
+    let copy = read_copy(&shack, 1);
+    at_the_shack(&engine, |e| e.set_frequency(7.074, "40m", "FT8"));
+    let calls = json!({"calls": ["N0CALL"]});
+    let Admission::Run { ticket, .. } = shack.admit(
+        &controller(),
+        save(2, "set_blocked_calls", calls, copy.as_str()),
+    ) else {
+        panic!("admitted")
+    };
+    // The save runs: the shack's list is what it wrote.
+    at_the_shack(&engine, |e| e.set_blocked_calls(vec!["N0CALL".to_string()]));
+    let mine = ticket.finish(Ok(json!({}))).revision.expect("a revision");
+    assert_ne!(
+        Some(&mine),
+        shack.inner.stores.revision(Store::Settings).as_ref()
+    );
+    at_the_shack(&engine, |e| {
+        e.set_radio_bands(radio, vec!["2m".to_string()])
+    });
+    assert_eq!(
+        saving(
+            &shack,
+            3,
+            "set_radio_bands",
+            json!({"id": radio, "bands": []}),
+            &mine
+        ),
+        refused(Refusal::ChangedAtShack)
+    );
+    assert_eq!(
+        saving(&shack, 4, "set_routing_rules", json!({"rules": []}), &mine),
+        "run"
+    );
+    assert_eq!(
+        saving(&shack, 5, "set_blocked_calls", json!({"calls": []}), &mine),
+        "run",
+        "its own list, as it saved it"
+    );
+}
+
+/// ★ Every list save's part is where the settings keep it: each path names a value in the real
+/// settings' JSON, and every field a radio's patch can write is a field of the radio's profile.
+/// CONTROL: a path to a field the settings do not have names nothing.
+#[test]
+fn each_list_saves_part_is_where_the_settings_keep_it() {
+    let mut engine = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+    engine.add_radio();
+    let settings = engine.settings().clone();
+    let json = serde_json::to_value(&settings).unwrap();
+    let radio = settings.radios[0].clone();
+    let profile = serde_json::to_value(&radio).unwrap();
+    let patch: tempo_app::settings::RadioProfilePatch =
+        serde_json::from_value(profile.clone()).expect("a profile carries every patch field");
+    let patch = serde_json::to_value(patch).unwrap();
+    assert!(
+        patch.as_object().unwrap().len() > 20,
+        "premise: the whole patch"
+    );
+    let mut cases = vec![
+        ("set_blocked_calls", json!({"calls": []})),
+        ("set_psk_macros", macros()),
+        ("set_radio_bands", json!({"id": radio.id, "bands": []})),
+        ("set_routing_rules", json!({"rules": []})),
+        ("set_rtty_macros", macros()),
+        (
+            "update_radio_profile",
+            json!({"id": radio.id, "patch": patch}),
+        ),
+    ];
+    let saves: Vec<&str> = STORES
+        .iter()
+        .filter(|(_, _, access)| *access == Access::PartSave)
+        .map(|(cmd, ..)| *cmd)
+        .collect();
+    assert_eq!(
+        saves,
+        cases.iter().map(|(cmd, _)| *cmd).collect::<Vec<_>>(),
+        "a list save with no case here"
+    );
+    for (cmd, args) in cases.drain(..) {
+        let paths = parts(cmd, &args).expect(cmd);
+        for path in paths {
+            assert!(at(&json, &path).is_some(), "{cmd}: {path:?} names nothing");
+        }
+    }
+    assert_eq!(at(&json, &[Step::Key("noSuchField".to_string())]), None);
+    assert_eq!(
+        parts("set_radio_bands", &json!({"bands": []})),
+        None,
+        "no radio named"
     );
 }

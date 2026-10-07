@@ -37,6 +37,13 @@
 //!   a store whole ([`STORES`]) names the revision of the copy it was made from, and is refused,
 //!   "Changed at the shack. Reload and save again.", unless that is the store's revision now. A read
 //!   of the store, and an accepted save, answer with the revision the other computer's copy now has.
+//! - **A list save is checked on its own list** (the operator's ruling of 2026-10-07, "Check only
+//!   that list"). The macros, the blocked calls, the routing rules, and a radio's bands or its
+//!   profile each replace one part of the settings ([`parts`]). The shack keeps the copies it gave
+//!   out, by revision, and a list save made from an older copy is admitted when its part is the same
+//!   in that copy as now: a QSY, or any other change elsewhere, refuses it no longer. The revision
+//!   it answers with is that copy's with the list as saved, so a second list save from the same
+//!   copy is checked on its own list too.
 //! - **The one mixed store**, `ui-state.json`, splits by key: the station's data ([`STATION_KEYS`])
 //!   lives at the shack, every other key on the computer the operator sits at.
 //! - **Events.** `pounce` is the one event the shack sends on, and the only one the other computer
@@ -293,25 +300,113 @@ pub(crate) enum Store {
 enum Access {
     /// It reads the store whole.
     Read,
-    /// It replaces the store, or a part of it, whole: the part it sends is what the other
-    /// computer's copy held, so a copy older than the shack's would put back what changed since.
+    /// It replaces the store whole: what it sends is what the other computer's copy held, so a
+    /// copy older than the shack's would put back what changed since.
     WholeSave,
+    /// It replaces one part of the store ([`parts`]) with what the other computer's copy held, and
+    /// is checked on that part alone.
+    PartSave,
 }
 
-/// The commands that read a store whole or replace it whole. The list saves each replace one part
-/// of the settings with a list the screen took from them.
+/// The commands that read a store whole or replace it, whole or a part. The list saves each replace
+/// one part of the settings with a list the screen took from them.
 const STORES: &[(&str, Store, Access)] = &[
     ("get_settings", Store::Settings, Access::Read),
-    ("set_blocked_calls", Store::Settings, Access::WholeSave),
-    ("set_psk_macros", Store::Settings, Access::WholeSave),
-    ("set_radio_bands", Store::Settings, Access::WholeSave),
-    ("set_routing_rules", Store::Settings, Access::WholeSave),
-    ("set_rtty_macros", Store::Settings, Access::WholeSave),
+    ("set_blocked_calls", Store::Settings, Access::PartSave),
+    ("set_psk_macros", Store::Settings, Access::PartSave),
+    ("set_radio_bands", Store::Settings, Access::PartSave),
+    ("set_routing_rules", Store::Settings, Access::PartSave),
+    ("set_rtty_macros", Store::Settings, Access::PartSave),
     ("set_settings", Store::Settings, Access::WholeSave),
     ("ui_state_load", Store::UiState, Access::Read),
     ("ui_state_save", Store::UiState, Access::WholeSave),
-    ("update_radio_profile", Store::Settings, Access::WholeSave),
+    ("update_radio_profile", Store::Settings, Access::PartSave),
 ];
+
+/// The settings copies kept, by revision, for list saves made from them.
+const SERVED: usize = 32;
+
+/// One step of a path into the settings' JSON.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Step {
+    /// A field, by its name in the JSON.
+    Key(String),
+    /// The radio in `radios` with this id.
+    Radio(u64),
+}
+
+/// Where in the settings' JSON the part a list save replaces is: one path or more, the last step of
+/// each a field. `None` for arguments that name no part (a radio save with no id), which is then
+/// checked on the whole settings. A radio's profile save is checked on the fields its patch writes,
+/// never the radio's tune memory, which the patch does not carry (`RadioProfilePatch`).
+fn parts(cmd: &str, args: &Value) -> Option<Vec<Vec<Step>>> {
+    let key = |name: &str| Step::Key(name.to_string());
+    let radio = || Some(Step::Radio(args.get("id")?.as_u64()?));
+    Some(match cmd {
+        "set_blocked_calls" => vec![vec![key("blockedCalls")]],
+        "set_routing_rules" => vec![vec![key("routingRules")]],
+        "set_rtty_macros" => vec![
+            vec![key("macros"), key("rttyProfiles")],
+            vec![key("macros"), key("activeRttyProfile")],
+        ],
+        "set_psk_macros" => vec![
+            vec![key("macros"), key("pskProfiles")],
+            vec![key("macros"), key("activePskProfile")],
+        ],
+        "set_radio_bands" => vec![vec![key("radios"), radio()?, key("bands")]],
+        "update_radio_profile" => {
+            let radio = radio()?;
+            args.get("patch")?
+                .as_object()?
+                .iter()
+                // A field the patch leaves unset (`null`) is not written.
+                .filter(|(_, value)| !value.is_null())
+                .map(|(field, _)| vec![key("radios"), radio.clone(), key(field)])
+                .collect()
+        }
+        _ => return None,
+    })
+}
+
+/// What `settings` holds at `path`, if anything.
+fn at<'a>(settings: &'a Value, path: &[Step]) -> Option<&'a Value> {
+    path.iter().try_fold(settings, |value, step| match step {
+        Step::Key(name) => value.get(name),
+        Step::Radio(id) => value
+            .as_array()?
+            .iter()
+            .find(|radio| radio.get("id").and_then(Value::as_u64) == Some(*id)),
+    })
+}
+
+/// `copy` with what `saved` holds at each of `paths` put in its place: the other computer's copy
+/// once its list save has run.
+fn with_parts(mut copy: Value, saved: &Value, paths: &[Vec<Step>]) -> Value {
+    for path in paths {
+        let Some((Step::Key(field), within)) = path.split_last() else {
+            continue;
+        };
+        let parent = within.iter().try_fold(&mut copy, |value, step| match step {
+            Step::Key(name) => value.get_mut(name),
+            Step::Radio(id) => value
+                .as_array_mut()?
+                .iter_mut()
+                .find(|radio| radio.get("id").and_then(Value::as_u64) == Some(*id)),
+        });
+        let Some(Value::Object(parent)) = parent else {
+            continue;
+        };
+        match at(saved, path) {
+            Some(value) => {
+                parent.insert(field.clone(), value.clone());
+            }
+            None => {
+                parent.remove(field);
+            }
+        }
+    }
+    copy
+}
 
 /// The ui-state pair, which splits by key at both ends.
 const UI_STATE: &[&str] = &["ui_state_load", "ui_state_save"];
@@ -349,6 +444,12 @@ pub(crate) trait Stores: Send + Sync + 'static {
     fn revision(&self, store: Store) -> Option<Revision>;
     /// The whole of `ui-state.json` now.
     fn ui_state(&self) -> BTreeMap<String, String>;
+    /// The store's contents as JSON with their revision, read together: what a list save's part is
+    /// checked in. `None` where only the revision is kept, and a list save is then checked on the
+    /// whole store, as a whole save is.
+    fn copy(&self, _store: Store) -> Option<(Revision, Value)> {
+        None
+    }
 }
 
 /// The shack's stores: its Engine's settings, and its `ui-state.json`.
@@ -359,15 +460,27 @@ pub(crate) struct ShackStores {
 impl Stores for ShackStores {
     fn revision(&self, store: Store) -> Option<Revision> {
         match store {
-            // The Engine's own copy, every field of it. A field a read does not show (the Cloudlog
-            // key waiting for the keychain) can only cost a needless refusal, never a missed change.
-            Store::Settings => Revision::of(crate::engine_lock(&self.engine).settings()),
+            Store::Settings => self.copy(store).map(|(revision, _)| revision),
             Store::UiState => Revision::of(&split_ui_state(self.ui_state()).0),
         }
     }
 
     fn ui_state(&self) -> BTreeMap<String, String> {
         crate::ui_state_load()
+    }
+
+    fn copy(&self, store: Store) -> Option<(Revision, Value)> {
+        match store {
+            // The Engine's own copy, every field of it. A field a read does not show (the Cloudlog
+            // key waiting for the keychain) can only cost a needless refusal, never a missed change.
+            Store::Settings => {
+                let copy =
+                    serde_json::to_value(crate::engine_lock(&self.engine).settings()).ok()?;
+                Some((Revision::of(&copy)?, copy))
+            }
+            // Saved whole, so checked on its revision alone.
+            Store::UiState => None,
+        }
     }
 }
 
@@ -551,6 +664,9 @@ impl<S: Stores> Clone for Dispatcher<S> {
 struct Inner<S> {
     stores: S,
     journals: Mutex<HashMap<CallerKey, Journal>>,
+    /// The settings copies given out, by revision, newest last ([`SERVED`] of them): what a list
+    /// save made from one of them is checked in. A copy no longer kept costs a needless refusal.
+    served: Mutex<VecDeque<(Revision, Value)>>,
 }
 
 impl<S: Stores> Dispatcher<S> {
@@ -559,6 +675,7 @@ impl<S: Stores> Dispatcher<S> {
             inner: Arc::new(Inner {
                 stores,
                 journals: Mutex::new(HashMap::new()),
+                served: Mutex::new(VecDeque::new()),
             }),
         }
     }
@@ -619,14 +736,41 @@ impl<S: Stores> Dispatcher<S> {
         };
         match access {
             // Taken before the read runs: a change landing during it can only cost a needless
-            // refusal later, never a stale save let through.
+            // refusal later, never a stale save let through. The copy is kept for a list save.
             Access::Read => {
-                ticket.after = After::Read(store, self.inner.stores.revision(store));
+                let revision = match self.inner.stores.copy(store) {
+                    Some((revision, copy)) => {
+                        self.keep(revision.clone(), copy);
+                        Some(revision)
+                    }
+                    None => self.inner.stores.revision(store),
+                };
+                ticket.after = After::Read(store, revision);
                 Admission::Run { args, ticket }
             }
-            Access::WholeSave => {
-                let now_is = self.inner.stores.revision(store);
-                if base.is_none() || now_is.is_none() || base != now_is {
+            Access::WholeSave | Access::PartSave => {
+                let now = self.inner.stores.copy(store);
+                let current = match &now {
+                    Some((revision, _)) => Some(revision.clone()),
+                    None => self.inner.stores.revision(store),
+                };
+                let fresh = base.is_some() && base == current;
+                let paths = match access {
+                    Access::PartSave => parts(&cmd, &args),
+                    _ => None,
+                };
+                // A list save, and the copy it was made from: the shack's own when the save names
+                // it, or else the kept copy it names, when its part is in that copy as it is now.
+                let made_from = match (paths, &now) {
+                    (Some(paths), Some((_, now))) if fresh => Some((now.clone(), paths)),
+                    (Some(paths), Some((_, now))) => base
+                        .as_ref()
+                        .and_then(|base| self.served(base))
+                        .filter(|copy| paths.iter().all(|path| at(copy, path) == at(now, path)))
+                        .map(|copy| (copy, paths)),
+                    _ => None,
+                };
+                if !fresh && made_from.is_none() {
                     ticket.close(Outcome::Refused(Refusal::ChangedAtShack));
                     return Admission::Refused(Refusal::ChangedAtShack);
                 }
@@ -640,10 +784,32 @@ impl<S: Stores> Dispatcher<S> {
                         }
                     },
                 };
-                ticket.after = After::Saved(store);
+                ticket.after = match made_from {
+                    Some((copy, paths)) => After::SavedPart(copy, paths),
+                    None => After::Saved(store),
+                };
                 Admission::Run { args, ticket }
             }
         }
+    }
+
+    /// Keeps a settings copy given out under `revision`, newest last.
+    fn keep(&self, revision: Revision, copy: Value) {
+        let mut served = lock(&self.inner.served);
+        served.retain(|(kept, _)| *kept != revision);
+        served.push_back((revision, copy));
+        while served.len() > SERVED {
+            served.pop_front();
+        }
+    }
+
+    /// The settings copy given out under `revision`, if it is still kept.
+    fn served(&self, revision: &Revision) -> Option<Value> {
+        lock(&self.inner.served)
+            .iter()
+            .rev()
+            .find(|(kept, _)| kept == revision)
+            .map(|(_, copy)| copy.clone())
     }
 
     /// What became of each id, for a run of Nexus asking after a reconnect, in the order asked.
@@ -833,6 +999,9 @@ enum After {
     Read(Store, Option<Revision>),
     /// An accepted whole save: answer with the store's revision after it.
     Saved(Store),
+    /// An accepted list save of the settings, made from this copy: answer with that copy's
+    /// revision once the parts at these paths are as saved.
+    SavedPart(Value, Vec<Vec<Step>>),
 }
 
 /// An admitted call's place in its journal and its slot under the caps. Dropping it without
@@ -854,7 +1023,22 @@ impl<S: Stores> Ticket<S> {
                 (Ok(station_answer(value)), revision.clone())
             }
             (After::Read(_, revision), Ok(value)) => (Ok(value), revision.clone()),
-            (After::Saved(store), Ok(value)) => (Ok(value), stores.revision(*store)),
+            (After::Saved(store), Ok(value)) => match stores.copy(*store) {
+                Some((revision, copy)) => {
+                    self.dispatcher.keep(revision.clone(), copy);
+                    (Ok(value), Some(revision))
+                }
+                None => (Ok(value), stores.revision(*store)),
+            },
+            (After::SavedPart(copy, paths), Ok(value)) => {
+                let revision = stores.copy(Store::Settings).and_then(|(_, saved)| {
+                    let mine = with_parts(copy.clone(), &saved, paths);
+                    let revision = Revision::of(&mine)?;
+                    self.dispatcher.keep(revision.clone(), mine);
+                    Some(revision)
+                });
+                (Ok(value), revision)
+            }
             (_, result) => (result, None),
         };
         self.close(match &result {
