@@ -1095,7 +1095,7 @@ async fn an_answer_signed_by_another_key_never_reaches_the_page() {
             .sign_answer(&offer, &answer, STATION, &kept.device_id, session)
             .unwrap();
         let welcome = json!({"type":"welcome","sessionId":session,"deviceId":kept.device_id,
-            "stationId":STATION});
+            "stationId":STATION,"app":super::super::wire::APP,"contract":super::super::wire::contract()});
         let candidate = json!({"type":"streamSignal","payload":{"kind":"candidate",
             "candidate":"candidate:1 1 udp 2130706431 192.168.1.20 42075 typ host","sdpMid":"0"}});
         let answered = json!({"type":"streamSignal","payload":{"kind":"answer","sdp":signed}});

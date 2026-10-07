@@ -38,13 +38,10 @@ mod chains;
 mod cluster_nodes;
 /// Where each command runs when another computer drives this station: at the shack, here,
 /// refused here, starts TX or stops TX.
-// Inert until the command link calls the dispatcher: outside the tests nothing reads either yet.
-#[cfg_attr(not(test), allow(dead_code))]
 mod command_classes;
 /// What another computer that drives this station runs itself and sends here, and what the shack
 /// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
 /// revision a whole save is checked against.
-#[cfg_attr(not(test), allow(dead_code))]
 mod command_dispatch;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
@@ -33323,6 +33320,21 @@ fn remote_service_for(
     let app = handle.clone();
     let main_window: remote_service::stream::WindowHandle =
         Arc::new(move || main_window_handle(&app));
+    // A paired computer's calls (the command lane of Remote over this network) run through this
+    // app's own command handler, as its main window's screen runs them; and each event that
+    // crosses to that computer is heard here as the screen hears it, and handed on.
+    let commands = remote_service::lan::commands::Commands::new(command_dispatch::tauri_runner(
+        handle.clone(),
+    ));
+    {
+        use tauri::Listener;
+        for &name in command_dispatch::FORWARDED_EVENTS {
+            let raised = commands.clone();
+            handle.listen_any(name, move |event| {
+                raised.raised(name, event.payload().to_string())
+            });
+        }
+    }
     remote_service::Service::new(
         d.engine.clone(),
         publisher,
@@ -33363,6 +33375,7 @@ fn remote_service_for(
                 tempo_core::applog::warn("remote", line)
             })),
         },
+        commands,
     )
 }
 

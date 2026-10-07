@@ -534,6 +534,7 @@ fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 48 && !name.chars().any(char::is_control)
 }
 impl Service {
+    #[allow(clippy::too_many_arguments)] // one for each part of the app the service serves from
     pub fn new(
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
@@ -545,6 +546,8 @@ impl Service {
         #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
         // What a streamed session needs from the application: the window its input goes to.
         stream: stream::Host,
+        // How a paired computer's calls run at the shack, and the events that cross to it.
+        commands: lan::commands::Commands,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -571,10 +574,12 @@ impl Service {
             feeds,
             Arc::new(lan::Book::new(Arc::new(SystemVault))),
             Arc::new(tempo_stream::lan::look),
+            commands,
         )
     }
     /// Remote over this network, beside the relay's road and sharing its one authority: its switch
-    /// kept at `path`, its key and paired computers in `book`.
+    /// kept at `path`, its key and paired computers in `book`, and a paired computer's calls run
+    /// with `commands`.
     fn with_lan(
         self,
         path: std::path::PathBuf,
@@ -582,9 +587,14 @@ impl Service {
         feeds: transport::Feeds,
         book: Arc<lan::Book>,
         resolve: lan::Resolve,
+        commands: lan::commands::Commands,
     ) -> Self {
         let authority = self.control.lock().ok().map(|c| c.operations.clone());
         if let Some(authority) = authority {
+            let dispatcher =
+                crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
+                    engine: engine.clone(),
+                });
             let lan = Arc::new(lan::Lan::start(
                 path,
                 lan::Deps {
@@ -595,6 +605,8 @@ impl Service {
                     resolve,
                     advertise: lan::advertise(),
                     firewall: lan::firewall_says(),
+                    dispatcher,
+                    commands,
                 },
             ));
             if let Ok(mut control) = self.control.lock() {

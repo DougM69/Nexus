@@ -431,8 +431,11 @@ pub async fn connected(
             .parse()
             .map_err(|_| "invalidResponse")?,
     );
+    // `true`: no Nagle. A small message, a Stop among them, could otherwise wait for the
+    // acknowledgement of the one before: one round trip of about 40 ms a session, measured through
+    // a relay room on 2026-10-07.
     let connect =
-        tokio_tungstenite::connect_async_with_config(request, Some(socket_config()), false);
+        tokio_tungstenite::connect_async_with_config(request, Some(socket_config()), true);
     let (socket, _) = tokio::select! {
         biased;
         _ = stop.changed() => return Ok(()),

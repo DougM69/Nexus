@@ -59,6 +59,7 @@ fn caller(run: u64, holds_lease: bool) -> Caller {
             device: "the operator's laptop".to_string(),
             run,
         },
+        profile: Profile::Desktop,
         holds_lease,
     }
 }
@@ -475,8 +476,9 @@ fn a_repeated_id_is_answered_and_never_run_twice() {
     );
     assert_eq!(
         kind(&shack.admit(&controller(), call(3, "log_current_qso", json!({})))),
-        refused(Refusal::Replayed),
-        "an id below the highest, never seen, is never run"
+        "run",
+        "an id below the highest, never seen, is new: calls admitted together, and one sent in \
+         pieces, come in any order"
     );
 }
 
@@ -1169,5 +1171,194 @@ fn a_stale_save_is_refused_against_the_shacks_real_settings() {
             save(3, "set_settings", json!({}), copy.as_str())
         )),
         refused(Refusal::ChangedAtShack)
+    );
+}
+
+// --- The command link's needs --------------------------------------------------------------------
+
+/// ★ A forgotten outcome closes its id and every id below it, and nothing else: once what became
+/// of id 5 is no longer kept, an unseen id 4 is refused `replayed` as 5 is, and an unseen id 6 is
+/// new. CONTROL: before that, 4 would have been new.
+#[test]
+fn an_unseen_id_at_or_below_a_forgotten_one_is_refused_and_above_it_runs() {
+    let shack = shack();
+    let now = Instant::now();
+    let Admission::Run { ticket, .. } =
+        shack.admit_at(&controller(), call(5, "log_current_qso", json!({})), now)
+    else {
+        panic!("admitted")
+    };
+    let _ = ticket.finish(Ok(json!(null)));
+    let journals = lock(&shack.inner.journals);
+    let journal = journals.get(&controller().key).expect("a journal");
+    assert!(matches!(journal.seen(4), Seen::New), "premise: 4 is new");
+    drop(journals);
+    let later = now + RESULT_AGE + Duration::from_secs(1);
+    for id in [5, 4] {
+        assert_eq!(
+            kind(&shack.admit_at(&controller(), call(id, "log_current_qso", json!({})), later)),
+            refused(Refusal::Replayed),
+            "{id}"
+        );
+    }
+    assert_eq!(
+        kind(&shack.admit_at(&controller(), call(6, "log_current_qso", json!({})), later)),
+        "run"
+    );
+}
+
+/// ★ The link's Stop admission: every command that stops a transmission, and the off half of every
+/// transmit switch, is taken as it came, and agrees with [`is_stop`]; anything else, the on half of
+/// the same switches included, is handed back untouched for the dispatcher.
+#[test]
+fn admit_stop_takes_every_stop_as_it_came_and_hands_back_everything_else() {
+    let stops: Vec<Call> = crate::command_classes::classes()
+        .filter(|(_, class)| *class == Class::StopsTx)
+        .map(|(cmd, _)| call(1, cmd, json!({})))
+        .chain(OFF_HALVES.iter().map(|(cmd, arg, off)| {
+            let value = match off {
+                Off::False => json!(false),
+                Off::OneOf(values) => json!(values[0]),
+            };
+            let mut args = serde_json::Map::new();
+            args.insert(arg.to_string(), value);
+            call(1, cmd, Value::Object(args))
+        }))
+        .collect();
+    assert!(
+        stops.len() > OFF_HALVES.len(),
+        "premise: some StopsTx commands"
+    );
+    for stop in stops {
+        let (cmd, args) = (stop.cmd.clone(), stop.args.clone());
+        assert!(is_stop(&cmd, &args), "{cmd} {args}");
+        let taken = admit_stop(stop).unwrap_or_else(|_| panic!("{cmd} {args} handed back"));
+        assert_eq!((taken.cmd, taken.args), (cmd, args));
+    }
+    for (cmd, args) in [
+        ("set_ptt", json!({"on": true})),
+        ("set_tx_enabled", json!({"enabled": true})),
+        ("set_mode", json!({"mode": "qso-run"})),
+        ("call_cq", json!({})),
+        ("get_settings", json!({})),
+        ("no_such_command", json!({})),
+    ] {
+        assert!(!is_stop(cmd, &args), "{cmd}");
+        let back = admit_stop(call(9, cmd, args.clone()))
+            .err()
+            .expect("handed back");
+        assert_eq!((back.id, back.cmd.as_str(), back.args), (9, cmd, args));
+    }
+}
+
+/// ★ Every refusal reads back from its code, as the other computer reads it. CONTROL: a code no
+/// refusal has reads as none.
+#[test]
+fn every_refusal_reads_back_from_its_code() {
+    for refusal in Refusal::ALL {
+        assert_eq!(Refusal::named(refusal.code()), Some(refusal));
+    }
+    assert_eq!(Refusal::named("noSuchRefusal"), None);
+}
+
+/// ★ The one profile this build serves is the desktop's (the mobile addendum's hook: a phone is a
+/// later build's). CONTROL: a phone's name is none of this build's.
+#[test]
+fn the_desktop_is_the_only_profile_served() {
+    assert_eq!(Profile::named("desktop"), Some(Profile::Desktop));
+    assert_eq!(
+        Profile::named(Profile::Desktop.name()),
+        Some(Profile::Desktop)
+    );
+    assert_eq!(Profile::named("mobile"), None);
+}
+
+// --- The shack's own handler, on Tauri's own dispatch --------------------------------------------
+
+#[tauri::command]
+fn runner_hello(name: String) -> String {
+    format!("hello {name}")
+}
+
+#[tauri::command]
+async fn runner_later(n: u32) -> Result<u32, String> {
+    Ok(n + 1)
+}
+
+#[tauri::command]
+fn runner_refuses() -> Result<(), String> {
+    Err("not from here".to_string())
+}
+
+/// What `runner` answers `cmd` with `args`.
+fn ask_runner(runner: &Runner, cmd: &str, args: Value) -> Result<Value, String> {
+    let (answer, answered) = std::sync::mpsc::channel();
+    runner(
+        cmd.to_string(),
+        args,
+        Box::new(move |result| {
+            let _ = answer.send(result);
+        }),
+    );
+    answered
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the handler answered")
+}
+
+/// ★ The shack's runner is Tauri's own dispatch for the main window: a sync command and an async
+/// one run with their arguments as the screen sends them, a command's own error comes back as its
+/// error, and the call carries the app's invoke key and the window's own address, so Tauri's
+/// permission check takes it as the screen's own. CONTROL: with no main window it runs nothing,
+/// and the same request from an address that is not the window's is refused by that check.
+#[test]
+fn the_runner_is_tauris_own_dispatch_for_the_main_window() {
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponse};
+    let app = tauri::test::mock_builder()
+        .invoke_handler(tauri::generate_handler![
+            runner_hello,
+            runner_later,
+            runner_refuses
+        ])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("a mock app");
+    let runner = tauri_runner(app.handle().clone());
+    assert_eq!(
+        ask_runner(&runner, "runner_hello", json!({"name": "KD9TAW"})),
+        Err("The station's main window is not open.".to_string())
+    );
+    let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("a main window");
+    assert_eq!(
+        ask_runner(&runner, "runner_hello", json!({"name": "KD9TAW"})),
+        Ok(json!("hello KD9TAW"))
+    );
+    assert_eq!(
+        ask_runner(&runner, "runner_later", json!({"n": 41})),
+        Ok(json!(42))
+    );
+    assert_eq!(
+        ask_runner(&runner, "runner_refuses", json!({})),
+        Err("not from here".to_string())
+    );
+    let (answer, answered) = std::sync::mpsc::channel();
+    window.as_ref().clone().on_message(
+        tauri::webview::InvokeRequest {
+            cmd: "runner_hello".to_string(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "https://example.invalid/".parse().expect("an address"),
+            body: InvokeBody::Json(json!({"name": "KD9TAW"})),
+            headers: Default::default(),
+            invoke_key: app.invoke_key().to_string(),
+        },
+        Box::new(move |_, _, response, _, _| {
+            let _ = answer.send(matches!(response, InvokeResponse::Ok(_)));
+        }),
+    );
+    assert_eq!(
+        answered.recv_timeout(Duration::from_secs(5)),
+        Ok(false),
+        "a request from another address is refused"
     );
 }

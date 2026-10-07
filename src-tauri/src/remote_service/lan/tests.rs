@@ -13,9 +13,11 @@ use std::sync::atomic::AtomicUsize;
 use tokio_tungstenite::tungstenite::Message;
 
 mod ceremony;
+mod commands;
 mod computer;
 mod drops;
 mod hostile;
+mod link;
 
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
@@ -206,6 +208,10 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
     let public_key = identity.public_key().to_string();
     let book = book_on(&store);
     let (paired, pairing) = book.verifier();
+    let dispatcher =
+        crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
+            engine: engine.clone(),
+        });
     let shared = Shared {
         authority,
         engine,
@@ -226,6 +232,9 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         gate: Arc::new(Gate::default()),
         handshake: channel::HANDSHAKE,
         silence: channel::SILENCE,
+        dispatcher,
+        commands: super::commands::Commands::default(),
+        build: (super::wire::APP, super::wire::contract()),
     };
     Shack {
         shared,
@@ -1345,6 +1354,8 @@ fn switch_with(
             resolve,
             advertise,
             firewall,
+            dispatcher: s.shared.dispatcher.clone(),
+            commands: s.shared.commands.clone(),
         },
     )
 }

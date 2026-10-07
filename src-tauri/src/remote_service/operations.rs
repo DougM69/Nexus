@@ -1030,6 +1030,32 @@ impl Authority {
         self.presence.permit(deadline).ok_or("authorityUnavailable")
     }
 
+    /// The authority's lock, held by a test as a slow request would hold it, until the guard goes.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> impl Sized + '_ {
+        self.core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Does the LAN connection `connection` hold the station's lease now, for `device`, which holds
+    /// station control? What the command lane asks before it admits any call but a Stop, and before
+    /// it pushes a feed or an event. Read under Core after a reconcile, so a lease that ran out or
+    /// went with a revoke reads as gone even when nothing else has asked since. Off the radio's
+    /// path: Core is never held across anything slow, and a Stop never asks.
+    pub fn lan_controls(&self, connection: u64, device: &str, now: Instant) -> bool {
+        let Ok(mut c) = self.core.lock() else {
+            return false;
+        };
+        if self.reconcile(&mut c, now).is_err() {
+            return false;
+        }
+        c.control_grants.contains(device)
+            && c.lease
+                .as_ref()
+                .is_some_and(|lease| lease.lan == Some(connection) && lease.device == device)
+    }
+
     /// The stream ended: its presence ends with it, and the engine halts on its next tick if it
     /// held any. Ending a session that never connected stops nothing, because it held none.
     pub fn end_stream_presence(&self) {

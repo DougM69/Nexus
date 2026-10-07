@@ -42,6 +42,7 @@ fn with_lan(
         },
         Arc::new(lan::Book::new(Arc::new(store.clone()))),
         Arc::new(|_| only(Err(tempo_stream::lan::NoNetwork::Choose))),
+        lan::commands::Commands::default(),
     )
 }
 

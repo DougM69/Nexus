@@ -93,6 +93,9 @@ serde = { version = "1", features = ["derive"] }
 # `raw_value`: a relay lane's proof covers an operation request exactly as the relay wrote it
 # (remote_service/lanes.rs). Already compiled in through tauri; named here so nothing leans on that.
 serde_json = { version = "1", features = ["raw_value"] }
+# The command link's feeds: one raw-deflate stream for each feed (remote_service/lan/wire.rs).
+# Already in Cargo.lock through js8 and reqwest, the same version: no new crate.
+flate2 = "1"
 # Remote's outbound task is isolated from CAT/audio. These packages are already
 # in the graph except the reviewed WebSocket adapter and its framing dependencies.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
@@ -188,6 +191,9 @@ windows-core = "0.61"
 # as a test reads it (SPEC-2 C19 Part D), which tempo-app's own tests read it through too. A
 # dev-dependency's feature is never on in a shipped build.
 tempo-app = { path = "../crates/tempo-app", features = ["test-util"] }
+# The same again: `test`, Tauri's mock runtime, so a test runs a command through Tauri's own
+# dispatch (`command_dispatch::tauri_runner`). It adds no crate, and a shipped build never has it.
+tauri = { version = "2", features = ["protocol-asset", "test"] }
 
 [features]
 # FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge. OFF by default: it links

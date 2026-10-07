@@ -485,6 +485,11 @@ pub(crate) fn class_of(name: &str) -> Option<Class> {
         .map(|at| CLASSES[at].1)
 }
 
+/// Every command and its class, in name order: what the build's contract is made from.
+pub(crate) fn classes() -> impl Iterator<Item = (&'static str, Class)> {
+    CLASSES.iter().map(|(name, class, _)| (*name, *class))
+}
+
 /// The command names `generate_handler!` registers, with any module path dropped
 /// (`log_by_id::edit_qso_by_id` is `edit_qso_by_id`). It reads `lib.rs` as text, as the other
 /// registration tests do, because the list exists nowhere else.

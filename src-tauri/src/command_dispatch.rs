@@ -25,10 +25,12 @@
 //! ## Everything else
 //!
 //! - **The lease.** Only the computer holding station control runs anything else.
-//! - **At most once.** Every call carries an id, rising, from one run of Nexus on the other
-//!   computer. The journal answers a repeated id with what became of it and never runs it twice,
-//!   and after a reconnect it says what became of each id ([`Dispatcher::outcomes`]). It keeps the
-//!   newest [`JOURNAL`] outcomes for [`RESULT_AGE`]; an id older than those is refused, never run.
+//! - **At most once.** Every call carries an id, unique within one run of Nexus on the other
+//!   computer. The ids rise as that computer makes them, but calls admitted together, and a call
+//!   sent in pieces, can come in another order. The journal answers a repeated id with what became
+//!   of it and never runs it twice, and after a reconnect it says what became of each id
+//!   ([`Dispatcher::outcomes`]). It keeps the newest [`JOURNAL`] outcomes for [`RESULT_AGE`]; an id
+//!   at or below one whose outcome it no longer keeps is refused, never run.
 //! - **Caps.** [`IN_FLIGHT`] calls at once from one computer, [`PER_COMMAND`] of them one command,
 //!   and [`PER_SECOND`] a second. The other computer holds its own calls back to stay under them.
 //! - **A stale whole save is refused** (the operator's ruling of 2026-10-05). A command that replaces
@@ -112,6 +114,26 @@ pub(crate) enum Refusal {
 }
 
 impl Refusal {
+    /// Every refusal, for reading one back from its code.
+    const ALL: [Refusal; 11] = [
+        Refusal::Unclassed,
+        Refusal::RunsHere,
+        Refusal::ShackOnly,
+        Refusal::TransmitNotYet,
+        Refusal::TypedPassword,
+        Refusal::NotController,
+        Refusal::Busy,
+        Refusal::RateLimited,
+        Refusal::Replayed,
+        Refusal::ChangedAtShack,
+        Refusal::BadArguments,
+    ];
+
+    /// The refusal a code names, as the other computer reads it back.
+    pub(crate) fn named(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|refusal| refusal.code() == code)
+    }
+
     /// The refusal's name on the wire.
     pub(crate) fn code(self) -> &'static str {
         match self {
@@ -221,6 +243,23 @@ const OFF_HALVES: &[(&str, &str, Off)] = &[
     ("set_tune", "on", Off::False),
     ("set_tx_enabled", "enabled", Off::False),
 ];
+
+/// A Stop, or the off half of a transmit switch, admitted at once with no lock taken: `Ok` with the
+/// call to run as it came, or `Err` with the call back when it is anything else. The command link
+/// asks this on its reading task before it hands a call anywhere, so a Stop never waits for another
+/// call, the Engine or a journal; [`Dispatcher::admit`] admits a Stop the same way.
+pub(crate) fn admit_stop(call: Call) -> Result<Call, Call> {
+    if runs_as_stop(class_of(&call.cmd), &call.cmd, &call.args) {
+        Ok(call)
+    } else {
+        Err(call)
+    }
+}
+
+/// Whether a call runs under Stop's rules, so the other computer sends it ahead of everything.
+pub(crate) fn is_stop(cmd: &str, args: &Value) -> bool {
+    runs_as_stop(class_of(cmd), cmd, args)
+}
 
 /// Whether a call runs under Stop's rules: its command stops a transmission, or it is the off half
 /// of a transmit switch.
@@ -414,10 +453,35 @@ pub(crate) struct CallerKey {
     pub(crate) run: u64,
 }
 
-/// Who is calling, and whether it holds the station's controller lease now.
+/// The kind of client a computer's Nexus is, as its hello names it. This build serves the desktop
+/// alone; a phone is a later build's, with what it may call written here first, so a new kind is a
+/// new rule in the dispatcher and leaves how a computer is admitted as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Profile {
+    /// The desktop app, the same build at both ends: every classed command, by its class.
+    Desktop,
+}
+
+impl Profile {
+    /// The profile a hello names, or `None` for one this build does not serve.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        (name == "desktop").then_some(Profile::Desktop)
+    }
+
+    /// Its name in the hello.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Profile::Desktop => "desktop",
+        }
+    }
+}
+
+/// Who is calling, the kind of client it is, and whether it holds the station's controller lease
+/// now.
 #[derive(Clone, Debug)]
 pub(crate) struct Caller {
     pub(crate) key: CallerKey,
+    pub(crate) profile: Profile,
     pub(crate) holds_lease: bool,
 }
 
@@ -529,7 +593,7 @@ impl<S: Stores> Dispatcher<S> {
             }
             let refusal = if journal.over_rate(now) {
                 Some(Refusal::RateLimited)
-            } else if let Some(refusal) = class_refusal(class, &cmd, &args, caller.holds_lease) {
+            } else if let Some(refusal) = class_refusal(caller, class, &cmd, &args) {
                 Some(refusal)
             } else if journal.over_caps(&cmd) {
                 Some(Refusal::Busy)
@@ -601,11 +665,14 @@ impl<S: Stores> Dispatcher<S> {
 
 /// The refusal a call's class gives it, its arguments and the lease. A Stop never gets here.
 fn class_refusal(
+    caller: &Caller,
     class: Option<Class>,
     cmd: &str,
     args: &Value,
-    holds_lease: bool,
 ) -> Option<Refusal> {
+    // Every profile this build serves is admitted by class alone. A second one stops this binding
+    // from compiling until its own rule is written here.
+    let Profile::Desktop = caller.profile;
     match class {
         None => Some(Refusal::Unclassed),
         Some(_) if !args.is_object() => Some(Refusal::BadArguments),
@@ -616,9 +683,8 @@ fn class_refusal(
         Some(Class::StartsTx) => Some(Refusal::TransmitNotYet),
         // Admitted before the journal, under Stop's rules.
         Some(Class::StopsTx) => None,
-        Some(Class::RunsAtShack) => {
-            argument_refusal(cmd, args).or_else(|| (!holds_lease).then_some(Refusal::NotController))
-        }
+        Some(Class::RunsAtShack) => argument_refusal(cmd, args)
+            .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController)),
     }
 }
 
@@ -647,7 +713,7 @@ fn journal_for<'a>(
 
 /// A call's id, against the ids its run of Nexus used before.
 enum Seen {
-    /// Higher than every one before.
+    /// Not used before.
     New,
     /// Used before, and this is what became of it.
     Again(Outcome),
@@ -655,10 +721,12 @@ enum Seen {
     Forgotten,
 }
 
-/// One run of Nexus's calls: the highest id it has used, the outcomes kept, and what is running.
+/// One run of Nexus's calls: the outcomes kept, what is running, and the highest id whose outcome
+/// is no longer kept.
 struct Journal {
-    /// An id at or below this one is a repeat.
-    highest: Option<u64>,
+    /// An id at or below this one with no outcome kept may have run once already: it is refused.
+    /// Above it, an id with no outcome kept and not running is new, in whatever order it comes.
+    forgotten: Option<u64>,
     /// Outcomes by id, with when each was recorded.
     outcomes: HashMap<u64, (Instant, Outcome)>,
     /// The ids in `outcomes`, oldest record first.
@@ -673,7 +741,7 @@ struct Journal {
 impl Journal {
     fn new(now: Instant) -> Self {
         Self {
-            highest: None,
+            forgotten: None,
             outcomes: HashMap::new(),
             order: VecDeque::new(),
             running: HashMap::new(),
@@ -682,16 +750,15 @@ impl Journal {
         }
     }
 
-    /// `id` against the ids used before; a new one becomes the highest.
-    fn seen(&mut self, id: u64) -> Seen {
-        if self.highest.is_some_and(|highest| id <= highest) {
-            return match self.outcome(id) {
-                Outcome::Unknown => Seen::Forgotten,
-                known => Seen::Again(known),
-            };
+    /// `id` against the ids used before.
+    fn seen(&self, id: u64) -> Seen {
+        match self.outcome(id) {
+            Outcome::Unknown if self.forgotten.is_some_and(|forgotten| id <= forgotten) => {
+                Seen::Forgotten
+            }
+            Outcome::Unknown => Seen::New,
+            known => Seen::Again(known),
         }
-        self.highest = Some(id);
-        Seen::New
     }
 
     fn outcome(&self, id: u64) -> Outcome {
@@ -731,9 +798,16 @@ impl Journal {
         }
         while self.order.len() > JOURNAL {
             if let Some(old) = self.order.pop_front() {
-                self.outcomes.remove(&old);
+                self.forget(old);
             }
         }
+    }
+
+    /// No longer keeps what became of `id`, and from now on refuses every id up to it that it has
+    /// no outcome for.
+    fn forget(&mut self, id: u64) {
+        self.outcomes.remove(&id);
+        self.forgotten = Some(self.forgotten.map_or(id, |forgotten| forgotten.max(id)));
     }
 
     /// Forgets the outcomes older than [`RESULT_AGE`].
@@ -747,7 +821,7 @@ impl Journal {
                 break;
             }
             self.order.pop_front();
-            self.outcomes.remove(&id);
+            self.forget(id);
         }
     }
 }
@@ -805,6 +879,95 @@ impl<S: Stores> Drop for Ticket<S> {
             self.close(Outcome::Lost);
         }
     }
+}
+
+// --- How the shack runs a call -------------------------------------------------------------------
+
+/// Runs an admitted call at the shack, through the app's own command handler, and hands what it
+/// answered to the [`Answer`], from whichever thread the command finished on. [`tauri_runner`] is
+/// the shack's; a test hands in its own.
+pub(crate) type Runner = Arc<dyn Fn(String, Value, Answer) + Send + Sync>;
+
+/// Where a command's answer goes: its value, or its own error.
+pub(crate) type Answer = Box<dyn FnOnce(Result<Value, String>) + Send>;
+
+/// The shack's own command handler, reached through Tauri's public entry for a webview's IPC
+/// (`Webview::on_message`) as the main window's screen reaches it: the same handler table, state
+/// and permissions, and the invoke key the app was built with, which never leaves this process. A
+/// sync command runs on the calling thread and an async one on Tauri's runtime, as from the screen.
+/// The main window's address is read once, since reading it is a round trip to the main thread: it
+/// is the local origin the permission check sees for the screen's own calls.
+pub(crate) fn tauri_runner<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Runner {
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody};
+    use tauri::Manager;
+    let address: std::sync::OnceLock<tauri::Url> = std::sync::OnceLock::new();
+    Arc::new(move |cmd: String, args: Value, answer: Answer| {
+        let Some(window) = app.get_webview_window("main") else {
+            return answer(Err("The station's main window is not open.".to_string()));
+        };
+        let webview: tauri::Webview<R> = window.as_ref().clone();
+        let url = match address.get() {
+            Some(url) => url.clone(),
+            None => match webview.url() {
+                Ok(url) => address.get_or_init(|| url).clone(),
+                Err(_) => {
+                    return answer(Err("The station's main window has no address.".to_string()))
+                }
+            },
+        };
+        let request = tauri::webview::InvokeRequest {
+            cmd,
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url,
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: app.invoke_key().to_string(),
+        };
+        webview.on_message(
+            request,
+            Box::new(move |_webview, _cmd, response, _callback, _error| {
+                answer(match response {
+                    InvokeResponse::Ok(InvokeResponseBody::Json(json)) => {
+                        serde_json::from_str(&json).map_err(|_| "unreadableAnswer".to_string())
+                    }
+                    // No command this app registers answers in raw bytes.
+                    InvokeResponse::Ok(InvokeResponseBody::Raw(_)) => {
+                        Err("unreadableAnswer".to_string())
+                    }
+                    InvokeResponse::Err(error) => Err(match error.0 {
+                        Value::String(text) => text,
+                        other => other.to_string(),
+                    }),
+                })
+            }),
+        );
+    })
+}
+
+/// This dispatcher's tables as text, for the build's contract (`remote_service::lan::wire`): every
+/// command's class, the off halves, the stores and how each command meets them, the station's
+/// ui-state keys, the events that cross and the profiles served.
+pub(crate) fn contract_text() -> String {
+    use std::fmt::Write;
+    let mut text = String::new();
+    for (cmd, class) in crate::command_classes::classes() {
+        let _ = writeln!(text, "class {cmd} {class:?}");
+    }
+    for (cmd, arg, off) in OFF_HALVES {
+        let _ = writeln!(text, "off {cmd} {arg} {off:?}");
+    }
+    for (cmd, store, access) in STORES {
+        let _ = writeln!(text, "store {cmd} {store:?} {access:?}");
+    }
+    for key in STATION_KEYS {
+        let _ = writeln!(text, "station {key}");
+    }
+    for event in FORWARDED_EVENTS {
+        let _ = writeln!(text, "event {event}");
+    }
+    let _ = writeln!(text, "profile {}", Profile::Desktop.name());
+    text
 }
 
 /// A command's error, cut to [`ERROR_BYTES`] on a character boundary.

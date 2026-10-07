@@ -72,6 +72,9 @@
 //! Remote on or off, revoking a browser), and gives the grant back at once. The page acquires
 //! again after `notController` or `leaseExpired`, when nobody else holds control; nothing at the
 //! station changes for it.
+/// The command link, protocol 2: inert until client mode drives it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod link;
 mod origin;
 pub(crate) mod pairing;
 pub(crate) mod road;

@@ -59,22 +59,26 @@
 //! | Failed handshakes | 5 in a minute, and the address is ignored for 5 minutes |
 //! | The handshake (TLS, upgrade, hello) | 5 s |
 //! | A connected computer's silence | 15 s, then it is gone (it pings every 5 s) |
-//! | A message, either way | 8 KiB |
+//! | A frame, either way | 8 KiB; a bigger call or answer goes in pieces |
 //! | Stream signals | 48 in 10 s, a close always allowed |
+//! | Calls from one computer | 8 running, 4 of them one command, 200 a second; 16 waiting at once |
 //!
 //! The listener has a thread and a runtime of its own, and reaches the radio only through the
 //! operations authority, which never blocks, so a flood can slow it and never the radio loop.
 //!
-//! ## The wire, after TLS: WebSocket text frames of JSON
+//! ## The wire, after TLS: WebSocket frames of JSON, but for the feeds and pieces (`wire`)
 //!
-//! From the computer: `{"type":"hello","protocol":1,"stream":1,"operation":4}` first, then
+//! From the computer: `{"type":"hello","protocol":2,"stream":1,"operation":4}` first, then
 //! `operationRequest` (`state`, `acquire`, `heartbeat`, `release` and `stopTransmit`, as on the
 //! relay's lane, at operation version 4), and `streamSignal` exactly as a page hands it to the
-//! relay.
-//! From the shack: `welcome` (the session, device and LAN station ids it stamped) or `refused`
-//! (`updateStation` / `updateComputer`), `operationResponse`, `streamSignal` and `streamState` as
-//! the relay hands them to a page, and `status` (`rigKeyed`, for the page's ▲ TX and its
-//! microphone's mute).
+//! relay. A computer that drives the shack, never a window, opens the command lane with `open`
+//! (`profile`, `app`, `contract`, `run`) and then sends `call` (`id`, `cmd`, `args`, and `base` for
+//! a whole save), `outcomes` (`ids`) and `watch` (`feeds`).
+//! From the shack: `welcome` (the session, device and LAN station ids it stamped, and its `app` and
+//! `contract`) or `refused` (`updateStation` / `updateComputer`, and for an `open` of another build
+//! of the same version `otherBuild`), `operationResponse`, `streamSignal` and `streamState` as the
+//! relay hands them to a page, and `status` (`rigKeyed`, for the page's ▲ TX and its microphone's
+//! mute); on the command lane `opened`, `result`, `outcomes`, `watching`, `event` and the feeds.
 //!
 //! ## Off by default, and off by itself
 //!
@@ -109,11 +113,14 @@
 //! speaks this wire with this module's own functions and versions.
 mod book;
 mod channel;
+pub(crate) mod commands;
 mod gate;
+pub(crate) mod outbox;
 pub(crate) mod pairing;
 #[cfg(test)]
 pub(super) mod tests;
 pub mod tls;
+pub(crate) mod wire;
 
 pub use book::Book;
 pub(crate) use book::{device_id, valid_name, NAME_CHARS};
@@ -313,6 +320,11 @@ pub(super) struct Deps {
     pub resolve: Resolve,
     pub advertise: Advertise,
     pub firewall: FirewallSays,
+    /// The command lane's dispatcher, one for the station: a computer that reconnects, even to a
+    /// listener started again, finds the journal of its calls.
+    pub dispatcher: crate::command_dispatch::Dispatcher<crate::command_dispatch::ShackStores>,
+    /// How the lane runs a call, and the events it may forward.
+    pub commands: commands::Commands,
 }
 
 struct State {
@@ -718,6 +730,9 @@ impl Listener {
             gate: Arc::new(gate::Gate::default()),
             handshake: channel::HANDSHAKE,
             silence: channel::SILENCE,
+            dispatcher: deps.dispatcher.clone(),
+            commands: deps.commands.clone(),
+            build: (wire::APP, wire::contract()),
         };
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(accept(socket, shared, stopped));
@@ -771,6 +786,9 @@ async fn accept(
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accepted = socket.accept() => match accepted {
                 Ok((stream, peer)) => {
+                    // Every frame goes as it is written. With Nagle a small one, a Stop among them,
+                    // can wait for the acknowledgement of the one before: about 40 ms, measured.
+                    let _ = stream.set_nodelay(true);
                     connections.spawn(channel::connection(stream, peer, shared.clone(), stop.clone()));
                 }
                 // Out of descriptors, say: wait a moment rather than spin.

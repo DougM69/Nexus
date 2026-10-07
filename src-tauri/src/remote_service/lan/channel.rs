@@ -19,7 +19,13 @@
 //!    connection's own id, so the lease it takes is bound to this connection. Stop is answered
 //!    on the reading task itself, before anything else it could queue behind, as on the relay's
 //!    socket. Stream signals go to the same session thread the relay's do, on this road's socket.
-//! 5. **The close.** However the connection ends (the computer closes it, it falls silent for
+//! 5. **The command lane** (protocol 2, `super::commands`): opened by the computer straight after
+//!    the welcome, naming its kind of client, its build and its run of Nexus (`super::wire`). Any
+//!    other build is refused, saying which side to update, and the connection closes before a call
+//!    runs. A window's session never opens it. On it go the calls, routed by class, and their
+//!    answers, the pushed feeds and the events. One writer writes everything on the connection
+//!    (`super::outbox`), a Stop and its answer ahead of all else.
+//! 6. **The close.** However the connection ends (the computer closes it, it falls silent for
 //!    [`SILENCE`], LAN is switched off, the computer is removed at the shack), its stream ends with
 //!    it, the stream's presence at once, and the lease it holds goes with the connection, so the
 //!    radio loop halts anything it was keeping on the air on its next tick.
@@ -37,13 +43,18 @@ use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
 
 use super::super::operations::{Authority, LanConnection, Request};
 use super::super::stream::{Station, StreamLane};
-use super::super::transport::{identifier, random_secret, Feeds, Outbound};
+use super::super::transport::{identifier, random_secret, Feeds};
+use super::commands::{Commands, Lane, Opening, OUTCOMES, WATCH};
 use super::gate::Gate;
+use super::outbox::Outbox;
 use super::pairing::{self, Asked, Desk, Outcome};
 use super::tls::{pin, Identity};
+use super::wire::{self, End, Whole};
+use crate::command_dispatch::{Call, Dispatcher, Profile, Revision, ShackStores};
 
-/// The LAN protocol this shack speaks: the hello and everything after it on this channel.
-pub const PROTOCOL_VERSION: u8 = 1;
+/// The LAN protocol this shack speaks: the hello and everything after it on this channel. 2 adds
+/// the command lane (step 5 in the module header, `super::wire`).
+pub const PROTOCOL_VERSION: u8 = 2;
 /// The operation version every request on this channel is answered at: the one that carries the
 /// stop token, as on the stream's own `control` channel.
 pub const OPERATION_VERSION: u8 = 4;
@@ -80,6 +91,14 @@ pub(super) struct Shared {
     /// [`HANDSHAKE`] and [`SILENCE`]; a test's own, shorter, so it need not wait them out.
     pub handshake: Duration,
     pub silence: Duration,
+    /// The command lane's dispatcher: one for the station, so a computer that reconnects finds the
+    /// journal of its calls.
+    pub dispatcher: Dispatcher<ShackStores>,
+    /// How the lane runs a call, and the events it may forward.
+    pub commands: Commands,
+    /// This shack's build, as its welcome says it and an `open` must name it: the app's version and
+    /// the contract (`super::wire`). A test's own stands for another build.
+    pub build: (&'static str, &'static str),
 }
 
 /// What a remote PC sends. Parsed whole and exactly: anything else closes the connection.
@@ -108,6 +127,31 @@ enum FromComputer {
         #[serde(rename = "leaseId")]
         lease_id: String,
         payload: BrowserSignal,
+    },
+    /// Opens the command lane, once, after the welcome: the kind of client, its build, and the run
+    /// of Nexus on it whose calls are journaled together.
+    Open {
+        profile: String,
+        app: String,
+        contract: String,
+        run: u64,
+    },
+    /// One call on the open lane: its id, rising within the run, the command and its arguments,
+    /// and for a whole save the revision of the copy it was made from.
+    Call {
+        id: u64,
+        cmd: String,
+        args: Value,
+        #[serde(default)]
+        base: Option<String>,
+    },
+    /// What became of these calls: asked after a reconnect.
+    Outcomes {
+        ids: Vec<u64>,
+    },
+    /// The feeds to push from now on, in place of the ones before.
+    Watch {
+        feeds: Vec<String>,
     },
 }
 
@@ -391,14 +435,17 @@ async fn session<S>(
         signer: Some(shared.identity.signer.clone()),
     };
     let (sink, mut reader) = socket.split();
-    let (outbound, mut writer) = Outbound::spawn(sink);
+    let (outbox, mut writer) = Outbox::spawn(sink);
+    let (app, contract) = shared.build;
     let welcome = json!({"type":"welcome","sessionId":session,"deviceId":device,
-        "stationId":shared.identity.station_id})
+        "stationId":shared.identity.station_id,"app":app,"contract":contract})
     .to_string();
-    if outbound.send(Message::Text(welcome.into())).is_err() {
+    if outbox.text(welcome).is_err() {
         return;
     }
-    let mut lane = StreamLane::default();
+    // The command lane, once this computer opens it with the same build.
+    let mut lane: Option<Lane> = None;
+    let mut stream_lane = StreamLane::default();
     let (to_peer, mut from_stream) = tokio::sync::mpsc::unbounded_channel::<String>();
     let mut operation: Option<tokio::task::JoinHandle<String>> = None;
     let mut signals: VecDeque<Instant> = VecDeque::new();
@@ -421,12 +468,19 @@ async fn session<S>(
             done = async { operation.as_mut().expect("guarded operation task").await }, if operation.is_some() => {
                 operation = None;
                 let Ok(text) = done else { break StreamReason::ConnectionFailed };
-                if outbound.send(Message::Text(text.into())).is_err() { break StreamReason::ConnectionFailed }
+                if outbox.text(text).is_err() { break StreamReason::ConnectionFailed }
             }
             message = reader.next() => {
                 heard = tokio::time::Instant::now();
-                let text = match message {
-                    Some(Ok(Message::Text(text))) => text,
+                // A message of text, or a call put back together from its pieces on the open lane.
+                let (text, pieced) = match message {
+                    Some(Ok(Message::Text(text))) => (text.to_string(), false),
+                    Some(Ok(Message::Binary(frame))) => match lane.as_mut().map(|lane| lane.piece(&frame)) {
+                        Some(Ok(Some(text))) => (text, true),
+                        Some(Ok(None)) => continue,
+                        // Bytes before the lane is open, or a piece no computer sends.
+                        None | Some(Err(())) => break StreamReason::StreamClosed,
+                    },
                     // tungstenite answers a ping itself; either kind of control frame only says
                     // the computer is still there.
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
@@ -435,18 +489,65 @@ async fn session<S>(
                 let Ok(message) = serde_json::from_str::<FromComputer>(&text) else {
                     break StreamReason::StreamClosed;
                 };
+                // Only a call comes in pieces.
+                if pieced && !matches!(message, FromComputer::Call { .. }) {
+                    break StreamReason::StreamClosed;
+                }
                 match message {
                     FromComputer::Hello { .. } | FromComputer::Pair { .. } => break StreamReason::StreamClosed,
+                    FromComputer::Open { profile, app, contract, run } => {
+                        if lane.is_some() || run == 0 { break StreamReason::StreamClosed }
+                        let profile = Profile::named(&profile);
+                        let refused = match profile {
+                            // A kind of client this build does not serve; a later shack may.
+                            None => Some("updateStation"),
+                            Some(_) => wire::refusal(End::Shack, shared.build, (&app, &contract)),
+                        };
+                        let (Some(profile), None) = (profile, refused) else {
+                            // Said, and the connection closed, before any call of its own runs.
+                            let reason = refused.unwrap_or("updateStation");
+                            let _ = outbox.text(json!({"type":"refused","reason":reason}).to_string());
+                            outbox.written(DRAIN_FOR).await;
+                            break StreamReason::StreamClosed;
+                        };
+                        lane = Some(Lane::open(Opening {
+                            dispatcher: shared.dispatcher.clone(),
+                            commands: shared.commands.clone(),
+                            authority: shared.authority.clone(),
+                            connection: connection.id,
+                            device: device.clone(),
+                            run,
+                            profile,
+                            outbox: outbox.clone(),
+                        }));
+                        if outbox.text(json!({"type":"opened"}).to_string()).is_err() { break StreamReason::ConnectionFailed }
+                    }
+                    FromComputer::Call { id, cmd, args, base } => {
+                        let Some(lane) = lane.as_mut() else { break StreamReason::StreamClosed };
+                        lane.call(Call { id, cmd, args, base: base.map(Revision::new) });
+                    }
+                    FromComputer::Outcomes { ids } => {
+                        let Some(lane) = lane.as_ref().filter(|_| ids.len() <= OUTCOMES) else { break StreamReason::StreamClosed };
+                        lane.outcomes(ids);
+                    }
+                    FromComputer::Watch { feeds } => {
+                        let Some(lane) = lane.as_mut().filter(|_| feeds.len() <= WATCH) else { break StreamReason::StreamClosed };
+                        lane.watch(feeds);
+                    }
                     FromComputer::OperationRequest { request } => {
                         let id = request.id().to_string();
                         if !identifier(&id) { break StreamReason::StreamClosed }
-                        let answer = if matches!(*request, Request::StopTransmit { .. }) {
+                        if matches!(*request, Request::StopTransmit { .. }) {
                             // The second road for Stop: admitted here, on the reading task, never
-                            // behind an operation or a send in flight. Its path never waits on the
+                            // behind an operation or a send in flight, and its answer ahead of
+                            // everything waiting to be written. Its path never waits on the
                             // engine's lock or the authority's (`transmit_stop`).
-                            Some(response(&id, shared.authority.handle_version((connection.id, OPERATION_VERSION),
-                                &session, &device, &request, &shared.engine, Instant::now())))
-                        } else if !matches!(*request, Request::State { .. } | Request::Acquire { .. }
+                            let answer = response(&id, shared.authority.handle_version((connection.id, OPERATION_VERSION),
+                                &session, &device, &request, &shared.engine, Instant::now()));
+                            if outbox.urgent(Whole::Text(answer)).is_err() { break StreamReason::ConnectionFailed }
+                            continue;
+                        }
+                        let answer = if !matches!(*request, Request::State { .. } | Request::Acquire { .. }
                             | Request::Heartbeat { .. } | Request::Release { .. }) {
                             // The relay's other lanes (logging, station controls, exports) stay on
                             // the relay: on this road everything else goes through the picture.
@@ -464,7 +565,7 @@ async fn session<S>(
                             None
                         };
                         if let Some(answer) = answer {
-                            if outbound.send(Message::Text(answer.into())).is_err() { break StreamReason::ConnectionFailed }
+                            if outbox.text(answer).is_err() { break StreamReason::ConnectionFailed }
                         }
                     }
                     FromComputer::StreamSignal { lease_id, payload } => {
@@ -478,22 +579,22 @@ async fn session<S>(
                             if signals.len() >= SIGNALS {
                                 let refused = RoomToPage::StreamState { streaming: false, reason: Some(StreamReason::TryLater) };
                                 let Ok(text) = serde_json::to_string(&refused) else { break StreamReason::StreamClosed };
-                                if outbound.send(Message::Text(text.into())).is_err() { break StreamReason::ConnectionFailed }
+                                if outbox.text(text).is_err() { break StreamReason::ConnectionFailed }
                                 continue;
                             }
                             signals.push_back(now);
                         }
-                        let said_now = lane.signal_lan(&station, &to_peer, (session.clone(), device.clone(), lease_id),
+                        let said_now = stream_lane.signal_lan(&station, &to_peer, (session.clone(), device.clone(), lease_id),
                             payload, shared.network, shared.port);
                         if let Some(text) = said_now.as_deref().and_then(to_page) {
-                            if outbound.send(Message::Text(text.into())).is_err() { break StreamReason::ConnectionFailed }
+                            if outbox.text(text).is_err() { break StreamReason::ConnectionFailed }
                         }
                     }
                 }
             }
             text = from_stream.recv() => {
                 if let Some(text) = text.as_deref().and_then(to_page) {
-                    if outbound.send(Message::Text(text.into())).is_err() { break StreamReason::ConnectionFailed }
+                    if outbox.text(text).is_err() { break StreamReason::ConnectionFailed }
                 }
             }
             _ = status_tick.tick() => {
@@ -501,16 +602,17 @@ async fn session<S>(
                     let keyed = frame.station.radio.rig_keyed;
                     if said != Some(keyed) {
                         said = Some(keyed);
-                        if outbound.send(Message::Text(status(keyed).into())).is_err() { break StreamReason::ConnectionFailed }
+                        if outbox.text(status(keyed)).is_err() { break StreamReason::ConnectionFailed }
                     }
                 }
             }
             _ = tokio::time::sleep_until(heard + shared.silence) => break StreamReason::ConnectionFailed,
         }
     };
-    // The stream ends with the connection, its presence at once, here; the lease and anything it
-    // keeps on the air end as `connection` is dropped.
-    lane.end(&station, &session, ended);
+    // The stream ends with the connection, its presence at once, here; the lane's feeds and events
+    // with it; and the lease and anything it keeps on the air as `connection` is dropped.
+    stream_lane.end(&station, &session, ended);
+    drop(stream_lane);
     drop(lane);
     drop(connection);
     writer.abort();

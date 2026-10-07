@@ -14,7 +14,7 @@ use tempo_stream::protocol::BrowserSignal;
 
 /// The shack's `connection` behind a port on this box's loopback address: each connection
 /// accepted there is handed to it as if it came from `PEER`, on the station's own subnet.
-async fn behind_a_port(s: &Shack, stop: watch::Receiver<bool>) -> SocketAddrV4 {
+pub(super) async fn behind_a_port(s: &Shack, stop: watch::Receiver<bool>) -> SocketAddrV4 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
         unreachable!()
@@ -909,7 +909,7 @@ async fn an_answer_that_does_not_hold_never_reaches_the_page() {
             .sign_answer(&offer, &answer, STATION, &kept.device_id, session)
             .unwrap();
         let welcome = json!({"type":"welcome","sessionId":session,"deviceId":kept.device_id,
-            "stationId":STATION});
+            "stationId":STATION,"app":super::super::wire::APP,"contract":super::super::wire::contract()});
         let candidate = json!({"type":"streamSignal","payload":{"kind":"candidate",
             "candidate":"candidate:1 1 udp 2130706431 192.168.1.20 42075 typ host","sdpMid":"0"}});
         let answered = json!({"type":"streamSignal","payload":{"kind":"answer","sdp":signed}});

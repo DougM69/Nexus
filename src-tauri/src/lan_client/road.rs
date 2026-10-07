@@ -114,6 +114,9 @@ pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<
         Ok(Err(error)) => return Err(Failed::NotConnected(error.kind())),
         Err(_) => return Err(Failed::NotConnected(std::io::ErrorKind::TimedOut)),
     };
+    // Every frame goes as it is written, the station's way too: a Stop is a small frame, and
+    // Nagle can hold one for the acknowledgement of the frame before (about 40 ms, measured).
+    let _ = tcp.set_nodelay(true);
     let name = rustls::pki_types::ServerName::try_from("nexus-station")
         .map_err(|_| Failed::Unreachable)?;
     let tls = tokio_rustls::TlsConnector::from(config)
@@ -171,6 +174,9 @@ enum First {
         device_id: String,
         #[serde(rename = "stationId")]
         station_id: String,
+        /// The station's build (`remote_service::lan::wire`): what the command link must match.
+        app: String,
+        contract: String,
     },
     Refused {
         reason: String,
@@ -186,7 +192,7 @@ pub(crate) const UNREACHED: [&str; 4] = ["unreachable", "otherNetwork", "refused
 /// answering says least, and of its words a refusal says most: the station's computer answered.
 pub(crate) fn weight(reason: &str) -> u8 {
     match reason {
-        "updateStation" | "updateComputer" => 7,
+        "updateStation" | "updateComputer" | "otherBuild" => 7,
         "notPaired" => 6,
         "keyChanged" => 5,
         "notStation" => 4,
@@ -206,12 +212,19 @@ pub(crate) struct Ids {
     pub session: String,
 }
 
-/// The hello at `at`: the socket and the session the station stamped, or why not.
+/// What a station welcomed this computer with: the session it stamped, and its build.
+pub(crate) struct Welcomed {
+    pub session: String,
+    pub app: String,
+    pub contract: String,
+}
+
+/// The hello at `at`: the socket and what the station welcomed it with, or why not.
 async fn hello(
     at: SocketAddrV4,
     config: Arc<ClientConfig>,
     record: &PairedStation,
-) -> Result<(Socket, String), &'static str> {
+) -> Result<(Socket, Welcomed), &'static str> {
     let Opened { mut socket, .. } = open(at, config).await.map_err(|failed| match failed {
         Failed::Unreachable => "unreachable",
         // Nothing answered at the address: why, in the words the card uses for it.
@@ -240,11 +253,18 @@ async fn hello(
             session_id,
             device_id,
             station_id,
+            app,
+            contract,
         }) if device_id == record.device_id
             && station_id == record.station_id
             && protocol::identifier(&session_id) =>
         {
-            Ok((socket, session_id))
+            let welcomed = Welcomed {
+                session: session_id,
+                app,
+                contract,
+            };
+            Ok((socket, welcomed))
         }
         Ok(First::Refused { reason }) if reason == "updateStation" => Err("updateStation"),
         Ok(First::Refused { reason }) if reason == "updateComputer" => Err("updateComputer"),
@@ -286,6 +306,28 @@ pub(crate) async fn connect_at(
     order: &[SocketAddrV4],
 ) -> Result<(Road, SocketAddrV4), &'static str> {
     let key = ComputerKey::restore(&record.pkcs8).ok_or("storeUnavailable")?;
+    let reached = reach(record, order).await?;
+    let road = Road::new(reached.socket, key, record.station_key.clone(), reached.ids);
+    Ok((road, reached.at))
+}
+
+/// A station welcomed this computer: the socket, the ids it was welcomed under, the station's
+/// build, and the address that answered.
+pub(crate) struct Reached {
+    pub socket: Socket,
+    pub ids: Ids,
+    pub app: String,
+    pub contract: String,
+    pub at: SocketAddrV4,
+}
+
+/// The hello to the station `record` names at each of `order` in turn, the window's road and the
+/// command link alike: the first that welcomes this computer, or the most telling reason none did
+/// (`unreachable`, with nowhere to try).
+pub(crate) async fn reach(
+    record: &PairedStation,
+    order: &[SocketAddrV4],
+) -> Result<Reached, &'static str> {
     let config =
         tls::client::config(&record.pkcs8, &record.station_key).ok_or("storeUnavailable")?;
     let mut told = "unreachable";
@@ -294,13 +336,19 @@ pub(crate) async fn connect_at(
             .await
             .unwrap_or(Err("unreachable"));
         match reached {
-            Ok((socket, session)) => {
+            Ok((socket, welcomed)) => {
                 let ids = Ids {
                     station: record.station_id.clone(),
                     device: record.device_id.clone(),
-                    session,
+                    session: welcomed.session,
                 };
-                return Ok((Road::new(socket, key, record.station_key.clone(), ids), at));
+                return Ok(Reached {
+                    socket,
+                    ids,
+                    app: welcomed.app,
+                    contract: welcomed.contract,
+                    at,
+                });
             }
             Err(reason) if weight(reason) > weight(told) => told = reason,
             Err(_) => {}
