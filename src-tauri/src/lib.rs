@@ -37,9 +37,15 @@ mod chains;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
 /// Where each command runs when another computer drives this station: at the shack, here,
-/// refused here, starts TX or stops TX. Test-only until the remote client reads it.
-#[cfg(test)]
+/// refused here, starts TX or stops TX.
+// Inert until the command link calls the dispatcher: outside the tests nothing reads either yet.
+#[cfg_attr(not(test), allow(dead_code))]
 mod command_classes;
+/// What another computer that drives this station runs itself and sends here, and what the shack
+/// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
+/// revision a whole save is checked against.
+#[cfg_attr(not(test), allow(dead_code))]
+mod command_dispatch;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;

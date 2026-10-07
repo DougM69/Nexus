@@ -5,16 +5,16 @@
 //! `generate_handler!` gets exactly one class here. "Here" is the computer the operator sits at;
 //! "the shack" is the one with the radio.
 //!
-//! Nothing reads the table at run time yet, so it changes no command. The remote client, when it
-//! is built, routes by it and refuses an unclassed command at both ends; the rules each class
-//! carries are its dispatcher's to enforce, not this file's. What the table holds down now is the
-//! list itself: the tests below fail on a registered command with no row and on a row for a
-//! command that is not registered, so a new command cannot arrive unclassed and a removed one
-//! cannot leave a row behind.
+//! The dispatcher (`command_dispatch`) reads it at both ends: the other computer routes each
+//! command by its class, the shack admits each one by its class again, and a command with no row is
+//! refused at both. The rules each class carries are the dispatcher's to enforce, not this file's.
+//! What the table holds down is the list itself: the tests below fail on a registered command with
+//! no row and on a row for a command that is not registered, so a new command cannot arrive
+//! unclassed and a removed one cannot leave a row behind.
 
 /// Where a command runs when another computer drives the shack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Class {
+pub(crate) enum Class {
     /// At the shack: the radio and the cockpits, decodes, the logbook, settings, uploads, and
     /// imports and exports carried as text.
     RunsAtShack,
@@ -41,6 +41,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("amp_command",                    RunsAtShack, "Band up, band down or operate on the shack's amplifier; keys nothing."),
     ("answer_remote_autostart_offer",  RefusedHere, "Part of turning on hosted Remote; remote-access admin stays at the shack."),
     ("app_version",                    RunsHere,    "This computer's version; both ends run the same build."),
+    ("apply_park_states",              RunsAtShack, "Gives ticked contacts in the shack's logbook their park's state."),
     ("aprs_arm",                       StartsTx,    "Arming by hand allows the unattended APRS auto-ack."),
     ("aprs_auto_arm",                  RunsAtShack, "Receive-only arm on entering the APRS view; never allows the auto-ack."),
     ("aprs_send_beacon",               StartsTx,    "Queues an APRS beacon to transmit."),
@@ -248,6 +249,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("open_remote_stations_window",    RunsHere,    "This computer's window onto hosted Remote."),
     ("os_notify",                      RunsHere,    "A notification on this computer."),
     ("override_next_tx",               StartsTx,    "Chooses the next FT transmission and arms it."),
+    ("park_state_review",              RunsAtShack, "Reads the shack's logbook for contacts whose park names another state."),
     ("parks_count",                    RunsAtShack, "The shack's park list."),
     ("pick_band",                      RunsAtShack, "Changes the shack's band; keys nothing."),
     ("pick_data_folder",               RefusedHere, "Opens a folder dialog on the shack's own screen."),
@@ -297,6 +299,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("remote_station_action",          RefusedHere, "Remote-access admin stays at the shack."),
     ("remove_radio",                   RunsAtShack, "Removes a radio from the shack's roster."),
     ("rename_radio",                   RunsAtShack, "Renames a radio in the shack's roster."),
+    ("repair_clock",                   RefusedHere, "Repairs the shack's clock through an administrator prompt that waits on the shack's own screen."),
     ("repeater_search",                RunsAtShack, "A repeater search from the shack."),
     ("repeater_tune",                  RunsAtShack, "Tunes the shack's rig to a repeater; keys nothing."),
     ("resend_chat",                    StartsTx,    "Queues a chat message to transmit again."),
@@ -332,6 +335,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("send_cw",                        StartsTx,    "Queues CW to transmit."),
     ("send_message",                   StartsTx,    "Queues a chat message to transmit."),
     ("set_activation",                 RunsAtShack, "Begins an activation at the shack."),
+    ("set_activation_state",           RunsAtShack, "Picks the state a park on a state line is activated from."),
     ("set_active_radio",               RunsAtShack, "Switches the shack's active radio; any carrier is dropped first."),
     ("set_af_gain",                    RunsAtShack, "The shack's rig control."),
     ("set_agc",                        RunsAtShack, "The shack's rig control."),
@@ -382,7 +386,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("set_repeaterbook_token",         RefusedHere, "Credentials are set at the shack only."),
     ("set_rf_gain",                    RunsAtShack, "The shack's rig control."),
     ("set_rf_power",                   RunsAtShack, "The shack's rig control."),
-    ("set_rig_func",                   RefusedHere, "Includes the rig's VOX, which keys on any audio that reaches the radio."),
+    ("set_rig_func",                   RunsAtShack, "The rig's NB, NR, notch, COMP, monitor and VOX switches, VOX on included."),
     ("set_rit",                        RunsAtShack, "The shack's rig control."),
     ("set_routing_rules",              RunsAtShack, "The shack's band routing."),
     ("set_rtty_macros",                RunsAtShack, "The shack's RTTY macros; sends nothing."),
@@ -459,7 +463,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("update_route",                   RunsHere,    "How this computer's Nexus takes an update."),
     ("upload_lotw_report",             RunsAtShack, "Signs and uploads at the shack, with its own TQSL."),
     ("use_single_radio",               RefusedHere, "The shack's launch picker, a choice made as the station starts."),
-    ("winlink_connect",                RefusedHere, "Can carry a typed Winlink password across the link."),
+    ("winlink_connect",                RunsAtShack, "A CMS session from the shack with its stored password; a typed one is refused."),
     ("winlink_disconnect",             RunsAtShack, "Ends the shack's Winlink session; not a transmit stop."),
     ("winlink_mailbox_list",           RunsAtShack, "The shack's Winlink mailbox."),
     ("winlink_mailbox_location",       RunsAtShack, "The path of the shack's Winlink mailbox, for display."),
@@ -471,10 +475,21 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("wrl_push_qso",                   RunsAtShack, "An upload from the shack, with its stored credential."),
 ];
 
+/// The class of the command `name`, as the app invokes it (`edit_qso_by_id`, never its module
+/// path), or `None` when it has no row, which both ends refuse. The rows are in name order, which
+/// a test below holds, so this is a binary search.
+pub(crate) fn class_of(name: &str) -> Option<Class> {
+    CLASSES
+        .binary_search_by(|(row, ..)| (*row).cmp(name))
+        .ok()
+        .map(|at| CLASSES[at].1)
+}
+
 /// The command names `generate_handler!` registers, with any module path dropped
 /// (`log_by_id::edit_qso_by_id` is `edit_qso_by_id`). It reads `lib.rs` as text, as the other
 /// registration tests do, because the list exists nowhere else.
-fn registered() -> Vec<&'static str> {
+#[cfg(test)]
+pub(crate) fn registered() -> Vec<&'static str> {
     include_str!("lib.rs")
         .split_once("tauri::generate_handler![")
         .and_then(|(_, rest)| rest.split_once("])"))
@@ -533,5 +548,22 @@ fn one_row_per_command_in_name_order() {
             pair[1].0,
             pair[0].0
         );
+    }
+}
+
+/// The lookup the dispatcher routes and admits by finds every row with its own class, and nothing
+/// that has no row.
+#[test]
+fn class_of_finds_every_row_and_nothing_else() {
+    for (name, class, _) in CLASSES {
+        assert_eq!(class_of(name), Some(*class), "{name}");
+    }
+    for name in [
+        "",
+        "throwaway_unclassed_probe",
+        "zzz",
+        "log_by_id::edit_qso_by_id",
+    ] {
+        assert_eq!(class_of(name), None, "{name:?}");
     }
 }
