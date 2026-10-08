@@ -30,6 +30,9 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+/// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
+/// and a computer driving the station hear.
+mod alert;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -33094,9 +33097,11 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         handle.state::<LogTallies>().needs.clone(),
         &handle,
     ));
-    // Pounce detector. Emits `pounce` to every window when a rare one appears — the
+    // Pounce detector. Raises an alert to every window when a rare one appears — the
     // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
-    // panel windows get it too without tracking listener lifetimes.
+    // panel windows get it too without tracking listener lifetimes. The alert is made
+    // here, with its id (`alert::raised`), so a computer driving this station hears the
+    // same alert, under the same id, on its link.
     {
         use tauri::Emitter;
         // Take-once: the dependency bundle is cloned for a possible retry, so the
@@ -33115,7 +33120,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
                 .name("nexus-pounce".into())
                 .spawn(move || {
                     pouncer::run(eng, needs, ota, rx, recent, move |p| {
-                        let _ = emit_handle.emit("pounce", &p);
+                        let _ = emit_handle.emit(alert::EVENT, &alert::raised("pounce", &p));
                     });
                 })
                 .expect("spawn pounce detector");

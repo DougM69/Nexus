@@ -56,8 +56,8 @@
 //!   copy is checked on its own list too.
 //! - **The one mixed store**, `ui-state.json`, splits by key: the station's data ([`STATION_KEYS`])
 //!   lives at the shack, every other key on the computer the operator sits at.
-//! - **Events.** `pounce` is the one event the shack sends on, and the only one the other computer
-//!   takes ([`FORWARDED_EVENTS`]).
+//! - **Events.** An alert (`crate::alert`, Pounce's today) is the one event the shack sends on, and
+//!   the only one the other computer takes ([`FORWARDED_EVENTS`]).
 //!
 //! The operator's other rulings of 2026-10-07 live in the table and in [`argument_refusal`]: a whole
 //! Settings save from afar saves every field, as the stream window's does; a settings restore, a
@@ -644,10 +644,11 @@ fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
 
 // --- Events --------------------------------------------------------------------------------------
 
-/// The shack's events that another computer is sent, and the only ones it takes in: `pounce`, the
-/// alert the pounce detector raises, the app's one push (everything else polls). Any other event
+/// The shack's events that another computer is sent, and the only ones it takes in: the alert
+/// (`crate::alert`), made once where it is raised (the pounce detector's today), the app's one push
+/// (everything else polls), so both computers' screens hear it under the same id. Any other event
 /// stays where it was raised.
-pub(crate) const FORWARDED_EVENTS: &[&str] = &["pounce"];
+pub(crate) const FORWARDED_EVENTS: &[&str] = &[crate::alert::EVENT];
 
 /// Whether the event `name` crosses between the two computers.
 pub(crate) fn forwards(name: &str) -> bool {

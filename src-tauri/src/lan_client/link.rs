@@ -708,7 +708,7 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            said(json!({"type":"event","name":"pounce","id":1,"at":5,"data":{}})),
+            said(json!({"type":"event","name":"alert","id":1,"at":5,"data":{}})),
             Ok(())
         );
         assert_eq!(said(json!({"type":"status","rigKeyed":null})), Ok(()));
@@ -717,6 +717,7 @@ mod tests {
             json!({"type":"result","id":5,"refused":"noSuchRefusal"}),
             json!({"type":"result","id":6,"outcome":"maybe"}),
             json!({"type":"event","name":"update-progress","id":1,"at":5,"data":{}}),
+            json!({"type":"event","name":"pounce","id":1,"at":5,"data":{}}),
             json!({"type":"somethingElse"}),
         ] {
             assert_eq!(said(wrong.clone()), Err(()), "{wrong}");

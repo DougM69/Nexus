@@ -602,7 +602,7 @@ mod tests {
                 "{cmd}"
             );
         }
-        assert!(text.contains("event pounce\n") && text.contains("profile desktop\n"));
+        assert!(text.contains("event alert\n") && text.contains("profile desktop\n"));
         assert!(super::super::stop_road::contract_text().starts_with("stop road 1 "));
         #[cfg(feature = "radio")]
         assert!(super::super::audio_road::contract_text()

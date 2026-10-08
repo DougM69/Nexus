@@ -807,7 +807,7 @@ async fn only_a_forwarded_event_reaches_only_the_computer_in_control() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     s.shared
         .commands
-        .raised("pounce", json!({"call":"VP8PJ"}).to_string());
+        .raised("alert", json!({"call":"VP8PJ"}).to_string());
     assert!(
         matches!(
             got_within(&mut socket, &mut pieces, Duration::from_millis(700)).await,
@@ -824,9 +824,12 @@ async fn only_a_forwarded_event_reaches_only_the_computer_in_control() {
     s.shared
         .commands
         .raised("update-progress", json!({"done":1}).to_string());
+    // An alert as the shack makes it: its id goes to the computer unchanged, so both screens name
+    // the same alert.
+    let raised = crate::alert::raised("pounce", json!({"call":"VP8PJ"}));
     s.shared
         .commands
-        .raised("pounce", json!({"call":"VP8PJ"}).to_string());
+        .raised("alert", serde_json::to_string(&raised).unwrap());
     let event = loop {
         match got(&mut socket, &mut pieces).await {
             Got::Text(value) if value["type"] == "event" => break value,
@@ -834,8 +837,14 @@ async fn only_a_forwarded_event_reaches_only_the_computer_in_control() {
             other => panic!("no event: {other:?}"),
         }
     };
-    assert_eq!(event["name"], "pounce", "{event}");
-    assert_eq!(event["data"], json!({"call":"VP8PJ"}), "{event}");
+    assert_eq!(event["name"], "alert", "{event}");
+    assert_eq!(
+        event["data"],
+        serde_json::to_value(&raised).unwrap(),
+        "{event}"
+    );
+    assert_eq!(event["data"]["id"], raised.id, "the same id: {event}");
+    assert_eq!(event["data"]["alert"], json!({"call":"VP8PJ"}), "{event}");
     assert!(
         event["id"].as_u64().is_some() && event["at"].as_u64().is_some(),
         "{event}"

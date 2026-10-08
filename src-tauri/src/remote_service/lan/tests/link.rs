@@ -264,14 +264,14 @@ async fn the_link_hears_the_stations_events() {
     let mut events = link.events();
     s.shared
         .commands
-        .raised("pounce", json!({"call":"VP8PJ"}).to_string());
+        .raised("alert", json!({"call":"VP8PJ"}).to_string());
     let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
         .expect("an event in time")
         .expect("an event");
     assert_eq!(
         (event.name.as_str(), event.data),
-        ("pounce", json!({"call":"VP8PJ"}))
+        ("alert", json!({"call":"VP8PJ"}))
     );
 }
 

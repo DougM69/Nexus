@@ -1183,23 +1183,24 @@ fn the_other_computer_splits_and_joins_by_the_same_keys() {
 // --- Events --------------------------------------------------------------------------------------
 
 #[test]
-fn pounce_is_the_one_event_that_crosses_and_both_screens_use_its_name() {
-    assert!(forwards("pounce"));
+fn the_alert_is_the_one_event_that_crosses_and_both_screens_use_its_name() {
+    assert!(forwards("alert"));
     for other in [
         "",
-        "pounce2",
-        "Pounce",
+        "pounce",
+        "alert2",
+        "Alert",
         "tauri://close-requested",
         "remote-log-notice",
     ] {
         assert!(!forwards(other), "{other:?}");
     }
     assert!(
-        include_str!("../lib.rs").contains(r#".emit("pounce", "#),
-        "the shack emits it by this name"
+        include_str!("../lib.rs").contains(r#".emit(alert::EVENT, &alert::raised("pounce", "#),
+        "the shack raises Pounce's as an alert made where it is raised"
     );
     assert!(
-        include_str!("../../../ui/src/usePounce.ts").contains("listen<PounceAlert>('pounce'"),
+        include_str!("../../../ui/src/usePounce.ts").contains("listen<RaisedAlert>('alert'"),
         "the screen listens for it by this name"
     );
 }
