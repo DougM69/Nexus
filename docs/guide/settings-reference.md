@@ -2356,9 +2356,12 @@ on this computer and never sent to the station.
 **Audio** picks where you hear the station's receiver (**The station's audio**) and the
 microphone you talk into when you transmit from here (**Your microphone**). Each starts on the
 system's default. A device you picked that is not plugged in stays shown as not connected; Nexus
-never swaps another in its place, and says why when a device will not open. **Microphone level**
-shows your microphone while this section is open, and **Play a test tone** plays a short note in
-the output you picked. Nexus opens the microphone only while something needs it.
+never swaps another in its place, and says why when a device will not open. **Volume** sets how
+loud the station is heard here, from 0 to 42 dB over the level the station keeps for its decoders
+(24 dB to begin with, as on the Remote page); it changes nothing at the station. **Microphone
+level** shows your microphone while this section is open, and **Play a test tone** plays a short
+note in the output you picked. The voice keyer's **Record** records from this microphone too, and
+the message goes to the station's slot. Nexus opens the microphone only while something needs it.
 
 ### Accessibility & eyes-free
 

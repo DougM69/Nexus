@@ -44,7 +44,9 @@ use super::stop_road::OnAir;
 use crate::remote_service::lan::audio_road::{Down, Up};
 use crate::remote_service::lan::datagram::{End, Keys, Opener, Sealer, Tag, AUDIO_MAX, EXPORTED};
 
-pub(crate) use tempo_audio::headset::{sound, Rings, Sound};
+pub(crate) use tempo_audio::headset::{
+    sound, Rings, Sound, GAIN_DB as VOLUME_DB, VOLUME_DB_MAX, VOLUME_DB_MIN,
+};
 /// This computer's headset for client mode (`tempo_audio::headset::Headset`).
 pub(crate) type ThisHeadset = tempo_audio::headset::Headset;
 

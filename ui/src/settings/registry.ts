@@ -666,7 +666,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'This computer',
     tab: 'appearance',
     keywords: ['audio', 'headset', 'headphones', 'speakers', 'microphone', 'mic', 'sound card',
-      'meter', 'test tone', 'operate from this computer', 'remote audio', 'client mode'],
+      'meter', 'test tone', 'volume', 'loudness', 'operate from this computer', 'remote audio',
+      'client mode'],
   },
   {
     id: 'accessibility',

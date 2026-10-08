@@ -612,6 +612,8 @@ export const JA: PartialCatalog = {
   "settings.thisComputer.audio.output.label": "局の音声",
   "settings.thisComputer.audio.output.hint": "局の受信機の音を聞く出力先です。",
   "settings.thisComputer.audio.output.trouble": "オーディオ出力を開けませんでした: {{why}}",
+  "settings.thisComputer.audio.volume.label": "音量",
+  "settings.thisComputer.audio.volume.hint": "ここで局の音をどれだけ大きく聞くか。局がデコーダーのために保つレベルからの上げ幅で、局では何も変わりません。",
   "settings.thisComputer.audio.input.label": "マイク",
   "settings.thisComputer.audio.input.hint": "ここから送信するときに話すマイクです。Nexus は必要なときだけ開きます。",
   "settings.thisComputer.audio.input.trouble": "マイクを開けませんでした: {{why}}",

@@ -3894,11 +3894,13 @@ export interface ClientAudioDevice {
 }
 
 /** This computer ▸ Audio (client mode): the output the station's audio plays on and the
- *  microphone, `''` for the system's default, this computer's devices, whether its headset
- *  started at all, and why a device would not open. Kept on this computer only. */
+ *  microphone, `''` for the system's default, how loud the station is heard here (dB over its own
+ *  level, the hosted page's volume), this computer's devices, whether its headset started at all,
+ *  and why a device would not open. Kept on this computer only. */
 export interface ClientAudio {
   output: string
   input: string
+  volumeDb: number
   outputs: ClientAudioDevice[]
   inputs: ClientAudioDevice[]
   available: boolean
@@ -3910,8 +3912,8 @@ export async function clientAudio(): Promise<ClientAudio> {
 }
 
 /** Picks this computer's headset for the station's audio; kept in this computer's own file. */
-export async function setClientAudio(output: string, input: string): Promise<ClientAudio> {
-  return invoke<ClientAudio>('set_client_audio', { output, input })
+export async function setClientAudio(output: string, input: string, volumeDb?: number): Promise<ClientAudio> {
+  return invoke<ClientAudio>('set_client_audio', { output, input, volumeDb })
 }
 
 /** The microphone's loudest moment since the last ask, `0` to `1`, keeping it open a moment. */

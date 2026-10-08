@@ -622,6 +622,8 @@ export const FR: PartialCatalog = {
   "settings.thisComputer.audio.output.label": "Audio de la station",
   "settings.thisComputer.audio.output.hint": "Là où vous entendez le récepteur de la station.",
   "settings.thisComputer.audio.output.trouble": "La sortie audio n’a pas pu s’ouvrir : {{why}}",
+  "settings.thisComputer.audio.volume.label": "Volume",
+  "settings.thisComputer.audio.volume.hint": "Le niveau auquel la station s’entend ici, au-dessus de celui qu’elle garde pour ses décodeurs. Rien ne change à la station.",
   "settings.thisComputer.audio.input.label": "Votre microphone",
   "settings.thisComputer.audio.input.hint": "Celui dans lequel vous parlez quand vous émettez d’ici. Nexus ne l’ouvre que tant qu’il est utile.",
   "settings.thisComputer.audio.input.trouble": "Le microphone n’a pas pu s’ouvrir : {{why}}",

@@ -21,7 +21,8 @@
 //!   never bursts.
 //! - **The page's level** ([`GAIN_DB`]): the station sets its receive level for its decoders, some
 //!   40 dB under a normal listen, so it is lifted by the page's default volume and held under
-//!   [`PEAK`].
+//!   [`PEAK`]. The operator's own volume moves the lift, as the page's slider does, from
+//!   [`VOLUME_DB_MIN`] to [`VOLUME_DB_MAX`] ([`Rings::set_volume_db`]); the bed moves with it.
 //! - **M9: muted, never ducked** ([`Rings::mute`]), while the operator's over may be on the air:
 //!   silence, and what was waiting is dropped, so nothing from before the over plays after it.
 //! - **The tone** ([`Rings::sound`]) plays over all of it, muted or not. It is this computer's own
@@ -54,6 +55,9 @@ pub const CEILING_MS: u32 = CUSHION_MS + 100;
 pub const BED_LEVEL: f32 = 0.0006;
 /// The station's level lifted by the hosted page's default volume.
 pub const GAIN_DB: f32 = 24.0;
+/// The quietest and loudest volume the operator may choose: the hosted page's slider's range.
+pub const VOLUME_DB_MIN: f32 = 0.0;
+pub const VOLUME_DB_MAX: f32 = 42.0;
 /// The loudest sample the headset is ever given, -0.9 dBFS.
 pub const PEAK: f32 = 0.9;
 /// Each ring: half a second at the highest rate a headset is likely to run, 192 kHz.
@@ -94,6 +98,8 @@ pub struct Rings {
     peak: AtomicU32,
     /// Moves each time a direction opens, so a reader at the old rate starts again.
     opened: AtomicU64,
+    /// The operator's volume as the factor the shack's audio is lifted by, as `f32` bits.
+    lift: AtomicU32,
     /// Samples of the shack's audio the output had no room for.
     dropped: AtomicU64,
 }
@@ -113,6 +119,7 @@ impl Default for Rings {
             in_rate: AtomicU32::new(0),
             peak: AtomicU32::new(0),
             opened: AtomicU64::new(0),
+            lift: AtomicU32::new(gain().to_bits()),
             dropped: AtomicU64::new(0),
         }
     }
@@ -143,14 +150,29 @@ impl Rings {
         self.opened.load(Ordering::Acquire)
     }
 
-    /// The shack's audio, at the output's rate: lifted by [`gain`], held under [`PEAK`] and queued.
-    /// Nothing is queued while muted (M9), and what will not fit is dropped and counted.
+    /// The operator's volume, in dB over the station's own level: held inside [`VOLUME_DB_MIN`]
+    /// and [`VOLUME_DB_MAX`], and heard from the next audio played.
+    pub fn set_volume_db(&self, db: f32) {
+        let db = if db.is_finite() { db } else { GAIN_DB };
+        let db = db.clamp(VOLUME_DB_MIN, VOLUME_DB_MAX);
+        self.lift
+            .store(10f32.powf(db / 20.0).to_bits(), Ordering::Release);
+    }
+
+    /// The factor the shack's audio is lifted by: the operator's volume, [`gain`] until one is set.
+    pub fn lift(&self) -> f32 {
+        f32::from_bits(self.lift.load(Ordering::Acquire))
+    }
+
+    /// The shack's audio, at the output's rate: lifted by the operator's volume ([`Rings::lift`]),
+    /// held under [`PEAK`] and queued. Nothing is queued while muted, and what will not fit is
+    /// dropped and counted.
     pub fn play(&self, samples: &[f32]) {
         let _writer = lock(&self.play_writer);
         if self.muted.load(Ordering::Acquire) {
             return;
         }
-        let lift = gain();
+        let lift = self.lift();
         let mut taken = 0;
         for sample in samples {
             if !self.play.push((sample * lift).clamp(-PEAK, PEAK)) {
@@ -245,10 +267,12 @@ impl Cushion {
         }
     }
 
-    /// At the top of each output callback: M9, and the ceiling. REALTIME.
+    /// At the top of each output callback: the mute, the bed at the operator's volume, and the
+    /// ceiling. REALTIME.
     pub fn begin(&mut self, rings: &Rings) {
         self.muted = rings.muted.load(Ordering::Acquire);
         self.listening = rings.listening.load(Ordering::Acquire);
+        self.bed = BED_LEVEL * rings.lift();
         if self.muted {
             // The callback is the ring's consumer, so it may empty it.
             rings.play.clear();
@@ -686,6 +710,43 @@ mod tests {
     fn out(cushion: &mut Cushion, rings: &Rings, n: usize) -> Vec<f32> {
         cushion.begin(rings);
         (0..n).map(|_| cushion.next(rings)).collect()
+    }
+
+    /// ★ The operator's volume lifts what plays, from the page's 0 dB to its 42 dB and never past
+    /// them, and the bed moves with it; held under the peak. CONTROL: until it is set, the lift is
+    /// the page's default 24 dB.
+    #[test]
+    fn the_volume_lifts_what_plays_inside_the_pages_range() {
+        let rings = Rings::default();
+        assert!((rings.lift() - gain()).abs() < 1e-6, "the default");
+        let played = |db: f32| {
+            rings.set_volume_db(db);
+            rings.play(&[0.001]);
+            let mut cushion = Cushion::new(RATE);
+            cushion.begin(&rings);
+            (rings.play.pop().unwrap(), cushion.bed)
+        };
+        let (quiet, quiet_bed) = played(0.0);
+        assert!(
+            (quiet - 0.001).abs() < 1e-7,
+            "0 dB plays the station's own level: {quiet}"
+        );
+        let (loud, loud_bed) = played(42.0);
+        let lifted = 0.001 * 10f32.powf(42.0 / 20.0);
+        assert!((loud - lifted).abs() < 1e-5, "42 dB: {loud} vs {lifted}");
+        assert!(
+            (loud_bed / quiet_bed - lifted / 0.001).abs() < 1e-2,
+            "the bed moved with it"
+        );
+        assert_eq!(
+            played(-6.0).0,
+            played(0.0).0,
+            "below the range is its floor"
+        );
+        assert_eq!(played(60.0).0, played(42.0).0, "above the range is its top");
+        rings.set_volume_db(42.0);
+        rings.play(&[0.5]);
+        assert_eq!(rings.play.pop(), Some(PEAK), "held under the peak");
     }
 
     /// ★ Playback waits for the cushion, plays it, and when it runs dry fills the cushion again

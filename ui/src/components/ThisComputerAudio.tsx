@@ -1,7 +1,8 @@
 // This computer ▸ Audio: the headset a computer driving a station (client mode) hears the station's
-// audio on and talks into. The choice belongs to this computer and is kept here, in a file of its
-// own, never sent to the station (`set_client_audio`). A meter shows the microphone's level while
-// the section is open, and a test plays a steady note in the output chosen.
+// audio on and talks into, and how loud the station is heard here (the hosted page's volume, 0 to
+// 42 dB over the station's own level). The choice belongs to this computer and is kept here, in a
+// file of its own, never sent to the station (`set_client_audio`). A meter shows the microphone's
+// level while the section is open, and a test plays a steady note in the output chosen.
 //
 // The microphone is opened only while something needs it (this meter, or a press), so a computer
 // that is only listening never holds it. A device that will not open says why, in Nexus's words
@@ -20,6 +21,7 @@ import {
   type ClientAudioDevice,
 } from '../api'
 import { t } from '../i18n'
+import { AUDIO_VOLUME_DB } from '../remote-web/audio-worklet'
 
 /** How often the meter asks after the microphone's level while it shows. */
 export const METER_EVERY_MS = 100
@@ -80,6 +82,11 @@ function Choice({
   )
 }
 
+/** The volume as gain over the station's own level, built invariantly: dB is not translated. */
+function volumeReading(db: number): string {
+  return `+${db} dB`
+}
+
 export function ThisComputerAudio() {
   const [audio, setAudio] = useState<ClientAudio | null>(null)
   const [notKept, setNotKept] = useState(false)
@@ -123,8 +130,8 @@ export function ThisComputerAudio() {
   if (!audio.available) {
     return <p className="settings-note" role="status">{t('settings.thisComputer.audio.unavailable')}</p>
   }
-  const pick = (output: string, input: string) => {
-    void setClientAudio(output, input)
+  const pick = (output: string, input: string, volumeDb = audio.volumeDb) => {
+    void setClientAudio(output, input, volumeDb)
       .then((now) => {
         setAudio(now)
         setNotKept(false)
@@ -154,6 +161,21 @@ export function ThisComputerAudio() {
         devices={audio.outputs}
         onPick={(name) => pick(name, audio.input)}
       />
+      <div className="settings-field">
+        <span className="settings-label">{t('settings.thisComputer.audio.volume.label')}</span>
+        <input
+          type="range"
+          className="settings-input"
+          min={AUDIO_VOLUME_DB.min}
+          max={AUDIO_VOLUME_DB.max}
+          step={1}
+          value={audio.volumeDb}
+          aria-label={t('settings.thisComputer.audio.volume.label')}
+          aria-valuetext={volumeReading(audio.volumeDb)}
+          onChange={(e) => pick(audio.output, audio.input, Number(e.currentTarget.value))}
+        />
+        <span className="settings-hint">{t('settings.thisComputer.audio.volume.hint')}</span>
+      </div>
       <div className="settings-field">
         <span className="settings-label">{t('settings.thisComputer.audio.test.label')}</span>
         <button type="button" className="settings-refresh" onClick={play} disabled={test === 'playing'}>

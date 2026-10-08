@@ -1396,13 +1396,15 @@ fn this_computers_audio_is_kept_here_and_never_sent() {
     let read = || ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
     let mut this = read();
     assert_eq!((this.output.as_str(), this.input.as_str()), ("", ""));
-    this.keep_audio("Headset Earphone", "Headset Microphone")
+    assert_eq!(this.volume_db, 24.0, "the hosted page's default volume");
+    this.keep_audio("Headset Earphone", "Headset Microphone", 30.0)
         .unwrap();
     let again = read();
     assert_eq!(
         (again.output.as_str(), again.input.as_str()),
         ("Headset Earphone", "Headset Microphone")
     );
+    assert_eq!(again.volume_db, 30.0, "the volume is kept with the devices");
     let written: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -1568,4 +1570,17 @@ fn a_voice_message_recorded_here_goes_to_the_shacks_slot_as_an_import() {
     );
     assert!(s.ran_here().is_empty(), "{:?}", s.ran_here());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ The volume as kept or asked for is whole dB inside the hosted page's 0 to 42, and anything
+/// unreadable is its default 24, never silence or a blast. CONTROL: a volume inside the range is
+/// kept as it is.
+#[test]
+fn a_volume_is_whole_db_inside_the_pages_range() {
+    assert_eq!(volume(Some(30.0)), 30.0);
+    assert_eq!(volume(Some(23.6)), 24.0);
+    assert_eq!(volume(Some(-3.0)), 0.0);
+    assert_eq!(volume(Some(60.0)), 42.0);
+    assert_eq!(volume(Some(f64::NAN)), 24.0);
+    assert_eq!(volume(None), 24.0);
 }

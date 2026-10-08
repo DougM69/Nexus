@@ -364,6 +364,8 @@ pub(crate) struct ThisComputer {
     /// The output and the microphone chosen there, "" for the system's default.
     output: String,
     input: String,
+    /// The station's audio here, in dB over its own level: the hosted page's volume.
+    volume_db: f32,
 }
 
 impl ThisComputer {
@@ -392,6 +394,7 @@ impl ThisComputer {
             launch_at_login: read["launchAtLogin"].as_bool().unwrap_or(false),
             output: device("output"),
             input: device("input"),
+            volume_db: volume(chosen["volumeDb"].as_f64()),
             settings,
             ui_state,
             audio,
@@ -399,14 +402,15 @@ impl ThisComputer {
     }
 
     /// Keeps This computer ▸ Audio's choice in this computer's own file.
-    fn keep_audio(&mut self, output: &str, input: &str) -> Result<(), String> {
-        let text = serde_json::to_string_pretty(&json!({ "output": output, "input": input }))
-            .map_err(|e| e.to_string())?;
+    fn keep_audio(&mut self, output: &str, input: &str, volume_db: f32) -> Result<(), String> {
+        let chosen = json!({ "output": output, "input": input, "volumeDb": volume_db });
+        let text = serde_json::to_string_pretty(&chosen).map_err(|e| e.to_string())?;
         if !crate::write_json_atomic(&self.audio, &text) {
             return Err("audioNotKept".to_string());
         }
         self.output = output.to_string();
         self.input = input.to_string();
+        self.volume_db = volume_db;
         Ok(())
     }
 
@@ -439,6 +443,15 @@ impl ThisComputer {
 
 /// This computer ▸ Audio's own file, beside this computer's `settings.json`.
 const AUDIO_FILE: &str = "client-audio.json";
+
+/// A volume as kept or asked for, in whole dB inside the hosted page's range; anything unreadable
+/// is the page's default, never silence or a blast.
+fn volume(db: Option<f64>) -> f32 {
+    match db.filter(|db| db.is_finite()) {
+        Some(db) => (db.round() as f32).clamp(audio_road::VOLUME_DB_MIN, audio_road::VOLUME_DB_MAX),
+        None => audio_road::VOLUME_DB,
+    }
+}
 /// The longest device name kept: a system's own names are far shorter.
 const DEVICE_NAME: usize = 512;
 
@@ -1400,12 +1413,14 @@ pub(crate) fn client_audio(app: tauri::AppHandle) -> Result<Value, String> {
     Ok(client.audio_view())
 }
 
-/// Picks the headset for the shack's audio: kept in this computer's own file, and used from now on.
+/// Picks the headset for the shack's audio, and how loud the station is heard here (the volume as
+/// it was when none is given): kept in this computer's own file, and used from now on.
 #[tauri::command]
 pub(crate) fn set_client_audio(
     app: tauri::AppHandle,
     output: String,
     input: String,
+    volume_db: Option<f64>,
 ) -> Result<Value, String> {
     let client = app
         .try_state::<Arc<Client>>()
@@ -1413,9 +1428,14 @@ pub(crate) fn set_client_audio(
     if output.len() > DEVICE_NAME || input.len() > DEVICE_NAME {
         return Err(word(Refusal::BadArguments.code()));
     }
-    lock(&client.this).keep_audio(&output, &input)?;
+    let volume_db = match volume_db {
+        Some(db) => volume(Some(db)),
+        None => lock(&client.this).volume_db,
+    };
+    lock(&client.this).keep_audio(&output, &input, volume_db)?;
     if let Some(headset) = client.headset.get() {
         headset.devices(&output, &input);
+        headset.rings().set_volume_db(volume_db);
     }
     Ok(client.audio_view())
 }
@@ -1466,9 +1486,9 @@ pub(crate) async fn client_audio_test(app: tauri::AppHandle) -> Result<Value, St
 impl Client {
     /// This computer ▸ Audio as it stands.
     fn audio_view(&self) -> Value {
-        let (output, input) = {
+        let (output, input, volume_db) = {
             let this = lock(&self.this);
-            (this.output.clone(), this.input.clone())
+            (this.output.clone(), this.input.clone(), this.volume_db)
         };
         let (inputs, outputs) = audio_road::devices();
         let listed = |devices: audio_road::Listed| {
@@ -1485,6 +1505,7 @@ impl Client {
         json!({
             "output": output,
             "input": input,
+            "volumeDb": volume_db,
             "outputs": listed(outputs),
             "inputs": listed(inputs),
             "available": self.headset.get().is_some(),
@@ -1511,6 +1532,9 @@ pub(crate) fn run(station: String) {
     );
     let this = ThisComputer::read(crate::settings_path(), crate::ui_state_path());
     let headset = audio_road::headset(&this.output, &this.input);
+    if let Some(headset) = &headset {
+        headset.rings().set_volume_db(this.volume_db);
+    }
     let client = Arc::new(Client::new(station, this));
     match headset {
         Some(headset) => client.hear_with(headset),

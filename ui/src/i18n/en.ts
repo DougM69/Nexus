@@ -720,6 +720,8 @@ export const EN = {
   "settings.thisComputer.audio.output.label": "The station's audio",
   "settings.thisComputer.audio.output.hint": "Where you hear the station's receiver.",
   "settings.thisComputer.audio.output.trouble": "The audio output would not open: {{why}}",
+  "settings.thisComputer.audio.volume.label": "Volume",
+  "settings.thisComputer.audio.volume.hint": "How loud the station is heard here, over the level it keeps for its decoders. It changes nothing at the station.",
   "settings.thisComputer.audio.input.label": "Your microphone",
   "settings.thisComputer.audio.input.hint": "What you talk into when you transmit from here. Nexus opens it only while it is needed.",
   "settings.thisComputer.audio.input.trouble": "The microphone would not open: {{why}}",
