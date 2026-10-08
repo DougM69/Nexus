@@ -495,6 +495,10 @@ export interface FdRulesetDto {
   problem?: string
   /** The W/VE warning (never a refusal) these settings would start the contest with. */
   locationWarning?: import('./types').ContestLocationWarning
+  /** The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order: what Settings
+   *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
+   *  tokens: the sponsor's names, never translated. */
+  entryClasses?: string[]
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
@@ -708,6 +712,27 @@ export async function contestLogManual(
   return invoke<AppSnapshot>('contest_log_manual', {
     call,
     fields,
+    mode,
+    submode: submode ?? null,
+  })
+}
+
+/** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
+ * Party counts once per county. `rows` is one field vector per row, each shaped exactly as
+ * `contestLogManual`'s `fields`. The engine stamps every row with one time and one band and
+ * dupe-checks each on its own key; the answer is, per row, whether it entered the log (`false`:
+ * refused as a dupe, as `contestLogManual` refuses one).
+ *
+ * `mode` and `submode` mean exactly what they mean there. */
+export async function contestLogManualRows(
+  call: string,
+  rows: [string, string][][],
+  mode: 'CW' | 'PH' | 'DIG',
+  submode?: string,
+): Promise<boolean[]> {
+  return invoke<boolean[]>('contest_log_manual_rows', {
+    call,
+    rows,
     mode,
     submode: submode ?? null,
   })

@@ -8541,6 +8541,12 @@ struct FdRulesetDto {
     /// the contest starts. Absent when it does not apply.
     #[serde(skip_serializing_if = "Option::is_none")]
     location_warning: Option<tempo_app::dto::LocationWarningDto>,
+    /// The sponsor's own entry classes (Cabrillo `ENTRY-CLASS`), in its order, for Settings
+    /// to offer: the Illinois QSO Party's eight. Filled by the PREVIEW only and absent when
+    /// empty: the Remote field-day capture sends this DTO too, and the hosted page refuses a
+    /// key it does not know, so a capture must stay the shape every published page accepts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    entry_classes: Vec<String>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -8567,6 +8573,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         exchange: Vec::new(),
         problem: String::new(),
         location_warning: None,
+        entry_classes: Vec::new(),
     }
 }
 
@@ -8591,6 +8598,8 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
         dto.event.as_str(),
         tempo_core::fd_rules::CURRENT_RULES_YEAR,
     ) {
+        // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
+        dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
         match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
             Ok(s) => {
                 dto.role = s.role().id.to_string();
@@ -27569,6 +27578,30 @@ async fn contest_log_manual(
     .await
 }
 
+/// ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois
+/// QSO Party counts once per county.
+///
+/// `rows` is one field vector per row, each shaped as [`contest_log_manual`]'s `fields`; the
+/// engine stamps every row with one time and one band and dupe-checks each on its own
+/// ([`Engine::contest_log_manual_rows`]). The answer is, per row, whether it entered the log:
+/// a dupe is a `false` here rather than an error, because the other counties of the same
+/// contact did log and the strip has to say which county it was. Err only when contest mode
+/// is off. Answers once the rows are in the journal on disk ([`journaled_command`]).
+#[tauri::command]
+async fn contest_log_manual_rows(
+    state: State<'_, SharedEngine>,
+    call: String,
+    rows: Vec<Vec<(String, String)>>,
+    mode: String,
+    submode: Option<String>,
+) -> Result<Vec<bool>, String> {
+    journaled_command(Arc::clone(&state), move |eng| {
+        let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        eng.contest_log_manual_rows(&call, &rows, &mode, sub)
+    })
+    .await
+}
+
 /// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites section's strip.
 ///
 /// Identical to [`contest_log_manual`] except for where the row's band and frequency
@@ -32689,20 +32722,10 @@ fn start_on_the_logbook(
             // quietly on a timer instead of re-erroring every second.
             let mut bind_failed: Option<(u16, std::time::Instant)> = None;
             loop {
-                let (want_host, want_addr) = {
-                    let e = engine_lock(&mgr_engine);
-                    let s = e.settings();
-                    let want_host = s.fd_host_enable.then_some(s.fd_host_port);
-                    // The host joins ITSELF over loopback; otherwise the
-                    // operator's join address (empty = no client).
-                    let want_addr = if s.fd_host_enable {
-                        Some(format!("127.0.0.1:{}", s.fd_host_port))
-                    } else {
-                        let a = s.fd_join_addr.trim().to_string();
-                        (!a.is_empty()).then_some(a)
-                    };
-                    (want_host, want_addr)
-                };
+                // What to run is the engine's answer (the host's own loopback join
+                // included), so sync configured for a contest it cannot run, anything
+                // but the two Field Days, is refused where the sockets are made.
+                let (want_host, want_addr) = engine_lock(&mgr_engine).fd_sync_targets();
 
                 // --- host listener + beacon reconcile ---
                 if want_host != hosting.as_ref().map(|(p, _)| *p) {
@@ -33627,6 +33650,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         clear_hunt_target,
         fd_log_manual,
         contest_log_manual,
+        contest_log_manual_rows,
         contest_log_satellite,
         contest_working,
         contest_entry_reset,
@@ -35554,6 +35578,37 @@ mod tests {
         );
     }
 
+    /// A county line logs only if `contest_log_manual_rows` is REGISTERED: left out of
+    /// `generate_handler!` the strip's Enter fails at runtime and the contact is not logged. It
+    /// must also be the engine's many-row write, journaled before it answers, so every county
+    /// of the contact shares one time and reaches the disk before the strip says "Logged".
+    #[test]
+    fn the_county_line_command_is_registered_and_journals_the_engines_rows() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nasync fn contest_log_manual_rows(")
+            .expect("the command a county line logs through must exist")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows("),
+            "contest_log_manual_rows must journal Engine::contest_log_manual_rows"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
+            "contest_log_manual_rows is not registered — a county line would fail at runtime"
+        );
+    }
+
     /// The RF scope pane's poll is also its request for the radio's scope, so it must be
     /// REGISTERED and must answer from the feed's RF read — a command with a precedence of its own
     /// could hand the pane the audio FFT, and would place no request.
@@ -35895,6 +35950,33 @@ mod tests {
             "2026 seed is dormant"
         );
         assert!(sfd.rules_year >= 2026);
+        // The Illinois QSO Party's classes reach Settings' preview, Unlimited last…
+        let s = tempo_app::settings::Settings {
+            fd_event: "ilqp".into(),
+            ..Default::default()
+        };
+        let preview = super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s));
+        assert_eq!(
+            preview.entry_classes.len(),
+            8,
+            "{:?}",
+            preview.entry_classes
+        );
+        assert_eq!(
+            preview.entry_classes.last().map(String::as_str),
+            Some("UNLIMITED")
+        );
+        // …and never the Remote capture, whose hosted page refuses a key it does not know.
+        let capture = serde_json::to_value(super::fd_ruleset_dto("ilqp")).unwrap();
+        assert!(capture.get("entryClasses").is_none(), "{capture}");
+        // CONTROL: Field Day's preview declares none.
+        assert!(
+            super::fd_ruleset_preview(
+                &tempo_app::engine::Engine::with_settings(Default::default())
+            )
+            .entry_classes
+            .is_empty()
+        );
     }
 
     /// …and the state the command hands back reflects the arm, through the DTO the cockpit

@@ -90,6 +90,7 @@ const CLASSES: &[(&str, Class, &str)] = &[
     ("contest_entry_reset",            RunsAtShack, "Clears the shack's contest entry line."),
     ("contest_i_moved",                RunsAtShack, "Records a move of the station during the contest session."),
     ("contest_log_manual",             RunsAtShack, "Logs a contest contact at the shack."),
+    ("contest_log_manual_rows",        RunsAtShack, "Logs a contest contact on a county line at the shack, one row per county."),
     ("contest_log_satellite",          RunsAtShack, "Logs a contest contact made through a satellite at the shack."),
     ("contest_working",                RunsAtShack, "Binds a contest serial to a station at the shack."),
     ("contest_zone_hint",              RunsAtShack, "From the shack's country file."),

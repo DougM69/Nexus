@@ -1920,6 +1920,21 @@ export const EN = {
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
+  // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
+  // joined by "/" (COOK/DUPG) and logged as one contact per county. The county codes are
+  // invariant tokens; {{exchange}} is the exchange as logged.
+  'logEntry.countyLine.logged': {
+    one: 'Logged {{call}} {{exchange}} ({{mode}})',
+    other: 'Logged {{call}} {{exchange}} ({{mode}}): {{count}} contacts, one per county',
+  },
+  'logEntry.countyLine.dupe': {
+    one: '{{call}} in {{counties}} is a dupe on this band/mode, not logged again',
+    other: '{{call}} in {{counties}} are dupes on this band/mode, not logged again',
+  },
+  'logEntry.countyLine.unknown': "{{value}} is not a county on the sponsor's list, so this county line cannot be logged.",
+  'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
+  'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
+  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
   'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.hint': 'Did you mean {{codes}}?',
@@ -4035,6 +4050,8 @@ export const EN = {
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
   'fieldDay.club.error': 'Host: {{msg}}',
+  'fieldDay.club.refused.chip': 'Not syncing',
+  'fieldDay.club.refused.body': 'Club sync works only for ARRL Field Day and Winter Field Day for now. With {{contest}} selected, this station does not host or join a club event. Each position keeps its own log, so export every position\'s Cabrillo file afterwards and merge them into one.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -4101,6 +4118,12 @@ export const EN = {
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
     'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
+  'settings.contestPick.entryClass.label': 'Entry class',
+  'settings.contestPick.entryClass.hint': 'The class the sponsor scores your entry in, from this contest\'s own rules, written on the ENTRY-CLASS line of the Cabrillo log. In the Illinois QSO Party a club running more than one transmitter at once enters UNLIMITED, and the high and low power classes split at 100 watts PEP. To certify a QRP entry, pick QRP under Power category.',
+  'settings.contestPick.club.label': 'Club',
+  'settings.contestPick.club.hint': 'Your contest club, for the CLUB line of the Cabrillo log when the contest\'s rules have one (the Illinois QSO Party). Leave it blank to leave the line out.',
+  'settings.contestPick.operators.label': 'Other operators',
+  'settings.contestPick.operators.hint': 'The OPERATORS line of the Cabrillo log lists everyone who was set as Operator at the key when they logged a contact. Add anyone else here, as callsigns separated by spaces or commas.',
   'settings.contestStation.legend': 'Your station data',
   'settings.contestStation.note': 'What your station sends when a contest asks for it. Fill in the ones your contest uses — a QSO party wants your county or your state, Sweepstakes wants your check. Nothing here is guessed: an exchange that goes on the air has to be one you typed.',
   'settings.contestStation.county.label': 'County',
@@ -10355,6 +10378,20 @@ export const EN = {
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
+  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
+  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
+  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
+  // on again.
+  'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
+  'shell.lane.slotAudioLost.detail':
+    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+  // The operator's PTT press that Nexus's own Flex client kept off the air: right after a digital
+  // mode, or native audio going off, the radio still took its transmit audio from the DAX Nexus had
+  // set, not the mic, so the voice would not have gone out. TX stays on; the next press answers anew.
+  // `{{mode}}` is the radio's own mode word (USB), as data.
+  'shell.lane.pttRefused.message': 'PTT REFUSED',
+  'shell.lane.pttRefused.detail':
+    'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.
