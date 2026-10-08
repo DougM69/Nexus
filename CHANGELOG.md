@@ -94,15 +94,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Club sync no longer builds a Field Day club log for other contests.** Hosting a club event,
-  or joining one, with the Illinois QSO Party (or any contest other than ARRL Field Day and
-  Winter Field Day) selected built an ARRL Field Day club log: counties dropped, CW and RTTY with
-  one station counted as two contacts, a mobile's new county counted as a dupe, and a club file
-  headed `CONTEST: ARRL-FD`. Club sync now runs for the two Field Days only. With any other
-  contest selected the station neither hosts nor joins, and the contest screen, the club board
-  window and Settings ▸ Contesting ▸ Field Day Club Sync say why. For a state QSO party, log on
-  each position by itself and merge the Cabrillo files afterwards; the Field Day manual has the
-  steps for the Illinois QSO Party.
+- **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
+  joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
+  selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station
+  counted as two contacts, a mobile's new county counted as a dupe, and a club file headed
+  `CONTEST: ARRL-FD`. The club log now runs the host's contest under its own rules: its
+  exchange, what counts as a dupe (CW and digital are one mode at the Illinois QSO Party, and a
+  mobile in a new county is a new contact), its multipliers and bonus stations, and its own
+  Cabrillo file, with the Entry class, Club and Operators lines. At a QSO party the log strip
+  warns while you type when another position, or this one, has already worked the station from
+  that county. Every position must pick the host's contest: a position logging another one,
+  or running a Nexus too old to say which, is refused when it joins, and its club chip names
+  both contests. The two Field Days count as different contests here too. Two kinds of contest
+  are refused, with the reason on the contest screen, the club board window and in Settings ▸
+  Contesting ▸ Field Day Club Sync: one with a serial number in the exchange (Sweepstakes, CQ
+  WPX, the California QSO Party), and CQ World-Wide, whose log must say which transmitter made
+  each contact. The spectator scoreboard is Field Day only. Try a club on two of your own PCs
+  before the party; the Field Day manual has a checklist.
+- **A contact queued while a club position was offline keeps the operator who logged it.** The
+  operator was read when the contact was sent rather than when it was logged, so after an outage
+  the contacts still waiting went up under whoever had sat down since, on the club board and in
+  the club file's operators.
 - **Winter Field Day 2027 is on 23 and 24 January.** The sponsor's 2027 rules put the event on
   the fourth full weekend of January, and Nexus still used the last full weekend from the 2025
   rules, so it counted down to 30 January, a week late. Installed copies pick the fix up from
@@ -278,6 +290,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
   file again does not add them twice.
+- **A contact imported from fldigi keeps its PSK mode.** fldigi logs PSK31 as PSK with PSK31 as
+  the submode, and the same for PSK63, QPSK31 and its other PSK modes. Nexus kept only the PSK, so
+  a PSK31 station read as a new mode against a log full of PSK31 contacts. The logbook and the
+  "new mode" need now see PSK31, PSK63, QPSK31 and the rest. Each contact is still written back,
+  in your exports and in what goes to LoTW, QRZ and the other services, exactly as fldigi wrote
+  it. Contacts logged on the PSK screen are written as before. Contacts imported before this
+  release keep PSK, and importing the same file again does not add them twice.
+- **Changing the mode of an imported contact no longer leaves its old submode behind.** A contact
+  imported from another logger can carry a submode Nexus keeps exactly as it was written, such as
+  fldigi's PSK31 or Log4OM's USB. Changing that contact's mode in the Logbook kept the old submode,
+  so a PSK31 contact corrected to CW was written to your log and your exports as CW with a PSK31
+  submode. Now a mode edit drops a submode the new mode does not have, and a PSK contact moved to
+  another PSK mode takes the new one with it (corrected to PSK63, it is written as PSK with PSK63,
+  as fldigi writes it). Editing any other field leaves the submode as it was.
+- **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
+  An activator's own row on the Needed board still asked only whether you had worked the country in
+  CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever
+  modes it announced. So an activator or a DXpedition on FT8 in a country you had worked only on
+  FT4 showed no new mode there, while the same station decoded by your radio did. The activator row
+  now judges the mode the spot names ("New mode — FT8 … (any band) · POTA …"), and a DXpedition card
+  is a new mode while any mode the operation announced is one you have never worked that country
+  in. A spot that names only data, phone or digital, or no mode at all, and an operation that
+  announced no mode or only "PSK", keep the old rule: a new mode only when you have never worked
+  that country in any mode of that kind.
 - **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
   Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
   list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
