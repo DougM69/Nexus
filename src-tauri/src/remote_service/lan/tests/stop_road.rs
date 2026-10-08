@@ -2830,6 +2830,46 @@ async fn a_start_after_presence_lapsed_is_refused() {
     seat.keep_the_lease().await;
 }
 
+/// ★ A start on a lease taken again waits for presence of its own. Presence renewed by a fresh
+/// echo, then the lease handed back and taken again on the same link: the Enable TX that follows,
+/// with the state its road named still under two seconds old and the lease held, is refused
+/// `noPresence` and runs nothing, since a lease handed back takes its presence with it and only a
+/// heartbeat mints presence for the new one. CONTROL: one heartbeat later the same Enable TX runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_on_a_lease_taken_again_waits_for_a_heartbeat() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    let mut seat = seated(&r).await;
+    seat.renewed().await;
+    let (_, fetched) = seat.snapshot.expect("a snapshot");
+    let lease = seat.lease();
+    let released = seat.ask(json!({"type":"release","leaseId":lease})).await;
+    assert!(released["error"].is_null(), "{released}");
+    let state = seat.ask(json!({"type":"state"})).await;
+    let acquired = seat
+        .ask(json!({"type":"acquire","stationBootId":state["value"]["stationBootId"]}))
+        .await;
+    assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+    seat.state = acquired["value"].clone();
+    let said = seat
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert!(
+        fetched.elapsed() < FRESH - Duration::from_millis(200),
+        "premise: the state the road named was still fresh at the start ({:?})",
+        fetched.elapsed()
+    );
+    assert_eq!(said["refused"], "noPresence", "{said}");
+    assert!(ran(&record).is_empty(), "{:?}", ran(&record));
+    seat.renewed().await;
+    let said = seat
+        .call(2, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "CONTROL: {said}");
+    assert_eq!(ran(&record), ["set_tx_enabled"]);
+}
+
 /// ★ A press from a connection whose presence went is refused, even under another's live presence.
 /// A computer holding the lease, with presence and fresh state, hands the lease back, and a second
 /// connection takes it and renews presence of its own at the station, in Phone with TX armed. The
