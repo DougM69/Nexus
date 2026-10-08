@@ -661,6 +661,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'reboot', 'log in', 'login', 'sign in', 'run at startup', 'remote'],
   },
   {
+    // Shown only while this computer drives a station over this network (client mode).
+    id: 'this-computer',
+    label: 'This computer',
+    tab: 'appearance',
+    keywords: ['audio', 'headset', 'headphones', 'speakers', 'microphone', 'mic', 'sound card',
+      'meter', 'test tone', 'operate from this computer', 'remote audio', 'client mode'],
+  },
+  {
     id: 'accessibility',
     label: 'Accessibility & eyes-free',
     tab: 'appearance',

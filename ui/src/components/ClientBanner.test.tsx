@@ -116,3 +116,76 @@ describe('on a computer driving a station', () => {
     expect((leave as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+describe('this computer’s over, as the station says it', () => {
+  const gaps = EN['client.over.gaps'] as { one: string; other: string }
+
+  it('counts the holes on the air, in amber, and says nothing of an over with none', async () => {
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      over: { phase: 'onAir', holes: 1, holeMs: 120 },
+    })
+    const container = await shown()
+    const over = container.querySelector('.client-banner-over')
+    expect(over?.textContent).toBe(fill(gaps.one, { count: '1', seconds: '0.1' }))
+    expect(over?.getAttribute('data-over')).toBe('onAir')
+    cleanup()
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      over: { phase: 'onAir', holes: 3, holeMs: 450 },
+    })
+    const more = await shown()
+    expect(more.querySelector('.client-banner-over')?.textContent).toBe(
+      fill(gaps.other, { count: '3', seconds: '0.5' }),
+    )
+    cleanup()
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      over: { phase: 'onAir', holes: 0, holeMs: 0 },
+    })
+    const none = await shown()
+    expect(none.querySelector('.client-banner-over')).toBeNull()
+  })
+
+  it('says why an over ended, each end in its own words, and when the station went quiet', async () => {
+    const ends = [
+      ['audioGap', 'client.over.ended.audioGap'],
+      ['pttGap', 'client.over.ended.pttGap'],
+      ['stopped', 'client.over.ended.stopped'],
+      ['presence', 'client.over.ended.presence'],
+      ['ceiling', 'client.over.ended.ceiling'],
+      ['watchdog', 'client.over.ended.watchdog'],
+      ['routeChanged', 'client.over.ended.routeChanged'],
+      ['refused', 'client.over.ended.refused'],
+    ] as const
+    const said = new Set<string>()
+    for (const [why, key] of ends) {
+      mockStatus.mockResolvedValue({
+        station: AT,
+        phase: 'live',
+        reason: null,
+        over: { phase: 'ended', why },
+      })
+      const container = await shown()
+      const text = container.querySelector('.client-banner-over')?.textContent ?? ''
+      expect(text).toBe(EN[key])
+      said.add(text)
+      cleanup()
+    }
+    expect(said.size).toBe(ends.length)
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      over: { phase: 'noWord' },
+    })
+    const quiet = await shown()
+    expect(quiet.querySelector('.client-banner-over')?.textContent).toBe(EN['client.over.noWord'])
+  })
+})

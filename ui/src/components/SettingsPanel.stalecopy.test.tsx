@@ -392,6 +392,7 @@ describe('an edit made in any section of Settings is saved', () => {
     performance: 'display preferences kept on this computer',
     'app-updates': 'setBetaUpdates, the beta channel’s one writer',
     'start-at-sign-in': 'setLaunchAtLogin, the login entry’s one writer',
+    'this-computer': 'setClientAudio, kept in this computer’s own file and never sent to the station',
     'data-folder': 'setDataFolder',
     configurations: 'the backup, restore and reset verbs',
   }

@@ -191,6 +191,7 @@ import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { resolveTarget } from '../settings/registry'
+import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
 import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
@@ -2398,6 +2399,8 @@ export function SettingsPanel({
   // optimistic flip would show "on" on a computer that refused, which is exactly the lie the
   // unsupported-platform message exists to prevent.
   const [launchAtLoginError, setLaunchAtLoginError] = useState<string | null>(null)
+  // A computer driving a station has a "This computer" section, for its headset.
+  const driving = useDriving()
   const toggleLaunchAtLogin = (on: boolean) => {
     setLaunchAtLoginError(null)
     void setLaunchAtLogin(on).then(
@@ -4486,6 +4489,19 @@ export function SettingsPanel({
               <span className="settings-hint">{t('settings.launchAtLogin.hint')}</span>
             </label>
             {launchAtLoginError && <p className="settings-note" role="alert">{launchAtLoginError}</p>}
+          </fieldset>
+          )}
+
+          {/* ---- This computer: what belongs to the computer the operator sits at while it drives a
+              station over this network (client mode), kept here and never sent to the station. Its
+              Audio is the headset the station's audio plays on and the microphone. ---- */}
+          {tab === 'appearance' && driving && (
+          <fieldset className="settings-section" id="settings-this-computer">
+            <legend>{t('settings.thisComputer.legend')}</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.thisComputer.audio.title')}</span>
+              <ThisComputerAudio />
+            </div>
           </fieldset>
           )}
 

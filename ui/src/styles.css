@@ -27309,6 +27309,14 @@ tr.sel .aprs-sym {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* This computer's over: the holes on the air in it, its end, or the station gone quiet. Amber,
+   as the TX strip's own warnings are, and in the flow, so it never covers a control either. */
+.client-banner-over {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--state-warn);
+  font-weight: 600;
+}
 .client-banner-leave {
   flex: none;
   padding: var(--space-1) var(--space-3);

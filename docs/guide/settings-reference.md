@@ -2347,6 +2347,19 @@ turn Remote on (Station ▸ Remote access), Nexus offers to switch this on. The 
 once, and your answer is remembered either way. If your computer will not let Nexus start at
 sign-in, the switch stays off and says so.
 
+### This computer
+
+Shown while this computer operates a station over your own network (**Operate from this
+computer** in Stations on this network). What is set here belongs to this computer: it is kept
+on this computer and never sent to the station.
+
+**Audio** picks where you hear the station's receiver (**The station's audio**) and the
+microphone you talk into when you transmit from here (**Your microphone**). Each starts on the
+system's default. A device you picked that is not plugged in stays shown as not connected; Nexus
+never swaps another in its place, and says why when a device will not open. **Microphone level**
+shows your microphone while this section is open, and **Play a test tone** plays a short note in
+the output you picked. Nexus opens the microphone only while something needs it.
+
 ### Accessibility & eyes-free
 
 Speech and sound cues for operating by ear. The keyboard and screen-reader labels

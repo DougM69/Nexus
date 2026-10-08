@@ -3774,12 +3774,74 @@ export async function exportChannels(
   return invoke<string>('export_channels', { channels, format, nameCap, attribution })
 }
 
+/** This computer's over, as the station last said it on Stop's road: on the air with its holes so
+ *  far (silences where its audio did not reach the station in time), ended and why, or a press
+ *  held with no word from the station. */
+export type ClientOver =
+  | { phase: 'onAir'; holes: number; holeMs: number }
+  | {
+      phase: 'ended'
+      why:
+        | 'audioGap'
+        | 'pttGap'
+        | 'stopped'
+        | 'presence'
+        | 'ceiling'
+        | 'watchdog'
+        | 'routeChanged'
+        | 'refused'
+    }
+  | { phase: 'noWord' }
+
 /** How this computer drives a paired station, when it does (client mode): where the station is,
- *  how the link stands, and why it was refused. `null` on a computer running its own station. */
+ *  how the link stands, why it was refused, and this computer's over. `null` on a computer
+ *  running its own station. */
 export interface ClientStatus {
   station: string
   phase: 'connecting' | 'live' | 'notLive' | 'busy' | 'refused'
   reason: string | null
+  over?: ClientOver | null
+}
+
+/** One of this computer's audio devices: the name kept, and the label shown. */
+export interface ClientAudioDevice {
+  name: string
+  label: string
+}
+
+/** This computer ▸ Audio (client mode): the output the station's audio plays on and the
+ *  microphone, `''` for the system's default, this computer's devices, whether its headset
+ *  started at all, and why a device would not open. Kept on this computer only. */
+export interface ClientAudio {
+  output: string
+  input: string
+  outputs: ClientAudioDevice[]
+  inputs: ClientAudioDevice[]
+  available: boolean
+  trouble: { output: string | null; input: string | null }
+}
+
+export async function clientAudio(): Promise<ClientAudio> {
+  return invoke<ClientAudio>('client_audio')
+}
+
+/** Picks this computer's headset for the station's audio; kept in this computer's own file. */
+export async function setClientAudio(output: string, input: string): Promise<ClientAudio> {
+  return invoke<ClientAudio>('set_client_audio', { output, input })
+}
+
+/** The microphone's loudest moment since the last ask, `0` to `1`, keeping it open a moment. */
+export async function clientAudioLevel(): Promise<{
+  level: number
+  open: boolean
+  trouble: string | null
+}> {
+  return invoke('client_audio_level')
+}
+
+/** A test note in this computer's output. */
+export async function clientAudioTest(): Promise<{ played: boolean; trouble?: string | null }> {
+  return invoke('client_audio_test')
 }
 
 export async function clientStatus(): Promise<ClientStatus | null> {
