@@ -1366,6 +1366,40 @@ async fn the_microphone_over_is_told_while_presence_is_live() {
     );
 }
 
+/// ★ The microphone over's state crosses the road whole, its holes on the air included (the road's
+/// format 2); a body of the first format, which had no holes, is not read as one. CONTROL: each
+/// end, and both counts at their largest, come back as they went.
+#[test]
+fn the_overs_state_crosses_the_road_with_its_holes() {
+    use tempo_app::mic::{MicEnded, MicStatus};
+    for ended in [None, Some(MicEnded::AudioGap), Some(MicEnded::RouteChanged)] {
+        let down = Down::Mic(MicStatus {
+            armed: true,
+            keyed: ended.is_none(),
+            no_power_out: false,
+            ended,
+            holes: 3,
+            hole_ms: 420,
+        });
+        assert_eq!(Down::read(down.kind(), &down.body()), Some(down.clone()));
+    }
+    let widest = Down::Mic(MicStatus {
+        holes: u32::MAX,
+        hole_ms: u32::MAX,
+        ..MicStatus::default()
+    });
+    assert_eq!(
+        Down::read(widest.kind(), &widest.body()),
+        Some(widest.clone())
+    );
+    assert_eq!(
+        Down::read(widest.kind(), &widest.body()[..4]),
+        None,
+        "a body without the holes"
+    );
+    assert!(super::super::stop_road::contract_text().contains(" format 2 "));
+}
+
 // ----- The snapshot's numbers -----
 
 /// ★ The shack pushes the snapshot every 300 ms whether or not it changed, each with a new number,

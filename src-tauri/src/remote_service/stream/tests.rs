@@ -887,9 +887,34 @@ fn the_page_is_told_what_the_microphone_over_does() {
     });
     poll(now + Duration::from_millis(20));
     assert_eq!(told(&mut streaming)["keyed"], true, "the key was not told");
-    let release = format!(r#"{{"type":"pttRelease","holdId":"{PRESS}","seq":1}}"#);
-    streaming.ptt(release.as_bytes(), now);
-    poll(now + Duration::from_millis(40));
+    // A stretch of the page's audio lost (frames 3 to 8): a hole on the air, which the engine
+    // counts for a remote screen's display. The page shows no holes, so it is told nothing new.
+    for k in 2..=14u64 {
+        let at = now + Duration::from_millis(20 * k);
+        if k.is_multiple_of(5) {
+            let again = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":{k}}}"#);
+            streaming.ptt(again.as_bytes(), at);
+        }
+        if !(3..=8).contains(&k) {
+            streaming.mic(&tempo_stream::session::MicPacket {
+                seq: k,
+                rtp: 960 * k,
+                clock_hz: 48_000,
+                arrived: at,
+                payload: vec![0xF8, 0xFF, 0xFE],
+            });
+        }
+        poll(at);
+    }
+    assert_eq!(
+        f.station.host.mic.status().holes,
+        1,
+        "premise: the engine counted the hole"
+    );
+    assert_eq!(streaming.mic_state(), None, "a hole alone told the page");
+    let release = format!(r#"{{"type":"pttRelease","holdId":"{PRESS}","seq":15}}"#);
+    streaming.ptt(release.as_bytes(), now + Duration::from_millis(280));
+    poll(now + Duration::from_millis(300));
     assert_eq!(
         told(&mut streaming),
         serde_json::json!({"type":"micState","armed":false,"keyed":false,"noPowerOut":false,"ended":"released"})

@@ -68,6 +68,15 @@
 //!
 //! Silence is what fills a moment whose frame never came: no concealment, so a loss can never
 //! become a burst on the air (design §7), and nothing heard on the air was made up here.
+//!
+//! ## The holes, counted for the operator to see
+//!
+//! Each such silence between two stretches of the over's audio is a hole on the air: a stall under
+//! the lead-in leaves none, a longer one leaves one about the stall's length less the lead-in, and
+//! one of [`MicMode::gap_ms`] ends the over (M2) instead. The over counts its holes and their length
+//! ([`MicLatch::holes`]) and the engine publishes them with the over's state ([`MicStatus`]), so a
+//! remote screen can say "1 gap on the air, 0.1 s". ⚠️ DISPLAY ONLY: the count is taken beside the
+//! pacer and changes nothing it feeds, keys or ends.
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -206,6 +215,11 @@ pub struct MicStatus {
     pub no_power_out: bool,
     /// Why the last over ended, until the next one is armed.
     pub ended: Option<MicEnded>,
+    /// Display only: the holes on the air in the keyed over so far, each a silence between two
+    /// stretches of its audio, where audio that never came in time was played as silence (M4).
+    pub holes: u32,
+    /// Display only: how long those holes lasted in all, in milliseconds.
+    pub hole_ms: u32,
 }
 
 #[derive(Default)]
@@ -408,6 +422,12 @@ struct Over {
     /// How much VOICED audio the over has accepted, in ms: frames at or above
     /// [`VOICE_FLOOR_RMS`]. Display only (the no-power warning); nothing keys on it (M5).
     voiced_ms: u64,
+    /// Display only: the holes counted so far, and their samples, each counted once the over's
+    /// audio resumes after it (a silence the over ends in is not a hole on the air but its end).
+    holes: u32,
+    hole_samples: u64,
+    /// Samples of the silence being fed now for want of a frame, until audio resumes.
+    in_hole: u64,
 }
 
 impl Over {
@@ -488,6 +508,18 @@ impl MicLatch {
         }
     }
 
+    /// The keyed over's holes on the air so far, and how long they lasted in all in ms (both 0 when
+    /// not keyed). DISPLAY ONLY: see the module header.
+    pub fn holes(&self) -> (u32, u32) {
+        match &self.phase {
+            Phase::Keyed(over) => {
+                let ms = over.hole_samples * 1000 / u64::from(self.mode.rate_hz);
+                (over.holes, u32::try_from(ms).unwrap_or(u32::MAX))
+            }
+            _ => (0, 0),
+        }
+    }
+
     /// ⚠️ THE PER-TICK PREDICATE, and the pacer behind it. `arrived` is everything the feed took
     /// since the last tick; `budget` is the most the loop can take this tick, in samples.
     ///
@@ -559,6 +591,9 @@ impl MicLatch {
                 route: route.unwrap_or(gates.route),
                 frames: VecDeque::new(),
                 voiced_ms: 0,
+                holes: 0,
+                hole_samples: 0,
+                in_hole: 0,
             };
             over.count_voice(&mode, &first);
             over.frames.push_back(first);
@@ -653,10 +688,19 @@ impl Over {
                 .frames
                 .front()
                 .filter(|f| f.media as i128 <= at)
-                .map(|f| f.samples[(at - f.media as i128) as usize])
-                // The pre-roll, and any moment whose frame never came: silence, never made up.
-                .unwrap_or(0.0);
-            out.push(sample);
+                .map(|f| f.samples[(at - f.media as i128) as usize]);
+            // Display only: a moment of the over's own audio whose frame never came is part of a
+            // hole, counted once the audio resumes after it. The pre-roll is no hole.
+            match sample {
+                Some(_) if self.in_hole > 0 => {
+                    self.holes = self.holes.saturating_add(1);
+                    self.hole_samples += std::mem::take(&mut self.in_hole);
+                }
+                None if at >= self.media0 as i128 => self.in_hole += 1,
+                _ => {}
+            }
+            // The pre-roll, and any moment whose frame never came: silence, never made up.
+            out.push(sample.unwrap_or(0.0));
             self.cursor += 1;
         }
         Some(out)
@@ -1030,6 +1074,116 @@ mod tests {
             after.len() as u64 <= MIC.samples(MIC.ahead_ms),
             "the first push after the stall caught up {} samples",
             after.len()
+        );
+    }
+
+    // ── The holes on the air, display only ────────────────────────────────────────────────────
+
+    /// The over keyed at `t0` and driven in 20 ms ticks to `ticks`, the page sending a frame every
+    /// 20 ms (media `20 ms × k`). Each frame reaches the latch at the first tick after it arrives:
+    /// on time, but for those sent during a stall of `stall` ms from 200 ms, which all arrive as it
+    /// ends, as a Wi-Fi queue lets them go.
+    fn through_a_stall(stall: u64, ticks: u64) -> Stalled {
+        let t0 = Instant::now();
+        let mut latch = keyed(t0);
+        let mut out = Vec::new();
+        let mut waiting: Vec<MicFrame> = Vec::new();
+        for k in 1..ticks {
+            let sent = 20 * k;
+            let arrives = if (200..200 + stall).contains(&sent) {
+                200 + stall
+            } else {
+                sent
+            };
+            waiting.push(frame(k + 1, MIC.samples(20) * k, t0 + ms(arrives), 0.5));
+            let now = t0 + ms(sent);
+            let (due, later): (Vec<MicFrame>, Vec<MicFrame>) =
+                waiting.into_iter().partition(|f| f.arrived <= now);
+            waiting = later;
+            let res = latch.tick(up(now), due, PLENTY);
+            if let Some(why) = res.drop {
+                return Stalled {
+                    fed: out,
+                    holes: latch.holes(),
+                    dropped: Some((k, why)),
+                };
+            }
+            if let MicTick::Samples(samples) = res.tick {
+                out.extend(samples);
+            }
+        }
+        Stalled {
+            fed: out,
+            holes: latch.holes(),
+            dropped: None,
+        }
+    }
+
+    /// What [`through_a_stall`] saw: what was fed, the over's holes, and its drop if it ended.
+    struct Stalled {
+        fed: Vec<f32>,
+        holes: (u32, u32),
+        dropped: Option<(u64, MicDrop)>,
+    }
+
+    /// ★ A stall under the lead-in is absorbed: every frame still plays at its moment, the air
+    /// carries no silence past the pre-roll, and no hole is counted. CONTROL: the stall happened
+    /// (three frames arrived together, late).
+    #[test]
+    fn a_stall_under_the_lead_in_leaves_no_hole_on_the_air() {
+        let Stalled {
+            fed,
+            holes,
+            dropped,
+        } = through_a_stall(50, 40);
+        assert_eq!(dropped, None);
+        assert_eq!(holes, (0, 0), "a hole counted where none went on the air");
+        let after_pre_roll = &fed[MIC.samples(MIC.ahead_ms) as usize..];
+        assert!(
+            !after_pre_roll.is_empty() && after_pre_roll.iter().all(|s| *s == 0.5),
+            "silence went on the air after a stall the lead-in should absorb"
+        );
+    }
+
+    /// ★ A stall between the lead-in and the gap leaves one hole on the air, about the stall's
+    /// length less the lead-in, counted once the audio resumes; the over goes on. CONTROL: the
+    /// silence is really in what was fed, and audio follows it.
+    #[test]
+    fn a_stall_past_the_lead_in_leaves_one_counted_hole_and_the_over_goes_on() {
+        let Stalled {
+            fed,
+            holes: (holes, hole_ms),
+            dropped,
+        } = through_a_stall(150, 50);
+        assert_eq!(dropped, None, "a stall under the gap ended the over");
+        assert_eq!(holes, 1);
+        let lead_in = MIC.lead_in_ms as u32;
+        assert!(
+            (150 - lead_in - 20..=150 - lead_in + 20).contains(&hole_ms),
+            "a 150 ms stall left a {hole_ms} ms hole"
+        );
+        let after_pre_roll = &fed[MIC.samples(MIC.ahead_ms) as usize..];
+        let silent = after_pre_roll.iter().filter(|s| **s == 0.0).count() as u64;
+        assert_eq!(
+            silent * 1000 / u64::from(MIC.rate_hz),
+            u64::from(hole_ms),
+            "the count is what went on the air"
+        );
+        assert_eq!(fed.last(), Some(&0.5), "the audio resumed after the hole");
+    }
+
+    /// ★ A stall of the gap or longer ends the over (M2), 200 ms after the last audio arrived and
+    /// within a tick of it, and the silence it ends in is its end, not a hole. CONTROL: the same
+    /// stall 60 ms shorter is a hole the over survives (the test above).
+    #[test]
+    fn a_stall_of_the_gap_ends_the_over_and_counts_no_hole() {
+        let Stalled { holes, dropped, .. } = through_a_stall(250, 50);
+        // The last frame before the stall was sent and arrived at 180 ms: tick 19, at 380 ms.
+        assert_eq!(dropped, Some((19, MicDrop::AudioGap)));
+        assert_eq!(
+            holes,
+            (0, 0),
+            "the silence the over ended in was counted as a hole"
         );
     }
 

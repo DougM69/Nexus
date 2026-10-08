@@ -528,10 +528,13 @@ impl Streaming {
         self.view
     }
 
-    /// The microphone over's state for the page, when it has changed since the page was last told.
+    /// The microphone over's state for the page, when what the page shows of it has changed since
+    /// the page was last told. The over's holes on the air are not among what it shows, so a hole
+    /// alone tells the page nothing new.
     pub fn mic_state(&mut self) -> Option<String> {
         let now = self.station.host.mic.status();
-        if now == self.mic_told {
+        let shown = |s: &tempo_app::mic::MicStatus| (s.armed, s.keyed, s.no_power_out, s.ended);
+        if shown(&now) == shown(&self.mic_told) {
             return None;
         }
         self.mic_told = now;

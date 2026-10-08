@@ -25,9 +25,10 @@
 //! From the computer: `stop` at the press and every 50 ms until it is acknowledged; `hold` and
 //! `release` for a held PTT; `heartbeat` every 500 ms, naming its lease and the last snapshot its
 //! screen fetched. From the shack: `stopped` for every Stop, each press's report, the microphone
-//! over's state, and presence's deadline at each renewal. Each message is one datagram of at most
-//! 128 bytes, and nothing is answered before this computer has spoken: the shack answers the
-//! address of the last datagram that verified.
+//! over's state with its holes on the air so far (display only), and presence's deadline at each
+//! renewal. Each message is one datagram of at most 128 bytes, and nothing is answered before this
+//! computer has spoken: the shack answers the address of the last datagram that verified. The
+//! messages' format has its own number ([`FORMAT`]), in the build's contract.
 //!
 //! ## Stop is never refused here
 //!
@@ -65,6 +66,8 @@ use super::datagram::{self, End, Keys, Tag, EXPORTED};
 
 /// The road's port, past the listener's TCP port: 42077 beside 42075, the audio road's 42076 between.
 pub(crate) const PORT_AFTER: u16 = 2;
+/// The format of the road's messages: 2 since the microphone over's state carries its holes.
+const FORMAT: u8 = 2;
 /// How long a road's keys outlive its connection, for a Stop sent as the link drops or after it.
 pub(crate) const AFTERLIFE: Duration = Duration::from_secs(60);
 /// How old the state a heartbeat names may be and still renew presence: the stream's two seconds
@@ -238,12 +241,17 @@ impl Down {
                 body.extend_from_slice(&[u8::from(*keyed), hold_end(*end)]);
                 body
             }
-            Down::Mic(status) => vec![
-                u8::from(status.armed),
-                u8::from(status.keyed),
-                u8::from(status.no_power_out),
-                mic_ended(status.ended),
-            ],
+            Down::Mic(status) => {
+                let mut body = vec![
+                    u8::from(status.armed),
+                    u8::from(status.keyed),
+                    u8::from(status.no_power_out),
+                    mic_ended(status.ended),
+                ];
+                body.extend_from_slice(&status.holes.to_be_bytes());
+                body.extend_from_slice(&status.hole_ms.to_be_bytes());
+                body
+            }
             Down::Presence { left_ms } => left_ms.to_be_bytes().to_vec(),
         }
     }
@@ -259,11 +267,13 @@ impl Down {
                 keyed: flag(body[8])?,
                 end: hold_end_of(body[9])?,
             },
-            (MIC, 4) => Down::Mic(MicStatus {
+            (MIC, 12) => Down::Mic(MicStatus {
                 armed: flag(body[0])?,
                 keyed: flag(body[1])?,
                 no_power_out: flag(body[2])?,
                 ended: mic_ended_of(body[3])?,
+                holes: u32::from_be_bytes(body[4..8].try_into().ok()?),
+                hole_ms: u32::from_be_bytes(body[8..12].try_into().ok()?),
             }),
             (PRESENCE, 4) => Down::Presence {
                 left_ms: u32::from_be_bytes(body.try_into().ok()?),
@@ -277,8 +287,9 @@ impl Down {
 /// these datagrams differently are not the same build.
 pub(crate) fn contract_text() -> String {
     format!(
-        "stop road {} {} up stop={STOP} hold={HOLD} release={RELEASE} heartbeat={HEARTBEAT} \
-         down stopped={STOPPED} press={PRESS} mic={MIC} presence={PRESENCE}\n",
+        "stop road {} {} format {FORMAT} up stop={STOP} hold={HOLD} release={RELEASE} \
+         heartbeat={HEARTBEAT} down stopped={STOPPED} press={PRESS} \
+         mic={MIC}(armed,keyed,noPowerOut,ended,holes,holeMs) presence={PRESENCE}\n",
         datagram::VERSION,
         String::from_utf8_lossy(datagram::STOP_LABEL),
     )

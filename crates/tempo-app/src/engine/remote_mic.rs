@@ -16,7 +16,8 @@
 //! instead of the page's hold, and by every rule below.
 //!
 //! What the page is shown of the over (`micState`) is published to the feed by each tick of a live
-//! over and by its end ([`MicStatus`]).
+//! over and by its end ([`MicStatus`]), with the over's holes on the air so far, which are display
+//! only ([`crate::mic::MicLatch::holes`]).
 //!
 //! ## Where each stop reaches it
 //!
@@ -137,11 +138,14 @@ impl Engine {
     /// tick of a live over ([`Self::poll_mic`]), and by its end, after which no tick runs.
     fn publish_mic_status(&self) {
         if let Some(feed) = &self.mic_feed {
+            let (holes, hole_ms) = self.mic.holes();
             feed.publish(MicStatus {
                 armed: self.mic.active(),
                 keyed: self.mic.keyed(),
                 no_power_out: self.mic_no_power_out(),
                 ended: self.mic_ended,
+                holes,
+                hole_ms,
             });
         }
     }
@@ -776,6 +780,7 @@ mod tests {
             keyed,
             no_power_out: false,
             ended,
+            ..MicStatus::default()
         };
         // The voice stops: the audio gap.
         let mut s = scene();
@@ -837,6 +842,44 @@ mod tests {
                 "{name}: the keyed over ended without its abort"
             );
         }
+    }
+
+    /// ★ The over's holes on the air are published with its state, display only: a stall of 150 ms
+    /// in the page's audio is one hole while the over goes on. CONTROL: on time, the audio leaves
+    /// none.
+    #[test]
+    fn the_overs_holes_on_the_air_are_published_with_its_state() {
+        let mut s = scene();
+        s.key();
+        // A frame every 20 ms; those sent from 200 ms until 350 ms arrive together as it ends.
+        let mut waiting: Vec<MicFrame> = Vec::new();
+        for k in 1..=40u64 {
+            let n = 20 * k;
+            if n.is_multiple_of(100) {
+                s.hold.hold(PRESS, s.at(n));
+            }
+            let arrives = if (200..350).contains(&n) { 350 } else { n };
+            waiting.push(frame(k, s.at(arrives)));
+            let (due, later): (Vec<MicFrame>, Vec<MicFrame>) =
+                waiting.into_iter().partition(|f| f.arrived <= s.at(n));
+            waiting = later;
+            for f in due {
+                s.feed.push(f).unwrap();
+            }
+            s.tick(n);
+            if n == 180 {
+                let status = s.feed.status();
+                assert_eq!(
+                    (status.holes, status.hole_ms),
+                    (0, 0),
+                    "on time: {status:?}"
+                );
+            }
+        }
+        assert!(s.e.mic_keyed(), "a stall under the gap ended the over");
+        let status = s.feed.status();
+        assert_eq!(status.holes, 1, "{status:?}");
+        assert!((40..=110).contains(&status.hole_ms), "{status:?}");
     }
 
     /// ★ The operator's ruling "Arms your mic": a press of the Phone cockpit's PTT made through the
