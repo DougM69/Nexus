@@ -632,6 +632,18 @@ mod tests {
         assert!(gen_wave(&enc.tones, 1500.0).is_some());
         assert_eq!(gen_wave(&enc.tones[..58], 1500.0), None, "a partial frame");
         assert_eq!(gen_wave(&[], 1500.0), None, "no frames");
+        // Past one frame but not a whole number of them: only the whole-frame
+        // check refuses these (58 above is caught by the one-frame minimum).
+        let three = encode("CQ KD9TAW EN52", Profile::Unknown).unwrap();
+        assert_eq!(three.frames(), 3);
+        for n in [
+            FRAME_SYMBOLS + 1,
+            2 * FRAME_SYMBOLS - 1,
+            2 * FRAME_SYMBOLS + 1,
+        ] {
+            assert_eq!(gen_wave(&three.tones[..n], 1500.0), None, "{n} tones");
+        }
+        assert!(gen_wave(&three.tones[..2 * FRAME_SYMBOLS], 1500.0).is_some());
         let mut bad = enc.tones.clone();
         bad[20] = 4;
         assert_eq!(gen_wave(&bad, 1500.0), None, "a tone above 3");
@@ -735,6 +747,21 @@ mod tests {
             JTTY_ERR_ARGS
         );
         assert!(wave.iter().all(|&s| s == 9.0), "a refused call wrote audio");
+        // One frame and a symbol, into a buffer big enough for it: only the
+        // whole-frame check is left to refuse.
+        let mut roomy = vec![9.0f32; 2 * FRAME_SAMPLES];
+        assert_eq!(
+            wav(
+                &tones[..FRAME_SYMBOLS + 1],
+                FRAME_SYMBOLS as c_int + 1,
+                &mut roomy
+            ),
+            JTTY_ERR_ARGS
+        );
+        assert!(
+            roomy.iter().all(|&s| s == 9.0),
+            "a refused call wrote audio"
+        );
         assert_eq!(
             wav(one, FRAME_SYMBOLS as c_int, &mut wave),
             FRAME_SAMPLES as c_int
