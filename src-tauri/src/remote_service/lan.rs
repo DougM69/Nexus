@@ -55,7 +55,10 @@
 //! same address, at the TCP port plus two (42077), heard only from the same subnet, with a road
 //! for each connection named in its welcome and keyed from that connection's TLS session
 //! ([`datagram`]). Its Stop goes there as well as on the link, and its presence is renewed only
-//! there, by a heartbeat naming a snapshot the lane pushed under two seconds before.
+//! there, by a heartbeat naming a snapshot the lane pushed under two seconds before. Between the
+//! two, at the TCP port plus one (42076), is its audio road (`audio_road`): the station's receive
+//! audio to it, and its microphone to the station's microphone over, refused while every start from
+//! afar is. A socket, a thread and keys of its own, so audio never stands in Stop's way.
 //!
 //! ## Caps and limits
 //!
@@ -118,6 +121,8 @@
 //!
 //! The paired computer's side, its key, its pairing and its road, is `crate::lan_client`, which
 //! speaks this wire with this module's own functions and versions.
+#[cfg(feature = "radio")]
+pub(crate) mod audio_road;
 mod book;
 mod channel;
 pub(crate) mod commands;
@@ -692,6 +697,22 @@ fn powers(deps: &Deps) -> Option<stop_road::Powers> {
     })
 }
 
+/// What the audio road's thread may do (`audio_road::Powers`): the station's one receive encoder,
+/// the audio lane's admission, the held PTT, read, and the microphone over the stream installed in
+/// the engine.
+#[cfg(feature = "radio")]
+fn audio_powers(deps: &Deps) -> audio_road::Powers {
+    let authority = deps.authority.clone();
+    audio_road::Powers {
+        receive: deps.feeds.audio.clone(),
+        admitted: Arc::new(move |session, device, lease, now| {
+            authority.audio_admitted(session, device, lease, now)
+        }),
+        ptt: deps.feeds.stream.ptt.clone(),
+        mic: deps.feeds.stream.mic.clone(),
+    }
+}
+
 /// The station's advert by name for a listener at `network` and `port`, on the adapter of
 /// `choice`: "Nexus" and its key's tag, never the computer's name (`tempo_stream::lan::dnssd`).
 /// `None` when Windows will not advertise it, or there is no key to name it by.
@@ -706,12 +727,16 @@ fn advert(deps: &Deps, choice: Option<&Choice>, network: Network, port: u16) -> 
     (deps.advertise)(&record)
 }
 
-/// The listening socket, the connections it has accepted, and Stop's second road beside it.
+/// The listening socket, the connections it has accepted, and Stop's second road and the audio
+/// road beside it.
 struct Listener {
     network: Network,
     port: u16,
     /// Stop's second road: its socket on the same address, and its thread.
     road: Option<stop_road::Running>,
+    /// The audio road: its socket on the same address, and its thread.
+    #[cfg(feature = "radio")]
+    audio: Option<audio_road::Running>,
     /// The generation of the LAN key it presents: a reset moves it, and the listener restarts.
     generation: u64,
     stop: watch::Sender<bool>,
@@ -761,6 +786,23 @@ impl Listener {
                 "on this network: Stop's second road did not open; Stop goes by the link alone",
             );
         }
+        // And the audio road, the same way: without it a computer here hears nothing.
+        #[cfg(feature = "radio")]
+        let audio = audio_road::AudioRoad::start(
+            SocketAddrV4::new(
+                network.address(),
+                port.saturating_add(audio_road::PORT_AFTER),
+            ),
+            stop_road::Hears::Subnet(network),
+            audio_powers(deps),
+        );
+        #[cfg(feature = "radio")]
+        if audio.is_none() {
+            tempo_core::applog::warn(
+                "remote",
+                "on this network: the audio road did not open; a computer here hears nothing",
+            );
+        }
         let shared = channel::Shared {
             authority: deps.authority.clone(),
             engine: deps.engine.clone(),
@@ -777,6 +819,8 @@ impl Listener {
             commands: deps.commands.clone(),
             build: (wire::APP, wire::contract()),
             stop_road: road.as_ref().map(stop_road::Running::road),
+            #[cfg(feature = "radio")]
+            audio_road: audio.as_ref().map(audio_road::Running::road),
         };
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(accept(socket, shared, stopped));
@@ -784,6 +828,8 @@ impl Listener {
             network,
             port,
             road,
+            #[cfg(feature = "radio")]
+            audio,
             generation,
             stop,
             task,
@@ -807,13 +853,19 @@ impl Listener {
     }
 
     /// Close the port and end every connection: each ends its stream, the stream's presence at
-    /// once, and its lease, before this returns. Then Stop's second road closes, its keys with it,
-    /// and the advert is withdrawn, both off this thread, since each can wait a moment.
+    /// once, and its lease, before this returns. Then Stop's second road and the audio road close,
+    /// their keys with them, and the advert is withdrawn, all off this thread, since each can wait
+    /// a moment.
     async fn stop(self) {
         let _ = self.stop.send(true);
         let _ = self.task.await;
         if let Some(road) = self.road {
             let thread = road.stop();
+            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        }
+        #[cfg(feature = "radio")]
+        if let Some(audio) = self.audio {
+            let thread = audio.stop();
             let _ = tokio::task::spawn_blocking(move || thread.join()).await;
         }
         if let Some(advert) = self.advert {

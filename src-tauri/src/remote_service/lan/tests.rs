@@ -238,6 +238,8 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         commands: super::commands::Commands::default(),
         build: (super::wire::APP, super::wire::contract()),
         stop_road: None,
+        #[cfg(feature = "radio")]
+        audio_road: None,
     };
     Shack {
         shared,

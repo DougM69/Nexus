@@ -552,8 +552,8 @@ impl Drop for Opened {
 }
 
 /// A press as the held PTT knows it: this road's tag and the computer's number, so no two roads'
-/// presses can be taken for one another.
-fn press_id(tag: &Tag, press: u64) -> String {
+/// presses can be taken for one another. The audio road names a press's frames the same way.
+pub(crate) fn press_id(tag: &Tag, press: u64) -> String {
     let tag: String = tag.iter().map(|b| format!("{b:02x}")).collect();
     format!("road-{tag}-{press:016x}")
 }
@@ -661,7 +661,7 @@ impl Thread {
         if !self.hears.hears(from.ip()) {
             return;
         }
-        let Some(tag) = datagram::tag_of(bytes) else {
+        let Some(tag) = datagram::tag_of(bytes, datagram::MAX) else {
             return;
         };
         let Some(road) = self.roads.get_mut(&tag) else {

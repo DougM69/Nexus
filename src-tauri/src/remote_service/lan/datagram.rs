@@ -1,13 +1,14 @@
 //! The datagram layer of the native client's roads beside the command link: Stop's second road
-//! (`super::stop_road` at the shack, `crate::lan_client::stop_road` on the other computer) and,
-//! after it, the audio road. A datagram is small, sent once, and either verifies under the road's
-//! keys or is dropped before anything reads its body.
+//! (`super::stop_road` at the shack, `crate::lan_client::stop_road` on the other computer) and the
+//! audio road (`super::audio_road`, `crate::lan_client::audio_road`). A datagram is small, sent
+//! once, and either verifies under the road's keys or is dropped before anything reads its body.
 //!
 //! ## The keys
 //!
 //! A road's keys come from the command link's own TLS 1.3 session, through its exporter (RFC 8446
-//! §7.5), with the road's own label ([`STOP_LABEL`]) and the session id the shack stamped in its
-//! welcome as the context. One export ([`EXPORTED`] bytes) gives each direction a key and a salt:
+//! §7.5), with the road's own label ([`STOP_LABEL`], [`AUDIO_LABEL`]) and the session id the shack
+//! stamped in its welcome as the context, so no two roads share a key. One export ([`EXPORTED`]
+//! bytes) gives each direction a key and a salt:
 //! "up", from the computer to the shack, and "down", back. Both ends derive the same bytes from the
 //! session they share, and nobody else can: they exist only while the link that made them is open,
 //! and the shack keeps the Stop road's for a minute past its close, for a late Stop. They are never
@@ -25,7 +26,9 @@
 //!
 //! The clear 18 bytes are the AEAD's associated data, so none of them can be changed in transit.
 //! The nonce is the direction's salt with the sequence in its last eight bytes (SRTP's and TLS 1.3's
-//! construction), so no nonce repeats under one key while no sequence does. At most [`MAX`] bytes.
+//! construction), so no nonce repeats under one key while no sequence does. At most [`MAX`] bytes
+//! on Stop's road; the audio road carries one Opus frame a datagram, whose receive frames are
+//! variable in size, and has its own maximum ([`AUDIO_MAX`]).
 //!
 //! ## What is dropped, before the body is read
 //!
@@ -48,11 +51,17 @@ pub(crate) const VERSION: u8 = 1;
 pub(crate) const HEADER: usize = 18;
 /// The AEAD's tag, after the body.
 const SEAL: usize = 16;
-/// The largest datagram either way, so none is ever split or waits behind another.
+/// The largest datagram either way on Stop's road, so none is ever split or waits behind another.
 pub(crate) const MAX: usize = 128;
+/// The largest datagram either way on the audio road: one 20 ms receive frame, whose Opus packet is
+/// variable in size (the receive encoder's ceiling is 400 bytes), with its header, numbers and
+/// seal. Far under any network's packet size, so it is never split either.
+pub(crate) const AUDIO_MAX: usize = 512;
 /// The exporter's label for Stop's second road: ours, beginning `EXPORTER` as RFC 5705 §4 asks, so
 /// it cannot collide with a label of TLS's own.
 pub(crate) const STOP_LABEL: &[u8] = b"EXPORTER-nexus-stop-road";
+/// The exporter's label for the audio road: its keys are never Stop's.
+pub(crate) const AUDIO_LABEL: &[u8] = b"EXPORTER-nexus-audio-road";
 /// One export: a key and a salt for each direction.
 pub(crate) const EXPORTED: usize = 2 * (KEY + NONCE_LEN);
 const KEY: usize = 16;
@@ -76,6 +85,8 @@ pub(crate) struct Sealer {
     salt: [u8; NONCE_LEN],
     tag: Tag,
     next: AtomicU64,
+    /// The road's largest datagram.
+    max: usize,
 }
 
 /// One direction's receiving half: its key, its salt, the road's tag and the replay window.
@@ -84,6 +95,8 @@ pub(crate) struct Opener {
     salt: [u8; NONCE_LEN],
     tag: Tag,
     window: Window,
+    /// The road's largest datagram.
+    max: usize,
 }
 
 /// Both directions of one road, as one end holds them.
@@ -94,8 +107,14 @@ pub(crate) struct Keys {
 
 impl Keys {
     /// The road `tag`'s keys at `end`, from the exporter's `exported` bytes: up's key and salt, then
-    /// down's. The shack sends down and receives up; the computer the other way.
+    /// down's. The shack sends down and receives up; the computer the other way. Stop's road: at
+    /// most [`MAX`] bytes a datagram.
     pub(crate) fn new(exported: &[u8; EXPORTED], tag: Tag, end: End) -> Option<Self> {
+        Self::sized(exported, tag, end, MAX)
+    }
+
+    /// The same for a road whose datagrams may be up to `max` bytes (the audio road's [`AUDIO_MAX`]).
+    pub(crate) fn sized(exported: &[u8; EXPORTED], tag: Tag, end: End, max: usize) -> Option<Self> {
         let (up, down) = exported.split_at(KEY + NONCE_LEN);
         let (send, receive) = match end {
             End::Shack => (down, up),
@@ -107,12 +126,14 @@ impl Keys {
                 salt: salt(send)?,
                 tag,
                 next: AtomicU64::new(1),
+                max,
             },
             receive: Opener {
                 key: key(receive)?,
                 salt: salt(receive)?,
                 tag,
                 window: Window::default(),
+                max,
             },
         })
     }
@@ -141,9 +162,9 @@ fn nonce(salt: &[u8; NONCE_LEN], sequence: u64) -> Nonce {
 }
 
 /// The clear header's parts: `(version, kind, tag, sequence)`, or `None` for a datagram that is too
-/// short or too long to be one.
-fn header(datagram: &[u8]) -> Option<(u8, u8, Tag, u64)> {
-    if datagram.len() < HEADER + SEAL || datagram.len() > MAX {
+/// short to be one, or longer than its road's `max`.
+fn header(datagram: &[u8], max: usize) -> Option<(u8, u8, Tag, u64)> {
+    if datagram.len() < HEADER + SEAL || datagram.len() > max {
         return None;
     }
     let tag: Tag = datagram[2..10].try_into().ok()?;
@@ -152,9 +173,10 @@ fn header(datagram: &[u8]) -> Option<(u8, u8, Tag, u64)> {
 }
 
 /// The tag a datagram names, read off its clear header alone, for the shack to find the road whose
-/// keys may open it. `None` for anything that is not shaped as a datagram of this version.
-pub(crate) fn tag_of(datagram: &[u8]) -> Option<Tag> {
-    header(datagram)
+/// keys may open it. `None` for anything that is not shaped as a datagram of this version on a road
+/// whose datagrams are at most `max` bytes.
+pub(crate) fn tag_of(datagram: &[u8], max: usize) -> Option<Tag> {
+    header(datagram, max)
         .filter(|(version, ..)| *version == VERSION)
         .map(|(_, _, tag, _)| tag)
 }
@@ -163,7 +185,7 @@ impl Sealer {
     /// A datagram of `kind` carrying `body`, sealed under the next sequence. `None` once the
     /// sequence is spent (it never wraps into one already used) or for a body that would not fit.
     pub(crate) fn seal(&self, kind: u8, body: &[u8]) -> Option<Vec<u8>> {
-        if HEADER + body.len() + SEAL > MAX {
+        if HEADER + body.len() + SEAL > self.max {
             return None;
         }
         let sequence = self
@@ -192,7 +214,7 @@ impl Opener {
     /// `datagram`'s kind and body, once it has verified under this road's key and its sequence is
     /// one the window has not seen; `None`, with nothing read past the clear header, otherwise.
     pub(crate) fn open(&mut self, datagram: &[u8]) -> Option<(u8, Vec<u8>)> {
-        let (version, kind, tag, sequence) = header(datagram)?;
+        let (version, kind, tag, sequence) = header(datagram, self.max)?;
         if version != VERSION || tag != self.tag || !self.window.fresh(sequence) {
             return None;
         }
@@ -360,6 +382,38 @@ mod tests {
             shack.receive.open(&sealed[69]).is_some(),
             "sequence 70, never seen"
         );
+    }
+
+    /// ★ Each road has its own largest datagram: one past Stop's 128 bytes is sealed and opened under
+    /// the audio road's keys, and refused on Stop's road before its body is read, whatever its tag
+    /// says. CONTROL: past the audio road's own maximum it is refused there too, and the two roads'
+    /// labels differ, so they never share a key.
+    #[test]
+    fn each_road_has_its_own_largest_datagram() {
+        let computer = Keys::sized(&exported(5), TAG, End::Computer, AUDIO_MAX).unwrap();
+        let mut audio = Keys::sized(&exported(5), TAG, End::Shack, AUDIO_MAX).unwrap();
+        let mut stop = Keys::new(&exported(5), TAG, End::Shack).unwrap();
+        let body = vec![0x42; 300];
+        let big = computer
+            .send
+            .seal(2, &body)
+            .expect("an audio-sized body is sealed");
+        assert!(big.len() > MAX);
+        assert_eq!(tag_of(&big, MAX), None, "too long for Stop's road");
+        assert_eq!(tag_of(&big, AUDIO_MAX), Some(TAG));
+        assert_eq!(
+            stop.receive.open(&big),
+            None,
+            "Stop's road takes nothing that long"
+        );
+        assert_eq!(audio.receive.open(&big), Some((2, body)));
+        assert_eq!(
+            computer
+                .send
+                .seal(2, &vec![0; AUDIO_MAX - HEADER - SEAL + 1]),
+            None
+        );
+        assert_ne!(STOP_LABEL, AUDIO_LABEL);
     }
 
     /// The window's own edges, against a plain record of what was taken.

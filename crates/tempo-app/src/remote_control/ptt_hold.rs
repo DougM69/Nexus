@@ -191,6 +191,15 @@ impl PttHold {
             .is_some_and(|p| p.phase == Phase::Keyed)
     }
 
+    /// True while press `id` is the one in force, keyed and not ending: the one press whose audio
+    /// the microphone over it armed may take. A read; it changes nothing.
+    pub fn keyed_by(&self, id: &str) -> bool {
+        self.state()
+            .press
+            .as_ref()
+            .is_some_and(|p| p.id == id && p.phase == Phase::Keyed && p.ending.is_none())
+    }
+
     /// One radio-loop tick, on the engine. `may_key` is whether a remote key would be admitted
     /// right now; `key_up` is whether the engine's manual key is still up. `ptt` is the engine's
     /// own PTT verb: called with `true` to key (it answers whether the key is now up) and with
@@ -253,6 +262,27 @@ mod tests {
 
     const A: &str = "10000000-0000-4000-8000-00000000000a";
     const B: &str = "10000000-0000-4000-8000-00000000000b";
+
+    /// ★ `keyed_by` names only the press whose audio may reach the microphone over: the one in
+    /// force, keyed, and not ending. CONTROL: a pending press, another id, a released press and a
+    /// refused one are none of those.
+    #[test]
+    fn keyed_by_names_only_the_keyed_press_in_force() {
+        let t0 = Instant::now();
+        let hold = PttHold::default();
+        assert!(!hold.keyed_by(A), "no press");
+        hold.hold(A, t0);
+        assert!(!hold.keyed_by(A), "pending, not keyed");
+        hold.tick(t0, true, false, |_| true);
+        assert!(hold.keyed_by(A), "keyed");
+        assert!(!hold.keyed_by(B), "another press");
+        hold.release(A);
+        assert!(!hold.keyed_by(A), "released, ending");
+        let refused = PttHold::default();
+        refused.hold(B, t0);
+        refused.tick(t0, false, false, |_| true);
+        assert!(!refused.keyed_by(B), "refused");
+    }
 
     /// The engine's PTT as the tests see it: whether the key is up, and every call made.
     #[derive(Default)]

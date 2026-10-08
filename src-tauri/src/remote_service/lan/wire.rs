@@ -297,8 +297,9 @@ pub(crate) fn read_feed(frame: &[u8]) -> Option<(&str, u64, &[u8])> {
 // --- The build ------------------------------------------------------------------------------------
 
 /// This build's contract: SHA-256, lowercase hex, of this protocol's number, every command's class,
-/// the dispatcher's tables, the feeds and Stop's second road's datagrams. Two builds with the same
-/// contract route, admit and push every command alike, and read each other's Stop road.
+/// the dispatcher's tables, the feeds, and the datagrams of Stop's second road and the audio road.
+/// Two builds with the same contract route, admit and push every command alike, and read each
+/// other's roads.
 pub(crate) fn contract() -> &'static str {
     static CONTRACT: OnceLock<String> = OnceLock::new();
     CONTRACT.get_or_init(|| {
@@ -317,6 +318,8 @@ pub(crate) fn contract() -> &'static str {
             ));
         }
         text.push_str(&super::stop_road::contract_text());
+        #[cfg(feature = "radio")]
+        text.push_str(&super::audio_road::contract_text());
         digest(&SHA256, text.as_bytes())
             .as_ref()
             .iter()
@@ -594,5 +597,8 @@ mod tests {
         }
         assert!(text.contains("event pounce\n") && text.contains("profile desktop\n"));
         assert!(super::super::stop_road::contract_text().starts_with("stop road 1 "));
+        #[cfg(feature = "radio")]
+        assert!(super::super::audio_road::contract_text()
+            .starts_with("audio road 1 EXPORTER-nexus-audio-road format 1 max 512 "));
     }
 }

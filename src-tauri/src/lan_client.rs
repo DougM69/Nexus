@@ -20,6 +20,9 @@
 //! - **No engine, no radio and no operations authority.** This computer's own station, if it has
 //!   one, is out of reach: nothing here names the engine, and the window's page reaches no Nexus
 //!   command (the loopback origin, below).
+//! - **This computer's headset, in client mode** ([`audio_road`]): the station's audio out and the
+//!   operator's microphone in, on this computer's own devices, opened only while wanted. It plays
+//!   and captures; nothing here keys anything.
 //!
 //! ## Pairing ([`pairing`])
 //!
@@ -72,6 +75,8 @@
 //! Remote on or off, revoking a browser), and gives the grant back at once. The page acquires
 //! again after `notController` or `leaseExpired`, when nobody else holds control; nothing at the
 //! station changes for it.
+/// The audio road, beside the command link, and this computer's headset.
+pub(crate) mod audio_road;
 /// The command link, protocol 2, which client mode drives.
 pub(crate) mod link;
 mod origin;

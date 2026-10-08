@@ -121,10 +121,10 @@ pub struct Subscription {
 }
 
 /// What one take produced for one listener.
-struct Taken {
-    frames: Vec<EncodedFrame>,
+pub(crate) struct Taken {
+    pub(crate) frames: Vec<EncodedFrame>,
     /// Frames this listener lost to its own bound since its last take.
-    dropped: u64,
+    pub(crate) dropped: u64,
 }
 
 impl ReceiveFanout {
@@ -142,8 +142,9 @@ impl ReceiveFanout {
     }
 
     /// Join. The first listener starts the encoder (it takes the feed's reader); a later one
-    /// shares it, from its next frame.
-    fn subscribe(self: &Arc<Self>) -> Result<Subscription, &'static str> {
+    /// shares it, from its next frame. The relay's Listen lane, each stream's lane and each
+    /// computer's audio road on this network (`super::lan::audio_road`) are listeners alike.
+    pub(crate) fn subscribe(self: &Arc<Self>) -> Result<Subscription, &'static str> {
         let mut state = self.state();
         if state.encoder.is_none() {
             let source = self.feed.describe().ok_or("audioUnavailable")?.source;
@@ -219,7 +220,7 @@ impl Fanout {
 
 impl Subscription {
     /// Run the encoder (once, for everyone) and take this listener's frames.
-    fn take(&self, now: Instant) -> Result<Taken, &'static str> {
+    pub(crate) fn take(&self, now: Instant) -> Result<Taken, &'static str> {
         let mut state = self.fanout.state();
         state.pump(now);
         let sink = state

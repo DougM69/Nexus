@@ -77,7 +77,7 @@ fn client_mode_drives_the_shack_end_to_end() {
     driving.abort();
     tauri::async_runtime::block_on(async {
         client.let_go().await;
-        let (other, _) = Link::connect(&record, Some(at), 7)
+        let (other, _) = Link::connect(&record, Some(at), 7, None)
             .await
             .expect("the link opens again");
         let mut state = json!({});

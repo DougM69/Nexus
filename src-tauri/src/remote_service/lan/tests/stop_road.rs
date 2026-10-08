@@ -10,7 +10,12 @@
 //! alone stops each kind of over; presence is renewed only by a fresh echo; both roads dead, it
 //! halts within five seconds and a tick. And a press from afar never keys while every start is
 //! refused.
-use super::super::datagram::{End, Keys, Tag, EXPORTED, STOP_LABEL};
+//!
+//! Beside it, the audio road (`super::super::audio_road`), on the same roadside: its own socket and
+//! keys, the station's receive audio to a computer in control, and the microphone refused before
+//! anything decodes it. The premise-1 flood goes to that real audio socket.
+use super::super::audio_road::{self, AudioRoad};
+use super::super::datagram::{End, Keys, Tag, AUDIO_LABEL, AUDIO_MAX, EXPORTED, STOP_LABEL};
 use super::super::stop_road::{
     Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, FRESH,
 };
@@ -18,6 +23,7 @@ use super::super::wire;
 use super::commands::App;
 use super::drops::{radio_loop, Over, TICK};
 use super::*;
+use crate::remote_service::audio::ReceiveFanout;
 use crate::remote_service::operations::tests::transmit::{
     assert_stopped, key_locally, LOCAL_TRANSMISSIONS,
 };
@@ -26,6 +32,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use tempo_app::mic::MicFeed;
 use tempo_app::remote_control::ptt_hold::{HoldEnd, PttHold};
+use tempo_audio::mic_encode::{MicEncoder, MIC_FRAME_SAMPLES};
+use tempo_audio::receive_encode::DetachedFeed;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// The design's bound for a Stop on this road, flood or no flood.
@@ -60,6 +68,9 @@ struct Roadside {
     s: Shack,
     ptt: PttHold,
     road: Option<Running>,
+    /// The audio road beside it, and the receive feed its encoder reads.
+    audio: Option<audio_road::Running>,
+    feed: Arc<DetachedFeed>,
 }
 
 impl Drop for Roadside {
@@ -67,6 +78,38 @@ impl Drop for Roadside {
         if let Some(road) = self.road.take() {
             drop(road.stop());
         }
+        if let Some(audio) = self.audio.take() {
+            drop(audio.stop());
+        }
+    }
+}
+
+impl Roadside {
+    /// What the audio road has done so far.
+    fn counts(&self) -> &audio_road::Counts {
+        self.audio.as_ref().expect("an audio road").counts()
+    }
+
+    /// The station's band on its receive feed, 20 ms of a 700 Hz tone every 20 ms, until the flag
+    /// it returns is cleared.
+    fn on_the_air(&self) -> Arc<AtomicBool> {
+        let playing = Arc::new(AtomicBool::new(true));
+        let (feed, on) = (self.feed.clone(), playing.clone());
+        std::thread::spawn(move || {
+            let mut n = 0usize;
+            while on.load(Ordering::SeqCst) {
+                let block: Vec<f32> = (0..960)
+                    .map(|i| {
+                        let t = (n + i) as f32 / 48_000.0;
+                        0.2 * (2.0 * std::f32::consts::PI * 700.0 * t).sin()
+                    })
+                    .collect();
+                feed.publish(Instant::now(), &block);
+                n += 960;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        playing
     }
 }
 
@@ -85,7 +128,7 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
         stop: RoadStop::new(s.shared.authority.clone(), s.shared.engine.clone()).unwrap(),
         presence: RoadPresence::new(s.shared.authority.clone(), s.shared.engine.clone()),
         ptt: ptt.clone(),
-        mic,
+        mic: mic.clone(),
         paired: s.shared.desk.book.verifier().0,
         pairings: {
             let book = s.shared.desk.book.clone();
@@ -95,10 +138,30 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
     let at = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
     let road = StopRoad::start_with(at, hears, powers, afterlife).unwrap();
     s.shared.stop_road = Some(road.road());
+    // The audio road, as the listener makes it: the station's one encoder over a feed of the
+    // test's own, the audio lane's admission from the shack's own authority.
+    let feed = Arc::new(DetachedFeed::new(48_000));
+    let authority = s.shared.authority.clone();
+    let audio = AudioRoad::start(
+        at,
+        hears,
+        audio_road::Powers {
+            receive: Some(ReceiveFanout::new(feed.feed.clone())),
+            admitted: Arc::new(move |session, device, lease, now| {
+                authority.audio_admitted(session, device, lease, now)
+            }),
+            ptt: ptt.clone(),
+            mic,
+        },
+    )
+    .unwrap();
+    s.shared.audio_road = Some(audio.road());
     Roadside {
         s,
         ptt,
         road: Some(road),
+        audio: Some(audio),
+        feed,
     }
 }
 
@@ -176,12 +239,59 @@ fn tag_of(offer: &Value) -> Tag {
 
 /// This computer's export for `session`, from its own side of the TLS session.
 fn exported(socket: &Client, session: &str) -> [u8; EXPORTED] {
+    exported_under(socket, session, STOP_LABEL)
+}
+
+/// The same under any road's label.
+fn exported_under(socket: &Client, session: &str, label: &[u8]) -> [u8; EXPORTED] {
     socket
         .get_ref()
         .get_ref()
         .1
-        .export_keying_material([0; EXPORTED], STOP_LABEL, Some(session.as_bytes()))
+        .export_keying_material([0; EXPORTED], label, Some(session.as_bytes()))
         .unwrap()
+}
+
+/// A computer's end of its audio road: a socket to the road the welcome named, and its keys.
+struct AudioRaw {
+    udp: tokio::net::UdpSocket,
+    keys: Keys,
+}
+
+impl AudioRaw {
+    async fn on(port: u16, keys: Keys) -> Self {
+        let udp = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        udp.connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        Self { udp, keys }
+    }
+
+    async fn say(&self, up: &audio_road::Up) {
+        let datagram = self.keys.send.seal(up.kind(), &up.body()).unwrap();
+        self.udp.send(&datagram).await.unwrap();
+    }
+
+    /// Every frame the shack sent within `within`.
+    async fn heard(&mut self, within: Duration) -> Vec<audio_road::Down> {
+        let deadline = tokio::time::Instant::now() + within;
+        let mut heard = Vec::new();
+        loop {
+            let mut buffer = [0u8; 2048];
+            let Ok(Ok(length)) =
+                tokio::time::timeout_at(deadline, self.udp.recv(&mut buffer)).await
+            else {
+                return heard;
+            };
+            assert!(length <= AUDIO_MAX, "a datagram of {length} bytes");
+            let down = self
+                .keys
+                .receive
+                .open(&buffer[..length])
+                .and_then(|(kind, body)| audio_road::Down::read(kind, &body));
+            heard.extend(down);
+        }
+    }
 }
 
 impl Raw {
@@ -271,6 +381,9 @@ struct Seat {
     state: Value,
     offer: Value,
     road: Raw,
+    /// The welcome's audio road, and this computer's end of it.
+    audio_offer: Value,
+    audio: AudioRaw,
     /// The newest snapshot the lane pushed here: its number and when it arrived.
     snapshot: Option<(u64, Instant)>,
     _stop: watch::Sender<bool>,
@@ -308,6 +421,15 @@ async fn seated_with(r: &Roadside, control: bool) -> Seat {
     let offer = welcome["stopRoad"].clone();
     let keys = Keys::new(&exported(&socket, &session), tag_of(&offer), End::Computer).unwrap();
     let road = Raw::on(offer["port"].as_u64().unwrap() as u16, keys, tag_of(&offer)).await;
+    let audio_offer = welcome["audioRoad"].clone();
+    let audio_keys = Keys::sized(
+        &exported_under(&socket, &session, AUDIO_LABEL),
+        tag_of(&audio_offer),
+        End::Computer,
+        AUDIO_MAX,
+    )
+    .unwrap();
+    let audio = AudioRaw::on(audio_offer["port"].as_u64().unwrap() as u16, audio_keys).await;
     let state = if control {
         let state = ask(&mut socket, json!({"type":"state","requestId":id()})).await;
         let boot = state["value"]["stationBootId"].clone();
@@ -334,6 +456,8 @@ async fn seated_with(r: &Roadside, control: bool) -> Seat {
         state,
         offer,
         road,
+        audio_offer,
+        audio,
         snapshot: None,
         _stop: stop,
     };
@@ -349,6 +473,18 @@ async fn seated_with(r: &Roadside, control: bool) -> Seat {
 impl Seat {
     fn lease(&self) -> String {
         self.state["leaseId"].as_str().unwrap().to_string()
+    }
+
+    /// This computer's audio road keys again, from its own side of the TLS session: a second
+    /// sender under the same keys, for a test's own thread.
+    fn audio_keys(&self) -> Keys {
+        Keys::sized(
+            &exported_under(&self.socket, &self.session, AUDIO_LABEL),
+            tag_of(&self.audio_offer),
+            End::Computer,
+            AUDIO_MAX,
+        )
+        .unwrap()
     }
 
     fn feed(&mut self, frame: &[u8]) {
@@ -791,10 +927,12 @@ fn a_datagram_that_does_not_verify_is_dropped_unread() {
 
 // ----- Stop never waits -----
 
-/// ★ Its own socket, port and thread. With a flood on another of the shack's ports at
-/// a hundred times the audio road's rate, and the command link full (the shack has stopped reading
-/// it), a Stop on the road is acknowledged within 20 ms, and the station stops. CONTROL: the link
-/// really is full (a write waits), and the flood really arrives.
+/// ★ Its own socket, port, thread and keys. The audio road's real socket flooded at a hundred
+/// times its rate with frames that verify (each read, and refused, on the audio road's own
+/// thread), its receive audio flowing to the same computer, and the command link full (the shack
+/// has stopped reading it): a Stop on the road is still acknowledged within 20 ms, five times over.
+/// CONTROL: the flood reached the audio road and was read there, the link really was full, and
+/// the station came to a stop.
 #[test]
 fn a_stop_is_acknowledged_within_20_ms_beside_a_flood_and_a_full_command_link() {
     let _alone = alone();
@@ -803,33 +941,35 @@ fn a_stop_is_acknowledged_within_20_ms_beside_a_flood_and_a_full_command_link() 
         let r = roadside(&app);
         let mut seat = seated(&r).await;
         key_the_mic(&r.s);
-        // Another port of the shack's, as the audio road will be: drained as fast as it comes.
-        let other = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        other
-            .set_read_timeout(Some(Duration::from_millis(50)))
-            .unwrap();
-        let at = other.local_addr().unwrap();
-        let flooding = Arc::new(AtomicBool::new(true));
-        let drained = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let drain = {
-            let (flooding, drained) = (flooding.clone(), drained.clone());
-            std::thread::spawn(move || {
-                let mut buffer = [0u8; 2048];
-                while flooding.load(Ordering::SeqCst) {
-                    if other.recv(&mut buffer).is_ok() {
-                        drained.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
+        // The audio road busy both ways: the station's band to this computer, and its socket
+        // flooded with microphone frames under this computer's own audio keys.
+        let band = r.on_the_air();
+        seat.audio
+            .say(&audio_road::Up::Listen {
+                lease: seat.lease(),
             })
-        };
+            .await;
+        let at = SocketAddr::new(
+            Ipv4Addr::LOCALHOST.into(),
+            seat.audio_offer["port"].as_u64().unwrap() as u16,
+        );
+        let keys = seat.audio_keys();
+        let flooding = Arc::new(AtomicBool::new(true));
         let flood = {
             let flooding = flooding.clone();
             std::thread::spawn(move || {
                 let sender = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-                let datagram = [0x5a; 120];
+                let mut frame = 0u32;
                 // Audio is a datagram every 20 ms: fifty a second. This is five thousand.
                 while flooding.load(Ordering::SeqCst) {
                     for _ in 0..50 {
+                        frame += 1;
+                        let up = audio_road::Up::Mic {
+                            press: 1,
+                            frame,
+                            packet: vec![0x5a; 80],
+                        };
+                        let datagram = keys.send.seal(up.kind(), &up.body()).unwrap();
                         let _ = sender.send_to(&datagram, at);
                     }
                     std::thread::sleep(Duration::from_millis(10));
@@ -845,16 +985,18 @@ fn a_stop_is_acknowledged_within_20_ms_beside_a_flood_and_a_full_command_link() 
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         flooding.store(false, Ordering::SeqCst);
+        band.store(false, Ordering::SeqCst);
         flood.join().unwrap();
-        drain.join().unwrap();
+        let read = r.counts().mic_read.load(Ordering::SeqCst);
+        let sent = r.counts().rx_sent.load(Ordering::SeqCst);
         eprintln!(
-        "measured: Stops on the road acknowledged in {took:?}, beside {} flood datagrams and a \
-         command link that took {written} messages before it was full",
-        drained.load(Ordering::SeqCst)
-    );
+            "measured: Stops on the road acknowledged in {took:?}, beside {read} flood frames read \
+             on the audio road, {sent} receive frames sent on it, and a command link that took \
+             {written} messages before it was full"
+        );
         assert!(
-            written > 0 && drained.load(Ordering::SeqCst) > 100,
-            "premise"
+            written > 0 && read > 100,
+            "premise: link {written}, read {read}"
         );
         for (n, took) in took.iter().enumerate() {
             let took = took.unwrap_or_else(|| panic!("Stop {} was not acknowledged", n + 1));
@@ -1398,6 +1540,231 @@ fn the_overs_state_crosses_the_road_with_its_holes() {
         "a body without the holes"
     );
     assert!(super::super::stop_road::contract_text().contains(" format 2 "));
+}
+
+// ----- The audio road -----
+
+/// ★ The welcome names each connection's own audio road beside its Stop road: one port for every
+/// connection, not Stop's, and a tag of its own, sixteen lowercase hex characters. CONTROL: a shack
+/// with no audio road names none.
+#[tokio::test]
+async fn the_welcome_names_each_connections_own_audio_road() {
+    let app = App::new();
+    let r = roadside(&app);
+    let (one, two) = (seated(&r).await, seated_with(&r, false).await);
+    assert_eq!(one.audio_offer["port"], two.audio_offer["port"]);
+    assert_ne!(
+        one.audio_offer["port"], one.offer["port"],
+        "Stop's own port"
+    );
+    assert_ne!(one.audio_offer["tag"], two.audio_offer["tag"]);
+    for offer in [&one.audio_offer, &two.audio_offer] {
+        let tag = offer["tag"].as_str().unwrap();
+        assert_eq!(tag.len(), 16);
+        assert!(tag
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+    }
+    let plain = super::commands::running(&app);
+    let (_stop, stopped) = watch::channel(false);
+    let (_task, socket) = dial(&plain, &plain.computer.key, PEER, stopped).await;
+    let mut socket = socket.unwrap();
+    plain
+        .shared
+        .authority
+        .permit_station(&plain.device, true)
+        .unwrap();
+    let welcome = hello(&mut socket, VERSIONS).await;
+    assert!(welcome.get("audioRoad").is_none(), "{welcome}");
+}
+
+/// ★ The audio road takes only its own keys: a frame sealed under the keys Stop's label exports,
+/// with the audio road's own tag, is dropped unread. CONTROL: the same frame under the audio road's
+/// own keys is read (and then refused, as every press from afar is).
+#[tokio::test]
+async fn the_audio_road_takes_only_its_own_keys() {
+    let app = App::new();
+    let r = roadside(&app);
+    let seat = seated(&r).await;
+    let frame = audio_road::Up::Mic {
+        press: 1,
+        frame: 1,
+        packet: vec![0x5a; 80],
+    };
+    let stops_keys = Keys::sized(
+        &exported(&seat.socket, &seat.session),
+        tag_of(&seat.audio_offer),
+        End::Computer,
+        AUDIO_MAX,
+    )
+    .unwrap();
+    let datagram = stops_keys.send.seal(frame.kind(), &frame.body()).unwrap();
+    seat.audio.udp.send(&datagram).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(r.counts().mic_read.load(Ordering::SeqCst), 0, "Stop's keys");
+    seat.audio.say(&frame).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        r.counts().mic_read.load(Ordering::SeqCst),
+        1,
+        "its own keys"
+    );
+    assert_eq!(r.counts().mic_refused.load(Ordering::SeqCst), 1);
+}
+
+/// ★ Receive audio goes to a computer that listens and controls the station, one 20 ms frame a
+/// datagram in the order of its numbers, each decoding as 20 ms; and to no other: a computer whose
+/// lease is another connection's hears nothing, and one that stops listening is sent nothing more
+/// after two seconds. CONTROL: the frames are the station's band, decodable here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn receive_audio_goes_to_a_listening_computer_in_control_and_to_no_other() {
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    let mut watcher = seated_with(&r, false).await;
+    let band = r.on_the_air();
+    let lease = seat.lease();
+    watcher
+        .audio
+        .say(&audio_road::Up::Listen {
+            lease: lease.clone(),
+        })
+        .await;
+    seat.audio
+        .say(&audio_road::Up::Listen {
+            lease: lease.clone(),
+        })
+        .await;
+    let heard = seat.audio.heard(Duration::from_millis(1000)).await;
+    assert!(
+        watcher
+            .audio
+            .heard(Duration::from_millis(300))
+            .await
+            .is_empty(),
+        "a lease of another connection's is no admission"
+    );
+    assert!(heard.len() >= 30, "{} frames in a second", heard.len());
+    let mut decoder = tempo_audio::receive_decode::ReceiveDecoder::new().unwrap();
+    let mut last: Option<u32> = None;
+    for audio_road::Down::Rx { seq, packet, .. } in &heard {
+        assert!(last.is_none_or(|last| *seq > last), "out of order");
+        last = Some(*seq);
+        let samples = decoder.decode(packet).expect("a frame did not decode");
+        assert_eq!(
+            samples.len(),
+            tempo_audio::receive_decode::PLAY_FRAME_SAMPLES
+        );
+    }
+    // No more `listen`: the frames stop within the lapse.
+    tokio::time::sleep(audio_road::LISTEN_LAPSE + Duration::from_millis(300)).await;
+    let _ = seat.audio.heard(Duration::from_millis(50)).await;
+    let later = seat.audio.heard(Duration::from_millis(500)).await;
+    band.store(false, Ordering::SeqCst);
+    assert!(
+        later.is_empty(),
+        "{} frames after it stopped listening",
+        later.len()
+    );
+}
+
+/// ★ The microphone from afar is refused before anything decodes it, while every start from afar
+/// is: a press held on Stop's road with its frames on the audio road, the computer's presence live
+/// and the station in Phone, never keys, never arms the microphone over, and not one frame reaches
+/// it. CONTROL: every frame verified and was read on the audio road; the radio loop ran throughout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_microphone_from_afar_is_refused_before_anything_decodes_it() {
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    seat.renewed().await;
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 3 * PRESENCE,
+    );
+    let mut encoder = MicEncoder::new().unwrap();
+    for frame in 1..=50u32 {
+        if frame % 5 == 1 {
+            seat.road.say(&Up::Hold { press: 7 }).await;
+        }
+        let voice: Vec<f32> = (0..MIC_FRAME_SAMPLES)
+            .map(|i| {
+                let t = (frame as usize * MIC_FRAME_SAMPLES + i) as f32 / 48_000.0;
+                0.4 * (2.0 * std::f32::consts::PI * 800.0 * t).sin()
+            })
+            .collect();
+        let packet = encoder.encode(&voice).unwrap();
+        seat.audio
+            .say(&audio_road::Up::Mic {
+                press: 7,
+                frame,
+                packet,
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!r.ptt.keyed(), "the press is never keyed");
+        let e = r.s.shared.engine.lock().unwrap();
+        assert!(!e.mic_armed(), "the microphone over is never armed");
+    }
+    seat.road.say(&Up::Release { press: 7 }).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    let counts = r.counts();
+    assert_eq!(
+        counts.mic_read.load(Ordering::SeqCst),
+        50,
+        "premise: every frame verified and was read"
+    );
+    assert_eq!(counts.mic_refused.load(Ordering::SeqCst), 50);
+    assert_eq!(
+        counts.mic_taken.load(Ordering::SeqCst),
+        0,
+        "a frame reached the microphone over"
+    );
+    assert!(ticks.len() > 20, "premise: the radio loop ran");
+    assert!(ticks.iter().all(|&(_, on)| !on), "never on the air");
+}
+
+/// ★ The audio road names nothing of the station's engine and nothing of Stop's road: no handle of
+/// either is in its thread, so nothing the audio road does can hold a Stop up, nor a Stop wait for
+/// it. CONTROL: the scan reads the road's code.
+#[test]
+fn the_audio_road_names_nothing_of_the_engine_or_stops_road() {
+    let code: String = include_str!("../audio_road.rs")
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        code.contains("ReceiveFanout") && code.contains("MicFeed"),
+        "the scan reads the code"
+    );
+    for name in [
+        "SharedEngine",
+        "Engine",
+        "engine",
+        "RoadStop",
+        "RoadPresence",
+        "StopRoad",
+        "Outbox",
+        "Commands",
+        "tokio",
+        "Link",
+        "lan_client",
+    ] {
+        assert!(!code.contains(name), "the audio road names `{name}`");
+    }
 }
 
 // ----- The snapshot's numbers -----

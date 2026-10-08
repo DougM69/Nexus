@@ -12,8 +12,9 @@
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
 //!    stamps the session: a session id of its own making, and the device the key belongs to.
 //!    Nothing the computer says names either; that stamp is what the relay supplies on the hosted
-//!    road. It opens the connection's own Stop road (`super::stop_road`), keyed from this TLS
-//!    session with the session id as the context, and the welcome names its port and tag. A
+//!    road. It opens the connection's own Stop road (`super::stop_road`) and audio road
+//!    (`super::audio_road`), each keyed from this TLS session under its own label with the session
+//!    id as the context, and the welcome names each one's port and tag. A
 //!    first message that asks to pair instead goes, under the same version rule, to a
 //!    pairing-only connection (`super::pairing`), which holds the pairing desk and nothing of
 //!    this lane's: none of the steps below happen on it.
@@ -106,6 +107,10 @@ pub(super) struct Shared {
     /// Stop's second road, where each connection's own road is opened as it is welcomed. `None`
     /// when it did not open: the welcome then names none, and Stop has this connection alone.
     pub stop_road: Option<StopRoad>,
+    /// The audio road, where each connection's own is opened as it is welcomed. `None` when it did
+    /// not open: the welcome then names none, and the computer hears nothing.
+    #[cfg(feature = "radio")]
+    pub audio_road: Option<super::audio_road::AudioRoad>,
 }
 
 /// What a remote PC sends. Parsed whole and exactly: anything else closes the connection.
@@ -439,6 +444,22 @@ async fn session<S>(
             .ok()?;
         road.open(&exported, &session, &device, pin, clock.clone())
     });
+    // Its audio road the same way, under the audio road's own label, so its keys are never Stop's.
+    // The Stop road's tag goes with it: a press is named by it at the held PTT.
+    #[cfg(feature = "radio")]
+    let audio = shared.audio_road.as_ref().and_then(|audio| {
+        let exported = socket
+            .get_ref()
+            .get_ref()
+            .1
+            .export_keying_material(
+                [0; datagram::EXPORTED],
+                datagram::AUDIO_LABEL,
+                Some(session.as_bytes()),
+            )
+            .ok()?;
+        audio.open(&exported, &session, &device, road.as_ref().map(|r| r.tag))
+    });
     // The lease this computer takes is bound to this connection, and goes with it.
     let connection = LanConnection::new(shared.authority.clone());
     let paired = book.clone();
@@ -467,6 +488,10 @@ async fn session<S>(
         "stationId":shared.identity.station_id,"app":app,"contract":contract});
     if let Some(road) = &road {
         welcome["stopRoad"] = road.offer();
+    }
+    #[cfg(feature = "radio")]
+    if let Some(audio) = &audio {
+        welcome["audioRoad"] = audio.offer();
     }
     if outbox.text(welcome.to_string()).is_err() {
         return;

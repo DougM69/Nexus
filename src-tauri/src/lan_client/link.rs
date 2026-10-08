@@ -23,6 +23,10 @@
 //! 6. **Stop's second road** ([`Link::stop_road`]), when the welcome names one: a road of its own
 //!    beside this link (`super::stop_road`), keyed from this link's TLS session. It is told when the
 //!    link ends, and outlives it by a minute for a Stop pressed as it drops.
+//! 7. **The audio road** ([`Link::audio_road`]), when the welcome names one and this computer has a
+//!    headset: the station's audio and this computer's microphone (`super::audio_road`), keyed
+//!    under its own label. It ends with the link. The station's status line says whether its rig is
+//!    keyed, which mutes the station's audio here (M9), kept with the over's state ([`OnAir`]).
 //!
 //! Anything the station sends that no station of this build sends ends the link: it fails closed.
 use std::collections::{HashMap, VecDeque};
@@ -38,8 +42,9 @@ use tempo_stream::protocol;
 use tokio::sync::{broadcast, oneshot, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
+use super::audio_road::{AudioRoad, Headset};
 use super::road::{self, Ids, Socket};
-use super::stop_road::StopRoad;
+use super::stop_road::{OnAir, StopRoad};
 use crate::command_dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
 use crate::remote_service::lan::commands::OUTCOMES;
 use crate::remote_service::lan::datagram;
@@ -128,6 +133,10 @@ struct Shared {
     end: Notify,
     /// This link's Stop road, told when the link ends.
     road: Option<Arc<StopRoad>>,
+    /// This link's audio road, told when the link ends.
+    audio: Option<Arc<AudioRoad>>,
+    /// Whether this computer's over may be on the air: the status line's rig keyed goes here.
+    on_air: Arc<OnAir>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -146,13 +155,15 @@ pub(crate) struct Link {
 
 impl Link {
     /// The link to the station `record` names, at `typed` first when the operator gave an address,
-    /// for the run `run` ([`run_id`] in the app): the link and the address that answered, or the
-    /// most telling reason it did not open (the road's, `updateStation`, `updateComputer`,
-    /// `otherBuild`, or `notStation` for a station that said something no station says).
+    /// for the run `run` ([`run_id`] in the app), its audio on `headset` when this computer has one:
+    /// the link and the address that answered, or the most telling reason it did not open (the
+    /// road's, `updateStation`, `updateComputer`, `otherBuild`, or `notStation` for a station that
+    /// said something no station says).
     pub(crate) async fn connect(
         record: &PairedStation,
         typed: Option<SocketAddrV4>,
         run: u64,
+        headset: Option<Arc<dyn Headset>>,
     ) -> Result<(Self, SocketAddrV4), &'static str> {
         let road::Reached {
             mut socket,
@@ -160,8 +171,10 @@ impl Link {
             app,
             contract,
             stop_road,
+            audio_road,
             at,
         } = road::reach(record, &road::order(record, typed)).await?;
+        let on_air = Arc::new(OnAir::default());
         let ours = (wire::APP, wire::contract());
         if let Some(reason) = wire::refusal(End::Computer, ours, (&app, &contract)) {
             let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
@@ -172,7 +185,7 @@ impl Link {
         road::say(&mut socket, open.to_string())
             .await
             .map_err(|_| "unreachable")?;
-        let said = tokio::time::timeout(road::HANDSHAKE, first_word(&mut socket))
+        let said = tokio::time::timeout(road::HANDSHAKE, first_word(&mut socket, &on_air))
             .await
             .ok()
             .flatten();
@@ -208,11 +221,33 @@ impl Link {
                 SocketAddrV4::new(*at.ip(), offer.port).into(),
                 tag,
                 &exported,
+                on_air.clone(),
+            )
+        });
+        // The audio road the same way, under its own label, when this computer has a headset.
+        let audio_road = audio_road.zip(headset).and_then(|(offer, headset)| {
+            let tag = offer.tag()?;
+            let exported = socket
+                .get_ref()
+                .get_ref()
+                .1
+                .export_keying_material(
+                    [0; datagram::EXPORTED],
+                    datagram::AUDIO_LABEL,
+                    Some(ids.session.as_bytes()),
+                )
+                .ok()?;
+            AudioRoad::open(
+                SocketAddrV4::new(*at.ip(), offer.port).into(),
+                tag,
+                &exported,
+                headset,
+                on_air.clone(),
             )
         });
         let (sink, stream) = socket.split();
         let (outbox, writer) = Outbox::spawn(sink);
-        let shared = Arc::new(Shared::new(stop_road));
+        let shared = Arc::new(Shared::new(stop_road, audio_road, on_air));
         let writing = writer.abort_handle();
         let reader = tokio::spawn(read(stream, shared.clone()));
         let keeper = tokio::spawn(keep(outbox.clone(), writer, shared.clone()));
@@ -338,6 +373,11 @@ impl Link {
         self.shared.road.clone()
     }
 
+    /// This link's audio road, when the station opened one and this computer has a headset.
+    pub(crate) fn audio_road(&self) -> Option<Arc<AudioRoad>> {
+        self.shared.audio.clone()
+    }
+
     /// Whether the link has ended.
     pub(crate) fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::SeqCst)
@@ -372,8 +412,9 @@ impl Drop for Link {
     }
 }
 
-/// The station's first word after the `open`, the status line left out: `None` once it has gone.
-async fn first_word(socket: &mut Socket) -> Option<Value> {
+/// The station's first word after the `open`, the status line kept aside (`on_air`): `None` once
+/// it has gone.
+async fn first_word(socket: &mut Socket, on_air: &OnAir) -> Option<Value> {
     loop {
         match socket.next().await? {
             Ok(Message::Text(text)) => {
@@ -381,6 +422,7 @@ async fn first_word(socket: &mut Socket) -> Option<Value> {
                 if said["type"] != "status" {
                     return Some(said);
                 }
+                on_air.rig(said["rigKeyed"].as_bool());
             }
             Ok(Message::Ping(_) | Message::Pong(_)) => {}
             _ => return None,
@@ -428,7 +470,7 @@ async fn keep(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>, shared: A
 }
 
 impl Shared {
-    fn new(road: Option<Arc<StopRoad>>) -> Self {
+    fn new(road: Option<Arc<StopRoad>>, audio: Option<Arc<AudioRoad>>, on_air: Arc<OnAir>) -> Self {
         Self {
             calls: Default::default(),
             operations: Default::default(),
@@ -439,15 +481,21 @@ impl Shared {
             ended: AtomicBool::new(false),
             end: Notify::new(),
             road,
+            audio,
+            on_air,
         }
     }
 
     /// The link has ended: every call still waiting is answered gone, and every other question
-    /// is dropped, which its asker reads the same way. Its Stop road stays a minute more.
+    /// is dropped, which its asker reads the same way. Its Stop road stays a minute more; its audio
+    /// road goes now.
     fn end(&self) {
         self.ended.store(true, Ordering::SeqCst);
         if let Some(road) = &self.road {
             road.link_ended();
+        }
+        if let Some(audio) = &self.audio {
+            audio.link_ended();
         }
         for (_, waiting) in lock(&self.calls).drain() {
             let _ = waiting.send(Answer::Gone);
@@ -513,7 +561,8 @@ impl Shared {
                 };
                 let _ = self.events.send(event);
             }
-            "status" => {}
+            // The rig keyed mutes the station's audio here (M9); `null` when it cannot tell.
+            "status" => self.on_air.rig(message["rigKeyed"].as_bool()),
             _ => return Err(()),
         }
         Ok(())
@@ -591,7 +640,7 @@ mod tests {
     /// are each kept, the newest with its number.
     #[test]
     fn a_feed_value_out_of_its_order_ends_the_link() {
-        let shared = Shared::new(None);
+        let shared = Shared::new(None, None, Arc::default());
         for frame in frames("snapshot/1", &[1, 2, 3]) {
             assert_eq!(shared.heard(Whole::Binary(frame)), Ok(()));
         }
@@ -605,7 +654,7 @@ mod tests {
             (&[1, 2, 1][..], "a step back"),
             (&[2][..], "a first value past 1"),
         ] {
-            let shared = Shared::new(None);
+            let shared = Shared::new(None, None, Arc::default());
             let mut heard: Vec<Result<(), ()>> = frames("meters/1", numbers)
                 .into_iter()
                 .map(|frame| shared.heard(Whole::Binary(frame)))
@@ -613,7 +662,7 @@ mod tests {
             assert_eq!(heard.pop(), Some(Err(())), "{why}");
             assert!(heard.iter().all(Result::is_ok), "{why}");
         }
-        let shared = Shared::new(None);
+        let shared = Shared::new(None, None, Arc::default());
         let unknown = frames("noSuchFeed/1", &[1]).remove(0);
         assert_eq!(
             shared.heard(Whole::Binary(unknown)),
@@ -634,7 +683,7 @@ mod tests {
     /// status line are taken.
     #[test]
     fn a_message_no_station_sends_ends_the_link() {
-        let shared = Shared::new(None);
+        let shared = Shared::new(None, None, Arc::default());
         let said = |value: Value| shared.heard(Whole::Text(value.to_string()));
         assert_eq!(
             said(json!({"type":"result","id":1,"value":{"ok":true}})),

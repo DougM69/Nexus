@@ -11,13 +11,16 @@
 //!
 //! A launch in client mode branches off in `run` (`lib.rs`) before anything of this computer's own
 //! station is opened: no settings opened for writing, no logbook, no Engine, no radio loop, no
-//! rigctld, no audio device, no CAT broker, no WSJT-X UDP, no cluster or spot feed, no upload and
-//! no listener. The app [`run`] builds manages no Engine at all, so a command that reached this
-//! computer's own handler could find none: it would fail, and never run on a station here. What it
-//! does open is this computer's: its windows, the keys of its own `ui-state.json` that are not the
-//! station's, and the two fields of its `settings.json` that belong to it, the update channel and
-//! start at sign-in ([`ThisComputer`]). A test holds the module to the short list of the crate's
-//! own functions it may call, each of which starts nothing.
+//! rigctld, no station audio device, no CAT broker, no WSJT-X UDP, no cluster or spot feed, no
+//! upload and no listener. The app [`run`] builds manages no Engine at all, so a command that
+//! reached this computer's own handler could find none: it would fail, and never run on a station
+//! here. What it does open is this computer's: its windows, the keys of its own `ui-state.json`
+//! that are not the station's, the two fields of its `settings.json` that belong to it, the update
+//! channel and start at sign-in, and This computer ▸ Audio's choice in a file of its own,
+//! `client-audio.json` ([`ThisComputer`]). Its headset (`crate::lan_client::audio_road`) opens this
+//! computer's own output and microphone only while the shack's audio, a press, the meter or the
+//! test wants them, and keys nothing. A test holds the module to the short list of the crate's own
+//! functions it may call, each of which starts nothing of a station.
 //!
 //! ## Every command by its class, failing closed
 //!
@@ -51,7 +54,9 @@
 //! hands the call to the link, and returns. The road's own thread sends it again until the shack
 //! acknowledges it. Each link's road outlives its link by a minute, so a Stop pressed as a link
 //! drops still goes. The road's heartbeat names the last snapshot the main window fetched, kept here
-//! per window, so a window that hangs lets presence lapse at the shack.
+//! per window, so a window that hangs lets presence lapse at the shack. The Stop press also ends
+//! this computer's own press, after the Stop is written and with an atomic store, so the audio road
+//! (`crate::lan_client::audio_road`) stops sending without the Stop ever waiting for it.
 //!
 //! ## The link and the lease
 //!
@@ -87,8 +92,9 @@ use crate::command_dispatch::{
     is_stop, join_ui_state, route, split_ui_state, store_access, transmit_from_afar, Refusal,
     Route, Store, IN_FLIGHT, PER_COMMAND,
 };
+use crate::lan_client::audio_road::{self, Headset, ThisHeadset};
 use crate::lan_client::link::{run_id, Answer, Link};
-use crate::lan_client::stop_road::StopRoad;
+use crate::lan_client::stop_road::{Over, StopRoad};
 use crate::remote_service::vault::PairedStation;
 
 #[cfg(test)]
@@ -310,8 +316,8 @@ impl Shack for Link {
 // --- This computer's own ------------------------------------------------------------------------
 
 /// What client mode keeps of this computer's own: the two settings that are this computer's
-/// (`betaUpdates`, `launchAtLogin`), shown in place of the shack's and changed only here, and where
-/// its own files are.
+/// (`betaUpdates`, `launchAtLogin`), shown in place of the shack's and changed only here; This
+/// computer ▸ Audio's headset; and where its own files are.
 pub(crate) struct ThisComputer {
     /// This computer's `settings.json`. Only the two fields are ever written to it, and only when
     /// the operator changes one.
@@ -320,6 +326,12 @@ pub(crate) struct ThisComputer {
     ui_state: PathBuf,
     beta_updates: bool,
     launch_at_login: bool,
+    /// This computer's `client-audio.json`, beside its `settings.json`: the headset for the shack's
+    /// audio, written only when the operator picks one, and never sent anywhere.
+    audio: PathBuf,
+    /// The output and the microphone chosen there, "" for the system's default.
+    output: String,
+    input: String,
 }
 
 impl ThisComputer {
@@ -327,16 +339,43 @@ impl ThisComputer {
     /// whole: a load could set a file it cannot read aside, and client mode writes nothing it was
     /// not asked to.
     pub(crate) fn read(settings: PathBuf, ui_state: PathBuf) -> Self {
-        let read: Value = std::fs::read_to_string(&settings)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
+        let json = |path: &PathBuf| -> Value {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default()
+        };
+        let read = json(&settings);
+        let audio = settings.with_file_name(AUDIO_FILE);
+        let chosen = json(&audio);
+        let device = |which: &str| {
+            chosen[which]
+                .as_str()
+                .filter(|name| name.len() <= DEVICE_NAME)
+                .unwrap_or_default()
+                .to_string()
+        };
         Self {
             beta_updates: read["betaUpdates"].as_bool().unwrap_or(false),
             launch_at_login: read["launchAtLogin"].as_bool().unwrap_or(false),
+            output: device("output"),
+            input: device("input"),
             settings,
             ui_state,
+            audio,
         }
+    }
+
+    /// Keeps This computer ▸ Audio's choice in this computer's own file.
+    fn keep_audio(&mut self, output: &str, input: &str) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(&json!({ "output": output, "input": input }))
+            .map_err(|e| e.to_string())?;
+        if !crate::write_json_atomic(&self.audio, &text) {
+            return Err("audioNotKept".to_string());
+        }
+        self.output = output.to_string();
+        self.input = input.to_string();
+        Ok(())
     }
 
     /// The shack's settings with this computer's own two in place of the shack's.
@@ -366,6 +405,11 @@ impl ThisComputer {
     }
 }
 
+/// This computer ▸ Audio's own file, beside this computer's `settings.json`.
+const AUDIO_FILE: &str = "client-audio.json";
+/// The longest device name kept: a system's own names are far shorter.
+const DEVICE_NAME: usize = 512;
+
 // --- The client ----------------------------------------------------------------------------------
 
 /// How the link to the station stands, for the screens' banner.
@@ -393,6 +437,9 @@ pub(crate) struct Status {
     pub(crate) phase: Phase,
     /// For a refusal, or a link that did not open: its code.
     pub(crate) reason: Option<String>,
+    /// This computer's over, as the station last said it on Stop's road: on the air with its holes,
+    /// ended and why, or no word while a press is held.
+    pub(crate) over: Option<Over>,
 }
 
 /// Client mode's state: the link, the caps, each window's revisions and rows, and this computer's
@@ -424,6 +471,9 @@ pub(crate) struct Client {
     fetched: Mutex<HashMap<String, u64>>,
     /// What the update hand-off saves of this computer's own (its window layouts and log).
     before_install: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// This computer's headset, for the shack's audio and the microphone: given once, as the app
+    /// starts, and never in a test that has no use for one.
+    headset: OnceLock<Arc<ThisHeadset>>,
 }
 
 impl Client {
@@ -433,6 +483,7 @@ impl Client {
                 station: station_id.clone(),
                 phase: Phase::Connecting,
                 reason: None,
+                over: None,
             }),
             station_id,
             shack: Mutex::new(None),
@@ -447,12 +498,26 @@ impl Client {
             roads: Mutex::new(Vec::new()),
             fetched: Mutex::new(HashMap::new()),
             before_install: OnceLock::new(),
+            headset: OnceLock::new(),
         }
     }
 
-    /// The link's state, for the banner.
+    /// The link's state, for the banner, with this computer's over as the link's Stop road last
+    /// heard it.
     pub(crate) fn status(&self) -> Status {
-        lock(&self.status).clone()
+        let over = self
+            .shack()
+            .and_then(|shack| shack.stop_road())
+            .and_then(|road| road.over(std::time::Instant::now()));
+        Status {
+            over,
+            ..lock(&self.status).clone()
+        }
+    }
+
+    /// This computer's headset, given once as the app starts.
+    pub(crate) fn hear_with(&self, headset: Arc<ThisHeadset>) {
+        let _ = self.headset.set(headset);
     }
 
     fn set(&self, phase: Phase, reason: Option<&str>) {
@@ -826,7 +891,11 @@ impl Client {
             if let Some(first) = record.addresses.first() {
                 self.at(first.clone());
             }
-            let wait = match Link::connect(&record, typed, run_id()).await {
+            let headset = self
+                .headset
+                .get()
+                .map(|headset| Arc::clone(headset) as Arc<dyn Headset>);
+            let wait = match Link::connect(&record, typed, run_id(), headset).await {
                 // The station proved the key pinned for this pairing; one that then names itself
                 // another station is not the one asked for, and runs nothing from here.
                 Ok((link, _)) if link.ids.station != self.station_id => {
@@ -897,9 +966,13 @@ impl Client {
             }
             lease = self.keep_the_lease(&link, lease).await;
             *lock(&self.held) = lease.clone().map(|lease| (Arc::clone(&link), lease));
-            // The Stop road's heartbeat names the lease held now, or none.
+            // The Stop road's heartbeat names the lease held now, or none, and the audio road
+            // listens only while this computer holds it.
             if let Some(road) = link.stop_road() {
                 road.lease(lease.clone());
+            }
+            if let Some(audio) = link.audio_road() {
+                audio.lease(lease.clone());
             }
             if !said_unwatched {
                 if let Some(watching) = link.watching() {
@@ -1109,6 +1182,110 @@ pub(crate) fn client_status(app: tauri::AppHandle) -> Option<Status> {
     app.try_state::<Arc<Client>>().map(|client| client.status())
 }
 
+/// This computer ▸ Audio as it stands: the output and the microphone chosen ("" for the system's
+/// default), this computer's devices to choose from, and why either would not open, if it would
+/// not. Only on a computer driving a station.
+#[tauri::command]
+pub(crate) fn client_audio(app: tauri::AppHandle) -> Result<Value, String> {
+    let client = app
+        .try_state::<Arc<Client>>()
+        .ok_or_else(|| "notClient".to_string())?;
+    Ok(client.audio_view())
+}
+
+/// Picks the headset for the shack's audio: kept in this computer's own file, and used from now on.
+#[tauri::command]
+pub(crate) fn set_client_audio(
+    app: tauri::AppHandle,
+    output: String,
+    input: String,
+) -> Result<Value, String> {
+    let client = app
+        .try_state::<Arc<Client>>()
+        .ok_or_else(|| "notClient".to_string())?;
+    if output.len() > DEVICE_NAME || input.len() > DEVICE_NAME {
+        return Err(word(Refusal::BadArguments.code()));
+    }
+    lock(&client.this).keep_audio(&output, &input)?;
+    if let Some(headset) = client.headset.get() {
+        headset.devices(&output, &input);
+    }
+    Ok(client.audio_view())
+}
+
+/// The meter: the microphone's loudest moment since the last ask, `0` to `1`, keeping it open a
+/// moment longer, and whether it is open.
+#[tauri::command]
+pub(crate) fn client_audio_level(app: tauri::AppHandle) -> Result<Value, String> {
+    let client = app
+        .try_state::<Arc<Client>>()
+        .ok_or_else(|| "notClient".to_string())?;
+    let headset = client
+        .headset
+        .get()
+        .ok_or_else(|| "audioUnavailable".to_string())?;
+    Headset::want_input(&**headset);
+    let (_, open) = headset.open();
+    let (_, trouble) = headset.trouble();
+    Ok(json!({ "level": Headset::rings(&**headset).peak(), "open": open, "trouble": trouble }))
+}
+
+/// The test: a steady note in the output chosen, once it is open.
+#[tauri::command]
+pub(crate) async fn client_audio_test(app: tauri::AppHandle) -> Result<Value, String> {
+    let client = app
+        .try_state::<Arc<Client>>()
+        .ok_or_else(|| "notClient".to_string())?
+        .inner()
+        .clone();
+    let headset = client
+        .headset
+        .get()
+        .ok_or_else(|| "audioUnavailable".to_string())?
+        .clone();
+    Headset::want_output(&*headset);
+    // The output opens on the headset's own thread within a moment, unless it cannot.
+    for _ in 0..50 {
+        if let Some(rate) = Headset::rings(&*headset).out_rate() {
+            Headset::rings(&*headset).sound(&audio_road::sound(audio_road::Sound::Test, rate));
+            return Ok(json!({ "played": true }));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let (trouble, _) = headset.trouble();
+    Ok(json!({ "played": false, "trouble": trouble }))
+}
+
+impl Client {
+    /// This computer ▸ Audio as it stands.
+    fn audio_view(&self) -> Value {
+        let (output, input) = {
+            let this = lock(&self.this);
+            (this.output.clone(), this.input.clone())
+        };
+        let (inputs, outputs) = audio_road::devices();
+        let listed = |devices: audio_road::Listed| {
+            devices
+                .into_iter()
+                .map(|(name, label)| json!({ "name": name, "label": label }))
+                .collect::<Vec<_>>()
+        };
+        let (out_trouble, in_trouble) = self
+            .headset
+            .get()
+            .map(|headset| headset.trouble())
+            .unwrap_or_default();
+        json!({
+            "output": output,
+            "input": input,
+            "outputs": listed(outputs),
+            "inputs": listed(inputs),
+            "available": self.headset.get().is_some(),
+            "trouble": { "output": out_trouble, "input": in_trouble },
+        })
+    }
+}
+
 /// Leave: this computer's Nexus starts again as itself, the station handed back first.
 #[tauri::command]
 pub(crate) fn leave_client_mode(app: tauri::AppHandle) -> Result<(), String> {
@@ -1126,7 +1303,15 @@ pub(crate) fn run(station: String) {
         "client mode: driving a paired station; this computer's own station stays off",
     );
     let this = ThisComputer::read(crate::settings_path(), crate::ui_state_path());
+    let headset = audio_road::headset(&this.output, &this.input);
     let client = Arc::new(Client::new(station, this));
+    match headset {
+        Some(headset) => client.hear_with(headset),
+        None => tempo_core::applog::warn(
+            "client",
+            "this computer's headset did not start: the station's audio is not heard here",
+        ),
+    }
     let local = crate::app_commands();
     let routed = Arc::clone(&client);
     let driving = Arc::clone(&client);

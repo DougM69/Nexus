@@ -722,6 +722,9 @@ const MAY_REACH: &[&str] = &[
     "crate::command_dispatch",
     "crate::lan_client::link",
     "crate::lan_client::stop_road",
+    // This computer's headset for the shack's audio: its own output and microphone, opened only
+    // while wanted. It plays and captures, and starts nothing of a station.
+    "crate::lan_client::audio_road",
     "crate::lan_client::Stations",
     "crate::remote_service::vault::PairedStation",
     "crate::remote_service::vault::SystemVault",
@@ -964,7 +967,8 @@ fn shack_with_a_road() -> (Arc<FakeShack>, RoadEnd) {
     let tag = [2; 8];
     let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     socket.set_nonblocking(true).unwrap();
-    let road = StopRoad::open(socket.local_addr().unwrap(), tag, &exported).unwrap();
+    let road =
+        StopRoad::open(socket.local_addr().unwrap(), tag, &exported, Arc::default()).unwrap();
     let shack = FakeShack::new();
     *lock(&shack.road) = Some(road);
     let mut keys = Keys::new(&exported, tag, End::Shack).unwrap();
@@ -1035,6 +1039,122 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
     for answered in &answers {
         assert!(answered.recv_timeout(Duration::from_secs(5)).is_ok());
     }
+}
+
+/// ★ No queue at this end, with the audio road's sender stuck as well. The five presses of the
+/// test above, with the link stuck (the shack answers nothing) and the audio road's sender held
+/// mid-send while a press is live: every Stop leaves on Stop's road, their median within the
+/// millisecond, and each ends this computer's press without waiting for the sender. CONTROL: the
+/// press was live and the sender was still held when the Stops had gone.
+#[test]
+fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_blocked_too() {
+    use crate::lan_client::audio_road::{AudioRoad, StandIn};
+    use crate::lan_client::stop_road::OnAir;
+    use crate::remote_service::lan::datagram::{End, Keys, EXPORTED};
+    use crate::remote_service::lan::stop_road::Up;
+    let on_air = Arc::new(OnAir::default());
+    let exported = [5; EXPORTED];
+    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let road = StopRoad::open(
+        socket.local_addr().unwrap(),
+        [2; 8],
+        &exported,
+        on_air.clone(),
+    )
+    .unwrap();
+    let station = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let _audio = AudioRoad::open(
+        station.local_addr().unwrap(),
+        [3; 8],
+        &[6; EXPORTED],
+        StandIn::new(),
+        on_air.clone(),
+    )
+    .unwrap();
+    let shack = FakeShack::new();
+    *lock(&shack.road) = Some(road);
+    shack.hold();
+    let mut keys = Keys::new(&exported, [2; 8], End::Shack).unwrap();
+    let dir = scratch("road-stop-audio");
+    let client = client_in(&dir, &shack);
+    let screens = screens(&client);
+    on_air.pressing(Some(9));
+    std::thread::sleep(Duration::from_millis(50));
+    let held = lock(&on_air.sender);
+    let mut took = Vec::new();
+    let mut answers = Vec::new();
+    let mut buffer = [0u8; 256];
+    for stop in 1..=5u64 {
+        on_air.pressing(Some(9));
+        let pressed = std::time::Instant::now();
+        answers.push(send(&screens.main, "halt_tx", json!({})));
+        let deadline = pressed + Duration::from_secs(1);
+        let left = loop {
+            if let Ok(length) = socket.recv(&mut buffer) {
+                let at = std::time::Instant::now();
+                let up = keys
+                    .receive
+                    .open(&buffer[..length])
+                    .and_then(|(kind, body)| Up::read(kind, &body));
+                if up == Some(Up::Stop { stop }) {
+                    break at;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Stop {stop} never left"
+            );
+        };
+        took.push(left - pressed);
+        eventually("the press ended", || on_air.press().is_none());
+    }
+    assert!(
+        on_air.sender.try_lock().is_err(),
+        "the sender was held throughout"
+    );
+    drop(held);
+    eprintln!("measured: with the audio sender held, the Stops left on the road {took:?}");
+    let mut sorted = took.clone();
+    sorted.sort();
+    assert!(sorted[2] < Duration::from_millis(1), "the median: {took:?}");
+    shack.let_go();
+    for answered in &answers {
+        assert!(answered.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+}
+
+/// ★ This computer ▸ Audio is this computer's: its four commands run here and never reach the
+/// shack, and the headset chosen is kept in this computer's own file beside its settings, read back
+/// as client mode starts. CONTROL: nothing else of this computer's is written, its settings file
+/// included.
+#[test]
+fn this_computers_audio_is_kept_here_and_never_sent() {
+    for cmd in [
+        "client_audio",
+        "set_client_audio",
+        "client_audio_level",
+        "client_audio_test",
+    ] {
+        assert_eq!(way(cmd, &json!({})), Way::Here, "{cmd}");
+    }
+    let dir = scratch("audio-here");
+    let read = || ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+    let mut this = read();
+    assert_eq!((this.output.as_str(), this.input.as_str()), ("", ""));
+    this.keep_audio("Headset Earphone", "Headset Microphone")
+        .unwrap();
+    let again = read();
+    assert_eq!(
+        (again.output.as_str(), again.input.as_str()),
+        ("Headset Earphone", "Headset Microphone")
+    );
+    let written: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(written, ["client-audio.json"]);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// ★ Only a Stop press takes the road: the off half of a switch (TX off, PTT up) goes by the link

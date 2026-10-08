@@ -119,6 +119,15 @@ impl Default for Rings {
 }
 
 impl Rings {
+    /// Rings with no device behind them, as if the output and the input were open at these rates:
+    /// for a test standing in for a headset.
+    pub fn stand_in(out_rate: u32, in_rate: u32) -> Self {
+        let rings = Self::default();
+        rings.out_rate.store(out_rate, Ordering::Release);
+        rings.in_rate.store(in_rate, Ordering::Release);
+        rings
+    }
+
     /// The output's rate, while it is open.
     pub fn out_rate(&self) -> Option<u32> {
         Some(self.out_rate.load(Ordering::Acquire)).filter(|rate| *rate > 0)
@@ -195,10 +204,9 @@ impl Rings {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    /// The input callback's half: one buffer folded to mono, queued, and its peak kept.
-    /// REALTIME: atomics and the ring only.
-    #[cfg_attr(not(feature = "device"), allow(dead_code))]
-    fn captured(&self, mono: impl Iterator<Item = f32>) {
+    /// The input callback's half: one buffer folded to mono, queued, and its peak kept. A test
+    /// stands for a microphone with it. REALTIME: atomics and the ring only.
+    pub fn captured(&self, mono: impl Iterator<Item = f32>) {
         let mut peak = 0.0f32;
         for sample in mono {
             peak = peak.max(sample.abs());

@@ -76,7 +76,7 @@ async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
 async fn the_link_runs_the_shacks_commands_and_keeps_this_computers_here() {
     let app = App::new();
     let (s, at, _listening) = shack_on(&app).await;
-    let (link, reached) = Link::connect(&paired_record(&s, at), Some(at), 41)
+    let (link, reached) = Link::connect(&paired_record(&s, at), Some(at), 41, None)
         .await
         .expect("opened");
     assert_eq!(reached, at);
@@ -145,14 +145,14 @@ async fn the_link_refuses_a_station_of_another_build() {
         s.shared.build = build;
         let (_listening, stop) = watch::channel(false);
         let at = behind_a_port(&s, stop).await;
-        let refused = Link::connect(&paired_record(&s, at), Some(at), 41)
+        let refused = Link::connect(&paired_record(&s, at), Some(at), 41, None)
             .await
             .err();
         assert_eq!(refused, Some(said), "{build:?}");
     }
     assert!(app.ran().is_empty(), "{:?}", app.ran());
     let (s, at, _listening) = shack_on(&app).await;
-    assert!(Link::connect(&paired_record(&s, at), Some(at), 41)
+    assert!(Link::connect(&paired_record(&s, at), Some(at), 41, None)
         .await
         .is_ok());
 }
@@ -163,7 +163,7 @@ async fn the_link_refuses_a_station_of_another_build() {
 async fn the_links_stop_goes_out_ahead_of_a_big_call() {
     let app = App::new();
     let (s, at, _listening) = shack_on(&app).await;
-    let (link, _) = Link::connect(&paired_record(&s, at), Some(at), 41)
+    let (link, _) = Link::connect(&paired_record(&s, at), Some(at), 41, None)
         .await
         .unwrap();
     in_control(&link).await;
@@ -192,7 +192,7 @@ async fn a_call_cut_off_is_asked_after_on_the_next_link() {
     let _let_go = LetGo(app.clone());
     let (s, at, _listening) = shack_on(&app).await;
     let record = paired_record(&s, at);
-    let (link, _) = Link::connect(&record, Some(at), 77).await.unwrap();
+    let (link, _) = Link::connect(&record, Some(at), 77, None).await.unwrap();
     in_control(&link).await;
     let link = Arc::new(link);
     let calling = {
@@ -206,7 +206,7 @@ async fn a_call_cut_off_is_asked_after_on_the_next_link() {
         .expect("closed at once");
     let (id, gone) = calling.await.unwrap();
     assert_eq!(gone, Answer::Gone);
-    let (next, _) = Link::connect(&record, Some(at), 77).await.unwrap();
+    let (next, _) = Link::connect(&record, Some(at), 77, None).await.unwrap();
     in_control(&next).await;
     assert_eq!(next.outcomes(&[id]).await, Some(vec![Outcome::Running]));
     app.release();
@@ -216,7 +216,7 @@ async fn a_call_cut_off_is_asked_after_on_the_next_link() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     next.close();
-    let (other, _) = Link::connect(&record, Some(at), 78).await.unwrap();
+    let (other, _) = Link::connect(&record, Some(at), 78, None).await.unwrap();
     assert_eq!(other.outcomes(&[id]).await, Some(vec![Outcome::Unknown]));
     assert_eq!(app.ran(), ["ask_log"]);
 }
@@ -228,7 +228,7 @@ async fn a_call_cut_off_is_asked_after_on_the_next_link() {
 async fn the_link_keeps_each_feeds_newest_value() {
     let app = App::new();
     let (s, at, _listening) = shack_on(&app).await;
-    let (link, _) = Link::connect(&paired_record(&s, at), Some(at), 41)
+    let (link, _) = Link::connect(&paired_record(&s, at), Some(at), 41, None)
         .await
         .unwrap();
     in_control(&link).await;
@@ -257,7 +257,7 @@ async fn the_link_keeps_each_feeds_newest_value() {
 async fn the_link_hears_the_stations_events() {
     let app = App::new();
     let (s, at, _listening) = shack_on(&app).await;
-    let (link, _) = Link::connect(&paired_record(&s, at), Some(at), 41)
+    let (link, _) = Link::connect(&paired_record(&s, at), Some(at), 41, None)
         .await
         .unwrap();
     in_control(&link).await;

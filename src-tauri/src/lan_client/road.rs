@@ -180,14 +180,18 @@ enum First {
         /// Stop's second road for this connection, when the station opened one.
         #[serde(rename = "stopRoad", default)]
         stop_road: Option<RoadOffer>,
+        /// The audio road for this connection, when the station opened one.
+        #[serde(rename = "audioRoad", default)]
+        audio_road: Option<RoadOffer>,
     },
     Refused {
         reason: String,
     },
 }
 
-/// Stop's second road as a welcome names it (`remote_service::lan::stop_road`): the station's UDP
-/// port, on the address that welcomed this computer, and the road's tag.
+/// Stop's second road or the audio road as a welcome names it (`remote_service::lan::stop_road`,
+/// `remote_service::lan::audio_road`): the station's UDP port, on the address that welcomed this
+/// computer, and the road's tag.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RoadOffer {
@@ -241,12 +245,13 @@ pub(crate) struct Ids {
 }
 
 /// What a station welcomed this computer with: the session it stamped, its build, and Stop's
-/// second road, if it opened one.
+/// second road and the audio road, if it opened them.
 pub(crate) struct Welcomed {
     pub session: String,
     pub app: String,
     pub contract: String,
     pub stop_road: Option<RoadOffer>,
+    pub audio_road: Option<RoadOffer>,
 }
 
 /// The hello at `at`: the socket and what the station welcomed it with, or why not.
@@ -286,6 +291,7 @@ async fn hello(
             app,
             contract,
             stop_road,
+            audio_road,
         }) if device_id == record.device_id
             && station_id == record.station_id
             && protocol::identifier(&session_id) =>
@@ -295,6 +301,7 @@ async fn hello(
                 app,
                 contract,
                 stop_road,
+                audio_road,
             };
             Ok((socket, welcomed))
         }
@@ -344,13 +351,14 @@ pub(crate) async fn connect_at(
 }
 
 /// A station welcomed this computer: the socket, the ids it was welcomed under, the station's
-/// build, Stop's second road if it opened one, and the address that answered.
+/// build, Stop's second road and the audio road if it opened them, and the address that answered.
 pub(crate) struct Reached {
     pub socket: Socket,
     pub ids: Ids,
     pub app: String,
     pub contract: String,
     pub stop_road: Option<RoadOffer>,
+    pub audio_road: Option<RoadOffer>,
     pub at: SocketAddrV4,
 }
 
@@ -381,6 +389,7 @@ pub(crate) async fn reach(
                     app: welcomed.app,
                     contract: welcomed.contract,
                     stop_road: welcomed.stop_road,
+                    audio_road: welcomed.audio_road,
                     at,
                 });
             }
