@@ -11,7 +11,7 @@ vi.mock('../api', async (original) => ({ ...(await original<typeof import('../ap
 import { doubleBeep } from '../alerts'
 import { osNotify } from '../api'
 import { processPotaAlert, resetPotaAlertsForTest } from '../features/potaAlert'
-import { usePounce, type PounceAlert } from '../usePounce'
+import { usePounce, type PounceAlert, type RaisedAlert } from '../usePounce'
 import type { OtaMapSpot, OtaSpot } from '../types'
 import { SessionStatus } from './SessionStatus'
 import { RemoteCollections } from './collections'
@@ -147,13 +147,15 @@ it('rare DX: off until clicked, silent on the first read and on replay, once per
 })
 
 it('rare DX: notifies for exactly the alerts the desktop Pounce raised, worded as the desktop words them', async () => {
-  let deliver: ((event: { payload: PounceAlert }) => void) | null = null
+  let deliver: ((event: { payload: RaisedAlert }) => void) | null = null
+  let heard = ''
   const bridge = window as unknown as { __TAURI__?: unknown }
-  bridge.__TAURI__ = { event: { listen: async (_name: string, handler: (event: { payload: PounceAlert }) => void) => { deliver = handler; return () => {} } } }
+  bridge.__TAURI__ = { event: { listen: async (name: string, handler: (event: { payload: RaisedAlert }) => void) => { heard = name; deliver = handler; return () => {} } } }
   try {
     renderHook(() => usePounce())
     await flush()
     expect(deliver).not.toBeNull()
+    expect(heard).toBe('alert')
     FakeNotification.permission = 'granted'
     localStorage.setItem('nexus.remote.rareDxAlerts', 'on')
     ring = [pounce('VP8PJ', 100, { entity: 'South Orkney Islands' })]
@@ -164,9 +166,10 @@ it('rare DX: notifies for exactly the alerts the desktop Pounce raised, worded a
       pounce('BS7H', 260, { band: '17m', freqMhz: null, entity: 'Scarborough Reef', tags: ['NewEntity', 'NewZone'] }),
       pounce('3Y0J', 3900), // the same slot again once the desktop's hour-long cooldown has passed
     ]
-    for (const alert of raised) {
+    for (const [i, alert] of raised.entries()) {
       ring = [...ring, alert]
-      act(() => deliver!({ payload: alert }))
+      // The desktop's event as the station raises it: the alert in its envelope, with its own id.
+      act(() => deliver!({ payload: { v: 1, id: i + 1, kind: 'pounce', atMs: alert.atUnix * 1000, alert } }))
       await poll(RARE_ALERT_POLL_MS)
     }
     const desktop = vi.mocked(osNotify).mock.calls.map(([title, body]) => ({ title, body }))
