@@ -2801,3 +2801,111 @@ fn each_road_alone_stops_each_kind_of_over_started_from_afar() {
         }
     });
 }
+
+/// ★ A start after presence has lapsed is refused. Presence renewed once by a fresh echo, and the
+/// lease kept on the link, then nothing more on the road for five seconds: the same Enable TX that
+/// ran while presence was live is refused `noPresence`, and nothing runs. CONTROL: run while it was
+/// live, and the lease still answers controlling after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_after_presence_lapsed_is_refused() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    let mut seat = seated(&r).await;
+    seat.renewed().await;
+    let renewed = Instant::now();
+    let said = seat
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "CONTROL: {said}");
+    while renewed.elapsed() < PRESENCE + Duration::from_millis(300) {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        seat.keep_the_lease().await;
+    }
+    let said = seat
+        .call(2, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["refused"], "noPresence", "{said}");
+    assert_eq!(ran(&record), ["set_tx_enabled"]);
+    seat.keep_the_lease().await;
+}
+
+/// ★ A press from a connection whose presence went is refused, even under another's live presence.
+/// A computer holding the lease, with presence and fresh state, hands the lease back, and a second
+/// connection takes it and renews presence of its own at the station, in Phone with TX armed. The
+/// first computer's next press, its last state still under two seconds old, is refused by its own
+/// road, said once, and never reaches the held PTT: the presence live at the station is the other
+/// connection's, and nothing else here would have refused it. CONTROL: the new holder's own press
+/// arms.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_press_from_a_connection_whose_presence_went_is_refused_under_anothers() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    let mut first = seated(&r).await;
+    let mut second = seated_with(&r, false).await;
+    first.renewed().await;
+    let (_, fetched) = first.snapshot.expect("a snapshot");
+    let lease = first.lease();
+    let released = first.ask(json!({"type":"release","leaseId":lease})).await;
+    assert!(released["error"].is_null(), "{released}");
+    let state = second.ask(json!({"type":"state"})).await;
+    let acquired = second
+        .ask(json!({"type":"acquire","stationBootId":state["value"]["stationBootId"]}))
+        .await;
+    assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+    second.state = acquired["value"].clone();
+    second.renewed().await;
+    let said = second
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{said}");
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 2 * PRESENCE,
+    );
+    let mut armed = false;
+    for _ in 0..3 {
+        first.road.say(&Up::Hold { press: 1 }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        armed |= r.s.shared.engine.lock().unwrap().mic_armed();
+    }
+    assert!(
+        fetched.elapsed() < FRESH - Duration::from_millis(200),
+        "premise: the first computer's state was still fresh at its press ({:?})",
+        fetched.elapsed()
+    );
+    let said = first.road_says(Duration::from_millis(200)).await;
+    assert_eq!(
+        presses(&said),
+        [&Down::Press {
+            press: 1,
+            keyed: false,
+            end: Some(HoldEnd::Refused)
+        }],
+        "{said:?}"
+    );
+    assert!(
+        !armed && !r.ptt.keyed(),
+        "a press with no presence of its own armed the over"
+    );
+    second.road.say(&Up::Hold { press: 1 }).await;
+    let mut held = false;
+    for _ in 0..20 {
+        held |= r.s.shared.engine.lock().unwrap().mic_armed();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    second.road.say(&Up::Release { press: 1 }).await;
+    done.store(true, Ordering::SeqCst);
+    drop(tokio::task::spawn_blocking(move || radio.join().unwrap()).await);
+    assert!(held, "CONTROL: the new holder's own press arms");
+    assert_eq!(ran(&record), ["set_tx_enabled"]);
+}
