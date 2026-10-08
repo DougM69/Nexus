@@ -53,6 +53,8 @@ export type Told =
   | { type: 'connectRefused'; reason: ConnectReason }
   | { type: 'closed'; reason: ClosedReason }
   | { type: 'answerRefused'; reason: (typeof ANSWER_REFUSALS)[number] }
+  /** Operate from this computer was taken: Nexus is closing, to start again driving the station. */
+  | { type: 'operating' }
   | { type: 'station'; message: Record<string, unknown> }
 
 type Fields = Record<string, unknown>
@@ -113,6 +115,7 @@ export function readTold(raw: unknown): Told {
     case 'connectRefused': return { type, reason: oneOf(CONNECT_REASONS, fields(raw, ['type', 'reason']).reason) }
     case 'closed': return { type, reason: oneOf(CLOSED_REASONS, fields(raw, ['type', 'reason']).reason) }
     case 'answerRefused': return { type, reason: oneOf(ANSWER_REFUSALS, fields(raw, ['type', 'reason']).reason) }
+    case 'operating': fields(raw, ['type']); return { type }
     default: throw Error('invalidLanMessage')
   }
 }

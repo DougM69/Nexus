@@ -7,23 +7,33 @@ use serde_json::json;
 
 // --- Scaffolding ---------------------------------------------------------------------------------
 
-/// Stores whose revisions and `ui-state.json` a test sets.
+/// Stores whose revisions and `ui-state.json` a test sets, and a file that can stop reading: at
+/// once, or after a number of reads.
 #[derive(Default)]
 struct Fake {
     settings: Mutex<Option<Revision>>,
     ui: Mutex<BTreeMap<String, String>>,
+    ui_unreadable: Mutex<bool>,
+    ui_reads_left: Mutex<Option<usize>>,
 }
 
 impl Stores for Fake {
     fn revision(&self, store: Store) -> Option<Revision> {
         match store {
             Store::Settings => lock(&self.settings).clone(),
-            Store::UiState => Revision::of(&split_ui_state(self.ui_state()).0),
+            Store::UiState => Revision::of(&split_ui_state(self.ui_state()?).0),
         }
     }
 
-    fn ui_state(&self) -> BTreeMap<String, String> {
-        lock(&self.ui).clone()
+    fn ui_state(&self) -> Option<BTreeMap<String, String>> {
+        let mut left = lock(&self.ui_reads_left);
+        if let Some(reads) = left.as_mut() {
+            if *reads == 0 {
+                return None;
+            }
+            *reads -= 1;
+        }
+        (!*lock(&self.ui_unreadable)).then(|| lock(&self.ui).clone())
     }
 }
 
@@ -840,6 +850,66 @@ fn a_save_from_afar_writes_the_station_keys_and_keeps_the_shacks_own() {
     );
 }
 
+/// ★ A `ui-state.json` that is there and does not read is never a store with nothing in it: a
+/// save from afar onto it is refused, because merged into an empty map it would write the
+/// station's keys and remove every key of the shack's own (its rail, its scale, its layouts).
+/// CONTROL: the same save, onto the same file once it reads, runs with the shack's keys kept.
+#[test]
+fn a_save_from_afar_onto_an_unreadable_ui_state_is_refused() {
+    let shack = shack();
+    ui_now(
+        &shack,
+        &[("nexus.navOrder", "[\"ft8\"]"), ("nexus.watchlist", "old")],
+    );
+    let base = shack.inner.stores.revision(Store::UiState).unwrap();
+    let sent = json!({ "state": { "nexus.watchlist": "new" } });
+    *lock(&shack.inner.stores.ui_unreadable) = true;
+    assert_eq!(shack.inner.stores.revision(Store::UiState), None);
+    assert_eq!(
+        kind(&shack.admit(
+            &controller(),
+            save(1, "ui_state_save", sent.clone(), base.as_str())
+        )),
+        refused(Refusal::ChangedAtShack)
+    );
+    *lock(&shack.inner.stores.ui_unreadable) = false;
+    match shack.admit(&controller(), save(2, "ui_state_save", sent, base.as_str())) {
+        Admission::Run { args, .. } => assert_eq!(
+            args,
+            json!({ "state": { "nexus.navOrder": "[\"ft8\"]", "nexus.watchlist": "new" } })
+        ),
+        other => panic!("{}", kind(&other)),
+    }
+}
+
+/// ★ …and a file that stops reading between the save's revision check and its merge refuses the
+/// save as well: merged then, the save would remove every key of the shack's own. CONTROL: with
+/// one read more, the same save runs.
+#[test]
+fn a_ui_state_that_stops_reading_before_the_merge_refuses_the_save() {
+    let shack = shack();
+    ui_now(
+        &shack,
+        &[("nexus.navOrder", "[\"ft8\"]"), ("nexus.watchlist", "old")],
+    );
+    let base = shack.inner.stores.revision(Store::UiState).unwrap();
+    let sent = json!({ "state": { "nexus.watchlist": "new" } });
+    // The revision's read, and then nothing.
+    *lock(&shack.inner.stores.ui_reads_left) = Some(1);
+    assert_eq!(
+        kind(&shack.admit(
+            &controller(),
+            save(1, "ui_state_save", sent.clone(), base.as_str())
+        )),
+        refused(Refusal::ChangedAtShack)
+    );
+    *lock(&shack.inner.stores.ui_reads_left) = Some(2);
+    assert_eq!(
+        kind(&shack.admit(&controller(), save(2, "ui_state_save", sent, base.as_str()))),
+        "run"
+    );
+}
+
 #[test]
 fn the_other_computer_splits_and_joins_by_the_same_keys() {
     let whole = map(&[
@@ -1114,6 +1184,30 @@ fn every_durable_key_is_in_exactly_one_half_of_the_split() {
     assert!(!STATION_KEYS
         .iter()
         .any(|key| key.starts_with("nexus.panels.")));
+}
+
+/// ★ The screen's own list of the station's keys is this one. On a computer driving the shack its
+/// durable store keeps exactly those keys out of that computer's `localStorage`, and the split
+/// sends exactly these to the shack: a key on one list and not the other would be the station's
+/// data read from the wrong computer, or this computer's kept at the shack.
+#[test]
+fn the_screens_station_keys_are_the_dispatchers() {
+    let store = include_str!("../../../ui/src/features/durableStore.ts");
+    let list = store
+        .split_once("export const STATION_KEYS: readonly string[] = [")
+        .and_then(|(_, rest)| rest.split_once("\n]"))
+        .map(|(list, _)| list)
+        .expect("durableStore.ts has its STATION_KEYS list");
+    let mut screens: Vec<&str> = list
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or("").trim())
+        .filter_map(|line| line.strip_prefix('\'')?.split_once('\''))
+        .map(|(key, _)| key)
+        .collect();
+    screens.sort_unstable();
+    let mut ours = STATION_KEYS.to_vec();
+    ours.sort_unstable();
+    assert_eq!(screens, ours);
 }
 
 // --- The shack's own stores ----------------------------------------------------------------------

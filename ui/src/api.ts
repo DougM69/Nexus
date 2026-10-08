@@ -8,6 +8,7 @@ import type { RemoteStationAction, RemoteStationStatus } from './remote-native/t
 import { remoteApplicationTransport } from './applicationTransport'
 import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
+import { clientWords } from './features/clientWords'
 import type { SelfSpotReport } from './selfSpot'
 import type {
   AppSnapshot,
@@ -173,12 +174,19 @@ async function httpInvoke<T>(base: string, cmd: string, args?: Record<string, un
   return (await r.json()) as T
 }
 
+/** The desktop bridge's rejection, with a client-mode refusal put in words; any other error as
+ *  it came. */
+function worded(error: unknown): never {
+  const code = typeof error === 'string' ? /^nexusClient:([A-Za-z]+)$/.exec(error)?.[1] : undefined
+  throw code === undefined ? error : clientWords(code)
+}
+
 /** Invoke a backend command. The desktop IPC bridge when present; the TV page's LAN
  *  RPC when its entry declared one; otherwise a hard error — never fabricated data. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
   const remote = remoteApplicationTransport()
-  const out = isTauri() ? ((await bridge()(cmd, args)) as T)
+  const out = isTauri() ? ((await bridge()(cmd, args).catch(worded)) as T)
     : remote ? await remote.invoke<T>(cmd, args).catch(error => {
       if (error instanceof Error && error.message === 'applicationUnsupported') {
         throw new Error(t('remote.applicationObserver'))
@@ -3766,10 +3774,29 @@ export async function exportChannels(
   return invoke<string>('export_channels', { channels, format, nameCap, attribution })
 }
 
+/** How this computer drives a paired station, when it does (client mode): where the station is,
+ *  how the link stands, and why it was refused. `null` on a computer running its own station. */
+export interface ClientStatus {
+  station: string
+  phase: 'connecting' | 'live' | 'notLive' | 'busy' | 'refused'
+  reason: string | null
+}
+
+export async function clientStatus(): Promise<ClientStatus | null> {
+  return invoke<ClientStatus | null>('client_status')
+}
+
+/** Leave: this computer's Nexus starts again as itself, the station handed back first. */
+export async function leaveClientMode(): Promise<void> {
+  return invoke<void>('leave_client_mode')
+}
+
 /** Load the durable UI-state store (`ui-state.json`, beside settings.json). See
- *  `features/durableStore.ts` for why some browser-storage keys are mirrored there. */
-export async function uiStateLoad(): Promise<Record<string, string>> {
-  return invoke<Record<string, string>>('ui_state_load')
+ *  `features/durableStore.ts` for why some browser-storage keys are mirrored there. `strict`:
+ *  a file that is there and does not read rejects, instead of reading as an empty store — for a
+ *  flush about to merge its own changes into the file. */
+export async function uiStateLoad(strict?: boolean): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>('ui_state_load', strict ? { strict: true } : undefined)
 }
 
 /** Replace the durable UI-state store. Returns whether the write landed — the caller keeps

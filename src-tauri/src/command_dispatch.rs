@@ -263,6 +263,19 @@ pub(crate) fn admit_stop(call: Call) -> Result<Call, Call> {
     }
 }
 
+/// Arguments that read as the off half of `cmd`, when it is a transmit switch: for the other
+/// computer's tests, which hold its routing to Stop's rules.
+#[cfg(test)]
+pub(crate) fn off_args(cmd: &str) -> Option<Value> {
+    OFF_HALVES
+        .iter()
+        .find(|(name, ..)| *name == cmd)
+        .map(|(_, arg, off)| match off {
+            Off::False => serde_json::json!({ *arg: false }),
+            Off::OneOf(values) => serde_json::json!({ *arg: values[0] }),
+        })
+}
+
 /// Whether a call runs under Stop's rules, so the other computer sends it ahead of everything.
 pub(crate) fn is_stop(cmd: &str, args: &Value) -> bool {
     runs_as_stop(class_of(cmd), cmd, args)
@@ -287,7 +300,7 @@ fn runs_as_stop(class: Option<Class>, cmd: &str, args: &Value) -> bool {
 // --- Stores and their revisions ------------------------------------------------------------------
 
 /// A store a whole save replaces, and whose reads answer with its revision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Store {
     /// The shack's settings.
     Settings,
@@ -322,6 +335,15 @@ const STORES: &[(&str, Store, Access)] = &[
     ("ui_state_save", Store::UiState, Access::WholeSave),
     ("update_radio_profile", Store::Settings, Access::PartSave),
 ];
+
+/// The store `cmd` reads or saves, and whether it saves it: what the other computer keeps the
+/// revision of, and sends a save with.
+pub(crate) fn store_access(cmd: &str) -> Option<(Store, bool)> {
+    STORES
+        .iter()
+        .find(|(name, ..)| *name == cmd)
+        .map(|&(_, store, access)| (store, access != Access::Read))
+}
 
 /// The settings copies kept, by revision, for list saves made from them.
 const SERVED: usize = 32;
@@ -442,8 +464,9 @@ impl Revision {
 pub(crate) trait Stores: Send + Sync + 'static {
     /// The store's revision now, or `None` when it cannot be read, which refuses a whole save.
     fn revision(&self, store: Store) -> Option<Revision>;
-    /// The whole of `ui-state.json` now.
-    fn ui_state(&self) -> BTreeMap<String, String>;
+    /// The whole of `ui-state.json` now, or `None` when the file is there and does not read: a
+    /// save from afar merged into an empty map would remove every key of the shack's own.
+    fn ui_state(&self) -> Option<BTreeMap<String, String>>;
     /// The store's contents as JSON with their revision, read together: what a list save's part is
     /// checked in. `None` where only the revision is kept, and a list save is then checked on the
     /// whole store, as a whole save is.
@@ -461,12 +484,12 @@ impl Stores for ShackStores {
     fn revision(&self, store: Store) -> Option<Revision> {
         match store {
             Store::Settings => self.copy(store).map(|(revision, _)| revision),
-            Store::UiState => Revision::of(&split_ui_state(self.ui_state()).0),
+            Store::UiState => Revision::of(&split_ui_state(self.ui_state()?).0),
         }
     }
 
-    fn ui_state(&self) -> BTreeMap<String, String> {
-        crate::ui_state_load()
+    fn ui_state(&self) -> Option<BTreeMap<String, String>> {
+        crate::ui_state_read(&crate::ui_state_path(), true).ok()
     }
 
     fn copy(&self, store: Store) -> Option<(Revision, Value)> {
@@ -776,12 +799,21 @@ impl<S: Stores> Dispatcher<S> {
                 }
                 let args = match store {
                     Store::Settings => args,
-                    Store::UiState => match merged_save(self.inner.stores.ui_state(), &args) {
-                        Some(merged) => merged,
+                    // The shack's own keys as the file holds them now; a file that stopped
+                    // reading since its revision was taken refuses the save, as one that did not
+                    // read then would have.
+                    Store::UiState => match self.inner.stores.ui_state() {
                         None => {
-                            ticket.close(Outcome::Refused(Refusal::BadArguments));
-                            return Admission::Refused(Refusal::BadArguments);
+                            ticket.close(Outcome::Refused(Refusal::ChangedAtShack));
+                            return Admission::Refused(Refusal::ChangedAtShack);
                         }
+                        Some(shack) => match merged_save(shack, &args) {
+                            Some(merged) => merged,
+                            None => {
+                                ticket.close(Outcome::Refused(Refusal::BadArguments));
+                                return Admission::Refused(Refusal::BadArguments);
+                            }
+                        },
                     },
                 };
                 ticket.after = match made_from {

@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicUsize;
 use tokio_tungstenite::tungstenite::Message;
 
 mod ceremony;
+mod client;
 mod commands;
 mod computer;
 mod drops;

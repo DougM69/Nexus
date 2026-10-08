@@ -466,6 +466,7 @@ async fn the_window_closing_mid_over_ends_it_at_once() {
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
+            operate: Arc::new(|_| {}),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;

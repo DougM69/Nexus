@@ -71,7 +71,7 @@ fn next_id() -> u64 {
 }
 
 /// What became of a call.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Answer {
     /// It ran, and this is what it answered, with the revision of the store it read or saved.
     Value {

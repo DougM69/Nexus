@@ -337,6 +337,12 @@ fn reach(app: &tauri::AppHandle) -> Reach {
         stations: Arc::new(Stations::new(Arc::new(SystemVault))),
         find: Arc::new(tempo_stream::lan::dnssd::find),
         name: computer_name(),
+        operate: {
+            let app = app.clone();
+            Arc::new(move |station: String| {
+                crate::client_mode::start_again(&app, vec![crate::client_mode::ARG.into(), station])
+            })
+        },
     }
 }
 

@@ -100,6 +100,9 @@ pub(crate) struct Reach {
     pub find: Find,
     /// This computer's name, offered as the one a station shows beside its key.
     pub name: String,
+    /// Operate from this computer: Nexus quits as itself and starts again driving the paired
+    /// station this id names (`client_mode`).
+    pub operate: Arc<dyn Fn(String) + Send + Sync>,
 }
 
 /// One request's head, read whole before anything is answered. Header names in lowercase.
@@ -486,6 +489,10 @@ enum FromPage {
         address: Option<String>,
     },
     Disconnect {},
+    Operate {
+        #[serde(rename = "stationId")]
+        station_id: String,
+    },
     OperationRequest {
         #[serde(rename = "operationVersion", default)]
         operation_version: Option<u8>,
@@ -641,6 +648,19 @@ async fn page(
                     FromPage::Disconnect {} => {
                         if let Some(open) = road.take() { open.close().await }
                         json!({"type":"closed","reason":"disconnected"}).to_string()
+                    }
+                    FromPage::Operate { station_id } => {
+                        if let Some(open) = road.take() { open.close().await }
+                        let kept = reach.stations.clone();
+                        let wanted = station_id.clone();
+                        match store(move || kept.get(&wanted)).await {
+                            Ok(Some(_)) => {
+                                (reach.operate)(station_id);
+                                json!({"type":"operating"}).to_string()
+                            }
+                            Ok(None) => json!({"type":"connectRefused","reason":"unknownStation"}).to_string(),
+                            Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
+                        }
                     }
                     FromPage::OperationRequest { operation_version, request } => {
                         let Some(open) = road.as_mut() else { continue };

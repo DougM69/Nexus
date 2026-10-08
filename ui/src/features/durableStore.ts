@@ -29,6 +29,20 @@
 //
 // The store is deliberately the SECOND source consulted on read, not the first: whichever copy is
 // newer wins by construction, because every write updates both.
+//
+// ── A second writer ─────────────────────────────────────────────────────────────────────────
+// This window is not the file's only writer: a pop-out has a store of its own, and a computer
+// driving this station saves the station's keys from afar. A flush of the whole cache put back
+// whatever they had written. So a flush reads the file again first and writes only the keys this
+// window changed since the file last matched it, each over what the file holds now: merged by
+// key. With no other writer the merge is the cache itself, byte for byte. A file that cannot be
+// read is written whole, as before, which is what repairs one.
+//
+// ── Driving another station ─────────────────────────────────────────────────────────────────
+// On a computer that drives another station, the station's keys (`STATION_KEYS`) come from that
+// station and go back to it, and every other key stays here. This computer's own `localStorage`
+// holds ITS station's memories and watch list, so for those keys it is never read, written or
+// migrated from: a station whose list is empty must not be handed this computer's.
 
 import { uiStateLoad, uiStateSave } from '../api'
 
@@ -89,7 +103,25 @@ function isMainWindowPanelLayout(key: string): boolean {
   return key.startsWith('nexus.panels.') && key.endsWith('.main')
 }
 
+/** The station's own data among the durable keys: on a computer driving another station they
+ *  live at that station, and every other durable key stays on the computer the operator sits at
+ *  (the rail, its order, the UI scale's cap, the main window's layouts). The same list as
+ *  `STATION_KEYS` in `src-tauri/src/command_dispatch.rs`, which a test there holds to this one. */
+export const STATION_KEYS: readonly string[] = [
+  'nexus.dxped.alarms',
+  'nexus.dxped.alarms.fired',
+  'nexus.dxped.chasing',
+  'nexus.memory.bank.v1',
+  'nexus.memory.bank.v2',
+  'nexus.profiles',
+  'nexus.sats.alarms',
+  'nexus.sats.alarms.fired',
+  'nexus.sats.chasing',
+  'nexus.watchlist',
+]
+
 const durable = new Set(DURABLE_KEYS)
+const station = new Set(STATION_KEYS)
 
 /** In-memory mirror of `ui-state.json`. `null` until `loadDurable()` has run — distinct from an
  *  empty map, which is a real and normal first-run answer. */
@@ -105,6 +137,31 @@ let cache: Record<string, string> | null = null
 let preLoad: Map<string, string | null> | null = null
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushing = false
+/** The keys this window changed since the file last matched them, each with the number of its
+ *  latest change: what a flush writes over the file. A change made while a flush is on its way
+ *  keeps its key here for the next one. */
+const dirty = new Map<string, number>()
+let changes = 0
+/** This computer drives another station ([`setRemoteStation`]). */
+let remote = false
+/** On such a computer: whether the station's keys have been loaded from it. Until they have, a
+ *  change to one is not kept, since it would be made over an empty copy and replace the
+ *  station's own. */
+let stationLoaded = false
+
+/** Say that this computer drives another station, before [`loadDurable`]. */
+export function setRemoteStation(on: boolean): void {
+  remote = on
+}
+
+/** A station key on a computer driving another station: never this computer's `localStorage`. */
+function elsewhere(key: string): boolean {
+  return remote && station.has(key)
+}
+
+function markDirty(key: string): void {
+  dirty.set(key, ++changes)
+}
 
 /** Is this a key we promise to keep? */
 export function isDurable(key: string): boolean {
@@ -127,7 +184,11 @@ export async function loadDurable(): Promise<void> {
     // this-session pre-load writes still land in the cache, so reads keep seeing them.
     cache = {}
     if (preLoad) {
-      for (const [k, v] of preLoad) if (v !== null) cache[k] = v
+      for (const [k, v] of preLoad) {
+        if (elsewhere(k)) continue
+        if (v !== null) cache[k] = v
+        markDirty(k)
+      }
       preLoad = null
     }
     return
@@ -137,10 +198,11 @@ export async function loadDurable(): Promise<void> {
   // every launch just because localStorage still has it.
   let migrated = false
   for (const key of DURABLE_KEYS) {
-    if (key in loaded) continue
+    if (key in loaded || elsewhere(key)) continue
     const local = safeLocalGet(key)
     if (local !== null) {
       loaded[key] = local
+      markDirty(key)
       migrated = true
     }
   }
@@ -154,6 +216,7 @@ export async function loadDurable(): Promise<void> {
     const local = safeLocalGet(key)
     if (local !== null) {
       loaded[key] = local
+      markDirty(key)
       migrated = true
     }
   }
@@ -164,11 +227,13 @@ export async function loadDurable(): Promise<void> {
     for (const [k, v] of preLoad) {
       if (v === null) delete loaded[k]
       else loaded[k] = v
+      markDirty(k)
     }
     preLoad = null
     migrated = true
   }
   cache = loaded
+  stationLoaded = true
   if (migrated) scheduleFlush()
 }
 
@@ -185,15 +250,20 @@ function safeLocalKeys(): string[] {
 /** Read a durable key: the store first, then `localStorage`. */
 export function durableGet(key: string): string | null {
   if (cache && key in cache) return cache[key]
-  return safeLocalGet(key)
+  return elsewhere(key) ? null : safeLocalGet(key)
 }
 
 /** Write a durable key to BOTH stores. `localStorage` stays current so it is a live fallback. */
 export function durableSet(key: string, value: string): void {
-  try {
-    globalThis.localStorage.setItem(key, value)
-  } catch {
-    // Quota or a disabled store — the durable copy below is then the only one, which is fine.
+  if (elsewhere(key)) {
+    // The station's, never this computer's: kept only once the station's copy has loaded.
+    if (!stationLoaded) return
+  } else {
+    try {
+      globalThis.localStorage.setItem(key, value)
+    } catch {
+      // Quota or a disabled store — the durable copy below is then the only one, which is fine.
+    }
   }
   // ⚠️ NON-DURABLE KEYS STOP HERE, and that check belongs in this function rather than at the
   // call sites. Since the panel layouts became durable BY PREFIX, one module now calls this
@@ -204,6 +274,7 @@ export function durableSet(key: string, value: string): void {
   if (!isDurable(key)) return
   if (cache) {
     cache[key] = value
+    markDirty(key)
     scheduleFlush()
   } else {
     ;(preLoad ??= new Map()).set(key, value)
@@ -212,14 +283,19 @@ export function durableSet(key: string, value: string): void {
 
 /** Remove a durable key from both stores, so a delete actually sticks. */
 export function durableRemove(key: string): void {
-  try {
-    globalThis.localStorage.removeItem(key)
-  } catch {
-    /* see durableSet */
+  if (elsewhere(key)) {
+    if (!stationLoaded) return
+  } else {
+    try {
+      globalThis.localStorage.removeItem(key)
+    } catch {
+      /* see durableSet */
+    }
   }
   if (cache) {
     if (key in cache) {
       delete cache[key]
+      markDirty(key)
       scheduleFlush()
     }
   } else if (isDurable(key)) {
@@ -236,12 +312,36 @@ function scheduleFlush(): void {
   }, 250)
 }
 
-/** Write the whole map. Exported so a test can flush deterministically instead of waiting. */
+/** Write this window's changes over what the file holds now (see "A second writer" above), and
+ *  take in what others wrote. Exported so a test can flush deterministically instead of waiting. */
 export async function flushDurable(): Promise<boolean> {
   if (!cache || flushing) return false
   flushing = true
   try {
-    return await uiStateSave(cache)
+    const mine = new Map(dirty)
+    let fresh: Record<string, string> | null = null
+    try {
+      fresh = (await uiStateLoad(true)) ?? {}
+    } catch {
+      fresh = null // the file does not read: written whole, as it always was
+    }
+    const merged: Record<string, string> = fresh ? { ...fresh } : { ...cache }
+    if (fresh) {
+      for (const key of mine.keys()) {
+        if (key in cache) merged[key] = cache[key]
+        else delete merged[key]
+      }
+    }
+    const landed = await uiStateSave(merged)
+    if (landed) {
+      for (const [key, change] of mine) if (dirty.get(key) === change) dirty.delete(key)
+      // What others wrote is this window's now, except where it has changed a key since.
+      const next: Record<string, string> = {}
+      for (const [key, value] of Object.entries(merged)) if (!dirty.has(key)) next[key] = value
+      for (const key of dirty.keys()) if (key in cache) next[key] = cache[key]
+      cache = next
+    }
+    return landed
   } catch {
     return false // localStorage still holds the value; nothing is lost by a failed flush.
   } finally {
@@ -267,4 +367,8 @@ export function __resetDurableForTest(): void {
   if (flushTimer) clearTimeout(flushTimer)
   flushTimer = null
   flushing = false
+  dirty.clear()
+  changes = 0
+  remote = false
+  stationLoaded = false
 }

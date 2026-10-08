@@ -100,6 +100,9 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [road, setRoad] = useState<Road | null>(null)
   const current = useRef<Road | null>(null)
   const [forgetting, setForgetting] = useState<string | null>(null)
+  // Operate from this computer, asked first: it closes this Nexus and starts it again driving the
+  // station, with this computer's own station off until Leave.
+  const [operating, setOperating] = useState<string | null>(null)
   const [another, setAnother] = useState<{ id: string; address: string } | null>(null)
   const [resume, setResume] = useState(0)
   const connecting = useRef<string | null>(null)
@@ -161,6 +164,9 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           return
         case 'answerRefused':
           current.current?.connection.answerRefused(told.reason)
+          return
+        case 'operating':
+          setSaid({ text: t('lanWindow.operating'), alert: false })
           return
         case 'station':
           current.current?.connection.receive(told.message, new TextEncoder().encode(event.data).length)
@@ -248,9 +254,16 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
               <button type="button" className="remote-button" disabled={!!busy} onClick={() => { setForgetting(null); say({ type: 'forget', stationId: station.id }) }}>{t('lanWindow.forgetYes')}</button>
               <button type="button" className="remote-button remote-button--quiet" onClick={() => setForgetting(null)}>{t('lanWindow.keep')}</button>
             </div>
+          </> : operating === station.id ? <>
+            <p className="remote-warning">{t('lanWindow.operateConfirm')}</p>
+            <div className="remote-actions">
+              <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => { setOperating(null); setBusy(`operate:${station.id}`); setSaid(null); say({ type: 'operate', stationId: station.id }) }}>{t('lanWindow.operateYes')}</button>
+              <button type="button" className="remote-button remote-button--quiet" onClick={() => setOperating(null)}>{t('lanWindow.operateNo')}</button>
+            </div>
           </> : <div className="remote-actions">
             <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => connect(station.id)}>
               {busy === `connect:${station.id}` ? t('lanWindow.connecting') : t('lanWindow.stream')}</button>
+            <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => setOperating(station.id)}>{t('lanWindow.operate')}</button>
             <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
           </div>}
           {another?.id === station.id && <form onSubmit={event => { event.preventDefault(); if (another.address.trim()) connect(station.id, another.address.trim()) }}>

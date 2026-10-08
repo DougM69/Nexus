@@ -489,6 +489,7 @@ fn reach(store: StationStore) -> Reach {
         stations: Arc::new(Stations::new(Arc::new(store))),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
+        operate: Arc::new(|_| {}),
     }
 }
 

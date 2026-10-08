@@ -765,7 +765,7 @@ mod tests {
         );
 
         let handler = &lib[at(lib, ".on_window_event(|window, event| {")..];
-        let handler = &handler[..at(handler, ".build(tauri::generate_context!())")];
+        let handler = &handler[..at(handler, ".build(context())")];
         assert!(
             handler.contains(
                 "if quit::hold_the_close(app) {\n                        api.prevent_close();"

@@ -1063,6 +1063,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
+            operate: Arc::new(|_| {}),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;
@@ -1201,6 +1202,7 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
             })
         },
         name: "Den PC".into(),
+        operate: Arc::new(|_| {}),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1296,6 +1298,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
             })
         },
         name: "Den PC".into(),
+        operate: Arc::new(|_| {}),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1375,6 +1378,7 @@ async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
         stations: stations.clone(),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
+        operate: Arc::new(|_| {}),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;

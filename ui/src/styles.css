@@ -27286,6 +27286,39 @@ tr.sel .aprs-sym {
    Deliberately QUIET, and deliberately unlike .pounce-banner. A new build is not urgent, so it
    sits at the bottom, does not steal focus, and can be dismissed. Pounce is loud and top-of-
    screen because a rare DX spot genuinely is a race; these two must not read as the same thing. */
+/* The banner of a computer driving another station (client mode): an in-flow strip at the top of
+   `.app`, its own height taken from the shell below, so it covers nothing — no cockpit control,
+   Stop included, is ever under it. Amber while the link is not live, control is elsewhere, or the
+   station refused this computer. */
+.client-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-elev);
+  border-bottom: 2px solid var(--border);
+  font-size: var(--fs-body);
+}
+.client-banner[data-phase='notLive'],
+.client-banner[data-phase='busy'],
+.client-banner[data-phase='refused'] {
+  border-bottom-color: var(--state-warn);
+}
+.client-banner-line {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.client-banner-leave {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+
 .update-banner {
   position: fixed;
   bottom: var(--space-3);

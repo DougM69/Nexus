@@ -196,6 +196,7 @@ import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
+import { ClientBanner } from './components/ClientBanner'
 import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
 import { RevealNudge } from './components/RevealNudge'
@@ -2709,6 +2710,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   if (!snap) {
     return (
       <div className="app loading">
+        {/* On a computer driving another station, what it waits for: connecting, control held
+            elsewhere, or why the station did not take it. Nothing on a station's own screen. */}
+        <ClientBanner />
         <span>{t('shell.loading')}</span>
       </div>
     )
@@ -3395,6 +3399,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   return (
     <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={(remote?.staleShown ?? remote?.stale) || undefined}>
       {remote?.status}
+      <ClientBanner />
       {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
           band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",

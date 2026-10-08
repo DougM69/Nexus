@@ -127,6 +127,10 @@ const MIGRATED = [
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
   'components/RevealNudge.tsx',
+  // Client mode (2026-10-07) — born migrated: the banner of a computer driving another station,
+  // and the words for a call it refused or could not make.
+  'components/ClientBanner.tsx',
+  'features/clientWords.ts',
   // Batch 1 (2026-08-18) — the getting-started guide and the app's own notices. Pure prose,
   // no radio state: the guide is documentation, the update banner and crash fallback are the
   // app talking about itself. Chosen as the first batch because GettingStartedGuide.tsx is

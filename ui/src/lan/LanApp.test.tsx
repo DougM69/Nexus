@@ -285,3 +285,33 @@ describe('the stream', () => {
     expect(socket.asked('acquire').length).toBe(1)
   })
 })
+
+describe('Operate from this computer', () => {
+  it('asks first, then names the station to the page’s socket; the answer says Nexus is starting again', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operate'] }))
+    expect(screen.getByText(EN['lanWindow.operateConfirm'])).toBeTruthy()
+    expect(socket.sent.some(m => m.type === 'operate'), 'asked first, nothing sent yet').toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateNo'] }))
+    expect(screen.queryByText(EN['lanWindow.operateConfirm'])).toBeNull()
+    expect(socket.sent.some(m => m.type === 'operate'), 'Not now sends nothing').toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operate'] }))
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(socket.sent).toContainEqual({ type: 'operate', stationId: STATION })
+    socket.tell({ type: 'operating' })
+    expect(screen.getByText(EN['lanWindow.operating'])).toBeTruthy()
+  })
+
+  it('a station this computer no longer knows is said, and nothing starts', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC',
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operate'] }))
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    socket.tell({ type: 'connectRefused', reason: 'unknownStation' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.reason.unknownStation'])
+    expect((screen.getByRole('button', { name: EN['lanWindow.operate'] }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
