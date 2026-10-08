@@ -1043,9 +1043,10 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
 
 /// ★ No queue at this end, with the audio road's sender stuck as well. The five presses of the
 /// test above, with the link stuck (the shack answers nothing) and the audio road's sender held
-/// mid-send while a press is live: every Stop leaves on Stop's road, their median within the
-/// millisecond, and each ends this computer's press without waiting for the sender. CONTROL: the
-/// press was live and the sender was still held when the Stops had gone.
+/// mid-send by another thread while a press is live: every Stop leaves on Stop's road at once,
+/// their median within the millisecond, and each ends this computer's press without waiting for
+/// the sender. CONTROL: the press was live before each Stop, and the sender was still held when
+/// the Stops had gone.
 #[test]
 fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_blocked_too() {
     use crate::lan_client::audio_road::{AudioRoad, StandIn};
@@ -1081,7 +1082,15 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
     let screens = screens(&client);
     on_air.pressing(Some(9));
     std::thread::sleep(Duration::from_millis(50));
-    let held = lock(&on_air.sender);
+    // The sender stuck: held by a thread of its own, as a send that will not return holds it.
+    let holder = {
+        let on_air = on_air.clone();
+        std::thread::spawn(move || {
+            let _held = lock(&on_air.sender);
+            std::thread::sleep(Duration::from_millis(600));
+        })
+    };
+    eventually("the sender held", || on_air.sender.try_lock().is_err());
     let mut took = Vec::new();
     let mut answers = Vec::new();
     let mut buffer = [0u8; 256];
@@ -1109,15 +1118,17 @@ fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_audio_sender_bl
         took.push(left - pressed);
         eventually("the press ended", || on_air.press().is_none());
     }
-    assert!(
-        on_air.sender.try_lock().is_err(),
-        "the sender was held throughout"
-    );
-    drop(held);
+    let held_throughout = on_air.sender.try_lock().is_err();
     eprintln!("measured: with the audio sender held, the Stops left on the road {took:?}");
+    assert!(
+        took.iter().all(|t| *t < Duration::from_millis(50)),
+        "every Stop left at once: {took:?}"
+    );
     let mut sorted = took.clone();
     sorted.sort();
     assert!(sorted[2] < Duration::from_millis(1), "the median: {took:?}");
+    assert!(held_throughout, "premise: the sender was held throughout");
+    holder.join().unwrap();
     shack.let_go();
     for answered in &answers {
         assert!(answered.recv_timeout(Duration::from_secs(5)).is_ok());
