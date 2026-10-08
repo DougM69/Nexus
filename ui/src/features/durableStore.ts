@@ -154,6 +154,12 @@ export function setRemoteStation(on: boolean): void {
   remote = on
 }
 
+/** Whether this computer drives another station (client mode): said once as the app starts,
+ *  before its first render. */
+export function drivesAnotherStation(): boolean {
+  return remote
+}
+
 /** A station key on a computer driving another station: never this computer's `localStorage`. */
 function elsewhere(key: string): boolean {
   return remote && station.has(key)

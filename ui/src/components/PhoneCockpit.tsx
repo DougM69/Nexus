@@ -49,6 +49,8 @@ import type { ModeClass } from '../neededFilters'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
+import { drivesAnotherStation } from '../features/durableStore'
+import { STREAM_PTT_REASSERT_MS } from '../remote-web/stream-protocol'
 import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
 import { formatDialMhz } from './FrequencyReadout'
 // ⊘ — the shared unavailable mark. Its own module so `CockpitHeader` can print the same
@@ -1080,6 +1082,28 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     micArmed.current = false
     micCall(releaseStreamMic)
   }
+  // A COMPUTER DRIVING A STATION (client mode) HOLDS ITS PTT BY RE-ASSERTING IT. Each `set_ptt` on
+  // is one hold of a held press on the station's Stop road (`src-tauri/src/client_mode.rs`), sent
+  // from this screen's own timer every STREAM_PTT_REASSERT_MS while the PTT is down, as the stream
+  // page's is; the station ends the press 200 ms after the last one, so a screen that hangs cannot
+  // leave its over on the air. The press arms the station's microphone over for this computer's
+  // headset, and its voice keys it. A press the station refused, or that ended other than by the
+  // release (a Stop, the station, the link), reads Ended until the PTT is let go.
+  const driving = drivesAnotherStation()
+  const holding = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [pressEnded, setPressEnded] = useState(false)
+  const stopHolding = () => {
+    if (holding.current !== null) clearInterval(holding.current)
+    holding.current = null
+  }
+  const holdAgain = () => {
+    void setPtt(true).catch((why) => {
+      if (holding.current === null) return
+      stopHolding()
+      setPressEnded(true)
+      pushToast(String(why), 'info', 4000)
+    })
+  }
   const key = (on: boolean) => {
     if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
@@ -1120,8 +1144,28 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       pushToast(t('phone.tx.turnedBackOn'), 'info', 4000)
       void setTxEnabled(true)
         .then((s) => onSnap?.(s))
-        .catch(() => {})
+        // From a computer driving a station, the station may refuse the arm: say why.
+        .catch((why) => {
+          if (driving) pushToast(String(why), 'info', 4000)
+        })
       return
+    }
+    if (on && driving) {
+      // Push-to-talk only, as over the stream.
+      if (lock) {
+        pushToast(t('phone.tx.remoteLock'), 'info', 4000)
+        return
+      }
+      setKeyed(true)
+      setPressEnded(false)
+      stopHolding()
+      holding.current = setInterval(holdAgain, STREAM_PTT_REASSERT_MS)
+      holdAgain()
+      return
+    }
+    if (!on) {
+      stopHolding()
+      setPressEnded(false)
     }
     if (on && isStreamInput()) {
       // Lock refuses it: no hands-free microphone over from Remote (the audio design's M5). The
@@ -1172,11 +1216,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const [micReported, setMicReported] = useState(false)
   useEffect(() => {
     if (!keyed) setMicReported(false)
-    else if (micArmed.current && streamMic !== null) setMicReported(true)
-  }, [keyed, streamMic])
+    else if ((micArmed.current || driving) && streamMic !== null) setMicReported(true)
+  }, [keyed, streamMic, driving])
   const pttArmed =
-    keyed && snap.radio.txAllowed && snap.radio.txEnabled && micArmed.current &&
-    (streamMic === 'armed' || (streamMic === null && !micReported))
+    keyed && snap.radio.txAllowed && snap.radio.txEnabled && (micArmed.current || driving) &&
+    !pressEnded && (streamMic === 'armed' || (streamMic === null && !micReported))
   const changePower = (pct: number) => {
     if (!control) return
     setPower(pct)
@@ -1249,6 +1293,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      stopHolding()
       void setPtt(false) // safety: never leave the rig keyed on unmount
       releaseMic()
     }
@@ -3129,9 +3174,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             : !snap.radio.txEnabled
               ? '■ TX OFF — CLICK TO ENABLE'
               : keyed
-                ? pttArmed
-                  ? 'Armed — talk to transmit'
-                  : 'ON AIR — release to stop'
+                ? pressEnded
+                  ? 'Over ended — release PTT'
+                  : pttArmed
+                    ? 'Armed — talk to transmit'
+                    : 'ON AIR — release to stop'
                 : 'PUSH TO TALK'}
         </button>
         <label className="ph-lock" title="Hands-free: click PTT once to key, again to unkey">

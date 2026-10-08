@@ -23,6 +23,11 @@ describe('a client-mode refusal, in words', () => {
     for (const [code, key] of [
       ['changedAtShack', 'client.refused.changedAtShack'],
       ['transmitNotYet', 'client.refused.transmitNotYet'],
+      ['heldPress', 'client.refused.heldPress'],
+      ['noStopRoad', 'client.refused.noStopRoad'],
+      ['noPresence', 'client.refused.noPresence'],
+      ['staleState', 'client.refused.staleState'],
+      ['pressEnded', 'client.refused.pressEnded'],
       ['shackOnly', 'client.refused.shackOnly'],
       ['notLive', 'client.refused.notLive'],
       ['gone', 'client.refused.gone'],
