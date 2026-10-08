@@ -71,6 +71,15 @@ fn caller(run: u64, holds_lease: bool) -> Caller {
         },
         profile: Profile::Desktop,
         holds_lease,
+        roads: Ok(()),
+    }
+}
+
+/// The computer holding the lease, its roads saying `roads` of a start.
+fn controller_whose_roads(roads: Result<(), Refusal>) -> Caller {
+    Caller {
+        roads,
+        ..controller()
     }
 }
 
@@ -220,8 +229,67 @@ fn a_shack_only_command_is_refused_at_both_ends() {
     }
 }
 
+/// The desktop's FT buttons that start a transmission, as the operator signed them for a computer
+/// driving the shack: Enable TX, CQ and directed CQ, a reply to a decode, Tx5 and the next-message
+/// choice, and resend. Written here, not read from the table, so a change to the table cannot
+/// move them.
+const FT_STARTS: [&str; 7] = [
+    "call_cq",
+    "call_station",
+    "override_next_tx",
+    "qso_freetext",
+    "qso_resend",
+    "set_tx_enabled",
+    "start_cq",
+];
+
+/// The rest of those FT buttons: Halt, working a spot, Log QSO and the prompt-to-log answer, and
+/// the operator's settings (the TX and RX offsets, Hold TX freq, even or odd, skip Tx1, auto cycle,
+/// mode, band, frequency and decode depth). None keys anything.
+const FT_KEYING_NOTHING: [&str; 14] = [
+    "confirm_pending_log",
+    "halt_tx",
+    "log_current_qso",
+    "pick_band",
+    "set_decode_depth",
+    "set_frequency",
+    "set_hold_tx_freq",
+    "set_rx_offset",
+    "set_skip_tx1",
+    "set_tier",
+    "set_tx_cycle_auto",
+    "set_tx_even",
+    "set_tx_offset",
+    "work_spot",
+];
+
+/// ★ The starts wired from afar are exactly the FT buttons' starts, the voice keyer's play, and the
+/// PTT as a held press; the table says so by value. CONTROL: the table holds no row that is not a
+/// start.
 #[test]
-fn nothing_from_afar_starts_a_transmission_yet() {
+fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_press() {
+    let mut wired: Vec<(&str, Wired)> = WIRED.to_vec();
+    wired.sort_unstable_by_key(|(name, _)| *name);
+    let mut expected: Vec<(&str, Wired)> = FT_STARTS.iter().map(|n| (*n, Wired::Ft)).collect();
+    expected.push(("play_voice_message", Wired::VoiceKeyer));
+    expected.push(("set_ptt", Wired::HeldPress));
+    expected.sort_unstable_by_key(|(name, _)| *name);
+    assert_eq!(wired, expected);
+    assert!(
+        WIRED.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "name order"
+    );
+    for (name, _) in WIRED {
+        assert_eq!(class_of(name), Some(Class::StartsTx), "{name}");
+    }
+}
+
+/// ★ The FT buttons are admitted from the computer that holds the lease with its roads up, and
+/// every other start is refused by name: the held press is never `set_ptt` from afar, and each start
+/// not wired is `transmitNotYet`, at the shack and on the other computer alike. CONTROL: the FT
+/// buttons that key nothing run, or stop, by their class.
+#[test]
+fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
     let shack = shack();
     let starts = of_class(Class::StartsTx);
     assert!(
@@ -230,10 +298,175 @@ fn nothing_from_afar_starts_a_transmission_yet() {
         starts.len()
     );
     for (id, name) in starts.into_iter().enumerate() {
-        // The other computer sends it; the shack refuses it.
+        // The other computer's routing sends a start on, and its own refusal reads the same switch.
         assert_eq!(route(name, &on_args(name)), Route::Shack, "{name}");
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
-        assert_eq!(kind(&admission), refused(Refusal::TransmitNotYet), "{name}");
+        let expected = match name {
+            _ if FT_STARTS.contains(&name) || name == "play_voice_message" => "run".to_string(),
+            "set_ptt" => refused(Refusal::HeldPress),
+            _ => refused(Refusal::TransmitNotYet),
+        };
+        assert_eq!(kind(&admission), expected, "{name}");
+        assert_eq!(
+            transmit_from_afar(name).err(),
+            (expected == refused(Refusal::TransmitNotYet)).then_some(Refusal::TransmitNotYet),
+            "{name}"
+        );
+    }
+    for (id, name) in FT_KEYING_NOTHING.into_iter().enumerate() {
+        let expected = match class_of(name) {
+            Some(Class::RunsAtShack) => "run",
+            Some(Class::StopsTx) => "stop",
+            other => panic!("{name} is {other:?}: an FT button that keys nothing"),
+        };
+        let admission = shack.admit(&controller(), call(id as u64 + 500, name, json!({})));
+        assert_eq!(kind(&admission), expected, "{name}");
+    }
+}
+
+/// ★ A wired start needs the lease on its connection and then its computer's roads: the second
+/// computer, without the lease, is refused `notController` whatever its roads say; the lease holder
+/// is refused with no Stop road, with no live presence, and with stale state, each by its own code.
+/// CONTROL: the lease and the roads both up, it runs; and a Stop and the PTT's off half from a
+/// computer whose roads are down still go.
+#[test]
+fn a_wired_start_needs_the_lease_and_its_roads() {
+    let shack = shack();
+    let mut id = 0;
+    for name in FT_STARTS.into_iter().chain(["play_voice_message"]) {
+        let mut admit = |who: &Caller| {
+            id += 1;
+            kind(&shack.admit(who, call(id, name, on_args(name))))
+        };
+        assert_eq!(
+            admit(&other_device()),
+            refused(Refusal::NotController),
+            "{name}"
+        );
+        assert_eq!(
+            admit(&Caller {
+                roads: Err(Refusal::NoPresence),
+                ..other_device()
+            }),
+            refused(Refusal::NotController),
+            "{name}: the lease first"
+        );
+        for refusal in [
+            Refusal::NoStopRoad,
+            Refusal::NoPresence,
+            Refusal::StaleState,
+        ] {
+            assert_eq!(
+                admit(&controller_whose_roads(Err(refusal))),
+                refused(refusal),
+                "{name}"
+            );
+        }
+        assert_eq!(admit(&controller()), "run", "{name}");
+    }
+    for (n, (name, args)) in [("halt_tx", json!({})), ("set_ptt", json!({"on": false}))]
+        .into_iter()
+        .enumerate()
+    {
+        let admission = shack.admit(
+            &Caller {
+                roads: Err(Refusal::NoStopRoad),
+                ..other_device()
+            },
+            call(900 + n as u64, name, args),
+        );
+        assert_eq!(kind(&admission), "stop", "{name}");
+    }
+}
+
+/// Whether a command's parameter reads as a time: one a clock or a slot could ride in.
+fn time_like(name: &str, ty: &str) -> bool {
+    const WORDS: [&str; 22] = [
+        "time",
+        "timestamp",
+        "clock",
+        "utc",
+        "at",
+        "ms",
+        "millis",
+        "micros",
+        "nanos",
+        "secs",
+        "seconds",
+        "slot",
+        "period",
+        "deadline",
+        "epoch",
+        "when",
+        "until",
+        "since",
+        "delay",
+        "fires",
+        "boundary",
+        "instant",
+    ];
+    const TYPES: [&str; 6] = [
+        "Instant",
+        "SystemTime",
+        "Duration",
+        "DateTime",
+        "NaiveDateTime",
+        "chrono::",
+    ];
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for c in name.chars() {
+        if (c.is_ascii_uppercase() || c == '_') && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        if c != '_' {
+            word.push(c.to_ascii_lowercase());
+        }
+    }
+    words.push(word);
+    words.iter().any(|w| WORDS.contains(&w.as_str())) || TYPES.iter().any(|t| ty.contains(t))
+}
+
+/// ★ No FT command from afar carries a time: every parameter of every FT button's command, read
+/// off its own signature in `lib.rs`, names no time and has no time type, so slot timing, the clock
+/// and the sequencer's timeouts stay at the shack. The prompt-to-log answer's record is the contact as the
+/// station proposed it, its logged times among its fields: what is written in the log, deciding
+/// nothing about when anything transmits, so it is the one parameter allowed, by name and by type.
+/// A new parameter that reads as a time fails this. CONTROL: the reader finds the times it must
+/// (JS8's reply's `firesAtMs`, and made-up names and types), and passes plain ones.
+#[test]
+fn no_ft_command_from_afar_carries_a_time() {
+    for (name, ty) in [
+        ("firesAtMs", "u64"),
+        ("slot", "u32"),
+        ("txAt", "u64"),
+        ("deadline", "Instant"),
+        ("whenever", "Duration"),
+        ("startUtc", "String"),
+        ("periodIndex", "i64"),
+    ] {
+        assert!(time_like(name, ty), "the guard misses {name}: {ty}");
+    }
+    assert!(
+        parameters("js8_answer_reply")
+            .iter()
+            .any(|(name, ty)| time_like(name, ty)),
+        "a time in a real signature"
+    );
+    for (name, ty) in [("call", "String"), ("enabled", "bool"), ("hz", "f32")] {
+        assert!(!time_like(name, ty), "{name}: {ty}");
+    }
+    for cmd in FT_STARTS.into_iter().chain(FT_KEYING_NOTHING) {
+        for (name, ty) in parameters(cmd) {
+            if cmd == "confirm_pending_log" && name == "record" {
+                assert_eq!(ty, "LoggedQso", "the record is the logged contact");
+                continue;
+            }
+            assert!(
+                !time_like(&name, &ty),
+                "{cmd} carries a time from afar: {name}: {ty}"
+            );
+        }
     }
 }
 
@@ -321,11 +554,13 @@ fn the_on_half_of_a_transmit_switch_is_its_class() {
     let shack = shack();
     for (id, (name, ..)) in OFF_HALVES.iter().enumerate() {
         let admission = shack.admit(&controller(), call(id as u64 + 1, name, on_args(name)));
-        let expected = match class_of(name) {
-            Some(Class::StartsTx) => refused(Refusal::TransmitNotYet),
+        let expected = match (class_of(name), transmit_from_afar(name)) {
+            (Some(Class::StartsTx), Ok(Wired::Ft)) => "run".to_string(),
+            (Some(Class::StartsTx), Ok(Wired::HeldPress)) => refused(Refusal::HeldPress),
+            (Some(Class::StartsTx), _) => refused(Refusal::TransmitNotYet),
             // Turning the RTTY sequencer on keys nothing, so it runs at the shack.
-            Some(Class::RunsAtShack) => "run".to_string(),
-            other => panic!("{name} is {other:?}"),
+            (Some(Class::RunsAtShack), _) => "run".to_string(),
+            (other, _) => panic!("{name} is {other:?}"),
         };
         assert_eq!(kind(&admission), expected, "{name}");
     }
@@ -976,6 +1211,10 @@ fn every_refusal_has_its_own_code() {
         Refusal::RunsHere,
         Refusal::ShackOnly,
         Refusal::TransmitNotYet,
+        Refusal::HeldPress,
+        Refusal::NoStopRoad,
+        Refusal::NoPresence,
+        Refusal::StaleState,
         Refusal::TypedPassword,
         Refusal::NotController,
         Refusal::Busy,

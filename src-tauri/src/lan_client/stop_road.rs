@@ -8,6 +8,11 @@
 //!   Stop it sends on the command link. The road's thread only sends it again, every [`REPEAT`]
 //!   until the station acknowledges it, for up to [`GIVE_UP`]. Only then is this computer's own
 //!   press ended, and that is an atomic store: nothing a Stop does waits for the audio road.
+//! - **The held press** ([`StopRoad::press`], [`StopRoad::hold`], [`StopRoad::release`]): each
+//!   time this computer's screen re-asserts its PTT, one `hold`, written by the caller on its own
+//!   thread; the road never repeats one on a timer of its own, so a screen that stops re-asserting
+//!   lets the station's held PTT end the press 200 ms later. A press the station says has ended
+//!   ends here too, so the microphone stops and it never keys again.
 //! - **The heartbeat**, every [`HEARTBEAT`] while the link is open: the lease, and the number of
 //!   the last snapshot this computer's main window fetched (client mode keeps it, [`StopRoad::fetched`]).
 //!   The number comes from the screen's own poll, so a window that hangs stops moving it, and
@@ -105,6 +110,14 @@ impl OnAir {
     /// A press is live (its number, never 0), or none is. An atomic store: never waits.
     pub(crate) fn pressing(&self, press: Option<u64>) {
         self.press.store(press.unwrap_or(0), Ordering::Release);
+    }
+
+    /// The press `press` is over here, if it is the live one: another press, or none, is left as
+    /// it is. Never waits.
+    fn end_press(&self, press: u64) {
+        let _ = self
+            .press
+            .compare_exchange(press, 0, Ordering::AcqRel, Ordering::Acquire);
     }
 
     /// The station's rig, as its status line says (`None` when it cannot tell).
@@ -299,12 +312,43 @@ impl StopRoad {
             .map(|(_, why)| Over::Ended { why })
     }
 
-    /// One message, sent now: whether it went on the socket.
-    // The held press is its first caller in the app, once a press from afar is allowed; until
-    // then, the tests.
-    #[allow(dead_code)]
+    /// One message, sent now: whether it went on the socket. For the tests, which speak on the
+    /// road by hand; the app speaks through the calls below.
+    #[cfg(test)]
     pub(crate) fn say(&self, up: &Up) -> bool {
         self.shared.say(up)
+    }
+
+    /// A new press, numbered `press`: its first hold written now, on this thread, and the press
+    /// live here (the microphone sends, and the station's audio here is muted).
+    pub(crate) fn press(&self, press: u64) {
+        self.shared.say(&Up::Hold { press });
+        self.shared.on_air.pressing(Some(press));
+    }
+
+    /// The press `press` held again, as the screen re-asserted it: one hold, written now, while
+    /// the press is still live here. `false`, and nothing sent, once it has ended: a Stop pressed
+    /// here, or the station saying it ended.
+    pub(crate) fn hold(&self, press: u64) -> bool {
+        if self.shared.on_air.press() != Some(press) {
+            return false;
+        }
+        self.shared.say(&Up::Hold { press });
+        true
+    }
+
+    /// The press `press` let go: its release written now, and the press over here.
+    pub(crate) fn release(&self, press: u64) {
+        self.shared.say(&Up::Release { press });
+        self.shared.on_air.end_press(press);
+    }
+
+    /// Whether presence is live as the station last said it on this road: the deadline it gave at
+    /// its last renewal not past.
+    pub(crate) fn presence_live(&self, now: Instant) -> bool {
+        lock(&self.shared.heard)
+            .presence
+            .is_some_and(|(at, left)| now < at + left)
     }
 
     /// The lease the heartbeat names, or none while this computer holds none.
@@ -369,6 +413,16 @@ impl Shared {
         match down {
             Down::Stopped { stop } => keep(&mut heard.stopped, stop),
             press @ Down::Press { .. } => {
+                // A press the station says has ended is over here too: the microphone stops, and
+                // the screen's next re-assertion finds it ended.
+                if let Down::Press {
+                    press: number,
+                    end: Some(_),
+                    ..
+                } = press
+                {
+                    self.on_air.end_press(number);
+                }
                 match press {
                     Down::Press {
                         end: Some(HoldEnd::Lapsed),

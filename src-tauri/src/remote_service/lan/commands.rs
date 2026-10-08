@@ -17,6 +17,14 @@
 //! What a call answers: its value (with the revision of the store it read or saved), its own error,
 //! the dispatcher's refusal, or, for an id already used, what became of it, and it is not run again.
 //!
+//! ## A transmission started from this computer
+//!
+//! A start is admitted only under the stream's transmit rules, which the dispatcher reads off the
+//! caller: the lease on this connection, and what this connection's Stop road says
+//! (`super::stop_road::Ready`: its presence live, the state its computer's screen last fetched under
+//! two seconds old). A connection with no Stop road starts nothing. Once a start has run, its road's
+//! presence is read again: a start that ran after presence lapsed is stopped at once.
+//!
 //! ## Feeds and events
 //!
 //! A watched feed runs its command here at its own pace, through the same handler, and pushes what
@@ -33,7 +41,9 @@ use tokio::sync::broadcast;
 
 use super::super::operations::Authority;
 use super::outbox::Outbox;
+use super::stop_road::Ready;
 use super::wire::{self, Assembly, Feed, Whole};
+use crate::command_classes::{class_of, Class};
 use crate::command_dispatch::{
     admit_stop, forwards, Admission, Answer, Call, Caller, CallerKey, Dispatcher, Outcome, Profile,
     Refusal, Reply, Runner, ShackStores,
@@ -105,6 +115,8 @@ struct Context {
     connection: u64,
     device: String,
     outbox: Outbox,
+    /// What this connection's Stop road says of a start from its computer; `None` with no road.
+    ready: Option<Arc<Ready>>,
 }
 
 impl Context {
@@ -112,6 +124,35 @@ impl Context {
     fn controls(&self) -> bool {
         self.authority
             .lan_controls(self.connection, &self.device, Instant::now())
+    }
+
+    /// The stream's transmit rules as this connection's roads read them now, for a start: a Stop
+    /// road at all, then its presence and the state its computer's screen last fetched.
+    fn roads(&self, now: Instant) -> Result<(), Refusal> {
+        match &self.ready {
+            None => Err(Refusal::NoStopRoad),
+            Some(ready) => ready.start(now),
+        }
+    }
+
+    /// ⛔ A START THAT RAN AFTER ITS COMPUTER'S PRESENCE LAPSED IS STOPPED AT ONCE. Presence is
+    /// read before a start is admitted, and the start then waits its turn at the Engine: a lapse in
+    /// between has already halted the station, so what the start began would be on the air with no
+    /// presence left to halt it. Asked once the start has run; the Stop is the station's own.
+    fn present_after(&self, cmd: &str) {
+        let live = self
+            .ready
+            .as_ref()
+            .is_some_and(|ready| ready.presence_live(Instant::now()));
+        if !live {
+            tempo_core::applog::warn(
+                "remote",
+                &format!(
+                    "on this network: {cmd} ran after its computer's presence lapsed; stopped"
+                ),
+            );
+            let _ = run(&self.runner, "halt_tx", json!({}));
+        }
     }
 }
 
@@ -136,6 +177,8 @@ pub(super) struct Opening {
     pub run: u64,
     pub profile: Profile,
     pub outbox: Outbox,
+    /// What this connection's Stop road says of a start; `None` when it has no road.
+    pub ready: Option<Arc<Ready>>,
 }
 
 impl Lane {
@@ -148,6 +191,7 @@ impl Lane {
             connection: opening.connection,
             device: opening.device.clone(),
             outbox: opening.outbox,
+            ready: opening.ready,
         });
         let events = tokio::spawn(forward(
             context.clone(),
@@ -200,10 +244,16 @@ impl Lane {
         let (context, key, profile) = (self.context.clone(), self.key.clone(), self.profile);
         tokio::task::spawn_blocking(move || {
             let _waiting = waiting;
+            let starts = class_of(&call.cmd) == Some(Class::StartsTx);
             let caller = Caller {
                 key,
                 profile,
                 holds_lease: context.controls(),
+                roads: if starts {
+                    context.roads(Instant::now())
+                } else {
+                    Ok(())
+                },
             };
             let cmd = call.cmd.clone();
             match context.dispatcher.admit(&caller, call) {
@@ -215,7 +265,11 @@ impl Lane {
                             .urgent(answered(id, run(&context.runner, &cmd, args), None));
                 }
                 Admission::Run { args, ticket } => {
-                    let answer = match run(&context.runner, &cmd, args) {
+                    let ran = run(&context.runner, &cmd, args);
+                    if starts {
+                        context.present_after(&cmd);
+                    }
+                    let answer = match ran {
                         Some(result) => {
                             let Reply { result, revision } = ticket.finish(result);
                             answered(id, Some(result), revision.as_ref().map(|r| r.as_str()))

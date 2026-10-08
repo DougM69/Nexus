@@ -735,10 +735,7 @@ impl Streaming {
 
     /// What the held PTT did since the last call, for the page.
     pub fn ptt_reports(&self) -> Vec<String> {
-        self.station
-            .host
-            .ptt
-            .reports()
+        page_reports(&self.station.host.ptt)
             .into_iter()
             .filter_map(|r| {
                 serde_json::to_string(&ControlOut::PttState {
@@ -831,6 +828,14 @@ impl Streaming {
 
 /// Why an over ended, in the contract's words: each end under its own name, so the page can say
 /// the right thing (the audio design's §7).
+/// What the held PTT says of the page's own presses since the last call, taken: a computer's press
+/// on Stop's road (`super::lan::stop_road`) is left for that road to tell, and never told here.
+pub(crate) fn page_reports(
+    ptt: &tempo_app::remote_control::ptt_hold::PttHold,
+) -> Vec<tempo_app::remote_control::ptt_hold::HoldReport> {
+    ptt.reports_where(|id| !super::lan::stop_road::is_road_press(id))
+}
+
 fn wire_ended(why: tempo_app::mic::MicEnded) -> tempo_stream::protocol::MicEnded {
     use tempo_app::mic::MicEnded as Engine;
     use tempo_stream::protocol::MicEnded as Wire;

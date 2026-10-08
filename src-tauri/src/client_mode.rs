@@ -40,8 +40,19 @@
 //!   operator's ruling of 2026-10-07: the rail, its order, the UI scale and the window layouts stay
 //!   on the computer the operator sits at);
 //! - **refused here**, with nothing sent: a command with no class, one only the shack's own screen
-//!   may give, a password typed here, and, until the stream's transmit rules are wired for this
-//!   road, every command that starts a transmission. The shack refuses each of those again itself.
+//!   may give, a password typed here, and every command that starts a transmission but the few
+//!   wired for this road (`command_dispatch::WIRED`). The shack refuses each of those again itself.
+//!
+//! ## A transmission started from here
+//!
+//! A wired start leaves only while both roads are up and presence is live as this computer's Stop
+//! road last heard it; the shack judges it again by the stream's transmit rules, on its own clock.
+//! The PTT is never the shack's `set_ptt`, which keys the shack's own audio source: each `set_ptt`
+//! on from the screen, which re-asserts it every 100 ms while its PTT is held, is one hold of a
+//! held press on Stop's road ([`Client::press`]), and its off half lets the press go first. A press
+//! that ended other than by the screen letting go (a Stop, the station, a new link) never keys
+//! again: the screen must let go and press again. So after a reconnect nothing transmits by
+//! itself: the lease is taken again, and the shack's transmit stays off until it is armed.
 //!
 //! ## Stop is never held
 //!
@@ -77,9 +88,9 @@ use std::future::Future;
 use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -90,7 +101,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::command_classes::{class_of, Class};
 use crate::command_dispatch::{
     is_stop, join_ui_state, route, split_ui_state, store_access, transmit_from_afar, Refusal,
-    Route, Store, IN_FLIGHT, PER_COMMAND,
+    Route, Store, Wired, IN_FLIGHT, PER_COMMAND,
 };
 use crate::lan_client::audio_road::{self, Headset, ThisHeadset};
 use crate::lan_client::link::{run_id, Answer, Link};
@@ -162,6 +173,11 @@ pub(crate) enum Way {
     Local(Local),
     /// Sent to the shack. A Stop goes ahead of everything and takes no slot.
     Shack { stop: bool },
+    /// A transmission start wired for this road: sent to the shack, under the caps, only while
+    /// this computer's own roads say a start may go.
+    Start,
+    /// The PTT held: one hold of a held press on Stop's road, never the shack's `set_ptt`.
+    Press,
     /// The ui-state pair: the station's keys at the shack, every other key here.
     Split,
     /// Refused here, and nothing is sent.
@@ -210,13 +226,15 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
         },
         Route::Shack => {
             let stop = is_stop(cmd, args);
-            // Until the stream's transmit rules are wired for this road, a start never leaves this
-            // computer; the shack refuses one too, by the same switch. The off half of a switch is
-            // a Stop, and goes.
+            // A start leaves this computer only when it is wired for this road, and the shack
+            // refuses every other one too, by the same switch. The off half of a switch is a Stop,
+            // and goes.
             if !stop && class_of(cmd) == Some(Class::StartsTx) {
-                if let Err(refusal) = transmit_from_afar() {
-                    return Way::Refused(refusal);
-                }
+                return match transmit_from_afar(cmd) {
+                    Err(refusal) => Way::Refused(refusal),
+                    Ok(Wired::HeldPress) => Way::Press,
+                    Ok(Wired::Ft | Wired::VoiceKeyer) => Way::Start,
+                };
             }
             match cmd {
                 "get_snapshot" => Way::Local(Local::Snapshot),
@@ -442,6 +460,17 @@ pub(crate) struct Status {
     pub(crate) over: Option<Over>,
 }
 
+/// This computer's PTT between the screen's re-assertions.
+enum Press {
+    /// Not pressed.
+    Up,
+    /// Pressed: a held press numbered `press`, on the Stop road of the link it was made on.
+    Held { press: u64, road: Arc<StopRoad> },
+    /// Ended other than by the screen letting go: a Stop, the station's word, or a new link. It
+    /// never keys again; the screen must let go and press again.
+    Ended,
+}
+
 /// Client mode's state: the link, the caps, each window's revisions and rows, and this computer's
 /// own settings.
 pub(crate) struct Client {
@@ -474,6 +503,10 @@ pub(crate) struct Client {
     /// This computer's headset, for the shack's audio and the microphone: given once, as the app
     /// starts, and never in a test that has no use for one.
     headset: OnceLock<Arc<ThisHeadset>>,
+    /// The PTT, and the number the next press takes: rising for this run, so no two presses on
+    /// one road are ever one press at the station.
+    press: Mutex<Press>,
+    next_press: AtomicU64,
 }
 
 impl Client {
@@ -499,6 +532,8 @@ impl Client {
             fetched: Mutex::new(HashMap::new()),
             before_install: OnceLock::new(),
             headset: OnceLock::new(),
+            press: Mutex::new(Press::Up),
+            next_press: AtomicU64::new(1),
         }
     }
 
@@ -537,7 +572,15 @@ impl Client {
 
     /// A new link to the shack, or none: each window's rows and snapshot numbers start again with
     /// its numbering, and its Stop road joins those a Stop goes on. The roads past their minute go.
+    /// A press held on the link before it is let go there, and ended: it never keys on the next.
     pub(crate) fn install(&self, shack: Option<Arc<dyn Shack>>) {
+        {
+            let mut held = lock(&self.press);
+            if let Press::Held { press, road } = &*held {
+                road.release(*press);
+                *held = Press::Ended;
+            }
+        }
         lock(&self.rows).clear();
         lock(&self.fetched).clear();
         let now = std::time::Instant::now();
@@ -561,6 +604,57 @@ impl Client {
         for road in roads.iter() {
             road.stop();
         }
+    }
+
+    /// Whether a transmission start may leave this computer now: a link, its Stop road, and
+    /// presence live as that road last heard it. The road, or the code of the first that is not
+    /// there. The shack judges the start again, by its own clock.
+    fn ready_to_start(&self, now: Instant) -> Result<Arc<StopRoad>, &'static str> {
+        let shack = self.shack().ok_or("notLive")?;
+        let road = shack.stop_road().ok_or(Refusal::NoStopRoad.code())?;
+        if !road.presence_live(now) {
+            return Err(Refusal::NoPresence.code());
+        }
+        Ok(road)
+    }
+
+    /// The screen re-asserted its PTT (`set_ptt` on). The first starts a held press on Stop's
+    /// road, once a start may leave this computer; each one after it holds that press again, one
+    /// hold each, never on a timer of this computer's own. A press that ended other than by the
+    /// screen letting go is refused until the screen lets go: it never keys again.
+    fn press(&self) -> Result<Value, String> {
+        let mut held = lock(&self.press);
+        match &*held {
+            Press::Held { press, road } => {
+                let on_this_link = self
+                    .shack()
+                    .and_then(|shack| shack.stop_road())
+                    .is_some_and(|now| Arc::ptr_eq(&now, road));
+                if on_this_link && road.hold(*press) {
+                    return Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})));
+                }
+                *held = Press::Ended;
+                Err(word("pressEnded"))
+            }
+            Press::Ended => Err(word("pressEnded")),
+            Press::Up => {
+                let road = self.ready_to_start(Instant::now()).map_err(word)?;
+                let press = self.next_press.fetch_add(1, Ordering::SeqCst);
+                road.press(press);
+                *held = Press::Held { press, road };
+                Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})))
+            }
+        }
+    }
+
+    /// The screen let go of its PTT: a press held is released on its road, at once, and the next
+    /// press is a new one.
+    fn let_go_the_press(&self) {
+        let mut held = lock(&self.press);
+        if let Press::Held { press, road } = &*held {
+            road.release(*press);
+        }
+        *held = Press::Up;
     }
 
     /// One IPC call from a window: routed by [`way`], answered here, sent to the shack, or refused.
@@ -631,12 +725,38 @@ impl Client {
                 });
                 true
             }
+            Way::Start => {
+                // Only while this computer's own roads say a start may go; the shack judges it
+                // again, by its own clock.
+                if let Err(code) = self.ready_to_start(Instant::now()) {
+                    invoke.resolver.reject(word(code));
+                    return true;
+                }
+                let me = Arc::clone(self);
+                invoke.resolver.respond_async(async move {
+                    me.at_the_shack(&cmd, args, &window, false)
+                        .await
+                        .map_err(InvokeError::from)
+                });
+                true
+            }
+            Way::Press => {
+                let answer = self.press();
+                invoke
+                    .resolver
+                    .respond_async(async move { answer.map_err(InvokeError::from) });
+                true
+            }
             Way::Shack { stop } => {
                 // A Stop press goes by the second road first, written here before the call is
                 // handed to the link, so a link that is stuck or gone holds nothing back. The off
-                // half of a switch is not a Stop press: it goes by the link alone.
+                // half of a switch is not a Stop press: it goes by the link alone, but the PTT's
+                // off half lets the held press go on its road first.
                 if stop && class_of(&cmd) == Some(Class::StopsTx) {
                     self.stop_on_the_roads();
+                }
+                if stop && cmd == "set_ptt" {
+                    self.let_go_the_press();
                 }
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {

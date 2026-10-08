@@ -595,6 +595,13 @@ mod tests {
                 "{cmd}"
             );
         }
+        for (cmd, wired) in crate::command_dispatch::WIRED {
+            assert_eq!(
+                text.matches(&format!("wired {cmd} {wired:?}\n")).count(),
+                1,
+                "{cmd}"
+            );
+        }
         assert!(text.contains("event pounce\n") && text.contains("profile desktop\n"));
         assert!(super::super::stop_road::contract_text().starts_with("stop road 1 "));
         #[cfg(feature = "radio")]

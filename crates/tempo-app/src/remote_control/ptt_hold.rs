@@ -9,7 +9,9 @@
 //!
 //! Two sides share one [`PttHold`]:
 //! - the stream (any thread) records what arrived: [`PttHold::hold`], [`PttHold::release`],
-//!   [`PttHold::end`], and takes what the page should be told with [`PttHold::reports`];
+//!   [`PttHold::end`], and takes what the page should be told with [`PttHold::reports_where`],
+//!   which leaves the reports of a press it did not make for the reader whose press it is (a
+//!   computer's Stop road takes its own the same way);
 //! - the engine decides, on every radio-loop tick, through [`PttHold::tick`]. Keying and unkeying
 //!   happen only there, through the engine's own PTT verb and every guard it carries.
 //!
@@ -183,6 +185,19 @@ impl PttHold {
         self.state().reports.drain(..).collect()
     }
 
+    /// The reports of the presses `mine` names, oldest first, taken; every other report is left,
+    /// in its order, for the reader whose press it is. Two readers that each take only their own
+    /// presses' reports never take each other's.
+    pub fn reports_where(&self, mine: impl Fn(&str) -> bool) -> Vec<HoldReport> {
+        let mut s = self.state();
+        let (taken, kept): (VecDeque<HoldReport>, VecDeque<HoldReport>) = s
+            .reports
+            .drain(..)
+            .partition(|report| mine(&report.hold_id));
+        s.reports = kept;
+        taken.into()
+    }
+
     /// True while a press is keyed.
     pub fn keyed(&self) -> bool {
         self.state()
@@ -262,6 +277,45 @@ mod tests {
 
     const A: &str = "10000000-0000-4000-8000-00000000000a";
     const B: &str = "10000000-0000-4000-8000-00000000000b";
+
+    /// ★ Two readers each take only their own presses' reports, in order, and never each other's.
+    /// CONTROL: what one reader leaves, the other takes, and nothing is left after both.
+    #[test]
+    fn each_reader_takes_only_its_own_presses_reports() {
+        let t0 = Instant::now();
+        let hold = PttHold::default();
+        let road = "road-0102030405060708-0000000000000001";
+        hold.hold(A, t0);
+        hold.tick(t0, true, false, |_| true);
+        hold.release(A);
+        hold.tick(t0 + ms(20), true, true, |_| true);
+        hold.hold(road, t0 + ms(40));
+        hold.tick(t0 + ms(40), true, false, |_| true);
+        let roads = hold.reports_where(|id| id.starts_with("road-"));
+        assert_eq!(
+            roads,
+            vec![HoldReport {
+                hold_id: road.to_string(),
+                keyed: true,
+                end: None
+            }],
+            "the road takes its own"
+        );
+        let page: Vec<(String, bool, Option<HoldEnd>)> = hold
+            .reports_where(|id| !id.starts_with("road-"))
+            .into_iter()
+            .map(|r| (r.hold_id, r.keyed, r.end))
+            .collect();
+        assert_eq!(
+            page,
+            vec![
+                (A.to_string(), true, None),
+                (A.to_string(), false, Some(HoldEnd::Released))
+            ],
+            "the page's, in order, none of the road's"
+        );
+        assert!(hold.reports().is_empty(), "nothing left");
+    }
 
     /// ★ `keyed_by` names only the press whose audio may reach the microphone over: the one in
     /// force, keyed, and not ending. CONTROL: a pending press, another id, a released press and a

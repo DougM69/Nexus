@@ -18,8 +18,8 @@
 //!   on the over's clock by its number. ⛔ NOTHING IS EVER QUEUED: a frame that cannot go now, or
 //!   that is already later than the station's lead-in could still play ([`LATE`]), is dropped and
 //!   its number skipped, so after a stall the station plays a hole where the stall was, never a
-//!   burst. Every press from afar is still refused (`command_dispatch::transmit_from_afar`), so
-//!   nothing here presses yet.
+//!   burst. The press is client mode's, a held press on Stop's road (`crate::client_mode`), and
+//!   the station takes a frame only for the press its held PTT keyed for this computer.
 //! - **The over's end, heard here.** When Stop's road hears an over end other than by the
 //!   operator letting go, or a press is held with no word from the station for half a second, the
 //!   headset plays a short tone. The tone goes to the headset's output alone, never into the

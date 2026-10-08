@@ -572,6 +572,7 @@ async fn session<S>(
                             run,
                             profile,
                             outbox: outbox.clone(),
+                            ready: road.as_ref().map(|road| road.ready()),
                         }));
                         if outbox.text(json!({"type":"opened"}).to_string()).is_err() { break StreamReason::ConnectionFailed }
                     }

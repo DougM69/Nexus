@@ -36,16 +36,16 @@
 //! frame once for every listener ([`ReceiveFanout`]); a frame the socket will not take within
 //! [`SEND_WAIT`] is dropped, never queued, so audio never piles up behind a stalled network.
 //!
-//! ## The microphone: a transmission, refused from afar
+//! ## The microphone: a transmission, taken only for this computer's keyed press
 //!
-//! A `mic` frame belongs to a press, and a press is a transmission start: refused while every start
-//! from afar is (`command_dispatch::transmit_from_afar`), before anything decodes it. Past that
-//! switch a frame is taken only while its press is the one the held PTT has keyed, named as Stop's
-//! road names it on the same connection (`PttHold::keyed_by`), so a frame can never reach an over
-//! another computer's or a page's press armed. It is then decoded here (`MicDecoder`, a fresh one
-//! for each press) to the transmit route's 12 kHz, its place on the over's clock taken from its own
-//! number, and handed to the microphone over (`MicFeed`), which takes audio only while an over is
-//! armed: M1–M12 hold as they are, from the lead-in to the 200 ms gap.
+//! A `mic` frame belongs to a press, and a press is a transmission start: refused, before anything
+//! decodes it, unless the held press is wired from afar (`command_dispatch::press_from_afar`). Past
+//! that switch a frame is taken only while its press is the one the held PTT has keyed, named as
+//! Stop's road names it on the same connection (`PttHold::keyed_by`), so a frame can never reach
+//! an over another computer's or a page's press armed. It is then decoded here (`MicDecoder`, a
+//! fresh one for each press) to the transmit route's 12 kHz, its place on the over's clock taken
+//! from its own number, and handed to the microphone over (`MicFeed`), which takes audio only while
+//! an over is armed: M1–M12 hold as they are, from the lead-in to the 200 ms gap.
 use std::collections::HashMap;
 use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -497,10 +497,10 @@ impl Thread {
                 packet,
             } => {
                 self.counts.mic_read.fetch_add(1, Ordering::Relaxed);
-                // ⛔ A PRESS'S AUDIO IS A TRANSMISSION: refused from afar while every start is,
-                // before anything decodes it; past that switch, only the press the held PTT keyed
-                // for this computer, named as Stop's road names it.
-                let keyed = crate::command_dispatch::transmit_from_afar().is_ok()
+                // ⛔ A PRESS'S AUDIO IS A TRANSMISSION: refused before anything decodes it unless
+                // the held press is wired from afar; past that switch, only the press the held PTT
+                // keyed for this computer, named as Stop's road names it.
+                let keyed = crate::command_dispatch::press_from_afar()
                     && road
                         .stop
                         .is_some_and(|stop| self.powers.ptt.keyed_by(&press_id(&stop, press)));

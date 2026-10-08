@@ -8,8 +8,13 @@
 //! the Engine is held three seconds; never refused for its lease, its age or its connection, a
 //! minute past that connection's end; a datagram that does not verify is dropped unread; each road
 //! alone stops each kind of over; presence is renewed only by a fresh echo; both roads dead, it
-//! halts within five seconds and a tick. And a press from afar never keys while every start is
-//! refused.
+//! halts within five seconds and a tick.
+//!
+//! And the stream's transmit rules on this road, for what may now start from afar: a start on the
+//! command link and a held press on the road each need the lease bound to the connection, presence
+//! live on its road and the state its screen fetched under two seconds old; a press ends 200 ms
+//! after its last re-assertion; either road alone stops each kind of over started from afar; a start
+//! that ran after presence lapsed is stopped; after a reconnect nothing keys until it is armed.
 //!
 //! Beside it, the audio road (`super::super::audio_road`), on the same roadside: its own socket and
 //! keys, the station's receive audio to a computer in control, and the microphone refused before
@@ -586,6 +591,41 @@ impl Seat {
             .presence(Duration::from_secs(2))
             .await
             .expect("a fresh echo renews presence")
+    }
+
+    /// One call on the command link, and its answer, whatever comes before it.
+    async fn call(&mut self, id: u64, cmd: &str, args: Value) -> Value {
+        send(
+            &mut self.socket,
+            json!({"type":"call","id":id,"cmd":cmd,"args":args}),
+        )
+        .await;
+        loop {
+            let said = self.text().await;
+            if said["type"] == "result" && said["id"] == id {
+                return said;
+            }
+        }
+    }
+
+    /// A heartbeat under a lease that is not this computer's, naming the fresh snapshot `state`:
+    /// the road reads the state its screen fetched, and renews nothing.
+    async fn fresh_but_not_present(&self, state: u64) {
+        self.road.say(&Up::Heartbeat { lease: id(), state }).await;
+    }
+
+    /// Everything the road says within `within`.
+    async fn road_says(&mut self, within: Duration) -> Vec<Down> {
+        let deadline = Instant::now() + within;
+        let mut heard = Vec::new();
+        while let Some(down) = self
+            .road
+            .heard(deadline.saturating_duration_since(Instant::now()))
+            .await
+        {
+            heard.push(down);
+        }
+        heard
     }
 
     /// Writes on the command link until a write waits: the shack has stopped reading, and the link
@@ -1424,13 +1464,228 @@ async fn the_link_alone_keeps_no_presence() {
 
 // ----- The held press -----
 
-/// ★ A press is a transmission start: while every start from afar is refused, a held press on the
-/// road is refused, said once, and never reaches the held PTT, so nothing arms or keys however long
-/// it is held. Here it is held a second, re-asserted every 100 ms, with presence live and the shack
-/// in Phone, where a press would arm the microphone, and the radio loop ticking. CONTROL: presence
-/// was live throughout; a release is taken.
+/// Frame `frame` of a voice: 20 ms of an 800 Hz tone at the encoder's 48 kHz, encoded as this
+/// computer's microphone encodes it.
+fn voice(encoder: &mut MicEncoder, frame: u32) -> Vec<u8> {
+    let samples: Vec<f32> = (0..MIC_FRAME_SAMPLES)
+        .map(|i| {
+            let t = (frame as usize * MIC_FRAME_SAMPLES + i) as f32 / 48_000.0;
+            0.4 * (2.0 * std::f32::consts::PI * 800.0 * t).sin()
+        })
+        .collect();
+    encoder.encode(&samples).unwrap()
+}
+
+/// This computer's press `press`, spoken into for `frames` frames of 20 ms on the audio road from
+/// frame `first`, and held again on the road every 100 ms while `held` says so of the frame: what
+/// a screen and its headset send while PTT is down. When each hold went.
+async fn speak(
+    seat: &Seat,
+    encoder: &mut MicEncoder,
+    press: u64,
+    first: u32,
+    frames: u32,
+    held: impl Fn(u32) -> bool,
+) -> Vec<Instant> {
+    let mut holds = Vec::new();
+    for frame in first..first + frames {
+        if (frame - first).is_multiple_of(5) && held(frame) {
+            seat.road.say(&Up::Hold { press }).await;
+            holds.push(Instant::now());
+        }
+        let packet = voice(encoder, frame);
+        seat.audio
+            .say(&audio_road::Up::Mic {
+                press,
+                frame,
+                packet,
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    holds
+}
+
+/// The presses among what the road said.
+fn presses(said: &[Down]) -> Vec<&Down> {
+    said.iter()
+        .filter(|down| matches!(down, Down::Press { .. }))
+        .collect()
+}
+
+/// ★ A held press from afar: a held press on the road arms the microphone over in Phone, and its voice
+/// keys it, only under the stream's transmit rules. With no presence (its screen's state fresh, the
+/// heartbeat under a lease that is not this computer's), and with stale state (presence live, the
+/// newest heartbeat naming a snapshot more than two seconds old), a press is refused, said once,
+/// and never reaches the held PTT. With presence live and the state fresh it is taken: the road says
+/// it is keyed (the held PTT's own report, relayed), the over keys on its voice, and frames are
+/// taken. CONTROL: the refused presses came with the shack in Phone, TX armed, and the radio loop
+/// ticking, where the same press is taken.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_held_press_never_keys_while_a_start_from_afar_is_refused() {
+async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    seat.keep_the_lease().await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 3 * PRESENCE,
+    );
+    // No presence, the state fresh.
+    let (state, _) = seat.fresh_snapshot().await;
+    seat.fresh_but_not_present(state).await;
+    for _ in 0..3 {
+        seat.road.say(&Up::Hold { press: 1 }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let said = seat.road_says(Duration::from_millis(200)).await;
+    assert_eq!(
+        presses(&said),
+        [&Down::Press {
+            press: 1,
+            keyed: false,
+            end: Some(HoldEnd::Refused)
+        }],
+        "no presence: refused, said once: {said:?}"
+    );
+    assert!(!r.ptt.keyed());
+    // Presence live, the state stale.
+    let (state, arrived) = seat.fresh_snapshot().await;
+    seat.heartbeat(state).await;
+    assert!(seat.road.presence(Duration::from_secs(2)).await.is_some());
+    tokio::time::sleep_until((arrived + FRESH + Duration::from_millis(100)).into()).await;
+    seat.keep_the_lease().await;
+    seat.heartbeat(state).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(
+        r.s.shared
+            .engine
+            .lock()
+            .unwrap()
+            .remote_presence_live(Instant::now()),
+        "premise: presence live"
+    );
+    for _ in 0..3 {
+        seat.road.say(&Up::Hold { press: 2 }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let said = seat.road_says(Duration::from_millis(200)).await;
+    assert_eq!(
+        presses(&said),
+        [&Down::Press {
+            press: 2,
+            keyed: false,
+            end: Some(HoldEnd::Refused)
+        }],
+        "stale state: refused, said once: {said:?}"
+    );
+    assert!(!r.ptt.keyed());
+    assert!(!r.s.shared.engine.lock().unwrap().mic_armed());
+    // Both: taken.
+    seat.renewed().await;
+    let mut encoder = MicEncoder::new().unwrap();
+    speak(&seat, &mut encoder, 3, 1, 30, |_| true).await;
+    let keyed = r.s.shared.engine.lock().unwrap().mic_keyed();
+    seat.road.say(&Up::Release { press: 3 }).await;
+    let said = seat.road_says(Duration::from_millis(300)).await;
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    assert!(keyed, "the voice keyed the over");
+    assert!(
+        said.contains(&Down::Press {
+            press: 3,
+            keyed: true,
+            end: None
+        }),
+        "the road said it keyed: {said:?}"
+    );
+    assert!(r.counts().mic_taken.load(Ordering::SeqCst) > 0);
+    assert!(ticks.iter().any(|&(_, on)| on), "on the air");
+}
+
+/// ★ The held press ends 200 ms after its last re-assertion. A press from afar, keyed and
+/// spoken into, whose holds stop while its voice goes on: the over comes off the air no sooner than
+/// 200 ms after the last hold and within a tick past it, the road says the press lapsed, and the
+/// frames that follow are refused. CONTROL: on the air until then, its voice still arriving.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
+    const GAP: Duration = Duration::from_millis(200);
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    seat.renewed().await;
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        Arc::default(),
+        Instant::now() + 2 * PRESENCE,
+    );
+    let mut encoder = MicEncoder::new().unwrap();
+    // Held for the first 40 frames, spoken into for 60.
+    let holds = speak(&seat, &mut encoder, 9, 1, 60, |frame| frame <= 40).await;
+    let last = *holds.last().unwrap();
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    let said = seat.road_says(Duration::from_millis(300)).await;
+    let on = ticks
+        .iter()
+        .position(|&(_, on)| on)
+        .expect("premise: never on the air");
+    let off = on
+        + ticks[on..]
+            .iter()
+            .position(|&(_, on)| !on)
+            .expect("never came off the air");
+    let (before, off) = (ticks[off - 1].0, ticks[off].0);
+    eprintln!(
+        "measured: the held press came off the air {:?} after its last hold (on at a tick {:?} \
+         after it); the bound is {GAP:?} and one {TICK:?} tick",
+        off.saturating_duration_since(last),
+        before.saturating_duration_since(last),
+    );
+    assert!(off >= last + GAP, "ended before the gap");
+    assert!(
+        off < last + GAP + TICK + Duration::from_millis(30),
+        "ended {:?} after the last hold",
+        off.saturating_duration_since(last)
+    );
+    assert!(
+        said.contains(&Down::Press {
+            press: 9,
+            keyed: false,
+            end: Some(HoldEnd::Lapsed)
+        }),
+        "the road said it lapsed: {said:?}"
+    );
+    assert!(
+        r.counts().mic_refused.load(Ordering::SeqCst) > 0,
+        "the frames after it refused"
+    );
+}
+
+/// ★ Each press's reports go back by the road that made it, and the stream's page is told only its
+/// own: a computer's press keyed and released is said on its road; the page's reader finds none of
+/// it, and a page's own press is told to the page and never on the road. CONTROL: the page's press
+/// was keyed, and its report was there to read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_press_report_goes_back_by_its_own_road_and_never_to_the_page() {
+    const PAGE: &str = "10000000-0000-4000-8000-00000000000a";
     let app = App::new();
     let r = roadside(&app);
     let mut seat = seated(&r).await;
@@ -1443,48 +1698,86 @@ async fn a_held_press_never_keys_while_a_start_from_afar_is_refused() {
     let done = Arc::new(AtomicBool::new(false));
     let radio = radio_loop(
         r.s.shared.engine.clone(),
-        Over::Voice,
+        Over::Phone,
         done.clone(),
-        Instant::now() + 3 * PRESENCE,
+        Instant::now() + 2 * PRESENCE,
     );
-    let mut heard = Vec::new();
-    for n in 0..10 {
-        seat.road.say(&Up::Hold { press: 7 }).await;
-        if n % 5 == 4 {
-            let (state, _) = seat.fresh_snapshot().await;
-            seat.heartbeat(state).await;
-        }
-        while let Some(down) = seat.road.heard(Duration::from_millis(100)).await {
-            heard.push(down);
-        }
-        assert!(!r.ptt.keyed(), "the press is never keyed");
-        let e = r.s.shared.engine.lock().unwrap();
-        assert!(!e.mic_armed(), "the microphone is never armed");
-        assert!(
-            e.remote_presence_live(Instant::now()),
-            "premise: presence live"
-        );
+    let mut page = Vec::new();
+    for _ in 0..4 {
+        seat.road.say(&Up::Hold { press: 5 }).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        page.extend(crate::remote_service::stream::page_reports(&r.ptt));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    seat.road.say(&Up::Release { press: 7 }).await;
-    done.store(true, Ordering::SeqCst);
-    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
-        .await
-        .unwrap();
-    let presses: Vec<&Down> = heard
-        .iter()
-        .filter(|down| matches!(down, Down::Press { .. }))
-        .collect();
+    seat.road.say(&Up::Release { press: 5 }).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    page.extend(crate::remote_service::stream::page_reports(&r.ptt));
+    let said = seat.road_says(Duration::from_millis(200)).await;
     assert_eq!(
-        presses,
-        [&Down::Press {
-            press: 7,
-            keyed: false,
-            end: Some(HoldEnd::Refused)
-        }],
-        "refused, and said once: {heard:?}"
+        presses(&said),
+        [
+            &Down::Press {
+                press: 5,
+                keyed: true,
+                end: None
+            },
+            &Down::Press {
+                press: 5,
+                keyed: false,
+                end: Some(HoldEnd::Released)
+            }
+        ],
+        "{said:?}"
     );
-    assert!(r.ptt.reports().is_empty(), "nothing reached the held PTT");
-    assert!(ticks.iter().all(|&(_, on)| !on), "never on the air");
+    assert!(
+        page.is_empty(),
+        "the page was told a road's press: {page:?}"
+    );
+    r.ptt.hold(PAGE, Instant::now());
+    let mut armed = false;
+    for _ in 0..50 {
+        armed |= r.s.shared.engine.lock().unwrap().mic_armed();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    r.ptt.release(PAGE);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let told = crate::remote_service::stream::page_reports(&r.ptt);
+    done.store(true, Ordering::SeqCst);
+    drop(tokio::task::spawn_blocking(move || radio.join().unwrap()).await);
+    assert!(armed, "premise: the page's press was keyed");
+    assert!(
+        told.iter()
+            .any(|report| report.hold_id == PAGE && report.keyed),
+        "the page's own: {told:?}"
+    );
+    assert!(
+        presses(&seat.road_says(Duration::from_millis(200)).await).is_empty(),
+        "a page's press was said on the road"
+    );
+}
+
+/// ★ The stream's page takes only its own presses' reports: with a road's and a page's press each
+/// reported, the page's reader takes the page's and leaves the road's for its road. CONTROL: the
+/// road's are still there to take.
+#[test]
+fn the_pages_reader_leaves_a_roads_presses_for_its_road() {
+    const PAGE: &str = "10000000-0000-4000-8000-00000000000a";
+    let ptt = PttHold::default();
+    let road = super::super::stop_road::press_id(&[1; 8], 4);
+    let t0 = Instant::now();
+    ptt.hold(&road, t0);
+    ptt.tick(t0, true, false, |_| true);
+    ptt.release(&road);
+    ptt.tick(t0, true, true, |_| true);
+    ptt.hold(PAGE, t0);
+    ptt.tick(t0, true, false, |_| true);
+    let page: Vec<String> = crate::remote_service::stream::page_reports(&ptt)
+        .into_iter()
+        .map(|report| report.hold_id)
+        .collect();
+    assert_eq!(page, [PAGE]);
+    let left: Vec<String> = ptt.reports().into_iter().map(|r| r.hold_id).collect();
+    assert_eq!(left, [road.clone(), road]);
 }
 
 /// ★ The microphone over's state goes to a computer whose presence is live, and to no other.
@@ -1668,12 +1961,13 @@ async fn receive_audio_goes_to_a_listening_computer_in_control_and_to_no_other()
     );
 }
 
-/// ★ The microphone from afar is refused before anything decodes it, while every start from afar
-/// is: a press held on Stop's road with its frames on the audio road, the computer's presence live
-/// and the station in Phone, never keys, never arms the microphone over, and not one frame reaches
-/// it. CONTROL: every frame verified and was read on the audio road; the radio loop ran throughout.
+/// ★ A frame belongs to a press, and is refused before anything decodes it unless its press is the
+/// one the held PTT keyed for this computer: frames for a press this computer never held, with its
+/// presence live and the station in Phone, never key, never arm the microphone over, and not one
+/// reaches it. CONTROL: every frame verified and was read on the audio road; the radio loop ran
+/// throughout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_microphone_from_afar_is_refused_before_anything_decodes_it() {
+async fn the_microphone_of_a_press_not_keyed_is_refused_before_anything_decodes_it() {
     let app = App::new();
     let r = roadside(&app);
     let mut seat = seated(&r).await;
@@ -1692,9 +1986,6 @@ async fn the_microphone_from_afar_is_refused_before_anything_decodes_it() {
     );
     let mut encoder = MicEncoder::new().unwrap();
     for frame in 1..=50u32 {
-        if frame % 5 == 1 {
-            seat.road.say(&Up::Hold { press: 7 }).await;
-        }
         let voice: Vec<f32> = (0..MIC_FRAME_SAMPLES)
             .map(|i| {
                 let t = (frame as usize * MIC_FRAME_SAMPLES + i) as f32 / 48_000.0;
@@ -1714,7 +2005,6 @@ async fn the_microphone_from_afar_is_refused_before_anything_decodes_it() {
         let e = r.s.shared.engine.lock().unwrap();
         assert!(!e.mic_armed(), "the microphone over is never armed");
     }
-    seat.road.say(&Up::Release { press: 7 }).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     done.store(true, Ordering::SeqCst);
     let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
@@ -1738,9 +2028,9 @@ async fn the_microphone_from_afar_is_refused_before_anything_decodes_it() {
 
 /// ★ A frame from afar never feeds an over another press armed. With the microphone over armed by
 /// the held PTT's own press, as a page's press arms it, and its feed open, the frames of this
-/// computer's press 7 are refused twice over: by the switch every start from afar reads, and past
-/// it because press 7 is not the press the held PTT keyed. None keys the over. CONTROL: the over
-/// stayed armed with its feed open throughout, and every frame verified and was read.
+/// computer's press 7 are refused: the held press is wired from afar, but press 7 is not the press
+/// the held PTT keyed. None keys the over. CONTROL: the over stayed armed with its feed open
+/// throughout, and every frame verified and was read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_frame_from_afar_never_feeds_an_over_another_press_armed() {
     const PAGE: &str = "10000000-0000-4000-8000-00000000000a";
@@ -2068,4 +2358,413 @@ fn client_mode_keeps_presence_and_stops_the_station_on_the_road() {
     driving.abort();
     tauri::async_runtime::block_on(client.let_go());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ----- A start from afar -----
+
+/// A gate the shack's handler holds a CQ at while it is shut: the stand-in for a start that waits
+/// its turn at the Engine.
+type Gate = Arc<(Mutex<bool>, std::sync::Condvar)>;
+
+fn gate(shut: bool) -> Gate {
+    Arc::new((Mutex::new(shut), std::sync::Condvar::new()))
+}
+
+fn set_gate(gate: &Gate, shut: bool) {
+    *gate.0.lock().unwrap() = shut;
+    gate.1.notify_all();
+}
+
+/// The shack's handler for these tests, on its own engine: the starts wired from afar and the
+/// cockpits' own stops as the app's handlers drive them (Enable TX, a CQ, the voice keyer's play;
+/// Stop TX and the keyer's Stop), each command recorded in order but the snapshot feed's own polls;
+/// a CQ waits at `gate` while it is shut. Set before a computer is seated: its lane takes the
+/// handler as it opens.
+fn on_the_engine(r: &mut Roadside, gate: Gate) -> Arc<Mutex<Vec<String>>> {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let (engine, record) = (r.s.shared.engine.clone(), ran.clone());
+    r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+        move |cmd: String, args: Value, answer: crate::command_dispatch::Answer| {
+            if cmd == "get_snapshot" {
+                return answer(Ok(json!({})));
+            }
+            record.lock().unwrap().push(cmd.clone());
+            if cmd == "call_cq" {
+                let (shut, opened) = &*gate;
+                let mut shut = shut.lock().unwrap();
+                while *shut {
+                    shut = opened.wait(shut).unwrap();
+                }
+            }
+            let mut e = engine.lock().unwrap();
+            let done = match cmd.as_str() {
+                "set_tx_enabled" => {
+                    e.set_tx_enabled(args["enabled"].as_bool() == Some(true));
+                    Ok(())
+                }
+                "call_cq" => e.start_cq(None),
+                "play_voice_message" => e.send_voice(vec![0.1; 12_000]),
+                "halt_tx" => {
+                    e.halt_tx();
+                    Ok(())
+                }
+                "stop_voice" => {
+                    e.stop_voice();
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+            answer(done.map(|()| json!({ "ran": cmd })))
+        },
+    ));
+    ran
+}
+
+fn ran(record: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    record.lock().unwrap().clone()
+}
+
+/// ★ On the command link, a wired start runs only under the stream's transmit rules. With the
+/// lease and the state its screen fetched fresh but no presence (the heartbeat under a lease that is
+/// not this computer's), it is refused `noPresence`; with presence live but the newest heartbeat
+/// naming a snapshot more than two seconds old, `staleState`; and nothing runs. With both, Enable
+/// TX, a CQ and the voice keyer's play each run, and TX is armed from afar. CONTROL: the refusals
+/// came from the computer holding the lease, where the same starts run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wired_start_runs_only_under_the_stream_rules() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    let mut seat = seated(&r).await;
+    seat.keep_the_lease().await;
+    let (state, _) = seat.fresh_snapshot().await;
+    seat.fresh_but_not_present(state).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let said = seat
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["refused"], "noPresence", "{said}");
+    let (state, arrived) = seat.fresh_snapshot().await;
+    seat.heartbeat(state).await;
+    assert!(seat.road.presence(Duration::from_secs(2)).await.is_some());
+    tokio::time::sleep_until((arrived + FRESH + Duration::from_millis(100)).into()).await;
+    seat.keep_the_lease().await;
+    seat.heartbeat(state).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(
+        r.s.shared
+            .engine
+            .lock()
+            .unwrap()
+            .remote_presence_live(Instant::now()),
+        "premise: presence live"
+    );
+    let said = seat
+        .call(2, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["refused"], "staleState", "{said}");
+    assert!(ran(&record).is_empty(), "ran: {:?}", ran(&record));
+    assert!(!r.s.shared.engine.lock().unwrap().tx_enabled());
+    seat.renewed().await;
+    for (id, cmd, args) in [
+        (3, "set_tx_enabled", json!({"enabled": true})),
+        (4, "call_cq", json!({})),
+        (5, "play_voice_message", json!({"slot": 1})),
+    ] {
+        let said = seat.call(id, cmd, args).await;
+        assert_eq!(said["value"]["ran"], cmd, "{said}");
+    }
+    assert_eq!(
+        ran(&record),
+        ["set_tx_enabled", "call_cq", "play_voice_message"]
+    );
+    assert!(
+        r.s.shared.engine.lock().unwrap().tx_enabled(),
+        "armed from afar"
+    );
+}
+
+/// ★ One controller, the lease bound to the connection that took it. A second connection
+/// of the same paired computer, without the lease, is refused `notController` for a start, and its
+/// road's press is refused, since only the lease holder's own lease mints its presence. CONTROL: the
+/// connection holding the lease starts the same CQ.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_from_a_connection_without_the_lease_is_refused() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    let mut holder = seated(&r).await;
+    holder.renewed().await;
+    let mut other = seated_with(&r, false).await;
+    let said = other.call(1, "call_cq", json!({})).await;
+    assert_eq!(said["refused"], "notController", "{said}");
+    other.road.say(&Up::Hold { press: 1 }).await;
+    let said = other.road_says(Duration::from_millis(300)).await;
+    assert_eq!(
+        presses(&said),
+        [&Down::Press {
+            press: 1,
+            keyed: false,
+            end: Some(HoldEnd::Refused)
+        }],
+        "{said:?}"
+    );
+    assert!(!r.ptt.keyed());
+    assert!(ran(&record).is_empty());
+    // One run of Nexus on both connections: its call ids follow on.
+    let said = holder.call(2, "call_cq", json!({})).await;
+    assert_eq!(said["value"]["ran"], "call_cq", "{said}");
+}
+
+/// ★ A start that ran after its computer's presence went is stopped at once. A CQ admitted under
+/// live presence waits its turn at the Engine (the gate) while the lease is handed back, and with
+/// it presence; when it runs, the station is stopped behind it and TX is off. CONTROL: the same CQ
+/// with presence kept runs and stays armed, with no Stop behind it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_that_ran_after_presence_went_is_stopped_at_once() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let held = gate(false);
+    let record = on_the_engine(&mut r, held.clone());
+    let mut seat = seated(&r).await;
+    seat.renewed().await;
+    let said = seat
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{said}");
+    let said = seat.call(2, "call_cq", json!({})).await;
+    assert_eq!(said["value"]["ran"], "call_cq", "{said}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(ran(&record), ["set_tx_enabled", "call_cq"], "CONTROL");
+    assert!(r.s.shared.engine.lock().unwrap().tx_enabled(), "CONTROL");
+    set_gate(&held, true);
+    send(
+        &mut seat.socket,
+        json!({"type":"call","id":3,"cmd":"call_cq","args":{}}),
+    )
+    .await;
+    for _ in 0..200 {
+        if ran(&record).len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(ran(&record).len(), 3, "premise: the CQ waits at the Engine");
+    let lease = seat.lease();
+    let released = seat.ask(json!({"type":"release","leaseId":lease})).await;
+    assert!(released["error"].is_null(), "{released}");
+    assert!(
+        !r.s.shared
+            .engine
+            .lock()
+            .unwrap()
+            .remote_presence_live(Instant::now()),
+        "premise: presence went with the lease"
+    );
+    set_gate(&held, false);
+    let said = loop {
+        let said = seat.text().await;
+        if said["type"] == "result" && said["id"] == 3 {
+            break said;
+        }
+    };
+    assert_eq!(said["value"]["ran"], "call_cq", "{said}");
+    for _ in 0..200 {
+        if ran(&record).len() == 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        ran(&record),
+        ["set_tx_enabled", "call_cq", "call_cq", "halt_tx"]
+    );
+    assert!(!r.s.shared.engine.lock().unwrap().tx_enabled(), "stopped");
+}
+
+/// ★ After a reconnect nothing transmits by itself. A computer arms TX from afar and keys
+/// a held press in Phone; its link drops, and the station comes off the air with TX off. Back on a
+/// new connection, the lease taken again and presence live, TX is still off, nothing goes on the
+/// air, and the computer's next press is refused at the station (TX off). CONTROL: armed again
+/// from afar, the next press keys.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_a_reconnect_nothing_keys_until_it_is_armed() {
+    let app = App::new();
+    let mut r = roadside(&app);
+    let record = on_the_engine(&mut r, gate(false));
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    let mut first = seated(&r).await;
+    first.renewed().await;
+    let said = first
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{said}");
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        Arc::default(),
+        Instant::now() + 3 * PRESENCE,
+    );
+    let mut encoder = MicEncoder::new().unwrap();
+    speak(&first, &mut encoder, 1, 1, 20, |_| true).await;
+    assert!(
+        r.s.shared.engine.lock().unwrap().mic_keyed(),
+        "premise: on the air"
+    );
+    drop(first);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    assert!(
+        ticks.iter().any(|&(_, on)| on) && !ticks.last().unwrap().1,
+        "came off the air"
+    );
+    assert!(came_to_a_stop(&r.s).await, "the drop stopped the station");
+    // The same run of Nexus on its new connection: its next call ids follow on, as client mode's do.
+    let mut again = seated(&r).await;
+    again.renewed().await;
+    assert!(
+        !r.s.shared.engine.lock().unwrap().tx_enabled(),
+        "TX stays off"
+    );
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 2 * PRESENCE,
+    );
+    speak(&again, &mut encoder, 1, 21, 20, |_| true).await;
+    let said = again.road_says(Duration::from_millis(200)).await;
+    assert_eq!(
+        presses(&said),
+        [&Down::Press {
+            press: 1,
+            keyed: false,
+            end: Some(HoldEnd::Refused)
+        }],
+        "refused at the station: {said:?}"
+    );
+    assert!(!r.s.shared.engine.lock().unwrap().mic_armed());
+    let armed_again = Instant::now();
+    let said = again
+        .call(2, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{said}");
+    speak(&again, &mut encoder, 2, 41, 20, |_| true).await;
+    let keyed = r.s.shared.engine.lock().unwrap().mic_keyed();
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    assert!(keyed, "CONTROL: armed again, the next press keys");
+    assert!(
+        ticks.iter().all(|&(at, on)| !on || at > armed_again),
+        "on the air before it was armed again"
+    );
+    assert_eq!(
+        ran(&record),
+        ["set_tx_enabled", "set_tx_enabled"],
+        "nothing else was asked"
+    );
+}
+
+/// What was started from afar, for the Stop test: FT armed and a CQ called on the command link, the
+/// voice keyer's play on it, or a held press spoken into. Each needs its computer's presence live.
+async fn start_from_afar(r: &Roadside, seat: &mut Seat, kind: &str) {
+    let said = seat
+        .call(1, "set_tx_enabled", json!({"enabled": true}))
+        .await;
+    assert_eq!(said["value"]["ran"], "set_tx_enabled", "{kind}: {said}");
+    match kind {
+        "ft" => {
+            let said = seat.call(2, "call_cq", json!({})).await;
+            assert_eq!(said["value"]["ran"], "call_cq", "{kind}: {said}");
+            assert!(r.s.shared.engine.lock().unwrap().tx_enabled(), "{kind}");
+        }
+        "voice" => {
+            let said = seat.call(2, "play_voice_message", json!({"slot": 1})).await;
+            assert_eq!(said["value"]["ran"], "play_voice_message", "{kind}: {said}");
+            assert!(
+                r.s.shared.engine.lock().unwrap().tx_owner().is_some(),
+                "{kind}"
+            );
+        }
+        _ => {
+            let mut encoder = MicEncoder::new().unwrap();
+            speak(seat, &mut encoder, 1, 1, 20, |_| true).await;
+            assert!(r.s.shared.engine.lock().unwrap().mic_keyed(), "{kind}");
+        }
+    }
+}
+
+/// ★ For what may now start from afar, either road alone stops each kind of over a
+/// computer started (FT armed with a CQ, the voice keyer's message, a held press keyed by its
+/// voice). The command link alone (the cockpit's own stop on it, as the link test of locally
+/// started overs sends it; no datagram on the road), then the road alone (the shack reading nothing
+/// from the link). CONTROL: each is on the air, or armed, before its stop.
+#[test]
+fn each_road_alone_stops_each_kind_of_over_started_from_afar() {
+    let _alone = alone();
+    on_a_runtime(2, async {
+        for kind in ["ft", "voice", "press"] {
+            for road in ["link", "road"] {
+                let app = App::new();
+                let mut r = roadside(&app);
+                let record = on_the_engine(&mut r, gate(false));
+                if kind == "press" {
+                    r.s.shared
+                        .engine
+                        .lock()
+                        .unwrap()
+                        .set_operating_mode("phone", false);
+                }
+                let mut seat = seated(&r).await;
+                seat.renewed().await;
+                let done = Arc::new(AtomicBool::new(false));
+                let radio = radio_loop(
+                    r.s.shared.engine.clone(),
+                    Over::Voice,
+                    done.clone(),
+                    Instant::now() + 2 * PRESENCE,
+                );
+                start_from_afar(&r, &mut seat, kind).await;
+                if road == "link" {
+                    for (n, cmd) in cockpit_stop(kind).into_iter().enumerate() {
+                        let said = seat.call(9 + n as u64, cmd, json!({})).await;
+                        assert_eq!(said["value"]["ran"], cmd, "{kind}: {said}");
+                    }
+                } else {
+                    seat.valve.shut();
+                    assert!(
+                        seat.road
+                            .road_stop(1, Duration::from_secs(2))
+                            .await
+                            .is_some(),
+                        "{kind}"
+                    );
+                }
+                assert!(came_to_a_stop(&r.s).await, "{kind} by the {road}");
+                done.store(true, Ordering::SeqCst);
+                drop(tokio::task::spawn_blocking(move || radio.join().unwrap()).await);
+                let mut e = r.s.shared.engine.lock().unwrap();
+                assert!(!e.mic_armed(), "{kind} by the {road}: the microphone over");
+                match kind {
+                    "ft" | "voice" => assert_stopped(&mut e, kind),
+                    _ => assert!(!e.tx_enabled(), "{kind} by the {road}"),
+                }
+                drop(e);
+                if road == "road" {
+                    assert!(
+                        !ran(&record).contains(&"halt_tx".to_string()),
+                        "{kind}: the link ran no Stop"
+                    );
+                }
+            }
+        }
+    });
 }

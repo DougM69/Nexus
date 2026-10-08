@@ -238,7 +238,11 @@ fn expected(cmd: &str, args: &Value) -> Way {
         },
         Class::StopsTx => Way::Shack { stop: true },
         Class::StartsTx if stop => Way::Shack { stop: true },
-        Class::StartsTx => Way::Refused(Refusal::TransmitNotYet),
+        Class::StartsTx => match transmit_from_afar(cmd) {
+            Err(refusal) => Way::Refused(refusal),
+            Ok(Wired::HeldPress) => Way::Press,
+            Ok(Wired::Ft | Wired::VoiceKeyer) => Way::Start,
+        },
         Class::RunsAtShack => match cmd {
             "ui_state_load" | "ui_state_save" => Way::Split,
             "get_snapshot" => Way::Local(Local::Snapshot),
@@ -254,7 +258,8 @@ fn expected(cmd: &str, args: &Value) -> Way {
 
 /// ★ Every registered command, on and off, goes where its class says: "runs here" here (but the
 /// four this computer answers itself), "refused here" refused, a station command to the shack, a
-/// start refused here, and a Stop or the off half of a switch to the shack under Stop's rules.
+/// start wired for this road to the shack as a start, the PTT as a held press, every other start
+/// refused here, and a Stop or the off half of a switch to the shack under Stop's rules.
 /// Polls of the three feeds are answered here, and the ui-state pair splits. CONTROL: a command
 /// with no class, and a password typed here, go nowhere.
 #[test]
@@ -281,12 +286,15 @@ fn every_command_goes_where_its_class_says() {
         Way::Refused(Refusal::TypedPassword)
     );
     // Spot checks, so the table above cannot pass by mirroring a broken rule.
+    assert_eq!(way("call_cq", &json!({})), Way::Start);
+    assert_eq!(way("play_voice_message", &json!({ "slot": 1 })), Way::Start);
+    assert_eq!(way("set_ptt", &json!({ "on": true })), Way::Press);
     assert_eq!(
-        way("call_cq", &json!({})),
+        way("send_cw", &json!({ "text": "CQ" })),
         Way::Refused(Refusal::TransmitNotYet)
     );
     assert_eq!(
-        way("set_ptt", &json!({ "on": true })),
+        way("set_tune", &json!({ "on": true })),
         Way::Refused(Refusal::TransmitNotYet)
     );
     assert_eq!(
@@ -303,10 +311,10 @@ fn every_command_goes_where_its_class_says() {
 }
 
 /// ★ Deny by default at this end, through the IPC every window uses: a command with no class, one
-/// only the shack's own screen may give, a start and a password typed here are refused here with
-/// their codes, and nothing reaches the shack or this computer's own handler. CONTROL: a station
-/// command reaches the shack, a command of this computer's runs here, and a Stop and the off half
-/// of a switch reach the shack.
+/// only the shack's own screen may give, a start not wired for this road, a wired start with no
+/// Stop road, and a password typed here are refused here with their codes, and nothing reaches the
+/// shack or this computer's own handler. CONTROL: a station command reaches the shack, a command of
+/// this computer's runs here, and a Stop and the off half of a switch reach the shack.
 #[test]
 fn a_command_refused_here_fails_closed_and_nothing_is_sent() {
     let dir = scratch("closed");
@@ -317,12 +325,11 @@ fn a_command_refused_here_fails_closed_and_nothing_is_sent() {
         ("no_such_command", json!({}), "unclassed"),
         ("repair_clock", json!({}), "shackOnly"),
         ("clear_lotw_password", json!({}), "shackOnly"),
-        ("call_cq", json!({}), "transmitNotYet"),
-        (
-            "set_tx_enabled",
-            json!({ "enabled": true }),
-            "transmitNotYet",
-        ),
+        ("send_cw", json!({ "text": "CQ" }), "transmitNotYet"),
+        ("set_tune", json!({ "on": true }), "transmitNotYet"),
+        ("call_cq", json!({}), "noStopRoad"),
+        ("set_tx_enabled", json!({ "enabled": true }), "noStopRoad"),
+        ("set_ptt", json!({ "on": true }), "noStopRoad"),
         (
             "winlink_connect",
             json!({ "password": "typed" }),
@@ -940,7 +947,8 @@ fn the_launch_names_the_station_it_drives() {
 // --- Stop's second road --------------------------------------------------------------------------
 
 /// The shack's end of a Stop road, for these tests: a socket that a thread of its own reads as
-/// fast as it can, noting when each datagram arrived and what it was.
+/// fast as it can, noting when each datagram arrived and what it was, and that answers the road's
+/// computer as the shack would ([`RoadEnd::say`]).
 struct RoadEnd {
     heard: Arc<
         Mutex<
@@ -951,6 +959,33 @@ struct RoadEnd {
         >,
     >,
     listening: Arc<AtomicBool>,
+    socket: std::net::UdpSocket,
+    send: crate::remote_service::lan::datagram::Sealer,
+    /// Where the road's computer last spoke from.
+    peer: Arc<Mutex<Option<std::net::SocketAddr>>>,
+}
+
+impl RoadEnd {
+    /// `down`, as the shack says it, to where the computer last spoke from.
+    fn say(&self, down: &crate::remote_service::lan::stop_road::Down) {
+        let peer = lock(&self.peer).expect("the computer has spoken");
+        let datagram = self.send.seal(down.kind(), &down.body()).unwrap();
+        self.socket.send_to(&datagram, peer).unwrap();
+    }
+
+    /// What the road sent, in order.
+    fn ups(&self) -> Vec<crate::remote_service::lan::stop_road::Up> {
+        lock(&self.heard).iter().map(|(up, _)| up.clone()).collect()
+    }
+
+    /// The holds and releases the road sent, in order.
+    fn presses(&self) -> Vec<crate::remote_service::lan::stop_road::Up> {
+        use crate::remote_service::lan::stop_road::Up;
+        self.ups()
+            .into_iter()
+            .filter(|up| matches!(up, Up::Hold { .. } | Up::Release { .. }))
+            .collect()
+    }
 }
 
 impl Drop for RoadEnd {
@@ -971,28 +1006,233 @@ fn shack_with_a_road() -> (Arc<FakeShack>, RoadEnd) {
         StopRoad::open(socket.local_addr().unwrap(), tag, &exported, Arc::default()).unwrap();
     let shack = FakeShack::new();
     *lock(&shack.road) = Some(road);
-    let mut keys = Keys::new(&exported, tag, End::Shack).unwrap();
+    let Keys { send, mut receive } = Keys::new(&exported, tag, End::Shack).unwrap();
     let heard = Arc::new(Mutex::new(Vec::new()));
     let listening = Arc::new(AtomicBool::new(true));
+    let peer = Arc::new(Mutex::new(None));
+    let answering = socket.try_clone().unwrap();
     {
-        let (heard, listening) = (heard.clone(), listening.clone());
+        let (heard, listening, peer) = (heard.clone(), listening.clone(), peer.clone());
         std::thread::spawn(move || {
             let mut buffer = [0u8; 256];
             while listening.load(Ordering::SeqCst) {
-                if let Ok(length) = socket.recv(&mut buffer) {
+                if let Ok((length, from)) = socket.recv_from(&mut buffer) {
                     let at = std::time::Instant::now();
-                    let up = keys
-                        .receive
+                    let up = receive
                         .open(&buffer[..length])
                         .and_then(|(kind, body)| Up::read(kind, &body));
                     if let Some(up) = up {
+                        *lock(&peer) = Some(from);
                         lock(&heard).push((up, at));
                     }
                 }
             }
         });
     }
-    (shack, RoadEnd { heard, listening })
+    (
+        shack,
+        RoadEnd {
+            heard,
+            listening,
+            socket: answering,
+            send,
+            peer,
+        },
+    )
+}
+
+/// A computer on a shack with a road whose end says presence is live for `live`: its lease handed
+/// to the road, the main window's snapshot fetched, so the road's heartbeat lets the end learn
+/// where it is, and then the end's word.
+fn present_for(live: Duration) -> (Arc<FakeShack>, RoadEnd, Arc<Client>, Screens, PathBuf) {
+    use crate::remote_service::lan::stop_road::Down;
+    let (shack, end) = shack_with_a_road();
+    shack.feeds("snapshot/1", 3, json!({"n": 3}));
+    let dir = scratch("present");
+    let client = client_in(&dir, &shack);
+    let s = screens(&client);
+    let road = lock(&shack.road).clone().unwrap();
+    road.lease(Some("30000000-0000-4000-8000-000000000001".into()));
+    assert_eq!(ask(&s.main, "get_snapshot", json!({})), Ok(json!({"n": 3})));
+    eventually("a heartbeat", || lock(&end.peer).is_some());
+    end.say(&Down::Presence {
+        left_ms: u32::try_from(live.as_millis()).unwrap(),
+    });
+    eventually("presence heard", || {
+        road.presence_live(std::time::Instant::now())
+    });
+    (shack, end, client, s, dir)
+}
+
+/// ★ A wired start leaves only while both roads are up and presence is live as the road last heard
+/// it: refused with no road, then with a road whose computer has heard no presence, each with its
+/// code and nothing sent; sent once presence is heard; and refused again once that deadline has
+/// passed with no renewal (stale presence). CONTROL: a station command goes all the while.
+#[test]
+fn a_start_leaves_only_with_both_roads_up_and_live_presence() {
+    let dir = scratch("start-roads");
+    let bare = FakeShack::new();
+    let client = client_in(&dir, &bare);
+    let s = screens(&client);
+    assert_eq!(ask(&s.main, "call_cq", json!({})), refused("noStopRoad"));
+    assert!(bare.sent().is_empty(), "{:?}", bare.sent());
+    let (shack, end) = shack_with_a_road();
+    client.install(Some(Arc::clone(&shack) as Arc<dyn Shack>));
+    assert_eq!(ask(&s.main, "call_cq", json!({})), refused("noPresence"));
+    assert!(shack.sent().is_empty(), "{:?}", shack.sent());
+    drop(end);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let (shack, _end, _client, s, dir) = present_for(Duration::from_millis(600));
+    let heard = std::time::Instant::now();
+    assert_eq!(
+        ask(&s.main, "call_cq", json!({})),
+        Ok(json!({"ran": "call_cq"}))
+    );
+    assert_eq!(
+        ask(&s.main, "play_voice_message", json!({"slot": 1})),
+        Ok(json!({"ran": "play_voice_message"}))
+    );
+    assert_eq!(shack.sent(), ["call_cq", "play_voice_message"]);
+    std::thread::sleep(
+        (heard + Duration::from_millis(650)).saturating_duration_since(std::time::Instant::now()),
+    );
+    assert_eq!(ask(&s.main, "start_cq", json!({})), refused("noPresence"));
+    assert_eq!(
+        ask(&s.main, "get_band_plan", json!({})),
+        Ok(json!({"ran": "get_band_plan"}))
+    );
+    assert_eq!(
+        shack.sent(),
+        ["call_cq", "play_voice_message", "get_band_plan"]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ The PTT here is a held press on Stop's road, never the shack's `set_ptt`: each re-assertion
+/// from the screen is one hold of one press, written as it is asked and never on a timer of this
+/// computer's own; letting go is its release on the road and the off half on the link; the next
+/// press is a new one. CONTROL: no hold goes while the screen asks nothing.
+#[test]
+fn the_ptt_here_is_a_held_press_on_stop_road() {
+    use crate::remote_service::lan::stop_road::Up;
+    let (shack, end, _client, s, dir) = present_for(Duration::from_secs(5));
+    for _ in 0..3 {
+        assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    eventually("three holds", || end.presses().len() >= 3);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        end.presses(),
+        [
+            Up::Hold { press: 1 },
+            Up::Hold { press: 1 },
+            Up::Hold { press: 1 }
+        ],
+        "one hold a re-assertion, none of its own"
+    );
+    assert!(
+        shack.sent().is_empty(),
+        "the PTT never reached the link: {:?}",
+        shack.sent()
+    );
+    assert!(ask(&s.main, "set_ptt", json!({"on": false})).is_ok());
+    eventually("the release", || end.presses().len() >= 4);
+    assert_eq!(end.presses()[3], Up::Release { press: 1 });
+    assert_eq!(shack.sent(), ["set_ptt"], "the off half on the link");
+    assert_eq!(lock(&shack.sent)[0].1, json!({"on": false}));
+    assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
+    eventually("the next press", || end.presses().len() >= 5);
+    assert_eq!(end.presses()[4], Up::Hold { press: 2 }, "a new press");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ A press that ended other than by the screen letting go never keys again: after a Stop pressed
+/// here, after the station says the press ended, and after a new link, every re-assertion is
+/// refused `pressEnded` and no hold goes, on the old road or the new one. A press held when its link
+/// changed is released on the old road. CONTROL: once the screen lets go, the next press goes, on
+/// the link there is now.
+#[test]
+fn an_ended_press_never_keys_again_until_the_screen_lets_go() {
+    use crate::remote_service::lan::stop_road::{Down, Up};
+    use tempo_app::remote_control::ptt_hold::HoldEnd;
+    let (shack, end, client, s, dir) = present_for(Duration::from_secs(5));
+    let road = lock(&shack.road).clone().unwrap();
+    let holds = |end: &RoadEnd| {
+        end.presses()
+            .into_iter()
+            .filter(|up| matches!(up, Up::Hold { .. }))
+            .count()
+    };
+    // A Stop pressed here.
+    assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
+    assert!(ask(&s.main, "halt_tx", json!({})).is_ok());
+    eventually("the Stop on the road", || {
+        end.ups().iter().any(|up| matches!(up, Up::Stop { .. }))
+    });
+    assert_eq!(
+        ask(&s.main, "set_ptt", json!({"on": true})),
+        refused("pressEnded")
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(holds(&end), 1, "no hold after the Stop");
+    assert!(ask(&s.main, "set_ptt", json!({"on": false})).is_ok());
+    // The station says the press ended.
+    assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
+    eventually("the second press", || holds(&end) == 2);
+    end.say(&Down::Press {
+        press: 2,
+        keyed: false,
+        end: Some(HoldEnd::Lapsed),
+    });
+    eventually("the station's word heard", || {
+        road.heard()
+            .presses
+            .iter()
+            .any(|down| matches!(down, Down::Press { press: 2, .. }))
+    });
+    assert_eq!(
+        ask(&s.main, "set_ptt", json!({"on": true})),
+        refused("pressEnded")
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(holds(&end), 2, "no hold after the station's word");
+    assert!(ask(&s.main, "set_ptt", json!({"on": false})).is_ok());
+    // A new link while a press is held.
+    assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
+    eventually("the third press", || holds(&end) == 3);
+    let (next, next_end) = shack_with_a_road();
+    next.feeds("snapshot/1", 1, json!({"n": 1}));
+    client.install(Some(Arc::clone(&next) as Arc<dyn Shack>));
+    eventually("released on the old road", || {
+        end.presses().last() == Some(&Up::Release { press: 3 })
+    });
+    let next_road = lock(&next.road).clone().unwrap();
+    next_road.lease(Some("30000000-0000-4000-8000-000000000001".into()));
+    assert_eq!(ask(&s.main, "get_snapshot", json!({})), Ok(json!({"n": 1})));
+    eventually("a heartbeat on the new road", || {
+        lock(&next_end.peer).is_some()
+    });
+    next_end.say(&Down::Presence { left_ms: 5000 });
+    eventually("presence on the new road", || {
+        next_road.presence_live(std::time::Instant::now())
+    });
+    assert_eq!(
+        ask(&s.main, "set_ptt", json!({"on": true})),
+        refused("pressEnded")
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        next_end.presses().is_empty(),
+        "nothing keyed on the new link"
+    );
+    assert_eq!(holds(&end), 3);
+    assert!(ask(&s.main, "set_ptt", json!({"on": false})).is_ok());
+    assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
+    eventually("a press on the new link", || !next_end.presses().is_empty());
+    assert!(matches!(next_end.presses()[0], Up::Hold { .. }));
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// ★ No queue at this end. A Stop press leaves on the road within a
@@ -1168,9 +1408,9 @@ fn this_computers_audio_is_kept_here_and_never_sent() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// ★ Only a Stop press takes the road: the off half of a switch (TX off, PTT up) goes by the link
-/// alone, as it always has, since TX off lets an FT over finish and a Stop does not. CONTROL: each
-/// stop command does take it.
+/// ★ Only a Stop press takes the road: the off half of a switch (TX off, PTT up with no press held)
+/// goes by the link alone, as it always has, since TX off lets an FT over finish and a Stop does
+/// not. CONTROL: each stop command does take it.
 #[test]
 fn only_a_stop_press_takes_the_road() {
     let (shack, end) = shack_with_a_road();

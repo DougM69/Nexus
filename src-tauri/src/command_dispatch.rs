@@ -2,7 +2,7 @@
 //! itself, what it sends here, and what the shack admits, each by the command's class in
 //! `command_classes`. "Here", in this file as in the table, is the computer the operator sits at;
 //! "the shack" is the one with the radio. Nothing outside the tests calls it yet: the command link
-//! that carries each call between the two computers comes next, and hands every call it reads to
+//! that carries each call between the two computers hands every call it reads to
 //! [`Dispatcher::admit`], and the other computer's handler asks [`route`] before it sends one.
 //!
 //! ## Deny by default, at both ends
@@ -11,8 +11,18 @@
 //! station command goes to the shack, the ui-state pair splits by key, and a command with no class,
 //! or one only the shack's own screen may give, is refused there and never sent. The shack does not
 //! trust that routing. [`Dispatcher::admit`] looks the class up again and refuses a command with no
-//! class, one that runs on the other computer, one that is refused from afar and, until the stream's
-//! transmit rules are wired for this road, every command that starts a transmission.
+//! class, one that runs on the other computer, one that is refused from afar, and every command that
+//! starts a transmission but the few wired for this road ([`transmit_from_afar`]).
+//!
+//! ## A transmission started from afar
+//!
+//! Only the starts in [`WIRED`] go, and each only under the stream's transmit rules, as the
+//! operator signed them for this road: the computer holds the lease on the connection the call came
+//! by, its Stop road holds live presence, and the newest heartbeat on that road named shack state
+//! its screen fetched under two seconds before, by the shack's own clock ([`Caller::roads`]). The FT
+//! starts are the desktop's own FT buttons, none of which carries a time; the PTT is never this
+//! command from afar but a held press on Stop's road ([`Wired::HeldPress`]). Every other start is
+//! refused by name.
 //!
 //! ## Stop is never refused
 //!
@@ -101,9 +111,17 @@ pub(crate) enum Refusal {
     RunsHere,
     /// The command is given only from the shack's own screen.
     ShackOnly,
-    /// The command starts a transmission, which another computer may not do until the stream's
-    /// transmit rules are wired for this road.
+    /// The command starts a transmission that is not wired for another computer ([`WIRED`]).
     TransmitNotYet,
+    /// `set_ptt` sent from another computer: its PTT is a held press on Stop's road, never the
+    /// command, which keys the shack's own audio source.
+    HeldPress,
+    /// A start from a connection with no Stop road: Stop would have one road only.
+    NoStopRoad,
+    /// A start while the computer's Stop road holds no live presence.
+    NoPresence,
+    /// A start while the newest heartbeat on the Stop road named shack state older than two seconds.
+    StaleState,
     /// A password typed on the other computer: credentials are set and used at the shack.
     TypedPassword,
     /// Another device holds station control.
@@ -122,11 +140,15 @@ pub(crate) enum Refusal {
 
 impl Refusal {
     /// Every refusal, for reading one back from its code.
-    const ALL: [Refusal; 11] = [
+    const ALL: [Refusal; 15] = [
         Refusal::Unclassed,
         Refusal::RunsHere,
         Refusal::ShackOnly,
         Refusal::TransmitNotYet,
+        Refusal::HeldPress,
+        Refusal::NoStopRoad,
+        Refusal::NoPresence,
+        Refusal::StaleState,
         Refusal::TypedPassword,
         Refusal::NotController,
         Refusal::Busy,
@@ -148,6 +170,10 @@ impl Refusal {
             Refusal::RunsHere => "runsHere",
             Refusal::ShackOnly => "shackOnly",
             Refusal::TransmitNotYet => "transmitNotYet",
+            Refusal::HeldPress => "heldPress",
+            Refusal::NoStopRoad => "noStopRoad",
+            Refusal::NoPresence => "noPresence",
+            Refusal::StaleState => "staleState",
             Refusal::TypedPassword => "typedPassword",
             Refusal::NotController => "notController",
             Refusal::Busy => "busy",
@@ -212,14 +238,55 @@ pub(crate) fn argument_refusal(cmd: &str, args: &Value) -> Option<Refusal> {
     }
 }
 
-/// ⛔ THE ONE SWITCH FOR A TRANSMISSION STARTED FROM ANOTHER COMPUTER. Every refusal of one reads
-/// it: the shack's own class check ([`Dispatcher::admit`]), the other computer's routing
-/// (`client_mode::way`), and a held press on Stop's second road (`remote_service::lan::stop_road`),
-/// which is a start too. It refuses every start until the stream's transmit rules (one controller,
-/// presence from the Stop road, fresh state, the held press) are wired for this road, and then all
-/// three lift together, here and nowhere else.
-pub(crate) fn transmit_from_afar() -> Result<(), Refusal> {
-    Err(Refusal::TransmitNotYet)
+/// How a transmission start wired for another computer goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wired {
+    /// One of the desktop's FT buttons. None carries a time: slot timing, the clock, sequencing,
+    /// its timeouts and the auto-log stay at the shack.
+    Ft,
+    /// The shack's voice keyer playing one of its slots: a message recorded on the other computer
+    /// reaches the slot as an import, and plays here as one recorded here does.
+    VoiceKeyer,
+    /// The PTT. From another computer never this command, which keys the shack's own audio
+    /// source: a held press on Stop's road, re-asserted by that computer's screen, that arms its
+    /// microphone over; its voice keys it.
+    HeldPress,
+}
+
+/// ⛔ THE TRANSMISSION STARTS WIRED FOR ANOTHER COMPUTER, and how each goes; every other start is
+/// refused, by name, at both ends. In name order. The FT rows are exactly the desktop's FT buttons
+/// that start a transmission; its other FT buttons key nothing and run at the shack by their
+/// class.
+pub(crate) const WIRED: &[(&str, Wired)] = &[
+    ("call_cq", Wired::Ft),
+    ("call_station", Wired::Ft),
+    ("override_next_tx", Wired::Ft),
+    ("play_voice_message", Wired::VoiceKeyer),
+    ("qso_freetext", Wired::Ft),
+    ("qso_resend", Wired::Ft),
+    ("set_ptt", Wired::HeldPress),
+    ("set_tx_enabled", Wired::Ft),
+    ("start_cq", Wired::Ft),
+];
+
+/// ⛔ THE ONE SWITCH FOR A TRANSMISSION STARTED FROM ANOTHER COMPUTER: how the start `cmd` goes
+/// from afar, or the refusal of one that is not wired. Every refusal of one reads it: the shack's
+/// own class check ([`Dispatcher::admit`]), the other computer's routing (`client_mode::way`), a
+/// held press on Stop's second road (`remote_service::lan::stop_road`), and a press's microphone on
+/// the audio road (`remote_service::lan::audio_road`), the last two asking for `set_ptt`'s held
+/// press. Past it, a start still needs the stream's transmit rules ([`Caller::roads`]).
+pub(crate) fn transmit_from_afar(cmd: &str) -> Result<Wired, Refusal> {
+    WIRED
+        .iter()
+        .find(|(name, _)| *name == cmd)
+        .map(|&(_, wired)| wired)
+        .ok_or(Refusal::TransmitNotYet)
+}
+
+/// Whether the held press is wired from afar: what Stop's road asks of a hold, and the audio road
+/// of a press's microphone.
+pub(crate) fn press_from_afar() -> bool {
+    transmit_from_afar("set_ptt") == Ok(Wired::HeldPress)
 }
 
 // --- Stop's rules --------------------------------------------------------------------------------
@@ -622,13 +689,17 @@ impl Profile {
     }
 }
 
-/// Who is calling, the kind of client it is, and whether it holds the station's controller lease
-/// now.
+/// Who is calling, the kind of client it is, whether it holds the station's controller lease
+/// now, and whether its roads let a transmission start.
 #[derive(Clone, Debug)]
 pub(crate) struct Caller {
     pub(crate) key: CallerKey,
     pub(crate) profile: Profile,
     pub(crate) holds_lease: bool,
+    /// For a start: the stream's transmit rules as this computer's Stop road reads them now (both
+    /// roads up, live presence, fresh state), or the refusal of the first that does not hold.
+    /// Asked by the command lane only for a command that starts a transmission.
+    pub(crate) roads: Result<(), Refusal>,
 }
 
 /// One call from the other computer. Deliberately not `Debug`: its arguments can hold anything the
@@ -886,13 +957,15 @@ fn class_refusal(
         Some(_) if !args.is_object() => Some(Refusal::BadArguments),
         Some(Class::RunsHere) => Some(Refusal::RunsHere),
         Some(Class::RefusedHere) => Some(Refusal::ShackOnly),
-        // The plumbing only: transmitting from another computer waits for the stream's transmit
-        // rules (one controller, presence, the held press) on this road. Once they are, a start
-        // still needs the lease, as every station command does.
-        Some(Class::StartsTx) => transmit_from_afar()
-            .err()
-            .or_else(|| argument_refusal(cmd, args))
-            .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController)),
+        // A start from afar: only one wired for this road, and only under the stream's transmit
+        // rules: the lease bound to this connection, then this computer's roads.
+        Some(Class::StartsTx) => match transmit_from_afar(cmd) {
+            Err(refusal) => Some(refusal),
+            Ok(Wired::HeldPress) => Some(Refusal::HeldPress),
+            Ok(Wired::Ft | Wired::VoiceKeyer) => argument_refusal(cmd, args)
+                .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController))
+                .or_else(|| caller.roads.err()),
+        },
         // Admitted before the journal, under Stop's rules.
         Some(Class::StopsTx) => None,
         Some(Class::RunsAtShack) => argument_refusal(cmd, args)
@@ -1176,13 +1249,16 @@ pub(crate) fn tauri_runner<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Runne
 }
 
 /// This dispatcher's tables as text, for the build's contract (`remote_service::lan::wire`): every
-/// command's class, the off halves, the stores and how each command meets them, the station's
-/// ui-state keys, the events that cross and the profiles served.
+/// command's class, the starts wired from afar, the off halves, the stores and how each command
+/// meets them, the station's ui-state keys, the events that cross and the profiles served.
 pub(crate) fn contract_text() -> String {
     use std::fmt::Write;
     let mut text = String::new();
     for (cmd, class) in crate::command_classes::classes() {
         let _ = writeln!(text, "class {cmd} {class:?}");
+    }
+    for (cmd, wired) in WIRED {
+        let _ = writeln!(text, "wired {cmd} {wired:?}");
     }
     for (cmd, arg, off) in OFF_HALVES {
         let _ = writeln!(text, "off {cmd} {arg} {off:?}");

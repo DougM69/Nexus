@@ -14,9 +14,9 @@ use tauri::Manager;
 /// ★ Client mode drives the shack, end to end: it connects to the station's real lane, takes the
 /// lease, and the screens' snapshot poll is answered from the feed the shack pushes; a station
 /// command runs at the shack, with this computer's own two settings shown in place of the shack's;
-/// a start never leaves this computer, a Stop runs at the shack, and a command of this computer's
-/// runs here. Leave hands the lease back, so control is free at once. CONTROL: the shack ran
-/// exactly what was sent to it.
+/// a start, with no Stop road beside this link, never leaves this computer, a Stop runs at the
+/// shack, and a command of this computer's runs here. Leave hands the lease back, so control is
+/// free at once. CONTROL: the shack ran exactly what was sent to it.
 #[test]
 fn client_mode_drives_the_shack_end_to_end() {
     let app = App::new();
@@ -64,7 +64,7 @@ fn client_mode_drives_the_shack_end_to_end() {
     );
     assert_eq!(
         ask(&screens.main, "call_cq", json!({})),
-        Err(json!("nexusClient:transmitNotYet"))
+        Err(json!("nexusClient:noStopRoad"))
     );
     assert!(ask(&screens.main, "halt_tx", json!({})).is_ok());
     assert_eq!(

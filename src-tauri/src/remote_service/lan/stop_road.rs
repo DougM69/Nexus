@@ -47,10 +47,15 @@
 //!   computer's own lease (`operations::RoadPresence`). A number never sent, or older than that,
 //!   renews nothing; the heartbeat that renews it is answered with the deadline. A renewal that
 //!   finds the Engine busy is handed to it at the thread's next look, never waited for.
-//! - **The press is a transmission start**, refused from afar exactly while every start is
-//!   (`command_dispatch::transmit_from_afar`), and said once per press. Past that switch it would
-//!   take only while this road's presence is live, and go to the held PTT the engine decides
-//!   (`PttHold`): a press that is refused never keys later. A release is always taken.
+//! - **The press is a transmission start**, taken only while the held press is wired from afar
+//!   (`command_dispatch::press_from_afar`), the connection is open, and this road's presence is
+//!   live; a press new to the road also needs the state its computer's screen last fetched under
+//!   two seconds old. Refused, it is said once and never keys later; taken, it goes to the held
+//!   PTT the engine decides (`PttHold`), and each of its reports comes back here for this computer
+//!   alone. A release is always taken.
+//! - **What a start on the command link needs** is read off [`Ready`]: the presence this road holds,
+//!   and the snapshot its newest heartbeat named. The road writes it without ever waiting; the
+//!   connection's command lane reads it.
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -60,6 +65,8 @@ use std::time::{Duration, Instant};
 use tempo_app::mic::{MicEnded, MicFeed, MicStatus};
 use tempo_app::remote_control::ptt_hold::{HoldEnd, PttHold};
 use tempo_app::remote_control::transmit::TransmitPermit;
+
+use crate::command_dispatch::Refusal;
 
 use super::super::operations::{RoadPresence, RoadStop};
 use super::datagram::{self, End, Keys, Tag, EXPORTED};
@@ -327,13 +334,83 @@ impl StateClock {
     /// before `now`? Asked by the road's thread, which only tries the lock: a moment's contention
     /// reads as not fresh, and the next heartbeat asks again.
     pub(crate) fn fresh(&self, number: u64, now: Instant) -> bool {
-        let Ok(sent) = self.taken.try_lock() else {
-            return false;
-        };
-        sent.iter()
-            .rev()
-            .find(|(sent, _)| *sent == number)
-            .is_some_and(|(_, taken)| now.saturating_duration_since(*taken) <= FRESH)
+        self.freshness(number, now).unwrap_or(false)
+    }
+
+    /// [`StateClock::fresh`], or `None` while the lock is held this moment: the road's thread never
+    /// waits, and a press it cannot judge now is asked about again at its next hold, never refused.
+    pub(crate) fn freshness(&self, number: u64, now: Instant) -> Option<bool> {
+        match self.taken.try_lock() {
+            Ok(sent) => Some(fresh_in(&sent, number, now)),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                Some(fresh_in(&poisoned.into_inner(), number, now))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// [`StateClock::fresh`], waiting for the lock: for the command lane, which may wait.
+    pub(crate) fn fresh_waiting(&self, number: u64, now: Instant) -> bool {
+        let sent = self
+            .taken
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        fresh_in(&sent, number, now)
+    }
+}
+
+fn fresh_in(sent: &VecDeque<(u64, Instant)>, number: u64, now: Instant) -> bool {
+    sent.iter()
+        .rev()
+        .find(|(sent, _)| *sent == number)
+        .is_some_and(|(_, taken)| now.saturating_duration_since(*taken) <= FRESH)
+}
+
+// --- What a start on the command link needs ------------------------------------------------------
+
+/// One connection's road as its command lane reads it before a transmission starts from that
+/// computer: the presence this road holds now, and the snapshot its newest heartbeat named, judged
+/// by the connection's own state clock (the stream's transmit rules: live presence, fresh state).
+/// The road's thread writes it and never waits for the lock; the lane reads it, before a start and
+/// again once the start has run.
+pub(crate) struct Ready {
+    presence: Mutex<Option<TransmitPermit>>,
+    named: AtomicU64,
+    clock: Arc<StateClock>,
+}
+
+impl Ready {
+    fn new(clock: Arc<StateClock>) -> Self {
+        Self {
+            presence: Mutex::new(None),
+            named: AtomicU64::new(0),
+            clock,
+        }
+    }
+
+    /// Whether this road holds presence that is live now.
+    pub(crate) fn presence_live(&self, now: Instant) -> bool {
+        self.presence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|permit| permit.valid(now))
+    }
+
+    /// Whether a transmission may start from this computer now, as its road reads it: presence
+    /// live, and the state its screen last fetched, as its newest heartbeat named it, taken no more
+    /// than [`FRESH`] before now. The refusal of the first that does not hold.
+    pub(crate) fn start(&self, now: Instant) -> Result<(), Refusal> {
+        if !self.presence_live(now) {
+            return Err(Refusal::NoPresence);
+        }
+        if !self
+            .clock
+            .fresh_waiting(self.named.load(Ordering::Acquire), now)
+        {
+            return Err(Refusal::StaleState);
+        }
+        Ok(())
     }
 }
 
@@ -394,6 +471,13 @@ struct Road {
     closed: Option<Instant>,
     /// The presence this road last renewed.
     presence: Option<TransmitPermit>,
+    /// What its command lane reads of it, and whether that is behind `presence`.
+    ready: Arc<Ready>,
+    unpublished: bool,
+    /// The snapshot its newest heartbeat named.
+    named: u64,
+    /// The press this road last handed to the held PTT, until its release.
+    pressing: Option<u64>,
     /// A renewal minted while the Engine was busy, with its deadline: handed over at the next look.
     pending: Option<(TransmitPermit, Instant)>,
     /// The microphone over as this computer was last told it.
@@ -507,6 +591,7 @@ impl StopRoad {
         clock: Arc<StateClock>,
     ) -> Option<Opened> {
         let tag = self.tags.fetch_add(1, Ordering::SeqCst).to_be_bytes();
+        let ready = Arc::new(Ready::new(clock.clone()));
         let road = Road {
             keys: Keys::new(exported, tag, End::Shack)?,
             device: device.to_string(),
@@ -517,6 +602,10 @@ impl StopRoad {
             paired: false,
             closed: None,
             presence: None,
+            ready: ready.clone(),
+            unpublished: false,
+            named: 0,
+            pressing: None,
             pending: None,
             mic_told: None,
             refused: VecDeque::new(),
@@ -525,6 +614,7 @@ impl StopRoad {
         Some(Opened {
             port: self.port,
             tag,
+            ready,
             closing: self.changes.clone(),
         })
     }
@@ -534,10 +624,16 @@ impl StopRoad {
 pub(crate) struct Opened {
     pub(crate) port: u16,
     pub(crate) tag: Tag,
+    ready: Arc<Ready>,
     closing: mpsc::Sender<Change>,
 }
 
 impl Opened {
+    /// What this connection's command lane reads of its road before a start.
+    pub(crate) fn ready(&self) -> Arc<Ready> {
+        self.ready.clone()
+    }
+
     /// The road as the welcome names it: `{"port", "tag"}`, the tag as lowercase hex.
     pub(crate) fn offer(&self) -> serde_json::Value {
         let tag: String = self.tag.iter().map(|b| format!("{b:02x}")).collect();
@@ -555,7 +651,41 @@ impl Drop for Opened {
 /// presses can be taken for one another. The audio road names a press's frames the same way.
 pub(crate) fn press_id(tag: &Tag, press: u64) -> String {
     let tag: String = tag.iter().map(|b| format!("{b:02x}")).collect();
-    format!("road-{tag}-{press:016x}")
+    format!("{PRESS_PREFIX}{tag}-{press:016x}")
+}
+
+/// What every press a road names begins with: a page's own presses are never named so.
+const PRESS_PREFIX: &str = "road-";
+
+/// Whether the held PTT's press `id` is one a road named ([`press_id`]): its reports go back by
+/// that road, and the stream's page is never told of it.
+pub(crate) fn is_road_press(id: &str) -> bool {
+    id.starts_with(PRESS_PREFIX)
+}
+
+/// The road's tag and the computer's number in a press a road named.
+fn road_press_of(id: &str) -> Option<(Tag, u64)> {
+    let (tag, press) = id.strip_prefix(PRESS_PREFIX)?.split_once('-')?;
+    let tag: Tag = tempo_stream::protocol::hex_bytes(tag)?.try_into().ok()?;
+    let press = u64::from_str_radix(press, 16).ok()?;
+    (press_id(&tag, press) == id).then_some((tag, press))
+}
+
+/// Tells `road`'s command lane the presence the road holds now, unless the lane is reading it this
+/// very moment: then at the road's next look. The road's thread never waits for it.
+fn publish(road: &mut Road) {
+    if !road.unpublished {
+        return;
+    }
+    let held = match road.ready.presence.try_lock() {
+        Ok(held) => Some(held),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    };
+    if let Some(mut held) = held {
+        *held = road.presence.clone();
+        road.unpublished = false;
+    }
 }
 
 /// Hands `road`'s pending renewal to the engine, if the Engine is free: the road then holds it, and
@@ -573,6 +703,8 @@ fn install(socket: &UdpSocket, presence: &RoadPresence, road: &mut Road, now: In
         Some(false) => {}
         Some(true) => {
             road.presence = Some(permit);
+            road.unpublished = true;
+            publish(road);
             let left = until.saturating_duration_since(now).as_millis();
             let left_ms = u32::try_from(left).unwrap_or(u32::MAX);
             answer(socket, road, &Down::Presence { left_ms });
@@ -647,6 +779,8 @@ impl Thread {
                         road.closed.get_or_insert(at);
                         road.presence = None;
                         road.pending = None;
+                        road.unpublished = true;
+                        publish(road);
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => return true,
@@ -689,12 +823,25 @@ impl Thread {
                 if road.closed.is_some() {
                     return;
                 }
-                // ⛔ A PRESS IS A TRANSMISSION START: refused from afar while every start is, and
-                // past that only while this computer's presence is live. Said once per press, and a
-                // press refused never keys later.
-                let refused = crate::command_dispatch::transmit_from_afar().is_err()
+                // ⛔ A PRESS IS A TRANSMISSION START, under the stream's transmit rules: the held
+                // press wired from afar, this computer's presence live on this road (which only its
+                // own lease mints), and, for a press new to this road, the state its screen last
+                // fetched under two seconds old. Said once per press, and a press refused never
+                // keys later. A press whose freshness cannot be read this moment is neither: its
+                // next hold asks again.
+                let new = road.pressing != Some(press);
+                let fresh = if new {
+                    match road.clock.freshness(road.named, now) {
+                        Some(fresh) => fresh,
+                        None => return,
+                    }
+                } else {
+                    true
+                };
+                let refused = !crate::command_dispatch::press_from_afar()
                     || !road.presence.as_ref().is_some_and(|p| p.valid(now))
-                    || road.refused.contains(&press);
+                    || road.refused.contains(&press)
+                    || !fresh;
                 if refused {
                     if !road.refused.contains(&press) {
                         if road.refused.len() >= REFUSED_KEPT {
@@ -711,12 +858,23 @@ impl Thread {
                     }
                     return;
                 }
+                road.pressing = Some(press);
                 self.powers.ptt.hold(&press_id(&tag, press), now);
             }
             // The off half: always taken.
-            Up::Release { press } => self.powers.ptt.release(&press_id(&tag, press)),
+            Up::Release { press } => {
+                if road.pressing == Some(press) {
+                    road.pressing = None;
+                }
+                self.powers.ptt.release(&press_id(&tag, press));
+            }
             Up::Heartbeat { lease, state } => {
-                if road.closed.is_some() || !road.clock.fresh(state, now) {
+                if road.closed.is_some() {
+                    return;
+                }
+                road.named = state;
+                road.ready.named.store(state, Ordering::Release);
+                if !road.clock.fresh(state, now) {
                     return;
                 }
                 let minted = self
@@ -746,18 +904,36 @@ impl Thread {
     }
 
     /// Every [`TICK`]: the roads past their afterlife go with their keys, a renewal the Engine was
-    /// too busy for is handed over, and each computer whose presence is live is told when the
-    /// microphone over changed.
+    /// too busy for is handed over, each lane is told the presence its road holds, each press's
+    /// report goes to the computer whose press it is, and each computer whose presence is live is
+    /// told when the microphone over changed.
     fn look(&mut self, now: Instant) {
         let afterlife = self.afterlife;
         self.roads.retain(|_, road| {
             road.closed
                 .is_none_or(|at| now.saturating_duration_since(at) < afterlife)
         });
+        if !self.roads.is_empty() {
+            // Only the roads' own presses: the stream's page takes its own.
+            for report in self.powers.ptt.reports_where(is_road_press) {
+                let Some((tag, press)) = road_press_of(&report.hold_id) else {
+                    continue;
+                };
+                if let Some(road) = self.roads.get(&tag) {
+                    let said = Down::Press {
+                        press,
+                        keyed: report.keyed,
+                        end: report.end,
+                    };
+                    answer(&self.socket, road, &said);
+                }
+            }
+        }
         // Read only while someone may be told, and once a look.
         let mut status = None;
         for road in self.roads.values_mut() {
             install(&self.socket, &self.powers.presence, road, now);
+            publish(road);
             let live = road.presence.as_ref().is_some_and(|p| p.valid(now));
             if !live || road.peer.is_none() {
                 continue;
