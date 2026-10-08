@@ -226,7 +226,8 @@ fn a_replayed_stop_after_a_new_remote_arm_still_stops_it() {
 // a browser without station control is refused and changes nothing. This replaces
 // `transmit_stop_cannot_stop_a_new_local_transmission`, which pinned the opposite rule.
 
-const LOCAL_TRANSMISSIONS: [&str; 8] = ["ptt", "tune", "cw", "voice", "rtty", "psk", "sstv", "ft"];
+pub(crate) const LOCAL_TRANSMISSIONS: [&str; 8] =
+    ["ptt", "tune", "cw", "voice", "rtty", "psk", "sstv", "ft"];
 
 /// A controlling v4 browser, with or without FT8/FT4 transmit permission, and nothing keyed.
 fn controlling(transmit: bool) -> (Fixture, Instant, Value) {
@@ -249,7 +250,7 @@ fn controlling(transmit: bool) -> (Fixture, Instant, Value) {
 }
 
 /// Start a transmission the way the shack does, through the local verbs, never a remote permit.
-fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
+pub(crate) fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
     match kind {
         "ptt" => {
             e.set_tx_enabled(true);
@@ -293,7 +294,7 @@ fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
     e.take_slot_tx_abort();
 }
 
-fn assert_stopped(e: &mut tempo_app::engine::Engine, kind: &str) {
+pub(crate) fn assert_stopped(e: &mut tempo_app::engine::Engine, kind: &str) {
     assert!(
         e.tx_owner().is_none(),
         "{kind}: nothing still owns the transmitter"

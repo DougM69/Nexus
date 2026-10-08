@@ -23,6 +23,8 @@ struct FakeShack {
     running: Mutex<HashMap<String, usize>>,
     /// The most calls running at once, in all and of one command, Stops left out.
     most: Mutex<(usize, usize)>,
+    /// Its Stop road, when the test gives it one.
+    road: Mutex<Option<Arc<StopRoad>>>,
 }
 
 impl FakeShack {
@@ -34,6 +36,7 @@ impl FakeShack {
             open: tokio::sync::watch::channel(true).0,
             running: Mutex::new(HashMap::new()),
             most: Mutex::new((0, 0)),
+            road: Mutex::new(None),
         })
     }
 
@@ -98,6 +101,10 @@ impl Shack for FakeShack {
 
     fn latest(&self, feed: &str) -> Option<(u64, Value)> {
         lock(&self.feeds).get(feed).cloned()
+    }
+
+    fn stop_road(&self) -> Option<Arc<StopRoad>> {
+        lock(&self.road).clone()
     }
 }
 
@@ -714,6 +721,7 @@ const MAY_REACH: &[&str] = &[
     "crate::command_classes",
     "crate::command_dispatch",
     "crate::lan_client::link",
+    "crate::lan_client::stop_road",
     "crate::lan_client::Stations",
     "crate::remote_service::vault::PairedStation",
     "crate::remote_service::vault::SystemVault",
@@ -924,4 +932,176 @@ fn the_launch_names_the_station_it_drives() {
     }
     assert_eq!(requested_in(args(&["--client"])), None);
     assert_eq!(requested_in(args(&["--profile", "r1"])), None);
+}
+
+// --- Stop's second road --------------------------------------------------------------------------
+
+/// The shack's end of a Stop road, for these tests: a socket that a thread of its own reads as
+/// fast as it can, noting when each datagram arrived and what it was.
+struct RoadEnd {
+    heard: Arc<
+        Mutex<
+            Vec<(
+                crate::remote_service::lan::stop_road::Up,
+                std::time::Instant,
+            )>,
+        >,
+    >,
+    listening: Arc<AtomicBool>,
+}
+
+impl Drop for RoadEnd {
+    fn drop(&mut self) {
+        self.listening.store(false, Ordering::SeqCst);
+    }
+}
+
+/// A shack with a Stop road to an end of the test's own.
+fn shack_with_a_road() -> (Arc<FakeShack>, RoadEnd) {
+    use crate::remote_service::lan::datagram::{End, Keys, EXPORTED};
+    use crate::remote_service::lan::stop_road::Up;
+    let exported = [5; EXPORTED];
+    let tag = [2; 8];
+    let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let road = StopRoad::open(socket.local_addr().unwrap(), tag, &exported).unwrap();
+    let shack = FakeShack::new();
+    *lock(&shack.road) = Some(road);
+    let mut keys = Keys::new(&exported, tag, End::Shack).unwrap();
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let listening = Arc::new(AtomicBool::new(true));
+    {
+        let (heard, listening) = (heard.clone(), listening.clone());
+        std::thread::spawn(move || {
+            let mut buffer = [0u8; 256];
+            while listening.load(Ordering::SeqCst) {
+                if let Ok(length) = socket.recv(&mut buffer) {
+                    let at = std::time::Instant::now();
+                    let up = keys
+                        .receive
+                        .open(&buffer[..length])
+                        .and_then(|(kind, body)| Up::read(kind, &body));
+                    if let Some(up) = up {
+                        lock(&heard).push((up, at));
+                    }
+                }
+            }
+        });
+    }
+    (shack, RoadEnd { heard, listening })
+}
+
+/// ★ No queue at this end. A Stop press leaves on the road within a
+/// millisecond while the command link is stuck (the shack answers nothing): the handler writes it
+/// itself, before it hands the call to the link. Five presses, each its own Stop: every one leaves,
+/// and their median within the millisecond. A queue here (the road's thread sending it, or the link
+/// first) delays every press, while a receiving thread descheduled on a loaded box delays one; a
+/// single press measured 1.1 ms once beside the whole suite, and 54–99 µs alone. CONTROL: the calls
+/// went to the link too, and are still waiting there.
+#[test]
+fn a_stop_press_leaves_on_the_road_within_a_millisecond_with_the_link_stuck() {
+    use crate::remote_service::lan::stop_road::Up;
+    let (shack, end) = shack_with_a_road();
+    shack.hold();
+    let dir = scratch("road-stop");
+    let client = client_in(&dir, &shack);
+    let screens = screens(&client);
+    let mut took = Vec::new();
+    let mut answers = Vec::new();
+    for stop in 1..=5u64 {
+        let first = |heard: &[(Up, std::time::Instant)]| {
+            heard
+                .iter()
+                .find(|(up, _)| *up == Up::Stop { stop })
+                .map(|(_, at)| *at)
+        };
+        let pressed = std::time::Instant::now();
+        answers.push(send(&screens.main, "halt_tx", json!({})));
+        eventually("the Stop on the road", || {
+            first(&lock(&end.heard)[..]).is_some()
+        });
+        took.push(first(&lock(&end.heard)[..]).unwrap() - pressed);
+    }
+    eprintln!("measured: the Stops left on the road {took:?} after their presses");
+    let mut sorted = took.clone();
+    sorted.sort();
+    assert!(sorted[2] < Duration::from_millis(1), "the median: {took:?}");
+    eventually("the calls on the link", || shack.sent() == ["halt_tx"; 5]);
+    assert!(
+        answers.iter().all(|answered| answered.try_recv().is_err()),
+        "the link answers nothing"
+    );
+    shack.let_go();
+    for answered in &answers {
+        assert!(answered.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+}
+
+/// ★ Only a Stop press takes the road: the off half of a switch (TX off, PTT up) goes by the link
+/// alone, as it always has, since TX off lets an FT over finish and a Stop does not. CONTROL: each
+/// stop command does take it.
+#[test]
+fn only_a_stop_press_takes_the_road() {
+    let (shack, end) = shack_with_a_road();
+    let dir = scratch("road-only-stops");
+    let client = client_in(&dir, &shack);
+    let screens = screens(&client);
+    for (cmd, args) in [
+        ("set_tx_enabled", json!({"enabled": false})),
+        ("set_ptt", json!({"on": false})),
+        ("set_tune", json!({"on": false})),
+    ] {
+        assert!(ask(&screens.main, cmd, args).is_ok(), "{cmd}");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        lock(&end.heard).is_empty(),
+        "an off half takes the link alone"
+    );
+    let stops: Vec<&str> = crate::command_classes::classes()
+        .filter(|(_, class)| *class == Class::StopsTx)
+        .map(|(cmd, _)| cmd)
+        .collect();
+    assert_eq!(stops.len(), 8);
+    for cmd in &stops {
+        assert!(ask(&screens.main, cmd, json!({})).is_ok(), "{cmd}");
+    }
+    eventually("a Stop on the road for each", || {
+        lock(&end.heard).len() >= stops.len()
+    });
+}
+
+/// ★ The heartbeat's echo is the main window's own poll: what a pop-out fetches never moves it,
+/// so a main window that hangs lets presence lapse at the shack. CONTROL: the main window's poll
+/// moves it, to the number it fetched.
+#[test]
+fn the_heartbeat_names_what_the_main_window_fetched() {
+    use crate::remote_service::lan::stop_road::Up;
+    let (shack, end) = shack_with_a_road();
+    shack.feeds("snapshot/1", 5, json!({"n": 5}));
+    let dir = scratch("road-echo");
+    let client = client_in(&dir, &shack);
+    let screens = screens(&client);
+    lock(&shack.road)
+        .as_ref()
+        .unwrap()
+        .lease(Some("30000000-0000-4000-8000-000000000001".into()));
+    assert_eq!(
+        ask(&screens.popout, "get_snapshot", json!({})),
+        Ok(json!({"n": 5}))
+    );
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(
+        lock(&end.heard).is_empty(),
+        "a pop-out's poll names nothing"
+    );
+    assert_eq!(
+        ask(&screens.main, "get_snapshot", json!({})),
+        Ok(json!({"n": 5}))
+    );
+    eventually("a heartbeat", || !lock(&end.heard).is_empty());
+    assert!(matches!(
+        &lock(&end.heard)[0].0,
+        Up::Heartbeat { state: 5, .. }
+    ));
 }

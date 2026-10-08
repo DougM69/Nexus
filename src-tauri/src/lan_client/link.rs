@@ -20,6 +20,9 @@
 //! 4. **Events** that cross, for the screens ([`Link::events`]).
 //! 5. **The lease, and Stop's first road**: protocol 1's operation requests ([`Link::operation`]),
 //!    a `stopTransmit` ahead of everything.
+//! 6. **Stop's second road** ([`Link::stop_road`]), when the welcome names one: a road of its own
+//!    beside this link (`super::stop_road`), keyed from this link's TLS session. It is told when the
+//!    link ends, and outlives it by a minute for a Stop pressed as it drops.
 //!
 //! Anything the station sends that no station of this build sends ends the link: it fails closed.
 use std::collections::{HashMap, VecDeque};
@@ -36,8 +39,10 @@ use tokio::sync::{broadcast, oneshot, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::road::{self, Ids, Socket};
+use super::stop_road::StopRoad;
 use crate::command_dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
 use crate::remote_service::lan::commands::OUTCOMES;
+use crate::remote_service::lan::datagram;
 use crate::remote_service::lan::outbox::Outbox;
 use crate::remote_service::lan::wire::{self, Assembly, End, Inflate, Whole};
 use crate::remote_service::vault::PairedStation;
@@ -121,6 +126,8 @@ struct Shared {
     events: broadcast::Sender<Event>,
     ended: AtomicBool,
     end: Notify,
+    /// This link's Stop road, told when the link ends.
+    road: Option<Arc<StopRoad>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -152,6 +159,7 @@ impl Link {
             ids,
             app,
             contract,
+            stop_road,
             at,
         } = road::reach(record, &road::order(record, typed)).await?;
         let ours = (wire::APP, wire::contract());
@@ -182,9 +190,29 @@ impl Link {
             }
             _ => return Err("notStation"),
         }
+        // Stop's second road, from this session's own keys: at the address that welcomed this
+        // computer, at the port and under the tag the welcome named. Without one, Stop has this link.
+        let stop_road = stop_road.and_then(|offer| {
+            let tag = offer.tag()?;
+            let exported = socket
+                .get_ref()
+                .get_ref()
+                .1
+                .export_keying_material(
+                    [0; datagram::EXPORTED],
+                    datagram::STOP_LABEL,
+                    Some(ids.session.as_bytes()),
+                )
+                .ok()?;
+            StopRoad::open(
+                SocketAddrV4::new(*at.ip(), offer.port).into(),
+                tag,
+                &exported,
+            )
+        });
         let (sink, stream) = socket.split();
         let (outbox, writer) = Outbox::spawn(sink);
-        let shared = Arc::new(Shared::new());
+        let shared = Arc::new(Shared::new(stop_road));
         let writing = writer.abort_handle();
         let reader = tokio::spawn(read(stream, shared.clone()));
         let keeper = tokio::spawn(keep(outbox.clone(), writer, shared.clone()));
@@ -305,6 +333,11 @@ impl Link {
         self.shared.events.subscribe()
     }
 
+    /// This link's Stop road, when the station opened one.
+    pub(crate) fn stop_road(&self) -> Option<Arc<StopRoad>> {
+        self.shared.road.clone()
+    }
+
     /// Whether the link has ended.
     pub(crate) fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::SeqCst)
@@ -395,7 +428,7 @@ async fn keep(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>, shared: A
 }
 
 impl Shared {
-    fn new() -> Self {
+    fn new(road: Option<Arc<StopRoad>>) -> Self {
         Self {
             calls: Default::default(),
             operations: Default::default(),
@@ -405,13 +438,17 @@ impl Shared {
             events: broadcast::channel(EVENTS).0,
             ended: AtomicBool::new(false),
             end: Notify::new(),
+            road,
         }
     }
 
     /// The link has ended: every call still waiting is answered gone, and every other question
-    /// is dropped, which its asker reads the same way.
+    /// is dropped, which its asker reads the same way. Its Stop road stays a minute more.
     fn end(&self) {
         self.ended.store(true, Ordering::SeqCst);
+        if let Some(road) = &self.road {
+            road.link_ended();
+        }
         for (_, waiting) in lock(&self.calls).drain() {
             let _ = waiting.send(Answer::Gone);
         }
@@ -554,7 +591,7 @@ mod tests {
     /// are each kept, the newest with its number.
     #[test]
     fn a_feed_value_out_of_its_order_ends_the_link() {
-        let shared = Shared::new();
+        let shared = Shared::new(None);
         for frame in frames("snapshot/1", &[1, 2, 3]) {
             assert_eq!(shared.heard(Whole::Binary(frame)), Ok(()));
         }
@@ -568,7 +605,7 @@ mod tests {
             (&[1, 2, 1][..], "a step back"),
             (&[2][..], "a first value past 1"),
         ] {
-            let shared = Shared::new();
+            let shared = Shared::new(None);
             let mut heard: Vec<Result<(), ()>> = frames("meters/1", numbers)
                 .into_iter()
                 .map(|frame| shared.heard(Whole::Binary(frame)))
@@ -576,7 +613,7 @@ mod tests {
             assert_eq!(heard.pop(), Some(Err(())), "{why}");
             assert!(heard.iter().all(Result::is_ok), "{why}");
         }
-        let shared = Shared::new();
+        let shared = Shared::new(None);
         let unknown = frames("noSuchFeed/1", &[1]).remove(0);
         assert_eq!(
             shared.heard(Whole::Binary(unknown)),
@@ -597,7 +634,7 @@ mod tests {
     /// status line are taken.
     #[test]
     fn a_message_no_station_sends_ends_the_link() {
-        let shared = Shared::new();
+        let shared = Shared::new(None);
         let said = |value: Value| shared.heard(Whole::Text(value.to_string()));
         assert_eq!(
             said(json!({"type":"result","id":1,"value":{"ok":true}})),

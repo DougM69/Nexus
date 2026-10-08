@@ -12,7 +12,9 @@
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
 //!    stamps the session: a session id of its own making, and the device the key belongs to.
 //!    Nothing the computer says names either; that stamp is what the relay supplies on the hosted
-//!    road. A first message that asks to pair instead goes, under the same version rule, to a
+//!    road. It opens the connection's own Stop road (`super::stop_road`), keyed from this TLS
+//!    session with the session id as the context, and the welcome names its port and tag. A
+//!    first message that asks to pair instead goes, under the same version rule, to a
 //!    pairing-only connection (`super::pairing`), which holds the pairing desk and nothing of
 //!    this lane's: none of the steps below happen on it.
 //! 4. **The lane.** Every operation request goes to the operations authority under this
@@ -45,9 +47,11 @@ use super::super::operations::{Authority, LanConnection, Request};
 use super::super::stream::{Station, StreamLane};
 use super::super::transport::{identifier, random_secret, Feeds};
 use super::commands::{Commands, Lane, Opening, OUTCOMES, WATCH};
+use super::datagram;
 use super::gate::Gate;
 use super::outbox::Outbox;
 use super::pairing::{self, Asked, Desk, Outcome};
+use super::stop_road::{StateClock, StopRoad};
 use super::tls::{pin, Identity};
 use super::wire::{self, End, Whole};
 use crate::command_dispatch::{Call, Dispatcher, Profile, Revision, ShackStores};
@@ -99,6 +103,9 @@ pub(super) struct Shared {
     /// This shack's build, as its welcome says it and an `open` must name it: the app's version and
     /// the contract (`super::wire`). A test's own stands for another build.
     pub build: (&'static str, &'static str),
+    /// Stop's second road, where each connection's own road is opened as it is welcomed. `None`
+    /// when it did not open: the welcome then names none, and Stop has this connection alone.
+    pub stop_road: Option<StopRoad>,
 }
 
 /// What a remote PC sends. Parsed whole and exactly: anything else closes the connection.
@@ -415,6 +422,23 @@ async fn session<S>(
     else {
         return;
     };
+    // This connection's own Stop road: its keys from this TLS session, under the road's label with
+    // the session as the context, so only this computer and this shack can make them. Opened before
+    // the welcome names it; it closes with the connection, its keys kept a minute for a late Stop.
+    let clock = Arc::new(StateClock::default());
+    let road = shared.stop_road.as_ref().and_then(|road| {
+        let exported = socket
+            .get_ref()
+            .get_ref()
+            .1
+            .export_keying_material(
+                [0; datagram::EXPORTED],
+                datagram::STOP_LABEL,
+                Some(session.as_bytes()),
+            )
+            .ok()?;
+        road.open(&exported, &session, &device, pin, clock.clone())
+    });
     // The lease this computer takes is bound to this connection, and goes with it.
     let connection = LanConnection::new(shared.authority.clone());
     let paired = book.clone();
@@ -436,11 +460,15 @@ async fn session<S>(
     };
     let (sink, mut reader) = socket.split();
     let (outbox, mut writer) = Outbox::spawn(sink);
+    // Each snapshot's number, and when its state was taken: the clock the road reads a state echo by.
+    outbox.keep_time("snapshot/1", clock);
     let (app, contract) = shared.build;
-    let welcome = json!({"type":"welcome","sessionId":session,"deviceId":device,
-        "stationId":shared.identity.station_id,"app":app,"contract":contract})
-    .to_string();
-    if outbox.text(welcome).is_err() {
+    let mut welcome = json!({"type":"welcome","sessionId":session,"deviceId":device,
+        "stationId":shared.identity.station_id,"app":app,"contract":contract});
+    if let Some(road) = &road {
+        welcome["stopRoad"] = road.offer();
+    }
+    if outbox.text(welcome.to_string()).is_err() {
         return;
     }
     // The command lane, once this computer opens it with the same build.
@@ -615,6 +643,8 @@ async fn session<S>(
     drop(stream_lane);
     drop(lane);
     drop(connection);
+    // Its Stop road closes now, and keeps its keys for a Stop that comes late.
+    drop(road);
     writer.abort();
     tempo_core::applog::info(
         "remote",

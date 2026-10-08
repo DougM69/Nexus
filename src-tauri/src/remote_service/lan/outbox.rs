@@ -10,14 +10,15 @@
 //!    one takes its place, so a feed never falls behind the shack's state. A value is numbered and
 //!    deflated as it is taken to be written, never before: the numbers on the wire run 1, 2, 3 with
 //!    no gap, and each feed's deflate stream holds exactly what was sent. The feeds and the messages
-//!    in turn take turns with each other.
+//!    in turn take turns with each other. The snapshot's numbers are where the state echo starts:
+//!    each is recorded as it is given, with when its state was taken ([`Outbox::keep_time`]).
 //!
 //! A frame the socket does not take in time ends the connection, as on the relay's road
 //! (`transport::Outbound`), and so does a queue the other end lets grow past [`WAITING`] messages:
 //! it has stopped reading. Nothing handed over is dropped, but a feed's value a newer one replaced.
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::stream::SplitSink;
 use futures_util::SinkExt;
@@ -25,6 +26,7 @@ use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
+use super::stop_road::StateClock;
 use super::wire::{self, Deflate, Whole};
 
 /// Messages waiting to be written before the other end is judged to have stopped reading.
@@ -58,15 +60,17 @@ struct Queues {
     writing: bool,
     /// The feed whose turn comes first.
     next_feed: usize,
+    /// The feed whose numbers are recorded as they are given, and where.
+    clock: Option<(&'static str, Arc<StateClock>)>,
     /// No more is written: the socket failed, the queue overflowed, or the connection ended.
     closed: bool,
 }
 
-/// One feed: the value waiting, the count of values sent, its deflate stream, and what is left of
-/// the value being written.
+/// One feed: the value waiting (with when it was taken), the count of values sent, its deflate
+/// stream, and what is left of the value being written.
 struct Slot {
     name: &'static str,
-    latest: Option<Vec<u8>>,
+    latest: Option<(Vec<u8>, Instant)>,
     sent: u64,
     deflate: Deflate,
     frames: VecDeque<Message>,
@@ -172,14 +176,15 @@ impl Outbox {
         Ok(())
     }
 
-    /// The feed `name`'s newest value, as JSON, in place of any value of it still waiting.
-    pub(crate) fn feed(&self, name: &'static str, json: Vec<u8>) {
+    /// The feed `name`'s newest value, as JSON, taken at `taken`, in place of any value of it still
+    /// waiting.
+    pub(crate) fn feed(&self, name: &'static str, json: Vec<u8>, taken: Instant) {
         let mut queues = lock(&self.shared.queues);
         match queues.feeds.iter_mut().find(|slot| slot.name == name) {
-            Some(slot) => slot.latest = Some(json),
+            Some(slot) => slot.latest = Some((json, taken)),
             None => queues.feeds.push(Slot {
                 name,
-                latest: Some(json),
+                latest: Some((json, taken)),
                 sent: 0,
                 deflate: Deflate::default(),
                 frames: VecDeque::new(),
@@ -187,6 +192,12 @@ impl Outbox {
         }
         drop(queues);
         self.shared.ready.notify_one();
+    }
+
+    /// Records each number the feed `name` is given in `clock`, with when its value was taken: the
+    /// clock Stop's second road reads a heartbeat's state echo by (`super::stop_road`).
+    pub(crate) fn keep_time(&self, name: &'static str, clock: Arc<StateClock>) {
+        lock(&self.shared.queues).clock = Some((name, clock));
     }
 
     /// Waits, for at most `within`, until everything handed over is on the socket: a refusal said
@@ -300,6 +311,7 @@ fn feed_frame(q: &mut Queues) -> Option<Message> {
         stream,
         next_feed,
         closed,
+        clock,
         ..
     } = q;
     let count = feeds.len();
@@ -307,7 +319,7 @@ fn feed_frame(q: &mut Queues) -> Option<Message> {
         let index = (*next_feed + step) % count;
         let slot = &mut feeds[index];
         if slot.frames.is_empty() {
-            let Some(json) = slot.latest.take() else {
+            let Some((json, taken)) = slot.latest.take() else {
                 continue;
             };
             let Some(deflated) = slot.deflate.value(&json) else {
@@ -315,6 +327,9 @@ fn feed_frame(q: &mut Queues) -> Option<Message> {
                 return None;
             };
             slot.sent += 1;
+            if let Some((_, clock)) = clock.as_ref().filter(|(name, _)| *name == slot.name) {
+                clock.sent(slot.sent, taken);
+            }
             slot.frames = frames(
                 Whole::Binary(wire::feed_frame(slot.name, slot.sent, &deflated)),
                 stream,
@@ -442,7 +457,11 @@ mod tests {
         outbox.text("x".repeat(1000)).unwrap();
         stalled().await;
         for n in 1..=10 {
-            outbox.feed("snapshot/1", format!("{{\"n\":{n}}}").into_bytes());
+            outbox.feed(
+                "snapshot/1",
+                format!("{{\"n\":{n}}}").into_bytes(),
+                Instant::now(),
+            );
         }
         let mut inflate = wire::Inflate::default();
         let mut feed = |whole: &Whole| match whole {
@@ -460,7 +479,11 @@ mod tests {
             "the latest only, numbered 1"
         );
         for (n, number) in [(11, 2), (12, 3)] {
-            outbox.feed("snapshot/1", format!("{{\"n\":{n}}}").into_bytes());
+            outbox.feed(
+                "snapshot/1",
+                format!("{{\"n\":{n}}}").into_bytes(),
+                Instant::now(),
+            );
             let next = read(&mut theirs, 1).await;
             assert_eq!(
                 feed(&next[0]),

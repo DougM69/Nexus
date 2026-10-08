@@ -212,6 +212,16 @@ pub(crate) fn argument_refusal(cmd: &str, args: &Value) -> Option<Refusal> {
     }
 }
 
+/// ⛔ THE ONE SWITCH FOR A TRANSMISSION STARTED FROM ANOTHER COMPUTER. Every refusal of one reads
+/// it: the shack's own class check ([`Dispatcher::admit`]), the other computer's routing
+/// (`client_mode::way`), and a held press on Stop's second road (`remote_service::lan::stop_road`),
+/// which is a start too. It refuses every start until the stream's transmit rules (one controller,
+/// presence from the Stop road, fresh state, the held press) are wired for this road, and then all
+/// three lift together, here and nowhere else.
+pub(crate) fn transmit_from_afar() -> Result<(), Refusal> {
+    Err(Refusal::TransmitNotYet)
+}
+
 // --- Stop's rules --------------------------------------------------------------------------------
 
 /// How the off half of a transmit switch reads in its argument.
@@ -877,8 +887,12 @@ fn class_refusal(
         Some(Class::RunsHere) => Some(Refusal::RunsHere),
         Some(Class::RefusedHere) => Some(Refusal::ShackOnly),
         // The plumbing only: transmitting from another computer waits for the stream's transmit
-        // rules (one controller, presence, the held press) on this road.
-        Some(Class::StartsTx) => Some(Refusal::TransmitNotYet),
+        // rules (one controller, presence, the held press) on this road. Once they are, a start
+        // still needs the lease, as every station command does.
+        Some(Class::StartsTx) => transmit_from_afar()
+            .err()
+            .or_else(|| argument_refusal(cmd, args))
+            .or_else(|| (!caller.holds_lease).then_some(Refusal::NotController)),
         // Admitted before the journal, under Stop's rules.
         Some(Class::StopsTx) => None,
         Some(Class::RunsAtShack) => argument_refusal(cmd, args)

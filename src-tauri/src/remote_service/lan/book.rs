@@ -218,6 +218,8 @@ pub struct Book {
     serial: AtomicU64,
     /// Moves on every change to who is paired, so a connected computer's session asks again.
     revision: watch::Sender<u64>,
+    /// The same count, read without a lock ([`Book::revisions`]).
+    revisions: AtomicU64,
     /// One write to the store at a time. Never held with `kept` or `window`, and never on the
     /// path that refuses a computer: that is memory's.
     writing: Mutex<()>,
@@ -232,6 +234,7 @@ impl Book {
             window: Mutex::new(None),
             serial: AtomicU64::new(0),
             revision: watch::Sender::new(0),
+            revisions: AtomicU64::new(0),
             writing: Mutex::new(()),
         }
     }
@@ -377,7 +380,22 @@ impl Book {
     }
 
     fn revised(&self) {
+        self.revisions.fetch_add(1, Ordering::SeqCst);
         self.revision.send_modify(|r| *r = r.wrapping_add(1));
+    }
+
+    /// How many times who is paired has changed, read without a lock: Stop's second road asks the
+    /// book again only when this moves, never on a Stop's own path.
+    pub fn revisions(&self) -> u64 {
+        self.revisions.load(Ordering::SeqCst)
+    }
+
+    /// The book's lock, held by a test as a slow reader would hold it, until the guard goes.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> impl Sized + '_ {
+        self.kept
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Open the pairing window: a press at the shack, and the approval itself. A new code, for ten

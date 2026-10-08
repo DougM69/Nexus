@@ -50,6 +50,13 @@
 //! 7. Presence: only a heartbeat naming a fresh picture renews it. Input, the held PTT and the
 //!    microphone are taken only while it is live.
 //!
+//! A computer that drives the shack (client mode, protocol 2's command lane) takes no picture.
+//! Beside the TCP port it has Stop's second road ([`stop_road`]): a UDP socket of its own on the
+//! same address, at the TCP port plus two (42077), heard only from the same subnet, with a road
+//! for each connection named in its welcome and keyed from that connection's TLS session
+//! ([`datagram`]). Its Stop goes there as well as on the link, and its presence is renewed only
+//! there, by a heartbeat naming a snapshot the lane pushed under two seconds before.
+//!
 //! ## Caps and limits
 //!
 //! | | |
@@ -114,9 +121,11 @@
 mod book;
 mod channel;
 pub(crate) mod commands;
+pub(crate) mod datagram;
 mod gate;
 pub(crate) mod outbox;
 pub(crate) mod pairing;
+pub(crate) mod stop_road;
 #[cfg(test)]
 pub(super) mod tests;
 pub mod tls;
@@ -144,7 +153,7 @@ use tempo_stream::lan::dnssd::Record;
 use tempo_stream::lan::{Choice, Look, Network, NoNetwork};
 use tokio::sync::{watch, Notify};
 
-use super::operations::Authority;
+use super::operations::{Authority, RoadPresence, RoadStop};
 use super::transport::Feeds;
 
 /// The TCP port the shack listens on, and the UDP port of its stream, unless the operator sets
@@ -666,6 +675,23 @@ async fn supervise(state: Arc<State>, deps: Deps) {
     }
 }
 
+/// What Stop's second road's thread may do (`stop_road::Powers`): the station's Stop path and
+/// presence, the held PTT and the microphone over the stream installed in the engine, and who is
+/// paired. `None` if the Stop path's own thread would not start.
+fn powers(deps: &Deps) -> Option<stop_road::Powers> {
+    Some(stop_road::Powers {
+        stop: RoadStop::new(deps.authority.clone(), deps.engine.clone())?,
+        presence: RoadPresence::new(deps.authority.clone(), deps.engine.clone()),
+        ptt: deps.feeds.stream.ptt.clone(),
+        mic: deps.feeds.stream.mic.clone(),
+        paired: deps.book.verifier().0,
+        pairings: {
+            let book = deps.book.clone();
+            Arc::new(move || book.revisions())
+        },
+    })
+}
+
 /// The station's advert by name for a listener at `network` and `port`, on the adapter of
 /// `choice`: "Nexus" and its key's tag, never the computer's name (`tempo_stream::lan::dnssd`).
 /// `None` when Windows will not advertise it, or there is no key to name it by.
@@ -680,10 +706,12 @@ fn advert(deps: &Deps, choice: Option<&Choice>, network: Network, port: u16) -> 
     (deps.advertise)(&record)
 }
 
-/// The listening socket and the connections it has accepted.
+/// The listening socket, the connections it has accepted, and Stop's second road beside it.
 struct Listener {
     network: Network,
     port: u16,
+    /// Stop's second road: its socket on the same address, and its thread.
+    road: Option<stop_road::Running>,
     /// The generation of the LAN key it presents: a reset moves it, and the listener restarts.
     generation: u64,
     stop: watch::Sender<bool>,
@@ -718,6 +746,21 @@ impl Listener {
                 std::io::ErrorKind::AddrInUse => "portInUse",
                 _ => "noNetwork",
             })?;
+        // Beside it, Stop's second road, heard from the same subnet. A listener without one still
+        // serves, and Stop has the command link alone.
+        let road = powers(deps).and_then(|powers| {
+            let at = SocketAddrV4::new(
+                network.address(),
+                port.saturating_add(stop_road::PORT_AFTER),
+            );
+            stop_road::StopRoad::start(at, stop_road::Hears::Subnet(network), powers)
+        });
+        if road.is_none() {
+            tempo_core::applog::warn(
+                "remote",
+                "on this network: Stop's second road did not open; Stop goes by the link alone",
+            );
+        }
         let shared = channel::Shared {
             authority: deps.authority.clone(),
             engine: deps.engine.clone(),
@@ -733,12 +776,14 @@ impl Listener {
             dispatcher: deps.dispatcher.clone(),
             commands: deps.commands.clone(),
             build: (wire::APP, wire::contract()),
+            stop_road: road.as_ref().map(stop_road::Running::road),
         };
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(accept(socket, shared, stopped));
         Ok(Self {
             network,
             port,
+            road,
             generation,
             stop,
             task,
@@ -762,11 +807,15 @@ impl Listener {
     }
 
     /// Close the port and end every connection: each ends its stream, the stream's presence at
-    /// once, and its lease, before this returns. Then the advert is withdrawn, off this thread,
-    /// since that waits for Windows.
+    /// once, and its lease, before this returns. Then Stop's second road closes, its keys with it,
+    /// and the advert is withdrawn, both off this thread, since each can wait a moment.
     async fn stop(self) {
         let _ = self.stop.send(true);
         let _ = self.task.await;
+        if let Some(road) = self.road {
+            let thread = road.stop();
+            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        }
         if let Some(advert) = self.advert {
             let _ = tokio::task::spawn_blocking(move || drop(advert)).await;
         }

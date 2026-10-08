@@ -46,6 +46,13 @@
 //! writes it ahead of everything waiting. With no link it cannot reach the shack, and says so at
 //! once rather than waiting for one.
 //!
+//! A Stop press (a command of the stop class) also goes by Stop's second road
+//! (`crate::lan_client::stop_road`): the handler writes it on that road's socket itself, before it
+//! hands the call to the link, and returns. The road's own thread sends it again until the shack
+//! acknowledges it. Each link's road outlives its link by a minute, so a Stop pressed as a link
+//! drops still goes. The road's heartbeat names the last snapshot the main window fetched, kept here
+//! per window, so a window that hangs lets presence lapse at the shack.
+//!
 //! ## The link and the lease
 //!
 //! [`Client::drive`] keeps the link: it connects, takes the lease when control is free, keeps it
@@ -77,10 +84,11 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::command_classes::{class_of, Class};
 use crate::command_dispatch::{
-    is_stop, join_ui_state, route, split_ui_state, store_access, Refusal, Route, Store, IN_FLIGHT,
-    PER_COMMAND,
+    is_stop, join_ui_state, route, split_ui_state, store_access, transmit_from_afar, Refusal,
+    Route, Store, IN_FLIGHT, PER_COMMAND,
 };
 use crate::lan_client::link::{run_id, Answer, Link};
+use crate::lan_client::stop_road::StopRoad;
 use crate::remote_service::vault::PairedStation;
 
 #[cfg(test)]
@@ -197,9 +205,12 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
         Route::Shack => {
             let stop = is_stop(cmd, args);
             // Until the stream's transmit rules are wired for this road, a start never leaves this
-            // computer; the shack refuses one too. The off half of a switch is a Stop, and goes.
+            // computer; the shack refuses one too, by the same switch. The off half of a switch is
+            // a Stop, and goes.
             if !stop && class_of(cmd) == Some(Class::StartsTx) {
-                return Way::Refused(Refusal::TransmitNotYet);
+                if let Err(refusal) = transmit_from_afar() {
+                    return Way::Refused(refusal);
+                }
             }
             match cmd {
                 "get_snapshot" => Way::Local(Local::Snapshot),
@@ -276,6 +287,10 @@ pub(crate) trait Shack: Send + Sync + 'static {
     fn call(self: Arc<Self>, cmd: String, args: Value, base: Option<String>) -> Answering;
     /// A feed's newest value, with its number.
     fn latest(&self, feed: &str) -> Option<(u64, Value)>;
+    /// This link's Stop road, when the shack opened one.
+    fn stop_road(&self) -> Option<Arc<StopRoad>> {
+        None
+    }
 }
 
 impl Shack for Link {
@@ -285,6 +300,10 @@ impl Shack for Link {
 
     fn latest(&self, feed: &str) -> Option<(u64, Value)> {
         Link::latest(self, feed)
+    }
+
+    fn stop_road(&self) -> Option<Arc<StopRoad>> {
+        Link::stop_road(self)
     }
 }
 
@@ -399,6 +418,10 @@ pub(crate) struct Client {
     live_once: AtomicBool,
     /// The link and the lease this computer holds on it, handed back as Nexus quits.
     held: Mutex<Option<(Arc<Link>, String)>>,
+    /// Stop's second roads: the link's now, and each earlier link's for its last minute.
+    roads: Mutex<Vec<Arc<StopRoad>>>,
+    /// The number of the last snapshot each window's poll fetched, on the link there is now.
+    fetched: Mutex<HashMap<String, u64>>,
     /// What the update hand-off saves of this computer's own (its window layouts and log).
     before_install: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
@@ -421,6 +444,8 @@ impl Client {
             gone: Mutex::new(Vec::new()),
             live_once: AtomicBool::new(false),
             held: Mutex::new(None),
+            roads: Mutex::new(Vec::new()),
+            fetched: Mutex::new(HashMap::new()),
             before_install: OnceLock::new(),
         }
     }
@@ -445,10 +470,32 @@ impl Client {
         lock(&self.shack).clone()
     }
 
-    /// A new link to the shack, or none: each window's rows start again with its numbering.
+    /// A new link to the shack, or none: each window's rows and snapshot numbers start again with
+    /// its numbering, and its Stop road joins those a Stop goes on. The roads past their minute go.
     pub(crate) fn install(&self, shack: Option<Arc<dyn Shack>>) {
         lock(&self.rows).clear();
+        lock(&self.fetched).clear();
+        let now = std::time::Instant::now();
+        let mut roads = lock(&self.roads);
+        roads.retain(|road| !road.gone(now));
+        if let Some(road) = shack.as_ref().and_then(|shack| shack.stop_road()) {
+            if !roads.iter().any(|kept| Arc::ptr_eq(kept, &road)) {
+                roads.push(road);
+            }
+        }
+        drop(roads);
         *lock(&self.shack) = shack;
+    }
+
+    /// A Stop press, on every Stop road that may still reach the shack: written now, on this
+    /// thread, beside the Stop the command link carries. The roads past their minute go.
+    fn stop_on_the_roads(&self) {
+        let now = std::time::Instant::now();
+        let mut roads = lock(&self.roads);
+        roads.retain(|road| !road.gone(now));
+        for road in roads.iter() {
+            road.stop();
+        }
     }
 
     /// One IPC call from a window: routed by [`way`], answered here, sent to the shack, or refused.
@@ -520,6 +567,12 @@ impl Client {
                 true
             }
             Way::Shack { stop } => {
+                // A Stop press goes by the second road first, written here before the call is
+                // handed to the link, so a link that is stuck or gone holds nothing back. The off
+                // half of a switch is not a Stop press: it goes by the link alone.
+                if stop && class_of(&cmd) == Some(Class::StopsTx) {
+                    self.stop_on_the_roads();
+                }
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {
                     me.at_the_shack(&cmd, args, &window, stop)
@@ -534,7 +587,7 @@ impl Client {
     /// What client mode answers itself, but start at sign-in ([`Client::launch_at_login`]).
     fn local(&self, what: Local, args: &Value, window: &str) -> Result<Value, String> {
         match what {
-            Local::Snapshot => self.fed("snapshot/1"),
+            Local::Snapshot => self.polled(window),
             Local::Meters => self.fed("meters/1"),
             Local::SpectrumRow => Ok(self.row(window)),
             Local::BetaUpdates | Local::LaunchAtLogin => {
@@ -578,13 +631,43 @@ impl Client {
 
     /// A feed's newest value, or its last while the link is down; nothing before it first came.
     fn fed(&self, feed: &'static str) -> Result<Value, String> {
-        let live = self.shack().and_then(|shack| shack.latest(feed));
+        self.newest(self.shack().as_ref(), feed)
+            .map(|(_, value)| value)
+    }
+
+    /// [`Client::fed`] from `shack`, with the value's number when it came from the link now.
+    fn newest(
+        &self,
+        shack: Option<&Arc<dyn Shack>>,
+        feed: &'static str,
+    ) -> Result<(Option<u64>, Value), String> {
+        let live = shack.and_then(|shack| shack.latest(feed));
         let mut last = lock(&self.last);
-        if let Some((_, value)) = live {
+        if let Some((number, value)) = live {
             last.insert(feed, value.clone());
-            return Ok(value);
+            return Ok((Some(number), value));
         }
-        last.get(feed).cloned().ok_or_else(|| word("notLive"))
+        last.get(feed)
+            .cloned()
+            .map(|value| (None, value))
+            .ok_or_else(|| word("notLive"))
+    }
+
+    /// A window's snapshot poll: [`Client::fed`], and the number of what it fetched kept for that
+    /// window. The main window's goes to the link's Stop road, whose heartbeat names it: the screen's
+    /// own poll, so a main window that hangs stops it moving.
+    fn polled(&self, window: &str) -> Result<Value, String> {
+        let shack = self.shack();
+        let (number, value) = self.newest(shack.as_ref(), "snapshot/1")?;
+        if let (Some(shack), Some(number)) = (&shack, number) {
+            lock(&self.fetched).insert(window.to_string(), number);
+            if window == "main" {
+                if let Some(road) = shack.stop_road() {
+                    road.fetched(number);
+                }
+            }
+        }
+        Ok(value)
     }
 
     /// The newest waterfall row, once to each window: a window that has it already, or a link
@@ -814,6 +897,10 @@ impl Client {
             }
             lease = self.keep_the_lease(&link, lease).await;
             *lock(&self.held) = lease.clone().map(|lease| (Arc::clone(&link), lease));
+            // The Stop road's heartbeat names the lease held now, or none.
+            if let Some(road) = link.stop_road() {
+                road.lease(lease.clone());
+            }
             if !said_unwatched {
                 if let Some(watching) = link.watching() {
                     said_unwatched = true;

@@ -77,6 +77,8 @@ pub(crate) mod link;
 mod origin;
 pub(crate) mod pairing;
 pub(crate) mod road;
+/// Stop's second road, beside the command link.
+pub(crate) mod stop_road;
 #[cfg(test)]
 pub(crate) mod tests;
 

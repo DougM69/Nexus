@@ -382,6 +382,8 @@ async fn push(context: Arc<Context>, feed: &'static Feed) {
     let mut last: Option<Vec<u8>> = None;
     loop {
         tick.tick().await;
+        // When this value's state began to be read: a value read slowly is the older for it.
+        let taken = Instant::now();
         let ran = {
             let context = context.clone();
             tokio::task::spawn_blocking(move || {
@@ -400,7 +402,7 @@ async fn push(context: Arc<Context>, feed: &'static Feed) {
         };
         if feed.always || last.as_deref() != Some(json.as_slice()) {
             last = Some(json.clone());
-            context.outbox.feed(feed.name, json);
+            context.outbox.feed(feed.name, json, taken);
         }
     }
 }

@@ -1014,6 +1014,19 @@ impl Authority {
         lease_id: &str,
         now: Instant,
     ) -> Result<tempo_app::remote_control::transmit::TransmitPermit, &'static str> {
+        self.presence_until(session, device, lease_id, now)
+            .map(|(permit, _)| permit)
+    }
+
+    /// [`Self::stream_presence`], with the deadline it was given: what Stop's second road tells the
+    /// computer whose heartbeat renewed it.
+    pub(crate) fn presence_until(
+        &self,
+        session: &str,
+        device: &str,
+        lease_id: &str,
+        now: Instant,
+    ) -> Result<(tempo_app::remote_control::transmit::TransmitPermit, Instant), &'static str> {
         if !identifier(session) || !identifier(device) || !identifier(lease_id) {
             return Err("invalidRequest");
         }
@@ -1027,7 +1040,10 @@ impl Authority {
             return Err("notController");
         }
         let deadline = (now + LEASE).min(lease.until);
-        self.presence.permit(deadline).ok_or("authorityUnavailable")
+        self.presence
+            .permit(deadline)
+            .map(|permit| (permit, deadline))
+            .ok_or("authorityUnavailable")
     }
 
     /// The authority's lock, held by a test as a slow request would hold it, until the guard goes.
@@ -1917,6 +1933,58 @@ impl Drop for LanConnection {
     }
 }
 
+pub(crate) use transmit_stop::RoadStop;
+
+/// Presence for a computer on Stop's second road (`lan::stop_road`): minted under that computer's
+/// own lease, exactly as a stream's is ([`Authority::stream_presence`]), and handed to the engine,
+/// which halts every transmission at the station when it lapses. Neither the authority nor the
+/// Engine is waited for: the authority busy is a heartbeat that renewed nothing, and the next asks
+/// again; the Engine busy leaves the minted permit with the road, which hands it over at its next
+/// look, as a stream's waits for its next tick. The road's thread holds this, never the Engine
+/// itself.
+///
+/// ⛔ IT GRANTS NOTHING, as a stream's presence grants nothing: holding it arms and keys nothing,
+/// and its only power is to stop the station when it lapses.
+pub(crate) struct RoadPresence {
+    authority: std::sync::Arc<Authority>,
+    engine: crate::SharedEngine,
+}
+
+impl RoadPresence {
+    pub(crate) fn new(authority: std::sync::Arc<Authority>, engine: crate::SharedEngine) -> Self {
+        Self { authority, engine }
+    }
+
+    /// Mint presence for `device`'s `lease` on `session`, now: the permit and its deadline, or
+    /// `None` when it is not this computer's lease, or the authority was busy.
+    pub(crate) fn mint(
+        &self,
+        session: &str,
+        device: &str,
+        lease: &str,
+        now: Instant,
+    ) -> Option<(tempo_app::remote_control::transmit::TransmitPermit, Instant)> {
+        self.authority
+            .presence_until(session, device, lease, now)
+            .ok()
+    }
+
+    /// Hand a minted permit to the engine, whose lock is only tried: `None` while the Engine is
+    /// busy, else whether the engine holds presence after.
+    pub(crate) fn install(
+        &self,
+        permit: &tempo_app::remote_control::transmit::TransmitPermit,
+        now: Instant,
+    ) -> Option<bool> {
+        let mut engine = match tempo_app::engine::engine_try_lock(&self.engine) {
+            Ok(engine) => engine,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        Some(engine.hold_remote_presence(permit.clone(), now))
+    }
+}
+
 /// Retire the lease on every socket exit, including malformed input and timeout.
 /// Local device permission survives a network interruption; a lease never does.
 pub struct Connection {
@@ -1936,4 +2004,4 @@ impl Drop for Connection {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

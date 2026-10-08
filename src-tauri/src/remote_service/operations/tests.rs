@@ -30,7 +30,7 @@ mod split;
 #[path = "spot_tests.rs"]
 mod spot;
 #[path = "transmit_tests.rs"]
-mod transmit;
+pub(crate) mod transmit;
 use super::*;
 use crate::remote_service::stored_log_tests::StoredLog;
 use std::sync::Arc;
@@ -157,8 +157,10 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     // The stream's tests are a sixth (2026-10-03): their Stops on the data channel reach
     // `stop_station` as any other does, and three of them ran unguarded outside this list.
     // The LAN road's two are a seventh and eighth (2026-10-04): a LAN controller's Stop reaches it
-    // the same way, on the authority and on the LAN channel.
-    const SOURCES: [(&str, &str); 8] = [
+    // the same way, on the authority and on the LAN channel. Stop's second road is a ninth
+    // (2026-10-07): its Stop runs every stop verb on a thread of its own, the satellite disarm
+    // among them.
+    const SOURCES: [(&str, &str); 9] = [
         ("lan_lease_tests.rs", include_str!("lan_lease_tests.rs")),
         (
             "remote_service/lan/tests.rs",
@@ -171,6 +173,10 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
         (
             "remote_service/stream/tests.rs",
             include_str!("../stream/tests.rs"),
+        ),
+        (
+            "remote_service/lan/tests/stop_road.rs",
+            include_str!("../lan/tests/stop_road.rs"),
         ),
         ("lib.rs", include_str!("../../lib.rs")),
     ];
@@ -198,6 +204,9 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
             || body.contains("\"stopTransmit\"")
             || body.contains("stop_request(")
             || body.contains("stop_v4(")
+            || body.contains("Up::Stop")
+            || body.contains("road_stop(")
+            || body.contains("road.stop()")
             || body.contains("rotator.point")
             || body.contains("test_live_sat_track")
             || body.contains("run_simulated_pass")

@@ -19,6 +19,7 @@ mod computer;
 mod drops;
 mod hostile;
 mod link;
+mod stop_road;
 
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
@@ -236,6 +237,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         dispatcher,
         commands: super::commands::Commands::default(),
         build: (super::wire::APP, super::wire::contract()),
+        stop_road: None,
     };
     Shack {
         shared,
