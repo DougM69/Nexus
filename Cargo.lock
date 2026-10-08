@@ -1228,6 +1228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jtty"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

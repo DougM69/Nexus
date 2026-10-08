@@ -474,6 +474,7 @@ set(LIBTEMPO_SOURCES
     #     NOT listed, because they are not vendored at all: upstream's standalone
     #     jtty console program (PortAudio), its simulators and two files upstream's
     #     own build does not compile. The vendor README lists every one.
+    ${CMAKE_CURRENT_SOURCE_DIR}/jtty_cabi.f90   # Nexus's C ABI: encode, wave, updates
     ${LIB}/jtty/jtty_tbcc_code_profile.f90  # module jtty_tbcc_code_profiles
     ${LIB}/jtty/tbcc.f90                  # module tbcc: CRC-12 + convolutional code
     ${LIB}/jtty/jtty_fec_mod.f90          # module jtty_fec: sync sequence + the code

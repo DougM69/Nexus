@@ -693,6 +693,96 @@ int ft2_gen_wave(const int *itone, int nsym, float f0,
                  float *wave_out, int nwave_cap);
 
 /*===========================================================================
+ * JTTY: WSJT-X's untimed keyboard mode. ENCODE, WAVEFORM AND RECEIVE ONLY:
+ * nothing here keys a transmitter. Not offered in any release: the modem is
+ * from a WSJT-X pre-release (see NOTICE).
+ *===========================================================================*/
+
+/* 4-GFSK at 31.25 baud, 59-symbol frames (13 sync + 46 code, 1.888 s), each one
+ * 34-bit atom under a CRC-12 and a K=10 tail-biting convolutional code; 1..16
+ * frames per message, no slot clock. jtty_cabi.f90 is Nexus's marshalling over
+ * upstream's genjtty/gen_jttywave; the jtty_rx_* functions further down are
+ * upstream's own C ABI (jtty_receive_context.f90), used as they are. */
+#define JTTY_NSPS          384    /* samples/symbol at 12 kHz: 31.25 baud     */
+#define JTTY_FRAME_SYMBOLS 59     /* 13 sync + 46 code symbols                */
+#define JTTY_MAX_FRAMES    16
+#define JTTY_MAX_TONES     944    /* JTTY_FRAME_SYMBOLS * JTTY_MAX_FRAMES     */
+#define JTTY_TEXT_LEN      80     /* longest message text, bytes              */
+#define JTTY_ERR_ARGS      (-1)   /* a length, count, tone or capacity refused */
+#define JTTY_ERR_ENCODE    (-2)   /* the modem cannot encode the text         */
+
+/* One receive update. 120 bytes, 8-byte aligned, no padding. Times are seconds
+ * on the caller's sample timeline (sample index / 12000). */
+typedef struct {
+    int64_t message_id;  /* stable across a message's growing updates       */
+    double  start_s;     /* the message's first frame                        */
+    double  latest_s;    /* its latest frame                                 */
+    float   freq;        /* audio frequency of tone 0, Hz                    */
+    int     terminal;    /* 0 growing, 1 complete, 2 expired, 3 rx ended     */
+    int     snr;         /* dB, the first frame                              */
+    char    text[84];    /* the text so far, NUL-filled                      */
+} jtty_update_t;
+
+/* Upstream's structured-atom descriptor (jtty_source_codec.f90), 20 bytes. */
+typedef struct {
+    int8_t  kind;        /* 0 call, 1 exch number, 2 exch location,
+                            3 class+section, 5 control, 6 grid              */
+    int8_t  subtype;
+    int8_t  role;
+    int8_t  reserved;    /* must be 0                                        */
+    int32_t value;
+    char    text[9];     /* up to 8 bytes + NUL                              */
+} jtty_source_atom_c;
+
+/*
+ * Text -> channel tones (0..3). profile: 0 unknown, 1 Field Day, 2 RTTY
+ * Roundup. sent (capacity >= JTTY_TEXT_LEN+1) receives the normalised text.
+ * Returns the tone count (whole frames), 0 for an empty message,
+ * JTTY_ERR_ARGS (nothing written) or JTTY_ERR_ENCODE. NOT thread-safe.
+ */
+int jtty_encode_text(const char *msg, int msg_len, int profile,
+                     int *itone_out, int max_tones, char *sent, int sent_cap);
+
+/*
+ * 1..16 atoms -> channel tones, one frame each. status: 0 ok, 1 invalid
+ * descriptor, 2 unknown ARRL/RAC section. Returns the tone count, 0 when the
+ * atoms are refused, JTTY_ERR_ARGS when max_tones is too small.
+ */
+int jtty_encode_atoms(const jtty_source_atom_c *atoms, int natoms,
+                      int *itone_out, int max_tones, int *status);
+
+/*
+ * Tones -> real audio at 12 kHz, amplitude 1: nsym*JTTY_NSPS samples. nsym
+ * must be whole frames up to JTTY_MAX_TONES, every tone 0..3, nwave_cap at
+ * least nsym*JTTY_NSPS. Returns the sample count or JTTY_ERR_ARGS.
+ */
+int jtty_gen_wave(const int *itone, int nsym, float f0,
+                  float *wave_out, int nwave_cap);
+
+/* Drain up to max_out pending updates of a receive handle; returns how many. */
+int jtty_take_updates(int handle, jtty_update_t *out, int max_out);
+
+/* Upstream's receive API. Eight contexts; each keeps its own reception state
+ * and upstream swaps it in around every call, but the DSP scratch is shared:
+ * call every one of these under the same modem lock. */
+int32_t jtty_rx_create(void);           /* 1..8, or 0 when all are taken     */
+void    jtty_rx_destroy(int32_t handle);
+void    jtty_rx_begin(int32_t handle, int64_t session_id, int64_t grid_origin,
+                      int64_t first_search, int32_t nsps /* 240/320/384/480 */);
+/* Up to max_steps quarter-frame searches over pcm[0..count), whose first
+ * element is sample first_sample, never at or past stop_sample. Searches
+ * center +- tolerance always, and 1200-1500 / 1500-1800 Hz where they fall
+ * inside low..high. Returns the steps run (0: more audio needed), -1 for an
+ * invalid or stopped handle, -2 when pcm does not reach back far enough. */
+int32_t jtty_rx_process(int32_t handle, const int16_t *pcm, int32_t count,
+                        int64_t first_sample, int64_t stop_sample,
+                        int32_t max_steps, int32_t low, int32_t high,
+                        float center, float tolerance);
+int64_t jtty_rx_next_required_sample(int32_t handle);
+int64_t jtty_rx_next_search_sample(int32_t handle);
+void    jtty_rx_end(int32_t handle, int32_t reason /* 2 expired, 3 ended */);
+
+/*===========================================================================
  * Q65: WSJT-X weak-signal mode for EME/VHF+ and ionoscatter. DECODE ONLY.
  *===========================================================================*/
 
