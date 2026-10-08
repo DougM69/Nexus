@@ -1270,7 +1270,7 @@ struct RxTaps {
 ///
 /// macOS stays on the host default — no report, and CoreAudio's `Xrun` comes from a
 /// `kAudioDeviceProcessorOverload` listener rather than a buffer this would size.
-fn capture_config(cfg: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+pub(crate) fn capture_config(cfg: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
     // `mut` is REQUIRED on Linux and Windows — the blocks below reassign `out.buffer_size` — and
     // unnecessary everywhere else, where they are compiled out. Removing it would break both; this
     // is the same `cfg_attr` shape this file already uses on `sized_capture_buffer` below.
@@ -1334,7 +1334,7 @@ fn wasapi_capture_buffer(rate_hz: u32) -> cpal::BufferSize {
 /// and the retry must not reuse the first attempt's moved callbacks. The retry fires only when a
 /// `Fixed` buffer was requested (Linux); every other platform asks for `Default` already, so its
 /// shipped single-attempt behaviour is byte-identical.
-fn open_capture_with_fallback<S, E: std::fmt::Display>(
+pub(crate) fn open_capture_with_fallback<S, E: std::fmt::Display>(
     sized: cpal::StreamConfig,
     mut build: impl FnMut(cpal::StreamConfig) -> Result<S, E>,
 ) -> Result<S, String> {

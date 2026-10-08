@@ -70,7 +70,14 @@ pub mod flex;
 #[cfg(feature = "device")]
 pub mod flexspectrum;
 pub mod frames;
+/// This computer's headset for a shack it drives over its own network: the shack's audio and a
+/// tone out through a fixed cushion, the microphone in, on wait-free rings; the devices behind the
+/// `device` feature.
+pub mod headset;
 pub mod mic_decode;
+/// The microphone of a computer driving a shack, encoded for the audio road: Opus voice, 20 ms,
+/// 32 kbit/s constant, no DTX, no FEC. Pure; tested.
+pub mod mic_encode;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
 /// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.
@@ -83,6 +90,9 @@ pub mod proc_util;
 #[cfg(feature = "device")]
 pub mod pskrx;
 pub mod receive_audio;
+/// The shack's receive audio, decoded on a computer driving it: one road packet in, 20 ms at
+/// 48 kHz out. Pure; tested.
+pub mod receive_decode;
 pub mod receive_encode;
 pub mod resample;
 pub mod rig;
