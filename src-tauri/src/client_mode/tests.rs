@@ -1074,9 +1074,10 @@ fn present_for(live: Duration) -> (Arc<FakeShack>, RoadEnd, Arc<Client>, Screens
 }
 
 /// ★ A wired start leaves only while both roads are up and presence is live as the road last heard
-/// it: refused with no road, then with a road whose computer has heard no presence, each with its
-/// code and nothing sent; sent once presence is heard; and refused again once that deadline has
-/// passed with no renewal (stale presence). CONTROL: a station command goes all the while.
+/// it: refused with no road, then with a road whose computer has heard no presence (a press too,
+/// with no hold sent), each with its code and nothing sent; sent once presence is heard; and refused
+/// again once that deadline has passed with no renewal (stale presence). CONTROL: a station command
+/// goes all the while.
 #[test]
 fn a_start_leaves_only_with_both_roads_up_and_live_presence() {
     let dir = scratch("start-roads");
@@ -1088,6 +1089,17 @@ fn a_start_leaves_only_with_both_roads_up_and_live_presence() {
     let (shack, end) = shack_with_a_road();
     client.install(Some(Arc::clone(&shack) as Arc<dyn Shack>));
     assert_eq!(ask(&s.main, "call_cq", json!({})), refused("noPresence"));
+    assert_eq!(
+        ask(&s.main, "set_ptt", json!({"on": true})),
+        refused("noPresence"),
+        "a press is a start too"
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        end.presses().is_empty(),
+        "no hold went: {:?}",
+        end.presses()
+    );
     assert!(shack.sent().is_empty(), "{:?}", shack.sent());
     drop(end);
     std::fs::remove_dir_all(&dir).unwrap();

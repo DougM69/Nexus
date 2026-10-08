@@ -2487,20 +2487,39 @@ async fn a_wired_start_runs_only_under_the_stream_rules() {
 
 /// ★ One controller, the lease bound to the connection that took it. A second connection
 /// of the same paired computer, without the lease, is refused `notController` for a start, and its
-/// road's press is refused, since only the lease holder's own lease mints its presence. CONTROL: the
-/// connection holding the lease starts the same CQ.
+/// road's press is refused and said once, never reaching the held PTT, since only the lease holder's
+/// own lease mints presence on its own road: in Phone, with the holder's presence live at the
+/// station and the radio loop ticking, where the holder's own press arms the microphone.
+/// CONTROL: the connection holding the lease starts the same CQ, and its press arms.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_from_a_connection_without_the_lease_is_refused() {
     let app = App::new();
     let mut r = roadside(&app);
     let record = on_the_engine(&mut r, gate(false));
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
     let mut holder = seated(&r).await;
     holder.renewed().await;
     let mut other = seated_with(&r, false).await;
     let said = other.call(1, "call_cq", json!({})).await;
     assert_eq!(said["refused"], "notController", "{said}");
-    other.road.say(&Up::Hold { press: 1 }).await;
-    let said = other.road_says(Duration::from_millis(300)).await;
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 2 * PRESENCE,
+    );
+    let mut armed = false;
+    for _ in 0..4 {
+        other.road.say(&Up::Hold { press: 1 }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        armed |= r.s.shared.engine.lock().unwrap().mic_armed();
+    }
+    let said = other.road_says(Duration::from_millis(200)).await;
     assert_eq!(
         presses(&said),
         [&Down::Press {
@@ -2510,11 +2529,24 @@ async fn a_start_from_a_connection_without_the_lease_is_refused() {
         }],
         "{said:?}"
     );
-    assert!(!r.ptt.keyed());
+    assert!(
+        !armed && !r.ptt.keyed(),
+        "another connection's press armed the over"
+    );
     assert!(ran(&record).is_empty());
     // One run of Nexus on both connections: its call ids follow on.
     let said = holder.call(2, "call_cq", json!({})).await;
     assert_eq!(said["value"]["ran"], "call_cq", "{said}");
+    holder.road.say(&Up::Hold { press: 1 }).await;
+    let mut held = false;
+    for _ in 0..20 {
+        held |= r.s.shared.engine.lock().unwrap().mic_armed();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    holder.road.say(&Up::Release { press: 1 }).await;
+    done.store(true, Ordering::SeqCst);
+    drop(tokio::task::spawn_blocking(move || radio.join().unwrap()).await);
+    assert!(held, "CONTROL: the lease holder's own press arms");
 }
 
 /// ★ A start that ran after its computer's presence went is stopped at once. A CQ admitted under
