@@ -234,6 +234,9 @@ fn expected(cmd: &str, args: &Value) -> Way {
             "set_launch_at_login" => Way::Local(Local::LaunchAtLogin),
             "prepare_update_install" => Way::Local(Local::BeforeInstall),
             "restart_app" => Way::Local(Local::Restart),
+            "start_voice_recording" => Way::Local(Local::RecordStart),
+            "stop_voice_recording" => Way::Local(Local::RecordStop),
+            "cancel_voice_recording" => Way::Local(Local::RecordCancel),
             _ => Way::Here,
         },
         Class::StopsTx => Way::Shack { stop: true },
@@ -1475,4 +1478,94 @@ fn the_heartbeat_names_what_the_main_window_fetched() {
         &lock(&end.heard)[0].0,
         Up::Heartbeat { state: 5, .. }
     ));
+}
+
+/// ★ A voice message recorded here goes to the shack's slot as an import. The keyer's Record takes
+/// this computer's microphone; its Stop & save sends what was recorded as `import_voice_message`
+/// with the slot and its label, a 12 kHz WAV that the shack's own reader reads back as the voice
+/// that went in, and the keyer is given the shack's answer. While it records, a press is refused.
+/// A cancel sends nothing, and a save with nothing recorded says so in the station's own words.
+/// CONTROL: nothing reached the shack before the save, and this computer's own handler (the
+/// station's recorder) was never asked.
+#[test]
+fn a_voice_message_recorded_here_goes_to_the_shacks_slot_as_an_import() {
+    use crate::lan_client::audio_road::StandIn;
+    let dir = scratch("record");
+    let shack = FakeShack::new();
+    let kept = json!([{ "slot": 2, "label": "CQ" }]);
+    shack.answers(
+        "import_voice_message",
+        Answer::Value {
+            value: kept.clone(),
+            revision: None,
+        },
+    );
+    let client = client_in(&dir, &shack);
+    let mic = StandIn::new();
+    client.record_from(mic.clone());
+    let s = screens(&client);
+    let tone = |block: usize| {
+        (0..960).map(move |i| {
+            let t = (block * 960 + i) as f32 / 48_000.0;
+            0.3 * (2.0 * std::f32::consts::PI * 800.0 * t).sin()
+        })
+    };
+    assert!(ask(&s.main, "start_voice_recording", json!({})).is_ok());
+    for block in 0..50 {
+        mic.rings.captured(tone(block));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        ask(&s.main, "set_ptt", json!({"on": true})),
+        refused("recording")
+    );
+    assert!(shack.sent().is_empty(), "{:?}", shack.sent());
+    assert_eq!(
+        ask(
+            &s.main,
+            "stop_voice_recording",
+            json!({"slot": 2, "label": "CQ"})
+        ),
+        Ok(kept)
+    );
+    let (cmd, args) = {
+        let sent = lock(&shack.sent);
+        assert_eq!(sent.len(), 1, "one import");
+        (sent[0].0.clone(), sent[0].1.clone())
+    };
+    assert_eq!(cmd, "import_voice_message");
+    assert_eq!(
+        (args["slot"].clone(), args["label"].clone()),
+        (json!(2), json!("CQ"))
+    );
+    let bytes: Vec<u8> = serde_json::from_value(args["bytes"].clone()).unwrap();
+    let file = dir.join("sent.wav");
+    std::fs::write(&file, &bytes).unwrap();
+    let voice = tempo_audio::voice::read_wav_12k(&file).unwrap();
+    assert!(
+        (10_000..=13_200).contains(&voice.len()),
+        "about the second recorded, at 12 kHz: {}",
+        voice.len()
+    );
+    let rms = (voice.iter().map(|x| x * x).sum::<f32>() / voice.len() as f32).sqrt();
+    assert!(rms > 0.15, "the voice that went in: {rms}");
+    assert!(ask(&s.main, "start_voice_recording", json!({})).is_ok());
+    mic.rings.captured(tone(0));
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(ask(&s.main, "cancel_voice_recording", json!({})).is_ok());
+    assert_eq!(
+        ask(
+            &s.main,
+            "stop_voice_recording",
+            json!({"slot": 3, "label": ""})
+        ),
+        Err(json!("Nothing was recorded — check your input device"))
+    );
+    assert_eq!(
+        shack.sent(),
+        ["import_voice_message"],
+        "a cancel sends nothing"
+    );
+    assert!(s.ran_here().is_empty(), "{:?}", s.ran_here());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

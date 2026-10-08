@@ -34,8 +34,10 @@
 //!   waiting here for a slot ([`Caps`]);
 //! - **answered here**: the snapshot, the waterfall's rows and the meters, from what the shack
 //!   pushes, so the screens' polls never cross the network; the update channel and start at
-//!   sign-in, which are this computer's; and the launch picker's question, which is about which
-//!   radio this Nexus drives, and so is never the shack's picker;
+//!   sign-in, which are this computer's; the launch picker's question, which is about which radio
+//!   this Nexus drives, and so is never the shack's picker; and the voice keyer's recorder, which
+//!   records this computer's microphone and sends the message to the shack's slot as an import
+//!   (`import_voice_message`), where the shack's voice keyer plays it;
 //! - **split**: the ui-state pair, the station's keys at the shack and every other key here (the
 //!   operator's ruling of 2026-10-07: the rail, its order, the UI scale and the window layouts stay
 //!   on the computer the operator sits at);
@@ -103,7 +105,7 @@ use crate::command_dispatch::{
     is_stop, join_ui_state, route, split_ui_state, store_access, transmit_from_afar, Refusal,
     Route, Store, Wired, IN_FLIGHT, PER_COMMAND,
 };
-use crate::lan_client::audio_road::{self, Headset, ThisHeadset};
+use crate::lan_client::audio_road::{self, Headset, Recording, ThisHeadset};
 use crate::lan_client::link::{run_id, Answer, Link};
 use crate::lan_client::stop_road::{Over, StopRoad};
 use crate::remote_service::vault::PairedStation;
@@ -206,6 +208,13 @@ pub(crate) enum Local {
     /// station drives none of its own, so it never shows the shack's picker, whose choices would
     /// change the shack.
     RadioLaunchInfo,
+    /// The voice keyer's Record: this computer's microphone, from now.
+    RecordStart,
+    /// The voice keyer's Stop & save: what was recorded here, sent to the shack's slot as an
+    /// import, and the shack's answer.
+    RecordStop,
+    /// The voice keyer's recording thrown away: nothing is sent.
+    RecordCancel,
 }
 
 /// The way for `cmd` invoked with `args`. `command_dispatch::route` first, deny by default: a
@@ -222,6 +231,11 @@ pub(crate) fn way(cmd: &str, args: &Value) -> Way {
             // The app's own handlers for these two save a logbook and stop a radio first.
             "prepare_update_install" => Way::Local(Local::BeforeInstall),
             "restart_app" => Way::Local(Local::Restart),
+            // The app's own recorder records the station's audio input; here the voice keyer
+            // records this computer's microphone.
+            "start_voice_recording" => Way::Local(Local::RecordStart),
+            "stop_voice_recording" => Way::Local(Local::RecordStop),
+            "cancel_voice_recording" => Way::Local(Local::RecordCancel),
             _ => Way::Here,
         },
         Route::Shack => {
@@ -507,6 +521,10 @@ pub(crate) struct Client {
     /// one road are ever one press at the station.
     press: Mutex<Press>,
     next_press: AtomicU64,
+    /// The microphone the voice keyer records from here (this computer's headset), and the
+    /// recording under way, if one is.
+    mic: OnceLock<Arc<dyn Headset>>,
+    recording: Mutex<Option<Recording>>,
 }
 
 impl Client {
@@ -534,6 +552,8 @@ impl Client {
             headset: OnceLock::new(),
             press: Mutex::new(Press::Up),
             next_press: AtomicU64::new(1),
+            mic: OnceLock::new(),
+            recording: Mutex::new(None),
         }
     }
 
@@ -552,7 +572,14 @@ impl Client {
 
     /// This computer's headset, given once as the app starts.
     pub(crate) fn hear_with(&self, headset: Arc<ThisHeadset>) {
+        let _ = self.mic.set(Arc::clone(&headset) as Arc<dyn Headset>);
         let _ = self.headset.set(headset);
+    }
+
+    /// The microphone the voice keyer records from, for a test with no headset.
+    #[cfg(test)]
+    pub(crate) fn record_from(&self, mic: Arc<dyn Headset>) {
+        let _ = self.mic.set(mic);
     }
 
     fn set(&self, phase: Phase, reason: Option<&str>) {
@@ -638,6 +665,10 @@ impl Client {
             }
             Press::Ended => Err(word("pressEnded")),
             Press::Up => {
+                // The microphone is the recorder's while a voice message is recorded here.
+                if lock(&self.recording).is_some() {
+                    return Err(word("recording"));
+                }
                 let road = self.ready_to_start(Instant::now()).map_err(word)?;
                 let press = self.next_press.fetch_add(1, Ordering::SeqCst);
                 road.press(press);
@@ -700,6 +731,15 @@ impl Client {
                     save();
                 }
                 invoke.resolver.resolve(());
+                true
+            }
+            Way::Local(Local::RecordStop) => {
+                let me = Arc::clone(self);
+                invoke.resolver.respond_async(async move {
+                    me.record_stop(&args, &window)
+                        .await
+                        .map_err(InvokeError::from)
+                });
                 true
             }
             Way::Local(what @ Local::BetaUpdates) => {
@@ -785,7 +825,54 @@ impl Client {
             }
             Local::RadioLaunchInfo => Ok(json!({ "showPicker": false, "radios": [] })),
             Local::BeforeInstall | Local::Restart => Ok(Value::Null),
+            Local::RecordStart => {
+                let mic = self
+                    .mic
+                    .get()
+                    .ok_or("No microphone on this computer to record from")?;
+                let mut recording = lock(&self.recording);
+                // A recording already under way starts afresh, as the station's own does.
+                recording.take();
+                *recording = Some(
+                    Recording::start(Arc::clone(mic))
+                        .ok_or("No microphone on this computer to record from")?,
+                );
+                Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})))
+            }
+            Local::RecordCancel => {
+                lock(&self.recording).take();
+                Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})))
+            }
+            // Answered by [`Client::record_stop`].
+            Local::RecordStop => Err(word(Refusal::BadArguments.code())),
         }
+    }
+
+    /// The voice keyer's Stop & save: the recording made here, finished, written as the keyer's
+    /// 12 kHz WAV and sent to the shack's slot (`import_voice_message`, as an imported file goes),
+    /// with the shack's answer: its slots as they are now. Nothing recorded is the station's own
+    /// words for it.
+    async fn record_stop(self: Arc<Self>, args: &Value, window: &str) -> Result<Value, String> {
+        let slot = args["slot"]
+            .as_u64()
+            .and_then(|slot| u8::try_from(slot).ok())
+            .ok_or_else(|| word(Refusal::BadArguments.code()))?;
+        let label = args["label"].as_str().unwrap_or_default().to_string();
+        let recording = lock(&self.recording).take();
+        let voice = match recording {
+            Some(recording) => tokio::task::spawn_blocking(move || recording.finish())
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        if voice.is_empty() {
+            return Err("Nothing was recorded — check your input device".to_string());
+        }
+        let bytes = audio_road::voice_message(&voice)
+            .map_err(|e| format!("Could not save recording: {e}"))?;
+        let message = json!({ "slot": slot, "label": label, "bytes": bytes });
+        self.at_the_shack("import_voice_message", message, window, false)
+            .await
     }
 
     /// What the update hand-off saves of this computer's own, once the app is built.

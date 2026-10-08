@@ -15,13 +15,33 @@ pub fn write_wav_12k(path: impl AsRef<Path>, samples: &[f32]) -> std::io::Result
     if let Some(dir) = path.as_ref().parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let spec = hound::WavSpec {
+    let w = hound::WavWriter::create(path, message_spec()).map_err(to_io)?;
+    write_message(w, samples)
+}
+
+/// 12 kHz mono samples as a 16-bit PCM WAV, whole, in memory: a message recorded on a computer
+/// driving the shack reaches the shack as these bytes, which it reads as it reads any import.
+pub fn wav_12k(samples: &[f32]) -> std::io::Result<Vec<u8>> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let w = hound::WavWriter::new(&mut bytes, message_spec()).map_err(to_io)?;
+    write_message(w, samples)?;
+    Ok(bytes.into_inner())
+}
+
+/// How a voice message is written: mono, at [`VOICE_RATE`], 16-bit PCM.
+fn message_spec() -> hound::WavSpec {
+    hound::WavSpec {
         channels: 1,
         sample_rate: VOICE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
-    };
-    let mut w = hound::WavWriter::create(path, spec).map_err(to_io)?;
+    }
+}
+
+fn write_message<W: std::io::Write + std::io::Seek>(
+    mut w: hound::WavWriter<W>,
+    samples: &[f32],
+) -> std::io::Result<()> {
     for &s in samples {
         let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         w.write_sample(v).map_err(to_io)?;
@@ -136,6 +156,28 @@ mod tests {
 
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus_voice_{}_{}", std::process::id(), name))
+    }
+
+    /// ★ A message written in memory is the file the shack reads: the same samples back at 12 kHz.
+    /// CONTROL: the bytes are a WAV's, and the file written to disk holds the same bytes.
+    #[test]
+    fn a_message_in_memory_reads_back_as_the_file_does() {
+        let dir = scratch("mem");
+        std::fs::create_dir_all(&dir).unwrap();
+        let samples: Vec<f32> = (0..2400).map(|i| (i as f32 * 0.03).sin() * 0.4).collect();
+        let bytes = wav_12k(&samples).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        let p = dir.join("m.wav");
+        std::fs::write(&p, &bytes).unwrap();
+        let back = read_wav_12k(&p).unwrap();
+        assert_eq!(back.len(), samples.len());
+        for (a, b) in samples.iter().zip(&back) {
+            assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        }
+        let q = dir.join("q.wav");
+        write_wav_12k(&q, &samples).unwrap();
+        assert_eq!(std::fs::read(&q).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

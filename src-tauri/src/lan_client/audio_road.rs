@@ -24,6 +24,9 @@
 //!   operator letting go, or a press is held with no word from the station for half a second, the
 //!   headset plays a short tone. The tone goes to the headset's output alone, never into the
 //!   microphone path.
+//! - **A voice message, recorded here** ([`Recording`]): the same microphone, while the voice
+//!   keyer records, folded to the keyer's 12 kHz on a thread of its own. Client mode sends it to
+//!   the shack's slot as an import; nothing of it is transmitted from here.
 //!
 //! The keys are made from the link's session, held in memory only, never written, logged or shown,
 //! and go when the road's thread ends, which it does as soon as its link has ended.
@@ -57,6 +60,94 @@ const SEND_WAIT: Duration = Duration::from_millis(1);
 const TICK: Duration = Duration::from_millis(10);
 /// The longest gap in the station's frames played as the bed; a longer one runs the cushion dry.
 const BED_FRAMES: u32 = 8;
+
+/// The longest voice message recorded here: a minute, for the keyer's short calls. Its import
+/// stays well inside the command link's largest call.
+pub(crate) const RECORD_MAX: Duration = Duration::from_secs(60);
+
+/// A voice message being recorded on this computer's microphone for a slot of the shack's voice
+/// keyer: the headset's input, kept open while it runs and taken every [`TICK`], folded to the
+/// keyer's 12 kHz, for at most [`RECORD_MAX`]. Finished, the voice is the caller's to send; dropped,
+/// nothing is kept.
+pub(crate) struct Recording {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<Vec<f32>>>,
+}
+
+impl Recording {
+    /// A recording on `headset` from now, on a thread of its own; `None` if none could start.
+    pub(crate) fn start(headset: Arc<dyn Headset>) -> Option<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let thread = std::thread::Builder::new()
+            .name("nexus-client-record".into())
+            .spawn(move || record(&*headset, &stopping))
+            .ok()?;
+        Some(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    /// The voice recorded, at 12 kHz, and the recording over.
+    pub(crate) fn finish(mut self) -> Vec<f32> {
+        self.stop.store(true, Ordering::Release);
+        self.thread
+            .take()
+            .and_then(|thread| thread.join().ok())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+
+/// A recorded message as the shack's voice keyer imports one: a 12 kHz mono WAV, whole.
+pub(crate) fn voice_message(voice: &[f32]) -> std::io::Result<Vec<u8>> {
+    tempo_audio::voice::wav_12k(voice)
+}
+
+/// The recording's thread: what the microphone captured from its start, at the keyer's rate,
+/// until it is stopped or reaches [`RECORD_MAX`].
+fn record(headset: &dyn Headset, stop: &AtomicBool) -> Vec<f32> {
+    let rings = headset.rings();
+    let most = tempo_audio::voice::VOICE_RATE as usize * RECORD_MAX.as_secs() as usize;
+    // Nothing from before Record was pressed.
+    let _ = rings.take_mic();
+    let mut voice = Vec::new();
+    let mut from: Option<(u64, u32, CaptureResampler)> = None;
+    let mut take = |voice: &mut Vec<f32>| {
+        let captured = rings.take_mic();
+        let Some(rate) = rings.in_rate() else {
+            return;
+        };
+        let opened = rings.opened();
+        if from
+            .as_ref()
+            .is_none_or(|(at, was, _)| *at != opened || *was != rate)
+        {
+            from = Some((
+                opened,
+                rate,
+                CaptureResampler::new(rate, tempo_audio::voice::VOICE_RATE),
+            ));
+        }
+        if let Some((_, _, resampler)) = from.as_mut() {
+            voice.extend(resampler.process(&captured));
+        }
+    };
+    while !stop.load(Ordering::Acquire) && voice.len() < most {
+        headset.want_input();
+        take(&mut voice);
+        std::thread::sleep(TICK);
+    }
+    take(&mut voice);
+    voice.truncate(most);
+    voice
+}
 
 /// This computer's headset, as an audio road uses it: its rings, and a direction kept open a
 /// while longer. The real one in client mode (`tempo_audio::headset::Headset`); a stand-in in a
