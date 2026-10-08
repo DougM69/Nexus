@@ -1713,9 +1713,12 @@ fn sanitize_profile(s: &str) -> Option<String> {
 /// instance is unaffected. Two instances get separate config by launching with distinct
 /// profiles; that is what keeps them from clobbering each other's settings/journals.
 ///
-/// ⚠️ `--profile` IS THE ONLY ARGUMENT NEXUS PARSES, AND THAT IS DELIBERATE. A reply on #101
-/// mentioned a `--debug` flag; none exists, and one was considered and declined on 2026-09-07.
-/// The reasons, so the next reader does not add it on the strength of that reply:
+/// ⚠️ `--profile` AND `--client` ARE THE ONLY ARGUMENTS NEXUS PARSES, AND THAT IS DELIBERATE.
+/// `--client <station id>` (`client_mode::requested`) passes the test below for the same reason:
+/// it must be known before anything of this computer's own station opens, so it cannot be a
+/// setting. A reply on #101 mentioned a `--debug` flag; none exists, and one was considered and
+/// declined on 2026-09-07. The reasons, so the next reader does not add it on the strength of
+/// that reply:
 ///
 /// * The extra-detail tier already has a switch — Settings ▸ Logging & Connectors ▸ "Extra
 ///   detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is being
