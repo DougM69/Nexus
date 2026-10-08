@@ -2103,6 +2103,22 @@ export interface MeterReadout {
   cwToneHz: number | null
 }
 
+/** The period a band or mode change caught while it was being decoded, which WSJT-X shows and so
+ *  does Nexus: display only, under the band, dial and mode it was heard on, never the new ones. */
+export interface LateDecodes {
+  /** The band it was received on ('' off the bands). */
+  band: string
+  /** The dial it was received on (MHz). */
+  dialMhz: number
+  /** The mode it was received in. */
+  tier: Tier
+  /** The received period's start, Unix ms — what its separator shows. */
+  periodStartMs: number
+  /** Where it sorts among the panes' rows: its boundary in the CURRENT mode's slot numbering. */
+  slot: number
+  rows: DecodeRow[]
+}
+
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
 export interface DecodeRow {
   from: string | null
@@ -2557,6 +2573,10 @@ export interface NeedAlert {
    * the matching cockpit and drives the row's mode badge. 'RTTY' is a Digital submode label
    * (RBN skimmer spots only) that routes to the RTTY cockpit; it filters as Digital. */
   mode: string
+  /** The mode the station was heard in, folded as `modeKey` folds it ('FT8', 'SSB'), or absent/null
+   * when its source named only a class (a cluster spot placed by its frequency). A NewMode need is a
+   * need for THIS mode, so its chip shows only where the surface is that mode (`tagsForSurface`). */
+  exactMode?: string | null
   /** Exact spot frequency in MHz when known (cluster/RBN), else null (band-level
    * reception needs). Lets click-to-work QSY to the spot, not just the band default. */
   freqMhz: number | null
@@ -4489,6 +4509,9 @@ export interface AppSnapshot {
   fieldDay: FieldDayStatus | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
+  /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
+   *  unless there is one, until the first period of the new band or mode decodes. */
+  lateDecodes?: LateDecodes
   /** JTAlert-style UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
@@ -4572,6 +4595,20 @@ export interface SlotKeyRefused {
   at: number
   /** What came back for the key, in the rig link's own words: data, never translated. */
   why: string
+  /** Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
+   *  its transmit audio from: the lane then says that in its own words. Absent otherwise. */
+  flexAudio?: FlexAudioRefusal | null
+}
+
+/** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
+ *  FlexAudioRefusal). */
+export interface FlexAudioRefusal {
+  /** The transmit slice's mode, in the radio's own word (DIGU): data, never translated. */
+  mode: string
+  /** `notYetDax`: native audio is on, and the radio does not take its transmit audio from Nexus's
+   *  DAX yet. `daxUnfed`: native audio is off, and the radio still takes its transmit audio from
+   *  the DAX Nexus set, which nothing feeds until its mic input is back. */
+  cause: 'notYetDax' | 'daxUnfed'
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words
