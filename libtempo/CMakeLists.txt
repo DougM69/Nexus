@@ -714,3 +714,66 @@ target_link_libraries(ft4_false_alarm PRIVATE tempo_static m gfortran)
 add_executable(ft8_callsign_roundtrip ${CMAKE_CURRENT_SOURCE_DIR}/../tests/ft8_callsign_roundtrip.c)
 target_link_libraries(ft8_callsign_roundtrip PRIVATE tempo_static m gfortran)
 
+# ---------------------------------------------------------------------------
+# Verification I: WSJT-X's own Fortran unit tests for the JTTY modem, vendored
+# unchanged under vendor/wsjtx/tests/ (19 of upstream's 20; the twentieth needs
+# WSJT-X's Qt code). They run against THIS libtempo, so they are also the check
+# that the JTTY codec still round-trips through Nexus's own 3.0.2 packjt77.
+#
+# EXCLUDE_FROM_ALL: neither cargo (which builds tempo_static only) nor a plain
+# `cmake --build` (scripts/build-windows-cross.sh) compiles them. Run by hand:
+#     cmake -S libtempo -B <dir> -DCMAKE_BUILD_TYPE=Release
+#     cmake --build <dir> --target jtty_upstream_tests
+#     ctest --test-dir <dir> -L jtty-upstream --output-on-failure
+#
+# The registrations copy upstream's tests/unit/jtty/CMakeLists.txt at the same
+# commit: the same arguments, pass expressions, working directory and timeouts,
+# so a pass here means what it means upstream.
+# ---------------------------------------------------------------------------
+set(JTTY_TESTS "${WX}/tests/unit/jtty")
+set(JTTY_UPSTREAM_TESTS
+    test_jtty_adjacent_decode test_jtty_block_pow test_jtty_continuous_decode
+    test_jtty_frequency_window test_jtty_gap_merge test_jtty_get_updates
+    test_jtty_message_matching test_jtty_overlap_decode test_jtty_pack
+    test_jtty_payload_correlators test_jtty_receive_state test_jtty_source_codec
+    test_jtty_sticky_retry test_jtty_surface_ranges test_jtty_tbcc_code_profile
+    test_jtty_tbcc_decoder test_jtty_tbcc_list_decoder test_jtty_windowed_decode
+    test_tbcc)
+foreach(t ${JTTY_UPSTREAM_TESTS})
+    add_executable(${t} EXCLUDE_FROM_ALL "${JTTY_TESTS}/${t}.f90")
+    set_target_properties(${t} PROPERTIES
+        Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/modules/${t}")
+    target_include_directories(${t} PRIVATE
+        ${LIBFT1_INCLUDE_DIRS}
+        "${CMAKE_CURRENT_BINARY_DIR}/modules/tempo_static")
+    target_link_libraries(${t} PRIVATE tempo_static)
+endforeach()
+add_custom_target(jtty_upstream_tests DEPENDS ${JTTY_UPSTREAM_TESTS})
+
+enable_testing()
+set(JTTY_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/jtty-upstream")
+file(MAKE_DIRECTORY "${JTTY_TEST_DIR}")
+# test_jtty_pack opens jtty_msgs.txt from its working directory.
+configure_file("${WX}/tests/fixtures/jtty/jtty_msgs.txt" "${JTTY_TEST_DIR}/jtty_msgs.txt" COPYONLY)
+foreach(t ${JTTY_UPSTREAM_TESTS})
+    add_test(NAME ${t} COMMAND ${t} WORKING_DIRECTORY "${JTTY_TEST_DIR}")
+endforeach()
+add_test(NAME test_jtty_overlap_decode_480 COMMAND test_jtty_overlap_decode 480
+    WORKING_DIRECTORY "${JTTY_TEST_DIR}")
+foreach(t test_jtty_source_codec test_tbcc test_jtty_block_pow test_jtty_message_matching
+          test_jtty_receive_state test_jtty_adjacent_decode test_jtty_overlap_decode
+          test_jtty_sticky_retry test_jtty_windowed_decode test_jtty_gap_merge
+          test_jtty_get_updates test_jtty_continuous_decode)
+    set_tests_properties(${t} PROPERTIES PASS_REGULAR_EXPRESSION "${t}: all checks passed")
+endforeach()
+set_tests_properties(test_jtty_overlap_decode_480 PROPERTIES
+    PASS_REGULAR_EXPRESSION "test_jtty_overlap_decode: all checks passed" TIMEOUT 240)
+set_tests_properties(test_jtty_pack PROPERTIES PASS_REGULAR_EXPRESSION
+    "^ 3     3    67 14     NOW IS THE TIME FOR ALL GOOD MEN TO COME TO THE AID OF THEIR PARTY\.;^ 3     3    52 11     THE QUICK BROWN FOX JUMPED OVER THE LAZY DOG, TWICE\.;\nTotal messages: 36   Number of errors:  0\n$")
+set_tests_properties(test_jtty_adjacent_decode test_jtty_overlap_decode
+    test_jtty_windowed_decode test_jtty_gap_merge test_jtty_surface_ranges PROPERTIES TIMEOUT 180)
+set_tests_properties(test_jtty_sticky_retry PROPERTIES TIMEOUT 60)
+set_tests_properties(test_jtty_continuous_decode PROPERTIES TIMEOUT 300)
+set_tests_properties(${JTTY_UPSTREAM_TESTS} test_jtty_overlap_decode_480 PROPERTIES
+    LABELS jtty-upstream)
+
