@@ -625,7 +625,10 @@ fn this_computers_update_channel_and_start_at_sign_in_stay_here() {
     let s = screens(&client);
     assert_eq!(
         ask(&s.main, "get_settings", json!({})),
-        Ok(json!({ "mycall": "KD9TAW", "betaUpdates": false, "launchAtLogin": false }))
+        Ok(
+            json!({ "mycall": "KD9TAW", "betaUpdates": false, "launchAtLogin": false,
+            "nexusRevision": "r1" })
+        )
     );
     assert_eq!(
         ask(&s.main, "set_beta_updates", json!({ "on": true })),
@@ -1586,4 +1589,61 @@ fn a_volume_is_whole_db_inside_the_pages_range() {
     assert_eq!(volume(Some(60.0)), 42.0);
     assert_eq!(volume(Some(f64::NAN)), 24.0);
     assert_eq!(volume(None), 24.0);
+}
+
+/// ★ A save goes with the revision of the read its copy was made from, when the screen names it:
+/// a settings read takes its revision to the screen beside the settings it read, a later read in
+/// the same window does not move what a save made from the earlier copy goes with, and the `base`
+/// the screen named goes no further than here. A ui-state read carries no revision to the screen.
+/// CONTROL: a save that names no read goes with the window's last read, as before.
+#[test]
+fn a_save_goes_with_the_revision_of_the_read_its_copy_was_made_from() {
+    let dir = scratch("read-revisions");
+    let shack = FakeShack::new();
+    let client = client_in(&dir, &shack);
+    let s = screens(&client);
+    let answer = |revision: &str| Answer::Value {
+        value: json!({ "mycall": "KD9TAW" }),
+        revision: Some(revision.to_string()),
+    };
+    shack.answers("get_settings", answer("rFirst"));
+    let first = ask(&s.main, "get_settings", json!({})).unwrap();
+    assert_eq!(first[READ_REVISION], "rFirst");
+    assert_eq!(first["mycall"], "KD9TAW");
+    shack.answers("get_settings", answer("rLater"));
+    ask(&s.main, "get_settings", json!({})).unwrap();
+    shack.answers("set_settings", answer("rSaved"));
+    ask(
+        &s.main,
+        "set_settings",
+        json!({ "settings": {}, "base": "rFirst" }),
+    )
+    .unwrap();
+    {
+        let sent = lock(&shack.sent);
+        let (cmd, args, base) = sent.last().unwrap();
+        assert_eq!(
+            (cmd.as_str(), base.as_deref()),
+            ("set_settings", Some("rFirst"))
+        );
+        assert_eq!(*args, json!({ "settings": {} }), "the base goes no further");
+    }
+    shack.answers("get_settings", answer("rAgain"));
+    ask(&s.main, "get_settings", json!({})).unwrap();
+    ask(&s.main, "set_settings", json!({ "settings": {} })).unwrap();
+    assert_eq!(
+        lock(&shack.sent).last().unwrap().2.as_deref(),
+        Some("rAgain"),
+        "CONTROL: no read named, the window's last"
+    );
+    shack.answers(
+        "ui_state_load",
+        Answer::Value {
+            value: json!({}),
+            revision: Some("rUi".to_string()),
+        },
+    );
+    let ui = ask(&s.main, "ui_state_load", json!({})).unwrap();
+    assert!(ui.get(READ_REVISION).is_none(), "{ui}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

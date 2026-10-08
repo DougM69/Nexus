@@ -59,9 +59,20 @@ fn client_mode_drives_the_shack_end_to_end() {
     eventually("the shack's snapshot here", || {
         ask(&screens.main, "get_snapshot", json!({})).is_ok_and(|snapshot| snapshot["n"].is_u64())
     });
+    let mut settings = ask(&screens.main, "get_settings", json!({})).unwrap();
+    let revision = settings
+        .as_object_mut()
+        .and_then(|fields| fields.remove("nexusRevision"));
     assert_eq!(
-        ask(&screens.main, "get_settings", json!({})),
-        Ok(json!({ "settings": "as read", "betaUpdates": false, "launchAtLogin": false }))
+        settings,
+        json!({ "settings": "as read", "betaUpdates": false, "launchAtLogin": false })
+    );
+    assert!(
+        revision
+            .as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|r| r.len() == 64),
+        "the shack's revision of the read, to the screen: {revision:?}"
     );
     assert_eq!(
         ask(&screens.main, "call_cq", json!({})),

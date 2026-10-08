@@ -3268,14 +3268,28 @@ export async function setPskMacros(
   return invoke<Settings['macros']>('set_psk_macros', { profiles, active })
 }
 
+/** On a computer driving a station, each settings read comes with the station's revision of what
+ *  it read (`src-tauri/src/client_mode.rs` puts it beside the settings, under this key). It is
+ *  taken off and kept on the copy under a symbol: no field, no JSON and no comparison sees it, yet
+ *  every copy spread from the read carries it, so a save made from that read goes back with its
+ *  revision (and a change made at the station since refuses it, "Changed at the station"),
+ *  whatever else this window read meanwhile. */
+const READ_REVISION = 'nexusRevision'
+const MADE_FROM: unique symbol = Symbol('the station revision this settings copy was read at')
+type Read = Settings & { [MADE_FROM]?: string }
+
 /** Load persisted operator + radio settings. */
 export async function getSettings(): Promise<Settings> {
-  return invoke<Settings>('get_settings')
+  const read = await invoke<Settings & { [READ_REVISION]?: unknown }>('get_settings')
+  if (typeof read?.[READ_REVISION] !== 'string') return read
+  const { [READ_REVISION]: revision, ...settings } = read
+  return { ...settings, [MADE_FROM]: revision as string } as Read
 }
 
 /** Persist operator + radio settings; returns the updated snapshot. */
 export async function setSettings(settings: Settings): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_settings', { settings })
+  const base = (settings as Read)[MADE_FROM]
+  return invoke<AppSnapshot>('set_settings', base === undefined ? { settings } : { settings, base })
 }
 
 /** THE writer of the satellite uplink consent pair (VFO mapping + per-radio

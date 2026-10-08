@@ -147,6 +147,9 @@ const FEEDS: [&str; 3] = ["snapshot/1", "spectrumRow/1", "meters/1"];
 const ASK_AT_ONCE: usize = 64;
 /// How long a look for the station by name listens for answers: the stations window's own wait.
 const LOOK_FOR: Duration = Duration::from_secs(3);
+/// Where a settings read's revision goes to the screen, beside the settings it read; `api.ts`
+/// takes it off and keeps it with that copy.
+const READ_REVISION: &str = "nexusRevision";
 
 /// The station this launch drives (`--client <id>` or `--client=<id>`), or none. Only an id a
 /// station could have is taken: anything else starts Nexus as itself.
@@ -1001,21 +1004,40 @@ impl Client {
         Ok(value)
     }
 
-    /// Sends one call on the link there is now, with the window's base revision when it saves a
-    /// store, and keeps the revision the shack answers with for the store it read or saved.
-    async fn send(&self, cmd: &str, args: Value, window: &str) -> Result<Value, String> {
+    /// Sends one call on the link there is now, with the base revision when it saves a store, and
+    /// keeps the revision the shack answers with for the store it read or saved. The base is the
+    /// read the saved copy was made from when the screen names it (`base`, which `api.ts` keeps
+    /// with each settings read, and which goes no further than here), else the window's last read
+    /// or accepted save. A settings read takes its revision to the screen ([`READ_REVISION`]).
+    async fn send(&self, cmd: &str, mut args: Value, window: &str) -> Result<Value, String> {
         let shack = self.shack().ok_or_else(|| word("notLive"))?;
         let access = store_access(cmd);
         let base = match access {
-            Some((store, true)) => lock(&self.revisions)
-                .get(&(window.to_string(), store))
-                .cloned(),
+            Some((store, true)) => {
+                let named = args
+                    .as_object_mut()
+                    .and_then(|fields| fields.remove("base"))
+                    .and_then(|base| base.as_str().map(str::to_string));
+                named.or_else(|| {
+                    lock(&self.revisions)
+                        .get(&(window.to_string(), store))
+                        .cloned()
+                })
+            }
             _ => None,
         };
         let (id, answer) = shack.call(cmd.to_string(), args, base).await;
         match answer {
-            Answer::Value { value, revision } => {
-                if let (Some((store, _)), Some(revision)) = (access, revision) {
+            Answer::Value {
+                mut value,
+                revision,
+            } => {
+                if let (Some((store, saved)), Some(revision)) = (access, revision) {
+                    if store == Store::Settings && !saved {
+                        if let Some(fields) = value.as_object_mut() {
+                            fields.insert(READ_REVISION.to_string(), json!(revision));
+                        }
+                    }
                     lock(&self.revisions).insert((window.to_string(), store), revision);
                 }
                 Ok(value)
