@@ -711,25 +711,14 @@ async fn connect(
         .await?
         .ok_or("unknownStation")?;
     let (opened, at) = match road::connect(&record, typed).await {
-        Err(why) if road::UNREACHED.contains(&why) || why == "keyChanged" => {
+        Err(why) if road::look_further(why) => {
             let tried = road::order(&record, typed);
             let found = found_at(reach, &record, &tried).await;
             // Nothing found by name: the page hears why the addresses tried did not welcome this
-            // computer. Another key there is told unless what was found by name told more.
-            road::connect_at(&record, &found).await.map_err(|later| {
-                if found.is_empty()
-                    || (why == "keyChanged" && road::weight(later) <= road::weight(why))
-                {
-                    why
-                } else if later == "keyChanged" {
-                    // Only an advert answered with another key: a forged or foreign one, since an
-                    // advert is a hint and never an identity. Not a sign that this station's key
-                    // changed, so never told as one.
-                    "notThisStation"
-                } else {
-                    later
-                }
-            })?
+            // computer (`road::told`).
+            road::connect_at(&record, &found)
+                .await
+                .map_err(|later| road::told(why, later, !found.is_empty()))?
         }
         reached => reached?,
     };
@@ -751,19 +740,11 @@ async fn found_at(
     record: &PairedStation,
     tried: &[SocketAddrV4],
 ) -> Vec<SocketAddrV4> {
-    let Some(pinned) = StationView::of(record) else {
-        return Vec::new();
-    };
     let find = reach.find.clone();
     let looked = tokio::task::spawn_blocking(move || find(FIND_FOR)).await;
-    let mut at = Vec::new();
-    for shack in looked.ok().and_then(Result::ok).unwrap_or_default() {
-        if pinned.key.starts_with(&shack.key)
-            && !tried.contains(&shack.address)
-            && !at.contains(&shack.address)
-        {
-            at.push(shack.address);
-        }
-    }
-    at
+    road::found_for(
+        record,
+        tried,
+        looked.ok().and_then(Result::ok).unwrap_or_default(),
+    )
 }

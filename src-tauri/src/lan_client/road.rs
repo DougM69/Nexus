@@ -311,6 +311,61 @@ async fn hello(
     }
 }
 
+/// A look by name (`tempo_stream::lan::dnssd::find`, or a test's own): the stations that answer
+/// within a wait. It blocks for that long, so it is only called on a thread that may wait.
+pub(crate) type Look = Arc<
+    dyn Fn(
+            Duration,
+        )
+            -> Result<Vec<tempo_stream::lan::dnssd::Found>, tempo_stream::lan::dnssd::Unavailable>
+        + Send
+        + Sync,
+>;
+
+/// Whether a road that did not open is worth a look by name: nothing answered at the addresses
+/// tried, or another key did (another station at an address that was this one's).
+pub(crate) fn look_further(why: &str) -> bool {
+    UNREACHED.contains(&why) || why == "keyChanged"
+}
+
+/// Where a look by name finds the station `record` names, at addresses not in `tried`: each advert
+/// whose key tag starts the fingerprint of the key pinned for it, so another station's is never
+/// tried (it could only fail the handshake, and say the key had changed).
+pub(crate) fn found_for(
+    record: &PairedStation,
+    tried: &[SocketAddrV4],
+    found: Vec<tempo_stream::lan::dnssd::Found>,
+) -> Vec<SocketAddrV4> {
+    let Some(pinned) = super::StationView::of(record) else {
+        return Vec::new();
+    };
+    let mut at = Vec::new();
+    for shack in found {
+        if pinned.key.starts_with(&shack.key)
+            && !tried.contains(&shack.address)
+            && !at.contains(&shack.address)
+        {
+            at.push(shack.address);
+        }
+    }
+    at
+}
+
+/// What is told when no address welcomed this computer: `why`, the addresses tried first; `later`,
+/// those a look by name found, if it found any. Another key at a tried address is told unless what
+/// was found by name told more; an advert that answered with another key is a forged or foreign
+/// one, since an advert is a hint and never an identity, so it is never told as this station's key
+/// having changed.
+pub(crate) fn told(why: &'static str, later: &'static str, found: bool) -> &'static str {
+    if !found || (why == "keyChanged" && weight(later) <= weight(why)) {
+        why
+    } else if later == "keyChanged" {
+        "notThisStation"
+    } else {
+        later
+    }
+}
+
 /// The addresses the road to the station `record` names is tried at, in turn: `typed` first when
 /// the operator gave an address, then each remembered one, the last that worked first.
 pub(crate) fn order(record: &PairedStation, typed: Option<SocketAddrV4>) -> Vec<SocketAddrV4> {

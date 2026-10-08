@@ -75,7 +75,9 @@
 //!
 //! [`Client::drive`] keeps the link: it connects, takes the lease when control is free, keeps it
 //! with a heartbeat every [`HEARTBEAT`], watches the feeds, and hands the shack's events to the
-//! screens. When the link drops, the screens keep the shack's last state ("Not live"), and it
+//! screens. It connects where the station answered before, the last address that worked first,
+//! and only when none answers (or another key does) where a look by name finds it, as the
+//! stations window does. When the link drops, the screens keep the shack's last state ("Not live"), and it
 //! connects again by itself. A call cut off by a drop is never sent again: the next link asks the
 //! shack what became of it.
 //!
@@ -107,6 +109,7 @@ use crate::command_dispatch::{
 };
 use crate::lan_client::audio_road::{self, Headset, Recording, ThisHeadset};
 use crate::lan_client::link::{run_id, Answer, Link};
+use crate::lan_client::road::{self, Look};
 use crate::lan_client::stop_road::{Over, StopRoad};
 use crate::remote_service::vault::PairedStation;
 
@@ -142,6 +145,8 @@ const SHOW_BY: Duration = Duration::from_secs(10);
 const FEEDS: [&str; 3] = ["snapshot/1", "spectrumRow/1", "meters/1"];
 /// The most ids one question after outcomes may carry (the shack's own bound).
 const ASK_AT_ONCE: usize = 64;
+/// How long a look for the station by name listens for answers: the stations window's own wait.
+const LOOK_FOR: Duration = Duration::from_secs(3);
 
 /// The station this launch drives (`--client <id>` or `--client=<id>`), or none. Only an id a
 /// station could have is taken: anything else starts Nexus as itself.
@@ -1074,6 +1079,7 @@ impl Client {
         self: Arc<Self>,
         app: tauri::AppHandle<R>,
         find: Find,
+        look: Look,
         typed: Option<SocketAddrV4>,
     ) {
         let shown = Arc::new(AtomicBool::new(false));
@@ -1111,11 +1117,7 @@ impl Client {
             if let Some(first) = record.addresses.first() {
                 self.at(first.clone());
             }
-            let headset = self
-                .headset
-                .get()
-                .map(|headset| Arc::clone(headset) as Arc<dyn Headset>);
-            let wait = match Link::connect(&record, typed, run_id(), headset).await {
+            let wait = match self.connect(&record, typed, &look).await {
                 // The station proved the key pinned for this pairing; one that then names itself
                 // another station is not the one asked for, and runs nothing from here.
                 Ok((link, _)) if link.ids.station != self.station_id => {
@@ -1145,6 +1147,37 @@ impl Client {
                 }
             };
             tokio::time::sleep(wait).await;
+        }
+    }
+
+    /// The link to the station `record` names: at the address the operator typed, then at the
+    /// remembered ones, and only when none of them welcomed this computer because nothing answered
+    /// or another key did, where a look by name finds the station now (`road::found_for`). The
+    /// link and the address that welcomed it, or the most telling reason none did (`road::told`).
+    async fn connect(
+        &self,
+        record: &PairedStation,
+        typed: Option<SocketAddrV4>,
+        look: &Look,
+    ) -> Result<(Link, SocketAddrV4), &'static str> {
+        let headset = self
+            .headset
+            .get()
+            .map(|headset| Arc::clone(headset) as Arc<dyn Headset>);
+        match Link::connect(record, typed, run_id(), headset.clone()).await {
+            Err(why) if road::look_further(why) => {
+                let look = Arc::clone(look);
+                let found = tokio::task::spawn_blocking(move || look(LOOK_FOR))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                let found = road::found_for(record, &road::order(record, typed), found);
+                Link::connect_at(record, &found, run_id(), headset)
+                    .await
+                    .map_err(|later| road::told(why, later, !found.is_empty()))
+            }
+            reached => reached,
         }
     }
 
@@ -1584,7 +1617,8 @@ pub(crate) fn run(station: String) {
                 )));
                 Arc::new(move |id: &str| stations.get(id))
             };
-            tauri::async_runtime::spawn(driving.drive(app.handle().clone(), find, None));
+            let look: Look = Arc::new(tempo_stream::lan::dnssd::find);
+            tauri::async_runtime::spawn(driving.drive(app.handle().clone(), find, look, None));
             Ok(())
         })
         .on_window_event(|window, event| {

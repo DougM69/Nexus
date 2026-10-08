@@ -165,6 +165,16 @@ impl Link {
         run: u64,
         headset: Option<Arc<dyn Headset>>,
     ) -> Result<(Self, SocketAddrV4), &'static str> {
+        Self::connect_at(record, &road::order(record, typed), run, headset).await
+    }
+
+    /// [`Link::connect`], at each of `order` in turn.
+    pub(crate) async fn connect_at(
+        record: &PairedStation,
+        order: &[SocketAddrV4],
+        run: u64,
+        headset: Option<Arc<dyn Headset>>,
+    ) -> Result<(Self, SocketAddrV4), &'static str> {
         let road::Reached {
             mut socket,
             ids,
@@ -173,7 +183,7 @@ impl Link {
             stop_road,
             audio_road,
             at,
-        } = road::reach(record, &road::order(record, typed)).await?;
+        } = road::reach(record, order).await?;
         let on_air = Arc::new(OnAir::default());
         let ours = (wire::APP, wire::contract());
         if let Some(reason) = wire::refusal(End::Computer, ours, (&app, &contract)) {

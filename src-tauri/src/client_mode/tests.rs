@@ -731,6 +731,9 @@ const MAY_REACH: &[&str] = &[
     "crate::command_classes",
     "crate::command_dispatch",
     "crate::lan_client::link",
+    // The road's order of addresses, and what a look by name may try: it reads a record and an
+    // advert, and starts nothing.
+    "crate::lan_client::road",
     "crate::lan_client::stop_road",
     // This computer's headset for the shack's audio: its own output and microphone, opened only
     // while wanted. It plays and captures, and starts nothing of a station.

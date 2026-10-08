@@ -2328,6 +2328,7 @@ fn client_mode_keeps_presence_and_stops_the_station_on_the_road() {
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
+        Arc::new(|_| Ok(Vec::new())),
         Some(at),
     ));
     let presence = || {

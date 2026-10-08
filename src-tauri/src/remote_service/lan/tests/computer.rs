@@ -194,7 +194,11 @@ async fn a_computer_removed_at_the_shack_is_told_it_is_not_paired() {
 }
 
 /// The shack's `connection` behind a port on `ip`, as [`behind_a_port`].
-async fn behind_a_port_on(s: &Shack, ip: Ipv4Addr, stop: watch::Receiver<bool>) -> SocketAddrV4 {
+pub(super) async fn behind_a_port_on(
+    s: &Shack,
+    ip: Ipv4Addr,
+    stop: watch::Receiver<bool>,
+) -> SocketAddrV4 {
     let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
     let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
         unreachable!()

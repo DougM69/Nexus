@@ -3,7 +3,7 @@
 //! behind a loopback port. It connects, takes the lease and the feeds, and every window's calls go
 //! where their class says; Leave hands the lease back at once.
 use super::commands::{running, App};
-use super::computer::{behind_a_port, paired_record};
+use super::computer::{behind_a_port, behind_a_port_on, paired_record};
 use super::*;
 use crate::client_mode::tests::{ask, eventually, scratch, screens};
 use crate::client_mode::{Client, Find, Phase, ThisComputer};
@@ -51,6 +51,7 @@ fn client_mode_drives_the_shack_end_to_end() {
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
+        Arc::new(|_| Ok(Vec::new())),
         Some(at),
     ));
     eventually("control taken", || client.status().phase == Phase::Live);
@@ -144,6 +145,7 @@ fn a_station_that_names_itself_another_is_refused() {
     let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
         screens.main.app_handle().clone(),
         find,
+        Arc::new(|_| Ok(Vec::new())),
         Some(at),
     ));
     eventually("refused", || {
@@ -157,4 +159,103 @@ fn a_station_that_names_itself_another_is_refused() {
     driving.abort();
     assert!(sent_here(&app).is_empty(), "{:?}", app.ran());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ★ A station not where it was is found by name. With its one remembered address dead (a new
+/// lease from the router, say) and no address typed, client mode looks for the station by name,
+/// past another station's advert at a port of this one, and drives it where its own advert says
+/// it is. CONTROL: with only the other station's advert found, it is never tried, nothing is
+/// driven, and the station's own answer is told (nothing answered at the address it remembered).
+/// Skipped, saying so, on a box with no private address of its own.
+#[test]
+fn client_mode_finds_a_station_by_name_when_its_remembered_address_is_dead() {
+    use crate::lan_client::tests::where_nothing_listens;
+    use ring::digest::{digest, SHA256};
+    use tempo_stream::lan::dnssd::Found;
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let app = App::new();
+    let (s, live, also, _listening) = tauri::async_runtime::block_on(async {
+        let s = running(&app);
+        s.shared.authority.permit_station(&s.device, true).unwrap();
+        let (stopper, stop) = watch::channel(false);
+        let live = behind_a_port_on(&s, private, stop.clone()).await;
+        let also = behind_a_port_on(&s, private, stop).await;
+        (s, live, also, stopper)
+    });
+    let dead = where_nothing_listens(private);
+    let record = paired_record(&s, live);
+    let spki = tempo_stream::protocol::hex_bytes(&s.public_key).unwrap();
+    let tag: String = digest(&SHA256, &spki)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()[..16]
+        .to_string();
+    let advert = |address: SocketAddrV4, key: &str| Found {
+        name: "Nexus 3F2A 9B1C".into(),
+        address,
+        protocol: 1,
+        key: key.into(),
+    };
+    let other = advert(also, "00c0ffee00c0ffee");
+    for (adverts, found) in [
+        (vec![other.clone(), advert(live, &tag)], true),
+        (vec![other], false),
+    ] {
+        let dir = scratch("by-name");
+        let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+        let client = Arc::new(Client::new(STATION.to_string(), this));
+        let screens = screens(&client);
+        let (device, key, pkcs8) = (
+            record.device_id.clone(),
+            record.station_key.clone(),
+            record.pkcs8.clone(),
+        );
+        let find: Find = Arc::new(move |_| {
+            Ok(Some(PairedStation {
+                station_id: STATION.into(),
+                device_id: device.clone(),
+                station_key: key.clone(),
+                pkcs8: pkcs8.clone(),
+                addresses: vec![dead.to_string()],
+            }))
+        });
+        let looks = Arc::new(AtomicUsize::new(0));
+        let look: crate::lan_client::road::Look = {
+            let looks = looks.clone();
+            Arc::new(move |_| {
+                looks.fetch_add(1, Ordering::SeqCst);
+                Ok(adverts.clone())
+            })
+        };
+        let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
+            screens.main.app_handle().clone(),
+            find,
+            look,
+            None,
+        ));
+        if found {
+            eventually("control taken where it was found", || {
+                client.status().phase == Phase::Live
+            });
+            assert_eq!(client.status().station, live.to_string());
+        } else {
+            eventually("a look made", || looks.load(Ordering::SeqCst) >= 1);
+            eventually("the station's own answer told", || {
+                client.status().reason.is_some()
+            });
+            let status = client.status();
+            assert_ne!(status.phase, Phase::Live, "{status:?}");
+            assert!(
+                crate::lan_client::road::UNREACHED.contains(&status.reason.as_deref().unwrap()),
+                "{status:?}"
+            );
+        }
+        driving.abort();
+        tauri::async_runtime::block_on(client.let_go());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
