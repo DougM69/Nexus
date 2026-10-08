@@ -1736,6 +1736,110 @@ async fn the_microphone_from_afar_is_refused_before_anything_decodes_it() {
     assert!(ticks.iter().all(|&(_, on)| !on), "never on the air");
 }
 
+/// ★ A frame from afar never feeds an over another press armed. With the microphone over armed by
+/// the held PTT's own press, as a page's press arms it, and its feed open, the frames of this
+/// computer's press 7 are refused twice over: by the switch every start from afar reads, and past
+/// it because press 7 is not the press the held PTT keyed. None keys the over. CONTROL: the over
+/// stayed armed with its feed open throughout, and every frame verified and was read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_frame_from_afar_never_feeds_an_over_another_press_armed() {
+    const PAGE: &str = "10000000-0000-4000-8000-00000000000a";
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    seat.renewed().await;
+    r.ptt.hold(PAGE, Instant::now());
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = radio_loop(
+        r.s.shared.engine.clone(),
+        Over::Voice,
+        done.clone(),
+        Instant::now() + 3 * PRESENCE,
+    );
+    let mut armed = false;
+    for _ in 0..100 {
+        armed = r.s.shared.engine.lock().unwrap().mic_armed();
+        if armed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(armed, "premise: another press armed the over");
+    let mut encoder = MicEncoder::new().unwrap();
+    for frame in 1..=50u32 {
+        if frame % 5 == 1 {
+            r.ptt.hold(PAGE, Instant::now());
+        }
+        let voice: Vec<f32> = (0..MIC_FRAME_SAMPLES)
+            .map(|i| {
+                let t = (frame as usize * MIC_FRAME_SAMPLES + i) as f32 / 48_000.0;
+                0.4 * (2.0 * std::f32::consts::PI * 800.0 * t).sin()
+            })
+            .collect();
+        let packet = encoder.encode(&voice).unwrap();
+        seat.audio
+            .say(&audio_road::Up::Mic {
+                press: 7,
+                frame,
+                packet,
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let e = r.s.shared.engine.lock().unwrap();
+        assert!(e.mic_armed(), "premise: the over stayed armed");
+        assert!(
+            !e.mic_keyed(),
+            "a frame from afar keyed another press's over"
+        );
+    }
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    let counts = r.counts();
+    assert_eq!(
+        counts.mic_read.load(Ordering::SeqCst),
+        50,
+        "premise: all read"
+    );
+    assert_eq!(counts.mic_refused.load(Ordering::SeqCst), 50);
+    assert_eq!(counts.mic_taken.load(Ordering::SeqCst), 0);
+    assert!(ticks.iter().all(|&(_, on)| !on), "never on the air");
+}
+
+/// ★ The audio road hears only the listener's subnet, as Stop's road does: a frame that verifies
+/// under the right keys and names the right road, from off that subnet, is dropped unread.
+/// CONTROL: the same computer's frame on a road that hears it is read.
+#[test]
+fn the_audio_road_hears_only_its_subnet() {
+    on_a_runtime(0, async {
+        let frame = audio_road::Up::Mic {
+            press: 1,
+            frame: 1,
+            packet: vec![0x5a; 80],
+        };
+        let app = App::new();
+        let r = roadside_with(&app, AFTERLIFE, Hears::Subnet(home()));
+        let seat = seated(&r).await;
+        seat.audio.say(&frame).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(r.counts().mic_read.load(Ordering::SeqCst), 0, "read");
+        drop(seat);
+
+        let app = App::new();
+        let r = roadside(&app);
+        let seat = seated(&r).await;
+        seat.audio.say(&frame).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(r.counts().mic_read.load(Ordering::SeqCst), 1, "control");
+    });
+}
+
 /// ★ The audio road names nothing of the station's engine and nothing of Stop's road: no handle of
 /// either is in its thread, so nothing the audio road does can hold a Stop up, nor a Stop wait for
 /// it. CONTROL: the scan reads the road's code.
