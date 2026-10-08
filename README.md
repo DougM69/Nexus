@@ -416,7 +416,10 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   the 77-bit message packing, the LDPC(174,91) FEC, the CRC-14 check, and the Q65 / FST4 / FST4W /
   MSK144 / JT65 / WSPR mode sources are their GPL-licensed work, vendored and reused via a
   foreign-function interface (see **[NOTICE](NOTICE)** for the full lineage and marked
-  modifications). Nexus interoperates with their ecosystem over the standard WSJT-X UDP protocol;
+  modifications). The **JTTY** keyboard-mode modem sources, by K1JT, K9AN and **David Christle
+  KD0BTO**, are vendored at `libtempo/vendor/wsjtx/lib/jtty/` from the WSJT-X 3.3.0-beta1
+  pre-release; Nexus will not release JTTY before a WSJT-X general release carries it. Nexus
+  interoperates with their ecosystem over the standard WSJT-X UDP protocol;
   its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.
   **Nexus is not endorsed by nor affiliated with the WSJT Development Group.** GPLv3.
 - **[qracodes](https://github.com/IV3NWV/qracodes)** — **Nico Palermo IV3NWV** / Microtelecom Srl

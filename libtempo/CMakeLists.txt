@@ -459,6 +459,44 @@ set(LIBTEMPO_SOURCES
     ${LIB}/smo121.f90                     # 1-2-1 smoothing
     ${LIB}/types.f90                      # module types: q3list + kind params
 
+    # --- JTTY modem (lib/jtty) : WSJT-X's untimed keyboard mode ---
+    #     4-GFSK at 31.25 baud, 1.888 s frames of 34-bit atoms protected by a
+    #     CRC-12 and a K=10 tail-biting convolutional code. Taken unchanged from
+    #     the WSJT-X 3.3.0-beta1 pre-release (NOTICE and vendor/wsjtx/README.md
+    #     say where and why; crates/tempo-fast-sys/tests/jtty_provenance.rs holds
+    #     every file to its upstream blob, so a local edit here fails that test).
+    #
+    #     The receiver is upstream's own handle API (jtty_receive_context.f90,
+    #     jtty_rx_*): each handle keeps its own reception state and swaps it in
+    #     around every call. The DSP scratch in jtty_mdecode is shared, so every
+    #     call runs under the modem lock, as for every other mode here.
+    #
+    #     NOT listed, because they are not vendored at all: upstream's standalone
+    #     jtty console program (PortAudio), its simulators and two files upstream's
+    #     own build does not compile. The vendor README lists every one.
+    ${LIB}/jtty/jtty_tbcc_code_profile.f90  # module jtty_tbcc_code_profiles
+    ${LIB}/jtty/tbcc.f90                  # module tbcc: CRC-12 + convolutional code
+    ${LIB}/jtty/jtty_fec_mod.f90          # module jtty_fec: sync sequence + the code
+    ${LIB}/jtty/jtty_tbcc_list_decoder.f90  # module jtty_tbcc_list_decoder
+    ${LIB}/jtty/jtty_tbcc_decoder.f90     # module jtty_tbcc_decoder: the decode ladder
+    ${LIB}/jtty/jtty_source_codec.f90     # module jtty_source_codec: the 34-bit atoms
+    ${LIB}/jtty/jtty_mod.f90              # module jtty_mod: normalise, pack frames
+    ${LIB}/jtty/genjtty.f90               # message -> channel tones
+    ${LIB}/jtty/gen_jttywave.f90          # tones -> 4-GFSK waveform (TX, and the
+                                          #   decoder's subtraction)
+    ${LIB}/jtty/gen_syncwave.f90          # the sync waveform the decoder correlates
+    ${LIB}/jtty/jtty_payload_correlators.f90  # module jtty_payload_correlators
+    ${LIB}/jtty/jtty_mdecode.f90          # module jtty_mdec: the multi-signal decoder
+    ${LIB}/jtty/jtty_receive_context.f90  # module jtty_receive_context: jtty_rx_*
+    ${LIB}/jtty/subtract_jtty.f90         # subtracts a decoded signal
+    ${LIB}/jtty/jtty_peakup.f90           # fine time and frequency
+    ${LIB}/jtty/jtty_block_pow.f90        # coherent block detection
+    ${LIB}/jtty/ana64a.f90                # iwave -> analytic signal at 6000 Sa/s
+    ${LIB}/jtty/rjtty_sub.f90             # whole-recording decoder upstream's tests
+                                          #   drive; not on Nexus's receive path
+    ${LIB}/jtty/jtty_decode.f90           # single-signal decoder; nothing in the set
+                                          #   calls it, upstream's library builds it
+
     # --- 77-bit message packing (lib/77bit) ---
     # NOTE: call_to_c28, encode77, free_text, hash22calc, nonstd_to_c58, test28
     # are standalone TEST PROGRAMS (each has its own `program main`), NOT library
@@ -467,6 +505,10 @@ set(LIBTEMPO_SOURCES
     # live inside packjt77.f90's module. parse77/my_hash are not in the genft1
     # encode->decode path, so they are omitted.
     ${LIB}/77bit/packjt77.f90             # module packjt77
+    ${LIB}/77bit/packjt77_grammar.f90     # module packjt77_grammar: the grammar tables
+                                          #   JTTY reads (the ARRL/RAC sections), from
+                                          #   WSJT-X 3.3.0-beta1; packjt77.f90 above is
+                                          #   Nexus's 3.0.2 copy and does not use it
 
     # --- misc shared (lib) ---
     ${LIB}/chkcall.f90                    # called by pack77 (callsign validation)
