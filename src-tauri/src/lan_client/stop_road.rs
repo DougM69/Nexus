@@ -12,7 +12,9 @@
 //!   time this computer's screen re-asserts its PTT, one `hold`, written by the caller on its own
 //!   thread; the road never repeats one on a timer of its own, so a screen that stops re-asserting
 //!   lets the station's held PTT end the press 200 ms later. A press the station says has ended
-//!   ends here too, so the microphone stops and it never keys again.
+//!   ends here too, so the microphone stops and it never keys again. The station says that end
+//!   again at each hold that reaches it after, so a lost report is heard at the next hold; it is
+//!   taken once, for the press live here.
 //! - **The heartbeat**, every [`HEARTBEAT`] while the link is open: the lease, and the number of
 //!   the last snapshot this computer's main window fetched (client mode keeps it, [`StopRoad::fetched`]).
 //!   The number comes from the screen's own poll, so a window that hangs stops moving it, and
@@ -115,11 +117,11 @@ impl OnAir {
     }
 
     /// The press `press` is over here, if it is the live one: another press, or none, is left as
-    /// it is. Never waits.
-    fn end_press(&self, press: u64) {
-        let _ = self
-            .press
-            .compare_exchange(press, 0, Ordering::AcqRel, Ordering::Acquire);
+    /// it is. Whether it was the live one. Never waits.
+    fn end_press(&self, press: u64) -> bool {
+        self.press
+            .compare_exchange(press, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     /// The station's rig, as its status line says (`None` when it cannot tell).
@@ -424,7 +426,7 @@ impl Shared {
             lock(&self.stops).retain(|pending| pending.stop != stop);
         }
         let mut heard = lock(&self.heard);
-        // An over's end, said once: by the microphone over's state as it leaves armed, or by the
+        // An over's end, taken once: by the microphone over's state as it leaves armed, or by the
         // press's report when its holds stopped arriving (the over then reads as let go).
         let ended = |heard: &mut Heard, why: &'static str| {
             heard.ended = Some((now, why));
@@ -434,25 +436,21 @@ impl Shared {
             Down::Stopped { stop } => keep(&mut heard.stopped, stop),
             press @ Down::Press { .. } => {
                 // A press the station says has ended is over here too: the microphone stops, and
-                // the screen's next re-assertion finds it ended.
-                if let Down::Press {
-                    press: number,
-                    end: Some(_),
-                    ..
-                } = press
-                {
-                    self.on_air.end_press(number);
-                }
-                match press {
+                // the screen's next re-assertion finds it ended. Its end is taken once, while the
+                // press is live here: the station says it again for each hold that reached it
+                // after, and a press let go here is the operator's own, with no words or tone.
+                let taken = match press {
                     Down::Press {
-                        end: Some(HoldEnd::Lapsed),
+                        press: number,
+                        end: Some(end),
                         ..
-                    } => ended(&mut heard, "pttGap"),
+                    } if self.on_air.end_press(number) => Some(end),
+                    _ => None,
+                };
+                match taken {
+                    Some(HoldEnd::Lapsed) => ended(&mut heard, "pttGap"),
                     // Not an over, so no tone: the words alone.
-                    Down::Press {
-                        end: Some(HoldEnd::Refused),
-                        ..
-                    } => heard.ended = Some((now, "refused")),
+                    Some(HoldEnd::Refused) => heard.ended = Some((now, "refused")),
                     _ => {}
                 }
                 keep(&mut heard.presses, press);
@@ -773,6 +771,8 @@ mod tests {
         say(status(true, false, None, 0, 0));
         say(status(false, false, Some(MicEnded::Released), 0, 0));
         assert_eq!(on_air.ended(), 1, "a release is the operator's own");
+        // A press's end is this computer's own over only while the press is live here.
+        on_air.pressing(Some(4));
         say(Down::Press {
             press: 4,
             keyed: false,
@@ -783,6 +783,7 @@ mod tests {
             Some(Over::Ended { why: "pttGap" })
         );
         assert_eq!(on_air.ended(), 2);
+        on_air.pressing(Some(5));
         say(Down::Press {
             press: 5,
             keyed: false,
@@ -799,6 +800,43 @@ mod tests {
             road.over(Instant::now() + NO_WORD),
             Some(Over::NoWord),
             "held, and silence"
+        );
+    }
+
+    /// ⛔ An over's end is taken once per press, while the press is still live here: the station
+    /// says it again for every hold that reaches it after (one lost datagram must not leave the
+    /// over on), so the words and the tone come once. A press this computer let go is the
+    /// operator's own: an end said for it after the release brings no tone. CONTROL: the first end
+    /// said for the live press is taken, and the press is over here.
+    #[test]
+    fn an_end_said_again_is_taken_once_per_press() {
+        let (road, mut station) = road();
+        let on_air = road.shared.on_air.clone();
+        road.lease(Some(LEASE.to_string()));
+        road.fetched(1);
+        let peer = station.heard(Duration::from_millis(700))[0].2;
+        let say = |down: Down| {
+            station.answer(peer, &down);
+            std::thread::sleep(Duration::from_millis(40));
+        };
+        let lapsed = |press| Down::Press {
+            press,
+            keyed: false,
+            end: Some(HoldEnd::Lapsed),
+        };
+        road.press(7);
+        say(lapsed(7));
+        assert_eq!(on_air.ended(), 1, "CONTROL: the live press's end is taken");
+        assert_eq!(on_air.press(), None, "CONTROL: the press is over here");
+        say(lapsed(7));
+        say(lapsed(7));
+        road.press(8);
+        road.release(8);
+        say(lapsed(8));
+        assert_eq!(
+            on_air.ended(),
+            1,
+            "an end said again, or said for a press let go, taken as an over's end"
         );
     }
 

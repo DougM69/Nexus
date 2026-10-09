@@ -25,8 +25,8 @@
 //! From the computer: `stop` at the press and every 50 ms until it is acknowledged; `hold` and
 //! `release` for a held PTT; `heartbeat` every 500 ms, naming its lease and the last snapshot its
 //! screen fetched. From the shack: `stopped` for every Stop, each press's report, the microphone
-//! over's state with its holes on the air so far (display only), and presence's deadline at each
-//! renewal. Each message is one datagram of at most 128 bytes, and nothing is answered before this
+//! over's state with its holes on the air so far (display only) when it changes and again after
+//! each renewal, and presence's deadline at each renewal. Each message is one datagram of at most 128 bytes, and nothing is answered before this
 //! computer has spoken: the shack answers the address of the last datagram that verified. The
 //! messages' format has its own number ([`FORMAT`]), in the build's contract.
 //!
@@ -50,9 +50,11 @@
 //! - **The press is a transmission start**, taken only while the held press is wired from afar
 //!   (`command_dispatch::press_from_afar`), the connection is open, and this road's presence is
 //!   live; a press new to the road also needs the state its computer's screen last fetched under
-//!   two seconds old. Refused, it is said once and never keys later; taken, it goes to the held
-//!   PTT the engine decides (`PttHold`), and each of its reports comes back here for this computer
-//!   alone. A release is always taken.
+//!   two seconds old. Refused, it is said at each hold and never keys later; taken, it goes to the
+//!   held PTT the engine decides (`PttHold`), and each of its reports comes back here for this
+//!   computer alone. A hold for a press that will never key (refused there, or ended) is answered
+//!   with why, one datagram for each hold, so the one report that said it can be lost. A release
+//!   is always taken.
 //! - **What a start on the command link needs** is read off [`Ready`]: the presence this road holds,
 //!   and the snapshot its newest heartbeat named. The road writes it without ever waiting; the
 //!   connection's command lane reads it.
@@ -84,7 +86,7 @@ pub(crate) const FRESH: Duration = Duration::from_millis(tempo_stream::protocol:
 const TICK: Duration = Duration::from_millis(20);
 /// Snapshots remembered per connection: about nineteen seconds of them, against two.
 const REMEMBERED: usize = 64;
-/// Presses remembered as refused per road, so each is said once.
+/// Presses remembered as refused per road, so a refused press never keys later.
 const REFUSED_KEPT: usize = 64;
 
 // --- What it carries -----------------------------------------------------------------------------
@@ -482,7 +484,7 @@ struct Road {
     pending: Option<(TransmitPermit, Instant)>,
     /// The microphone over as this computer was last told it.
     mic_told: Option<MicStatus>,
-    /// Presses refused, each said once.
+    /// Presses refused here: each never keys later.
     refused: VecDeque<u64>,
 }
 
@@ -708,6 +710,9 @@ fn install(socket: &UdpSocket, presence: &RoadPresence, road: &mut Road, now: In
             let left = until.saturating_duration_since(now).as_millis();
             let left_ms = u32::try_from(left).unwrap_or(u32::MAX);
             answer(socket, road, &Down::Presence { left_ms });
+            // And the microphone over's state again, at this look or the next: a computer that
+            // lost the one datagram saying its over ended hears it within a renewal.
+            road.mic_told = None;
         }
     }
 }
@@ -826,9 +831,9 @@ impl Thread {
                 // ⛔ A PRESS IS A TRANSMISSION START, under the stream's transmit rules: the held
                 // press wired from afar, this computer's presence live on this road (which only its
                 // own lease mints), and, for a press new to this road, the state its screen last
-                // fetched under two seconds old. Said once per press, and a press refused never
-                // keys later. A press whose freshness cannot be read this moment is neither: its
-                // next hold asks again.
+                // fetched under two seconds old. Said at each hold, one datagram for each, and a
+                // press refused never keys later. A press whose freshness cannot be read this moment
+                // is neither: its next hold asks again.
                 let new = road.pressing != Some(press);
                 let fresh = if new {
                     match road.clock.freshness(road.named, now) {
@@ -848,18 +853,30 @@ impl Thread {
                             road.refused.pop_front();
                         }
                         road.refused.push_back(press);
-                        let end = Some(HoldEnd::Refused);
-                        let said = Down::Press {
-                            press,
-                            keyed: false,
-                            end,
-                        };
-                        answer(&self.socket, road, &said);
                     }
+                    let said = Down::Press {
+                        press,
+                        keyed: false,
+                        end: Some(HoldEnd::Refused),
+                    };
+                    answer(&self.socket, road, &said);
                     return;
                 }
                 road.pressing = Some(press);
-                self.powers.ptt.hold(&press_id(&tag, press), now);
+                let id = press_id(&tag, press);
+                self.powers.ptt.hold(&id, now);
+                // ⛔ A hold for a press that will never key is answered with why, one datagram for
+                // each hold: the one report that said it may have been lost, and its computer would
+                // go on holding an over that is not on the air, its microphone open and the
+                // station's audio muted.
+                if let Some(end) = self.powers.ptt.end_of(&id) {
+                    let said = Down::Press {
+                        press,
+                        keyed: false,
+                        end: Some(end),
+                    };
+                    answer(&self.socket, road, &said);
+                }
             }
             // The off half: always taken.
             Up::Release { press } => {
@@ -906,7 +923,7 @@ impl Thread {
     /// Every [`TICK`]: the roads past their afterlife go with their keys, a renewal the Engine was
     /// too busy for is handed over, each lane is told the presence its road holds, each press's
     /// report goes to the computer whose press it is, and each computer whose presence is live is
-    /// told when the microphone over changed.
+    /// told the microphone over's state when it changed, and again after each renewal.
     fn look(&mut self, now: Instant) {
         let afterlife = self.afterlife;
         self.roads.retain(|_, road| {

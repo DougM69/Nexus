@@ -44,6 +44,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// The bench's road switch on this roadside, end to end (test builds only).
 #[cfg(feature = "bench-road-switch")]
 mod bench;
+/// A press's end, said again.
+mod ends;
 /// A section change from afar arms nothing.
 mod entry;
 /// Stop wins over a start that was in flight.
@@ -1524,8 +1526,8 @@ fn presses(said: &[Down]) -> Vec<&Down> {
 /// ★ A held press from afar: a held press on the road arms the microphone over in Phone, and its voice
 /// keys it, only under the stream's transmit rules. With no presence (its screen's state fresh, the
 /// heartbeat under a lease that is not this computer's), and with stale state (presence live, the
-/// newest heartbeat naming a snapshot more than two seconds old), a press is refused, said once,
-/// and never reaches the held PTT. With presence live and the state fresh it is taken: the road says
+/// newest heartbeat naming a snapshot more than two seconds old), a press is refused, said at each
+/// hold, and never reaches the held PTT. With presence live and the state fresh it is taken: the road says
 /// it is keyed (the held PTT's own report, relayed), the over keys on its voice, and frames are
 /// taken. CONTROL: the refused presses came with the shack in Phone, TX armed, and the radio loop
 /// ticking, where the same press is taken.
@@ -1555,14 +1557,15 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let said = seat.road_says(Duration::from_millis(200)).await;
+    let refused = |press| Down::Press {
+        press,
+        keyed: false,
+        end: Some(HoldEnd::Refused),
+    };
     assert_eq!(
         presses(&said),
-        [&Down::Press {
-            press: 1,
-            keyed: false,
-            end: Some(HoldEnd::Refused)
-        }],
-        "no presence: refused, said once: {said:?}"
+        [&refused(1); 3],
+        "no presence: refused, said at each hold: {said:?}"
     );
     assert!(!r.ptt.keyed());
     // Presence live, the state stale.
@@ -1588,12 +1591,8 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
     let said = seat.road_says(Duration::from_millis(200)).await;
     assert_eq!(
         presses(&said),
-        [&Down::Press {
-            press: 2,
-            keyed: false,
-            end: Some(HoldEnd::Refused)
-        }],
-        "stale state: refused, said once: {said:?}"
+        [&refused(2); 3],
+        "stale state: refused, said at each hold: {said:?}"
     );
     assert!(!r.ptt.keyed());
     assert!(!r.s.shared.engine.lock().unwrap().mic_armed());
@@ -2546,7 +2545,7 @@ async fn a_wired_start_runs_only_under_the_stream_rules() {
 
 /// ★ One controller, the lease bound to the connection that took it. A second connection
 /// of the same paired computer, without the lease, is refused `notController` for a start, and its
-/// road's press is refused and said once, never reaching the held PTT, since only the lease holder's
+/// road's press is refused and said at each hold, never reaching the held PTT, since only the lease holder's
 /// own lease mints presence on its own road: in Phone, with the holder's presence live at the
 /// station and the radio loop ticking, where the holder's own press arms the microphone.
 /// CONTROL: the connection holding the lease starts the same CQ, and its press arms.
@@ -2579,15 +2578,12 @@ async fn a_start_from_a_connection_without_the_lease_is_refused() {
         armed |= r.s.shared.engine.lock().unwrap().mic_armed();
     }
     let said = other.road_says(Duration::from_millis(200)).await;
-    assert_eq!(
-        presses(&said),
-        [&Down::Press {
-            press: 1,
-            keyed: false,
-            end: Some(HoldEnd::Refused)
-        }],
-        "{said:?}"
-    );
+    let refused = Down::Press {
+        press: 1,
+        keyed: false,
+        end: Some(HoldEnd::Refused),
+    };
+    assert_eq!(presses(&said), [&refused; 4], "{said:?}");
     assert!(
         !armed && !r.ptt.keyed(),
         "another connection's press armed the over"
@@ -2732,16 +2728,18 @@ async fn after_a_reconnect_nothing_keys_until_it_is_armed() {
         done.clone(),
         Instant::now() + 2 * PRESENCE,
     );
-    speak(&again, &mut encoder, 1, 21, 20, |_| true).await;
+    let holds = speak(&again, &mut encoder, 1, 21, 20, |_| true).await.len();
     let said = again.road_says(Duration::from_millis(200)).await;
-    assert_eq!(
-        presses(&said),
-        [&Down::Press {
-            press: 1,
-            keyed: false,
-            end: Some(HoldEnd::Refused)
-        }],
-        "refused at the station: {said:?}"
+    let refused = Down::Press {
+        press: 1,
+        keyed: false,
+        end: Some(HoldEnd::Refused),
+    };
+    // Refused at its first tick, and said again at each hold after: at most one for each hold.
+    let told = presses(&said);
+    assert!(
+        !told.is_empty() && told.len() <= holds && told.iter().all(|down| **down == refused),
+        "refused at the station, {holds} holds: {said:?}"
     );
     assert!(!r.s.shared.engine.lock().unwrap().mic_armed());
     let armed_again = Instant::now();
@@ -2935,7 +2933,7 @@ async fn a_start_on_a_lease_taken_again_waits_for_a_heartbeat() {
 /// A computer holding the lease, with presence and fresh state, hands the lease back, and a second
 /// connection takes it and renews presence of its own at the station, in Phone with TX armed. The
 /// first computer's next press, its last state still under two seconds old, is refused by its own
-/// road, said once, and never reaches the held PTT: the presence live at the station is the other
+/// road, said at each hold, and never reaches the held PTT: the presence live at the station is the other
 /// connection's, and nothing else here would have refused it. CONTROL: the new holder's own press
 /// arms.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2985,15 +2983,12 @@ async fn a_press_from_a_connection_whose_presence_went_is_refused_under_anothers
         fetched.elapsed()
     );
     let said = first.road_says(Duration::from_millis(200)).await;
-    assert_eq!(
-        presses(&said),
-        [&Down::Press {
-            press: 1,
-            keyed: false,
-            end: Some(HoldEnd::Refused)
-        }],
-        "{said:?}"
-    );
+    let refused = Down::Press {
+        press: 1,
+        keyed: false,
+        end: Some(HoldEnd::Refused),
+    };
+    assert_eq!(presses(&said), [&refused; 3], "{said:?}");
     assert!(
         !armed && !r.ptt.keyed(),
         "a press with no presence of its own armed the over"
