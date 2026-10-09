@@ -380,6 +380,17 @@ jobs:
       - name: cargo clippy src-tauri --features radio
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features radio -- -D warnings
 
+      # The same lint over a TEST build's shape. `bench-road-switch` is the
+      # switch a test build of the remote client carries, to block one of its
+      # roads to the shack while a bench measures what the other does. It is
+      # off by default and no release can turn it on: the `cargo test` step
+      # above runs the guard that fails if one could. So neither step above
+      # compiles the switch, and between test builds its code and its tests
+      # could break with nothing noticing. This step compiles both, under the
+      # same toolchain, cache and `-D warnings`. It builds nothing that ships.
+      - name: cargo clippy src-tauri --features radio,bench-road-switch
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features radio,bench-road-switch -- -D warnings
+
       - name: Set up Node.js for the native Remote integration
         uses: actions/setup-node@v7
         with:
