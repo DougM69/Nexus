@@ -27433,8 +27433,12 @@ tr.sel .aprs-sym {
 .client-banner[data-bench='blockStopRoad'] {
   border-bottom-color: var(--state-bad);
 }
+/* It may shrink, and its parts wrap inside it: at the 1024 floor the mark goes under the
+   positions rather than past the banner's edge (measured in a real browser: the line it would
+   need is 1101px). */
 .client-banner-bench {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
