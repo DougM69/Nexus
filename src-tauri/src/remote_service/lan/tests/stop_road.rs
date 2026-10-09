@@ -41,6 +41,10 @@ use tempo_audio::mic_encode::{MicEncoder, MIC_FRAME_SAMPLES};
 use tempo_audio::receive_encode::DetachedFeed;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+/// The bench's road switch on this roadside, end to end (test builds only).
+#[cfg(feature = "bench-road-switch")]
+mod bench;
+
 /// The design's bound for a Stop on this road, flood or no flood.
 const ACKNOWLEDGED: Duration = Duration::from_millis(20);
 /// Presence's five seconds, written here so a change in the code cannot move them.

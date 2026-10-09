@@ -81,6 +81,14 @@
 //! connects again by itself. A call cut off by a drop is never sent again: the next link asks the
 //! shack what became of it.
 //!
+//! ## A test build's road switch
+//!
+//! Built with the `bench-road-switch` feature only (`crate::bench_road_switch`): one switch here
+//! blocks the command link or Stop's road at this computer's own transport, so the bench can try
+//! each road alone. Every link [`Client::drive`] opens is opened under it, and the banner's status
+//! says where it is. Nothing in this module decides anything by it: the rules above meet a blocked
+//! road as they would meet a firewall on this computer.
+//!
 //! ## What a refusal says
 //!
 //! A call refused here or at the shack fails with `nexusClient:<code>`, a refusal's code or one of
@@ -493,6 +501,9 @@ pub(crate) struct Status {
     /// This computer's over, as the station last said it on Stop's road: on the air with its holes,
     /// ended and why, or no word while a press is held.
     pub(crate) over: Option<Over>,
+    /// A test build's road switch: Normal, or the road this computer blocks.
+    #[cfg(feature = "bench-road-switch")]
+    pub(crate) bench: crate::bench_road_switch::Position,
 }
 
 /// This computer's PTT between the screen's re-assertions.
@@ -546,6 +557,10 @@ pub(crate) struct Client {
     /// recording under way, if one is.
     mic: OnceLock<Arc<dyn Headset>>,
     recording: Mutex<Option<Recording>>,
+    /// A test build's road switch over every link this computer opens to the shack: in memory
+    /// only, so every launch starts with both roads open.
+    #[cfg(feature = "bench-road-switch")]
+    road_switch: Arc<crate::bench_road_switch::Switch>,
 }
 
 impl Client {
@@ -556,6 +571,8 @@ impl Client {
                 phase: Phase::Connecting,
                 reason: None,
                 over: None,
+                #[cfg(feature = "bench-road-switch")]
+                bench: Default::default(),
             }),
             station_id,
             shack: Mutex::new(None),
@@ -575,6 +592,8 @@ impl Client {
             next_press: AtomicU64::new(1),
             mic: OnceLock::new(),
             recording: Mutex::new(None),
+            #[cfg(feature = "bench-road-switch")]
+            road_switch: Arc::default(),
         }
     }
 
@@ -587,8 +606,16 @@ impl Client {
             .and_then(|road| road.over(std::time::Instant::now()));
         Status {
             over,
+            #[cfg(feature = "bench-road-switch")]
+            bench: self.road_switch.position(),
             ..lock(&self.status).clone()
         }
+    }
+
+    /// A test build's road switch.
+    #[cfg(feature = "bench-road-switch")]
+    pub(crate) fn road_switch(&self) -> &crate::bench_road_switch::Switch {
+        &self.road_switch
     }
 
     /// This computer's headset, given once as the app starts.
@@ -1139,7 +1166,11 @@ impl Client {
             if let Some(first) = record.addresses.first() {
                 self.at(first.clone());
             }
-            let wait = match self.connect(&record, typed, &look).await {
+            let connecting = self.connect(&record, typed, &look);
+            // In a test build, what this link opens is under the road switch.
+            #[cfg(feature = "bench-road-switch")]
+            let connecting = self.road_switch.over(connecting);
+            let wait = match connecting.await {
                 // The station proved the key pinned for this pairing; one that then names itself
                 // another station is not the one asked for, and runs nothing from here.
                 Ok((link, _)) if link.ids.station != self.station_id => {

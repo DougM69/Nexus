@@ -24,6 +24,8 @@
 //!   the station was last heard, and each end of an over the operator did not make by letting go.
 //! - **After the link ends** the road stays for [`AFTERLIFE`], as the station keeps its keys, so a
 //!   Stop pressed as the link drops, or just after, still goes. No heartbeat goes then.
+//! - **In a test build** a road opened under the bench's road switch drops every datagram both ways
+//!   while the switch blocks it, as a firewall here would (`crate::bench_road_switch`).
 //!
 //! The keys are made from the link's session and held in memory only; nothing here writes, logs or
 //! shows them. They go with the afterlife: the road's thread drops them as it ends, whoever still
@@ -217,6 +219,9 @@ struct Shared {
     /// When the link this road was made for ended.
     ended: Mutex<Option<Instant>>,
     heard: Mutex<Heard>,
+    /// A test build's road switch, when the road was opened under one.
+    #[cfg(feature = "bench-road-switch")]
+    switch: Option<Arc<crate::bench_road_switch::Switch>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -266,6 +271,8 @@ impl StopRoad {
             state: AtomicU64::new(0),
             ended: Mutex::new(None),
             heard: Mutex::new(Heard::default()),
+            #[cfg(feature = "bench-road-switch")]
+            switch: crate::bench_road_switch::Switch::opening(),
         });
         let theirs = shared.clone();
         std::thread::Builder::new()
@@ -385,7 +392,20 @@ impl Shared {
         let sealed = lock(&self.send)
             .as_ref()
             .and_then(|send| send.seal(up.kind(), &up.body()));
+        // Blocked by a test build's switch: sealed, and dropped, as a firewall here would drop it.
+        #[cfg(feature = "bench-road-switch")]
+        if self.blocked() {
+            return sealed.is_some();
+        }
         sealed.is_some_and(|datagram| self.socket.send(&datagram).is_ok())
+    }
+
+    /// Whether a test build's road switch blocks this road now.
+    #[cfg(feature = "bench-road-switch")]
+    fn blocked(&self) -> bool {
+        self.switch
+            .as_ref()
+            .is_some_and(|switch| switch.blocks(crate::bench_road_switch::Road::StopRoad))
     }
 
     fn gone(&self, now: Instant) -> bool {
@@ -468,6 +488,9 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
     let mut beat: Option<Instant> = None;
     loop {
         match shared.socket.recv(&mut buffer) {
+            // Blocked by a test build's switch: dropped unread, as a firewall here would drop it.
+            #[cfg(feature = "bench-road-switch")]
+            Ok(_) if shared.blocked() => {}
             Ok(length) => {
                 let heard = receive
                     .open(&buffer[..length])
@@ -820,5 +843,90 @@ mod tests {
             "nothing is sealed past it"
         );
         assert!(station.heard(Duration::from_millis(100)).is_empty());
+    }
+
+    /// ★ In a test build, a road opened under the bench's road switch carries nothing either way
+    /// while the switch blocks it: a Stop pressed, a held press and the heartbeat never reach the
+    /// station, and what the station says (an acknowledgement, presence) is dropped unread. Opened
+    /// again, the Stop still unacknowledged is sent again, and its acknowledgement is heard.
+    /// CONTROL: before the block the same road's Stop reached the station at once and its answer
+    /// was heard; a road opened under no switch is never blocked.
+    #[cfg(feature = "bench-road-switch")]
+    #[test]
+    fn a_road_the_switch_blocks_carries_nothing_either_way() {
+        use crate::bench_road_switch::{Position, Switch};
+        let switch = Arc::new(Switch::default());
+        let (switched, mut station) = tauri::async_runtime::block_on(switch.over(async { road() }));
+        switched.lease(Some(LEASE.to_string()));
+        switched.fetched(9);
+        let first = switched.stop();
+        let heard = station.heard(Duration::from_millis(100));
+        assert!(
+            heard.iter().any(|(up, ..)| *up == Up::Stop { stop: first }),
+            "CONTROL: {heard:?}"
+        );
+        let from = heard[0].2;
+        station.answer(from, &Down::Stopped { stop: first });
+        let until = Instant::now() + Duration::from_secs(1);
+        while switched.heard().stopped.is_empty() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            switched.heard().stopped,
+            [first],
+            "CONTROL: the answer heard"
+        );
+
+        assert_eq!(
+            switch.set(Position::BlockStopRoad),
+            Ok(Position::BlockStopRoad)
+        );
+        let _ = station.heard(Duration::from_millis(30));
+        let second = switched.stop();
+        switched.press(7);
+        assert!(switched.hold(7), "the press is live here");
+        let carried = station.heard(Duration::from_millis(700));
+        assert!(carried.is_empty(), "carried while blocked: {carried:?}");
+        station.answer(from, &Down::Stopped { stop: second });
+        station.answer(from, &Down::Presence { left_ms: 5_000 });
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            switched.heard().stopped,
+            [first],
+            "an answer taken while blocked"
+        );
+        assert!(
+            !switched.presence_live(Instant::now()),
+            "presence taken while blocked"
+        );
+
+        assert_eq!(switch.set(Position::Normal), Ok(Position::Normal));
+        let after = station.heard(Duration::from_millis(200));
+        assert!(
+            after
+                .iter()
+                .any(|(up, ..)| *up == Up::Stop { stop: second }),
+            "the Stop unacknowledged goes again once open: {after:?}"
+        );
+        station.answer(from, &Down::Stopped { stop: second });
+        let until = Instant::now() + Duration::from_secs(1);
+        while switched.heard().stopped.len() < 2 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(switched.heard().stopped, [first, second]);
+
+        let (free, mut its_station) = road();
+        assert_eq!(
+            switch.set(Position::BlockStopRoad),
+            Ok(Position::BlockStopRoad)
+        );
+        let stop = free.stop();
+        assert!(
+            its_station
+                .heard(Duration::from_millis(100))
+                .iter()
+                .any(|(up, ..)| *up == Up::Stop { stop }),
+            "a road opened under no switch was blocked"
+        );
     }
 }

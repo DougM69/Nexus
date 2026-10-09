@@ -490,15 +490,25 @@ const CLASSES: &[(&str, Class, &str)] = &[
 /// path), or `None` when it has no row, which both ends refuse. The rows are in name order, which
 /// a test below holds, so this is a binary search.
 pub(crate) fn class_of(name: &str) -> Option<Class> {
+    // A test build's road switch runs here: it is this computer's own roads to the shack.
+    #[cfg(feature = "bench-road-switch")]
+    if name == crate::bench_road_switch::COMMAND {
+        return Some(RunsHere);
+    }
     CLASSES
         .binary_search_by(|(row, ..)| (*row).cmp(name))
         .ok()
         .map(|at| CLASSES[at].1)
 }
 
-/// Every command and its class, in name order: what the build's contract is made from.
+/// Every command and its class, in name order (a test build's road switch last): what the build's
+/// contract is made from.
 pub(crate) fn classes() -> impl Iterator<Item = (&'static str, Class)> {
-    CLASSES.iter().map(|(name, class, _)| (*name, *class))
+    let rows = CLASSES.iter().map(|(name, class, _)| (*name, *class));
+    // A test build has one command more, so it is another build to a shipped one.
+    #[cfg(feature = "bench-road-switch")]
+    let rows = rows.chain([(crate::bench_road_switch::COMMAND, RunsHere)]);
+    rows
 }
 
 /// The command names `generate_handler!` registers, with any module path dropped

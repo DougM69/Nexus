@@ -60,7 +60,13 @@ const OPERATIONS: [&str; 5] = ["state", "acquire", "heartbeat", "release", "stop
 /// The operation version every request on this road is answered at.
 const OPERATION_VERSION: u8 = VERSIONS.2;
 
+#[cfg(not(feature = "bench-road-switch"))]
 pub(super) type Socket = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+/// In a test build every road to a station's listener is under the road switch it was opened
+/// under, if it was opened under one (`crate::bench_road_switch`).
+#[cfg(feature = "bench-road-switch")]
+pub(super) type Socket =
+    WebSocketStream<tokio_rustls::client::TlsStream<crate::bench_road_switch::Gated<TcpStream>>>;
 
 /// A TLS session with a station, upgraded: the socket, the key the station presented (SPKI) and
 /// this session's exporter, which a pairing's proofs are bound to.
@@ -109,6 +115,18 @@ fn socket_config() -> WebSocketConfig {
 
 /// TCP, TLS with `config`, and the upgrade, at `at`.
 pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<Opened, Failed> {
+    // A test build's road switch with the command link blocked: no connection leaves this
+    // computer, and it is given up after the connect's own wait, as an unanswered one is.
+    #[cfg(feature = "bench-road-switch")]
+    let switch = crate::bench_road_switch::Switch::opening();
+    #[cfg(feature = "bench-road-switch")]
+    if switch
+        .as_ref()
+        .is_some_and(|switch| switch.blocks(crate::bench_road_switch::Road::Link))
+    {
+        tokio::time::sleep(CONNECT).await;
+        return Err(Failed::NotConnected(std::io::ErrorKind::TimedOut));
+    }
     let tcp = match tokio::time::timeout(CONNECT, TcpStream::connect(at)).await {
         Ok(Ok(tcp)) => tcp,
         Ok(Err(error)) => return Err(Failed::NotConnected(error.kind())),
@@ -117,6 +135,8 @@ pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<
     // Every frame goes as it is written, the station's way too: a Stop is a small frame, and
     // Nagle can hold one for the acknowledgement of the frame before (about 40 ms, measured).
     let _ = tcp.set_nodelay(true);
+    #[cfg(feature = "bench-road-switch")]
+    let tcp = crate::bench_road_switch::Gated::new(tcp, switch);
     let name = rustls::pki_types::ServerName::try_from("nexus-station")
         .map_err(|_| Failed::Unreachable)?;
     let tls = tokio_rustls::TlsConnector::from(config)

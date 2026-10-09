@@ -742,6 +742,9 @@ const MAY_REACH: &[&str] = &[
     // while wanted. It plays and captures, and starts nothing of a station.
     "crate::lan_client::audio_road",
     "crate::lan_client::Stations",
+    // A test build's road switch: this computer's own roads to the shack, blocked one at a time.
+    // It opens and starts nothing.
+    "crate::bench_road_switch",
     "crate::remote_service::vault::PairedStation",
     "crate::remote_service::vault::SystemVault",
     "crate::ui_state_read",

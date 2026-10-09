@@ -159,8 +159,9 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     // The LAN road's two are a seventh and eighth (2026-10-04): a LAN controller's Stop reaches it
     // the same way, on the authority and on the LAN channel. Stop's second road is a ninth
     // (2026-10-07): its Stop runs every stop verb on a thread of its own, the satellite disarm
-    // among them.
-    const SOURCES: [(&str, &str); 9] = [
+    // among them. The bench's road switch is a tenth: a Stop pressed on a client-mode screen goes
+    // on that road too.
+    const SOURCES: [(&str, &str); 10] = [
         ("lan_lease_tests.rs", include_str!("lan_lease_tests.rs")),
         (
             "remote_service/lan/tests.rs",
@@ -177,6 +178,10 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
         (
             "remote_service/lan/tests/stop_road.rs",
             include_str!("../lan/tests/stop_road.rs"),
+        ),
+        (
+            "remote_service/lan/tests/stop_road/bench.rs",
+            include_str!("../lan/tests/stop_road/bench.rs"),
         ),
         ("lib.rs", include_str!("../../lib.rs")),
     ];
@@ -207,6 +212,8 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
             || body.contains("Up::Stop")
             || body.contains("road_stop(")
             || body.contains("road.stop()")
+            // A Stop pressed on a client-mode screen, which goes by Stop's road as well.
+            || body.contains("stop_from_the_screen(")
             || body.contains("rotator.point")
             || body.contains("test_live_sat_track")
             || body.contains("run_simulated_pass")

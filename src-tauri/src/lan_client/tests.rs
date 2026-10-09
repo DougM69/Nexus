@@ -797,3 +797,71 @@ async fn a_pairing_that_reaches_nobody_says_why() {
         Some(nobody_answers)
     );
 }
+
+/// ★ In a test build, a road opened while the bench's road switch blocks the command link makes no
+/// connection: nothing reaches the station's port, and the road is given up after the connect's own
+/// three seconds, as an unanswered one is. CONTROL: the same road opened at Normal reaches the port,
+/// and one opened under no switch is never held back.
+#[cfg(feature = "bench-road-switch")]
+#[tokio::test]
+async fn a_road_opened_while_the_link_is_blocked_reaches_nothing() {
+    use crate::bench_road_switch::{Position, Switch};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let std::net::SocketAddr::V4(at) = listener.local_addr().unwrap() else {
+        unreachable!()
+    };
+    let paired = record(&id(1), &[&at.to_string()]);
+    let config =
+        crate::remote_service::lan::tls::client::config(&paired.pkcs8, &paired.station_key)
+            .unwrap();
+    let switch = Arc::new(Switch::default());
+    assert_eq!(switch.set(Position::BlockLink), Ok(Position::BlockLink));
+    let began = std::time::Instant::now();
+    let opened = tokio::time::timeout(
+        Duration::from_secs(5),
+        switch.over(road::open(at, config.clone())),
+    )
+    .await;
+    let took = began.elapsed();
+    assert_eq!(
+        opened.map(Result::err),
+        Ok(Some(road::Failed::NotConnected(
+            std::io::ErrorKind::TimedOut
+        ))),
+        "given up as an unanswered connect is, within the connect's own wait"
+    );
+    assert!(took >= Duration::from_millis(2_900), "{took:?}");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), listener.accept())
+            .await
+            .is_err(),
+        "the station's port was reached"
+    );
+
+    for under in [Some(Position::Normal), None] {
+        if let Some(position) = under {
+            assert_eq!(switch.set(position), Ok(position));
+        }
+        let opening = async {
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), road::open(at, config.clone())).await;
+        };
+        let (_, accepted) = match under {
+            Some(_) => tokio::join!(
+                switch.over(opening),
+                tokio::time::timeout(Duration::from_secs(1), listener.accept())
+            ),
+            None => {
+                assert_eq!(switch.set(Position::BlockLink), Ok(Position::BlockLink));
+                tokio::join!(
+                    opening,
+                    tokio::time::timeout(Duration::from_secs(1), listener.accept())
+                )
+            }
+        };
+        assert!(
+            accepted.is_ok_and(|accepted| accepted.is_ok()),
+            "CONTROL ({under:?}): the port is reached"
+        );
+    }
+}

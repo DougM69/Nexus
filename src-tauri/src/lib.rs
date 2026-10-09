@@ -33,6 +33,10 @@
 /// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
 /// and a computer driving the station hear.
 mod alert;
+/// Test builds only (the `bench-road-switch` feature): the switch on a computer driving a station
+/// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
+#[cfg(feature = "bench-road-switch")]
+mod bench_road_switch;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -83,6 +87,10 @@ mod remote_window;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
+/// A shipped build never carries the bench's road switch: the release never turns the feature on,
+/// and a build without it has none of it.
+#[cfg(test)]
+mod shipped_without_the_road_switch;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -33430,7 +33438,8 @@ fn splash_notes(handle: &tauri::AppHandle) -> std::sync::mpsc::Sender<SplashNote
 /// mode's both run them through this handler; client mode routes each by its class first
 /// (`client_mode::Client::handle`), so a command that runs at the shack never reaches it there.
 pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + Sync> {
-    Box::new(tauri::generate_handler![
+    type Commands = Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + Sync>;
+    let commands: Commands = Box::new(tauri::generate_handler![
         display_metrics,
         update_install_block,
         prepare_update_install,
@@ -33879,7 +33888,11 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         qsy_move_now,
         qsy_pause,
         qsy_stop
-    ])
+    ]);
+    // A test build's road switch brings its one command; a shipped build has none of it.
+    #[cfg(feature = "bench-road-switch")]
+    let commands = bench_road_switch::with_its_command(commands);
+    commands
 }
 
 /// The context the app is built in: its configuration and its frontend, embedded once for the

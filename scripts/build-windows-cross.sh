@@ -9,6 +9,7 @@
 #   ./scripts/build-windows-cross.sh            # everything (modem exes + GUI)
 #   ./scripts/build-windows-cross.sh --modem    # only the modem exes (fast, fully static)
 #   ./scripts/build-windows-cross.sh --no-gui   # modem + win_smoke, skip Nexus.exe
+#   ./scripts/build-windows-cross.sh --bench-road-switch   # a TEST build for the bench, never shipped
 #
 # Prereqs (Debian/Ubuntu pkg names) — the script checks and reports what's missing:
 #   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64
@@ -33,11 +34,14 @@ export FFTW_MINGW_PREFIX="$REPO/target/fftw-mingw"   # read by ft1-sys/build.rs
 VPX_VER=1.17.0
 export VPX_MINGW_PREFIX="$REPO/target/vpx-mingw"     # read by crates/tempo-stream/build.rs
 
-GUI=1; MODEM_ONLY=0
+GUI=1; MODEM_ONLY=0; FEATURES=radio,custom-protocol
 for a in "$@"; do
   case "$a" in
     --modem)  MODEM_ONLY=1 ;;
     --no-gui) GUI=0 ;;
+    # A test build only: the switch that blocks one road to the shack at a time, for the bench.
+    # Never a release: src-tauri's tests fail if a release workflow names it.
+    --bench-road-switch) FEATURES+=,bench-road-switch ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $a" ;;
   esac
@@ -212,7 +216,7 @@ if [ "$GUI" = 1 ]; then
   # its build jobs never see the key, and a separate job signs the finished installer. A local
   # build with the key in ~/.nexus-build.env still signs here, as before.
   no_sign=(); [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || no_sign=(--no-sign)
-  ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis "${no_sign[@]}" )
+  ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features "$FEATURES" --bundles nsis "${no_sign[@]}" )
   ok "Nexus.exe + installer"
 fi
 
