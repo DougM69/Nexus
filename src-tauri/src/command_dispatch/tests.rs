@@ -698,6 +698,62 @@ fn a_winlink_password_typed_here_is_refused_at_both_ends() {
     }
 }
 
+#[test]
+fn a_radios_icom_network_password_is_set_and_asked_after_at_the_shack_only() {
+    // Credentials are set at the shack only, as for every other service: storing, clearing and
+    // asking whether there is one are each refused at both ends, the yes-or-no question included,
+    // since it reads the shack's keychain. A typed password is refused before it is sent.
+    let shack = shack();
+    for (id, (name, args)) in [
+        (
+            "set_icom_lan_password",
+            json!({ "radioId": 1, "password": "not-a-real-one" }),
+        ),
+        ("clear_icom_lan_password", json!({ "radioId": 1 })),
+        ("icom_lan_password_saved", json!({ "radioId": 1 })),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(class_of(name), Some(Class::RefusedHere), "{name}");
+        assert_eq!(
+            route(name, &args),
+            Route::Refused(Refusal::ShackOnly),
+            "{name} is never sent"
+        );
+        let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
+        assert_eq!(kind(&admission), "refused shackOnly", "{name} at the shack");
+    }
+}
+
+#[test]
+fn a_cluster_spot_and_a_confirmation_check_run_at_the_shack_as_their_siblings_do() {
+    // A spot to the DX cluster goes as the activation's own spot goes, by the shack's connections;
+    // the shack still refuses it while a contest allows spotting only over RF. Starting Check
+    // confirmations goes as the check's other steps go: at the shack, with the credentials stored
+    // there, changing nothing until Apply.
+    let shack = shack();
+    for (id, (name, sibling, args)) in [
+        (
+            "post_spot",
+            "self_spot_activation",
+            json!({ "freqMhz": 14.074, "call": "KD9TAW", "comment": "FT8" }),
+        ),
+        ("start_confirmation_check", "confirmation_check", json!({})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(class_of(sibling), Some(Class::RunsAtShack), "{sibling}");
+        assert_eq!(class_of(name), Some(Class::RunsAtShack), "{name}");
+        assert_eq!(route(name, &args), Route::Shack, "{name} is sent");
+        match shack.admit(&controller(), call(id as u64 + 1, name, args.clone())) {
+            Admission::Run { args: ran, .. } => assert_eq!(ran, args, "{name} at the shack"),
+            other => panic!("{name} at the shack: {}", kind(&other)),
+        }
+    }
+}
+
 // --- At most once --------------------------------------------------------------------------------
 
 #[test]
