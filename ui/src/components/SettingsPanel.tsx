@@ -12,7 +12,7 @@ import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
-import { checkRigForm, blocks, dataModePickerShown, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -51,6 +51,9 @@ import {
   clearHamqthPassword,
   clearHrdlogCode,
   clearLotwPassword,
+  clearIcomLanPassword,
+  icomLanPasswordSaved,
+  setIcomLanPassword,
   clearQrzLogbookKey,
   clearQrzPassword,
   detectRigs,
@@ -819,7 +822,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // this profile drives is a property of the profile, and dropping it on Save would move an
     // operator's RIG 2 radio silently onto RIG 1.
     omnirigSlot: s.omnirigSlot ?? 1,
-    rigctldPort: s.rigctldPort ?? 4532,
+    rigctldPort: s.rigctldPort ?? 4534,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
     // ⚠️ PER-RADIO, so it MUST be seeded here for the same reason `omnirigSlot` is: the Save
@@ -860,6 +863,9 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
     flexNativeCat: s.flexNativeCat ?? false,
+    icomLanHost: s.icomLanHost ?? '',
+    icomLanUser: s.icomLanUser ?? '',
+    icomLanPort: s.icomLanPort ?? 50001,
   }
 }
 
@@ -1683,6 +1689,27 @@ export function SettingsPanel({
   // Which radio the Radio-tab form is currently EDITING — decoupled from which radio is operating
   // (activeRadioId). Editing a non-active radio writes just that profile (no live rig swap).
   const [editingRadioId, setEditingRadioId] = useState<number | undefined>(activeRadioId)
+  // The Icom network connection's password: typed here and stored in the OS keychain at Set, never
+  // kept in the form or read back. Only whether one is saved is ever asked (`icomLanPwSaved`; `null`
+  // while not known).
+  const [icomLanPw, setIcomLanPw] = useState('')
+  const [icomLanPwSaved, setIcomLanPwSaved] = useState<boolean | null>(null)
+  const icomLanRadioId = editingRadioId ?? form?.activeRadio
+  const onIcomLan = form?.rigConn === 'icomlan'
+  useEffect(() => {
+    setIcomLanPw('')
+    if (!onIcomLan || icomLanRadioId == null || remote) {
+      setIcomLanPwSaved(null)
+      return
+    }
+    let live = true
+    icomLanPasswordSaved(icomLanRadioId)
+      .then((saved) => live && setIcomLanPwSaved(saved))
+      .catch(() => live && setIcomLanPwSaved(null))
+    return () => {
+      live = false
+    }
+  }, [onIcomLan, icomLanRadioId, remote])
   // In-progress MHz text for the override row being edited — committed only when
   // it parses as a positive number, so a half-typed "14." never corrupts the form.
   const [mhzDraft, setMhzDraft] = useState<{ idx: number; text: string } | null>(null)
@@ -2859,6 +2886,32 @@ export function SettingsPanel({
     }
   }
 
+  const onSetIcomLanPassword = async () => {
+    if (!icomLanPw || icomLanRadioId == null) return
+    const ok = await withErrorToast(async () => {
+      await setIcomLanPassword(icomLanRadioId, icomLanPw)
+      return true
+    }, t('settings.rigControl.icomLan.password.saveFailed'))
+    if (ok) {
+      setIcomLanPw('')
+      setIcomLanPwSaved(true)
+      pushToast(t('settings.rigControl.icomLan.password.setDone'), 'success')
+    }
+  }
+
+  const onClearIcomLanPassword = async () => {
+    if (icomLanRadioId == null) return
+    const ok = await withErrorToast(async () => {
+      await clearIcomLanPassword(icomLanRadioId)
+      return true
+    }, t('settings.rigControl.icomLan.password.clearFailed'))
+    if (ok) {
+      setIcomLanPw('')
+      setIcomLanPwSaved(false)
+      pushToast(t('settings.rigControl.icomLan.password.clearDone'), 'success')
+    }
+  }
+
   const onForgetLotwPassword = async () => {
     const ok = await withErrorToast(async () => {
       await clearLotwPassword()
@@ -3283,6 +3336,7 @@ export function SettingsPanel({
       portlessRigModels,
       portInfos,
       audioInfos,
+      icomLanPwSaved,
     )
     setRigChecks(rigProblems)
     if (blocks(rigProblems)) {
@@ -3453,6 +3507,10 @@ export function SettingsPanel({
   // Why native CI-V cannot be offered for THIS radio, or null when it can. Derived rather than
   // inlined so the control and its explanation can never disagree about the condition.
   const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
+  // Does Nexus's own CI-V engine drive this radio here, and so apply its D1/D2/D3? Always on the Icom
+  // network connection; over a cable only through the native switch, on a radio that has one.
+  const civAppliesDataMode =
+    form.rigConn === 'icomlan' || (!!form.icomNativeCat && NATIVE_CIV_MODELS.includes(form.rigModel))
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -4732,7 +4790,9 @@ export function SettingsPanel({
                             ? `OmniRig ${OMNIRIG_SLOTS[r.omnirigSlot === 2 ? 2 : 1]}`
                             : r.rigConn === 'network'
                               ? r.rigAddr || t('settings.radios.card.noAddress')
-                              : r.serialPort || t('settings.radios.card.noPort'),
+                              : r.rigConn === 'icomlan'
+                                ? r.icomLanHost || t('settings.radios.card.noAddress')
+                                : r.serialPort || t('settings.radios.card.noPort'),
                         flex:
                           (r.flexRadioIp ?? '').trim() !== ''
                             ? t('settings.radios.card.meta.flex', { ip: r.flexRadioIp ?? '' })
@@ -5336,6 +5396,12 @@ export function SettingsPanel({
                   <option value="omnirig" disabled={omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled}>
                     {omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).label}
                   </option>
+                  {/* Offered only for the six Icoms with a network server built in, and kept while
+                      chosen so the select always shows its own value; Detect never picks it, and a
+                      new profile starts on Serial. */}
+                  {(ICOM_LAN_MODELS.includes(form.rigModel) || form.rigConn === 'icomlan') && (
+                    <option value="icomlan">{t('settings.rigControl.conn.icomlan')}</option>
+                  )}
                 </select>
                 <span className="settings-hint">
                   <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
@@ -5371,6 +5437,95 @@ export function SettingsPanel({
                   </select>
                   <span className="settings-hint">{t('settings.rigControl.omnirig.hint')}</span>
                 </label>
+              )}
+
+              {form.rigConn === 'icomlan' && (
+                <>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.icomLan.hint" tags={{ b: <strong /> }} />
+                  </span>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.icomLan.host.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.icomLanHost ?? ''}
+                      placeholder="192.168.1.50"
+                      onChange={(e) => update('icomLanHost', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.icomLan.host.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.icomLan.user.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      maxLength={16}
+                      value={form.icomLanUser ?? ''}
+                      onChange={(e) => update('icomLanUser', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">{t('settings.rigControl.icomLan.user.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.icomLan.password.label')}</span>
+                    <div className="settings-input-row">
+                      <input disabled={remote}
+                        className="settings-input"
+                        type="password"
+                        maxLength={16}
+                        value={icomLanPw}
+                        placeholder={t('settings.rigControl.icomLan.password.placeholder')}
+                        onChange={(e) => setIcomLanPw(e.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        onClick={onSetIcomLanPassword}
+                        disabled={remote || !icomLanPw}
+                      >
+                        {t('settings.confirmations.credential.set.action')}
+                      </button>
+                      <button disabled={remote || icomLanPwSaved !== true}
+                        type="button"
+                        className="settings-refresh"
+                        onClick={onClearIcomLanPassword}
+                        title={t('settings.confirmations.credential.forget.title')}
+                      >
+                        {t('settings.confirmations.credential.forget.action')}
+                      </button>
+                    </div>
+                    <span className="settings-hint">
+                      {icomLanPwSaved === true
+                        ? t('settings.rigControl.icomLan.password.saved')
+                        : icomLanPwSaved === false
+                          ? t('settings.rigControl.icomLan.password.none')
+                          : ''}{' '}
+                      {t('settings.rigControl.icomLan.password.hint')}
+                    </span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.icomLan.port.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="number"
+                      inputMode="numeric"
+                      value={String(form.icomLanPort ?? 50001)}
+                      placeholder="50001"
+                      onChange={(e) => updateNum('icomLanPort', Number(e.target.value))}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">{t('settings.rigControl.icomLan.port.hint')}</span>
+                  </label>
+                </>
               )}
 
               {form.rigConn === 'network' && (
@@ -5444,7 +5599,7 @@ export function SettingsPanel({
                   rigctld over TCP; with OmniRig it is OmniRig itself, which owns the rig type,
                   the port and the baud — so asking for them here would be asking the operator
                   to configure the same radio twice and get it wrong once. */}
-              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && (
+              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' && (
                 <>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.serialPort.label')}</span>
@@ -5645,7 +5800,7 @@ export function SettingsPanel({
                   type="number"
                   inputMode="numeric"
                   value={String(form.rigctldPort)}
-                  placeholder="4532"
+                  placeholder="4534"
                   onChange={(e) => update('rigctldPort', e.target.value)}
                   autoComplete="off"
                 />
@@ -5714,6 +5869,8 @@ export function SettingsPanel({
                         'Not available on a network connection: the CI-V engine speaks to the radio over its serial port, and a LAN-connected radio has none for Nexus to open. Connect this radio by USB to use it.'
                       ) : civBlocked === 'omnirig' ? (
                         'Not available through OmniRig: OmniRig holds the COM port, so Nexus cannot open it to speak CI-V.'
+                      ) : civBlocked === 'icomlan' ? (
+                        t('settings.rigControl.icomNative.icomlan')
                       ) : (
                         <T k="settings.rigControl.icomNative.hint" tags={{ b: <strong /> }} />
                       )}
@@ -5722,16 +5879,17 @@ export function SettingsPanel({
                 )}
 
               {/* WHICH Icom data mode. Only for the radios that have more than one (see
-                  dataModePickerShown), and only through the native CI-V
-                  engine — Hamlib's PKT modes always select D1, so offering the choice on that
-                  path would be a control that does nothing. */}
+                  dataModePickerShown), and only through Nexus's own CI-V engine (the native
+                  switch, or the Icom network connection, which always uses it): Hamlib's PKT
+                  modes always select D1, so offering the choice on that path would be a control
+                  that does nothing. */}
               {dataModePickerShown(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">Data mode</span>
                   <select
                     className="settings-input"
                     value={String(form.icomDataMode ?? 1)}
-                    disabled={remote || (!form.icomNativeCat)}
+                    disabled={remote || !civAppliesDataMode}
                     onChange={(e) => updateNum('icomDataMode', Number(e.target.value))}
                   >
                     <option value="1">D1</option>
@@ -5739,9 +5897,11 @@ export function SettingsPanel({
                     <option value="3">D3</option>
                   </select>
                   <span className="settings-hint">
-                    {form.icomNativeCat
+                    {civAppliesDataMode
                       ? 'Which DATA mode this radio is put into for digital operating. Pick the one your USB audio is wired to — D1 unless you changed it on the radio. Needs a bench check on a real radio before it is trusted.'
-                      : 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'}
+                      : NATIVE_CIV_MODELS.includes(form.rigModel)
+                        ? 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'
+                        : 'Needs the Icom network connection: through Hamlib the radio always lands on D1.'}
                   </span>
                 </label>
               )}
@@ -5840,9 +6000,11 @@ export function SettingsPanel({
                 </label>
               )}
 
-              {form.rigConn !== 'network' &&
-                /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
-                form.icomNativeCat && (
+              {(form.rigConn === 'icomlan'
+                ? ICOM_LAN_MODELS.includes(form.rigModel)
+                : form.rigConn !== 'network' &&
+                  /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
+                  form.icomNativeCat) && (
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rigControl.civLog.label')}</span>
                     <button disabled={remote}
@@ -7124,7 +7286,7 @@ export function SettingsPanel({
                       em: <em />,
                       code: <code className="rig-share-direct mono" />,
                     }}
-                    vals={{ address: `127.0.0.1:${form.rigctldPort || 4532}` }}
+                    vals={{ address: `127.0.0.1:${form.rigctldPort || 4534}` }}
                   />
                 </span>
               )}
@@ -10217,6 +10379,13 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.integrations.pskreporter.hint')}
                   </span>
+                  {/* A contest that allows spotting only over amateur RF (Winter Field Day)
+                      pauses the reports while it runs, whatever this switch says. */}
+                  {form.fdActive && rulesetPreview?.spotsRfOnly && (
+                    <span className="settings-hint">
+                      {t('settings.integrations.pskreporter.rfOnly', { event: contestName(rulesetPreview.event) })}
+                    </span>
+                  )}
                 </div>
 
                 <div className="settings-field">
@@ -11961,6 +12130,12 @@ export function SettingsPanel({
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
+              {/* Winter Field Day has no high-power entry: its Cabrillo takes QRP or LOW, and a
+                  power left at HIGH writes no CATEGORY-POWER line rather than one it does not
+                  have. Said here, beside the picker that decides it. */}
+              {(form.fdEvent ?? '').trim() === 'wfd' && (
+                <span className="settings-hint">{t('settings.contestPick.power.wfd')}</span>
+              )}
               {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
                   when the log is exported rather than when a contest starts: nothing sent on
                   the air depends on it. NAME is the Station tab's operator name. */}
@@ -12506,6 +12681,9 @@ export function SettingsPanel({
                 <span className="toggle-knob" />
               </button>
               <span className="settings-hint">{t('settings.fdClub.host.hint')}</span>
+              {/* The ports a club event needs through the firewall, said where the event is
+                  switched on: Nexus adds no firewall rule of its own. */}
+              <span className="settings-hint">{t('settings.fdClub.firewall.hint')}</span>
             </label>
             {form.fdHostEnable && (
               <p className="settings-note">{t('settings.fdClub.host.note')}</p>
@@ -12656,7 +12834,7 @@ export function SettingsPanel({
                     </span>
                   )}
                   {!form.fdHostEnable && (
-                    <span className="settings-hint">{t('settings.fdBoard.hostOnly')}</span>
+                    <span className="settings-hint">{t('settings.fdBoard.notHosting')}</span>
                   )}
                 </div>
               </div>

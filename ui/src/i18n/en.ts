@@ -991,7 +991,7 @@ export const EN = {
   'gettingStarted.radio.shot.usbLabel': 'USB / Serial',
   'gettingStarted.radio.shot.usbBlurb': 'Most rigs — one cable',
   'gettingStarted.radio.shot.netLabel': 'Network',
-  'gettingStarted.radio.shot.netBlurb': 'FlexRadio / remote rigctld',
+  'gettingStarted.radio.shot.netBlurb': 'SDR software, or a remote rig',
   'gettingStarted.radio.shot.audioIn': 'Audio in',
   'gettingStarted.radio.shot.audioOut': 'Audio out',
   'gettingStarted.radio.shot.testCatBtn': '⚡ Test CAT',
@@ -1254,42 +1254,53 @@ export const EN = {
     other: '{{count}} contacts now hold their park’s state',
   },
   'logbook.parkStates.failed': 'Could not check park states',
-  // "Check confirmations" (ConfirmationReview): contacts holding a LoTW confirmation or upload mark
-  // that LoTW's own records give another contact, or none. LoTW, calls, bands and modes are
-  // invariant tokens. `{{time}}` is a UTC time (HH:MM, with its date when that is not the line's
-  // own), `{{codes}}` ADIF award credit names, `{{path}}` a file path: data, never translated.
+  // "Check confirmations" (ConfirmationReview): contacts holding a LoTW, eQSL or QRZ confirmation,
+  // or LoTW's upload mark, that the service's own records give another contact, or none. LoTW,
+  // eQSL, QRZ, calls, bands and modes are invariant tokens; `{{service}}` is one of the three.
+  // `{{time}}` is a UTC time (HH:MM, with its date when that is not the line's own), `{{codes}}`
+  // ADIF award credit names, `{{path}}` a file path, `{{reason}}` the station's own words: data,
+  // never translated.
   'logbook.confirmations.button': 'Check confirmations',
   'logbook.confirmations.buttonTitle':
-    'Download your whole LoTW history and list the contacts holding a LoTW confirmation or upload mark that LoTW gives another contact, or none, for you to tick and take off',
+    'Download your whole history from LoTW, eQSL and QRZ, each one you have set up, and list the contacts holding a confirmation or LoTW upload mark that the service gives another contact, or none, for you to tick and take off',
   'logbook.confirmations.title': 'Check confirmations',
   'logbook.confirmations.intro':
-    'Earlier versions of Nexus could put the LoTW confirmation of one contact, or the mark that LoTW holds its upload, on another contact with the same station, band and mode on the same UTC day. Check downloads your whole LoTW history once, which can take several minutes, and lists each contact holding a LoTW confirmation or upload mark that LoTW’s own records give another contact, or none. A line starts ticked only when those records decide it. Nothing changes until you press the button, nothing is uploaded, and no paper card is touched.',
+    'Earlier versions of Nexus could put the confirmation of one contact, from LoTW, eQSL or QRZ, or the mark that LoTW holds its upload, on another contact with the same station, band and mode on the same UTC day. Check downloads your whole history once from each of these services you have set up, which can take several minutes for LoTW, and lists each contact holding a confirmation or upload mark that the service’s own records give another contact, or none. A line starts ticked only when those records decide it. Nothing changes until you press the button, nothing is uploaded, and no paper card is touched.',
   'logbook.confirmations.check': 'Check',
-  'logbook.confirmations.checking': 'Downloading your whole LoTW history…',
+  'logbook.confirmations.checking': 'Downloading your whole {{service}} history…',
+  'logbook.confirmations.notChecked': 'Not checked: {{reason}}',
   'logbook.confirmations.none':
     'LoTW’s records back every LoTW confirmation and upload mark this check can judge.',
-  'logbook.confirmations.change': 'LoTW ✓ → —',
+  'logbook.confirmations.noneService':
+    '{{service}}’s records back every {{service}} confirmation this check can judge.',
+  'logbook.confirmations.change': '{{service}} ✓ → —',
   'logbook.confirmations.changeUpload': 'LoTW: on file → not uploaded',
-  'logbook.confirmations.why.moved': 'LoTW’s confirmation is your {{time}} contact’s',
-  'logbook.confirmations.why.contradicted': 'LoTW holds this contact unconfirmed',
-  'logbook.confirmations.why.orphan': 'LoTW confirms a {{time}} QSO that is not in your log',
+  'logbook.confirmations.why.moved': '{{service}}’s confirmation is your {{time}} contact’s',
+  'logbook.confirmations.why.contradicted': '{{service}} holds this contact unconfirmed',
+  'logbook.confirmations.why.orphan': '{{service}} confirms a {{time}} QSO that is not in your log',
   'logbook.confirmations.why.uploadMoved': 'The upload LoTW holds is your {{time}} contact’s',
   'logbook.confirmations.why.uploadOrphan': 'LoTW holds a {{time}} upload that is not in your log',
   'logbook.confirmations.why.dateOnly': 'no time of day',
   'logbook.confirmations.unticked.dateOnly':
-    'This contact, or one the check compares it with, has a date but no time of day, so LoTW’s records cannot say which contact this belongs to. Tick it only if you are sure.',
+    'This contact, or one the check compares it with, has a date but no time of day, so {{service}}’s records cannot say which contact this belongs to. Tick it only if you are sure.',
   'logbook.confirmations.unticked.notReplayed':
     'Earlier versions could not have put this confirmation here by taking the wrong contact, so it came some other way: an import, an older call, or a paper card an older Nexus filed as LoTW. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.notReplayedEqsl':
+    'Earlier versions could not have put this card here by taking the wrong contact, so it came some other way: an import, an older call, or a confirmation an older Nexus filed as eQSL. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.notReplayedQrz':
+    'Earlier versions could not have put this confirmation here by taking the wrong contact, so it came some other way, such as an import or an older call. Tick it only if you are sure.',
   'logbook.confirmations.unticked.uploadNotReplayed':
     'Earlier versions could not have marked this contact by taking the wrong one, so the mark came some other way, such as an import. Tick it only if you are sure.',
   'logbook.confirmations.unticked.tie':
-    'LoTW’s record is exactly as near your other contact as this one, so the check cannot tell which it belongs to. Tick it only if you are sure.',
+    '{{service}}’s record is exactly as near your other contact as this one, so the check cannot tell which it belongs to. Tick it only if you are sure.',
   'logbook.confirmations.unticked.orphan':
-    'No contact in your log is within 30 minutes of LoTW’s record: the QSO may be missing from your log, or this contact’s time may be more than 30 minutes off. Tick it only if you are sure.',
+    'No contact in your log is within 30 minutes of {{service}}’s record: the QSO may be missing from your log, or this contact’s time may be more than 30 minutes off. Tick it only if you are sure.',
   'logbook.confirmations.unticked.insideWindow':
-    'LoTW’s record is within 30 minutes of this contact too, so it may be this contact’s. Tick it only if you are sure.',
+    '{{service}}’s record is within 30 minutes of this contact too, so it may be this contact’s. Tick it only if you are sure.',
+  'logbook.confirmations.unticked.insideWindowEqsl':
+    'eQSL’s card is within 30 minutes of this contact too, and a card carries the time the other station logged, so it may be this contact’s. Tick it only if you are sure.',
   'logbook.confirmations.unticked.notToTheMinute':
-    'LoTW’s unconfirmed record is near this contact but not on its minute, so it may be another QSO’s. Tick it only if you are sure.',
+    '{{service}}’s unconfirmed record is near this contact but not on its minute, so it may be another QSO’s. Tick it only if you are sure.',
   'logbook.confirmations.badge.card': 'paper card — keeps award credit',
   'logbook.confirmations.badge.credit': 'credit {{codes}} removed',
   'logbook.confirmations.badge.submitted': 'submitted credit {{codes}} removed',
@@ -1297,18 +1308,18 @@ export const EN = {
   'logbook.confirmations.badge.owedTitle':
     'LoTW holds no upload of this contact. Once it is changed, Upload to LoTW sends it, and so does the automatic LoTW upload if you turned that on.',
   'logbook.confirmations.gains': {
-    one: '{{count}} contact gains the confirmation LoTW holds for it.',
-    other: '{{count}} contacts gain the confirmation LoTW holds for them.',
+    one: '{{count}} contact gains the confirmation {{service}} holds for it.',
+    other: '{{count}} contacts gain the confirmation {{service}} holds for them.',
   },
   'logbook.confirmations.unreached': {
-    one: '{{count}} contact holds a LoTW confirmation that LoTW does not list within a day of it; this check leaves it alone.',
+    one: '{{count}} contact holds a {{service}} confirmation that {{service}} does not list within a day of it; this check leaves it alone.',
     other:
-      '{{count}} contacts hold a LoTW confirmation that LoTW does not list within a day of them; this check leaves them alone.',
+      '{{count}} contacts hold a {{service}} confirmation that {{service}} does not list within a day of them; this check leaves them alone.',
   },
   'logbook.confirmations.outOfScope': {
-    one: '{{count}} contact with a LoTW confirmation was logged under another call than the one in Settings; this check leaves it alone.',
+    one: '{{count}} contact with a {{service}} confirmation was logged under another call than the one in Settings; this check leaves it alone.',
     other:
-      '{{count}} contacts with a LoTW confirmation were logged under another call than the one in Settings; this check leaves them alone.',
+      '{{count}} contacts with a {{service}} confirmation were logged under another call than the one in Settings; this check leaves them alone.',
   },
   'logbook.confirmations.uploadsUnreached': {
     one: '{{count}} contact marked as uploaded has no upload LoTW lists within a day of it; this check leaves it alone.',
@@ -1326,16 +1337,16 @@ export const EN = {
     other: 'Change {{count}} contacts',
   },
   'logbook.confirmations.done.confirmations': {
-    one: 'Took LoTW’s confirmation off {{count}} contact.',
-    other: 'Took LoTW’s confirmation off {{count}} contacts.',
+    one: 'Took {{service}}’s confirmation off {{count}} contact.',
+    other: 'Took {{service}}’s confirmation off {{count}} contacts.',
   },
   'logbook.confirmations.done.uploads': {
     one: 'Marked {{count}} contact as not uploaded to LoTW.',
     other: 'Marked {{count}} contacts as not uploaded to LoTW.',
   },
   'logbook.confirmations.done.gained': {
-    one: '{{count}} contact gained the confirmation LoTW holds for it.',
-    other: '{{count}} contacts gained the confirmation LoTW holds for them.',
+    one: '{{count}} contact gained the confirmation {{service}} holds for it.',
+    other: '{{count}} contacts gained the confirmation {{service}} holds for them.',
   },
   'logbook.confirmations.done.skipped': {
     one: '{{count}} ticked line was left alone: its contact changed after the check.',
@@ -3332,6 +3343,7 @@ export const EN = {
   'spots.post.busy': 'Spotting…',
   'spots.post.done': 'Spotted {{call}} on the cluster',
   'spots.post.failed': 'Spot failed',
+  'spots.post.rfOnly': 'Not posted: the contest you are running allows spots only over amateur RF while it runs.',
   'spots.post.confirm.title': 'Spot {{call}} to the DX cluster?',
   'spots.post.confirm.body': '{{call}} on {{freq}} MHz, posted from the station\u2019s cluster login. Everyone on the cluster sees it.',
   'spots.post.confirm.post': 'Post spot',
@@ -3726,6 +3738,7 @@ export const EN = {
   'ota.selfSpot.cluster.invalid': 'Not sent to the DX cluster: check your callsign, and that the dial is in a ham band',
   'ota.selfSpot.moved': 'Your park or frequency changed after you pressed Spot me, so nothing was posted',
   'ota.selfSpot.failed': 'Couldn’t spot you. Nothing was posted.',
+  'ota.selfSpot.rfOnly': 'Not spotted: the contest you are running allows spots only over amateur RF while it runs.',
 
   // The offline park directory. `{{formatted}}` is a park COUNT the call site has already
   // grouped for display — it never passes through a formatter here (see `logbook.markLotw`).
@@ -3903,6 +3916,7 @@ export const EN = {
   // instead of the ARRL power×+bonus arithmetic — a different statement, not a shortened one.
   'fieldDay.score.wfd':
     'QSO pts {{points}} · WFD objective multipliers apply at submission (not tracked here)',
+  'fieldDay.score.wfdObjectives': 'QSO pts <b>{{qsoPts}}</b> × (OM <b>{{om}}</b> + 1) = <total>{{totalScore}}</total>',
   // The whole sum as ONE message: an equation assembled from eight fragments cannot be
   // reordered, and every language puts "power" and "bonuses" somewhere of its own.
   'fieldDay.score.math':
@@ -4001,6 +4015,22 @@ export const EN = {
   'fieldDay.bonus.plan.on': 'Planned',
   'fieldDay.bonus.plan.aria': 'Plan {{label}} \u2014 planned bonuses do not score',
   'fieldDay.bonus.plan.title': 'Planned = you mean to earn it. It scores only once you tick the box.',
+  'fieldDay.objectives.head': 'Objectives',
+  'fieldDay.objectives.count': '{{done}}/{{total}} completed · OM {{om}}',
+  'fieldDay.objectives.planned.count': '{{count}} planned · +OM {{om}}',
+  'fieldDay.objectives.chase.aria': 'Objective multiplier earned and planned',
+  'fieldDay.objectives.chase.earned': 'Earned OM {{om}}',
+  'fieldDay.objectives.chase.planned': 'Planned +OM {{om}}',
+  'fieldDay.objectives.chase.potential': 'If all land OM {{om}}',
+  'fieldDay.objectives.aria': 'Completed Winter Field Day objectives',
+  'fieldDay.objective.aria': '{{label}} — objective multiplier {{om}}',
+  'fieldDay.objective.om': '×{{om}}',
+  'fieldDay.objective.implied': 'comes with an objective you ticked',
+  'fieldDay.objective.hint.bands': 'log: {{count}} of {{need}} bands with 3+ contacts',
+  'fieldDay.objective.hint.modes': 'log: {{count}} modes',
+  'fieldDay.objective.plan.aria': 'Plan {{label}} — planned objectives do not count',
+  'fieldDay.objectives.qrp.undeclared': '“{{objective}}” is ticked, but your Power category (Settings ▸ Contesting ▸ Contest) is not QRP, so the Cabrillo file does not claim QRP.',
+  'fieldDay.objectives.qrp.unticked': 'Your Power category is QRP, but “{{objective}}” (×{{om}}) is not ticked.',
 
   // The log. Column headings name a CONCEPT; every value under them is a token. ARRL calls
   // the exchange field Class and WFD calls it Category — two words for two events, not one
@@ -4040,6 +4070,7 @@ export const EN = {
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':
     'Spotting assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
+  'fieldDay.advisory.spotsRfOnly': '{{event}} allows spots only over amateur RF while it runs: Nexus is sending no PSK Reporter reports, DX cluster spots or POTA self-spots until it ends. Receiving spots carries on.',
   'fieldDay.club.aria': 'Club sync',
   'fieldDay.club.head': 'Club',
   'fieldDay.club.state.synced': 'Synced',
@@ -4125,6 +4156,7 @@ export const EN = {
   'settings.contestPick.entryAxes.unset': 'Not set',
   'settings.contestPick.entryAxes.hint':
     'The rest of what your Cabrillo log declares about the entry. Sweepstakes also sends these on the air, as the precedence letter, so it will not start until you have picked one of each: ARRL counts 5 watts or less as QRP, 100 watts or less as low power, and anything above that as high power, and an entry using spots, a skimmer or a cluster is Single Operator Unlimited.',
+  'settings.contestPick.power.wfd': 'Winter Field Day takes QRP or LOW (its limit is 100 W PEP), and HIGH writes no CATEGORY-POWER line.',
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
     'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
@@ -4178,9 +4210,8 @@ export const EN = {
   'settings.fieldDay.class.label': 'FD Class',
   'settings.fieldDay.class.hint':
     'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.',
-  'settings.fieldDay.category.label': 'WFD Category',
-  'settings.fieldDay.category.hint':
-    'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).',
+  'settings.fieldDay.category.label': 'WFD Class and Category',
+  'settings.fieldDay.category.hint': 'The number of transmitters (your class), then your category letter: H=Home, I=Indoor, O=Outdoor, M=Mobile (e.g. 2O = 2 transmitters, outdoor).',
   'settings.fieldDay.section.label': 'ARRL Section',
   // `{{section}}` is what the operator typed and `{{count}}` the size of the section list.
   'settings.fieldDay.section.invalid':
@@ -4251,6 +4282,7 @@ export const EN = {
   'settings.fdClub.legend': 'Field Day Club Sync',
   'settings.fdClub.host.label': 'Host a club event',
   'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
+  'settings.fdClub.firewall.hint': 'Allow Nexus through your computer\'s firewall (on Windows, on Private networks): a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373. Nexus adds no firewall rule of its own.',
   'settings.fdClub.host.note': 'Positions on this network can now find and join this event. There is no join password — a club site LAN is trusted, and anyone on it could add rows to the club log, which you will see. If this PC dies, enable hosting on any other position: everyone re-joins and nothing is lost.',
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
@@ -4309,7 +4341,7 @@ export const EN = {
   'settings.fdBoard.url.label': 'On the TV, open',
   'settings.fdBoard.url.copy': 'Copy',
   'settings.fdBoard.url.pending': 'Starting up — save settings, then this row shows the address.',
-  'settings.fdBoard.hostOnly': 'Live data appears when this position hosts the club event; otherwise the page points viewers to the host.',
+  'settings.fdBoard.notHosting': 'When this station is a position, its TV shows the board of the host it joined, so the host needs Spectator scoreboard on too, on the same port. With no club at all, the TV says so and what to do.',
 
   // ── Satellites ──────────────────────────────────────────────────────────────────────
   // The Satellites section, the Connect Passes pane, and the nine composers behind them.
@@ -6099,6 +6131,34 @@ export const EN = {
   'settings.rigControl.conn.label': 'Connection',
   'settings.rigControl.conn.serial': 'Serial (USB / COM port)',
   'settings.rigControl.conn.network': 'Network (host:port — SDR software, or a remote rig)',
+  'settings.rigControl.conn.icomlan': 'Icom network (LAN / Wi-Fi) — Beta',
+  'settings.rigControl.icomLan.hint': '<b>Beta: receive and control only.</b> Nexus does not transmit on this connection, and carries no audio over it yet. On the radio: Network Control ON (it takes effect after a restart) and CI-V Transceive ON. The radio takes one network program at a time, so close wfview or RS-BA1 first. LAN and Wi-Fi only: from another network, use a VPN.',
+  'settings.rigControl.icomLan.host.label': 'Radio address',
+  'settings.rigControl.icomLan.host.hint':
+    "The radio's own IPv4 address on your network. On an IC-7760 it is <b>IP Address (LAN)</b> in MENU ▸ SET ▸ Network.",
+  'settings.rigControl.icomLan.user.label': 'Network user',
+  'settings.rigControl.icomLan.user.hint': 'A network user set up on the radio (Network User1 or User2 in its network Remote Settings), 16 characters at most.',
+  'settings.rigControl.icomLan.password.label': 'Network password',
+  'settings.rigControl.icomLan.password.placeholder': 'Type it, then Set',
+  'settings.rigControl.icomLan.password.saved': 'A password is saved for this radio.',
+  'settings.rigControl.icomLan.password.none': 'No password is saved for this radio yet.',
+  'settings.rigControl.icomLan.password.hint':
+    "It is kept in this computer's keychain, one per radio, never in Settings or a log. The radio's login is scrambled on the wire, not encrypted, so use this connection on your own network.",
+  'settings.rigControl.icomLan.password.setDone': 'Network password saved in the keychain',
+  'settings.rigControl.icomLan.password.clearDone': 'Network password removed from the keychain',
+  'settings.rigControl.icomLan.password.saveFailed':
+    "Couldn't save the network password",
+  'settings.rigControl.icomLan.password.clearFailed':
+    "Couldn't remove the network password",
+  'settings.rigControl.icomLan.port.label': 'Control port (UDP)',
+  'settings.rigControl.icomLan.port.hint': '50001 unless you moved it on the radio.',
+  'settings.rigControl.icomNative.icomlan': 'Always on over the Icom network connection: it is how Nexus drives the radio there.',
+  'settings.radio.check.icomLanModel': 'The Icom network connection works with the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2. Pick one of those, or Serial (USB).',
+  'settings.radio.check.icomLanAddress':
+    "Enter the radio's IPv4 address, for example {{example}}.",
+  'settings.radio.check.icomLanUser': 'No network user is set, so the radio will refuse the login.',
+  'settings.radio.check.icomLanPassword': 'No network password is saved for this radio yet: type it and press Set.',
+  'operate.strip.state.connectionNoTx': 'No TX on this connection',
   'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
   'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
   'settings.rigControl.conn.hint':
@@ -6584,7 +6644,7 @@ export const EN = {
   'setup.rig.conn.serial.label': 'USB / Serial',
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
-  'setup.rig.conn.network.blurb': 'FlexRadio / remote rigctld',
+  'setup.rig.conn.network.blurb': 'SDR software, or a remote rig',
   'setup.rig.address.label': 'Address',
   'setup.rig.network.hint':
     'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
@@ -7450,6 +7510,7 @@ export const EN = {
     'WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.',
   'settings.integrations.spotSources.title': 'Spot Sources',
   'settings.integrations.pskreporter.hint': 'upload spots to the global map',
+  'settings.integrations.pskreporter.rfOnly': 'While {{event}} runs, its rules allow spots only over amateur RF, so no reports are sent; they resume when it ends.',
   'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
   'settings.integrations.clusterSpots.hint':
     'Surface "new ones" from the Reverse Beacon Network on the Needed board + Conditions. Takes effect on restart.',

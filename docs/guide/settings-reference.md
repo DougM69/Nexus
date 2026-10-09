@@ -441,6 +441,12 @@ Baud continue across to the right.*
   Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC
   (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld." For a Hermes
   Lite 2, see [Hermes Lite 2 and SDR Program Setup](../rigs/sdr-programs.md).
+  For the six Icoms with a network port (IC-7610, IC-9700, IC-705, IC-905,
+  IC-7760, IC-7300MK2) there is also **Icom network (LAN / Wi-Fi) — Beta**:
+  receive and control only, with the **Radio address**, **Network user**,
+  **Network password** (stored in the keychain, write-only) and **Control port
+  (UDP)** in place of Serial Port and Baud. See the
+  [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of
@@ -475,7 +481,7 @@ Baud continue across to the right.*
 
 **Advanced** (a collapsed group) holds the rest:
 
-- **rigctld TCP Port** — "Port Nexus launches rigctld on" (default 4532).
+- **rigctld TCP Port** — "Port Nexus launches rigctld on" (default 4534).
 - **Data modes use plain SSB** — **leave this off unless you know you need it.**
   Nexus normally puts the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for
   FT8, FT4, RTTY-AFSK and SSTV, because on most rigs that is the only mode where
@@ -1603,7 +1609,10 @@ the decode-log switches continue to the right.*
 your own list, which nodes you list is a matter of coverage, not correctness —
 Nexus connects to all of them and merges what they report.*
 
-- **PSK Reporter** — "upload spots to the global map."
+- **PSK Reporter** — "upload spots to the global map." While a contest whose rules
+  allow spotting only over amateur RF is running (Winter Field Day 2027), no reports
+  are sent whatever this switch says, and a note beside it says so; they resume when
+  the event ends.
 - **DX Cluster / RBN spots** — "Surface 'new ones' from the Reverse Beacon
   Network on the Needed board + Conditions." Takes effect on restart.
 - **Phone/SSB cluster nodes** — human DX-cluster nodes for SSB/phone spots, since
@@ -1955,7 +1964,8 @@ the Cabrillo headers.
 - **Power category**, **Spotting assistance** and **Station type** — the rest of
   what your Cabrillo log declares about the entry. Sweepstakes sends these on the
   air as its precedence letter, and a CQ WW RTTY log carries the power category and
-  the assistance as header lines.
+  the assistance as header lines. Winter Field Day takes only `QRP` or `LOW` (its limit is
+  100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
 - **Email for contest logs** — goes on the EMAIL line of the Cabrillo log you
   export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you
   about your entry. The NAME line is your operator name from the
@@ -2039,7 +2049,8 @@ claim right now; the record underneath is the evidence, kept across restarts.*
 - **FD Class** / **WFD Category** (the label follows the Event) — "Number of
   transmitters + class letter: A=club/group portable, B=1–2 person portable,
   C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A."
-  For WFD: "Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor."
+  For WFD the box is **WFD Class and Category**: "The number of transmitters (your
+  class), then your category letter: H=Home, I=Indoor, O=Outdoor, M=Mobile."
 - **ARRL Section** — "Your ARRL / RAC section (e.g. WI, ENY, ONN). Start typing
   the code or a state name and pick from the list." Every entry is validated
   against the full ARRL/RAC list and an unknown one is flagged inline, so it

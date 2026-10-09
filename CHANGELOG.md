@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
+  straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
+  has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
+  RS-BA1 and wfview use, with no bridge program in between, and runs its own CI-V control over it:
+  frequency and mode both ways, the dial followed as you turn it, the meters, and the radio's own
+  panadapter (one frame a sweep over the network, so no CI-V baud applies). On the IC-7610 and
+  IC-7760, which have three DATA modes, the Data mode picker (D1, D2 or D3) in Rig & CAT works on
+  this connection too; the other four have one and are always sent it. **Nothing transmits on
+  this connection yet**: every transmit path (FT, Tune, CW, the voice keyer, PTT, APRS, RTTY, PSK,
+  SSTV and another program's PTT through Nexus) says so and stops before the radio is keyed, and the
+  radio is never sent a key. There is no audio over it yet: keep the USB cable for audio. The
+  network password is kept in your computer's keychain, one per radio profile, never in Settings or
+  a log. At connect Nexus reads, and never changes, the radio's time-out timer and MOD Input
+  settings and shows them in Rig & CAT. The radio takes one network program at a time; use it on
+  your own network, or through a VPN. If the session drops, Nexus reconnects by itself after 1, 2,
+  4, 8 and 16 seconds, then every 30; if the radio refused the login or another program took it,
+  Nexus waits for Test CAT. USB stays the default and nothing changes unless you pick it. An older
+  Nexus reads this connection as Serial. NEEDS-BENCH: not yet tried on a radio; an IC-7760 is first.
+- **Winter Field Day's objectives, and the score they make.** For Winter Field Day the contest
+  screen shows the sponsor's thirteen 2027 objectives where ARRL Field Day shows its bonuses: tick
+  each one you complete, or mark it planned, as with the bonuses. The score everywhere is the
+  sponsor's QSO points × (objective multipliers + 1): the contest screen and its pop-out, the club
+  line every position shows, the club TV scoreboard, the summary you download and the Cabrillo
+  `CLAIMED-SCORE`. 100% alternative power counts station equipment on alternative power with it,
+  and twelve bands counts six. For six bands, twelve bands and multiple modes, a hint from your log
+  says how far it shows you are; you tick them yourself, as the sponsor's form asks. A note says
+  when the QRP objective and your Power category disagree. Nexus Remote shows your objectives too,
+  read-only, once its page has been updated.
 - **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
   Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
   including the new Unlimited that a club running more than one transmitter at once must enter),
@@ -25,6 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release: that first download asked for too little, and each download after it carried on from
   there, so older confirmations never arrived. Your logged contacts and the confirmations on them
   are not changed.
+- **The spectator scoreboard is redesigned for a TV across the room, and works for any contest club
+  sync runs.** The claimed score is the biggest thing on the board, with how it is made beside it,
+  then the rate (the last hour, the last ten minutes and a bar for each hour), the contacts by band
+  and mode, each position's band and mode right now, the multipliers with their counts and caps,
+  the bonus stations, the latest contact, the clock and the time left. The map shows what the
+  contest counts: the sections globe for the two Field Days, and for the Illinois QSO Party the
+  state's 102 counties, each one lit when the club works it, with the host's own county outlined.
+  The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
+  address for the light board, or `?theme=auto` to follow the TV's own setting.
 - **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
   **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
   its own, and a click works the station as it does on the Needed screen, moving the radio and
@@ -52,17 +89,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
   Nexus Remote.
 
-- **Check confirmations, for LoTW confirmations earlier versions put on the wrong contact (#400).**
+- **Check confirmations, for confirmations earlier versions put on the wrong contact (#400).**
   If you worked a station twice on one band and mode in a UTC day, the earlier contact could take
-  the later one's LoTW confirmation, or LoTW's mark that it holds the later one's upload.
-  Logbook ▸ Check confirmations downloads your whole LoTW history once and lists each contact
-  holding a LoTW confirmation or upload mark that LoTW's own records give another of your contacts,
-  or none. Each line says why it is listed and what the change keeps or costs, and starts ticked
-  only when LoTW's records decide it. Nothing changes until you press Change, and nothing is
-  uploaded. The contacts it changes are first saved, as they were, to a file beside your log, and
-  importing that file with Logbook ▸ Import ADIF puts them back. A paper card is never touched,
-  and a contact that loses a false LoTW confirmation and was never uploaded goes in your next LoTW
-  upload. It checks LoTW; eQSL and QRZ confirmations are not checked.
+  the later one's LoTW, eQSL or QRZ confirmation, or LoTW's mark that it holds the later one's
+  upload. Logbook ▸ Check confirmations downloads your whole history once from each of these
+  services you have set up, and lists under each one the contacts holding its confirmation, or
+  LoTW's upload mark, that its own records give another of your contacts, or none. Each line says
+  why it is listed and what the change keeps or costs, and starts ticked only when the service's
+  records decide it. Your QRZ logbook's copies of what LoTW, eQSL and paper cards say never count
+  as QRZ's. Nothing changes until you press Change, and nothing is uploaded. The contacts it
+  changes are first saved, as they were, to a file beside your log, and importing that file with
+  Logbook ▸ Import ADIF puts them back. A paper card is never touched, and a contact that loses a
+  false LoTW confirmation and was never uploaded goes in your next LoTW upload.
 
 - **Illinois QSO Party: a station on a county line takes one entry.** The 2026 rules count a
   station on the border of two to four counties once per county. Type its counties into the QTH
@@ -91,9 +129,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
   themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
   of them, and a failed fetch says so once.
+- **Winter Field Day runs on the sponsor's 2027 rules.** The rules data now says 2027, so a station
+  that has it is no longer told in January to check for rules updates. Winter Field Day no longer
+  carries a copy of ARRL Field Day's bonus list: those bonuses are not part of Winter Field Day,
+  and one ticked there now scores nothing. Its Cabrillo file gains the lines the sponsor's example
+  log has: your name (Settings ▸ Station), the email for contest logs, the club and the other
+  operators (Settings ▸ Contesting ▸ Contest), each where you have set it.
+- **Winter Field Day's Cabrillo header is the one in the sponsor's example.** It carries
+  `X-EXCHANGE` (your class and category, such as `3O`) and, when your Power category is QRP or LOW,
+  `CATEGORY-POWER`. Winter Field Day's limit is 100 W PEP and it has no high-power entry, so a
+  Power category left at HIGH writes no CATEGORY-POWER line; Settings says so beside the picker. A
+  club's file carries the same lines as a position's, and its OPERATORS line now names the
+  operators the positions logged under as well as the ones you typed.
+- **A satellite contact counts for nothing at Winter Field Day.** The sponsor's 2027 rules say
+  cross-band and relayed contacts do not count. A contact made through a satellite is still logged
+  and kept, and reaches your logbook and LoTW when you merge the contest log, but it scores
+  nothing, is left out of the Winter Field Day Cabrillo and ADIF files, and does not make the
+  same station worked on the same band without the satellite a duplicate. ARRL Field Day, which
+  counts satellite contacts, is unchanged.
+- **No spots over the internet while Winter Field Day runs.** The sponsor's 2027 rules say "You may
+  spot yourself and others only via amateur RF." So while the event runs, a station with Winter
+  Field Day switched on sends no PSK Reporter reports, posts no DX cluster spot and sends no POTA
+  self-spot, from the desktop or from Nexus Remote. The contest screen says why, the Spot and Spot
+  me buttons say so if you press them, and Settings says so beside PSK Reporter. Receiving cluster
+  and skimmer spots carries on, your PSK Reporter setting is not changed, and everything goes back
+  to normal when the event ends.
+- **Winter Field Day's words follow the 2027 rules, and the manual has its checklist.** The Field
+  Day Setup box is **WFD Class and Category**: the number of transmitters, then H, I, O or M, as the
+  sponsor now names them, and the contest log puts the H/I/M/O note on that column. Settings ▸
+  Contesting ▸ Field Day Club Sync names the firewall ports a club event uses. The Field Day manual
+  has a Winter Field Day 2027 checklist (the rules update and restart, class and category, LOW or
+  QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
+  the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
+  export sections now describe the objectives and the sponsor's submission.
 
 ### Fixed
 
+- **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
+  too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
+  sent its macro, Alt+F4 (which closes the window) included. One press is now
+  one send, however long you hold the key, and a key with Ctrl, Alt or Cmd held is left to the
+  system, as on the RTTY and PSK screens. Esc and Stop TX stop exactly as before.
+- **In CW, the call in the log strip is the call the F-keys send.** A call typed only into the
+  log strip was not the one the keys sent: they sent the call in His Call, which was the last
+  station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
+  pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
+  field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
+  in a contest and out of one, and logging a contact empties both. Until you work a station or
+  type a call, the decoder's best guess still fills the strip, and now His Call too: it is shown
+  unconfirmed, as before, and the F-keys send it unless you correct it first. Clicking a decoded
+  call's chip puts that call in both.
+- **CW contest keys send your report.** In a contest whose exchange includes a signal report
+  (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
+  cockpit's built-in F3 and F4 sent your county, zone or serial without the 5NN: in the Illinois
+  QSO Party, F3 to K9AAA from Cook County sent `K9AAA DE <your call> COOK COOK K`. They now send
+  5NN before it. Sweepstakes, the California QSO Party and the ARRL VHF contests have no report
+  in their exchange, and their keys send what they did; so do Field Day's. Macro profiles you
+  saved are never changed: if you copied the contest keys into one of your own, add `{RST}`
+  before `{EXCH}` in its F3 and F4.
+- **A TV showing the spectator scoreboard on a position, or on a host running the Illinois QSO
+  Party, got a grey "served from the host station" overlay.** A position now shows the host's
+  board, from the host it joined (turn on Spectator scoreboard on the host too, on the same port),
+  and a host shows its club whatever contest it runs. If the host can't be reached, the TV says so
+  in plain words, keeps the last board it had and comes back by itself. A station with no club
+  says so, with what to do. Settings ▸ Contesting ▸ Field Day Club Sync says the same beside the
+  scoreboard's address.
 - **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
   joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
   selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station
@@ -122,8 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates), at the next launch.
 - **FT2 is on Winter Field Day's banned-mode list**, as the sponsor's 2027 list has it. The
   warning is advisory, as before: the log strip warns and nothing is refused.
-- **The Data mode picker (D1/D2/D3) is offered on the IC-7610 only, and the IC-9700, IC-705 and
-  IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT offered the picker on
+- **The Data mode picker (D1/D2/D3) is offered only on the Icoms that have D2 and D3, and the
+  IC-9700, IC-705 and IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT
+  offered the picker on
   the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put
   a value Icom does not define for those radios into the command that sets their DATA mode for the
   digital modes. On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA
@@ -137,6 +238,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs no rigctld server, so an RS-BA1 user who followed it found nothing to connect to. It now
   says: with RS-BA1, choose Serial, your Icom's model and the virtual COM port RS-BA1 creates. With
   wfview, turn on its rigctld server and use Network and NET rigctl, as before.
+- **The setup wizard describes Network the way Settings does.** On the wizard's Rig step, Network
+  read "FlexRadio / remote rigctld", although it is also how Nexus reaches an SDR program on the same
+  computer, such as Thetis for a Hermes Lite 2. It now reads "SDR software, or a remote rig", the
+  words of the Connection choice in Settings ▸ Radio ▸ Rig & CAT, and the wizard's picture in Help ▸
+  Getting started says the same. The German, Spanish, French and Japanese text uses each language's
+  own words for that Connection choice.
 - **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
   CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
   0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full
@@ -319,6 +426,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
   what it is waiting for, as the other boxes do: where to set up a rotator or an amplifier, that no
   needed station is being heard yet, or that the contest calendar appears once Nexus is online.
+- **The note in Nexus's Hamlib folder says what is in it.** The README.txt installed beside Hamlib
+  said Linux used the system Hamlib and told AppImage users to install libhamlib-utils, but every
+  download has carried its own Hamlib since 1.9.0, on Linux and macOS as on Windows. It now says what
+  each download carries, that Nexus starts that copy first, and when it falls back to a Hamlib
+  installed on the computer.
+- **FT keeps the sort, filter and search you set in its panes when the window gets too narrow for
+  the dashboard rail, and wide again.** With the rail on, a window below that size moves the rail's
+  boxes into FT's side rail, and FT redrew its panes each time it crossed that line: the Call Roster
+  went back to sorting by Need, Band Activity to Time, and the Stations list to All with its search
+  cleared. They now stay as you set them, both ways. They still start from those defaults when Nexus
+  starts.
 
 ## [1.17.0] — 2026-10-07
 

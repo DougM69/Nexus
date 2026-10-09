@@ -74,6 +74,11 @@ pub mod frames;
 /// tone out through a fixed cushion, the microphone in, on wait-free rings; the devices behind the
 /// `device` feature.
 pub mod headset;
+/// Nexus's own Icom network (LAN / Wi-Fi) client (Beta, opt-in per radio): one network session to
+/// the radio, the native CI-V daemon carried over it, with keying refused. Needs tempo-net, so it
+/// rides the `device` feature like the Flex client.
+#[cfg(feature = "device")]
+pub mod icomlan;
 pub mod mic_decode;
 /// The microphone of a computer driving a shack, encoded for the audio road: Opus voice, 20 ms,
 /// 32 kbit/s constant, no DTX, no FEC. Pure; tested.
