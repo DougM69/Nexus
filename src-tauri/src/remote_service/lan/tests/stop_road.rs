@@ -2735,10 +2735,12 @@ async fn after_a_reconnect_nothing_keys_until_it_is_armed() {
         keyed: false,
         end: Some(HoldEnd::Refused),
     };
-    // Refused at its first tick, and said again at each hold after: at most one for each hold.
+    // Refused at its first tick, in the held PTT's own report, and said again at each hold that
+    // reached the road after it (the first hold too, when the tick came between that hold and the
+    // road's look at it): never more than one for each hold and that one report.
     let told = presses(&said);
     assert!(
-        !told.is_empty() && told.len() <= holds && told.iter().all(|down| **down == refused),
+        !told.is_empty() && told.len() <= holds + 1 && told.iter().all(|down| **down == refused),
         "refused at the station, {holds} holds: {said:?}"
     );
     assert!(!r.s.shared.engine.lock().unwrap().mic_armed());
