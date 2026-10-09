@@ -98,7 +98,7 @@ fn client_mode_drives_the_shack_end_to_end() {
                 .operation(json!({"type":"state","requestId":id()}))
                 .await
                 .expect("an answer");
-            if answer["error"] != "stationBusy" {
+            if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
                 state = answer;
                 break;
             }
@@ -269,4 +269,71 @@ fn client_mode_finds_a_station_by_name_when_its_remembered_address_is_dead() {
         tauri::async_runtime::block_on(client.let_go());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+/// ⛔ A lease heartbeat the shack answers as busy keeps the lease. Client mode drives the shack
+/// with the lease taken; then the shack's authority is busy for 2.5 s (its lock held, as another
+/// request holds it a moment), so each heartbeat that comes meanwhile is answered `remoteBusy`.
+/// The lease is held at every look, every 50 ms, through it and after: dropping it there stopped
+/// the Stop road's heartbeat and the receive audio for a turn, then took the lease again. CONTROL:
+/// the lease was held before the busy time, and looked at through it and 1.5 s past it; with the
+/// busy answer read as a refusal, as before, the looks find it dropped.
+#[test]
+fn a_lease_heartbeat_answered_busy_keeps_the_lease() {
+    let app = App::new();
+    let (s, at, _listening) = tauri::async_runtime::block_on(async {
+        let s = running(&app);
+        s.shared.authority.permit_station(&s.device, true).unwrap();
+        let (stopper, stop) = watch::channel(false);
+        let at = behind_a_port(&s, stop).await;
+        (s, at, stopper)
+    });
+    let record = paired_record(&s, at);
+    let dir = scratch("busy-heartbeat");
+    let this = ThisComputer::read(dir.join("settings.json"), dir.join("ui-state.json"));
+    let client = Arc::new(Client::new(STATION.to_string(), this));
+    let screens = screens(&client);
+    let (device, key, pkcs8) = (
+        record.device_id.clone(),
+        record.station_key.clone(),
+        record.pkcs8.clone(),
+    );
+    let find: Find = Arc::new(move |_| {
+        Ok(Some(PairedStation {
+            station_id: STATION.into(),
+            device_id: device.clone(),
+            station_key: key.clone(),
+            pkcs8: pkcs8.clone(),
+            addresses: vec![at.to_string()],
+        }))
+    });
+    let driving = tauri::async_runtime::spawn(Arc::clone(&client).drive(
+        screens.main.app_handle().clone(),
+        find,
+        Arc::new(|_| Ok(Vec::new())),
+        Some(at),
+    ));
+    eventually("control taken", || client.lease_held().is_some());
+    let before = client.lease_held();
+    let busy = s.shared.authority.busy_for_a_test();
+    let mut looks = Vec::new();
+    let until = std::time::Instant::now() + Duration::from_millis(2500);
+    while std::time::Instant::now() < until {
+        looks.push(client.lease_held());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(busy);
+    for _ in 0..30 {
+        looks.push(client.lease_held());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    driving.abort();
+    tauri::async_runtime::block_on(client.let_go());
+    std::fs::remove_dir_all(&dir).unwrap();
+    let dropped = looks.iter().filter(|held| **held != before).count();
+    assert_eq!(
+        (before.is_some(), looks.len() >= 70, dropped),
+        (true, true, 0),
+        "(held before, looked through it, looks when the lease was not the one held before)"
+    );
 }

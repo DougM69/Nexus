@@ -331,8 +331,9 @@ async fn hello(socket: &mut Client, (protocol, stream, operation): (u8, u8, u8))
 }
 
 /// One request and its answer. `stationBusy` is the authority's answer while the engine is held for
-/// a moment (the radio loop, the status line's own read), and a page asks again: so does this, a
-/// bounded number of times, with a fresh request id each time.
+/// a moment (the radio loop, the status line's own read), and `remoteBusy` while another request
+/// holds the authority's own lock; a page asks again after either: so does this, a bounded number
+/// of times, with a fresh request id each time.
 async fn ask(socket: &mut Client, request: Value) -> Value {
     for _ in 0..50 {
         let mut request = request.clone();
@@ -341,7 +342,7 @@ async fn ask(socket: &mut Client, request: Value) -> Value {
         }
         send(socket, json!({"type":"operationRequest","request":request})).await;
         let answer = next(socket).await;
-        if answer["error"] != "stationBusy" {
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;

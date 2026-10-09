@@ -625,6 +625,12 @@ impl Client {
         }
     }
 
+    /// The lease this computer holds now, if it holds one: for a test that watches it.
+    #[cfg(test)]
+    pub(crate) fn lease_held(&self) -> Option<String> {
+        lock(&self.held).as_ref().map(|(_, lease)| lease.clone())
+    }
+
     /// The link's state, for the banner, with this computer's over as the link's Stop road last
     /// heard it.
     pub(crate) fn status(&self) -> Status {
@@ -1382,8 +1388,9 @@ impl Client {
     }
 
     /// One turn of the lease: renewed while held, taken when control is free, and the banner told
-    /// how it stands. A shack whose engine is busy for a moment answers `stationBusy`; the lease
-    /// outlasts several of those, so it is simply asked again next turn.
+    /// how it stands. A shack busy for a moment answers `stationBusy` (its engine) or `remoteBusy`
+    /// (its authority's lock, held by another request that moment); the lease outlasts several of
+    /// those, so it is simply asked again next turn.
     async fn keep_the_lease(&self, link: &Link, lease: Option<String>) -> Option<String> {
         if let Some(held) = lease {
             return match operate(link, json!({"type":"heartbeat","leaseId":held})).await {
@@ -1391,7 +1398,7 @@ impl Client {
                     self.set(Phase::Live, None);
                     Some(held)
                 }
-                Err("stationBusy") => Some(held),
+                Err(code) if busy(code) => Some(held),
                 // Gone, or taken back by the station: taken again next turn, if control is free.
                 Err(_) => None,
             };
@@ -1473,14 +1480,21 @@ async fn operate(link: &Link, mut request: Value) -> Result<Value, &'static str>
 }
 
 /// The operation errors client mode tells apart; any other reads as `refused`.
-const KNOWN: [&str; 6] = [
+const KNOWN: [&str; 7] = [
     "stationBusy",
+    "remoteBusy",
     "controllerBusy",
     "leaseExpired",
     "notController",
     "localPermissionRequired",
     "staleStation",
 ];
+
+/// Whether an operation's error says only that the shack was busy a moment, its engine
+/// (`stationBusy`) or its authority's lock (`remoteBusy`), and not that the request was refused.
+fn busy(code: &str) -> bool {
+    matches!(code, "stationBusy" | "remoteBusy")
+}
 
 /// A request id: 36 lowercase characters in the station's identifier shape, at random.
 fn request_id() -> String {

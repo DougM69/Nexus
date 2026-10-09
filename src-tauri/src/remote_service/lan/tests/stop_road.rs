@@ -547,7 +547,7 @@ impl Seat {
                     break said;
                 }
             };
-            if answer["error"] != "stationBusy" {
+            if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
                 return answer;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

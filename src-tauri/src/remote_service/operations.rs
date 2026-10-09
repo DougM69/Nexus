@@ -446,6 +446,15 @@ type ClusterPoster = Box<dyn Fn(f64, &str, &str) -> Result<(), String> + Send + 
 /// Called under Core: it may take no lock that is ever held while Core is taken.
 pub type LanDevices = Box<dyn Fn() -> Vec<String> + Send + Sync>;
 impl Authority {
+    /// The authority's lock, held for as long as a test keeps what this returns: every request
+    /// that comes meanwhile is answered `remoteBusy`, as it is while another request holds it.
+    #[cfg(test)]
+    pub(crate) fn busy_for_a_test(&self) -> impl Sized + '_ {
+        self.core
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Self-spot posts publicly from the station's own call, to pota.app and its cluster login, so
     /// it has its own switch (`logging::SELF_SPOT`).
     fn self_spot_enabled(&self) -> bool {

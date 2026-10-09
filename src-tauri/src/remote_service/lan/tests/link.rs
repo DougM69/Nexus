@@ -19,7 +19,9 @@ async fn operate(link: &Link, request: Value) -> Value {
         let mut request = request.clone();
         request["requestId"] = json!(id());
         let answer = link.operation(request).await.expect("the link carries it");
-        if answer["error"] != "stationBusy" && answer["error"] != "controllerBusy" {
+        if !["stationBusy", "remoteBusy", "controllerBusy"]
+            .contains(&answer["error"].as_str().unwrap_or_default())
+        {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

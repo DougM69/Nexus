@@ -95,7 +95,7 @@ async fn ask_road(road: &mut road::Road, request: Value) -> Value {
             return serde_json::from_str(&answered).unwrap();
         }
         let answer = heard(road).await;
-        if answer["error"] != "stationBusy" {
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1011,7 +1011,7 @@ pub(super) async fn page_ask(page: &mut Client2, request: Value) -> Value {
             .await
             .unwrap();
         let answer = told(page).await;
-        if answer["error"] != "stationBusy" {
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
