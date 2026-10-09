@@ -17,19 +17,26 @@ pub(super) fn turned_on(cmd: &str) -> Value {
 }
 
 /// One call on the link carrying `stops`, the count of Stops its computer had pressed when it made
-/// it, and the shack's answer to it, whatever comes before.
+/// it, and the shack's answer to it ([`answer_to`]).
 pub(super) async fn counted(seat: &mut Seat, id: u64, cmd: &str, args: Value, stops: u64) -> Value {
-    send(
-        &mut seat.socket,
-        json!({"type":"call","id":id,"cmd":cmd,"args":args,"stops":stops}),
-    )
-    .await;
-    loop {
-        let said = seat.text().await;
-        if said["type"] == "result" && said["id"] == id {
-            return said;
+    let call = json!({"type":"call","id":id,"cmd":cmd,"args":args,"stops":stops});
+    answer_to(seat, id, call).await
+}
+
+/// `call` sent on the link, and the shack's answer to the call numbered `id`, whatever comes before;
+/// `{"unanswered": true}` when none comes within three seconds.
+async fn answer_to(seat: &mut Seat, id: u64, call: Value) -> Value {
+    send(&mut seat.socket, call).await;
+    let answer = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let said = seat.text().await;
+            if said["type"] == "result" && said["id"] == id {
+                return said;
+            }
         }
-    }
+    })
+    .await;
+    answer.unwrap_or_else(|_| json!({"unanswered": true}))
 }
 
 /// What an answer says in a word: the command it ran, or its refusal.
@@ -322,10 +329,24 @@ fn a_stop_is_taken_whatever_number_it_carries() {
                     said(&counted(&mut seat, 10 + stop, "halt_tx", json!({}), stop).await)
                         == "ran halt_tx"
                 }
-                _ => said(&seat.call(10 + stop, "halt_tx", json!({})).await) == "ran halt_tx",
+                _ => {
+                    let id = 10 + stop;
+                    let call = json!({"type":"call","id":id,"cmd":"halt_tx","args":{}});
+                    said(&answer_to(&mut seat, id, call).await) == "ran halt_tx"
+                }
             };
             cases.push((stop, by, on_the_air, taken, came_to_a_stop(&r.s).await));
         }
+        assert_eq!(
+            cases,
+            [
+                (2, "road", true, true, true),
+                (0, "road", true, true, true),
+                (0, "link", true, true, true),
+                (9, "link, no number", true, true, true),
+            ],
+            "(the number, its road, on the air before it, taken, stopped)"
+        );
         seat.renewed().await;
         let armed = counted(
             &mut seat,
@@ -338,16 +359,6 @@ fn a_stop_is_taken_whatever_number_it_carries() {
         assert_eq!(said(&armed), "ran set_tx_enabled", "premise: armed again");
         let before = said(&counted(&mut seat, 31, "call_cq", json!({}), 4).await);
         let after = said(&counted(&mut seat, 32, "call_cq", json!({}), 5).await);
-        assert_eq!(
-            cases,
-            [
-                (2, "road", true, true, true),
-                (0, "road", true, true, true),
-                (0, "link", true, true, true),
-                (9, "link, no number", true, true, true),
-            ],
-            "(the number, its road, on the air before it, taken, stopped)"
-        );
         assert_eq!(
             (before.as_str(), after.as_str()),
             ("refused stopped", "ran call_cq"),
