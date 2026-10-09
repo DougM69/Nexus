@@ -9,6 +9,9 @@ use crate::command_dispatch::off_args;
 use std::path::Path;
 use tauri::test::MockRuntime;
 
+/// Stop wins over a start that was in flight, at this computer.
+mod stop_first;
+
 // --- Scaffolding ---------------------------------------------------------------------------------
 
 const STATION: &str = "0123abcd-0123-4567-89ab-0123456789ab";

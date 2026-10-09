@@ -62,6 +62,11 @@
 //! writes it ahead of everything waiting. With no link it cannot reach the shack, and says so at
 //! once rather than waiting for one.
 //!
+//! ⛔ Stop wins over a start that was in flight. A start pressed here reads how many Stops (a Stop
+//! press, or the off half of a switch) have been pressed so far; one still waiting here for a slot
+//! when another is pressed is refused `stopped` and never sent ([`Client::at_the_shack`]). The shack
+//! voids a start it read before a Stop the same way (`command_dispatch::still_bound`).
+//!
 //! A Stop press (a command of the stop class) also goes by Stop's second road
 //! (`crate::lan_client::stop_road`): the handler writes it on that road's socket itself, before it
 //! hands the call to the link, and returns. The road's own thread sends it again until the shack
@@ -524,6 +529,9 @@ pub(crate) struct Client {
     status: Mutex<Status>,
     shack: Mutex<Option<Arc<dyn Shack>>>,
     caps: Caps,
+    /// How many Stops this run has pressed, a Stop press or the off half of a switch: a start reads
+    /// it when it is pressed, and one that waited for a slot while it moved never leaves.
+    stops: AtomicU64,
     /// The revision of the copy each window holds of each store: the answer to its last read of
     /// it, or to its last save the shack took. A save goes with it. The screen does not say which
     /// read a save was made from, so a window that read the store again between making a copy and
@@ -577,6 +585,7 @@ impl Client {
             station_id,
             shack: Mutex::new(None),
             caps: Caps::new(),
+            stops: AtomicU64::new(0),
             revisions: Mutex::new(HashMap::new()),
             rows: Mutex::new(HashMap::new()),
             last: Mutex::new(HashMap::new()),
@@ -820,9 +829,10 @@ impl Client {
                     invoke.resolver.reject(word(code));
                     return true;
                 }
+                let pressed = self.stops.load(Ordering::SeqCst);
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {
-                    me.at_the_shack(&cmd, args, &window, false)
+                    me.at_the_shack(&cmd, args, &window, false, Some(pressed))
                         .await
                         .map_err(InvokeError::from)
                 });
@@ -836,6 +846,11 @@ impl Client {
                 true
             }
             Way::Shack { stop } => {
+                // ⛔ STOP WINS: counted first, an atomic step, so a start pressed before it and
+                // still waiting here for a slot never leaves.
+                if stop {
+                    self.stops.fetch_add(1, Ordering::SeqCst);
+                }
                 // A Stop press goes by the second road first, written here before the call is
                 // handed to the link, so a link that is stuck or gone holds nothing back. The off
                 // half of a switch is not a Stop press: it goes by the link alone, but the PTT's
@@ -848,7 +863,7 @@ impl Client {
                 }
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {
-                    me.at_the_shack(&cmd, args, &window, stop)
+                    me.at_the_shack(&cmd, args, &window, stop, None)
                         .await
                         .map_err(InvokeError::from)
                 });
@@ -919,7 +934,7 @@ impl Client {
         let bytes = audio_road::voice_message(&voice)
             .map_err(|e| format!("Could not save recording: {e}"))?;
         let message = json!({ "slot": slot, "label": label, "bytes": bytes });
-        self.at_the_shack("import_voice_message", message, window, false)
+        self.at_the_shack("import_voice_message", message, window, false, None)
             .await
     }
 
@@ -1011,19 +1026,25 @@ impl Client {
         }
     }
 
-    /// One call at the shack, under the caps unless it is a Stop.
+    /// One call at the shack, under the caps unless it is a Stop. A start comes with the count of
+    /// Stops pressed when it was (`pressed`): if one was pressed here while it waited for its slot,
+    /// it is refused `stopped` and never sent. Stop wins over a start that was in flight.
     async fn at_the_shack(
         self: Arc<Self>,
         cmd: &str,
         args: Value,
         window: &str,
         stop: bool,
+        pressed: Option<u64>,
     ) -> Result<Value, String> {
         let _slot = if stop {
             None
         } else {
             Some(self.caps.slot(cmd).await)
         };
+        if pressed.is_some_and(|pressed| pressed != self.stops.load(Ordering::SeqCst)) {
+            return Err(word(Refusal::Stopped.code()));
+        }
         let mut value = self.send(cmd, args, window).await?;
         if cmd == "get_settings" {
             lock(&self.this).over(&mut value);
