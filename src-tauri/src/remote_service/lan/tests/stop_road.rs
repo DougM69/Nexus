@@ -48,8 +48,12 @@ mod bench;
 mod ends;
 /// A section change from afar arms nothing.
 mod entry;
+/// Stop's second road through a relay, as the internet stands between the two computers.
+mod relayed;
 /// Stop wins over a start that was in flight.
 mod stand_down;
+/// Stop wins over a start or a press that a later Stop overtook on the way.
+mod stop_count;
 
 /// The design's bound for a Stop on this road, flood or no flood.
 const ACKNOWLEDGED: Duration = Duration::from_millis(20);
@@ -1500,7 +1504,7 @@ async fn speak(
     let mut holds = Vec::new();
     for frame in first..first + frames {
         if (frame - first).is_multiple_of(5) && held(frame) {
-            seat.road.say(&Up::Hold { press }).await;
+            seat.road.say(&Up::Hold { press, stops: 0 }).await;
             holds.push(Instant::now());
         }
         let packet = voice(encoder, frame);
@@ -1553,7 +1557,7 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
     let (state, _) = seat.fresh_snapshot().await;
     seat.fresh_but_not_present(state).await;
     for _ in 0..3 {
-        seat.road.say(&Up::Hold { press: 1 }).await;
+        seat.road.say(&Up::Hold { press: 1, stops: 0 }).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let said = seat.road_says(Duration::from_millis(200)).await;
@@ -1585,7 +1589,7 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
         "premise: presence live"
     );
     for _ in 0..3 {
-        seat.road.say(&Up::Hold { press: 2 }).await;
+        seat.road.say(&Up::Hold { press: 2, stops: 0 }).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let said = seat.road_says(Duration::from_millis(200)).await;
@@ -1711,7 +1715,7 @@ async fn each_press_report_goes_back_by_its_own_road_and_never_to_the_page() {
     );
     let mut page = Vec::new();
     for _ in 0..4 {
-        seat.road.say(&Up::Hold { press: 5 }).await;
+        seat.road.say(&Up::Hold { press: 5, stops: 0 }).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         page.extend(crate::remote_service::stream::page_reports(&r.ptt));
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1808,9 +1812,9 @@ async fn the_microphone_over_is_told_while_presence_is_live() {
     );
 }
 
-/// ★ The microphone over's state crosses the road whole, its holes on the air included (the road's
-/// format 2); a body of the first format, which had no holes, is not read as one. CONTROL: each
-/// end, and both counts at their largest, come back as they went.
+/// ★ The microphone over's state crosses the road whole, its holes on the air included (since the
+/// road's format 2); a body of the first format, which had no holes, is not read as one. CONTROL:
+/// each end, and both counts at their largest, come back as they went.
 #[test]
 fn the_overs_state_crosses_the_road_with_its_holes() {
     use tempo_app::mic::{MicEnded, MicStatus};
@@ -1839,7 +1843,30 @@ fn the_overs_state_crosses_the_road_with_its_holes() {
         None,
         "a body without the holes"
     );
-    assert!(super::super::stop_road::contract_text().contains(" format 2 "));
+    assert!(super::super::stop_road::contract_text().contains(" format 3 "));
+}
+
+/// ★ A hold crosses the road with the Stops its press began under (the road's format 3), and a
+/// hold of the older format, which named none, is not read as one; a Stop's body is as it always
+/// was, so a Stop of every format is still read. CONTROL: the largest numbers come back as they
+/// went.
+#[test]
+fn a_hold_crosses_the_road_with_the_stops_its_press_began_under() {
+    // It names a Stop, and the badge census reads every test that names one as reaching the badge.
+    let _alone = alone();
+    for (press, stops) in [(1, 0), (7, 3), (u64::MAX, u64::MAX)] {
+        let up = Up::Hold { press, stops };
+        assert_eq!(up.body().len(), 16);
+        assert_eq!(Up::read(up.kind(), &up.body()), Some(up.clone()));
+        assert_eq!(
+            Up::read(up.kind(), &up.body()[..8]),
+            None,
+            "a hold that names no Stops"
+        );
+    }
+    let stop = Up::Stop { stop: 5 };
+    assert_eq!(stop.body(), 5u64.to_be_bytes());
+    assert_eq!(Up::read(stop.kind(), &5u64.to_be_bytes()), Some(stop));
 }
 
 // ----- The audio road -----
@@ -2573,7 +2600,7 @@ async fn a_start_from_a_connection_without_the_lease_is_refused() {
     );
     let mut armed = false;
     for _ in 0..4 {
-        other.road.say(&Up::Hold { press: 1 }).await;
+        other.road.say(&Up::Hold { press: 1, stops: 0 }).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         armed |= r.s.shared.engine.lock().unwrap().mic_armed();
     }
@@ -2592,7 +2619,7 @@ async fn a_start_from_a_connection_without_the_lease_is_refused() {
     // One run of Nexus on both connections: its call ids follow on.
     let said = holder.call(2, "call_cq", json!({})).await;
     assert_eq!(said["value"]["ran"], "call_cq", "{said}");
-    holder.road.say(&Up::Hold { press: 1 }).await;
+    holder.road.say(&Up::Hold { press: 1, stops: 0 }).await;
     let mut held = false;
     for _ in 0..20 {
         held |= r.s.shared.engine.lock().unwrap().mic_armed();
@@ -2975,7 +3002,7 @@ async fn a_press_from_a_connection_whose_presence_went_is_refused_under_anothers
     );
     let mut armed = false;
     for _ in 0..3 {
-        first.road.say(&Up::Hold { press: 1 }).await;
+        first.road.say(&Up::Hold { press: 1, stops: 0 }).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         armed |= r.s.shared.engine.lock().unwrap().mic_armed();
     }
@@ -2995,7 +3022,7 @@ async fn a_press_from_a_connection_whose_presence_went_is_refused_under_anothers
         !armed && !r.ptt.keyed(),
         "a press with no presence of its own armed the over"
     );
-    second.road.say(&Up::Hold { press: 1 }).await;
+    second.road.say(&Up::Hold { press: 1, stops: 0 }).await;
     let mut held = false;
     for _ in 0..20 {
         held |= r.s.shared.engine.lock().unwrap().mic_armed();

@@ -85,7 +85,7 @@ async fn the_link_runs_the_shacks_commands_and_keeps_this_computers_here() {
         (STATION, s.device.as_str())
     );
     in_control(&link).await;
-    let (_, read) = link.call("get_settings", json!({}), None).await;
+    let (_, read) = link.call("get_settings", json!({}), None, 0).await;
     let Answer::Value { value, revision } = read else {
         panic!("{read:?}")
     };
@@ -102,14 +102,16 @@ async fn the_link_runs_the_shacks_commands_and_keeps_this_computers_here() {
         ),
     ] {
         assert_eq!(
-            link.call(cmd, args, None).await.1,
+            link.call(cmd, args, None, 0).await.1,
             Answer::Refused(refusal),
             "{cmd}"
         );
     }
     let big = "x".repeat(100_000);
     assert_eq!(
-        link.call("add_radio", json!({"name": big}), None).await.1,
+        link.call("add_radio", json!({"name": big}), None, 0)
+            .await
+            .1,
         Answer::Value {
             value: json!({"ran":"add_radio","args":{"name":big}}),
             revision: None
@@ -117,13 +119,13 @@ async fn the_link_runs_the_shacks_commands_and_keeps_this_computers_here() {
     );
     let too_big = "x".repeat(wire::CALL_BYTES);
     assert_eq!(
-        link.call("add_radio", json!({"name": too_big}), None)
+        link.call("add_radio", json!({"name": too_big}), None, 0)
             .await
             .1,
         Answer::TooLarge
     );
     assert!(matches!(
-        link.call("halt_tx", json!({}), None).await.1,
+        link.call("halt_tx", json!({}), None, 0).await.1,
         Answer::Value { .. }
     ));
     assert_eq!(app.ran(), ["get_settings", "add_radio", "halt_tx"]);
@@ -171,11 +173,15 @@ async fn the_links_stop_goes_out_ahead_of_a_big_call() {
     let big = "x".repeat(12 << 20);
     let sending = {
         let (link, big) = (link.clone(), big.clone());
-        tokio::spawn(async move { link.call("add_radio", json!({"name": big}), None).await.1 })
+        tokio::spawn(async move {
+            link.call("add_radio", json!({"name": big}), None, 0)
+                .await
+                .1
+        })
     };
     tokio::task::yield_now().await;
     assert!(matches!(
-        link.call("halt_tx", json!({}), None).await.1,
+        link.call("halt_tx", json!({}), None, 0).await.1,
         Answer::Value { .. }
     ));
     let sent = sending.await.unwrap();
@@ -197,7 +203,7 @@ async fn a_call_cut_off_is_asked_after_on_the_next_link() {
     let link = Arc::new(link);
     let calling = {
         let link = link.clone();
-        tokio::spawn(async move { link.call("ask_log", json!({}), None).await })
+        tokio::spawn(async move { link.call("ask_log", json!({}), None, 0).await })
     };
     eventually("the call runs", || app.ran() == ["ask_log"]).await;
     link.close();
@@ -297,4 +303,22 @@ fn this_run_has_one_id() {
     let run = crate::lan_client::link::run_id();
     assert_ne!(run, 0);
     assert_eq!(crate::lan_client::link::run_id(), run);
+}
+
+/// ★ A call carries its count of Stops from this computer's link to the shack's reader, by value: a
+/// start's count, a Stop's own number, the largest number there is, and a whole save's revision
+/// beside it. A call that names no count reads as 0, older than any Stop. CONTROL: a message the
+/// shack would close the connection over reads as no call at all.
+#[test]
+fn a_calls_count_of_stops_crosses_the_link_as_written() {
+    use super::super::channel::read_call;
+    use crate::lan_client::link::call_message;
+    for (stops, base) in [(0, None), (3, None), (u64::MAX, Some("7-1"))] {
+        let text = call_message(7, "call_cq", json!({}), base, stops).to_string();
+        assert_eq!(read_call(&text), Some((7, stops)), "{text}");
+    }
+    let unnumbered = json!({"type":"call","id":8,"cmd":"halt_tx","args":{}}).to_string();
+    assert_eq!(read_call(&unnumbered), Some((8, 0)));
+    let garbled = json!({"type":"call","id":9,"cmd":"halt_tx","args":{},"stops":"two"}).to_string();
+    assert_eq!(read_call(&garbled), None);
 }

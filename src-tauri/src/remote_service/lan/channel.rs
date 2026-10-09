@@ -149,13 +149,16 @@ enum FromComputer {
         run: u64,
     },
     /// One call on the open lane: its id, rising within the run, the command and its arguments,
-    /// and for a whole save the revision of the copy it was made from.
+    /// for a whole save the revision of the copy it was made from, and how many Stops the computer
+    /// had pressed when it made the call (a Stop counting itself).
     Call {
         id: u64,
         cmd: String,
         args: Value,
         #[serde(default)]
         base: Option<String>,
+        #[serde(default)]
+        stops: u64,
     },
     /// What became of these calls: asked after a reconnect.
     Outcomes {
@@ -165,6 +168,17 @@ enum FromComputer {
     Watch {
         feeds: Vec<String>,
     },
+}
+
+/// A call as the shack reads it off the link: its id and the count of Stops it carries, or `None`
+/// for a message the shack would close the connection over. For a test that holds the computer's
+/// writing of a call to the shack's reading of it.
+#[cfg(test)]
+pub(super) fn read_call(text: &str) -> Option<(u64, u64)> {
+    match serde_json::from_str::<FromComputer>(text).ok()? {
+        FromComputer::Call { id, stops, .. } => Some((id, stops)),
+        _ => None,
+    }
 }
 
 /// Which side to update, when the two ends do not speak the same versions (as ruled on
@@ -576,9 +590,9 @@ async fn session<S>(
                         }));
                         if outbox.text(json!({"type":"opened"}).to_string()).is_err() { break StreamReason::ConnectionFailed }
                     }
-                    FromComputer::Call { id, cmd, args, base } => {
+                    FromComputer::Call { id, cmd, args, base, stops } => {
                         let Some(lane) = lane.as_mut() else { break StreamReason::StreamClosed };
-                        lane.call(Call { id, cmd, args, base: base.map(Revision::new) });
+                        lane.call(Call { id, cmd, args, base: base.map(Revision::new), stops });
                     }
                     FromComputer::Outcomes { ids } => {
                         let Some(lane) = lane.as_ref().filter(|_| ids.len() <= OUTCOMES) else { break StreamReason::StreamClosed };

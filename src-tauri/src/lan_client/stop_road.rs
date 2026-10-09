@@ -5,7 +5,8 @@
 //!
 //! - **A Stop press** ([`StopRoad::stop`]) is written to the socket by the caller itself, on the
 //!   caller's own thread, before anything else is asked: client mode's Stop handler, beside the
-//!   Stop it sends on the command link. The road's thread only sends it again, every [`REPEAT`]
+//!   Stop it sends on the command link, and under that Stop's number (how many Stops this run has
+//!   pressed, itself included). The road's thread only sends it again, every [`REPEAT`]
 //!   until the station acknowledges it, for up to [`GIVE_UP`]. Only then is this computer's own
 //!   press ended, and that is an atomic store: nothing a Stop does waits for the audio road.
 //! - **The held press** ([`StopRoad::press`], [`StopRoad::hold`], [`StopRoad::release`]): each
@@ -14,7 +15,9 @@
 //!   lets the station's held PTT end the press 200 ms later. A press the station says has ended
 //!   ends here too, so the microphone stops and it never keys again. The station says that end
 //!   again at each hold that reaches it after, so a lost report is heard at the next hold; it is
-//!   taken once, for the press live here.
+//!   taken once, for the press live here. Every hold names how many Stops had been pressed when its
+//!   press began, so the station never keys a press the network delivers after a Stop pressed after
+//!   it.
 //! - **The heartbeat**, every [`HEARTBEAT`] while the link is open: the lease, and the number of
 //!   the last snapshot this computer's main window fetched (client mode keeps it, [`StopRoad::fetched`]).
 //!   The number comes from the screen's own poll, so a window that hangs stops moving it, and
@@ -214,7 +217,8 @@ struct Shared {
     /// How long the road outlives its link.
     afterlife: Duration,
     stops: Mutex<Vec<Pending>>,
-    next_stop: AtomicU64,
+    /// How many Stops had been pressed when the press live here began: what each of its holds names.
+    press_stops: AtomicU64,
     lease: Mutex<Option<String>>,
     /// The number of the last snapshot the main window fetched, 0 before the first.
     state: AtomicU64,
@@ -268,7 +272,7 @@ impl StopRoad {
             send: Mutex::new(Some(send)),
             afterlife,
             stops: Mutex::new(Vec::new()),
-            next_stop: AtomicU64::new(1),
+            press_stops: AtomicU64::new(0),
             lease: Mutex::new(None),
             state: AtomicU64::new(0),
             ended: Mutex::new(None),
@@ -284,11 +288,11 @@ impl StopRoad {
         Some(Arc::new(Self { shared }))
     }
 
-    /// A Stop press: written to the socket now, on this thread, and then sent again by the road's
-    /// thread until the station acknowledges it; then this computer's own press is over. Returns at
-    /// once with the Stop's number.
-    pub(crate) fn stop(&self) -> u64 {
-        let stop = self.shared.next_stop.fetch_add(1, Ordering::SeqCst);
+    /// A Stop press, numbered `stop` by the caller (how many Stops this run has pressed, itself
+    /// included: the number the command link's Stop carries): written to the socket now, on this
+    /// thread, and then sent again by the road's thread until the station acknowledges it; then
+    /// this computer's own press is over. Returns at once.
+    pub(crate) fn stop(&self, stop: u64) {
         let now = Instant::now();
         self.shared.say(&Up::Stop { stop });
         lock(&self.shared.stops).push(Pending {
@@ -298,7 +302,6 @@ impl StopRoad {
         });
         // The microphone stops sending: an atomic store, which waits for nothing.
         self.shared.on_air.pressing(None);
-        stop
     }
 
     /// What the screens say of this computer's over at `now`, if anything.
@@ -328,10 +331,12 @@ impl StopRoad {
         self.shared.say(up)
     }
 
-    /// A new press, numbered `press`: its first hold written now, on this thread, and the press
-    /// live here (the microphone sends, and the station's audio here is muted).
-    pub(crate) fn press(&self, press: u64) {
-        self.shared.say(&Up::Hold { press });
+    /// A new press, numbered `press`, begun when this run had pressed `stops` Stops: its first hold
+    /// written now, on this thread, and the press live here (the microphone sends, and the station's
+    /// audio here is muted). Each hold of it names the same `stops`.
+    pub(crate) fn press(&self, press: u64, stops: u64) {
+        self.shared.press_stops.store(stops, Ordering::SeqCst);
+        self.shared.say(&Up::Hold { press, stops });
         self.shared.on_air.pressing(Some(press));
     }
 
@@ -342,7 +347,8 @@ impl StopRoad {
         if self.shared.on_air.press() != Some(press) {
             return false;
         }
-        self.shared.say(&Up::Hold { press });
+        let stops = self.shared.press_stops.load(Ordering::SeqCst);
+        self.shared.say(&Up::Hold { press, stops });
         true
     }
 
@@ -618,7 +624,8 @@ mod tests {
     fn a_stop_goes_at_once_and_again_every_50_ms_until_it_is_acknowledged() {
         let (road, mut station) = road();
         let pressed = Instant::now();
-        let stop = road.stop();
+        let stop = 1;
+        road.stop(stop);
         let heard = station.heard(Duration::from_millis(180));
         assert!(heard.len() >= 3, "{heard:?}");
         assert!(heard.iter().all(|(up, ..)| *up == Up::Stop { stop }));
@@ -641,7 +648,7 @@ mod tests {
     #[test]
     fn a_stop_nobody_acknowledges_is_given_up_after_five_seconds() {
         let (road, mut station) = road();
-        road.stop();
+        road.stop(1);
         let heard = station.heard(Duration::from_millis(5600));
         let (first, last) = (heard[0].1, heard[heard.len() - 1].1);
         assert!(
@@ -710,7 +717,8 @@ mod tests {
     fn a_stop_still_goes_after_the_link_ended_until_its_afterlife() {
         let (road, mut station) = road();
         road.link_ended();
-        let stop = road.stop();
+        let stop = 1;
+        road.stop(stop);
         let heard = station.heard(Duration::from_millis(30));
         assert_eq!(
             heard.first().map(|(up, ..)| up.clone()),
@@ -824,13 +832,13 @@ mod tests {
             keyed: false,
             end: Some(HoldEnd::Lapsed),
         };
-        road.press(7);
+        road.press(7, 0);
         say(lapsed(7));
         assert_eq!(on_air.ended(), 1, "CONTROL: the live press's end is taken");
         assert_eq!(on_air.press(), None, "CONTROL: the press is over here");
         say(lapsed(7));
         say(lapsed(7));
-        road.press(8);
+        road.press(8, 0);
         road.release(8);
         say(lapsed(8));
         assert_eq!(
@@ -847,7 +855,8 @@ mod tests {
         let (road, mut station) = road();
         road.shared.on_air.pressing(Some(9));
         assert_eq!(road.shared.on_air.press(), Some(9));
-        let stop = road.stop();
+        let stop = 1;
+        road.stop(stop);
         assert_eq!(road.shared.on_air.press(), None);
         assert_eq!(
             station
@@ -897,7 +906,8 @@ mod tests {
         let (switched, mut station) = tauri::async_runtime::block_on(switch.over(async { road() }));
         switched.lease(Some(LEASE.to_string()));
         switched.fetched(9);
-        let first = switched.stop();
+        let first = 1;
+        switched.stop(first);
         let heard = station.heard(Duration::from_millis(100));
         assert!(
             heard.iter().any(|(up, ..)| *up == Up::Stop { stop: first }),
@@ -920,8 +930,9 @@ mod tests {
             Ok(Position::BlockStopRoad)
         );
         let _ = station.heard(Duration::from_millis(30));
-        let second = switched.stop();
-        switched.press(7);
+        let second = 2;
+        switched.stop(second);
+        switched.press(7, second);
         assert!(switched.hold(7), "the press is live here");
         let carried = station.heard(Duration::from_millis(700));
         assert!(carried.is_empty(), "carried while blocked: {carried:?}");
@@ -958,7 +969,8 @@ mod tests {
             switch.set(Position::BlockStopRoad),
             Ok(Position::BlockStopRoad)
         );
-        let stop = free.stop();
+        let stop = 1;
+        free.stop(stop);
         assert!(
             its_station
                 .heard(Duration::from_millis(100))

@@ -13,6 +13,8 @@ use tauri::test::MockRuntime;
 mod reassert;
 /// The recorder and the held press.
 mod record;
+/// What each call and each hold says of the Stops pressed before it.
+mod stop_count;
 /// Stop wins over a start that was in flight, at this computer.
 mod stop_first;
 
@@ -24,6 +26,8 @@ const STATION: &str = "0123abcd-0123-4567-89ab-0123456789ab";
 /// answers each as the test set for its command (`{"ran": <command>}` otherwise).
 struct FakeShack {
     sent: Mutex<Vec<(String, Value, Option<String>)>>,
+    /// Each call's command and the count of Stops it carried, in the order sent.
+    counted: Mutex<Vec<(String, u64)>>,
     answers: Mutex<HashMap<String, Answer>>,
     feeds: Mutex<HashMap<String, (u64, Value)>>,
     open: tokio::sync::watch::Sender<bool>,
@@ -38,6 +42,7 @@ impl FakeShack {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             sent: Mutex::new(Vec::new()),
+            counted: Mutex::new(Vec::new()),
             answers: Mutex::new(HashMap::new()),
             feeds: Mutex::new(HashMap::new()),
             open: tokio::sync::watch::channel(true).0,
@@ -78,9 +83,16 @@ impl FakeShack {
 }
 
 impl Shack for FakeShack {
-    fn call(self: Arc<Self>, cmd: String, args: Value, base: Option<String>) -> Answering {
+    fn call(
+        self: Arc<Self>,
+        cmd: String,
+        args: Value,
+        base: Option<String>,
+        stops: u64,
+    ) -> Answering {
         Box::pin(async move {
             let stop = is_stop(&cmd, &args);
+            lock(&self.counted).push((cmd.clone(), stops));
             lock(&self.sent).push((cmd.clone(), args, base));
             if !stop {
                 let mut running = lock(&self.running);
@@ -1157,9 +1169,9 @@ fn the_ptt_here_is_a_held_press_on_stop_road() {
     assert_eq!(
         end.presses(),
         [
-            Up::Hold { press: 1 },
-            Up::Hold { press: 1 },
-            Up::Hold { press: 1 }
+            Up::Hold { press: 1, stops: 0 },
+            Up::Hold { press: 1, stops: 0 },
+            Up::Hold { press: 1, stops: 0 }
         ],
         "one hold a re-assertion, none of its own"
     );
@@ -1175,7 +1187,11 @@ fn the_ptt_here_is_a_held_press_on_stop_road() {
     assert_eq!(lock(&shack.sent)[0].1, json!({"on": false}));
     assert!(ask(&s.main, "set_ptt", json!({"on": true})).is_ok());
     eventually("the next press", || end.presses().len() >= 5);
-    assert_eq!(end.presses()[4], Up::Hold { press: 2 }, "a new press");
+    assert_eq!(
+        end.presses()[4],
+        Up::Hold { press: 2, stops: 1 },
+        "a new press, begun after the off half, which counts as a Stop"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

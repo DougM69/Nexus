@@ -80,6 +80,23 @@ fn next_id() -> u64 {
     LAST.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// The call the link writes: its id, the command and its arguments, how many Stops had been pressed
+/// here when it was made (a Stop counting itself), and for a whole save the revision of the copy it
+/// was made from.
+pub(crate) fn call_message(
+    id: u64,
+    cmd: &str,
+    args: Value,
+    base: Option<&str>,
+    stops: u64,
+) -> Value {
+    let mut message = json!({"type":"call","id":id,"cmd":cmd,"args":args,"stops":stops});
+    if let Some(base) = base {
+        message["base"] = json!(base);
+    }
+    message
+}
+
 /// What became of a call.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Answer {
@@ -273,11 +290,18 @@ impl Link {
         ))
     }
 
-    /// One station command, with the revision of the copy a whole save was made from: its id in
-    /// this run, and what became of it. Routed first, deny by default: a command that runs on this
-    /// computer, or is refused here, is answered here and never sent. The ui-state pair goes as
-    /// given, already split (`command_dispatch::split_ui_state`).
-    pub(crate) async fn call(&self, cmd: &str, args: Value, base: Option<&str>) -> (u64, Answer) {
+    /// One station command, with the revision of the copy a whole save was made from and how many
+    /// Stops had been pressed here when it was made (a Stop counting itself: the number its second
+    /// road carries too): its id in this run, and what became of it. Routed first, deny by default:
+    /// a command that runs on this computer, or is refused here, is answered here and never sent.
+    /// The ui-state pair goes as given, already split (`command_dispatch::split_ui_state`).
+    pub(crate) async fn call(
+        &self,
+        cmd: &str,
+        args: Value,
+        base: Option<&str>,
+        stops: u64,
+    ) -> (u64, Answer) {
         let id = next_id();
         match route(cmd, &args) {
             Route::Shack | Route::Split => {}
@@ -285,11 +309,7 @@ impl Link {
             Route::Refused(refusal) => return (id, Answer::Refused(refusal)),
         }
         let urgent = is_stop(cmd, &args);
-        let mut message = json!({"type":"call","id":id,"cmd":cmd,"args":args});
-        if let Some(base) = base {
-            message["base"] = json!(base);
-        }
-        let text = message.to_string();
+        let text = call_message(id, cmd, args, base, stops).to_string();
         if text.len() > wire::CALL_BYTES {
             return (id, Answer::TooLarge);
         }

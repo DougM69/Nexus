@@ -27,7 +27,10 @@
 //! Stop wins over a start that was in flight. The command link binds each start to the transmit
 //! stand-down generation as it reads it ([`Afar`]), and its handler checks that generation under the
 //! Engine lock it then runs in ([`still_bound`]): a Stop taken in between, by either road, or any
-//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]).
+//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]). A Stop that
+//! overtook the start on the way (by the second road, or ahead of it on the link) is caught by its
+//! number: every call says how many Stops its computer had pressed when it was made ([`Call`]), and
+//! a start made before a Stop the shack has taken is refused as it is read.
 //!
 //! From afar only those starts arm transmit. A section change, a spot worked or an SSTV channel
 //! picked runs at the shack as its own screen's does, but the lane writes [`Afar`] into it too, and
@@ -766,7 +769,8 @@ pub(crate) struct Caller {
     pub(crate) profile: Profile,
     pub(crate) holds_lease: bool,
     /// For a start: the stream's transmit rules as this computer's Stop road reads them now (both
-    /// roads up, live presence, fresh state), or the refusal of the first that does not hold.
+    /// roads up, live presence, fresh state), or the refusal of the first that does not hold, or
+    /// [`Refusal::Stopped`] for a start its computer made before a Stop the shack has since taken.
     /// Asked by the command lane only for a command that starts a transmission.
     pub(crate) roads: Result<(), Refusal>,
 }
@@ -781,6 +785,11 @@ pub(crate) struct Call {
     pub(crate) args: Value,
     /// For a whole save: the revision of the copy it was made from.
     pub(crate) base: Option<Revision>,
+    /// How many Stops the other computer had pressed when this call was made, a Stop counting
+    /// itself: what a start is judged by against the Stops the shack has taken since (the command
+    /// lane's, `remote_service::lan::stop_road::Ready`). Nothing else reads it, and it never
+    /// refuses a Stop.
+    pub(crate) stops: u64,
 }
 
 /// What became of a call, as the journal keeps it.
@@ -865,6 +874,7 @@ impl<S: Stores> Dispatcher<S> {
             cmd,
             args,
             base,
+            stops: _,
         } = call;
         let class = class_of(&cmd);
         if runs_as_stop(class, &cmd, &args) {

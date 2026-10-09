@@ -161,8 +161,9 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     // (2026-10-07): its Stop runs every stop verb on a thread of its own, the satellite disarm
     // among them. The bench's road switch is a tenth: a Stop pressed on a client-mode screen goes
     // on that road too. The tests of a start in flight behind a Stop are an eleventh: one takes its
-    // Stop on the road.
-    const SOURCES: [(&str, &str); 11] = [
+    // Stop on the road. Those of a start or a press a later Stop overtook, and of the road through a
+    // relay, are a twelfth and a thirteenth: their Stops go on the road too.
+    const SOURCES: [(&str, &str); 13] = [
         ("lan_lease_tests.rs", include_str!("lan_lease_tests.rs")),
         (
             "remote_service/lan/tests.rs",
@@ -187,6 +188,14 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
         (
             "remote_service/lan/tests/stop_road/stand_down.rs",
             include_str!("../lan/tests/stop_road/stand_down.rs"),
+        ),
+        (
+            "remote_service/lan/tests/stop_road/stop_count.rs",
+            include_str!("../lan/tests/stop_road/stop_count.rs"),
+        ),
+        (
+            "remote_service/lan/tests/stop_road/relayed.rs",
+            include_str!("../lan/tests/stop_road/relayed.rs"),
         ),
         ("lib.rs", include_str!("../../lib.rs")),
     ];
@@ -216,7 +225,8 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
             || body.contains("stop_v4(")
             || body.contains("Up::Stop")
             || body.contains("road_stop(")
-            || body.contains("road.stop()")
+            // The computer's own road, whose Stop now takes its number.
+            || body.contains("road.stop(")
             // A Stop pressed on a client-mode screen, which goes by Stop's road as well.
             || body.contains("stop_from_the_screen(")
             || body.contains("rotator.point")

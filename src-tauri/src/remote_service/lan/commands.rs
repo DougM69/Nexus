@@ -35,6 +35,14 @@
 //! them never runs, and is answered `stopped`. The other computer cannot say it: anything it sends
 //! under that argument goes before the call is looked at.
 //!
+//! A Stop pressed after a start can also reach the shack first: by the second road, which on the
+//! internet is the shorter way, or ahead of the start on the link, whose outbox writes a Stop before
+//! anything waiting. So every call carries how many Stops its computer had pressed when it was made,
+//! a Stop counting itself, and each Stop is noted by that number where this connection's road notes
+//! its own (`super::stop_road::Ready`), before it moves the generation. A start whose number is
+//! older than a Stop noted there is refused `stopped` as it is read, and never runs. The number
+//! refuses nothing else: a Stop is taken whatever it carries.
+//!
 //! ## Feeds and events
 //!
 //! A watched feed runs its command here at its own pace, through the same handler, and pushes what
@@ -140,6 +148,22 @@ impl Context {
             .lan_controls(self.connection, &self.device, Instant::now())
     }
 
+    /// The Stop numbered `stops` came from this computer on the command link: noted where its road
+    /// notes the road's own, before the generation moves. A connection with no road starts nothing.
+    fn took_stop(&self, stops: u64) {
+        if let Some(ready) = &self.ready {
+            ready.took_stop(stops);
+        }
+    }
+
+    /// Whether a start made when its computer had pressed `stops` Stops came before a Stop that
+    /// either of this connection's roads has since delivered.
+    fn pressed_before_a_stop(&self, stops: u64) -> bool {
+        self.ready
+            .as_ref()
+            .is_some_and(|ready| ready.pressed_before_a_stop(stops))
+    }
+
     /// The stream's transmit rules as this connection's roads read them now, for a start: a Stop
     /// road at all, then its presence and the state its computer's screen last fetched.
     fn roads(&self, now: Instant) -> Result<(), Refusal> {
@@ -241,14 +265,17 @@ impl Lane {
     /// off to be admitted, a start bound as it is read.
     pub(super) fn call(&mut self, mut call: Call) {
         let id = call.id;
+        let stops = call.stops;
         // Whether a call is from afar is the lane's to say, never the other computer's.
         if let Some(args) = call.args.as_object_mut() {
             args.remove(AFAR);
         }
         let call = match admit_stop(call) {
             Ok(stop) => {
-                // ⛔ STOP WINS: every start read before this Stop is void from now, an atomic step
-                // taken before the Stop waits for anything, as the road's Stop takes it.
+                // ⛔ STOP WINS: noted by its number first, where a start read after it is judged;
+                // then every start read before this Stop is void from now, an atomic step taken
+                // before the Stop waits for anything, as the road's Stop takes it.
+                self.context.took_stop(stops);
                 self.context.transmit.revoke();
                 let context = self.context.clone();
                 tokio::task::spawn_blocking(move || {
@@ -270,13 +297,19 @@ impl Lane {
         let afar = takes_afar(&call.cmd).then(|| Afar {
             stand_down: self.context.transmit.generation(),
         });
+        // ⛔ Then the Stops that overtook it: one pressed after this start that reached the shack
+        // first, by the road or ahead of it on the link. Read after the generation, as each Stop is
+        // noted before it moves the generation, so no Stop falls between the two reads.
+        let overtaken = starts && self.context.pressed_before_a_stop(stops);
         tokio::task::spawn_blocking(move || {
             let _waiting = waiting;
             let caller = Caller {
                 key,
                 profile,
                 holds_lease: context.controls(),
-                roads: if starts {
+                roads: if overtaken {
+                    Err(Refusal::Stopped)
+                } else if starts {
                     context.roads(Instant::now())
                 } else {
                     Ok(())

@@ -98,6 +98,7 @@ fn call(id: u64, cmd: &str, args: Value) -> Call {
         cmd: cmd.to_string(),
         args,
         base: None,
+        stops: 0,
     }
 }
 

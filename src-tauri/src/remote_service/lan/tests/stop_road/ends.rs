@@ -49,7 +49,7 @@ async fn a_hold_for_a_press_the_station_ended_is_answered_with_its_end() {
         "premise: the station said the press ended: {lost:?}"
     );
     for _ in 0..5 {
-        seat.road.say(&Up::Hold { press: 1 }).await;
+        seat.road.say(&Up::Hold { press: 1, stops: 0 }).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let said = seat.road_says(Duration::from_millis(300)).await;

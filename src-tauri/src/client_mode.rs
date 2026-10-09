@@ -67,7 +67,11 @@
 //! ⛔ Stop wins over a start that was in flight. A start pressed here reads how many Stops (a Stop
 //! press, or the off half of a switch) have been pressed so far; one still waiting here for a slot
 //! when another is pressed is refused `stopped` and never sent ([`Client::at_the_shack`]). The shack
-//! voids a start it read before a Stop the same way (`command_dispatch::still_bound`).
+//! voids a start it read before a Stop the same way (`command_dispatch::still_bound`). And every
+//! call carries that count, a Stop its own number (the one its second road carries too), and every
+//! hold of a press the count it began under, so a Stop that overtakes a start on the way, by the
+//! second road or ahead of it on the link, still wins: the shack refuses a start or a press made
+//! before a Stop it has taken.
 //!
 //! A Stop press (a command of the stop class) also goes by Stop's second road
 //! (`crate::lan_client::stop_road`): the handler writes it on that road's socket itself, before it
@@ -344,8 +348,15 @@ pub(crate) type Find =
 
 /// The shack, as client mode reaches it: the command link in the app, a stand-in in a test.
 pub(crate) trait Shack: Send + Sync + 'static {
-    /// One call, with the revision of the copy a save was made from: its id, and what became of it.
-    fn call(self: Arc<Self>, cmd: String, args: Value, base: Option<String>) -> Answering;
+    /// One call, with the revision of the copy a save was made from and how many Stops had been
+    /// pressed here when it was made, a Stop counting itself: its id, and what became of it.
+    fn call(
+        self: Arc<Self>,
+        cmd: String,
+        args: Value,
+        base: Option<String>,
+        stops: u64,
+    ) -> Answering;
     /// A feed's newest value, with its number.
     fn latest(&self, feed: &str) -> Option<(u64, Value)>;
     /// This link's Stop road, when the shack opened one.
@@ -355,8 +366,14 @@ pub(crate) trait Shack: Send + Sync + 'static {
 }
 
 impl Shack for Link {
-    fn call(self: Arc<Self>, cmd: String, args: Value, base: Option<String>) -> Answering {
-        Box::pin(async move { Link::call(&self, &cmd, args, base.as_deref()).await })
+    fn call(
+        self: Arc<Self>,
+        cmd: String,
+        args: Value,
+        base: Option<String>,
+        stops: u64,
+    ) -> Answering {
+        Box::pin(async move { Link::call(&self, &cmd, args, base.as_deref(), stops).await })
     }
 
     fn latest(&self, feed: &str) -> Option<(u64, Value)> {
@@ -681,14 +698,15 @@ impl Client {
         *lock(&self.shack) = shack;
     }
 
-    /// A Stop press, on every Stop road that may still reach the shack: written now, on this
-    /// thread, beside the Stop the command link carries. The roads past their minute go.
-    fn stop_on_the_roads(&self) {
+    /// The Stop press numbered `stop`, on every Stop road that may still reach the shack: written
+    /// now, on this thread, beside the Stop the command link carries under the same number. The
+    /// roads past their minute go.
+    fn stop_on_the_roads(&self, stop: u64) {
         let now = std::time::Instant::now();
         let mut roads = lock(&self.roads);
         roads.retain(|road| !road.gone(now));
         for road in roads.iter() {
-            road.stop();
+            road.stop(stop);
         }
     }
 
@@ -736,7 +754,9 @@ impl Client {
                 }
                 let road = self.ready_to_start(Instant::now()).map_err(word)?;
                 let press = self.next_press.fetch_add(1, Ordering::SeqCst);
-                road.press(press);
+                // Begun under the Stops pressed so far: a Stop pressed after it that reaches the
+                // shack first keeps it from ever keying there.
+                road.press(press, self.stops.load(Ordering::SeqCst));
                 *held = Press::Held { press, road };
                 Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})))
             }
@@ -840,7 +860,7 @@ impl Client {
                 let pressed = self.stops.load(Ordering::SeqCst);
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {
-                    me.at_the_shack(&cmd, args, &window, false, Some(pressed))
+                    me.at_the_shack(&cmd, args, &window, false, Some(pressed), pressed)
                         .await
                         .map_err(InvokeError::from)
                 });
@@ -855,23 +875,26 @@ impl Client {
             }
             Way::Shack { stop } => {
                 // ⛔ STOP WINS: counted first, an atomic step, so a start pressed before it and
-                // still waiting here for a slot never leaves.
-                if stop {
-                    self.stops.fetch_add(1, Ordering::SeqCst);
-                }
+                // still waiting here for a slot never leaves. Its count is its number on both
+                // roads, so the shack can tell which starts were made before it.
+                let stops = if stop {
+                    self.stops.fetch_add(1, Ordering::SeqCst) + 1
+                } else {
+                    self.stops.load(Ordering::SeqCst)
+                };
                 // A Stop press goes by the second road first, written here before the call is
                 // handed to the link, so a link that is stuck or gone holds nothing back. The off
                 // half of a switch is not a Stop press: it goes by the link alone, but the PTT's
                 // off half lets the held press go on its road first.
                 if stop && class_of(&cmd) == Some(Class::StopsTx) {
-                    self.stop_on_the_roads();
+                    self.stop_on_the_roads(stops);
                 }
                 if stop && cmd == "set_ptt" {
                     self.let_go_the_press();
                 }
                 let me = Arc::clone(self);
                 invoke.resolver.respond_async(async move {
-                    me.at_the_shack(&cmd, args, &window, stop, None)
+                    me.at_the_shack(&cmd, args, &window, stop, None, stops)
                         .await
                         .map_err(InvokeError::from)
                 });
@@ -949,7 +972,8 @@ impl Client {
         let bytes = audio_road::voice_message(&voice)
             .map_err(|e| format!("Could not save recording: {e}"))?;
         let message = json!({ "slot": slot, "label": label, "bytes": bytes });
-        self.at_the_shack("import_voice_message", message, window, false, None)
+        let stops = self.stops.load(Ordering::SeqCst);
+        self.at_the_shack("import_voice_message", message, window, false, None, stops)
             .await
     }
 
@@ -1043,7 +1067,8 @@ impl Client {
 
     /// One call at the shack, under the caps unless it is a Stop. A start comes with the count of
     /// Stops pressed when it was (`pressed`): if one was pressed here while it waited for its slot,
-    /// it is refused `stopped` and never sent. Stop wins over a start that was in flight.
+    /// it is refused `stopped` and never sent. Stop wins over a start that was in flight. `stops` is
+    /// the count the call carries to the shack: a start's `pressed`, a Stop's own number.
     async fn at_the_shack(
         self: Arc<Self>,
         cmd: &str,
@@ -1051,6 +1076,7 @@ impl Client {
         window: &str,
         stop: bool,
         pressed: Option<u64>,
+        stops: u64,
     ) -> Result<Value, String> {
         let _slot = if stop {
             None
@@ -1060,7 +1086,7 @@ impl Client {
         if pressed.is_some_and(|pressed| pressed != self.stops.load(Ordering::SeqCst)) {
             return Err(word(Refusal::Stopped.code()));
         }
-        let mut value = self.send(cmd, args, window).await?;
+        let mut value = self.send(cmd, args, window, stops).await?;
         if cmd == "get_settings" {
             lock(&self.this).over(&mut value);
         }
@@ -1072,7 +1098,13 @@ impl Client {
     /// read the saved copy was made from when the screen names it (`base`, which `api.ts` keeps
     /// with each settings read, and which goes no further than here), else the window's last read
     /// or accepted save. A settings read takes its revision to the screen ([`READ_REVISION`]).
-    async fn send(&self, cmd: &str, mut args: Value, window: &str) -> Result<Value, String> {
+    async fn send(
+        &self,
+        cmd: &str,
+        mut args: Value,
+        window: &str,
+        stops: u64,
+    ) -> Result<Value, String> {
         let shack = self.shack().ok_or_else(|| word("notLive"))?;
         let access = store_access(cmd);
         let base = match access {
@@ -1089,7 +1121,7 @@ impl Client {
             }
             _ => None,
         };
-        let (id, answer) = shack.call(cmd.to_string(), args, base).await;
+        let (id, answer) = shack.call(cmd.to_string(), args, base, stops).await;
         match answer {
             Answer::Value {
                 mut value,
@@ -1129,8 +1161,9 @@ impl Client {
                 // The station's half strictly, always: a file at the shack that does not read is
                 // no station data, never an empty list of it.
                 let _slot = self.caps.slot(cmd).await;
+                let stops = self.stops.load(Ordering::SeqCst);
                 let station = self
-                    .send("ui_state_load", json!({ "strict": true }), window)
+                    .send("ui_state_load", json!({ "strict": true }), window, stops)
                     .await?;
                 let station: BTreeMap<String, String> = serde_json::from_value(station)
                     .map_err(|_| word(Refusal::BadArguments.code()))?;
@@ -1147,8 +1180,13 @@ impl Client {
                     .unwrap_or(false);
                 let _slot = self.caps.slot(cmd).await;
                 let there = matches!(
-                    self.send("ui_state_save", json!({ "state": station }), window)
-                        .await,
+                    self.send(
+                        "ui_state_save",
+                        json!({ "state": station }),
+                        window,
+                        self.stops.load(Ordering::SeqCst),
+                    )
+                    .await,
                     Ok(Value::Bool(true))
                 );
                 Ok(json!(here && there))

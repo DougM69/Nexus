@@ -22,9 +22,10 @@
 //!
 //! ## What it carries ([`Up`], [`Down`])
 //!
-//! From the computer: `stop` at the press and every 50 ms until it is acknowledged; `hold` and
-//! `release` for a held PTT; `heartbeat` every 500 ms, naming its lease and the last snapshot its
-//! screen fetched. From the shack: `stopped` for every Stop, each press's report, the microphone
+//! From the computer: `stop` at the press and every 50 ms until it is acknowledged, numbered by how
+//! many Stops its computer has pressed this run, itself included; `hold` and `release` for a held
+//! PTT, each hold naming how many Stops had been pressed when its press began; `heartbeat` every
+//! 500 ms, naming its lease and the last snapshot its screen fetched. From the shack: `stopped` for every Stop, each press's report, the microphone
 //! over's state with its holes on the air so far (display only) when it changes and again after
 //! each renewal, and presence's deadline at each renewal. Each message is one datagram of at most 128 bytes, and nothing is answered before this
 //! computer has spoken: the shack answers the address of the last datagram that verified. The
@@ -34,10 +35,12 @@
 //!
 //! A Stop that verifies under a road's keys is that computer's, and it is admitted while the
 //! computer is paired here, which is station control on this road: not its lease, the lease's age,
-//! presence, a rate, or whether its connection is still open. It retires the current transmit
+//! presence, a rate, or whether its connection is still open. It is noted first, by its number,
+//! where the connection's command lane reads it ([`Ready`]); it then retires the current transmit
 //! generation at once and stops every transmission at the station however it started
-//! (`operations::RoadStop`); it is answered at once, never after the Engine. Only two things are
-//! refused: a datagram that does not verify, which is not this computer's Stop, and a computer
+//! (`operations::RoadStop`); it is answered at once, never after the Engine. Its number refuses
+//! nothing but a start or a press its computer made before it, whatever number it carries. Only two
+//! things are refused: a datagram that does not verify, which is not this computer's Stop, and a computer
 //! removed at the shack, which has no grant and changes nothing.
 //!
 //! ## Presence, and the press
@@ -50,14 +53,16 @@
 //! - **The press is a transmission start**, taken only while the held press is wired from afar
 //!   (`command_dispatch::press_from_afar`), the connection is open, and this road's presence is
 //!   live; a press new to the road also needs the state its computer's screen last fetched under
-//!   two seconds old. Refused, it is said at each hold and never keys later; taken, it goes to the
+//!   two seconds old, and to have begun after every Stop this connection has had taken, on either
+//!   road: a hold the network delivers after the Stop pressed after it never keys. Refused, it is said at each hold and never keys later; taken, it goes to the
 //!   held PTT the engine decides (`PttHold`), and each of its reports comes back here for this
 //!   computer alone. A hold for a press that will never key (refused there, or ended) is answered
 //!   with why, one datagram for each hold, so the one report that said it can be lost. A release
 //!   is always taken.
 //! - **What a start on the command link needs** is read off [`Ready`]: the presence this road holds,
-//!   and the snapshot its newest heartbeat named. The road writes it without ever waiting; the
-//!   connection's command lane reads it.
+//!   the snapshot its newest heartbeat named, and the newest Stop of its computer's that either road
+//!   has delivered. The road writes it without ever waiting; the connection's command lane reads it,
+//!   and notes there the Stops the link delivers.
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -75,8 +80,9 @@ use super::datagram::{self, End, Keys, Tag, EXPORTED};
 
 /// The road's port, past the listener's TCP port: 42077 beside 42075, the audio road's 42076 between.
 pub(crate) const PORT_AFTER: u16 = 2;
-/// The format of the road's messages: 2 since the microphone over's state carries its holes.
-const FORMAT: u8 = 2;
+/// The format of the road's messages: 2 since the microphone over's state carries its holes, 3
+/// since a hold names the Stops pressed before its press began.
+const FORMAT: u8 = 3;
 /// How long a road's keys outlive its connection, for a Stop sent as the link drops or after it.
 pub(crate) const AFTERLIFE: Duration = Duration::from_secs(60);
 /// How old the state a heartbeat names may be and still renew presence: the stream's two seconds
@@ -103,10 +109,12 @@ const PRESENCE: u8 = 19;
 /// What a computer sends on its road.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Up {
-    /// A Stop press, repeated until it is acknowledged: the same number each time.
+    /// A Stop press, repeated until it is acknowledged: the same number each time, its computer's
+    /// count of Stops pressed this run, itself included (the count the command link carries).
     Stop { stop: u64 },
-    /// The press `press` is still held: the screen re-asserts it every 100 ms.
-    Hold { press: u64 },
+    /// The press `press` is still held: the screen re-asserts it every 100 ms. `stops` is how many
+    /// Stops its computer had pressed when the press began, the same at every hold.
+    Hold { press: u64, stops: u64 },
     /// The press `press` was let go.
     Release { press: u64 },
     /// The computer's lease, and the number of the last snapshot its screen fetched.
@@ -142,8 +150,11 @@ impl Up {
 
     pub(crate) fn body(&self) -> Vec<u8> {
         match self {
-            Up::Stop { stop: n } | Up::Hold { press: n } | Up::Release { press: n } => {
-                n.to_be_bytes().to_vec()
+            Up::Stop { stop: n } | Up::Release { press: n } => n.to_be_bytes().to_vec(),
+            Up::Hold { press, stops } => {
+                let mut body = press.to_be_bytes().to_vec();
+                body.extend_from_slice(&stops.to_be_bytes());
+                body
             }
             Up::Heartbeat { lease, state } => {
                 let mut body = lease.as_bytes().to_vec();
@@ -159,7 +170,10 @@ impl Up {
         let number = || body.try_into().ok().map(u64::from_be_bytes);
         Some(match kind {
             STOP => Up::Stop { stop: number()? },
-            HOLD => Up::Hold { press: number()? },
+            HOLD if body.len() == 16 => Up::Hold {
+                press: u64::from_be_bytes(body[..8].try_into().ok()?),
+                stops: u64::from_be_bytes(body[8..].try_into().ok()?),
+            },
             RELEASE => Up::Release { press: number()? },
             HEARTBEAT if body.len() == 36 + 8 => {
                 let lease = std::str::from_utf8(&body[..36]).ok()?;
@@ -296,8 +310,8 @@ impl Down {
 /// these datagrams differently are not the same build.
 pub(crate) fn contract_text() -> String {
     format!(
-        "stop road {} {} format {FORMAT} up stop={STOP} hold={HOLD} release={RELEASE} \
-         heartbeat={HEARTBEAT} down stopped={STOPPED} press={PRESS} \
+        "stop road {} {} format {FORMAT} up stop={STOP} hold={HOLD}(press,stops) \
+         release={RELEASE} heartbeat={HEARTBEAT} down stopped={STOPPED} press={PRESS} \
          mic={MIC}(armed,keyed,noPowerOut,ended,holes,holeMs) presence={PRESENCE}\n",
         datagram::VERSION,
         String::from_utf8_lossy(datagram::STOP_LABEL),
@@ -379,6 +393,9 @@ pub(crate) struct Ready {
     presence: Mutex<Option<TransmitPermit>>,
     named: AtomicU64,
     clock: Arc<StateClock>,
+    /// The newest Stop of this computer's that either road has delivered, by its number: how many
+    /// Stops it had pressed then, that one included. 0 before the first.
+    stopped: AtomicU64,
 }
 
 impl Ready {
@@ -387,6 +404,7 @@ impl Ready {
             presence: Mutex::new(None),
             named: AtomicU64::new(0),
             clock,
+            stopped: AtomicU64::new(0),
         }
     }
 
@@ -413,6 +431,24 @@ impl Ready {
             return Err(Refusal::StaleState);
         }
         Ok(())
+    }
+
+    /// The Stop numbered `stop` reached the shack from this computer, on either road. Noted before
+    /// it retires the transmit generation, never waiting, and only ever raising the number: a late
+    /// repeat of an older Stop leaves it as it is. It refuses nothing: a Stop is taken whatever
+    /// number it carries.
+    pub(crate) fn took_stop(&self, stop: u64) {
+        self.stopped.fetch_max(stop, Ordering::SeqCst);
+    }
+
+    /// ⛔ STOP WINS, WHICHEVER ROAD IT CAME BY. Whether a start or a press, made when its computer
+    /// had pressed `stops` Stops, came before a Stop that has since reached the shack: one the road
+    /// delivered ahead of a start still on the command link, or one the link wrote ahead of a start
+    /// that waited in its outbox. Then it never runs. Asked once the start's transmit generation is
+    /// read, as each Stop is noted before it moves the generation: a Stop is either seen here, or it
+    /// voids the start where the start waits.
+    pub(crate) fn pressed_before_a_stop(&self, stops: u64) -> bool {
+        self.stopped.load(Ordering::SeqCst) > stops
     }
 }
 
@@ -821,17 +857,20 @@ impl Thread {
                 if !road.paired {
                     return;
                 }
+                // Noted before the generation moves, where the command lane reads it: a start or a
+                // press its computer made before this Stop is refused when it arrives.
+                road.ready.took_stop(stop);
                 self.powers.stop.stop();
                 answer(&self.socket, road, &Down::Stopped { stop });
             }
-            Up::Hold { press } => {
+            Up::Hold { press, stops } => {
                 if road.closed.is_some() {
                     return;
                 }
                 // ⛔ A PRESS IS A TRANSMISSION START, under the stream's transmit rules: the held
                 // press wired from afar, this computer's presence live on this road (which only its
                 // own lease mints), and, for a press new to this road, the state its screen last
-                // fetched under two seconds old. Said at each hold, one datagram for each, and a
+                // fetched under two seconds old and no Stop of its computer's taken since it began. Said at each hold, one datagram for each, and a
                 // press refused never keys later. A press whose freshness cannot be read this moment
                 // is neither: its next hold asks again.
                 let new = road.pressing != Some(press);
@@ -846,7 +885,8 @@ impl Thread {
                 let refused = !crate::command_dispatch::press_from_afar()
                     || !road.presence.as_ref().is_some_and(|p| p.valid(now))
                     || road.refused.contains(&press)
-                    || !fresh;
+                    || !fresh
+                    || (new && road.ready.pressed_before_a_stop(stops));
                 if refused {
                     if !road.refused.contains(&press) {
                         if road.refused.len() >= REFUSED_KEPT {
