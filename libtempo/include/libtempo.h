@@ -752,6 +752,28 @@ int jtty_encode_atoms(const jtty_source_atom_c *atoms, int natoms,
                       int *itone_out, int max_tones, int *status);
 
 /*
+ * Text -> one 34-bit source word per frame: what jtty_encode_text sends,
+ * before the CRC and the code. Source bit 1 is the most significant of the 34,
+ * bit 33 reserved (0), bit 34 end-of-message, set on the last frame only when
+ * is_final is 1 (0 leaves it clear; anything else is refused). Returns the
+ * frame count, 0 for an empty message, JTTY_ERR_ARGS (nothing written) or
+ * JTTY_ERR_ENCODE, as jtty_encode_text.
+ */
+int jtty_pack_text(const char *msg, int msg_len, int profile, int is_final,
+                   int64_t *frames_out, int max_frames, char *sent, int sent_cap);
+
+/*
+ * 1..16 source words -> the text as the receiver shows it (text_cap >=
+ * JTTY_TEXT_LEN+1, NUL-terminated). A word the receiver would discard
+ * (reserved bit, unassigned form, field out of range) is left out. eom: 1 when
+ * every word is valid and the last carries end-of-message. Returns 0 when every
+ * word is valid, 1 when one or more are not, JTTY_ERR_ARGS for a refused count,
+ * word (2**34 or more) or capacity (nothing written).
+ */
+int jtty_unpack_frames(const int64_t *frames, int nframes, char *text_out,
+                       int text_cap, int *eom);
+
+/*
  * Tones -> real audio at 12 kHz, amplitude 1: nsym*JTTY_NSPS samples. nsym
  * must be whole frames up to JTTY_MAX_TONES, every tone 0..3, nwave_cap at
  * least nsym*JTTY_NSPS. Returns the sample count or JTTY_ERR_ARGS.

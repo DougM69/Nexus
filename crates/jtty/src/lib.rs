@@ -13,8 +13,8 @@
 //! calls it, and nothing here keys a transmitter: [`gen_wave`] returns audio
 //! samples and stops there.
 //!
-//! Wraps Nexus's `jtty_cabi.f90` ([`encode`], [`encode_atoms`], [`gen_wave`]
-//! and the update records) and upstream's own receive API,
+//! Wraps Nexus's `jtty_cabi.f90` ([`encode`], [`encode_atoms`], [`gen_wave`],
+//! [`pack`] and [`unpack`], and the update records) and upstream's own receive API,
 //! `jtty_receive_context.f90`'s `jtty_rx_*`, which a [`Receiver`] holds one
 //! handle of.
 //!
@@ -118,6 +118,105 @@ pub fn encode(text: &str, profile: Profile) -> Result<Encoded, EncodeError> {
         JTTY_ERR_ARGS => Err(EncodeError::TooLong),
         JTTY_ERR_ENCODE => Err(EncodeError::NotEncodable { sent }),
         _ => Err(EncodeError::NotEncodable { sent }),
+    }
+}
+
+/// A message as its frames' source words: what [`encode`] sends, before the
+/// CRC and the code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Packed {
+    /// One 34-bit word per frame. Source bit 1 is the most significant of the
+    /// 34, bit 33 is reserved (zero) and bit 34, the least significant, is
+    /// end-of-message: the form upstream's spec publishes its vectors in.
+    pub frames: Vec<u64>,
+    /// The text as the encoder normalised it, as [`Encoded::sent`].
+    pub sent: String,
+}
+
+/// Pack message text into the source words of the frames [`encode`] puts on
+/// the air. `last` sets end-of-message on the final frame, as a whole message
+/// does; text sent while it is still being typed leaves it clear.
+pub fn pack(text: &str, profile: Profile, last: bool) -> Result<Packed, EncodeError> {
+    let mut frames = [0i64; MAX_FRAMES];
+    let mut sent = [0u8; TEXT_LEN + 1];
+    let len = c_int::try_from(text.len()).unwrap_or(c_int::MAX);
+    let n = {
+        let _guard = modem_lock();
+        unsafe {
+            tempo_fast_sys::jtty_pack_text(
+                text.as_ptr().cast::<c_char>(),
+                len,
+                profile as c_int,
+                c_int::from(last),
+                frames.as_mut_ptr(),
+                MAX_FRAMES as c_int,
+                sent.as_mut_ptr().cast::<c_char>(),
+                sent.len() as c_int,
+            )
+        }
+    };
+    let sent = nul_terminated(&sent);
+    match n {
+        n if n > 0 => Ok(Packed {
+            frames: frames.iter().take(n as usize).map(|&w| w as u64).collect(),
+            sent,
+        }),
+        0 => Err(EncodeError::Empty),
+        // As in `encode`: the length is the only argument this can get wrong.
+        JTTY_ERR_ARGS => Err(EncodeError::TooLong),
+        JTTY_ERR_ENCODE => Err(EncodeError::NotEncodable { sent }),
+        _ => Err(EncodeError::NotEncodable { sent }),
+    }
+}
+
+/// A message read back out of source words by [`unpack`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unpacked {
+    /// The text as the receiver shows it.
+    pub text: String,
+    /// The last word carries end-of-message.
+    pub eom: bool,
+}
+
+/// Why [`unpack`] did not read a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnpackError {
+    /// Not 1..=16 words, or a word wider than 34 bits.
+    BadFrames,
+    /// One or more words the receiver would discard (a reserved bit set, an
+    /// unassigned form, a field out of range); `text` is what the rest say.
+    InvalidWord { text: String },
+}
+
+/// Render source words (as [`Packed::frames`]) the way the receiver shows the
+/// message, checking each word as the decoder checks a frame after its CRC.
+pub fn unpack(frames: &[u64]) -> Result<Unpacked, UnpackError> {
+    if frames.is_empty() || frames.len() > MAX_FRAMES || frames.iter().any(|&w| w >> 34 != 0) {
+        return Err(UnpackError::BadFrames);
+    }
+    let words: Vec<i64> = frames.iter().map(|&w| w as i64).collect();
+    let mut text = [0u8; TEXT_LEN + 1];
+    let mut eom: c_int = 0;
+    let status = {
+        let _guard = modem_lock();
+        unsafe {
+            tempo_fast_sys::jtty_unpack_frames(
+                words.as_ptr(),
+                words.len() as c_int,
+                text.as_mut_ptr().cast::<c_char>(),
+                text.len() as c_int,
+                &mut eom,
+            )
+        }
+    };
+    let text = nul_terminated(&text);
+    match status {
+        0 => Ok(Unpacked {
+            text,
+            eom: eom == 1,
+        }),
+        1 => Err(UnpackError::InvalidWord { text }),
+        _ => Err(UnpackError::BadFrames),
     }
 }
 
@@ -595,6 +694,176 @@ mod tests {
         assert_eq!(messy, clean);
     }
 
+    /// Upstream's spec publishes ten 34-bit words ("Representative 34-bit
+    /// vectors" in its `jtty_source_encoding.txt`). Eight are reachable from
+    /// text through the packing `encode` sends; each must pack to exactly its
+    /// word, and read back to the same text with end-of-message where the spec
+    /// puts it. Clearing end-of-message subtracts one, as the spec says.
+    #[test]
+    fn the_spec_vectors_pack_bit_exact() {
+        use Profile::*;
+        let vectors = [
+            ("CQ K1ABC CQ", Unknown, true, 0x026F78D41),
+            ("599 123", RttyRoundup, false, 0x20007B008),
+            ("599 123", RttyRoundup, true, 0x20007B009),
+            ("599 CA", RttyRoundup, true, 0x2001BA019),
+            ("1D EMA", FieldDay, true, 0x082C58029),
+            ("AGN?", Unknown, true, 0x000000049),
+            ("FN42", Unknown, true, 0x04A198049),
+            ("HELLO", Unknown, true, 0x11395558D),
+        ];
+        for (text, profile, last, word) in vectors {
+            let p = pack(text, profile, last).expect("the text packs");
+            assert_eq!(p.frames, vec![word], "{text:?} {profile:?} last={last}");
+            assert_eq!(p.sent, text);
+            assert_eq!(
+                unpack(&p.frames),
+                Ok(Unpacked {
+                    text: text.to_string(),
+                    eom: last
+                }),
+                "{word:#011X}"
+            );
+        }
+        // The profile chooses the atom, not just the frame count: Unknown packs
+        // "599 123" as a generic number, RTTY Roundup as a serial.
+        let generic = pack("599 123", Unknown, true).unwrap();
+        assert_eq!(generic.frames.len(), 1);
+        assert_ne!(generic.frames[0], 0x20007B009);
+        assert_eq!(unpack(&generic.frames).unwrap().text, "599 123");
+    }
+
+    /// The other two published words carry atoms no text packs to (upstream
+    /// infers neither a zone-and-location pair nor a serial-and-time exchange
+    /// from text, and its C descriptor reaches neither), so Nexus can only
+    /// receive them. They must read back as the spec renders them.
+    #[test]
+    fn the_spec_vectors_nexus_cannot_send_read_back() {
+        for (word, text) in [(0x00B790D29, "599 05 NWT"), (0x204E42D39, "599 156 1749")] {
+            assert_eq!(
+                unpack(&[word]),
+                Ok(Unpacked {
+                    text: text.to_string(),
+                    eom: true
+                })
+            );
+        }
+    }
+
+    /// The spec's frame-count examples (its "Automatic text packing"), with
+    /// the text each profile normalises to. `encode`, the path that goes on the
+    /// air, must agree with `pack` on both.
+    #[test]
+    fn frame_counts_match_the_spec_examples() {
+        use Profile::*;
+        let examples = [
+            ("CQ K1ABC CQ", Unknown, 1, "CQ K1ABC CQ"),
+            ("599 123", Unknown, 1, "599 123"),
+            ("599 MA", Unknown, 1, "599 MA"),
+            ("599 FN42", Unknown, 1, "599 FN42"),
+            ("1D EMA", Unknown, 1, "1D EMA"),
+            ("599 001", Unknown, 2, "599 001"),
+            ("599 001", FieldDay, 2, "599 001"),
+            ("599 001", RttyRoundup, 1, "599 001"),
+            ("K1ABC 599 001", RttyRoundup, 2, "K1ABC 599 001"),
+            ("599 05", Unknown, 2, "599 05"),
+            ("599 05", FieldDay, 2, "599 05"),
+            ("599 05", RttyRoundup, 1, "599 005"),
+            ("599 0123", Unknown, 2, "599 0123"),
+            ("599 0123", RttyRoundup, 1, "599 123"),
+            ("599 BRUCE", Unknown, 2, "599 BRUCE"),
+        ];
+        for (text, profile, frames, sent) in examples {
+            let p = pack(text, profile, true).expect("the text packs");
+            assert_eq!(
+                (p.frames.len(), p.sent.as_str()),
+                (frames, sent),
+                "pack {text:?} {profile:?}"
+            );
+            let e = encode(text, profile).expect("the text encodes");
+            assert_eq!(
+                (e.frames(), e.sent.as_str()),
+                (frames, sent),
+                "encode {text:?} {profile:?}"
+            );
+        }
+    }
+
+    /// `unpack` renders words the way the receiver shows a message: for each
+    /// of these, the receiver's own decode of the sent audio, `unpack` of the
+    /// packed words and the sent text all agree.
+    #[test]
+    fn unpack_reads_what_the_receiver_shows() {
+        for (text, profile) in [
+            ("CQ KD9TAW EN52", Profile::Unknown),
+            ("TU K1ABC CQ", Profile::Unknown),
+            ("K1ABC 599 0123", Profile::RttyRoundup),
+            ("2A EMA HELLO 73", Profile::FieldDay),
+        ] {
+            let p = pack(text, profile, true).unwrap();
+            let e = encode(text, profile).unwrap();
+            assert_eq!(p.frames.len(), e.frames());
+            let shown = unpack(&p.frames).expect("valid words");
+            assert_eq!(shown.text, e.sent);
+            assert!(shown.eom);
+            let updates = receive(&on_air(&e.tones, 1500.0));
+            let complete: Vec<_> = updates
+                .iter()
+                .filter(|u| u.terminal == Terminal::Complete)
+                .map(|u| u.text.as_str())
+                .collect();
+            assert_eq!(complete, vec![shown.text.as_str()], "{updates:?}");
+        }
+    }
+
+    /// A word the receiver would discard is reported, and left out of the text.
+    #[test]
+    fn unpack_refuses_what_the_receiver_discards() {
+        let cq = 0x026F78D41;
+        let tu = pack("TU", Profile::Unknown, true).unwrap().frames[0];
+        assert_eq!(unpack(&[cq]).map(|u| u.text), Ok("CQ K1ABC CQ".to_string()));
+        // Bit 33 is reserved and must be zero.
+        assert_eq!(
+            unpack(&[cq | 0b10]),
+            Err(UnpackError::InvalidWord {
+                text: String::new()
+            })
+        );
+        // The all-zero grammar word is the invalid sentinel, end-of-message or not.
+        assert!(matches!(unpack(&[0]), Err(UnpackError::InvalidWord { .. })));
+        assert!(matches!(unpack(&[1]), Err(UnpackError::InvalidWord { .. })));
+        // A good word before a bad one still renders; end-of-message needs
+        // every word valid.
+        let more = pack("CQ K1ABC CQ", Profile::Unknown, false).unwrap().frames[0];
+        assert_eq!(
+            unpack(&[more, tu | 0b10]),
+            Err(UnpackError::InvalidWord {
+                text: "CQ K1ABC CQ".to_string()
+            })
+        );
+        assert_eq!(
+            unpack(&[more, tu]),
+            Ok(Unpacked {
+                text: "CQ K1ABC CQ TU".to_string(),
+                eom: true
+            })
+        );
+        // Text another sender packed with a leading space is shown without it,
+        // as the receiver shows it: TEXT5 " CQ  " (alphabet indices 36 12 26 36
+        // 36, form 11, end-of-message).
+        let text5 = [36u64, 12, 26, 36, 36].iter().fold(0, |w, &c| w * 64 + c) << 4 | 0b1101;
+        assert_eq!(
+            unpack(&[text5]),
+            Ok(Unpacked {
+                text: "CQ".to_string(),
+                eom: true
+            })
+        );
+        assert_eq!(unpack(&[]), Err(UnpackError::BadFrames));
+        assert_eq!(unpack(&[cq; 17]), Err(UnpackError::BadFrames));
+        assert_eq!(unpack(&[1 << 34]), Err(UnpackError::BadFrames));
+    }
+
     #[test]
     fn empty_and_overlong_text_are_refused() {
         assert_eq!(encode("", Profile::Unknown), Err(EncodeError::Empty));
@@ -771,6 +1040,83 @@ mod tests {
         assert_eq!(
             unsafe { tempo_fast_sys::jtty_take_updates(1, out.as_mut_ptr(), 0) },
             0
+        );
+    }
+
+    /// The same for the source-word entries, which the safe API checks first.
+    #[test]
+    fn the_word_entries_refuse_bad_arguments_and_write_nothing() {
+        let _guard = modem_lock();
+        let msg = b"CQ KD9TAW EN52";
+        let mut frames = [-7i64; MAX_FRAMES];
+        let mut sent = [b'?' as c_char; TEXT_LEN + 1];
+        let pack_c = |len: c_int, last: c_int, frames: &mut [i64], sent: &mut [c_char]| unsafe {
+            tempo_fast_sys::jtty_pack_text(
+                msg.as_ptr().cast(),
+                len,
+                0,
+                last,
+                frames.as_mut_ptr(),
+                frames.len() as c_int,
+                sent.as_mut_ptr(),
+                sent.len() as c_int,
+            )
+        };
+        let len = msg.len() as c_int;
+        assert_eq!(pack_c(-1, 1, &mut frames, &mut sent), JTTY_ERR_ARGS);
+        assert_eq!(
+            pack_c(TEXT_LEN as c_int + 1, 1, &mut frames, &mut sent),
+            JTTY_ERR_ARGS
+        );
+        assert_eq!(
+            pack_c(len, 1, &mut frames, &mut sent[..TEXT_LEN]),
+            JTTY_ERR_ARGS
+        );
+        assert_eq!(pack_c(len, 2, &mut frames, &mut sent), JTTY_ERR_ARGS);
+        assert_eq!(pack_c(len, -1, &mut frames, &mut sent), JTTY_ERR_ARGS);
+        // Three frames do not fit in two.
+        assert_eq!(pack_c(len, 1, &mut frames[..2], &mut sent), JTTY_ERR_ARGS);
+        assert!(
+            frames.iter().all(|&w| w == -7),
+            "a refused call wrote words"
+        );
+        assert!(
+            sent.iter().all(|&c| c == b'?' as c_char),
+            "a refused call wrote text"
+        );
+        assert_eq!(pack_c(len, 1, &mut frames[..3], &mut sent), 3);
+        assert_eq!(pack_c(len, 0, &mut frames, &mut sent), 3);
+        assert_eq!(frames[2] & 1, 0, "is_final 0 leaves end-of-message clear");
+
+        let mut text = [b'?' as c_char; TEXT_LEN + 1];
+        let mut eom: c_int = -1;
+        let unpack_c = |words: &[i64], text: &mut [c_char], eom: &mut c_int| unsafe {
+            tempo_fast_sys::jtty_unpack_frames(
+                words.as_ptr(),
+                words.len() as c_int,
+                text.as_mut_ptr(),
+                text.len() as c_int,
+                eom,
+            )
+        };
+        let cq = 0x026F78D41i64;
+        assert_eq!(unpack_c(&[], &mut text, &mut eom), JTTY_ERR_ARGS);
+        assert_eq!(unpack_c(&[cq; 17], &mut text, &mut eom), JTTY_ERR_ARGS);
+        assert_eq!(unpack_c(&[cq, 1 << 34], &mut text, &mut eom), JTTY_ERR_ARGS);
+        assert_eq!(unpack_c(&[cq, -1], &mut text, &mut eom), JTTY_ERR_ARGS);
+        assert_eq!(
+            unpack_c(&[cq], &mut text[..TEXT_LEN], &mut eom),
+            JTTY_ERR_ARGS
+        );
+        assert!(
+            text.iter().all(|&c| c == b'?' as c_char),
+            "a refused call wrote text"
+        );
+        assert_eq!(eom, -1, "a refused call wrote end-of-message");
+        assert_eq!(unpack_c(&[cq], &mut text, &mut eom), 0);
+        assert_eq!(
+            (nul_terminated(&text.map(|c| c as u8)), eom),
+            ("CQ K1ABC CQ".to_string(), 1)
         );
     }
 }

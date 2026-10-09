@@ -989,6 +989,42 @@ extern "C" {
         status: *mut c_int,
     ) -> c_int;
 
+    /// Pack JTTY message text into one 34-bit source word per frame: the frames
+    /// [`jtty_encode_text`] sends, before the CRC and the code. Source bit 1 is
+    /// the most significant of the 34, bit 33 is reserved and bit 34 is
+    /// end-of-message, set on the last frame when `is_final` is 1 (0 leaves it
+    /// clear; anything else is refused). `msg`, `profile` and `sent` are as for
+    /// [`jtty_encode_text`].
+    ///
+    /// Returns the frame count, 0 for an empty message, [`JTTY_ERR_ARGS`] or
+    /// [`JTTY_ERR_ENCODE`]. Hold [`MODEM_LOCK`].
+    pub fn jtty_pack_text(
+        msg: *const c_char,
+        msg_len: c_int,
+        profile: c_int,
+        is_final: c_int,
+        frames_out: *mut i64, // [max_frames]
+        max_frames: c_int,
+        sent: *mut c_char, // [sent_cap]
+        sent_cap: c_int,
+    ) -> c_int;
+
+    /// Render 1..=16 source words as the receiver shows the message
+    /// (`text_cap` >= [`JTTY_TEXT_LEN`] + 1, NUL-terminated), leaving out any
+    /// word the receiver would discard. `eom` is 1 when every word is valid and
+    /// the last carries end-of-message.
+    ///
+    /// Returns 0 when every word is valid, 1 when one or more are not, or
+    /// [`JTTY_ERR_ARGS`] for a refused count, word or capacity. Hold
+    /// [`MODEM_LOCK`].
+    pub fn jtty_unpack_frames(
+        frames: *const i64, // [nframes]
+        nframes: c_int,
+        text_out: *mut c_char, // [text_cap]
+        text_cap: c_int,
+        eom: *mut c_int,
+    ) -> c_int;
+
     /// JTTY channel tones -> real audio at 12 kHz, amplitude 1:
     /// `nsym * JTTY_NSPS` samples. `nsym` must be whole frames, up to
     /// [`JTTY_MAX_TONES`]; every tone 0..=3.

@@ -29,6 +29,14 @@
 !   jtty_encode_atoms -> genjtty_atoms_c, upstream's own C entry. Adds the
 !                        capacity check; upstream writes up to 59*16 tones
 !                        into an assumed-size buffer.
+!   jtty_pack_text    -> pack_jtty, the packing genjtty_profile does before
+!                        the CRC and the code, returned as one 34-bit source
+!                        word per frame: the form upstream's spec publishes
+!                        its vectors in. The same limits and normalised text
+!                        as jtty_encode_text, plus the end-of-message choice.
+!   jtty_unpack_frames-> unpack_jtty over source words, rendered as the
+!                        receiver shows a message (display_message_text), and
+!                        says whether every word was one the receiver keeps.
 !   jtty_gen_wave     -> gen_jttywave at 12 kHz: nsps 384, bt 2.0, the
 !                        48 kHz call WSJT-X makes (nsps 1536) scaled to
 !                        Nexus's audio rate. Refuses a symbol count that is
@@ -192,6 +200,130 @@ contains
     itone_out(1:nsym) = itone(1:nsym)
     nsym_out = nsym
   end function jtty_encode_atoms
+
+  !-------------------------------------------------------------------------
+  ! jtty_pack_text : message text -> one 34-bit source word per frame.
+  !
+  !   The words are the frames jtty_encode_text sends, before the CRC and the
+  !   code: source bit 1 is the most significant of the 34, bit 33 is reserved
+  !   (zero) and bit 34 is end-of-message.
+  !
+  !   msg, msg_len, profile, sent, sent_cap : as jtty_encode_text
+  !   is_final   : 1 sets end-of-message on the last frame, as a whole message
+  !                does; 0 leaves it clear, for text sent while it is still
+  !                being typed. Anything else is refused.
+  !   frames_out : caller buffer, capacity max_frames (JTTY_MAX_FRAMES fits)
+  !   returns    : frames, 1..16; 0 for an empty message; JTTY_ERR_ARGS
+  !                (nothing written) or JTTY_ERR_ENCODE, as jtty_encode_text
+  !-------------------------------------------------------------------------
+  function jtty_pack_text(msg, msg_len, profile, is_final, frames_out, max_frames, sent, sent_cap) &
+       result(nframes_out) bind(C, name="jtty_pack_text")
+    use jtty_mod, only: pack_jtty
+    character(kind=c_char), intent(in)  :: msg(*)
+    integer(c_int), value,  intent(in)  :: msg_len, profile, is_final, max_frames, sent_cap
+    integer(c_int64_t),     intent(out) :: frames_out(*)
+    character(kind=c_char), intent(out) :: sent(*)
+    integer(c_int) :: nframes_out
+
+    character(len=JTTY_TEXT_LEN) :: umsg
+    character(len=34) :: c32(JTTY_MAX_FRAMES)
+    integer :: nframes, final, i, j, n
+    integer(c_int64_t) :: word
+
+    nframes_out = JTTY_ERR_ARGS
+    if (msg_len < 0 .or. msg_len > JTTY_TEXT_LEN) return
+    if (sent_cap < JTTY_TEXT_LEN + 1) return
+    if (is_final /= 0 .and. is_final /= 1) return
+
+    umsg = ' '
+    do i = 1, msg_len
+       if (msg(i) == c_null_char) exit
+       umsg(i:i) = msg(i)
+    end do
+
+    final = is_final
+    nframes = 0
+    call pack_jtty(umsg, c32, nframes, int(profile), is_final=final)
+    if (nframes > 0 .and. max_frames < nframes) return
+
+    n = len_trim(umsg)
+    do i = 1, n
+       sent(i) = umsg(i:i)
+    end do
+    sent(n + 1) = c_null_char
+
+    if (nframes <= 0) then
+       nframes_out = 0
+       if (n > 0) nframes_out = JTTY_ERR_ENCODE
+       return
+    end if
+    do i = 1, nframes
+       word = 0
+       do j = 1, 34
+          word = 2 * word
+          if (c32(i)(j:j) == '1') word = word + 1
+       end do
+       frames_out(i) = word
+    end do
+    nframes_out = nframes
+  end function jtty_pack_text
+
+  !-------------------------------------------------------------------------
+  ! jtty_unpack_frames : 34-bit source words -> the message text.
+  !
+  !   Each word is checked as the decoder checks a frame after its CRC
+  !   (reserved bits, assigned forms, field ranges); a word that fails is left
+  !   out of the text, as the receiver drops it.
+  !
+  !   frames, nframes : 1..16 words, each below 2**34, bit 1 most significant
+  !   text_out        : caller buffer, capacity text_cap >= JTTY_TEXT_LEN+1;
+  !                     the text as the receiver shows it, NUL-terminated
+  !   eom             : 1 when every word is valid and the last carries
+  !                     end-of-message, else 0
+  !   returns         : 0 when every word is valid, 1 when one or more are not,
+  !                     JTTY_ERR_ARGS for a refused count, word or capacity
+  !                     (nothing written)
+  !-------------------------------------------------------------------------
+  function jtty_unpack_frames(frames, nframes, text_out, text_cap, eom) &
+       result(status) bind(C, name="jtty_unpack_frames")
+    use jtty_mod, only: unpack_jtty
+    use jtty_mdec, only: display_message_text
+    integer(c_int64_t),     intent(in)  :: frames(*)
+    integer(c_int), value,  intent(in)  :: nframes, text_cap
+    character(kind=c_char), intent(out) :: text_out(*)
+    integer(c_int),         intent(out) :: eom
+    integer(c_int) :: status
+
+    character(len=34) :: c32(JTTY_MAX_FRAMES)
+    character(len=JTTY_TEXT_LEN) :: message
+    logical :: last, valid
+    integer :: i, j, n
+
+    status = JTTY_ERR_ARGS
+    if (nframes < 1 .or. nframes > JTTY_MAX_FRAMES) return
+    if (text_cap < JTTY_TEXT_LEN + 1) return
+    if (any(frames(1:nframes) < 0) .or. any(frames(1:nframes) >= 2_c_int64_t**34)) return
+
+    c32 = ' '
+    do i = 1, nframes
+       do j = 1, 34
+          c32(i)(j:j) = '0'
+          if (btest(frames(i), 34 - j)) c32(i)(j:j) = '1'
+       end do
+    end do
+
+    call unpack_jtty(c32, int(nframes), message, is_last_frame=last, source_valid=valid)
+    message = display_message_text(message)
+    n = len_trim(message)
+    do i = 1, n
+       text_out(i) = message(i:i)
+    end do
+    text_out(n + 1) = c_null_char
+    eom = 0
+    if (last) eom = 1
+    status = 0
+    if (.not. valid) status = 1
+  end function jtty_unpack_frames
 
   !-------------------------------------------------------------------------
   ! jtty_gen_wave : channel tones -> real audio at 12 kHz, amplitude 1.
