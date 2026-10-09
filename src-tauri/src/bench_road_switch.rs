@@ -2,8 +2,10 @@
 //! (client mode) that blocks the command link or Stop's road, one at a time, at this computer's own
 //! transport, so each road can be tried alone at the bench. The design's bench asks for exactly
 //! this: "a diagnostics switch on this computer to block the command link, block the Stop road ...
-//! so that each road can be tried alone. Shipped builds never carry it." Forcing the internet
-//! road's relay belongs to that road, and has no place here until it exists.
+//! so that each road can be tried alone. Shipped builds never carry it." The design's third
+//! switch, forcing the internet road through its relay, comes with that road: a fourth
+//! [`Position`], one more button on the banner, and that road's transport reading the switch it
+//! was opened under ([`Switch::opening`]) as the two here do.
 //!
 //! ## Only in a test build
 //!
