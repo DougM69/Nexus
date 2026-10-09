@@ -8044,8 +8044,14 @@ impl Engine {
     }
 
     // Remote entry shares every native section/memory/power decision but cannot
-    // acquire transmit authority as a side effect. Local entry keeps its latch.
-    fn set_operating_mode_with_arming(&mut self, mode: &str, follow_freq: bool, arm_manual: bool) {
+    // acquire transmit authority as a side effect. Local entry keeps its latch. A
+    // computer driving this station enters with `arm_manual` false too.
+    pub fn set_operating_mode_with_arming(
+        &mut self,
+        mode: &str,
+        follow_freq: bool,
+        arm_manual: bool,
+    ) {
         self.set_operating_mode_with_reset(
             mode,
             follow_freq,
@@ -8433,7 +8439,19 @@ impl Engine {
     /// at the new dial — the field report: picking 20 m SSTV from the RTTY section landed
     /// DATA-L at 14.230, because RTTY-AFSK's PKTLSB is LSB-side on every band.
     pub fn sstv_tune(&mut self, dial_mhz: f64, band: &str, mode: &str) {
-        self.set_operating_mode("phone", false);
+        self.sstv_tune_with_arming(dial_mhz, band, mode, true);
+    }
+
+    /// [`Self::sstv_tune`], arming Phone's Enable-TX latch on the way in only with `arm_manual`:
+    /// a computer driving this station passes false, as Remote's entry does.
+    pub fn sstv_tune_with_arming(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        arm_manual: bool,
+    ) {
+        self.set_operating_mode_with_arming("phone", false, arm_manual);
         self.set_frequency(dial_mhz, band, mode);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
@@ -8467,12 +8485,26 @@ impl Engine {
         band: &str,
         split_up_khz: Option<f64>,
     ) {
+        self.work_spot_tiered_with_arming(tier, mode, freq_mhz, band, split_up_khz, true);
+    }
+
+    /// [`Self::work_spot_tiered`], arming a manual section's Enable-TX latch on the way in only
+    /// with `arm_manual`: a computer driving this station passes false, as Remote's entry does.
+    pub fn work_spot_tiered_with_arming(
+        &mut self,
+        tier: Option<Tier>,
+        mode: &str,
+        freq_mhz: f64,
+        band: &str,
+        split_up_khz: Option<f64>,
+        arm_manual: bool,
+    ) {
         if let Some(t) = tier {
             if self.app.tier() != t {
                 self.set_tier(t);
             }
         }
-        self.work_spot_split(mode, freq_mhz, band, split_up_khz);
+        self.work_spot_split_with_arming(mode, freq_mhz, band, split_up_khz, arm_manual);
     }
 
     /// Record the callsign of the just-worked spot, right after [`work_spot_split`] (same lock).

@@ -44,6 +44,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// The bench's road switch on this roadside, end to end (test builds only).
 #[cfg(feature = "bench-road-switch")]
 mod bench;
+/// A section change from afar arms nothing.
+mod entry;
 /// Stop wins over a start that was in flight.
 mod stand_down;
 
@@ -2391,8 +2393,8 @@ fn on_the_engine(r: &mut Roadside, gate: Gate) -> Arc<Mutex<Vec<String>>> {
     held_on_the_engine(r, gate, "call_cq")
 }
 
-/// [`on_the_engine`], with `held` the command that waits at `gate` while it is shut. Each start
-/// asks first what its handler asks first, under the Engine lock it then runs in: whether a Stop
+/// [`on_the_engine`], with `held` the command that waits at `gate` while it is shut, and the
+/// section entries as the app's handlers make them. Each start asks first what its handler asks first, under the Engine lock it then runs in: whether a Stop
 /// came after the command lane read it (`command_dispatch::still_bound`, with what the lane wrote
 /// under `afar`).
 fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<Mutex<Vec<String>>> {
@@ -2429,6 +2431,38 @@ fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<M
                 "call_cq" => still_bound(&e, afar.as_ref()).and_then(|()| e.start_cq(None)),
                 "play_voice_message" => {
                     still_bound(&e, afar.as_ref()).and_then(|()| e.send_voice(vec![0.1; 12_000]))
+                }
+                // `lib.rs` `set_operating_mode`: `set_operating_mode_with_arming`, arming nothing
+                // from afar.
+                "set_operating_mode" => {
+                    e.set_operating_mode_with_arming(
+                        args["mode"].as_str().unwrap_or_default(),
+                        args["followFreq"].as_bool() == Some(true),
+                        afar.is_none(),
+                    );
+                    Ok(())
+                }
+                // `lib.rs` `work_spot`: `work_spot_tiered_with_arming`, arming nothing from afar.
+                "work_spot" => {
+                    e.work_spot_tiered_with_arming(
+                        None,
+                        args["mode"].as_str().unwrap_or_default(),
+                        args["freqMhz"].as_f64().unwrap_or_default(),
+                        args["band"].as_str().unwrap_or_default(),
+                        None,
+                        afar.is_none(),
+                    );
+                    Ok(())
+                }
+                // `lib.rs` `sstv_tune`: `sstv_tune_with_arming`, arming nothing from afar.
+                "sstv_tune" => {
+                    e.sstv_tune_with_arming(
+                        args["dialMhz"].as_f64().unwrap_or_default(),
+                        args["band"].as_str().unwrap_or_default(),
+                        args["mode"].as_str().unwrap_or_default(),
+                        afar.is_none(),
+                    );
+                    Ok(())
                 }
                 "halt_tx" => {
                     e.halt_tx();

@@ -29,6 +29,10 @@
 //! Engine lock it then runs in ([`still_bound`]): a Stop taken in between, by either road, or any
 //! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]).
 //!
+//! From afar only those starts arm transmit. A section change, a spot worked or an SSTV channel
+//! picked runs at the shack as its own screen's does, but the lane writes [`Afar`] into it too, and
+//! its handler then enters the section as Remote's entry does, arming nothing ([`ENTRIES`]).
+//!
 //! ## Stop is never refused
 //!
 //! A command that stops a transmission, and the off half of a transmit switch, is admitted before
@@ -299,10 +303,12 @@ pub(crate) fn press_from_afar() -> bool {
     transmit_from_afar("set_ptt") == Ok(Wired::HeldPress)
 }
 
-/// What the shack's command lane writes into a start it admitted from another computer, under the
-/// argument [`AFAR`]: the transmit stand-down generation as the lane read the call off the link.
-/// The lane alone writes it; anything the other computer sends under that name goes before any
-/// call is admitted. The shack's own screen never sends it, so its starts are as they always were.
+/// What the shack's command lane writes into a call it admitted from another computer that a
+/// handler must run as from afar, under the argument [`AFAR`]: the transmit stand-down generation
+/// as the lane read the call off the link. A start runs only under it ([`still_bound`]); a section
+/// entry arms nothing with it ([`ENTRIES`]). The lane alone writes it; anything the other computer
+/// sends under that name goes before any call is admitted. The shack's own screen never sends it,
+/// so its calls are as they always were.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Afar {
@@ -312,10 +318,18 @@ pub(crate) struct Afar {
 /// The argument [`Afar`] goes under: the name each handler that takes it gives its parameter.
 pub(crate) const AFAR: &str = "afar";
 
+/// ⛔ The section entries: from the shack's own screen each arms the Enable-TX latch on the way
+/// into a manual section (Phone, CW, RTTY, Keyboard), so the manual keys there work. From afar each
+/// arms nothing, as Remote's entry arms nothing: the latch is armed from afar only by a wired
+/// start, under the stream's transmit rules, and with it armed the shack's own keys (its PTT, a CAT
+/// client's) would be live with no presence behind them.
+pub(crate) const ENTRIES: [&str; 3] = ["set_operating_mode", "sstv_tune", "work_spot"];
+
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
-/// the held press, which never runs as a command. A test holds this to the handlers that take it.
+/// the held press, which never runs as a command, and each section entry ([`ENTRIES`]). A test
+/// holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
-    matches!(transmit_from_afar(cmd), Ok(Wired::Ft | Wired::VoiceKeyer))
+    matches!(transmit_from_afar(cmd), Ok(Wired::Ft | Wired::VoiceKeyer)) || ENTRIES.contains(&cmd)
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit

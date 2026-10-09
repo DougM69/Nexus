@@ -17867,15 +17867,17 @@ fn set_frequency(
 /// An SSTV strip pick / dial commit: claim the Phone section (SSTV rides Phone) and QSY
 /// atomically, so the radio loop never applies the OLD section's mode policy at the new dial
 /// (picking 20 m SSTV from RTTY used to land DATA-L at 14.230). Persists like `set_frequency`.
+/// `afar`: as [`set_operating_mode`]'s.
 #[tauri::command(async)]
 fn sstv_tune(
     state: State<'_, SharedEngine>,
     dial_mhz: f64,
     band: String,
     mode: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.sstv_tune(dial_mhz, &band, &mode);
+    eng.sstv_tune_with_arming(dial_mhz, &band, &mode, afar.is_none());
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist frequency: {e}")
     });
@@ -17931,14 +17933,19 @@ fn pick_band(
 /// next tune. `follow_freq` = true when the operator clicks an actual operating-section tab
 /// (QSY to that mode's home freq); false for incidental nav and the Needed click. Persists,
 /// returns the snapshot.
+///
+/// `afar`: from a computer driving this station (the command lane writes it, never that
+/// computer). A manual section is then entered without arming Enable TX, as Remote's entry enters
+/// it: from afar only the wired starts arm, under the stream's transmit rules.
 #[tauri::command(async)]
 fn set_operating_mode(
     state: State<'_, SharedEngine>,
     mode: String,
     follow_freq: bool,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_operating_mode(&mode, follow_freq);
+    eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist operating mode: {e}")
     });
@@ -17948,8 +17955,9 @@ fn set_operating_mode(
 /// Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
 /// exact frequency atomically (one engine lock, one round-trip) — so the rig can't end up in
 /// the new mode at the old dial, and the UI never sees a half-applied state. Persists,
-/// returns the snapshot.
+/// returns the snapshot. `afar`: as [`set_operating_mode`]'s.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)] // one per argument the screen gives, and the lane's
 fn work_spot(
     state: State<'_, SharedEngine>,
     spots: State<'_, SharedSpots>,
@@ -17958,6 +17966,7 @@ fn work_spot(
     band: String,
     call: Option<String>,
     tier: Option<String>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     // A digital spot names its protocol (FT8/FT4). The tier switch must happen under the
     // SAME engine lock as the QSY: as two commands, the radio loop could tick in the gap
@@ -17982,7 +17991,7 @@ fn work_spot(
             .and_then(|buf| work_spot_split_offset(&buf, c, freq_mhz, std::time::Instant::now()))
     });
     let mut eng = engine_lock(&state);
-    eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
+    eng.work_spot_tiered_with_arming(tier, &mode, freq_mhz, &band, split_up_khz, afar.is_none());
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist worked spot: {e}")
@@ -46402,5 +46411,93 @@ mod tests {
         assert!(off.is_ok(), "CONTROL: the off half runs: {off:?}");
         assert!(!engine_lock(&engine).tx_enabled(), "CONTROL: TX off");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ From afar a section entry arms nothing. Called through the shack's own runner, as the
+    /// command lane calls them, with `afar` as the lane writes it: a section change into Phone, a
+    /// Phone spot worked and an SSTV channel picked each put the station in Phone and leave Enable
+    /// TX off, as Remote's entry does. CONTROL: each began in Digital with TX off, and the same
+    /// three from the shack's own screen (no `afar`) arm it, as they always have.
+    #[test]
+    fn a_section_entry_from_afar_arms_nothing() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{set_operating_mode, sstv_tune, work_spot};
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_net::cluster::SpotBuffer::new(8),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(spots)
+            .invoke_handler(tauri::generate_handler![
+                set_operating_mode,
+                sstv_tune,
+                work_spot
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let mut armed = Vec::new();
+        for (cmd, args) in [
+            (
+                "set_operating_mode",
+                json!({"mode": "phone", "followFreq": false}),
+            ),
+            (
+                "work_spot",
+                json!({"mode": "phone", "freqMhz": 14.25, "band": "20m"}),
+            ),
+            (
+                "sstv_tune",
+                json!({"dialMhz": 14.23, "band": "20m", "mode": "USB"}),
+            ),
+        ] {
+            for from_afar in [true, false] {
+                let mut args = args.clone();
+                {
+                    let mut e = engine_lock(&engine);
+                    e.set_operating_mode("digital", false);
+                    assert!(!e.tx_enabled(), "CONTROL {cmd}: Digital, TX off");
+                    if from_afar {
+                        let stand_down = e.remote_transmit_stand_down_generation();
+                        args["afar"] = json!({ "standDown": stand_down });
+                    }
+                }
+                let ran = ask(cmd, args);
+                assert!(ran.is_ok(), "{cmd}: {ran:?}");
+                let e = engine_lock(&engine);
+                assert_eq!(
+                    e.settings().operating_mode,
+                    OperatingMode::Phone,
+                    "{cmd}: the section entered"
+                );
+                if !from_afar {
+                    assert!(e.tx_enabled(), "CONTROL {cmd}: the shack's own entry arms");
+                } else if e.tx_enabled() {
+                    armed.push(cmd);
+                }
+            }
+        }
+        assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
     }
 }
