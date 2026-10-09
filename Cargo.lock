@@ -1231,6 +1231,7 @@ dependencies = [
 name = "jtty"
 version = "0.1.0"
 dependencies = [
+ "hound",
  "tempo-fast-sys",
 ]
 
