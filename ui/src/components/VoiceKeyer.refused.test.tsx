@@ -15,15 +15,16 @@ import { subscribeToasts, dismissToast, type Toast } from '../toast'
 /** The engine's refusal, verbatim (`Engine::send_voice`). */
 const REFUSAL = 'TX locked — this frequency is outside your license privileges'
 
-const { playVoiceMessage } = vi.hoisted(() => ({
+const { playVoiceMessage, startVoiceRecording } = vi.hoisted(() => ({
   playVoiceMessage: vi.fn(async (): Promise<unknown> => ({})),
+  startVoiceRecording: vi.fn(async (): Promise<unknown> => ({})),
 }))
 
 vi.mock('../api', () => ({
   getVoiceMessages: vi.fn(async () => [{ slot: 1, label: 'CQ', file: '/tmp/cq.wav' }]),
   playVoiceMessage,
   stopVoice: vi.fn(async () => ({})),
-  startVoiceRecording: vi.fn(async () => ({})),
+  startVoiceRecording,
   stopVoiceRecording: vi.fn(async () => []),
   cancelVoiceRecording: vi.fn(async () => ({})),
   clearVoiceMessage: vi.fn(async () => []),
@@ -43,6 +44,7 @@ afterEach(() => {
   for (const t of toasts) dismissToast(t.id)
   unsub()
   playVoiceMessage.mockReset()
+  startVoiceRecording.mockReset()
 })
 
 /** Render the keyer with TX on, let its slot list load, and press F1's slot. */
@@ -70,5 +72,26 @@ describe('a voice-keyer message the engine refuses', () => {
     playVoiceMessage.mockResolvedValue({})
     await playF1()
     expect(toasts).toEqual([])
+  })
+})
+
+/** A refused recording, as the screen words it: a computer driving a station, its PTT held. */
+const RECORD_REFUSAL = 'The PTT is held on this computer. Let go of PTT, then record.'
+
+describe('a recording that is refused', () => {
+  it("shows the reason in the keyer's toast, and records nothing", async () => {
+    startVoiceRecording.mockRejectedValue(RECORD_REFUSAL)
+    const { container } = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    await act(async () => {})
+    const record = container.querySelector<HTMLButtonElement>('.vk-tool')
+    expect(record?.textContent, 'precondition: the slot offers Record').toBe('●')
+    await act(async () => {
+      fireEvent.click(record!)
+    })
+    expect(startVoiceRecording).toHaveBeenCalled()
+    expect(toasts.map((t) => [t.kind, t.message])).toEqual([
+      ['error', `Could not start recording: ${RECORD_REFUSAL}`],
+    ])
+    expect(container.querySelector('.vk-slot.rec'), 'nothing reads as recording').toBeNull()
   })
 })

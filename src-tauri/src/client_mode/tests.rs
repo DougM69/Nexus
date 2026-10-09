@@ -11,6 +11,8 @@ use tauri::test::MockRuntime;
 
 /// The held press against presence as heard here.
 mod reassert;
+/// The recorder and the held press.
+mod record;
 /// Stop wins over a start that was in flight, at this computer.
 mod stop_first;
 

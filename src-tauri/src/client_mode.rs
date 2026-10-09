@@ -37,7 +37,8 @@
 //!   sign-in, which are this computer's; the launch picker's question, which is about which radio
 //!   this Nexus drives, and so is never the shack's picker; and the voice keyer's recorder, which
 //!   records this computer's microphone and sends the message to the shack's slot as an import
-//!   (`import_voice_message`), where the shack's voice keyer plays it;
+//!   (`import_voice_message`), where the shack's voice keyer plays it, and which is refused while
+//!   a press is held, as the PTT is while a message is recorded;
 //! - **split**: the ui-state pair, the station's keys at the shack and every other key here (the
 //!   operator's ruling of 2026-10-07: the rail, its order, the UI scale and the window layouts stay
 //!   on the computer the operator sits at);
@@ -900,6 +901,13 @@ impl Client {
                     .mic
                     .get()
                     .ok_or("No microphone on this computer to record from")?;
+                // The microphone is the over's while a press is held, as it is the recorder's
+                // while a message is recorded: refused, and nothing recorded. Held while the
+                // recording starts (a thread, at once), so no press begins between the two.
+                let held = lock(&self.press);
+                if matches!(*held, Press::Held { .. }) {
+                    return Err(word("pressHeld"));
+                }
                 let mut recording = lock(&self.recording);
                 // A recording already under way starts afresh, as the station's own does.
                 recording.take();

@@ -640,6 +640,7 @@ export const JA: PartialCatalog = {
   "client.refused.staleState": "この画面に表示されている局の状態が2秒以上前のものなので、追いつくまで局はここからの送信を受け付けません。何も送信されていません。",
   "client.refused.pressEnded": "PTT の押下は終了しました。PTT を離して、もう一度押してから話してください。",
   "client.refused.recording": "このコンピューターで音声メッセージを録音中です。録音を止めてから PTT を押してください。",
+  "client.refused.pressHeld": "このコンピューターで PTT が押されています。PTT を離してから録音してください。",
   "client.refused.typedPassword": "ここで入力したパスワードは送信されません。局に保存されているパスワードが使われます。",
   "client.refused.notController": "別のデバイスが局の操作権を持っています。",
   "client.refused.busy": "局はこのコンピューターからの他の要求を処理中です。もう一度お試しください。",

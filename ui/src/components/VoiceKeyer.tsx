@@ -202,9 +202,10 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
 
   const startRec = (slot: number) => {
     setRecording(slot)
-    void startVoiceRecording().catch(() => {
-      setRecording(null)
-      pushToast(t('phone.keyer.recordFailed'), 'error')
+    // The toast carries the reason, as a play's does: a computer driving a station is refused
+    // Record while its PTT is held, and says so.
+    void withErrorToast(() => startVoiceRecording(), t('phone.keyer.recordFailed')).then((snap) => {
+      if (snap === null) setRecording(null)
     })
   }
 

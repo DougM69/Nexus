@@ -650,6 +650,7 @@ export const ES: PartialCatalog = {
   "client.refused.staleState": "Lo que esta pantalla muestra de la estación tiene más de 2 segundos, así que la estación no acepta ninguna transmisión desde aquí hasta que se ponga al día. No se envió nada.",
   "client.refused.pressEnded": "Tu pulsación de PTT terminó. Suelta el PTT y vuelve a pulsar para hablar.",
   "client.refused.recording": "Se está grabando un mensaje de voz en este ordenador. Detén la grabación y luego pulsa el PTT.",
+  "client.refused.pressHeld": "El PTT está pulsado en este ordenador. Suelta el PTT y luego graba.",
   "client.refused.typedPassword": "Una contraseña escrita aquí nunca se envía: la estación usa la que tiene guardada.",
   "client.refused.notController": "Otro dispositivo tiene el control de la estación.",
   "client.refused.busy": "La estación está ocupada con otras peticiones de este ordenador. Vuelve a intentarlo.",

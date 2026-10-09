@@ -748,6 +748,7 @@ export const EN = {
   "client.refused.staleState": "What this screen shows of the station is more than 2 seconds old, so the station takes no transmission from here until it catches up. Nothing was sent.",
   "client.refused.pressEnded": "Your PTT press has ended. Let go of PTT and press again to talk.",
   "client.refused.recording": "A voice message is being recorded on this computer. Stop the recording, then press PTT.",
+  "client.refused.pressHeld": "The PTT is held on this computer. Let go of PTT, then record.",
   "client.refused.typedPassword": "A password typed here is never sent: the station uses the one it has stored.",
   "client.refused.notController": "Another device has control of the station.",
   "client.refused.busy": "The station is busy with this computer’s other requests. Try again.",

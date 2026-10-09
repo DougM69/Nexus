@@ -29,6 +29,7 @@ describe('a client-mode refusal, in words', () => {
       ['staleState', 'client.refused.staleState'],
       ['pressEnded', 'client.refused.pressEnded'],
       ['recording', 'client.refused.recording'],
+      ['pressHeld', 'client.refused.pressHeld'],
       ['shackOnly', 'client.refused.shackOnly'],
       ['notLive', 'client.refused.notLive'],
       ['gone', 'client.refused.gone'],
