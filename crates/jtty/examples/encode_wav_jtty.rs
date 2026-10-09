@@ -25,13 +25,17 @@
 //! scaled by 100. Without it the file is scaled to full range, as sjtty does
 //! for a clean file.
 //!
+//! `--tones` also prints each message's channel tones on stdout, one line per
+//! message, for a tone-for-tone comparison with stock `sjtty`, which prints
+//! the tones it sends: equal tones mean equal packing, CRC, code and sync.
+//!
 //! stderr gets one `# message N:` line per message (frames and the normalised
 //! text) and `# wrote`; a message the modem refuses is an error, exit status 1.
 //!
 //! Usage:
 //!   cargo run -q -p jtty --example encode_wav_jtty -- OUT.wav "CQ KD9TAW EN52" ["NEXT" ...]
 //!       [--profile unknown|field-day|rtty-roundup] [--f0 1500] [--dt 1.0]
-//!       [--snr-db N] [--seed N]
+//!       [--snr-db N] [--seed N] [--tones]
 
 use jtty::{Profile, FRAME_SAMPLES, SAMPLE_RATE};
 
@@ -75,7 +79,7 @@ fn main() {
         .collect();
     if positional.len() < 2 {
         eprintln!(
-            "usage: encode_wav_jtty OUT.wav \"TEXT\"|@k,s,r,v,text;... [...] [--profile unknown|field-day|rtty-roundup] [--f0 1500] [--dt 1.0] [--snr-db N] [--seed N]"
+            "usage: encode_wav_jtty OUT.wav \"TEXT\"|@k,s,r,v,text;... [...] [--profile unknown|field-day|rtty-roundup] [--f0 1500] [--dt 1.0] [--snr-db N] [--seed N] [--tones]"
         );
         std::process::exit(2);
     }
@@ -90,6 +94,7 @@ fn main() {
     };
     let f0: f32 = arg(&args, "--f0", 1500.0);
     let dt: f32 = arg(&args, "--dt", 1.0);
+    let print_tones = args.iter().any(|a| a == "--tones");
     let snr_db: Option<f32> = args
         .iter()
         .position(|a| a == "--snr-db")
@@ -121,6 +126,10 @@ fn main() {
             }
         };
         let wave = jtty::gen_wave(&tones, f0).expect("the encoder made whole frames");
+        if print_tones {
+            let line: Vec<String> = tones.iter().map(|t| t.to_string()).collect();
+            println!("{}", line.join(" "));
+        }
         eprintln!(
             "# message {}: {} frame(s) {what}",
             n + 1,
