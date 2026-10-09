@@ -9,6 +9,8 @@ use crate::command_dispatch::off_args;
 use std::path::Path;
 use tauri::test::MockRuntime;
 
+/// The held press against presence as heard here.
+mod reassert;
 /// Stop wins over a start that was in flight, at this computer.
 mod stop_first;
 

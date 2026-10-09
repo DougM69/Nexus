@@ -51,9 +51,10 @@
 //! road last heard it; the shack judges it again by the stream's transmit rules, on its own clock.
 //! The PTT is never the shack's `set_ptt`, which keys the shack's own audio source: each `set_ptt`
 //! on from the screen, which re-asserts it every 100 ms while its PTT is held, is one hold of a
-//! held press on Stop's road ([`Client::press`]), and its off half lets the press go first. A press
-//! that ended other than by the screen letting go (a Stop, the station, a new link) never keys
-//! again: the screen must let go and press again. So after a reconnect nothing transmits by
+//! held press on Stop's road ([`Client::press`]) while presence is live as that road last heard it,
+//! and its off half lets the press go first. A press that ended other than by the screen letting go
+//! (a Stop, the station, a new link, presence lapsing here) never keys again: the screen must let
+//! go and press again. So after a reconnect nothing transmits by
 //! itself: the lease is taken again, and the shack's transmit stays off until it is armed.
 //!
 //! ## Stop is never held
@@ -704,8 +705,10 @@ impl Client {
 
     /// The screen re-asserted its PTT (`set_ptt` on). The first starts a held press on Stop's
     /// road, once a start may leave this computer; each one after it holds that press again, one
-    /// hold each, never on a timer of this computer's own. A press that ended other than by the
-    /// screen letting go is refused until the screen lets go: it never keys again.
+    /// hold each, never on a timer of this computer's own, on the same link and while presence is
+    /// live as its road last heard it. A press whose presence lapsed here is let go on its road and
+    /// ends. A press that ended other than by the screen letting go is refused until the screen
+    /// lets go: it never keys again.
     fn press(&self) -> Result<Value, String> {
         let mut held = lock(&self.press);
         match &*held {
@@ -714,7 +717,11 @@ impl Client {
                     .shack()
                     .and_then(|shack| shack.stop_road())
                     .is_some_and(|now| Arc::ptr_eq(&now, road));
-                if on_this_link && road.hold(*press) {
+                if on_this_link && !road.presence_live(Instant::now()) {
+                    // Presence as this computer last heard it has lapsed (its Stop road gone quiet,
+                    // say): the press ends here, its microphone stops, and the station is told.
+                    road.release(*press);
+                } else if on_this_link && road.hold(*press) {
                     return Ok(self.fed("snapshot/1").unwrap_or_else(|_| json!({})));
                 }
                 *held = Press::Ended;
