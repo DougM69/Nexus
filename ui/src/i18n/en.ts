@@ -4061,6 +4061,26 @@ export const EN = {
   // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
   // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
   'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
+  // The lines under the Field Day mode switch at the top of the contest screen. The switch
+  // itself reads Settings' label and accessible names (settings.fieldDay.mode.*). {{contest}}
+  // and {{picked}} are contests' own names and {{modes}} on-air mode tokens, all invariant;
+  // {{field}}, {{first}} and {{second}} are Settings' names for the exchange boxes.
+  'fieldDay.mode.off':
+    'Off. When it is on, the log strips, this screen and the exports follow the {{contest}} rules.',
+  'fieldDay.mode.on':
+    'The {{contest}} rules apply now: the log strips, this screen and the exports follow them.',
+  'fieldDay.mode.rule.banned': 'Not permitted: {{modes}}. Contacts in them are logged but do not count.',
+  'fieldDay.mode.rule.cluster': 'DX cluster assistance is not permitted.',
+  'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
+  'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
+  'fieldDay.mode.picked':
+    'Picked in Settings: {{picked}}. Turn Field Day mode off and on again to switch to it.',
+  'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
+  'fieldDay.mode.needs.two':
+    'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
+  'fieldDay.mode.needs.open': 'Open in Settings',
+  'fieldDay.mode.club':
+    'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.
@@ -4089,6 +4109,8 @@ export const EN = {
   'fieldDay.club.popOut.label': '⧉ Pop out board',
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
+  'fieldDay.club.clock.ahead': 'This PC\'s clock is {{secs}} s ahead of the host\'s',
+  'fieldDay.club.clock.behind': 'This PC\'s clock is {{secs}} s behind the host\'s',
   'fieldDay.club.error': 'Host: {{msg}}',
   'fieldDay.club.refused.chip': 'Not syncing',
   'fieldDay.club.refused.serial': 'Club sync does not run {{contest}}: its serial numbers must run in one sequence for the whole entry, and every position would give out its own. This station does not host or join a club event, and each position keeps its own log.',
@@ -4106,9 +4128,15 @@ export const EN = {
   'fieldDay.club.board.column.operator': 'Operator',
   'fieldDay.club.board.column.qsos': 'QSOs',
   'fieldDay.club.board.column.rate': 'Rate',
+  'fieldDay.club.board.column.clock': 'Clock',
   'fieldDay.club.board.stale': 'Last heard {{secs}} s ago',
   'fieldDay.club.board.unnamed': 'Unnamed position',
   'fieldDay.club.board.rate': '{{rate}}/hr',
+  'fieldDay.club.board.clock.title': 'Each position\'s clock against the host\'s, measured over the club link every 5 s. Nexus only shows it and never changes a clock: put a wrong one right in that PC\'s own date and time settings.',
+  'fieldDay.club.board.clock.ok': 'in step',
+  'fieldDay.club.board.clock.ahead': '{{secs}} s ahead',
+  'fieldDay.club.board.clock.behind': '{{secs}} s behind',
+  'fieldDay.club.board.clock.unknown': 'Not measured: that position runs an older Nexus, or has not answered yet',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
@@ -4202,7 +4230,7 @@ export const EN = {
   'settings.fieldDay.mode.aria.enable': 'Enable Field Day mode',
   'settings.fieldDay.mode.aria.disable': 'Disable Field Day mode',
   'settings.fieldDay.mode.hint':
-    'Turn on for Field Day weekend — reveals the Field Day workspace and the Class/Section exchange across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply.',
+    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply. The same switch is at the top of the Contest screen.',
   'settings.fieldDay.needExchange':
     "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
@@ -8096,7 +8124,7 @@ export const EN = {
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
   'settings.features.fieldDay.hint':
-    'Turn on for Field Day weekend — reveals the Field Day workspace, the Class/Section exchange across all modes, and the setup tab. Off the rest of the year (nothing shows). Stays on across restarts until you turn it off; Save settings to apply.',
+    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
@@ -10692,7 +10720,10 @@ export const EN = {
   'nav.stats.label': 'Stats',
   'nav.stats.title':
     'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations',
-  'nav.fieldDay.title': 'Field Day — contest rate workspace',
+  // The rail's contest item: a word, so it translates. {{contest}} is the picked contest's own
+  // name (fdEvent.ts CONTESTS), which a translator leaves exactly as it is.
+  'nav.fieldDay.label': 'Contest',
+  'nav.fieldDay.title': 'Contest — {{contest}}',
   'nav.fdClub.label': 'Club Board',
   'nav.fdClub.title': 'Club band board — who is on what band at every position on site, in its own window for a second monitor',
   'nav.pota.title': "POTA / SOTA — parks & summits: who's on now (hunt) + tag your activation",
@@ -10840,6 +10871,12 @@ export const EN = {
   'panels.arrange.side.aBox': 'a box',
   'panels.arrange.toSide.aria': 'Move {{pane}} to the left side',
   'panels.arrange.fromSide.aria': 'Move {{pane}} from the left side back to its column',
+  // A pane dragged by its title (2026-10-08): what a screen reader is told when it lands.
+  // `{{place}}` is the column's name as Arrange lists it, `{{next}}` the pane it landed above.
+  'panels.drag.dropped.above': '{{pane}} moved: {{place}}, above {{next}}',
+  'panels.drag.dropped.foot': '{{pane}} moved: {{place}}, at the foot',
+  // The grip's hover text, on a pane with no title bar (FT's Tx messages) and on ⊞ Arrange's rows.
+  'panels.drag.grip.title': 'Drag to move {{pane}}',
   // THE BOXES (any pane in any area): up to six on a cockpit's screen, each showing one Conditions box.
   // `{{title}}` is that box's own name.
   'panels.box.add': '+ Add a box',
@@ -11377,7 +11414,7 @@ export const EN = {
   // says an operator can be named at all.
   'topbar.operator.set': 'Set operator',
   'topbar.operator.set.title': 'Nobody is set as the operator — click to say who is at the key',
-  'topbar.operator.firstSet': 'No operators logged yet — set the first one on the Field Day dashboard',
+  'topbar.operator.firstSet': 'No operators logged yet — set the first one on the Contest screen',
   // `{{rig}}` and `{{believed}}` are mode names, straight through.
   'topbar.rigMode.chip': 'rig: {{mode}}',
   'topbar.rigMode.title':
@@ -11511,6 +11548,7 @@ export const EN = {
   'features.nowBar.oneLine': 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
   'features.chat.label': 'Chat',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
+  'features.fieldDay.label': 'Contest',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
   'features.connect.label': 'Conditions',
   'features.connect.windowTitle': 'Conditions (formerly Connect)',

@@ -4,8 +4,9 @@ Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day)
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
-**Field Day mode is the exception**: it stays off until you switch it on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or
+**Field Day mode is the exception**: it stays off until you switch it on at the
+top of the **Contest** screen (the tent in the left bar), in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
 [Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
 reshapes the app for a weekend most operators are not having.
 
@@ -131,7 +132,7 @@ a club sync worked.*
   a lock (N3FJP semantics); your own log's dupes still refuse.
 - A live **band board** shows where every position is (band, mode, operator,
   rate), stale-marked the moment one goes quiet. It has its own **Club Board**
-  button in the left rail under Field Day, and its own window — one click, on a
+  button in the left rail under Contest, and its own window — one click, on a
   second monitor or a corner of the big one, in bigger type than the dashboard
   copy because it is watched from across the tent. **Pop out board** in the club
   header opens the same window. The rail button is there whenever Field Day is
@@ -179,11 +180,15 @@ Before any club event:
   port**) and announces itself on UDP port 42074, which **Find club events**
   listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
   firewall rule of its own.
-- **Set every clock first.** Nexus never changes a PC's clock. A position whose
-  clock is more than 30 seconds from the host's shows a warning when it joins,
-  but the contact times in the club log and in each Cabrillo file come from each
-  position's own clock, and when two positions log the same contact the club log
-  keeps the earlier one. Set every laptop from one source, a phone for example,
+- **Set every clock first.** Nexus never changes a PC's clock. Each position
+  measures its clock against the host's every 5 seconds over the club link, and
+  from 2 seconds off its club line says so ("This PC's clock is 3 s behind the
+  host's"); past 30 seconds the line is a warning. The host's club board has a
+  **Clock** column for every position, with a dash for one running an older
+  Nexus. The contact times in the club log and in each Cabrillo file still come
+  from each position's own clock, and when two positions log the same contact the
+  club log keeps the earlier one, so put a wrong clock right in that PC's own
+  date and time settings. Set every laptop from one source, a phone for example,
   before the event starts.
 
 ### The spectator scoreboard
