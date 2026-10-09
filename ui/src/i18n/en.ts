@@ -755,6 +755,7 @@ export const EN = {
   "client.refused.replayed": "The station had that request already, and did not run it again.",
   "client.refused.changedAtShack": "Changed at the station. Reload and save again.",
   "client.refused.badArguments": "The station could not read that request.",
+  "client.refused.stopped": "Transmit was stopped after you pressed this, so the station did not do it. Press it again if you still want it.",
   "client.refused.tooLarge": "That is too large to send to the station.",
   "client.refused.gone": "The link to the station dropped before it answered. Check at the station whether it happened.",
   "client.refused.notLive": "Not connected to the station.",

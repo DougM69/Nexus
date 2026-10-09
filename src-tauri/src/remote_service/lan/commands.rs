@@ -8,6 +8,8 @@
 //! - **A Stop**, or the off half of a transmit switch, is admitted there, with no lock
 //!   (`command_dispatch::admit_stop`), and run at once on a thread of its own, behind no other
 //!   call, its answer ahead of everything waiting to be written. It needs no lease and takes no slot.
+//!   It moves the transmit stand-down generation there and then, an atomic step, so every start
+//!   read before it is void wherever it waits.
 //! - **Any other call** is admitted off the reading task, since a store's revision can wait on the
 //!   Engine: the dispatcher's lease, class, journal, caps and revisions, with the lease read live
 //!   from the operations authority. It then runs through the app's own handler, and its answer goes
@@ -24,6 +26,14 @@
 //! (`super::stop_road::Ready`: its presence live, the state its computer's screen last fetched under
 //! two seconds old). A connection with no Stop road starts nothing. Once a start has run, its road's
 //! presence is read again: a start that ran after presence lapsed is stopped at once.
+//!
+//! ⛔ Stop wins over a start that was in flight. A start is bound, as the reading task reads it, to
+//! the transmit stand-down generation (`command_dispatch::Afar`), written into its arguments; its
+//! handler runs it only if that generation still stands under the Engine lock it runs in
+//! (`command_dispatch::still_bound`). A Stop read after it on this link, a Stop on its road, presence
+//! lapsing, or any halt at the station moves the generation, so a start that waited behind one of
+//! them never runs, and is answered `stopped`. The other computer cannot say it: anything it sends
+//! under that argument goes before the call is looked at.
 //!
 //! ## Feeds and events
 //!
@@ -45,9 +55,10 @@ use super::stop_road::Ready;
 use super::wire::{self, Assembly, Feed, Whole};
 use crate::command_classes::{class_of, Class};
 use crate::command_dispatch::{
-    admit_stop, forwards, Admission, Answer, Call, Caller, CallerKey, Dispatcher, Outcome, Profile,
-    Refusal, Reply, Runner, ShackStores,
+    admit_stop, forwards, takes_afar, Admission, Afar, Answer, Call, Caller, CallerKey, Dispatcher,
+    Outcome, Profile, Refusal, Reply, Runner, ShackStores, AFAR, STOPPED_SINCE,
 };
+use tempo_app::remote_control::Revocation;
 
 /// Calls one computer may have waiting at once, admitted or not: the dispatcher's own cap on calls
 /// in flight, and as many again being admitted. One more is refused `busy` without a thread.
@@ -117,6 +128,9 @@ struct Context {
     outbox: Outbox,
     /// What this connection's Stop road says of a start from its computer; `None` with no road.
     ready: Option<Arc<Ready>>,
+    /// The transmit stand-down generation (the authority's, which every halt at the station moves
+    /// too): what a start is bound to as it is read, and what a Stop moves as it is read.
+    transmit: Revocation,
 }
 
 impl Context {
@@ -138,7 +152,8 @@ impl Context {
     /// ⛔ A START THAT RAN AFTER ITS COMPUTER'S PRESENCE LAPSED IS STOPPED AT ONCE. Presence is
     /// read before a start is admitted, and the start then waits its turn at the Engine: a lapse in
     /// between has already halted the station, so what the start began would be on the air with no
-    /// presence left to halt it. Asked once the start has run; the Stop is the station's own.
+    /// presence left to halt it. Asked once the start's handler has answered, whether it ran or a
+    /// Stop since it was read kept it from running; the Stop is the station's own.
     fn present_after(&self, cmd: &str) {
         let live = self
             .ready
@@ -187,6 +202,7 @@ impl Lane {
         let context = Arc::new(Context {
             dispatcher: opening.dispatcher,
             runner: opening.commands.runner,
+            transmit: opening.authority.transmit_revocation(),
             authority: opening.authority,
             connection: opening.connection,
             device: opening.device.clone(),
@@ -222,11 +238,18 @@ impl Lane {
     }
 
     /// One call, on the reading task: a Stop admitted here and run at once, anything else handed
-    /// off to be admitted.
-    pub(super) fn call(&mut self, call: Call) {
+    /// off to be admitted, a start bound as it is read.
+    pub(super) fn call(&mut self, mut call: Call) {
         let id = call.id;
+        // Whether a call is from afar is the lane's to say, never the other computer's.
+        if let Some(args) = call.args.as_object_mut() {
+            args.remove(AFAR);
+        }
         let call = match admit_stop(call) {
             Ok(stop) => {
+                // ⛔ STOP WINS: every start read before this Stop is void from now, an atomic step
+                // taken before the Stop waits for anything, as the road's Stop takes it.
+                self.context.transmit.revoke();
                 let context = self.context.clone();
                 tokio::task::spawn_blocking(move || {
                     let answer = answered(id, run(&context.runner, &stop.cmd, stop.args), None);
@@ -242,9 +265,13 @@ impl Lane {
         }
         let waiting = Waiting::new(&self.pending);
         let (context, key, profile) = (self.context.clone(), self.key.clone(), self.profile);
+        let starts = class_of(&call.cmd) == Some(Class::StartsTx);
+        // Read here, on the reading task: a Stop read after this call moves it after this read.
+        let afar = takes_afar(&call.cmd).then(|| Afar {
+            stand_down: self.context.transmit.generation(),
+        });
         tokio::task::spawn_blocking(move || {
             let _waiting = waiting;
-            let starts = class_of(&call.cmd) == Some(Class::StartsTx);
             let caller = Caller {
                 key,
                 profile,
@@ -264,12 +291,22 @@ impl Lane {
                             .outbox
                             .urgent(answered(id, run(&context.runner, &cmd, args), None));
                 }
-                Admission::Run { args, ticket } => {
+                Admission::Run { mut args, ticket } => {
+                    if let Some(afar) = afar {
+                        bind(&mut args, afar);
+                    }
                     let ran = run(&context.runner, &cmd, args);
                     if starts {
                         context.present_after(&cmd);
                     }
+                    let voided = starts
+                        && matches!(&ran, Some(Err(error)) if error.as_str() == STOPPED_SINCE);
                     let answer = match ran {
+                        // A Stop came after it was read: it did not run.
+                        Some(_) if voided => {
+                            ticket.refuse(Refusal::Stopped);
+                            refused(id, Refusal::Stopped)
+                        }
                         Some(result) => {
                             let Reply { result, revision } = ticket.finish(result);
                             answered(id, Some(result), revision.as_ref().map(|r| r.as_str()))
@@ -363,6 +400,14 @@ impl Waiting {
 impl Drop for Waiting {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A start's arguments with the stand-down it was read under, as its handler takes them
+/// (`command_dispatch::still_bound`). An admitted call's arguments are always an object.
+fn bind(args: &mut Value, afar: Afar) {
+    if let (Some(fields), Ok(afar)) = (args.as_object_mut(), serde_json::to_value(afar)) {
+        fields.insert(AFAR.to_string(), afar);
     }
 }
 

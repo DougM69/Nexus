@@ -33,6 +33,7 @@ describe('a client-mode refusal, in words', () => {
       ['notLive', 'client.refused.notLive'],
       ['gone', 'client.refused.gone'],
       ['unclassed', 'client.refused.unclassed'],
+      ['stopped', 'client.refused.stopped'],
     ] as const) {
       backendRejects(`nexusClient:${code}`)
       await expect(getSettings()).rejects.toBe(EN[key])

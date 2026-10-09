@@ -160,8 +160,9 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     // the same way, on the authority and on the LAN channel. Stop's second road is a ninth
     // (2026-10-07): its Stop runs every stop verb on a thread of its own, the satellite disarm
     // among them. The bench's road switch is a tenth: a Stop pressed on a client-mode screen goes
-    // on that road too.
-    const SOURCES: [(&str, &str); 10] = [
+    // on that road too. The tests of a start in flight behind a Stop are an eleventh: one takes its
+    // Stop on the road.
+    const SOURCES: [(&str, &str); 11] = [
         ("lan_lease_tests.rs", include_str!("lan_lease_tests.rs")),
         (
             "remote_service/lan/tests.rs",
@@ -182,6 +183,10 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
         (
             "remote_service/lan/tests/stop_road/bench.rs",
             include_str!("../lan/tests/stop_road/bench.rs"),
+        ),
+        (
+            "remote_service/lan/tests/stop_road/stand_down.rs",
+            include_str!("../lan/tests/stop_road/stand_down.rs"),
         ),
         ("lib.rs", include_str!("../../lib.rs")),
     ];

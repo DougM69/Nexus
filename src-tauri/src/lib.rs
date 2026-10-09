@@ -17019,9 +17019,19 @@ fn b64_encode(data: &[u8]) -> String {
 /// the Windows message-pump thread, so a CAT stall inside the radio loop's tick
 /// parks the whole UI. The doc above is the TX-Off latch semantics; the async
 /// attribute is where it runs. Both are load-bearing — keep them together.
+///
+/// `afar`: from a computer driving this station, the stand-down its arm was admitted under (the
+/// command lane's, never that computer's); a Stop since then voids it. Never asked of the off half.
 #[tauri::command(async)]
-fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
+fn set_tx_enabled(
+    state: State<'_, SharedEngine>,
+    enabled: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    if enabled {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_tx_enabled(enabled);
     // TX On refused because a clock repair holds transmit: say so, rather than leave a button
     // that did nothing (`Engine::hold_tx_for_clock_repair`).
@@ -18429,8 +18439,13 @@ fn set_cw_keyer(
 /// Play a voice-keyer message: read the slot's WAV and queue it for the radio loop to
 /// transmit (PTT + audio). Errors if the slot has no recording, or with the engine's reason
 /// when it refuses the send (TX off, outside the privileges), which the keyer's toast shows.
+/// `afar`: as [`set_tx_enabled`]'s, asked as the message is queued.
 #[tauri::command(async)]
-fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSnapshot, String> {
+fn play_voice_message(
+    state: State<'_, SharedEngine>,
+    slot: u8,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let file = {
         let eng = engine_lock(&state);
         eng.voice_messages()
@@ -18449,12 +18464,13 @@ fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSna
         let samples = tempo_audio::voice::read_wav_12k(&file)
             .map_err(|e| format!("Could not read voice message: {e}"))?;
         let mut eng = engine_lock(&state);
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
         eng.send_voice(samples)?;
         Ok(eng.snapshot())
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = file;
+        let _ = (file, afar);
         Err("Voice keyer needs the radio build".to_string())
     }
 }
@@ -18703,10 +18719,15 @@ fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 }
 
 /// Start a CQ run; `dir` = a directed-CQ token ("DX"/"NA"/"POTA"/…) or None
-/// for a plain CQ (also clears a sticky directed token).
+/// for a plain CQ (also clears a sticky directed token). `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSnapshot, String> {
+fn start_cq(
+    state: State<'_, SharedEngine>,
+    dir: Option<String>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.start_cq(dir.as_deref())?;
     Ok(eng.snapshot())
 }
@@ -18714,9 +18735,15 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
 /// Call CQ from Tempo (chat-first): emit ONE structured `CQ <mycall> <mygrid>` frame
 /// and arm TX, staying in Chat mode. Errors if the callsign/grid aren't set (so a CQ
 /// never goes out malformed). `dir` = an optional directed-CQ token (None = plain CQ).
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn call_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSnapshot, String> {
+fn call_cq(
+    state: State<'_, SharedEngine>,
+    dir: Option<String>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.call_cq(dir.as_deref())?;
     Ok(eng.snapshot())
 }
@@ -18739,15 +18766,18 @@ fn resume_chat_cq(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String>
 }
 
 /// WSJT-X Tx-slot click: force `text` as the next transmission to `call`
-/// (starts/retargets the QSO, arms per the double-click behavior option).
+/// (starts/retargets the QSO, arms per the double-click behavior option). `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn override_next_tx(
     state: State<'_, SharedEngine>,
     call: String,
     grid: Option<String>,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.override_next_tx(&call, grid.as_deref(), &text);
     Ok(eng.snapshot())
 }
@@ -19212,7 +19242,7 @@ async fn close_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), 
 /// action). Enters QSO mode answering `call`. `message`/`snr` are the exact
 /// decoded line the operator double-clicked (when available) so the auto-sequencer
 /// jumps to the correct next Tx — WSJT-X double-click semantics — instead of
-/// restarting at the grid. Returns the refreshed snapshot.
+/// restarting at the grid. Returns the refreshed snapshot. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)] // one per managed state it reads
 fn call_station(
@@ -19224,8 +19254,19 @@ fn call_station(
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    call_station_on(&state, &ota_cache, &parks, &call, grid, message, snr, freq)
+    call_station_on(
+        &state,
+        &ota_cache,
+        &parks,
+        &call,
+        grid,
+        message,
+        snr,
+        freq,
+        afar.as_ref(),
+    )
 }
 
 /// [`call_station`]'s body, over plain handles so a test drives exactly what the command runs.
@@ -19239,6 +19280,7 @@ fn call_station_on(
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
+    afar: Option<&command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     // #351 — the park this contact belongs to, when the hunter feed says it can only be one.
     // This is the one path the Call Roster, Band Activity, the station list and their pop-outs
@@ -19250,6 +19292,7 @@ fn call_station_on(
         (program, reference, places)
     });
     let mut eng = engine_lock(engine);
+    command_dispatch::still_bound(&eng, afar)?;
     // Working a station keys a standard structured message (your grid in Tx1) — refuse
     // without a valid callsign + grid so we never emit a grid-less directed call. The
     // mode plugin decides which tiers are gated (Capabilities::structured_identity).
@@ -19305,19 +19348,29 @@ fn set_area(state: State<'_, SharedEngine>, area: String) -> Result<AppSnapshot,
 }
 
 /// Operator "Resend": re-arm the current QSO message so a stalled/uncopied step
-/// transmits again on the next TX slot. No-op outside a QSO.
+/// transmits again on the next TX slot. No-op outside a QSO. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn qso_resend(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn qso_resend(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.qso_resend();
     Ok(eng.snapshot())
 }
 
 /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
 /// `text`, directed to the current DX station when known. No-op outside a QSO.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn qso_freetext(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.qso_freetext(&text);
     Ok(eng.snapshot())
 }
@@ -43346,6 +43399,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("the call goes through");
         assert_eq!(
@@ -45105,6 +45159,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("the call itself goes through");
         engine_lock(&engine).log_qso(park_rec(call, None, crate::now_unix()));
@@ -45259,6 +45314,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("our own line is a benign no-op, not an error");
         let eng = engine_lock(&engine);
@@ -45303,6 +45359,7 @@ mod tests {
                 &cache,
                 &crate::SharedParks::default(),
                 "K1ABC",
+                None,
                 None,
                 None,
                 None,
@@ -46215,5 +46272,135 @@ mod tests {
         );
         assert!(matches!(made, Ok(Ok(_))));
         assert_eq!(folds(), 3, "an edit folds each tally again");
+    }
+
+    /// ★ The start handlers run a start from afar only under the stand-down the command lane read
+    /// it under (`command_dispatch::still_bound`). Called through the shack's own runner, as the
+    /// lane calls them, each wired start whose `afar` names a stand-down a halt has moved since is
+    /// refused, `STOPPED_SINCE`, and leaves the station as it was: TX off, nothing queued to play.
+    /// Named with the stand-down as it stands now, each runs. CONTROL: with no `afar`, as the
+    /// shack's own screen calls them, each runs as it always has; and Enable TX's off half runs
+    /// whatever `afar` it carries.
+    #[test]
+    fn a_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use crate::{
+            call_cq, call_station, override_next_tx, play_voice_message, qso_freetext, qso_resend,
+            set_tx_enabled, start_cq,
+        };
+        use serde_json::{json, Value};
+        let dir = std::env::temp_dir().join(format!("nexus-afar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("f1.wav");
+        let voice = crate::lan_client::audio_road::voice_message(&[0.1; 1_200]).unwrap();
+        std::fs::write(&wav, voice).unwrap();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            let mut settings = e.settings().clone();
+            settings.voice_messages = vec![tempo_app::settings::VoiceMessage {
+                slot: 1,
+                label: "CQ".into(),
+                file: wav.display().to_string(),
+            }];
+            e.apply_settings(settings);
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(crate::SharedOtaSpots::default())
+            .manage(crate::SharedParks::default())
+            .invoke_handler(tauri::generate_handler![
+                call_cq,
+                call_station,
+                override_next_tx,
+                play_voice_message,
+                qso_freetext,
+                qso_resend,
+                set_tx_enabled,
+                start_cq
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        let stopped = Err(STOPPED_SINCE.to_string());
+        for (cmd, args) in [
+            ("call_cq", json!({})),
+            ("call_station", json!({"call": "K1ABC"})),
+            (
+                "override_next_tx",
+                json!({"call": "K1ABC", "text": "K1ABC W9XYZ EN52"}),
+            ),
+            ("play_voice_message", json!({"slot": 1})),
+            ("qso_freetext", json!({"text": "TNX 73"})),
+            ("qso_resend", json!({})),
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("start_cq", json!({})),
+        ] {
+            let stale = {
+                let mut e = engine_lock(&engine);
+                let stale = e.remote_transmit_stand_down_generation();
+                e.halt_tx();
+                // The keyer plays only with TX on: on at the shack, which moves no stand-down.
+                if cmd == "play_voice_message" {
+                    e.set_tx_enabled(true);
+                }
+                stale
+            };
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let (armed, queued) = {
+                let mut e = engine_lock(&engine);
+                (e.tx_enabled(), e.poll_voice().is_some())
+            };
+            let left_alone = if cmd == "play_voice_message" {
+                !queued
+            } else {
+                !armed && !queued
+            };
+            assert!(
+                voided == stopped && left_alone,
+                "{cmd} under a moved stand-down: {voided:?}, TX armed {armed}, voice queued {queued}"
+            );
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            let ran = ask(cmd, args);
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+        }
+        let stale = {
+            let mut e = engine_lock(&engine);
+            e.set_tx_enabled(true);
+            e.remote_transmit_stand_down_generation().wrapping_sub(1)
+        };
+        let off = ask(
+            "set_tx_enabled",
+            with(json!({"enabled": false}), Some(stale)),
+        );
+        assert!(off.is_ok(), "CONTROL: the off half runs: {off:?}");
+        assert!(!engine_lock(&engine).tx_enabled(), "CONTROL: TX off");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

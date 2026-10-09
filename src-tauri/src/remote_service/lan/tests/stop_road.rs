@@ -44,6 +44,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// The bench's road switch on this roadside, end to end (test builds only).
 #[cfg(feature = "bench-road-switch")]
 mod bench;
+/// Stop wins over a start that was in flight.
+mod stand_down;
 
 /// The design's bound for a Stop on this road, flood or no flood.
 const ACKNOWLEDGED: Duration = Duration::from_millis(20);
@@ -2386,6 +2388,15 @@ fn set_gate(gate: &Gate, shut: bool) {
 /// a CQ waits at `gate` while it is shut. Set before a computer is seated: its lane takes the
 /// handler as it opens.
 fn on_the_engine(r: &mut Roadside, gate: Gate) -> Arc<Mutex<Vec<String>>> {
+    held_on_the_engine(r, gate, "call_cq")
+}
+
+/// [`on_the_engine`], with `held` the command that waits at `gate` while it is shut. Each start
+/// asks first what its handler asks first, under the Engine lock it then runs in: whether a Stop
+/// came after the command lane read it (`command_dispatch::still_bound`, with what the lane wrote
+/// under `afar`).
+fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<Mutex<Vec<String>>> {
+    use crate::command_dispatch::{still_bound, Afar, AFAR};
     let ran = Arc::new(Mutex::new(Vec::new()));
     let (engine, record) = (r.s.shared.engine.clone(), ran.clone());
     r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
@@ -2394,21 +2405,31 @@ fn on_the_engine(r: &mut Roadside, gate: Gate) -> Arc<Mutex<Vec<String>>> {
                 return answer(Ok(json!({})));
             }
             record.lock().unwrap().push(cmd.clone());
-            if cmd == "call_cq" {
+            if cmd == held {
                 let (shut, opened) = &*gate;
                 let mut shut = shut.lock().unwrap();
                 while *shut {
                     shut = opened.wait(shut).unwrap();
                 }
             }
+            let afar: Option<Afar> = args
+                .get(AFAR)
+                .and_then(|afar| serde_json::from_value(afar.clone()).ok());
             let mut e = engine.lock().unwrap();
             let done = match cmd.as_str() {
                 "set_tx_enabled" => {
-                    e.set_tx_enabled(args["enabled"].as_bool() == Some(true));
-                    Ok(())
+                    let on = args["enabled"].as_bool() == Some(true);
+                    let bound = if on {
+                        still_bound(&e, afar.as_ref())
+                    } else {
+                        Ok(())
+                    };
+                    bound.map(|()| e.set_tx_enabled(on))
                 }
-                "call_cq" => e.start_cq(None),
-                "play_voice_message" => e.send_voice(vec![0.1; 12_000]),
+                "call_cq" => still_bound(&e, afar.as_ref()).and_then(|()| e.start_cq(None)),
+                "play_voice_message" => {
+                    still_bound(&e, afar.as_ref()).and_then(|()| e.send_voice(vec![0.1; 12_000]))
+                }
                 "halt_tx" => {
                     e.halt_tx();
                     Ok(())
@@ -2553,10 +2574,12 @@ async fn a_start_from_a_connection_without_the_lease_is_refused() {
     assert!(held, "CONTROL: the lease holder's own press arms");
 }
 
-/// ★ A start that ran after its computer's presence went is stopped at once. A CQ admitted under
-/// live presence waits its turn at the Engine (the gate) while the lease is handed back, and with
-/// it presence; when it runs, the station is stopped behind it and TX is off. CONTROL: the same CQ
-/// with presence kept runs and stays armed, with no Stop behind it.
+/// ★ A start that comes to the Engine after its computer's presence went does not run, and the
+/// station is stopped behind it. A CQ admitted under live presence waits its turn at the Engine (the
+/// gate) while the lease is handed back, and with it presence: the lease's end retires the transmit
+/// generation, so the CQ is answered `stopped` without running, and the station is stopped behind
+/// it with TX off. CONTROL: the same CQ with presence kept runs and stays armed, with no Stop behind
+/// it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_that_ran_after_presence_went_is_stopped_at_once() {
     let app = App::new();
@@ -2605,7 +2628,7 @@ async fn a_start_that_ran_after_presence_went_is_stopped_at_once() {
             break said;
         }
     };
-    assert_eq!(said["value"]["ran"], "call_cq", "{said}");
+    assert_eq!(said["refused"], "stopped", "{said}");
     for _ in 0..200 {
         if ran(&record).len() == 4 {
             break;

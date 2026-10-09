@@ -24,6 +24,11 @@
 //! command from afar but a held press on Stop's road ([`Wired::HeldPress`]). Every other start is
 //! refused by name.
 //!
+//! Stop wins over a start that was in flight. The command link binds each start to the transmit
+//! stand-down generation as it reads it ([`Afar`]), and its handler checks that generation under the
+//! Engine lock it then runs in ([`still_bound`]): a Stop taken in between, by either road, or any
+//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]).
+//!
 //! ## Stop is never refused
 //!
 //! A command that stops a transmission, and the off half of a transmit switch, is admitted before
@@ -136,11 +141,14 @@ pub(crate) enum Refusal {
     ChangedAtShack,
     /// Arguments that are not what the command is invoked with.
     BadArguments,
+    /// A start pressed before a Stop, or a halt at the station, that has since been taken: it never
+    /// ran. Stop wins over a start that was in flight ([`still_bound`]).
+    Stopped,
 }
 
 impl Refusal {
     /// Every refusal, for reading one back from its code.
-    const ALL: [Refusal; 15] = [
+    const ALL: [Refusal; 16] = [
         Refusal::Unclassed,
         Refusal::RunsHere,
         Refusal::ShackOnly,
@@ -156,6 +164,7 @@ impl Refusal {
         Refusal::Replayed,
         Refusal::ChangedAtShack,
         Refusal::BadArguments,
+        Refusal::Stopped,
     ];
 
     /// The refusal a code names, as the other computer reads it back.
@@ -181,6 +190,7 @@ impl Refusal {
             Refusal::Replayed => "replayed",
             Refusal::ChangedAtShack => "changedAtShack",
             Refusal::BadArguments => "badArguments",
+            Refusal::Stopped => "stopped",
         }
     }
 }
@@ -288,6 +298,50 @@ pub(crate) fn transmit_from_afar(cmd: &str) -> Result<Wired, Refusal> {
 pub(crate) fn press_from_afar() -> bool {
     transmit_from_afar("set_ptt") == Ok(Wired::HeldPress)
 }
+
+/// What the shack's command lane writes into a start it admitted from another computer, under the
+/// argument [`AFAR`]: the transmit stand-down generation as the lane read the call off the link.
+/// The lane alone writes it; anything the other computer sends under that name goes before any
+/// call is admitted. The shack's own screen never sends it, so its starts are as they always were.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Afar {
+    pub(crate) stand_down: u64,
+}
+
+/// The argument [`Afar`] goes under: the name each handler that takes it gives its parameter.
+pub(crate) const AFAR: &str = "afar";
+
+/// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
+/// the held press, which never runs as a command. A test holds this to the handlers that take it.
+pub(crate) fn takes_afar(cmd: &str) -> bool {
+    matches!(transmit_from_afar(cmd), Ok(Wired::Ft | Wired::VoiceKeyer))
+}
+
+/// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
+/// stand-down generation is the one the command lane read it under ([`Afar`]). Asked by the
+/// start's own handler, first, under the Engine lock the start then runs in: a Stop on either road,
+/// the off half of a switch on the link, presence lapsing, or any halt at the station, taken after
+/// the start was read, has moved it, so the start does not run at all. One taken once the start has
+/// run waits for the same lock, and stops what it began. Asked before the start's own work, so a
+/// start whose work halts (a QSY's change of context) never trips on itself. `None`, the shack's own
+/// screen, runs as it always has.
+pub(crate) fn still_bound(
+    engine: &tempo_app::engine::Engine,
+    afar: Option<&Afar>,
+) -> Result<(), String> {
+    match afar {
+        Some(afar) if engine.remote_transmit_stand_down_generation() != afar.stand_down => {
+            Err(STOPPED_SINCE.to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A start's own error when [`still_bound`] stopped it from running: the command lane answers it
+/// as [`Refusal::Stopped`].
+pub(crate) const STOPPED_SINCE: &str =
+    "Transmit was stopped after this was pressed, so it did not run.";
 
 // --- Stop's rules --------------------------------------------------------------------------------
 
@@ -1166,6 +1220,12 @@ impl<S: Stores> Ticket<S> {
             Err(error) => Outcome::Failed(bounded(error)),
         });
         Reply { result, revision }
+    }
+
+    /// Records the call as refused when it came to run, frees its slot: a start [`still_bound`]
+    /// stopped. Nothing ran.
+    pub(crate) fn refuse(mut self, refusal: Refusal) {
+        self.close(Outcome::Refused(refusal));
     }
 
     fn close(&mut self, outcome: Outcome) {

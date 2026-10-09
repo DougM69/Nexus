@@ -657,6 +657,7 @@ export const FR: PartialCatalog = {
   "client.refused.replayed": "La station avait déjà cette demande et ne l’a pas exécutée à nouveau.",
   "client.refused.changedAtShack": "Modifié à la station. Rechargez et enregistrez à nouveau.",
   "client.refused.badArguments": "La station n’a pas pu lire cette demande.",
+  "client.refused.stopped": "L’émission a été arrêtée après que vous avez appuyé sur ceci, la station ne l’a donc pas fait. Appuyez de nouveau si vous le voulez toujours.",
   "client.refused.tooLarge": "C’est trop volumineux pour être envoyé à la station.",
   "client.refused.gone": "La liaison avec la station a été coupée avant sa réponse. Vérifiez à la station si cela a été fait.",
   "client.refused.notLive": "Pas connecté à la station.",

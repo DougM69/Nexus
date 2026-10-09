@@ -657,6 +657,7 @@ export const ES: PartialCatalog = {
   "client.refused.replayed": "La estación ya tenía esa petición y no la volvió a ejecutar.",
   "client.refused.changedAtShack": "Cambiado en la estación. Vuelve a cargar y guarda otra vez.",
   "client.refused.badArguments": "La estación no pudo leer esa petición.",
+  "client.refused.stopped": "Se detuvo la transmisión después de que pulsaras esto, así que la estación no lo hizo. Vuelve a pulsarlo si todavía lo quieres.",
   "client.refused.tooLarge": "Es demasiado grande para enviarlo a la estación.",
   "client.refused.gone": "Se cortó el enlace con la estación antes de que respondiera. Comprueba en la estación si se hizo.",
   "client.refused.notLive": "Sin conexión con la estación.",

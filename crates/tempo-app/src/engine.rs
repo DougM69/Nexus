@@ -12713,8 +12713,10 @@ impl Engine {
         &self.watch_list
     }
 
-    /// The generation a browser is shown as its `transmitEpoch`. Test-visible so a stand-down
-    /// can be asserted to move it without reaching through the Remote service.
+    /// The generation a browser is shown as its `transmitEpoch`, and the one a start from a
+    /// computer driving this station was admitted under: read under the Engine lock the start runs
+    /// in, so a Stop or a halt that reached the Engine first has already moved it. Test-visible too,
+    /// so a stand-down can be asserted to move it without reaching through the Remote service.
     pub fn remote_transmit_stand_down_generation(&self) -> u64 {
         self.remote_transmit_stand_down.generation()
     }

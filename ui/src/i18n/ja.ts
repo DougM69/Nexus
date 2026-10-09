@@ -647,6 +647,7 @@ export const JA: PartialCatalog = {
   "client.refused.replayed": "局はその要求をすでに受け取っており、再実行しませんでした。",
   "client.refused.changedAtShack": "局で変更されました。再読み込みしてから、もう一度保存してください。",
   "client.refused.badArguments": "局はその要求を読み取れませんでした。",
+  "client.refused.stopped": "これを押した後に送信が停止されたため、局は実行しませんでした。必要ならもう一度押してください。",
   "client.refused.tooLarge": "大きすぎるため局に送信できません。",
   "client.refused.gone": "局が応答する前にリンクが切れました。実行されたかどうかを局で確認してください。",
   "client.refused.notLive": "局に接続していません。",

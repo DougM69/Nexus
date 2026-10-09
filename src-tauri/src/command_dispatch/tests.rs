@@ -470,6 +470,34 @@ fn no_ft_command_from_afar_carries_a_time() {
     }
 }
 
+/// ★ The command lane writes `afar` into exactly the calls whose handler takes it: every command
+/// the app registers takes `afar` in its signature in `lib.rs` exactly when `takes_afar` says the
+/// lane writes it. A handler that took it unwritten would never hear a Stop came after its start; a
+/// call written with it and a handler that took none would run unbound. CONTROL: a wired start
+/// takes it and a station read does not.
+#[test]
+fn the_lane_writes_afar_into_exactly_the_calls_whose_handler_takes_it() {
+    let lib = include_str!("../lib.rs");
+    let mut read = 0;
+    for cmd in crate::command_classes::registered() {
+        if !lib.contains(&format!("fn {cmd}(")) {
+            continue;
+        }
+        read += 1;
+        let takes = parameters(cmd).iter().any(|(name, _)| name == AFAR);
+        assert_eq!(takes, takes_afar(cmd), "{cmd}: takes `afar` {takes}");
+    }
+    assert!(read > 400, "the signatures read: {read}");
+    assert!(
+        takes_afar("call_cq") && !takes_afar("get_snapshot"),
+        "CONTROL"
+    );
+    assert!(
+        parameters("call_cq").iter().any(|(name, _)| name == AFAR),
+        "CONTROL: the reader sees it"
+    );
+}
+
 #[test]
 fn only_the_computer_holding_the_lease_runs_a_station_command() {
     let shack = shack();
@@ -1279,6 +1307,7 @@ fn every_refusal_has_its_own_code() {
         Refusal::Replayed,
         Refusal::ChangedAtShack,
         Refusal::BadArguments,
+        Refusal::Stopped,
     ];
     let mut codes: Vec<&str> = all.iter().map(|r| r.code()).collect();
     assert!(codes

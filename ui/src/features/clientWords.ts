@@ -27,6 +27,7 @@ export function clientWords(code: string): string {
     case 'replayed': return t('client.refused.replayed')
     case 'changedAtShack': return t('client.refused.changedAtShack')
     case 'badArguments': return t('client.refused.badArguments')
+    case 'stopped': return t('client.refused.stopped')
     case 'tooLarge': return t('client.refused.tooLarge')
     case 'gone': return t('client.refused.gone')
     case 'notLive': return t('client.refused.notLive')

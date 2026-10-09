@@ -642,6 +642,7 @@ export const DE: PartialCatalog = {
   "client.refused.replayed": "Die Station hatte diese Anfrage schon und hat sie nicht noch einmal ausgeführt.",
   "client.refused.changedAtShack": "An der Station geändert. Lade neu und speichere noch einmal.",
   "client.refused.badArguments": "Die Station konnte diese Anfrage nicht lesen.",
+  "client.refused.stopped": "Das Senden wurde gestoppt, nachdem du dies gedrückt hast, daher hat die Station es nicht ausgeführt. Drücke es erneut, wenn du es noch willst.",
   "client.refused.tooLarge": "Das ist zu groß, um es an die Station zu senden.",
   "client.refused.gone": "Die Verbindung zur Station ist abgebrochen, bevor sie geantwortet hat. Prüfe an der Station, ob es ausgeführt wurde.",
   "client.refused.notLive": "Nicht mit der Station verbunden.",
