@@ -9,7 +9,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto, type RemovedContest } from '../api'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
@@ -23,6 +23,7 @@ import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
 import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
+import { REMOVE_CONFIRM_MS, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -1214,6 +1215,24 @@ export function FdClubSection({
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
+      {/* The host's alone: the positions it turned away, each with the sentence it was sent,
+          which that position's own screen shows as its host error. */}
+      {club.refused?.map((r, i) => (
+        <div key={i} style={CLUB_WARN} role="alert">
+          {r.posName
+            ? t('fieldDay.club.refusedPosition', { name: r.posName, call: r.call, reason: r.reason })
+            : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
+        </div>
+      ))}
+      {/* The host's alone: its board is as big as the club line every position is sent can
+          carry — said before one more position might not fit, and once it is cut. */}
+      {club.boardFull && (
+        <div style={CLUB_WARN} role="status">
+          {club.boardFull.shown < club.boardFull.positions
+            ? t('fieldDay.club.boardCut', { shown: club.boardFull.shown, positions: club.boardFull.positions })
+            : t('fieldDay.club.boardFull', { positions: club.boardFull.positions })}
+        </div>
+      )}
       {club.board.length === 0 ? (
         // Sync IS on here (the block only rides the snapshot when it is), so this
         // says what it is waiting for and never sends anyone to Settings — the
@@ -1293,6 +1312,27 @@ export function FdClubSection({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The contacts in this computer's contest journal that entering the contest did not load,
+ * by reason, and that nothing was deleted — the journal is one file per position whatever
+ * contest it last ran, and the session loads only its own contest's rows from this running.
+ */
+function FdKeptOutNote({
+  keptOut,
+  contest,
+}: {
+  keptOut: { otherContest: number; otherRunning: number }
+  contest: string
+}) {
+  return (
+    <p className="fd-score-note" role="note">
+      {keptOut.otherRunning > 0 && <>{t('fieldDay.keptOut.running', { count: keptOut.otherRunning, contest })} </>}
+      {keptOut.otherContest > 0 && <>{t('fieldDay.keptOut.contest', { count: keptOut.otherContest })} </>}
+      {t('fieldDay.keptOut.kept')}
+    </p>
   )
 }
 
@@ -1695,6 +1735,67 @@ export function ContestView({
   const rows = useMemo(() => annotate(log), [log])
   const modes = useMemo(() => modeCounts(log), [log])
 
+  // ⭐ REMOVE THE NEWEST CONTACT, AND THE REMOVED LIST WITH RESTORE — the screen's half of the
+  // strip's Ctrl+D. Remove sits on the newest row alone and asks before it acts (a second click
+  // within REMOVE_CONFIRM_MS), as the strip does. Nothing is deleted: a removed contact is kept,
+  // left out of the score, the dupe check and every export, and Restore puts it back exactly as
+  // it was. Never offered when observing (`observed`): removal is refused from afar.
+  const removable = !observed && fieldDay != null
+  const newest = newestContact(log)
+  const [removeAsk, setRemoveAsk] = useState<{ call: string; whenUnix: number; at: number } | null>(null)
+  const [removedList, setRemovedList] = useState<RemovedContest[]>([])
+  const [removedNote, setRemovedNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The list follows the log: a removal or a restore anywhere (the strip, another window)
+  // changes its length.
+  const logLen = log.length
+  useEffect(() => {
+    if (!removable) {
+      setRemovedList([])
+      return
+    }
+    let live = true
+    contestRemoved().then((list) => live && setRemovedList(list)).catch(() => {})
+    return () => { live = false }
+  }, [removable, logLen])
+  useEffect(() => {
+    if (!removeAsk) return
+    const id = window.setTimeout(() => setRemoveAsk(null), Math.max(0, removeAsk.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [removeAsk])
+  const removeNewest = () => {
+    if (!newest) return
+    const now = Date.now()
+    const asked = removeAsk != null && removeAsk.call === newest.call && removeAsk.whenUnix === newest.whenUnix
+    if (!asked || now - removeAsk.at > REMOVE_CONFIRM_MS) {
+      setRemovedNote(null)
+      setRemoveAsk({ call: newest.call, whenUnix: newest.whenUnix, at: now })
+      return
+    }
+    setRemoveAsk(null)
+    const label = contactLabel(newest.rows)
+    contestRemoveLast(newest.call, newest.whenUnix)
+      .then(
+        (answer) => {
+          setRemovedNote({ text: removalText(answer, label), alert: answer.outcome === 'refused' })
+          return contestRemoved().then(setRemovedList)
+        },
+        () => setRemovedNote({ text: t('logEntry.remove.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+  const restore = (entry: RemovedContest) => {
+    const call = entry.rows[0]?.call ?? ''
+    contestRestore(entry.id)
+      .then(
+        (answer) => {
+          setRemovedNote({ text: restoreText(answer, call), alert: answer.outcome === 'refused' })
+          return contestRemoved().then(setRemovedList)
+        },
+        () => setRemovedNote({ text: t('fieldDay.removed.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+
   // Worked-section set for the summary/dupe exports (the board derives its own
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
@@ -1855,8 +1956,9 @@ export function ContestView({
   // Section columns empty on every row.
   const fdEventIsFieldDay = isFieldDay(shownEvent)
   // Why club sync is not running, when it is switched on for a contest it cannot run — read
-  // from the station's own settings, which a Remote observation does not carry.
-  const clubRefusal = clubSyncRefusal(nativeSettings)
+  // from the station's own settings, which a Remote observation does not carry, and the
+  // station's preview of that pick (a contest the loaded rules dropped resolves elsewhere).
+  const clubRefusal = clubSyncRefusal(nativeSettings, fdRuleset)
   const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(shownEvent)
   // The window: the session's, else the preview's. Both are the rules data's running-or-next
   // window, so the banner reads the same before the contest starts as during it.
@@ -2292,6 +2394,8 @@ export function ContestView({
       {!fieldDay?.club && clubRefusal && (
         <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} why={clubRefusal} />
       )}
+      {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
+      {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />
@@ -2499,11 +2603,61 @@ export function ContestView({
                     {r.qso.mode}
                   </span>
                 )}
+                {removable && i === rows.length - 1 && (
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    aria-pressed={removeAsk != null}
+                    title={t('fieldDay.log.remove.title')}
+                    onClick={removeNewest}
+                  >
+                    {t('fieldDay.log.remove')}
+                  </button>
+                )}
               </span>
             </div>
           ))}
         </div>
       </div>
+
+      {/* THE REMOVED LIST — kept contacts, with Restore. Only while there is something to say,
+          so the log keeps every pixel otherwise. */}
+      {removable && (removedList.length > 0 || removeAsk != null || removedNote != null) && (
+        <div className="fd-removed" role="region" aria-label={t('fieldDay.removed.aria')}>
+          {removeAsk != null && newest && (
+            <p className="fd-removed-note" role="alert">
+              {t('fieldDay.log.remove.ask', { contact: contactLabel(newest.rows) })}
+            </p>
+          )}
+          {removeAsk == null && removedNote && (
+            <p className="fd-removed-note" role={removedNote.alert ? 'alert' : 'status'}>
+              {removedNote.text}
+            </p>
+          )}
+          {removedList.length > 0 && (
+            <details className="fd-removed-list">
+              <summary>{t('fieldDay.removed.title', { count: removedList.length })}</summary>
+              <p className="fd-removed-hint">{t('fieldDay.removed.note')}</p>
+              {removedList.map((entry) => (
+                <div className="fd-removed-row" key={entry.id}>
+                  <span className="mono">{contactLabel(entry.rows)}</span>
+                  <span className="fd-removed-at">
+                    {t('fieldDay.removed.at', { time: utcHhmm(entry.removedUnix) })}
+                  </span>
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    title={t('fieldDay.removed.restore.title')}
+                    onClick={() => restore(entry)}
+                  >
+                    {t('fieldDay.removed.restore')}
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
+        </div>
+      )}
     </section>
   )
 }

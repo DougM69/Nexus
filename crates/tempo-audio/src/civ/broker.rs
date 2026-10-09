@@ -551,7 +551,7 @@ impl CivBackend {
         let dial = self
             .read(commands::read_freq(self.addr), 0x03, None)
             .ok()
-            .and_then(|f| commands::parse_freq(&f));
+            .and_then(|f| commands::parse_freq(&f, self.model));
         let ok = self.ack(commands::set_dsp_func(
             self.addr,
             commands::FUNC_SATMODE,
@@ -571,7 +571,7 @@ impl CivBackend {
                 false,
             ));
             if let Some(hz) = dial {
-                let _ = self.ack(commands::set_freq(self.addr, hz));
+                let _ = self.ack(commands::set_freq(self.addr, hz, self.model));
             }
             return false;
         }
@@ -583,7 +583,7 @@ impl CivBackend {
             // next verb's `ensure_main` repairs it, and the next Doppler
             // correction rewrites the dial).
             if self.select("Main") {
-                let _ = self.ack(commands::set_freq(self.addr, hz));
+                let _ = self.ack(commands::set_freq(self.addr, hz, self.model));
             } else {
                 g.sel_stray = true;
             }
@@ -1108,7 +1108,7 @@ impl RigBackend for CivBackend {
             Ok(f) => {
                 *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(std::time::Instant::now());
-                commands::parse_freq(&f)
+                commands::parse_freq(&f, self.model)
                     .or(self.h.state().freq_hz)
                     .unwrap_or(0)
             }
@@ -1216,7 +1216,7 @@ impl RigBackend for CivBackend {
             return self.ensure_main(&mut g)
                 && self.ack(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
         }
-        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
+        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz, self.model))
     }
 
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
@@ -1288,6 +1288,17 @@ impl RigBackend for CivBackend {
 
     fn set_vfo(&self, vfo: &str) -> bool {
         self.set_vfo_on(ReceiverId::Main, vfo)
+    }
+
+    /// UNKNOWN: this daemon has no receive range for any model, so it declares none, and
+    /// `\dump_state` carries an empty RX list. Nexus's reader takes that as unknown and every
+    /// caller fails open, so the radio is commanded and answers for itself: a frequency it cannot
+    /// tune comes back NG, which the radio loop reports as the radio's refusal. Left at the trait's
+    /// `None`, the reply carried the CAT broker's wide row for WSJT-X, and the app took 135.7 kHz
+    /// to 1.3 GHz as this radio's range: an IC-905 was refused 2.4, 5.7 and 10 GHz before it was
+    /// asked, and an IC-7300 was believed to receive 2 m.
+    fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+        Some(Vec::new())
     }
 
     /// The rig's own pads and preamps, so a client reading `\dump_state` learns which
@@ -1417,18 +1428,18 @@ impl RigBackend for CivBackend {
             return Some(false);
         }
         if !g.engaged {
-            return Some(self.ack(commands::set_unselected_freq(self.addr, hz)));
+            return Some(self.ack(commands::set_unselected_freq(self.addr, hz, self.model)));
         }
         // Satellite mode: the TX dial lives in the SUB band. Select-write-
         // verify-restore, atomic under the band lock. Success ONLY when the
         // rig's own read-back returns the frequency we sent — per LAW, what
         // was DONE, never what was computed.
         let ok = self.select("Sub")
-            && self.ack(commands::set_freq(self.addr, hz))
+            && self.ack(commands::set_freq(self.addr, hz, self.model))
             && self
                 .read(commands::read_freq(self.addr), 0x03, None)
                 .ok()
-                .and_then(|f| commands::parse_freq(&f))
+                .and_then(|f| commands::parse_freq(&f, self.model))
                 == Some(hz);
         // ALWAYS hand the selection back to Main — even mid-failure — and
         // re-read the dial so the engine's state cache holds MAIN's frequency
@@ -2809,6 +2820,74 @@ mod tests {
         );
     }
 
+    /// ⭐ THIS DAEMON DOES NOT KNOW WHAT ITS RADIO RECEIVES, AND ITS `\dump_state` SAYS SO: an empty
+    /// RX list, which Nexus's own reader takes as unknown, for every model and for an unnamed one.
+    /// It used to carry the CAT broker's wide row for WSJT-X, 135.7 kHz to 1.3 GHz, which the
+    /// reader took as the radio's range. The pads and preamps further down the same reply are
+    /// still each model's own, and the whole reply for a radio with none is pinned line by line:
+    /// every line but the RX row is the one it always was.
+    #[test]
+    fn the_dump_state_declares_no_receive_range_and_each_models_own_pads() {
+        use crate::rigctld_server::{handle_command, Handled};
+        use IcomModel::*;
+        let dump = |b: &CivBackend| match handle_command("\\dump_state", b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("\\dump_state closed the connection"),
+        };
+        let models = [
+            Some(Ic7300),
+            Some(Ic7610),
+            Some(Ic9700),
+            Some(Ic705),
+            Some(Ic905),
+            Some(Ic7760),
+            Some(Ic7300Mk2),
+            None,
+        ];
+        for model in models {
+            let (_e, b, _regs) = backend_on(model.map_or(0x94, IcomModel::default_civ_addr), model);
+            let ds = dump(&b);
+            assert_eq!(
+                (
+                    crate::rig::parse_dump_state_rx_ranges(&ds),
+                    crate::rig::parse_dump_state_db_lists(&ds)
+                        .map(|s| (s.preamp_db, s.attenuator_db)),
+                ),
+                (None, Some((b.preamp_steps_db(), b.attenuator_steps_db()))),
+                "{model:?}"
+            );
+        }
+        let (_e, b, _regs) = backend_on(0xAC, Some(Ic905));
+        assert_eq!(
+            dump(&b),
+            concat!(
+                "0\n",
+                "2\n",
+                "1\n",
+                "0 0 0 0 0 0 0\n",
+                "135700 1300000000 0xffffffff 5000 100000 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "0xffffffff 1\n",
+                "0 0\n",
+                "0xffffffff 2700\n",
+                "0xffffffff 500\n",
+                "0 0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+            )
+        );
+    }
+
     /// A RIG WITH NO STEP LIST OFFERS NEITHER CONTROL, rather than a guessed one. The IC-905
     /// has no Hamlib backend to read pads off (NEEDS-BENCH), and `None` is what a build that
     /// does not know the model carries. Both must answer "unimplemented" — `None`, which the
@@ -3286,6 +3365,64 @@ mod tests {
                 ],
                 "{model:?}: the dial and mode writes moved"
             );
+        }
+    }
+
+    /// ⭐ ON ITS 10 GHz BAND THE IC-905 SENDS ITS DIAL IN 12 DIGITS. "When the 10 GHz band is
+    /// selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz" (A7711-9EX-2, PDF
+    /// p. 17). The fake radio adds that sixth byte by hand ([`Regs::ten_ghz_12_digits`]). Read as
+    /// 10 digits, 10368.150 MHz came back as 368.150 MHz: the 10 GHz digit was never read.
+    #[test]
+    fn the_ic905s_10_ghz_dial_is_read_in_12_digits() {
+        let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+        regs.lock().unwrap().main_hz = 10_368_150_000; // the radio on its 10 GHz band
+        assert_eq!(b.freq_hz(), 10_368_150_000);
+    }
+
+    /// ⭐ …AND IS SENT ITS DIAL IN 12 DIGITS: `05` and the split's `25 01` (whose frequency is the
+    /// same field, "See “Operating frequency.” (p. 16)", A7711-9EX-2 PDF p. 28). The bytes are
+    /// PDF p. 17's layout typed out: 1 Hz first, the 100 GHz digit (0) over the 10 GHz digit in
+    /// the sixth byte. In 10 digits a QSY to 10368.150 MHz sent the radio to 368.150 MHz.
+    #[test]
+    fn a_qsy_on_the_ic905s_10_ghz_band_is_sent_in_12_digits() {
+        let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+        let n = regs.lock().unwrap().wire.len();
+        let acked = (b.set_freq(10_368_150_000), b.set_split_freq(10_368_200_000));
+        let r = regs.lock().unwrap();
+        assert_eq!(
+            (acked, hex_frames(&r.wire[n..]), r.main_hz, r.unselected_hz),
+            (
+                (true, Some(true)),
+                vec![
+                    "FE FE AC E0 05 00 00 15 68 03 01 FD".to_string(),
+                    "FE FE AC E0 25 01 00 00 20 68 03 01 FD".to_string(),
+                ],
+                10_368_150_000,
+                10_368_200_000
+            )
+        );
+    }
+
+    /// The control: on every IC-905 band at or below 5600 MHz the dial stays 10 digits (5
+    /// bytes), read and written exactly as before (A7711-9EX-2 PDF p. 17).
+    #[test]
+    fn the_ic905s_bands_up_to_5600_mhz_keep_their_10_digit_dial() {
+        for (hz, bcd) in [
+            (144_200_000u64, "00 00 20 44 01"),
+            (432_100_000, "00 00 10 32 04"),
+            (1_296_100_000, "00 00 10 96 12"),
+            (2_304_100_000, "00 00 10 04 23"),
+            (5_760_100_000, "00 00 10 60 57"),
+        ] {
+            let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+            let n = regs.lock().unwrap().wire.len();
+            assert!(b.set_freq(hz), "{hz}");
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [format!("FE FE AC E0 05 {bcd} FD")],
+                "{hz}"
+            );
+            assert_eq!(b.freq_hz(), hz, "{hz}: read back");
         }
     }
 

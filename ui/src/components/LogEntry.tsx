@@ -6,15 +6,16 @@
 // `i18n/index.ts`.
 
 import { useContext, useEffect, useRef, useState } from 'react'
-import type {
-  AppSnapshot,
-  ContestFieldSpec,
-  FieldDayQso,
-  FieldDayStatus,
-  LoggedQso,
+import {
+  isOnAir,
+  type AppSnapshot,
+  type ContestFieldSpec,
+  type FieldDayQso,
+  type FieldDayStatus,
+  type LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -34,9 +35,16 @@ import {
   withLastCountyPart,
 } from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
+import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
+import { scpLine } from '../features/scp'
+import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
+import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
+import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
+import type { EsmHost } from '../features/esmHost'
+import { esmRefusalText, esmStepName } from '../features/esmWords'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
@@ -59,6 +67,9 @@ import { pushToast, withErrorToast } from '../toast'
 // case, and it is measured in the headless-Chrome harness (`ui/layout-harness/
 // entry-strip.html`), never in jsdom — jsdom lays out nothing and every rect is 0.
 // ---------------------------------------------------------------------------
+
+/** How long a call stands in the strip before it is reported to the Rotor box (`onEntryCall`). */
+export const ENTRY_SETTLE_MS = 300
 
 /** The two slots a Field Day role receives — what a snapshot from a build older than
  *  `FieldDayStatus.receives` describes, and what this strip has always rendered. */
@@ -346,6 +357,14 @@ interface Props {
    * never filled straight back, which is what keeps a keystroke typed during the round trip.
    */
   onCallChange?: (call: string) => void
+  /**
+   * The call this strip would log, trimmed and uppercased, for the Rotor box beside its cockpit
+   * (the bearing to it, and Point). Reported however the call got there, a fill included, once it
+   * has stood for `ENTRY_SETTLE_MS`, so a call typed a key at a time is reported once rather than
+   * per keystroke (each report re-renders the window and asks the station for a bearing); and `''`
+   * the moment this strip goes, since a strip that is not on screen has no call in it.
+   */
+  onEntryCall?: (call: string) => void
   /** Called when the entry is cleared for the next contact: after one is logged, or by ✕. */
   onReset?: () => void
   /**
@@ -404,6 +423,20 @@ interface Props {
    * (The Field Day variant below has never had a heading, on the same reasoning.)
    */
   titled?: boolean
+  /**
+   * CONTEST STRIP ONLY — is this strip's host the view on screen? Ctrl+D (remove the newest
+   * contact) is a WINDOW key, and the RTTY, PSK and JS8 cockpits stay mounted while hidden, so
+   * each hidden strip would otherwise take every press too. Default true: a host mounted only
+   * while it shows has nothing to say here.
+   */
+  active?: boolean
+  /**
+   * CONTEST STRIP ONLY — Enter Sends Message, from the CW, RTTY and Phone cockpits
+   * (`features/esmHost.ts`): with `on`, Enter in the strip's boxes sends the contact's next
+   * message through the cockpit's own send path and logs the contact at its last step. Absent,
+   * or off, and Enter is exactly what it always was. Never on the hosted page.
+   */
+  esm?: EsmHost
 }
 
 /**
@@ -427,13 +460,16 @@ export function LogEntry({
   onConsumeWork,
   cwLive,
   onCallChange,
+  onEntryCall,
   onReset,
   fieldDay,
   fdMode,
   fdSubmode,
   fillExchange,
   titled = true,
+  active = true,
   remote,
+  esm,
 }: Props) {
   const remoteMode = remote != null
   // A station that offers its park directory answers the two offline park reads below.
@@ -447,6 +483,8 @@ export function LogEntry({
     if (remoteMode) setRemoteDraftContext(current => current ?? currentDraftContext())
   }
   const fdActive = fieldDay != null
+  // Enter Sends Message runs here: the cockpit's switch, a contest strip, and never from afar.
+  const esmLive = !!esm?.on && fdActive && !remoteMode
   // Does this cockpit's exchange carry a park/summit reference? See `exchange`.
   const asksForPark = exchange === 'terrestrial'
   // …and a grid square? A bird's exchange is grid-for-grid, so the field is asked
@@ -612,6 +650,8 @@ export function LogEntry({
     if (fdActive && fieldDay && fdLogLen > fdSeenLen.current) {
       const lastEntry = fieldDay.log?.[fdLogLen - 1]
       if (lastEntry) {
+        // Every box is rewritten, so no box is a call-history fill or the operator's any more.
+        setFill(EMPTY_FILL)
         setFdFields((prev) => {
           const next = { ...prev }
           for (const f of fdReceives) {
@@ -625,6 +665,114 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
 
+  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D (N1MM's key) or Remove last, PRESSED TWICE. The first
+  // press names the contact on the verdict line and changes nothing; a second within
+  // REMOVE_CONFIRM_MS removes it. Any other key, the window running out, or a new contact lets it
+  // lapse, so nothing is removed that the operator was not just shown — and if the newest contact
+  // changed between the presses, nothing is removed and the line says so. The engine checks the
+  // same identity again (`changed`), so a snapshot that lagged cannot remove the wrong contact.
+  //
+  // ⛔ IT NEVER MOVES THE CARET. The Space-PTT incident was a focus change in this entry code: a
+  // keyup aimed at an input was swallowed and the rig stayed keyed. The button cancels its
+  // mousedown so focus stays where it was, and nothing here calls focus(). Nor does it key or stop
+  // a transmission: Esc still stops TX, and this reaches the contest log alone.
+  //
+  // Not on the hosted Remote page or in the native client (`remoteMode`): removal is refused
+  // from afar, and Remote's operations carry no contest-log command.
+  const removable = fdActive && !remoteMode
+  const newest = newestContact(fieldDay?.log)
+  const newestKey = newest ? `${newest.call}|${newest.whenUnix}` : ''
+  const [removeArmed, setRemoveArmed] = useState<
+    { call: string; whenUnix: number; label: string; at: number } | null
+  >(null)
+  const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // Enter Sends Message's one line in the same slot (below): why a press sent nothing, Phone's
+  // prompt, or what a stop left. `about` is the contact a stopped note names, so a new contact
+  // that is not that one retires it. `esmLineKey` is the key press that wrote it: every OTHER
+  // key lets it lapse, as every other key lets a removal lapse.
+  const [esmLine, setEsmLine] = useState<{ text: string; alert: boolean; about?: string } | null>(null)
+  const esmLineKey = useRef<Event | null>(null)
+  const armedRef = useRef(removeArmed)
+  armedRef.current = removeArmed
+  const pressRemove = () => {
+    const armed = armedRef.current
+    const now = Date.now()
+    if (!newest) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.empty'), alert: false })
+      return
+    }
+    if (!armed || now - armed.at > REMOVE_CONFIRM_MS) {
+      setRemoveNote(null)
+      setRemoveArmed({ call: newest.call, whenUnix: newest.whenUnix, label: contactLabel(newest.rows), at: now })
+      return
+    }
+    setRemoveArmed(null)
+    if (armed.call !== newest.call || armed.whenUnix !== newest.whenUnix) {
+      setRemoveNote({ text: t('logEntry.remove.changed'), alert: true })
+      return
+    }
+    contestRemoveLast(armed.call, armed.whenUnix).then(
+      (answer) => setRemoveNote({ text: removalText(answer, armed.label), alert: answer.outcome === 'refused' }),
+      () => setRemoveNote({ text: t('logEntry.remove.failed'), alert: true }),
+    )
+  }
+  const pressRemoveRef = useRef(pressRemove)
+  pressRemoveRef.current = pressRemove
+  // The press window, from the moment of the first press.
+  useEffect(() => {
+    if (!removeArmed) return
+    const id = window.setTimeout(() => setRemoveArmed(null), Math.max(0, removeArmed.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [removeArmed])
+  // A new contact (or the newest gone some other way) while a press waits: it lapses, and the
+  // line says why the next press starts over. A new contact also retires the last answer.
+  const seenNewest = useRef({ key: newestKey, len: fdLogLen })
+  useEffect(() => {
+    const was = seenNewest.current
+    seenNewest.current = { key: newestKey, len: fdLogLen }
+    if (was.key === newestKey && was.len === fdLogLen) return
+    if (armedRef.current) {
+      setRemoveArmed(null)
+      setRemoveNote({ text: t('logEntry.remove.changed'), alert: true })
+    } else if (fdLogLen > was.len) {
+      setRemoveNote(null)
+    }
+    // …and an Enter Sends Message line, unless it is the stopped note about that very contact.
+    const call = newest?.call.toUpperCase()
+    setEsmLine((l) => (l && l.about !== undefined && l.about === call ? l : null))
+  }, [newestKey, fdLogLen])
+  // Ctrl+D from anywhere in the cockpit showing this strip — only while its host is on screen,
+  // since the RTTY, PSK and JS8 strips stay mounted when hidden.
+  useEffect(() => {
+    if (!removable || !active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (isRemoveKey(e)) {
+        // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
+        // in a macOS text box) never runs.
+        e.preventDefault()
+        // Held down, it is still ONE press: auto-repeat can never be the second.
+        if (!e.repeat) pressRemoveRef.current()
+        setEsmLine(null)
+        return
+      }
+      if (isModifierKey(e)) return
+      // Any other key lets a waiting press lapse, and retires the last answer — and an Enter
+      // Sends Message line, except at the press that wrote it.
+      setRemoveArmed(null)
+      setRemoveNote(null)
+      if (e !== esmLineKey.current) setEsmLine(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [removable, active])
+  // ONE line in the verdict slot while a press waits or an answer shows: the strip does not grow.
+  const removeLine = removeArmed
+    ? t('logEntry.remove.armed', { contact: removeArmed.label })
+    : removeNote?.text
+  // …and the same for an Enter Sends Message line, behind a removal's.
+  const slotFree = removeLine == null && esmLine == null
+
   // THE FILL API (`fillExchange`): one box, refilled on every new `ts`. Keyed on the
   // stamp alone so a snapshot re-render never refills, and a slot this session does not
   // receive is dropped rather than added — a box nobody renders would still ride the
@@ -632,9 +780,60 @@ export function LogEntry({
   useEffect(() => {
     if (!fdActive || !fillExchange) return
     if (!fdReceives.some((f) => f.key === fillExchange.key)) return
+    // The operator's own act (a double-click on what they copied), so call history never
+    // writes over it.
+    noteTyped(fillExchange.key)
     setFdField(fillExchange.key, fillExchange.value)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fillExchange?.ts])
+
+  // ⭐ SUPER CHECK PARTIAL AND CALL HISTORY are on where the ENGINE says they are: its effective
+  // assistance sources (`assistanceOn`) fold Unassisted mode in, so declaring an unassisted entry
+  // takes both off this strip at the next snapshot, as it does the cluster and the AI CW decoder.
+  // Never on Remote: the hosted page gets neither.
+  const assistOn = fieldDay?.assistanceOn ?? []
+  const scpOn = fdActive && !remoteMode && assistOn.includes(SCP_SOURCE)
+  const historyOn = fdActive && !remoteMode && assistOn.includes(CALL_HISTORY_SOURCE)
+  const scpCalls = useScpList(scpOn)
+  const historyFile = useCallHistory(historyOn)
+  // What the call-history fill has done since the strip last cleared. The ref is the truth, read
+  // by the fill effect and the key handlers in the same tick; the state renders the marks.
+  const fillRef = useRef<FillState>(EMPTY_FILL)
+  const [fillMarks, setFillMarks] = useState<FillState['filled']>({})
+  const setFill = (next: FillState) => {
+    if (next === fillRef.current) return
+    fillRef.current = next
+    setFillMarks(next.filled)
+  }
+  /** The operator typed in a box (or picked from its list, or grabbed into it): it is theirs. */
+  const noteTyped = (key: string) => setFill(typedIn(fillRef.current, key))
+  /** The strip is clearing. A logged contact keeps what it logged; an abandoned one gives its
+   *  call-history values back, so one station's last exchange never stays in a box, unmarked,
+   *  for the next. */
+  const endFill = (logged: boolean) => {
+    if (fillRef.current === EMPTY_FILL) return
+    if (!logged) {
+      const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
+      const { writes } = applyFill(fillRef.current, '', {}, values)
+      if (Object.keys(writes).length > 0) setFdFields((prev) => ({ ...prev, ...writes }))
+    }
+    setFill(EMPTY_FILL)
+  }
+  // ⭐ THE FILL, AS THE CALL IS TYPED (operator, 2026-10-08). Every change of the call (typed, a
+  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what the
+  // file holds for exactly that call: `features/callHistoryFill` decides what may go in, and
+  // takes a fill back out when the call stops being the one it was for.
+  const fdReceivesKey = fdReceives.map((f) => f.key).join(' ')
+  useEffect(() => {
+    if (!fdActive) return
+    const offered = historyFill(logCall, fdReceives, historyFile, fieldDay?.event)
+    const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
+    const r = applyFill(fillRef.current, logCall, offered, values)
+    if (r.state === fillRef.current) return
+    setFill(r.state)
+    if (Object.keys(r.writes).length > 0) setFdFields((prev) => ({ ...prev, ...r.writes }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey])
 
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
@@ -938,6 +1137,8 @@ export function LogEntry({
         .then(() => contestWorking(worked))
         .catch(() => {})
     }
+    // A spot handed over is a station to answer: Enter Sends Message goes to S&P.
+    if (esmLive) esm?.dispatch('spot')
     // preventScroll: focusing the RST readies it for the report, but must NOT scroll the log
     // into view — the operator works from the decode feed/roster scrolled up, and a click
     // snapping the window down to the log every time is the reported bug.
@@ -1009,6 +1210,16 @@ export function LogEntry({
     linkedCall.current = c
     onCallChangeRef.current(c)
   }, [logCall])
+  // What this strip would log, for the Rotor box beside the cockpit (`onEntryCall`): settled, and
+  // withdrawn when the strip goes.
+  const onEntryCallRef = useRef(onEntryCall)
+  onEntryCallRef.current = onEntryCall
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    const id = setTimeout(() => onEntryCallRef.current?.(c), ENTRY_SETTLE_MS)
+    return () => clearTimeout(id)
+  }, [logCall])
+  useEffect(() => () => onEntryCallRef.current?.(''), [])
 
   // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
   // so the Dupe badge and the B4 chips can never disagree about what a dupe is. Until the
@@ -1220,6 +1431,9 @@ export function LogEntry({
   }
 
   const reset = () => {
+    // Before the call goes: a contact abandoned here gives its call-history values back. A
+    // logged one has already said it keeps them (`endFill(true)` beside its `reset()`).
+    endFill(false)
     setRemoteDraftContext(null)
     setLogCall('')
     setLogRstSent(defaultRst)
@@ -1241,6 +1455,8 @@ export function LogEntry({
     // live slot is released, so the next call committed is issued a number of its own instead
     // of inheriting the one that was in flight.
     if (fdActive && !remoteMode) void contestEntryReset().catch(() => {})
+    // A new contact for Enter Sends Message: nothing has gone out to it.
+    if (esmLive) esm?.dispatch('cleared')
     // When the other-radio override is open, refresh its UTC time to now for the next contact
     // (a run of live V/UHF contacts each get the current time, never a silently-reused stale
     // one) while KEEPING band/freq/mode — like fdClass/fdSection, so they aren't re-entered.
@@ -1401,7 +1617,10 @@ export function LogEntry({
           }
           // The contact is in the log once any county entered it; a line that was all dupes
           // leaves the entry on screen, as a refused single contact does.
-          if (logged.length > 0) reset()
+          if (logged.length > 0) {
+            endFill(true)
+            reset()
+          }
         }
         return
       }
@@ -1429,6 +1648,7 @@ export function LogEntry({
           }),
           'success',
         )
+        endFill(true)
         reset()
       }
       return
@@ -1488,7 +1708,13 @@ export function LogEntry({
   }
 
   const onEnter = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') void logIt()
+    if (e.key !== 'Enter') return
+    // Alt+Enter logs without sending anything (rule 6); Ctrl or Cmd with Enter is not ESM either.
+    if (esmLive && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      void pressEsm(e)
+      return
+    }
+    void logIt()
   }
 
   /**
@@ -1639,6 +1865,179 @@ export function LogEntry({
     logEntity !== null &&
     WVE_ENTITIES.has(logEntity) &&
     fdValue(qthSlot).trim() === ''
+  // The SCP line for what is in the Call box: calls already in this log first, then the list's
+  // partial matches, then its one-character-different ones. A scan per render, zero IPC.
+  const scpHits =
+    scpOn && scpCalls.length > 0
+      ? scpLine(logCall, scpCalls, (fieldDay?.log ?? []).map((q) => q.call.toUpperCase()))
+      : []
+  /** A click on the SCP line puts that call in the Call box, as typing it would, and leaves
+   *  the caret there. Nothing is ever put in the box from the line on its own. */
+  const pickScp = (call: string) => {
+    setLogCall(call)
+    requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
+  }
+
+  // ⭐ ENTER SENDS MESSAGE (`features/esm.ts`; its rules signed by the operator, 2026-10-09). With
+  // the cockpit's switch on, Enter in this strip's boxes sends the contact's next message through
+  // the COCKPIT's own send path (`esm.send`, the one its F-keys use), and the press for the
+  // contact's last step logs it through `logIt`, the one log path, once that path has taken the
+  // message (decision 1). The message is expanded and taken BEFORE `logIt`'s reset clears the
+  // strip, so a message that names his call names the one in the strip (rule 7).
+  //
+  // ⛔ IT NEVER TURNS TX ON, AND A REFUSED PRESS LOGS NOTHING. Every refusal (the step's, the set's,
+  // the cockpit's transmit guards, then the send path's own answer) comes before `logIt`. With ESM
+  // off, stepping aside, or on the hosted page, Enter is what it always was (`onEnter`). The caret
+  // moves only between this strip's own boxes, on a press made in them, with `preventScroll`: the
+  // Space-PTT incident was a focus change in this shared entry code.
+
+  /** A box as ESM reads it: complete only with what the operator gave for THIS contact — typed,
+   *  picked or grabbed since the strip last cleared, an untouched default report, a blank
+   *  optional box, or a call-history fill (counted, and refused at the logging step until it is
+   *  accepted: rule 10). A value the strip carried over from the last contact is not one: Field
+   *  Day's class and section stay in their boxes after a contact is logged, and read as complete
+   *  they would make the first Enter on a new call in S&P send the exchange and log the last
+   *  station's. */
+  const esmGiven = (f: ContestFieldSpec): boolean => {
+    const v = fdValue(f)
+    if (!fdFieldOk(f, v, fdLineDomain(f))) return false
+    const fill = fillRef.current
+    return (
+      fill.typed[f.key] === true ||
+      fill.filled[f.key]?.value === v ||
+      (f.kind === 'rst' && v === rstDefault) ||
+      (v.trim() === '' && !f.required)
+    )
+  }
+  /** What ESM judges a press on: the strip's call, its exchange, the dupe verdict, and a box
+   *  still holding a call-history fill nobody accepted. */
+  const esmStrip = (): EsmStrip => ({
+    call: logCall.trim().toUpperCase(),
+    exchangeComplete: fdReceives.every(esmGiven),
+    dupe: fdDupe,
+    fromHistory: fdReceives.find((f) => fillRef.current.filled[f.key]?.value === fdValue(f))?.key ?? null,
+  })
+  // The dock's plate and highlight follow what the strip holds.
+  const stripNow = esmLive ? esmStrip() : null
+  const stripKey = stripNow
+    ? `${stripNow.call}|${stripNow.exchangeComplete}|${stripNow.dupe}|${stripNow.fromHistory ?? ''}`
+    : ''
+  useEffect(() => {
+    esm?.onStrip(stripNow)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stripKey])
+  useEffect(
+    () => () => esm?.onStrip(null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  // The last message a press sent, until its over ends: what a stop may have cut.
+  const esmSent = useRef<{ role: EsmRole; call: string; logged: boolean; seen: boolean } | null>(null)
+  const onAir = isOnAir(snap.radio)
+  useEffect(() => {
+    const sent = esmSent.current
+    if (!sent) return
+    if (onAir) sent.seen = true
+    else if (sent.seen) esmSent.current = null
+  }, [onAir])
+  /** WHAT COUNTS AS A STOP (decision 3): any Esc, Stop TX, the keyer's ■ Stop (the cockpit counts
+   *  them in `esm.stops`) or the TX latch falling, the watchdog's among them. What went out to
+   *  the call in the strip then counts as not sent, so the next Enter sends it again rather than
+   *  logging (rule 8). A stopped last message stays logged, and the strip says so (rule 8, as
+   *  changed by the operator's D8). Nothing here stops anything: the cockpit's stop already has. */
+  const esmStopped = () => {
+    if (!esmLive || !esm) return
+    const call = logCall.trim().toUpperCase()
+    if (call) esm.dispatch('stopped')
+    const sent = esmSent.current
+    esmSent.current = null
+    if (!sent) return
+    const step = esmStepName(sent.role)
+    if (sent.logged) {
+      setEsmLine({
+        text: fieldDay?.club
+          ? t('contest.esm.stopped.loggedClubSync', { step, call: sent.call })
+          : t('contest.esm.stopped.logged', { step, call: sent.call }),
+        alert: true,
+        about: sent.call,
+      })
+    } else if (sent.call === call) {
+      setEsmLine({ text: t('contest.esm.stopped.again', { step }), alert: true })
+    }
+  }
+  const stopsSeen = useRef(esm?.stops ?? 0)
+  useEffect(() => {
+    const n = esm?.stops ?? 0
+    if (n === stopsSeen.current) return
+    stopsSeen.current = n
+    esmStopped()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esm?.stops])
+  const latchUp = useRef(snap.radio.txEnabled === true)
+  useEffect(() => {
+    const was = latchUp.current
+    latchUp.current = snap.radio.txEnabled === true
+    if (was && !latchUp.current) esmStopped()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.radio.txEnabled])
+
+  const esmCaret = (caret: EsmCaret) => {
+    if (caret === 'call') {
+      callInputRef.current?.focus({ preventScroll: true })
+    } else if (caret === 'ex0') {
+      const box = fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null
+      box?.focus({ preventScroll: true })
+      box?.select()
+    }
+  }
+  // One press, one message: a press still being taken holds the next one off.
+  const esmBusy = useRef(false)
+  const pressEsm = async (e: React.KeyboardEvent) => {
+    if (!esm || e.repeat || esmBusy.current) return
+    esmLineKey.current = e.nativeEvent
+    setEsmLine(null)
+    const strip = esmStrip()
+    const decision = esmPress({
+      state: esm.state,
+      strip,
+      callOnce: esm.callOnce,
+      guards: esm.guards(),
+      roles: esm.roles,
+      slots: esm.slots,
+    })
+    if (decision.kind === 'inert') {
+      void logIt()
+      return
+    }
+    if (decision.kind === 'refuse') {
+      setEsmLine({ text: esmRefusalText(decision.refusal), alert: true })
+      return
+    }
+    if (decision.kind === 'speak') {
+      esm.dispatch(decision.next)
+      esmCaret(decision.caret)
+      setEsmLine({ text: t('contest.esm.phone.speak'), alert: false })
+      return
+    }
+    esmBusy.current = true
+    let why: string | null
+    try {
+      why = await esm.send({ role: decision.role, keys: decision.keys, text: decision.text, call: strip.call })
+    } catch (err) {
+      why = err instanceof Error ? err.message : String(err)
+    } finally {
+      esmBusy.current = false
+    }
+    if (why !== null) {
+      setEsmLine({ text: t('contest.esm.notSent', { why }), alert: true })
+      return
+    }
+    esm.dispatch(decision.next)
+    esmSent.current = { role: decision.role, call: strip.call, logged: decision.log, seen: false }
+    if (decision.log) await logIt()
+    esmCaret(decision.caret)
+  }
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -1770,16 +2169,30 @@ export function LogEntry({
           {/* ONE BOX PER RECEIVED SLOT, in receive order. Space walks each to the next
               and the last one back to Call, which is the loop the shipped strip has:
               Call → Class → Section → Call. */}
-          {fdReceives.map((f, i) => (
+          {fdReceives.map((f, i) => {
+            // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
+            // value: typing over it, or the strip clearing, takes the mark away.
+            const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            return (
             <label className="le-fd-field" key={f.key}>
-              <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              {fromHistory ? (
+                <span className="le-fd-cap le-fd-cap-marked">
+                  <span className="le-fd-cap-text">{fdFieldLabel(f.key)}</span>
+                  <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
+                </span>
+              ) : (
+                <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+              )}
               <input
                 ref={(el) => {
                   fdBoxRefs.current[f.key] = el
                 }}
-                className="settings-input mono le-fd-input le-fd-input-code"
+                className={`settings-input mono le-fd-input le-fd-input-code${
+                  fromHistory ? ' le-fd-input-history' : ''
+                }`}
                 value={fdValue(f)}
                 onChange={(e) => {
+                  noteTyped(f.key)
                   setFdField(f.key, e.target.value)
                   // The list is offered from every universe this slot draws on, which for
                   // a QSO party's one QTH box is counties AND states — and, inside a county
@@ -1812,7 +2225,11 @@ export function LogEntry({
                 placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
                 spellCheck={false}
-                title={slotTitle(f.key)}
+                title={
+                  fromHistory
+                    ? t('logEntry.history.title', { file: historyFile?.fileName ?? '' })
+                    : slotTitle(f.key)
+                }
               />
               {fdHits.key === f.key && fdHits.values.length > 0 && (
                 <ul className="le-fd-suggest">
@@ -1824,6 +2241,7 @@ export function LogEntry({
                           e.preventDefault() // pick before the input's onBlur closes the list
                           // Inside a county line the pick completes the part being typed.
                           const line = fdLineDomain(f)
+                          noteTyped(f.key)
                           setFdField(
                             f.key,
                             line && isCountyLine(fdValue(f)) ? withLastCountyPart(fdValue(f), v.code) : v.code,
@@ -1839,7 +2257,8 @@ export function LogEntry({
                 </ul>
               )}
             </label>
-          ))}
+            )
+          })}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
               is false whenever `fdActive` is, so `logIt`'s grid guard — which
               sits above the FD branch — is provably inert on this path. A layout
@@ -1860,8 +2279,55 @@ export function LogEntry({
           >
             {t('logEntry.clear.label')}
           </button>
+          {removable && (
+            <button
+              type="button"
+              className="le-qrz le-fd-remove"
+              // ⛔ THE CARET STAYS WHERE IT WAS: a click never takes focus (see `pressRemove`).
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={pressRemove}
+              disabled={!newest}
+              aria-pressed={removeArmed != null}
+              title={t('logEntry.remove.title')}
+            >
+              {t('logEntry.remove.label')}
+            </button>
+          )}
 
         </div>
+
+        {/* ⭐ SUPER CHECK PARTIAL — one line under the boxes, there whenever SCP is on so the
+            strip does not grow and shrink as calls come and go (it is a `fit="content"` pane,
+            so its height is its content). A click puts the call in the Call box; nothing is put
+            there from this line on its own, and a call missing from it is not an error. A log
+            aid, not a transmit control. */}
+        {scpOn && (
+          <div className="le-scp" role="group" aria-label={t('logEntry.scp.label')} title={t('logEntry.scp.title')}>
+            {scpCalls.length === 0 ? (
+              <span className="le-scp-empty">{t('logEntry.scp.none')}</span>
+            ) : (
+              scpHits.map((h) => (
+                <button
+                  key={h.call}
+                  type="button"
+                  className={`le-scp-call le-scp-${h.kind}`}
+                  // The caret stays in the Call box: a press here is a pick, not a move.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickScp(h.call)}
+                  title={
+                    h.kind === 'worked'
+                      ? t('logEntry.scp.worked.title')
+                      : h.kind === 'near'
+                        ? t('logEntry.scp.near.title')
+                        : undefined
+                  }
+                >
+                  {h.call}
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         {/* THE VERDICT SLOT — always present, empty or not.
 
@@ -1874,12 +2340,22 @@ export function LogEntry({
             strip) reserved two pixels of an eleven-pixel line — i.e. nothing. The wrapper is
             zero-height in every other host, so Phone and CW are unchanged. */}
         <div className="le-fd-verdicts">
-        {logCall.trim() !== '' && fdBadField !== undefined && (
+        {removeLine != null && (
+          <div className="le-fd-hint le-fd-remove-line" role={removeArmed || removeNote?.alert ? 'alert' : 'status'}>
+            {removeLine}
+          </div>
+        )}
+        {removeLine == null && esmLine != null && (
+          <div className="le-fd-hint le-fd-esm-line" role={esmLine.alert ? 'alert' : 'status'}>
+            {esmLine.text}
+          </div>
+        )}
+        {slotFree && logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
             {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField))}
           </div>
         )}
-        {fdOwnDupe && (
+        {slotFree && fdOwnDupe && (
           <div className="le-fd-hint" role="alert">
             {/* FOUR literal call sites rather than one with a computed key: the i18n
                 extractor reads keys statically and the placeholder guard compares each
@@ -1906,7 +2382,7 @@ export function LogEntry({
                 : t('logEntry.fd.dupe.ownAnyBandOrMode', { call: fdTypedCall })}
           </div>
         )}
-        {fdClubDupe && (
+        {slotFree && fdClubDupe && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.fd.dupe.club', {
               call: fdTypedCall,
@@ -1915,7 +2391,7 @@ export function LogEntry({
             })}
           </div>
         )}
-        {wveMissingQth && (
+        {slotFree && wveMissingQth && (
           <div className="le-fd-hint" role="status">
             {t('logEntry.contest.qthMissing', { call: fdTypedCall })}
           </div>

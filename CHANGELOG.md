@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
+  ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
+  and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,
+  then TU, which logs it. Searching and pouncing: your call, then your exchange, which logs it. It
+  is off until you turn it on, for each cockpit separately, with the ESM switch in its TX dock or
+  in Settings ▸ Contesting ▸ Enter Sends Message, where you can also choose which of your own keys
+  sends each step. The dock shows **Run** or **S&P** (click it to switch; your CQ key switches to
+  Run, and clicking a spot to S&P), lights the key or keys the next Enter sends, and says why when
+  it sends nothing. Enter never turns TX on: after Stop TX, Esc or the watchdog it sends nothing
+  until you turn TX back on yourself, with an F-key in CW, the TX button in RTTY or PTT in Phone.
+  It sends what that F-key sends, by the same path and with the same checks, and an Enter that is
+  refused logs nothing. One press is one message: holding Enter sends once, and Alt+Enter logs
+  without sending anything. A message you stop counts as not sent, so the next Enter sends it
+  again; if you stop the TU or the exchange whose Enter logged the contact, the contact stays
+  logged and the strip says so, and Ctrl+D twice takes it back. In Phone, Enter plays the voice
+  keyer's recordings (F1 CQ, F2 your exchange, F3 TU, F4 your call, F5 AGN), and when you are
+  running you say his call and your exchange yourself. A box filled from call history counts once
+  you type it, so Enter never logs last year's exchange on its own. ESM steps aside, and Enter logs
+  as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the voice keyer
+  is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
+- **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
+  last** beside Clear on the log strip) names your newest contest contact on the strip's message
+  line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
+  it. Any other key, the 5 seconds, or a new contact cancels it, a held-down Ctrl+D counts as one
+  press, and the caret stays where it was. A county-line contact goes with all its counties. The
+  contact is never deleted: it leaves the score, the multipliers, the rate, the dupe check and
+  every export, and the contest screen keeps it under **Removed**, where **Restore** puts it back
+  exactly (same time, serial and number) unless you have worked that station again on that band
+  and mode. Its serial number and its club-sync number are never given to another contact, even
+  after a restart. The strip also says where the contact had already gone (N3FJP, the N1MM
+  broadcast, WSJT-X listeners, and your logbook with the services it was uploaded to), because
+  Nexus cannot take it back from there. Removal is refused while club sync is on, since the club
+  log cannot take a contact back yet. Ctrl+D never keys or stops the transmitter, and Esc still
+  stops TX. It is not offered on the Remote page or in the Remote client. The newest row on the
+  contest screen has its own **Remove**, which asks the same way. Deleting a contact in the
+  Logbook that you merged from the contest still running now removes it from the contest log too
+  (restorable), as editing it there already corrects the contest log. Going back to an older
+  Nexus brings removed contacts back as ordinary contacts.
+- **The Rotor box points the antenna at the station in your log entry.** In the dashboard rail
+  beside FT8/FT4, Phone, CW, RTTY, PSK and JS8, the Rotor box keeps the antenna's live bearing on
+  its first line, and its second line now shows the call in that cockpit's log entry with the
+  short-path bearing and distance to it (for example "→ EC1DD 227° (1531 km)", in your distance
+  unit), and a **Point** button that turns the antenna there. In FT8/FT4 that is the call of the
+  QSO in progress, the one Log QSO would log, even while you have selected another station in the
+  roster. The bearing shown is the one Point turns to: both come from the same lookup, which uses
+  the station's grid or callbook position when Nexus knows one and the centre of its country
+  otherwise (the box's tooltip says which). With no call in the entry the line is empty; a call
+  Nexus cannot place says "location unknown", and without your own grid in Settings it says so.
+  Point only turns the antenna: it never keys the radio, and ■ STOP stops the rotator as before.
+  The same Rotor box standing in a cockpit's own columns shows the same line. SSTV and APRS have no
+  log entry, so the line stays empty there. The rotator readouts in the cockpit headers, and Nexus
+  Remote, are unchanged.
 - **Field Day mode has a switch on the contest screen, and the left bar calls that screen
   Contest.** The tent item in the left bar now reads **Contest**, and its tooltip names the
   contest you picked (for example "Contest — Illinois QSO Party"). It keeps its place in your bar
@@ -37,6 +89,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still answers the station, and nothing in the TX strip (TX On/Off, Tune, ATU, Stop TX), the dock
   or PTT can be dragged or dropped onto. On a touch screen, hold a finger on a title until the pane
   lifts; a swipe still scrolls.
+- **Super Check Partial and call history in the contest strip.** As you type a call in any
+  contest's log strip, a line under the boxes lists the calls active in recent contests that
+  contain what you have typed: calls already in your log first, then the rest, then (from the
+  fourth character) calls one character different. Click one to put it in the Call box. The list
+  (`MASTER.SCP`, about 360 KB of callsigns) comes from supercheckpartial.com, maintained by W9KKN.
+  Nexus downloads it the first time a contest starts and checks for a newer copy at most once a
+  day, following the site's rules for logging software; it is never shipped with Nexus. Settings ▸
+  Contesting ▸ Super Check Partial and call history turns it off, turns the daily check off, and
+  has Update now. You can also import an N1MM-format call-history file for one contest: as you
+  type a call that is in it, the exchange boxes it can check (a county, state, section or zone the
+  contest accepts) fill from it and say **history** in their caption, and whatever you type wins.
+  A report, a serial number, a Field Day class or a Sweepstakes check never comes from the file.
+  Unassisted mode turns both off, and the assistance record lists them.
 - **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
   straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
@@ -150,8 +215,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one it was while the others are logged. A part that is not a county on the sponsor's list stops
   the whole line. Each county is an ordinary contact in the log, and a single county logs as
   before.
+- **FlexRadio: CW through the Flex native client, built and off until a tester has checked it on
+  a radio.** Once it is switched on, the CW screen's CAT keyer sends each word of a message to the
+  radio's own CW keyer, which keys and unkeys the radio with its break-in, as it does through
+  SmartSDR CAT, and the WPM control sets the radio's CW speed and no other CW setting. Nexus sends
+  nothing, and says why on the CW line, while the transmit slice is not in CW (so the CW ID after
+  an FT 73, sent in DIGU, stays unsent as it is today), while break-in is off, while Sync CWX is
+  on, or while XIT is on. Stop TX clears the radio's CW buffer at once, so only the word already
+  going out can still finish; if the radio still shows transmitting just after that, Nexus sends
+  the unkey, and if the radio does not confirm it, Nexus says so in red and drops the connection.
+  NEEDS-BENCH on a FLEX radio.
 
 ### Changed
+
+- **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
+  every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
+  call, F5 his call alone, F6 your exchange in search and pounce, F7 AGN and F8 `<his call> QSO
+  B4`. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
+  `TU 5NN COOK`; at Field Day they send your class and section, such as `K9AAA 3A WI`. Only F1
+  and F7 send what they sent before. Your exchange now goes once, without "DE <your call> … K",
+  and your call goes out on F1, F3 and F4. Habit is the risk: F3 pressed for the exchange now
+  sends TU, F4 pressed to confirm sends only your call, and F5 pressed for your call sends his.
+  The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
+  Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
+  unchanged, and a macro profile of your own keeps the texts it has.
 
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
@@ -204,6 +291,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
+  satellite contact no credit, and the contest journal was skipped for a log whose scored count
+  was zero, so a log of satellite contacts alone was never written to disk and a restart or a
+  Run/S&P switch lost them.
+- **A rehearsal's contacts no longer come back into the contest's log.** The contest journal on
+  each laptop holds whatever contest it last ran, and entering Field Day mode used to load every
+  contact of the last four days into the session starting: a club that rehearsed on the Wednesday
+  began Sunday's QSO party with the rehearsal's contacts in every position's log, and in the
+  club's log once the positions sent them. Now only the contest you are entering is loaded, and
+  only its contacts from 24 hours before it starts onwards; a quit, a crash or the next day's
+  export still brings back every one of them. The rest stay in the journal untouched, and the
+  Contest screen says how many it kept out and why. Nothing is deleted.
+- **A club position set up on the wrong side of the state line is turned away, by name.** At a
+  QSO party a laptop with another state in Your station data sends its state instead of the
+  club's county on every contact. The host now refuses it when it joins, and both that laptop's
+  club block and the host's say which exchange each sends and where to set it. A position on an
+  older Nexus, which cannot say, joins as before. A different callsign is not refused: an ARRL
+  Field Day GOTA station must use one.
+- **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
+  file Nexus loaded does not have the contest you picked, club sync does not run, and now the
+  Contest screen, the club board window and Settings say so, by the contest's name, with where to
+  check for a rules update. The host's log line names the contest the same way instead of an
+  internal id.
+- **A big club no longer locks every position out of club sync.** The first line of the club
+  state a position is sent carried the whole board, every section and 50 worked stations, and
+  somewhere past 27 to 38 positions, by the contest and the length of the names, it grew longer
+  than the 8 KB line every Nexus reads: each position
+  dropped the connection on it and reconnected into the same line, with nothing on screen to say
+  why. The sections and worked stations now go out over as many lines as they need, so a club of
+  about 59 positions fits, and older Nexus positions read the new lines unchanged. The host's
+  club block warns before one more position might not fit, naming how many it has; past that,
+  each position's board leaves out the positions heard from least recently, while contacts, dupe
+  warnings and the score still sync. A position whose host is on an older Nexus with too big a
+  club now says so instead of reconnecting in silence.
 - **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
   Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
@@ -215,6 +336,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station you had just worked could stay marked as needed and the counts were one short, with
   nothing to say so. Now, while the contact is still being saved, they give no answer rather than
   a short one, and the next look includes it.
+- **On a slow disk, a contact you just logged shows up within seconds in the Logbook list, the
+  Needed board, Awards, Journey and Statistics.** When saving it took more than two seconds, the
+  Logbook list left it out until you logged another contact, and the Needed board kept the
+  station you had just worked marked as needed until its next half-minute refresh. Nexus now asks
+  again each second, up to three times, and shows the contact as soon as it is saved.
+- **The Logbook no longer says your log is empty while it is still reading it.** Opening it showed
+  "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each time,
+  and longer on a slow disk. It now shows "Reading the logbook…" until they are in. On the Remote
+  page, a search that matches nothing now says so, where it said the log was empty.
+- **The Logbook globe no longer says "0 grid squares worked" while it is still counting them.**
+  Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
+  worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
+  slow disk. The globe now shows its count once the squares are counted.
 - **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
   too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
   sent its macro, Alt+F4 (which closes the window) included. One press is now
@@ -312,6 +446,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
   for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
   IC-905 on 10 GHz.
+- **IC-905 on 10 GHz: the dial, a QSY and the log are on the frequency the radio is on.** On its
+  10 GHz band the IC-905 sends and takes its frequency with two more digits than on its other
+  bands, and Nexus's own CI-V connection read and wrote the usual ten. With the radio on 10368.150
+  MHz the dial read 368.150 MHz, a contact logged there went in at 368.150 MHz with no band, and a
+  QSY to 10368.150 MHz (or a split's transmit frequency there) sent the radio to 368.150 MHz.
+  Transmit stayed locked, because 368 MHz is outside every amateur band. Nexus now reads and
+  writes the longer form on 10 GHz, over USB and over the Icom network connection, as Icom's CI-V
+  reference for the IC-905 describes it: the dial reads 10368.150 MHz, the log gets 3 cm, and the
+  check against your licence privileges judges 3 cm, as it does every other band. Its other bands,
+  and every other radio, are unchanged. NEEDS-BENCH: not yet tried on an IC-905 on 10 GHz (the
+  dial, a QSY and a logged contact, receiving or into a dummy load).
+- **A native CI-V Icom is no longer refused a frequency that Nexus only guessed it cannot reach.**
+  On Nexus's own CI-V connection (USB or the Icom network connection), Nexus took 135.7 kHz to
+  1.3 GHz as the range the radio receives. That range is part of what the CAT broker tells WSJT-X
+  so that WSJT-X will set any frequency, and it was never the radio's own. So an IC-905 was
+  refused a satellite downlink on 2.4, 5.7 or 10 GHz with "This radio doesn't cover…" before the
+  radio was asked (a QO-100 pick on 10489.5 MHz among them), and an IC-7300 was taken to receive
+  2 m. Nexus now treats a native CI-V radio's range as unknown and refuses nothing up front: the
+  frequency goes to the radio, and if the radio cannot tune it, the CAT status and the satellite
+  rail say that the radio refused it. What WSJT-X and other programs read through the CAT broker
+  is unchanged, and so is the check against your licence privileges. NEEDS-BENCH: a QO-100 pick
+  on an IC-905, and a 2 m QSY on an IC-7300, which should report that the radio refused it.
 - **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
   Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
   and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
@@ -326,6 +482,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any radio on the Icom network connection. It is no longer offered through OmniRig, or on a
   radio that is only named like one of those, where Nexus's own CI-V never runs and the log
   would have nothing to record.
+- **The Data mode picker (D1/D2/D3) is greyed where it cannot reach the radio.** On an IC-7610
+  connected over Network or through OmniRig with Native Icom CI-V left on, Settings ▸ Radio ▸
+  Rig & CAT ▸ Advanced offered the picker and said the radio is put into the mode you pick, but
+  the pick was never sent: Nexus's own CI-V connection does not run there. The picker is now
+  greyed there, as the Native Icom CI-V switch above it is, and says it needs that connection.
 - **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
   client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
   when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
@@ -358,6 +519,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PTT pressed as Flex native DAX audio went off. Nexus now holds that key back and says why in the
   status lane; let go of PTT, and the radio has its mic back within a moment. NEEDS-BENCH on a
   FLEX radio.
+- **FlexRadio: an amplifier in line no longer turns an over's end into an alarm.** With the Flex
+  native client (Beta), the radio can name the amplifier it is waiting on while an over keys (a
+  PowerGenius XL shows as `AMP:PG-XL`). Nexus took any such name as a sign the transmitter might
+  not be its own, so on a station with that amplifier an over could end in "the radio did not
+  confirm the unkey" and a dropped connection. An amplifier's name alone now counts as the radio's
+  ordinary report; anything else the radio names there still stops the over and warns you.
+  NEEDS-BENCH on a FLEX radio with an amplifier in line.
+- **FlexRadio: the CW screen says why the Flex native client sent no CW.** With the Flex native
+  client (Beta), the client does not send CW yet, and the CW screen's warning line said instead
+  that the rig did not accept Hamlib's CW keying and to try another keyer. It now says that the
+  client does not send CW yet, and that SmartSDR CAT does: turn the client off for CW, or use the
+  WinKeyer or Soundcard keyer.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of
@@ -401,6 +574,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dial, the over on the air stops and TX turns off. The QSO stays where it was; turn TX on again to
   carry on in the new mode. A switch that leaves your Tx frequency on the waterfall, Tempo Fast to
   Tempo Deep (they share one channel), and a switch into WSPR leave TX as it was.
+- **FST4 and FST4W no longer write past the end of the audio they make for an over.** Making the
+  audio for every FST4 or FST4W transmission wrote one value just past the space Nexus had set
+  aside for it. On Linux, where it was measured, that did no harm. On Windows and macOS it could
+  damage the memory beside it and crash Nexus later, at some unrelated moment. The audio sent is
+  unchanged, sample for sample, at every period. NEEDS-BENCH: an FST4 and an FST4W transmit on
+  Windows into a dummy load.
 - **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
   twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
   put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
@@ -431,6 +610,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
   eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
   adds that confirmation. Confirmations already in your log are not changed.
+- **Sync from QRZ no longer marks a contact as uploaded to LoTW.** Your QRZ logbook can also say
+  that a contact was sent to LoTW, and Sync from QRZ took that as LoTW's word: a contact could come
+  out of a sync marked as already on file at LoTW, including one whose mark Logbook ▸ Check
+  confirmations had just taken off, and Nexus then never uploaded it. Sync from QRZ and Pull
+  confirmations automatically now leave a contact's LoTW upload mark as it was, and a contact a
+  sync adds to your log starts without one. LoTW's own list of your uploads still marks them. The
+  contacts this affects go in your next LoTW upload; one LoTW already holds is a duplicate there
+  and changes nothing. Marks already in your log are not changed, and nothing changes in what goes
+  to QRZ, Club Log or eQSL.
 - **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
   the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
   worked a station twice on one band in a UTC day, the later contact's upload could mark the

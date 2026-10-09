@@ -160,6 +160,8 @@ const MIGRATED = [
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
   'components/LogEntry.tsx',
+  // Removing the newest contest contact: the strip's and the contest screen's sentences.
+  'features/contestRemoval.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
@@ -502,7 +504,8 @@ const MIGRATED = [
   //
   // Two things this batch settles that the nineteen before it did not. A LABEL TABLE THAT
   // ANOTHER TEST PARSES OUT OF THE SOURCE moves its guard with it: `docs-match-code.test.ts`
-  // reads DEFAULT_MACROS/DEFAULT_FD_MACROS out of this file and compares the captions with
+  // reads DEFAULT_MACROS out of this file (and the contest and Field Day sets out of
+  // features/esmRoles.ts) and compares the captions with
   // the tables docs/manual/CW.md publishes, so the captions that are WORDS now carry a
   // `labelKey` and that guard resolves it through this catalog — asserting exactly what it
   // asserted before (proved by drifting one entry and watching both doc rows go red). And a
@@ -590,6 +593,20 @@ const MIGRATED = [
   'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // Enter Sends Message's step table — migrated from birth. It holds no sentence: its reasons
+  // are typed, and the strip words them from the catalog.
+  'features/esm.ts',
+  // …and its role tables, the same way. A macro text is an on-air token, never prose.
+  'features/esmRoles.ts',
+  // …and its words: a step's name and one sentence per reason, all from the catalog — migrated
+  // from birth, with CQ, TU and AGN held as the on-air constants they are.
+  'features/esmWords.ts',
+  // …and Settings' role picker for one macro set — migrated from birth; a key name is a token.
+  'components/EsmRolePicker.tsx',
+  // …and what a cockpit hands its contest strip, which holds no sentence at all, and the TX
+  // dock's ESM plate — both migrated from birth; ESM, N1MM's name for it, is held as a token.
+  'features/esmHost.ts',
+  'components/EsmPlate.tsx',
 ]
 
 /**

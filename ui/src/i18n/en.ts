@@ -1113,13 +1113,13 @@ export const EN = {
   // Four whole sentences rather than a stem plus a " since HH:MMZ" fragment: the stamp lands
   // in a different place in different languages. `{{since}}` is a UTC time stamp — invariant.
   'assist.sources.off':
-    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs.',
+    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.offSince':
-    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs.',
+    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.on':
-    'AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification.',
+    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
   'assist.sources.onSince':
-    'AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since {{since}}.',
+    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
   'assist.toggle.declare': 'Declare unassisted entry',
   'assist.toggle.end': 'End unassisted entry',
   'assist.why.summary': 'What this means for your contest category',
@@ -1676,6 +1676,8 @@ export const EN = {
   'logbook.field.qslCard.label': 'Card received',
   'logbook.empty': 'No logged contacts yet.',
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
+  // The list before the engine has answered what the log holds: never "No logged contacts yet." until it has.
+  'logbook.reading': 'Reading the logbook…',
   // A row of the list whose page is still on its way from the log (SPEC-2 C17b).
   'logbook.rows.loading': 'Loading…',
   // The keyboard grid's keys (v2 §6), read to a screen reader as the grid's description: four
@@ -1939,6 +1941,15 @@ export const EN = {
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
+  'logEntry.scp.label': 'Super Check Partial',
+  'logEntry.scp.title':
+    'Calls active in recent contests that match what you have typed. Click one to put it in the Call box.',
+  'logEntry.scp.worked.title': 'Already in this log',
+  'logEntry.scp.near.title': 'One character different from what you typed',
+  'logEntry.scp.none': 'Super Check Partial has no list yet. Settings › Contesting says why.',
+  'logEntry.history.mark': 'history',
+  'logEntry.history.title':
+    'From call history ({{file}}). Type over it if they sent something else.',
   // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
   // joined by "/" (COOK/DUPG) and logged as one contact per county. The county codes are
   // invariant tokens; {{exchange}} is the exchange as logged.
@@ -1951,6 +1962,22 @@ export const EN = {
     other: '{{call}} in {{counties}} are dupes on this band/mode, not logged again',
   },
   'logEntry.countyLine.unknown': "{{value}} is not a county on the sponsor's list, so this county line cannot be logged.",
+  'logEntry.remove.label': 'Remove last',
+  'logEntry.remove.title': 'Remove the newest contest contact (Ctrl+D). Press twice: the first press names it, and a second within 5 seconds removes it.',
+  'logEntry.remove.contact': '{{call}} · {{band}} {{mode}} · {{time}} · {{exchange}}',
+  'logEntry.remove.contactBare': '{{call}} · {{band}} {{mode}} · {{time}}',
+  'logEntry.remove.armed': 'Remove {{contact}}? Press Ctrl+D again.',
+  'logEntry.remove.done': 'Removed {{contact}} from the contest log. Restore it on the contest screen.',
+  'logEntry.remove.sentTo': 'It was already sent to {{places}}: delete it there too.',
+  'logEntry.remove.sent.n3fjp': 'N3FJP ({{host}})',
+  'logEntry.remove.sent.n1mm': 'the N1MM broadcast',
+  'logEntry.remove.sent.wsjtx': 'WSJT-X listeners',
+  'logEntry.remove.logbook': 'It stays in your logbook.',
+  'logEntry.remove.logbookUploaded': 'It stays in your logbook, and {{services}} have it: Nexus cannot take it back from them.',
+  'logEntry.remove.empty': 'There is no contest contact to remove.',
+  'logEntry.remove.changed': 'The newest contact changed, so nothing was removed.',
+  'logEntry.remove.clubSync': "Club sync is on, so this contact is already in the club log. Nothing was removed. Edit the club's Cabrillo file before you send it in.",
+  'logEntry.remove.failed': 'Nexus could not remove the contact, so nothing was removed.',
   'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
   'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
   'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
@@ -4045,6 +4072,20 @@ export const EN = {
   'fieldDay.log.column.band': 'Band',
   'fieldDay.log.column.mode': 'Mode',
   'fieldDay.log.empty': 'No contacts logged yet.',
+  'fieldDay.log.remove': 'Remove',
+  'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
+  'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',
+  'fieldDay.removed.title': 'Removed ({{count}})',
+  'fieldDay.removed.aria': 'Removed contacts',
+  'fieldDay.removed.note': 'Kept, and left out of the score, the dupe check and every export.',
+  'fieldDay.removed.at': 'removed {{time}}',
+  'fieldDay.removed.restore': 'Restore',
+  'fieldDay.removed.restore.title': 'Put this contact back in the contest log exactly as it was: the same time, serial and number.',
+  'fieldDay.removed.restored': 'Restored {{call}} to the contest log.',
+  'fieldDay.removed.workedAgain': '{{call}} was worked again on that band and mode after it was removed, so it was not restored.',
+  'fieldDay.removed.clubSync': 'Club sync is on, so nothing was restored.',
+  'fieldDay.removed.notRemoved': 'That contact is no longer in the Removed list.',
+  'fieldDay.removed.failed': 'Nexus could not restore the contact.',
   'fieldDay.log.dupe.title': 'Duplicate — kept in the log and worth no points',
   'fieldDay.log.mult.title': 'New section — multiplier',
   'fieldDay.log.mult': 'Mult!',
@@ -4117,6 +4158,22 @@ export const EN = {
   'fieldDay.club.refused.chip': 'Not syncing',
   'fieldDay.club.refused.serial': 'Club sync does not run {{contest}}: its serial numbers must run in one sequence for the whole entry, and every position would give out its own. This station does not host or join a club event, and each position keeps its own log.',
   'fieldDay.club.refused.transmitter': 'Club sync does not run {{contest}}: its log must say which transmitter made each contact, and club sync does not number the transmitters. This station does not host or join a club event, and each position keeps its own log.',
+  'fieldDay.club.refused.unknown': 'Club sync does not run {{contest}}: the contest rules this Nexus loaded do not include it. Check for rules updates on the Contesting tab in Settings (new rules apply when Nexus starts again), or pick another contest. This station does not host or join a club event, and each position keeps its own log.',
+  'fieldDay.club.refusedPosition': 'Turned away {{name}} ({{call}}). It was told: “{{reason}}”',
+  'fieldDay.club.refusedCall': 'Turned away {{call}}. It was told: “{{reason}}”',
+  'fieldDay.club.boardFull':
+    "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
+  'fieldDay.club.boardCut':
+    "Each position's club board shows {{shown}} of this club's {{positions}} positions, as many as one club line carries, leaving out the ones heard from least recently. Contacts, dupe warnings and the score still sync.",
+  'fieldDay.keptOut.running': {
+    one: "{{count}} contact in this computer's contest journal was logged in another running of {{contest}}, a rehearsal before it for one, so it is not in this log.",
+    other: "{{count}} contacts in this computer's contest journal were logged in another running of {{contest}}, a rehearsal before it for one, so they are not in this log.",
+  },
+  'fieldDay.keptOut.contest': {
+    one: "{{count}} contact in this computer's contest journal belongs to another contest, so it is not in this log.",
+    other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
+  },
+  'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -4217,7 +4274,7 @@ export const EN = {
   'settings.contestCategory.unassisted.aria.declare': 'Declare an unassisted contest entry',
   'settings.contestCategory.unassisted.aria.end': 'End an unassisted contest entry',
   'settings.contestCategory.unassisted.hint':
-    'Turns off the AI CW decoder, DX cluster / RBN spots and the PSK Reporter needs feed together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
+    'Turns off the AI CW decoder, DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
   // The journal. Each entry's own note and the source names in it are the engine's words,
   // printed as they arrive; the UNASSISTED / assisted state and the empty stand-in are ours.
   'settings.contestCategory.journal.label': 'Assistance record',
@@ -4226,6 +4283,111 @@ export const EN = {
   'settings.contestCategory.journal.noSources': 'nothing active',
   'settings.contestCategory.journal.hint':
     'Kept in <code>assistance_journal.json</code> beside your settings, so it survives restarts. Newest first.',
+  'settings.contestAids.legend': 'Super Check Partial and call history',
+  'settings.contestAids.scp.label': 'Super Check Partial',
+  'settings.contestAids.scp.hint':
+    'Lists the calls active in recent contests that match what you type in the contest strip’s Call box. Nexus downloads the list (MASTER.SCP, about 360 KB of callsigns) from supercheckpartial.com, which W9KKN maintains, the first time a contest starts with this on. It is never shipped with Nexus.',
+  'settings.contestAids.auto.label': 'Check for a newer list once a day',
+  'settings.contestAids.auto.hint':
+    'While a contest runs, Nexus asks the site at most once a day whether the list has changed, and downloads it only if it has. Off keeps the list you have; Update now still checks.',
+  'settings.contestAids.update.action': 'Update now',
+  'settings.contestAids.update.busy': 'Checking…',
+  'settings.contestAids.status.none': 'No list yet. It downloads the first time a contest starts.',
+  'settings.contestAids.status.held': '{{count}} calls, downloaded {{date}}.',
+  'settings.contestAids.status.failed':
+    'The last check failed: {{error}}. The list you have is still used.',
+  'settings.contestAids.unassisted':
+    'Unassisted mode is on, so Super Check Partial and call history are off until it ends.',
+  'settings.contestAids.history.label': 'Call history',
+  'settings.contestAids.history.hint':
+    'A call-history file you choose, in N1MM’s format. As you type a call that is in it, Nexus fills the exchange boxes it can check (a county, state, section or zone the contest accepts) and marks them; what you type always wins. A file is used only for the contest it was imported for, and never leaves this computer.',
+  'settings.contestAids.history.fill.label': 'Fill the exchange from call history',
+  'settings.contestAids.history.import.action': 'Import a file…',
+  'settings.contestAids.history.import.busy': 'Importing…',
+  'settings.contestAids.history.import.title':
+    'The file will be used for the contest picked above: {{contest}}.',
+  'settings.contestAids.history.import.ok': 'Imported {{count}} calls for {{contest}}.',
+  'settings.contestAids.history.import.failed': 'That file could not be imported: {{error}}',
+  'settings.contestAids.history.clear.action': 'Clear',
+  'settings.contestAids.history.none': 'No file imported.',
+  'settings.contestAids.history.held': '{{file}}: {{count}} calls, for {{contest}}.',
+  'settings.contestAids.history.otherContest':
+    'This file is for {{contest}}, not the contest picked above, so it is not used now.',
+  'settings.contestKeys.legend': 'Enter Sends Message',
+  'settings.contestKeys.hint':
+    'With ESM on, Enter in the contest log strip sends the contact’s next message from your F-keys, as N1MM Logger+ does, and the contact logs at its last step. ESM is off until you turn it on, in each cockpit separately. Enter never turns TX on, and nothing is sent by a timer.',
+  'settings.contestKeys.remote':
+    'Enter Sends Message is set at the station and works only there, not on this page.',
+  'settings.contestKeys.cw.label': 'ESM in the CW cockpit',
+  'settings.contestKeys.rtty.label': 'ESM in the RTTY cockpit',
+  'settings.contestKeys.phone.label': 'ESM in the Phone cockpit',
+  'settings.contestKeys.phone.hint':
+    'Enter plays the voice keyer’s recordings. When you are running, you say his call and your exchange yourself: a recording cannot say a callsign.',
+  'settings.contestKeys.callOnce.label': 'Call once (S&P)',
+  'settings.contestKeys.callOnce.hint':
+    'In search and pounce, your call goes once per station. The next Enter asks for a repeat instead of sending your call again.',
+  'settings.contestKeys.cw.steps.label': 'CW steps: {{profile}}',
+  'settings.contestKeys.cw.steps.builtIn':
+    'This profile uses the built-in sets, so its steps in a contest are theirs. To map your own keys, customize the profile in Settings ▸ CW.',
+  'settings.contestKeys.cw.steps.own':
+    'Saved with this profile. A step with no key sends nothing, and the strip names it.',
+  'settings.contestKeys.rtty.steps.label': 'RTTY steps',
+  'settings.contestKeys.rtty.steps.hint':
+    'Each set keeps its own mapping. A key you changed in the cockpit keeps its place, so its step sends your text.',
+  'settings.contestKeys.phone.steps.label': 'Voice keyer steps',
+  'settings.contestKeys.phone.steps.hint':
+    'Record a slot for each step you want Enter to play. An empty slot plays nothing.',
+  'contest.esm.step.callExch': 'His call and your exchange',
+  'contest.esm.step.myCall': 'Your call',
+  'contest.esm.step.exch': 'Your S&P exchange',
+  'contest.esm.refused.dupe': 'A dupe of your own log: Enter sends nothing and logs nothing.',
+  'contest.esm.refused.txOff':
+    'TX is off, and Enter never turns it on. Turn TX on yourself, then press Enter.',
+  'contest.esm.refused.txLocked':
+    'TX is locked here: the dial is outside your license privileges, or this connection does not allow transmitting.',
+  'contest.esm.refused.clockRepair': 'A clock repair is holding transmit, so Enter sends nothing.',
+  'contest.esm.refused.recording': 'The voice keyer is recording, so Enter plays nothing.',
+  'contest.esm.refused.pttHeld': 'You are holding PTT, so Enter plays nothing.',
+  'contest.esm.refused.radioHasMic': 'The radio has the mic, so a recording would not go out.',
+  'contest.esm.refused.unmapped':
+    '{{step}}: no key is mapped, so Enter sends nothing and logs nothing at that step.',
+  'contest.esm.refused.empty':
+    '{{step}}: {{key}} is empty, so Enter sends nothing and logs nothing at that step.',
+  'contest.esm.refused.oneSlot': '{{step}}: mapped to two recordings, and the keyer plays one per press.',
+  'contest.esm.inert.noKeyer':
+    'ESM steps aside while the voice keyer is hidden: Enter logs as it does with ESM off.',
+  'contest.esm.inert.auto':
+    'ESM steps aside while the RTTY auto sequence runs: Enter logs as it does with ESM off.',
+  'contest.esm.inert.continuousTx':
+    'ESM steps aside while Continuous TX is latched: Enter logs as it does with ESM off.',
+  'contest.esm.inert.noRoles':
+    'This set has no step mapped, so ESM steps aside: Enter logs as it does with ESM off.',
+  'contest.esm.picker.builtIn.title': 'The built-in set’s key for this step',
+  'contest.esm.picker.builtIn.none': 'none',
+  'contest.esm.picker.useBuiltIn': 'Built in: {{keys}}',
+  'contest.esm.picker.none': 'None',
+  'contest.esm.picker.key.aria': 'Key for {{step}}',
+  'contest.esm.picker.then.aria': 'Second key for {{step}}',
+  'contest.esm.picker.thenNone': 'Nothing more',
+  'contest.esm.switch.label': 'Enter Sends Message',
+  'contest.esm.switch.title':
+    'Enter Sends Message: with it on, Enter in the contest strip sends the contact’s next message from your F-keys, and logs the contact at its last step. Enter never turns TX on. It is off until you turn it on, in each cockpit separately.',
+  'contest.esm.mode.run': 'Run',
+  'contest.esm.mode.sp': 'S&P',
+  'contest.esm.mode.title':
+    'Running or search and pounce: click to switch. The key that holds your CQ switches to running, and clicking a spot switches to S&P.',
+  'contest.esm.next': 'Enter sends {{keys}}',
+  'contest.esm.logOnly.title': 'Alt+Enter logs the contact without sending anything.',
+  'contest.esm.phone.speak': 'Say his call and your exchange.',
+  'contest.esm.notSent': 'Nothing was sent, and nothing was logged: {{why}}',
+  'contest.esm.refused.history':
+    '{{field}} came from call history: type it to accept it, then press Enter. Alt+Enter logs it as it is.',
+  'contest.esm.stopped.logged': '{{step}} stopped. {{call}} is logged. Ctrl+D twice removes it.',
+  'contest.esm.stopped.loggedClubSync':
+    '{{step}} stopped. {{call}} is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
+  'contest.esm.stopped.again':
+    '{{step}} stopped, so it counts as not sent: the next Enter sends it again.',
+  'contest.esm.switch.failed': 'Enter Sends Message was not saved, so the switch is as it was.',
 
   'settings.fieldDay.legend': 'Field Day Setup',
   'settings.fieldDay.mode.label': 'Field Day mode',
@@ -10014,6 +10176,7 @@ export const EN = {
   'cw.macro.exch.label': 'Exch',
   'cw.macro.myCall.label': 'My Call',
   'cw.macro.hisCall.label': 'His Call',
+  'cw.macro.spExch.label': 'S&P exch',
   'cw.compose.placeholder': 'Type CW to send… (Enter)',
   'cw.hisCall.label': 'His call',
   'cw.hisCall.title': 'The station you are working. The ! in a macro sends this call. A decoded call fills it in; type over it to answer someone else, then press Enter or a macro key.',
@@ -11315,6 +11478,11 @@ export const EN = {
   'rotor.pane.el.entry.aria': 'Elevation to move to (degrees, {{min}}–{{max}})',
   'rotor.pane.el.outside': 'This rotator reaches {{min}}–{{max}}° of elevation',
   'rotor.pane.hint.azel': 'click the rose or type a bearing or an elevation · headings are TRUE',
+  'rotor.pane.aim.title': 'Bearing and distance to {{call}}, short path ({{to}})',
+  'rotor.pane.aim.point.label': 'Point',
+  'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
+  'rotor.pane.aim.unknown': 'location unknown',
+  'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,

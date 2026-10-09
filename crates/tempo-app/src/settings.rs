@@ -1080,6 +1080,24 @@ pub struct Settings {
     /// verbatim, because the sponsor's own examples are not a closed set.
     #[serde(default)]
     pub contest_power: String,
+    /// ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
+    /// message from the macro set's keys, step by step, as N1MM Logger+'s ESM does. OFF by
+    /// default, and nothing but the operator's own switch turns it on: it makes Enter a way to
+    /// start a transmission. One switch per cockpit, so an operator can run CW with it and
+    /// leave Phone without it.
+    #[serde(default)]
+    pub contest_esm_cw: bool,
+    /// [`Self::contest_esm_cw`] for the RTTY cockpit's contest strip. OFF by default.
+    #[serde(default)]
+    pub contest_esm_rtty: bool,
+    /// [`Self::contest_esm_cw`] for the Phone cockpit's contest strip, playing the voice keyer's
+    /// recordings. OFF by default.
+    #[serde(default)]
+    pub contest_esm_phone: bool,
+    /// ESM's "call once" in Search and Pounce: my call goes out once per station, and the next
+    /// Enter asks for a repeat instead of sending it again. OFF by default.
+    #[serde(default)]
+    pub contest_esm_call_once: bool,
     /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
@@ -1556,6 +1574,21 @@ pub struct Settings {
     /// operator hears would be worse than the exposure this closes.
     #[serde(default)]
     pub unassisted_mode: bool,
+    /// SUPER CHECK PARTIAL: the line of contest calls under the contest strip's Call box
+    /// (`crate::scp`). On by default (operator, 2026-10-08), so the list downloads the first time
+    /// a contest starts. Read it through [`Settings::scp_active`], which Unassisted mode overrides.
+    #[serde(default = "default_true")]
+    pub scp_enabled: bool,
+    /// The once-a-day check for a newer Super Check Partial list. Off keeps the list held; the
+    /// operator's "Update now" still asks.
+    #[serde(default = "default_true")]
+    pub scp_auto_update: bool,
+    /// CALL HISTORY: fill the contest strip's exchange boxes from the file the operator imported
+    /// (`crate::call_history`). Importing a file is the operator asking for it, so this is on;
+    /// it is the way to stop the fill without losing the file. Read it through
+    /// [`Settings::call_history_active`], which Unassisted mode overrides.
+    #[serde(default = "default_true")]
+    pub call_history_enabled: bool,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Antenna rotator, the INTEGRATED way: a Hamlib rotator model number
@@ -2767,6 +2800,15 @@ pub struct Settings {
     /// Defaulted to six labelled-but-empty casual slots.
     #[serde(default = "default_voice_messages")]
     pub voice_messages: Vec<VoiceMessage>,
+    /// ENTER SENDS MESSAGE on the voice keyer: the slots the operator mapped to ESM's steps
+    /// ([`EsmRoleMap`]), over the built-in slot convention. One map, as the keyer has one set of
+    /// slots. None = the convention as it is, and then it is not written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_esm_roles"
+    )]
+    pub voice_esm_roles: Option<EsmRoleMap>,
 
     /// ⛔ **THE FORWARD-COMPATIBILITY CATCH-ALL. Not a setting — do not read it.** Every
     /// key `settings.json` carries that this build has no field for, held verbatim so the
@@ -3138,6 +3180,18 @@ pub struct Macros {
     /// Same one writer as `rtty_profiles`.
     #[serde(default, deserialize_with = "lenient_string")]
     pub active_rtty_profile: String,
+    /// ENTER SENDS MESSAGE on the RTTY cockpit's sets: per set id (`everyday`, `contest`), the
+    /// steps the operator mapped to that set's keys ([`EsmRoleMap`]), over the contest set's
+    /// built-in layout. The SETTINGS FORM writes it, not `Engine::save_rtty_macros`, which
+    /// replaces only the two fields above and so leaves this one as it is. Kept beside the sets
+    /// rather than on their entries because the cockpit's editor rebuilds an entry from its name
+    /// and keys. None = nothing mapped, and then it is not written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_esm_role_sets"
+    )]
+    pub rtty_esm_roles: Option<std::collections::BTreeMap<String, EsmRoleMap>>,
     /// The PSK cockpit's F1–F8 sets — the same shape and the same contract as `rtty_profiles`,
     /// and SEPARATE STORAGE on purpose: the two modes' built-in texts differ (PSK is mixed-case
     /// full ASCII, RTTY is Baudot upper), so one shared field would make an edit in one cockpit
@@ -3165,6 +3219,58 @@ pub struct CwMacroDef {
 pub struct CwMacroProfile {
     pub name: String,
     pub macros: Vec<CwMacroDef>,
+    /// ENTER SENDS MESSAGE — which of this set's keys send ESM's steps, as the operator mapped
+    /// them ([`EsmRoleMap`]). It travels with the set it describes. None = nothing mapped, and
+    /// then the key is not written at all, so a profile saved before this field existed loads
+    /// and saves back byte for byte.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_esm_roles"
+    )]
+    pub esm_roles: Option<EsmRoleMap>,
+}
+
+/// ENTER SENDS MESSAGE — a macro set's own mapping of its keys to ESM's steps: the step's name
+/// (`cq`, `callExch`, `tu`, `myCall`, `exch`, `again`) → the F-keys that send it, in order (two
+/// keys go out as one message). The UI owns what the names mean (`ui/src/features/esmRoles.ts`);
+/// the backend only keeps the map, so a step or a key it does not know is kept as written.
+pub type EsmRoleMap = std::collections::BTreeMap<String, Vec<String>>;
+
+/// An [`EsmRoleMap`] read LENIENTLY, as [`lenient_list`] reads a list: a step whose keys are not
+/// a list of strings is dropped, and a value that is not a map at all reads as no map. A hand
+/// edit gone wrong costs that mapping, never the macro set it sits on or the file around it.
+fn esm_role_map(value: serde_json::Value) -> Option<EsmRoleMap> {
+    let serde_json::Value::Object(steps) = value else {
+        return None;
+    };
+    Some(
+        steps
+            .into_iter()
+            .filter_map(|(step, keys)| serde_json::from_value(keys).ok().map(|keys| (step, keys)))
+            .collect(),
+    )
+}
+
+/// The lenient loader of one [`EsmRoleMap`] field ([`esm_role_map`]).
+fn lenient_esm_roles<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<EsmRoleMap>, D::Error> {
+    Ok(esm_role_map(serde_json::Value::deserialize(de)?))
+}
+
+/// The lenient loader of [`EsmRoleMap`]s by macro-set id: a set whose map is not one is dropped.
+fn lenient_esm_role_sets<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<std::collections::BTreeMap<String, EsmRoleMap>>, D::Error> {
+    Ok(match serde_json::Value::deserialize(de)? {
+        serde_json::Value::Object(sets) => Some(
+            sets.into_iter()
+                .filter_map(|(set, roles)| esm_role_map(roles).map(|roles| (set, roles)))
+                .collect(),
+        ),
+        _ => None,
+    })
 }
 
 /// A list loaded ENTRY BY ENTRY: each entry that parses is kept, each one that does not is
@@ -3241,6 +3347,7 @@ impl Default for Macros {
             active_cw_profile: 0,
             rtty_profiles: Vec::new(),
             active_rtty_profile: String::new(),
+            rtty_esm_roles: None,
             psk_profiles: Vec::new(),
             active_psk_profile: String::new(),
         }
@@ -3268,6 +3375,7 @@ impl Macros {
             self.cw_profiles = vec![CwMacroProfile {
                 name: "Default".to_string(),
                 macros: std::mem::take(&mut self.cw),
+                esm_roles: None,
             }];
             self.active_cw_profile = 0;
         }
@@ -3852,6 +3960,12 @@ fn default_rated_watts() -> u32 {
     100
 }
 
+/// The assistance label Super Check Partial is journaled and reported under. The contest strip
+/// matches it on `FieldDayStatus::assistance_on` (see [`Settings::assistance_sources`]).
+pub const SCP_SOURCE: &str = "Super Check Partial";
+/// The assistance label call history is journaled and reported under, matched the same way.
+pub const CALL_HISTORY_SOURCE: &str = "Call history";
+
 fn default_true() -> bool {
     true
 }
@@ -4312,6 +4426,11 @@ impl Default for Settings {
             contest_cq_zone: 0,  // 0 = not set; CQ zones are 1..=40
             contest_itu_zone: 0, // 0 = not set; ITU zones are 1..=90
             contest_power: String::new(),
+            // Enter Sends Message: off in every cockpit until the operator turns it on.
+            contest_esm_cw: false,
+            contest_esm_rtty: false,
+            contest_esm_phone: false,
+            contest_esm_call_once: false,
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
@@ -4396,6 +4515,9 @@ impl Default for Settings {
             // Assistance is a normal, legal way to operate; only the operator's explicit
             // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
             unassisted_mode: false,
+            scp_enabled: true,
+            scp_auto_update: true,
+            call_history_enabled: true,
             // Matches the profile default above: 4534 (broker owns 4532, rotctld 4533; #53).
             rigctld_port: 4534,
             rotator_model: 0,
@@ -4624,6 +4746,7 @@ impl Default for Settings {
             opening_regional: true,
             macros: Macros::default(),
             voice_messages: default_voice_messages(),
+            voice_esm_roles: None,
             // A fresh install has no file, so nothing unknown to carry.
             unknown: serde_json::Map::new(),
         }
@@ -4683,15 +4806,35 @@ impl Settings {
         !self.unassisted_mode
     }
 
+    /// Is Super Check Partial EFFECTIVELY on? The operator's switch, minus Unassisted mode. A list
+    /// of the calls active in contests is help finding and copying stations, so an unassisted
+    /// entry gets none, and nothing is downloaded while one is declared.
+    pub fn scp_active(&self) -> bool {
+        self.scp_enabled && !self.unassisted_mode
+    }
+
+    /// Is call history EFFECTIVELY on? The operator's switch, minus Unassisted mode, for the same
+    /// reason as [`Settings::scp_active`]: last time's exchange is help copying this one.
+    pub fn call_history_active(&self) -> bool {
+        self.call_history_enabled && !self.unassisted_mode
+    }
+
     /// The assistance sources this build knows how to suppress, as
     /// `(label, effectively_on)` — the single list the journal records and the UI reads,
     /// so a new assistance source cannot be added to the app and forgotten by Unassisted
     /// mode. Order is stable: it is display order and journal order.
-    pub fn assistance_sources(&self) -> [(&'static str, bool); 3] {
+    ///
+    /// ⚠️ The contest strip reads the last two labels off `FieldDayStatus::assistance_on` to
+    /// decide whether it shows Super Check Partial and fills from call history
+    /// (`ui/src/features/contestLists.ts`), so a rename here is a rename there: guarded by
+    /// `the_strip_reads_the_scp_and_call_history_labels_the_engine_sends`.
+    pub fn assistance_sources(&self) -> [(&'static str, bool); 5] {
         [
             ("AI CW decoder", self.ai_cw_active()),
             ("DX cluster / RBN", self.cluster_active()),
             ("PSK Reporter needs", self.pskr_evidence_active()),
+            (SCP_SOURCE, self.scp_active()),
+            (CALL_HISTORY_SOURCE, self.call_history_active()),
         ]
     }
 
@@ -6563,7 +6706,7 @@ mod tests {
         // rename, not a parser hole.
         assert_eq!(
             labels.len(),
-            3,
+            5,
             "assistance_sources changed shape: {labels:?}"
         );
         for needed in ["DX cluster / RBN", "PSK Reporter needs"] {
@@ -10493,10 +10636,12 @@ mod tests {
                 CwMacroProfile {
                     name: "Alice".into(),
                     macros: vec![mac("F1"), mac("F2")],
+                    esm_roles: None,
                 },
                 CwMacroProfile {
                     name: "Bob".into(),
                     macros: vec![mac("F3")],
+                    esm_roles: None,
                 },
             ],
             active_cw_profile: 1,
@@ -10518,6 +10663,7 @@ mod tests {
                     label: "CQ".into(),
                     text: "CQ".into(),
                 }],
+                esm_roles: None,
             }],
             active_cw_profile: 9, // out of range
             ..Macros::default()
@@ -10565,6 +10711,7 @@ mod tests {
                     label: "CQ".into(),
                     text: "CQ DE {MYCALL}".into(),
                 }],
+                esm_roles: None,
             },
             CwMacroProfile {
                 name: "Bob".into(),
@@ -10573,6 +10720,7 @@ mod tests {
                     label: "73".into(),
                     text: "73".into(),
                 }],
+                esm_roles: None,
             },
         ];
         s.macros.active_cw_profile = 1;
@@ -10587,6 +10735,251 @@ mod tests {
         assert_eq!(back.macros.cw_profiles[1].name, "Bob");
         assert_eq!(back.macros.active_cw_profile, 1, "active index preserved");
         assert_eq!(back.macros.active_cw_macros()[0].key, "F2");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ENTER SENDS MESSAGE's four switches, in one array: CW, RTTY, Phone, call once.
+    fn esm_switches(s: &Settings) -> [bool; 4] {
+        [
+            s.contest_esm_cw,
+            s.contest_esm_rtty,
+            s.contest_esm_phone,
+            s.contest_esm_call_once,
+        ]
+    }
+
+    /// ENTER SENDS MESSAGE's four switches: OFF on a fresh install and in a file that predates
+    /// them, on their exact wire keys, and declared in `ui/src/types.ts`. Nothing but the
+    /// operator turns ESM on: it makes Enter a way to start a transmission.
+    #[test]
+    fn contest_esm_switches_ship_off_wire_keys_and_ts_mirror() {
+        let read = esm_switches;
+        assert_eq!(read(&Settings::default()), [false; 4], "ESM ships OFF");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"contestEsmCw\":false",
+            "\"contestEsmRtty\":false",
+            "\"contestEsmPhone\":false",
+            "\"contestEsmCallOnce\":false",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        // An upgrader's file predates the keys: off, never on by accident.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(read(&old), [false; 4]);
+
+        // The TS mirror, read from types.ts itself.
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        for key in [
+            "contestEsmCw",
+            "contestEsmRtty",
+            "contestEsmPhone",
+            "contestEsmCallOnce",
+            "voiceEsmRoles",
+            "rttyEsmRoles",
+        ] {
+            assert!(declares(key), "ui/src/types.ts Settings is missing `{key}`");
+        }
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start().starts_with("cwProfiles?:") && l.contains("esmRoles?:")),
+            "ui/src/types.ts declares no `esmRoles` on a CW profile"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("contestEsm") && !declares("contestEsmCW"));
+    }
+
+    /// Each ESM switch survives a restart: on by itself, it comes back from the real file as it
+    /// went in, the others with it; all four on come back on, and all four off come back off.
+    #[test]
+    fn contest_esm_switches_survive_a_save_and_a_load() {
+        let path = scratch_dir("esm_switches").join("settings.json");
+        for i in 0..4 {
+            let mut on = Settings::default();
+            match i {
+                0 => on.contest_esm_cw = true,
+                1 => on.contest_esm_rtty = true,
+                2 => on.contest_esm_phone = true,
+                _ => on.contest_esm_call_once = true,
+            }
+            on.save(&path).unwrap();
+            assert_eq!(
+                esm_switches(&Settings::load(&path)),
+                esm_switches(&on),
+                "switch {i} did not survive a save and a load"
+            );
+        }
+        for want in [true, false] {
+            let mut s = Settings::default();
+            s.contest_esm_cw = want;
+            s.contest_esm_rtty = want;
+            s.contest_esm_phone = want;
+            s.contest_esm_call_once = want;
+            s.save(&path).unwrap();
+            assert_eq!(esm_switches(&Settings::load(&path)), [want; 4]);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A CW profile, the RTTY sets and the voice keyer from before Enter Sends Message carry no
+    /// mapping, and an old profile comes back BYTE FOR BYTE: nothing is added to it, through
+    /// serde and through the real file path, so an operator's set reads back as it was written.
+    #[test]
+    fn a_macro_set_saved_before_esm_roles_round_trips_byte_for_byte() {
+        let old_profile = concat!(
+            r#"{"name":"Contest","macros":["#,
+            r#"{"key":"F1","label":"CQ TEST","text":"CQ TEST DE {MYCALL} {MYCALL} K"},"#,
+            r#"{"key":"F3","label":"Exch","text":"! DE {MYCALL} {RST} {EXCH} {EXCH} K"}]}"#
+        );
+        let p: CwMacroProfile = serde_json::from_str(old_profile).unwrap();
+        assert_eq!(p.esm_roles, None);
+        assert_eq!(
+            serde_json::to_string(&p).unwrap(),
+            old_profile,
+            "an old profile changed on its way back out"
+        );
+
+        let path = scratch_dir("esm_old_profile").join("settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let old_rtty = r#"[{"name":"contest","macros":[{"key":"F3","label":"TU","text":"TU {MYCALL} TEST"}]}]"#;
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"mycall":"W9XYZ","macros":{{"cwProfiles":[{old_profile}],"activeCwProfile":0,"rttyProfiles":{old_rtty},"activeRttyProfile":"contest"}}}}"#
+            ),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.mycall, "W9XYZ",
+            "control: the old file loaded, rather than falling back to defaults"
+        );
+        loaded.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for key in ["esmRoles", "rttyEsmRoles", "voiceEsmRoles"] {
+            assert!(
+                !saved.contains(&format!("\"{key}\"")),
+                "saving an old file wrote `{key}`"
+            );
+        }
+        let back = Settings::load(&path);
+        assert_eq!(
+            serde_json::to_string(&back.macros.cw_profiles[0]).unwrap(),
+            old_profile,
+            "the old profile changed through a save and a load"
+        );
+        assert_eq!(
+            serde_json::to_string(&back.macros.rtty_profiles).unwrap(),
+            old_rtty
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The mappings themselves come back by VALUE through a save and a load, on their wire keys:
+    /// a CW profile's, the RTTY sets' and the voice keyer's. And a hand edit gone wrong costs only
+    /// the step that is wrong — never the profile's keys, nor the file around them, which serde
+    /// would otherwise set aside for defaults, the licence lockout with it.
+    #[test]
+    fn esm_role_maps_round_trip_by_value_and_a_bad_one_costs_only_itself() {
+        let roles = |pairs: &[(&str, &[&str])]| -> EsmRoleMap {
+            pairs
+                .iter()
+                .map(|(step, keys)| {
+                    (
+                        step.to_string(),
+                        keys.iter().map(|k| k.to_string()).collect(),
+                    )
+                })
+                .collect()
+        };
+        let path = scratch_dir("esm_maps").join("settings.json");
+        let mut s = Settings::default();
+        s.macros.cw_profiles = vec![CwMacroProfile {
+            name: "Mine".into(),
+            macros: vec![CwMacroDef {
+                key: "F1".into(),
+                label: "CQ".into(),
+                text: "CQ TEST {MYCALL}".into(),
+            }],
+            esm_roles: Some(roles(&[("cq", &["F1"]), ("callExch", &["F5", "F2"])])),
+        }];
+        s.macros.rtty_esm_roles = Some(std::collections::BTreeMap::from([(
+            "everyday".to_string(),
+            roles(&[("tu", &["F3"])]),
+        )]));
+        s.voice_esm_roles = Some(roles(&[("again", &["F6"])]));
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.macros.cw_profiles[0].esm_roles,
+            s.macros.cw_profiles[0].esm_roles
+        );
+        assert_eq!(back.macros.rtty_esm_roles, s.macros.rtty_esm_roles);
+        assert_eq!(back.voice_esm_roles, s.voice_esm_roles);
+        let json = serde_json::to_value(&back).unwrap();
+        assert_eq!(
+            json["macros"]["cwProfiles"][0]["esmRoles"],
+            serde_json::json!({"cq": ["F1"], "callExch": ["F5", "F2"]})
+        );
+        assert_eq!(
+            json["macros"]["rttyEsmRoles"],
+            serde_json::json!({"everyday": {"tu": ["F3"]}})
+        );
+        assert_eq!(json["voiceEsmRoles"], serde_json::json!({"again": ["F6"]}));
+
+        // A bad hand edit: steps that are not lists of keys, a map that is not one.
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"mycall":"W9XYZ","macros":{"cwProfiles":["#,
+                r#"{"name":"Mine","macros":[{"key":"F1","label":"CQ","text":"CQ"}],"#,
+                r#""esmRoles":{"cq":["F1"],"tu":"F3","again":[3]}},"#,
+                r#"{"name":"Bad","macros":[],"esmRoles":5}],"#,
+                r#""rttyEsmRoles":{"everyday":{"tu":["F3"]},"contest":"x"}},"#,
+                r#""voiceEsmRoles":[1]}"#
+            ),
+        )
+        .unwrap();
+        let bad = Settings::load(&path);
+        assert_eq!(bad.mycall, "W9XYZ", "a bad mapping cost the whole file");
+        assert_eq!(
+            bad.macros
+                .cw_profiles
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Mine", "Bad"],
+            "a bad mapping cost its profile"
+        );
+        assert_eq!(
+            bad.macros.cw_profiles[0].macros.len(),
+            1,
+            "the profile's keys survived"
+        );
+        assert_eq!(
+            bad.macros.cw_profiles[0].esm_roles,
+            Some(roles(&[("cq", &["F1"])])),
+            "only the wrong steps were dropped"
+        );
+        assert_eq!(bad.macros.cw_profiles[1].esm_roles, None);
+        assert_eq!(
+            bad.macros.rtty_esm_roles,
+            Some(std::collections::BTreeMap::from([(
+                "everyday".to_string(),
+                roles(&[("tu", &["F3"])]),
+            )]))
+        );
+        assert_eq!(bad.voice_esm_roles, None);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -11859,6 +12252,97 @@ mod tests {
             s.pskreporter,
             "the outbound upload is explicitly not assistance and must keep running"
         );
+    }
+
+    /// Super Check Partial and call history are on out of the box (the operator's ruling: the
+    /// list downloads the first time a contest starts), and Unassisted mode turns both off
+    /// without touching either switch, exactly as it does the cluster and the AI CW decoder.
+    #[test]
+    fn scp_and_call_history_are_on_by_default_and_unassisted_turns_both_off() {
+        let mut s = Settings::default();
+        assert_eq!(
+            (s.scp_enabled, s.scp_auto_update, s.call_history_enabled),
+            (true, true, true)
+        );
+        assert_eq!((s.scp_active(), s.call_history_active()), (true, true));
+        s.unassisted_mode = true;
+        assert_eq!((s.scp_active(), s.call_history_active()), (false, false));
+        assert_eq!(
+            (s.scp_enabled, s.call_history_enabled),
+            (true, true),
+            "it overrides, never overwrites"
+        );
+        let labels: Vec<_> = s
+            .assistance_sources()
+            .iter()
+            .filter(|&&(_, on)| !on)
+            .map(|&(label, _)| label)
+            .collect();
+        assert!(labels.contains(&SCP_SOURCE) && labels.contains(&CALL_HISTORY_SOURCE));
+        s.unassisted_mode = false;
+        s.scp_enabled = false;
+        assert_eq!((s.scp_active(), s.call_history_active()), (false, true));
+    }
+
+    /// The three switches on the exact wire keys the UI writes, and a settings file written
+    /// before they existed loads with all three ON: the ruling's default reaches upgrades too.
+    #[test]
+    fn scp_and_call_history_settings_use_the_exact_wire_keys_and_old_files_load_them_on() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"scpEnabled\":true",
+            "\"scpAutoUpdate\":true",
+            "\"callHistoryEnabled\":true",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW"}"#).unwrap();
+        assert_eq!(
+            (
+                old.scp_enabled,
+                old.scp_auto_update,
+                old.call_history_enabled
+            ),
+            (true, true, true)
+        );
+        let off: Settings = serde_json::from_str(
+            r#"{"scpEnabled":false,"scpAutoUpdate":false,"callHistoryEnabled":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                off.scp_enabled,
+                off.scp_auto_update,
+                off.call_history_enabled
+            ),
+            (false, false, false),
+            "the operator's own choice round-trips"
+        );
+    }
+
+    /// The contest strip decides whether it shows Super Check Partial and fills from call
+    /// history by these two labels on `FieldDayStatus::assistance_on`. A rename on either side
+    /// would leave the strip silently showing neither, so the UI's mirror is read here.
+    #[test]
+    fn the_strip_reads_the_scp_and_call_history_labels_the_engine_sends() {
+        let ts = include_str!("../../../ui/src/features/contestLists.ts");
+        let labels: Vec<&str> = Settings::default()
+            .assistance_sources()
+            .iter()
+            .map(|&(label, _)| label)
+            .collect();
+        for needed in [SCP_SOURCE, CALL_HISTORY_SOURCE] {
+            assert!(
+                labels.contains(&needed),
+                "{needed:?} left assistance_sources()"
+            );
+            assert!(
+                ts.contains(&format!("= '{needed}'")),
+                "contestLists.ts no longer mirrors {needed:?}: the strip would never see it on"
+            );
+        }
+        // Control: the reader is reading the real file, not an empty haystack.
+        assert!(ts.contains("export function useScpList"));
     }
 
     /// Default false, and nothing but the operator's toggle may set it — same doctrine as

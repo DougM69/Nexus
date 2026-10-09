@@ -154,6 +154,22 @@ import {
   setLaunchAtLogin,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
+import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory, scpEnsure } from '../api'
+import type { CallHistoryStatus, ScpStatus } from '../types'
+import { CONTEST_LISTS_CHANGED } from '../features/contestLists'
+import { fmtUtc } from '../features/logQuery'
+import { EsmRolePicker } from './EsmRolePicker'
+import {
+  CW_BUILT_IN_ROLES,
+  RTTY_SET_ROLES,
+  VOICE_KEYS,
+  VOICE_SLOT_ROLES,
+  cwBuiltInRoles,
+  esmVoiceSlots,
+  type EsmRoleMap,
+} from '../features/esmRoles'
+import { MACRO_KEYS, macroSetId, type MacroSetId } from '../features/macroSets'
+import { resolveRttySet } from '../features/rttyMacros'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { getDxccEntityNames } from '../api'
 import { CONTINENT_CODES } from '../features/dxccGeo'
@@ -1611,6 +1627,22 @@ export function SettingsPanel({
   // target leaves the default landing rather than doing nothing.
   const resolvedTarget = useMemo(() => (target ? resolveTarget(target) : null), [target, targetSeq])
   const [tab, setTab] = useState<SettingsTab>(resolvedTarget?.tab ?? 'station')
+  // Super Check Partial and call history: what is held, read when the Contesting tab opens. The
+  // station decides when the site is asked; this only reports, and "Update now" asks it to try.
+  const [scpStatus, setScpStatus] = useState<ScpStatus | null>(null)
+  const [scpBusy, setScpBusy] = useState(false)
+  const [historyStatus, setHistoryStatus] = useState<CallHistoryStatus | null>(null)
+  const [historyBusy, setHistoryBusy] = useState(false)
+  const historyFileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (remote || tab !== 'contesting') return
+    let live = true
+    getScpStatus().then((s) => live && setScpStatus(s)).catch(() => {})
+    getCallHistoryStatus().then((s) => live && setHistoryStatus(s)).catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [remote, tab])
   useEffect(() => {
     if(remote)return
     if (tab !== 'contesting' || !form?.fdScoreboard) {
@@ -2185,6 +2217,44 @@ export function SettingsPanel({
         return { ...p, macros: p.macros.map((m, mi) => (mi === i ? { ...m, [field]: value } : m)) }
       })
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
+    })
+  }
+
+  // --- Enter Sends Message: each set's own mapping of its keys to ESM's steps ---
+  // A mapping describes its set, so it is saved WITH the set: on the active CW profile, per
+  // RTTY set id, and one for the voice keyer. Nothing mapped = no key at all, so a set nobody
+  // mapped saves exactly as it did before ESM existed. The RTTY cockpit's own save
+  // (`setRttyMacros`) writes its sets and leaves this mapping alone; a Save here writes it.
+  const [esmRttySet, setEsmRttySet] = useState<MacroSetId>('contest')
+  const setCwEsmRoles = (esmRoles: EsmRoleMap | undefined) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const idx = prev.macros.activeCwProfile ?? 0
+      const list = (prev.macros.cwProfiles ?? []).map((p, i) => {
+        if (i !== idx) return p
+        const { esmRoles: _was, ...rest } = p
+        return esmRoles ? { ...rest, esmRoles } : rest
+      })
+      return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
+    })
+  }
+  const setRttyEsmRoles = (set: MacroSetId, esmRoles: EsmRoleMap | undefined) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const { rttyEsmRoles, ...macros } = prev.macros
+      const { [set]: _was, ...others } = rttyEsmRoles ?? {}
+      const sets = esmRoles ? { ...others, [set]: esmRoles } : others
+      return { ...prev, macros: Object.keys(sets).length ? { ...macros, rttyEsmRoles: sets } : macros }
+    })
+  }
+  const setVoiceEsmRoles = (esmRoles: EsmRoleMap | undefined) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const { voiceEsmRoles: _was, ...rest } = prev
+      return esmRoles ? { ...rest, voiceEsmRoles: esmRoles } : (rest as Settings)
     })
   }
 
@@ -3508,9 +3578,9 @@ export function SettingsPanel({
   // inlined so the control and its explanation can never disagree about the condition.
   const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
   // Does Nexus's own CI-V engine drive this radio here, and so apply its D1/D2/D3? Always on the Icom
-  // network connection; over a cable only through the native switch, on a radio that has one.
-  const civAppliesDataMode =
-    form.rigConn === 'icomlan' || (!!form.icomNativeCat && NATIVE_CIV_MODELS.includes(form.rigModel))
+  // network connection; over a cable only through the native switch, asked the way the switch asks it
+  // (`civBlocked`): never on Network or through OmniRig, where a switch left on does nothing.
+  const civAppliesDataMode = form.rigConn === 'icomlan' || (civBlocked === null && !!form.icomNativeCat)
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -3522,8 +3592,12 @@ export function SettingsPanel({
     ? RETIRED_SECTIONS[form.fdSection.trim().toUpperCase()]
     : undefined
   // Why club sync cannot run the picked contest at all, or null when it can — shown beside
-  // the switches before anybody turns one on.
-  const clubRefusalHere = contestClubRefusal(form.fdEvent)
+  // the switches before anybody turns one on. The station's preview answers for the SAVED
+  // pick, so it is asked only while the form's pick is the saved one.
+  const clubRefusalHere = contestClubRefusal(
+    form.fdEvent,
+    (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null,
+  )
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>
@@ -12397,6 +12471,321 @@ export function SettingsPanel({
                     <T k="settings.contestCategory.journal.hint" tags={{ code: <code /> }} />
                   </span>
                 </div>
+              )}
+            </fieldset>
+          )}
+
+          {tab === 'contesting' && (
+            <fieldset className="settings-section" id="settings-scp-call-history">
+              <legend>{t('settings.contestAids.legend')}</legend>
+              {/* Both are help finding and copying stations, so Unassisted mode turns them off,
+                  overriding these switches rather than rewriting them (`Settings::scp_active`).
+                  Said here so a switch that reads ON does not look broken during that entry. */}
+              {form.unassistedMode && (
+                <p className="settings-note">{t('settings.contestAids.unassisted')}</p>
+              )}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.scp.label')}</span>
+                <button disabled={remote}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.scpEnabled !== false}
+                  className={`toggle${form.scpEnabled !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('scpEnabled', form.scpEnabled === false)}
+                  aria-label={t('settings.contestAids.scp.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {/* What is downloaded, from where and when, in plain words (operator, 2026-10-08). */}
+                <span className="settings-hint">{t('settings.contestAids.scp.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.auto.label')}</span>
+                <button disabled={remote || form.scpEnabled === false}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.scpAutoUpdate !== false}
+                  className={`toggle${form.scpAutoUpdate !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('scpAutoUpdate', form.scpAutoUpdate === false)}
+                  aria-label={t('settings.contestAids.auto.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">{t('settings.contestAids.auto.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <span className="settings-hint">
+                  {scpStatus && scpStatus.count > 0
+                    ? t('settings.contestAids.status.held', {
+                        count: scpStatus.count,
+                        date: fmtUtc(scpStatus.fetchedAt),
+                      })
+                    : t('settings.contestAids.status.none')}
+                  {scpStatus?.lastError
+                    ? ` ${t('settings.contestAids.status.failed', { error: scpStatus.lastError })}`
+                    : ''}
+                </span>
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={remote || scpBusy || form.scpEnabled === false || !!form.unassistedMode}
+                  onClick={() => {
+                    setScpBusy(true)
+                    scpEnsure(true)
+                      .then((s) => {
+                        setScpStatus(s)
+                        window.dispatchEvent(new Event(CONTEST_LISTS_CHANGED))
+                      })
+                      .catch(() => {})
+                      .finally(() => setScpBusy(false))
+                  }}
+                >
+                  {scpBusy
+                    ? t('settings.contestAids.update.busy')
+                    : t('settings.contestAids.update.action')}
+                </button>
+              </div>
+
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.history.fill.label')}</span>
+                <button disabled={remote}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.callHistoryEnabled !== false}
+                  className={`toggle${form.callHistoryEnabled !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('callHistoryEnabled', form.callHistoryEnabled === false)}
+                  aria-label={t('settings.contestAids.history.fill.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">{t('settings.contestAids.history.hint')}</span>
+              </label>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.contestAids.history.label')}</span>
+                <span className="settings-hint">
+                  {historyStatus
+                    ? t('settings.contestAids.history.held', {
+                        file: historyStatus.fileName,
+                        count: historyStatus.count,
+                        contest: contestName(historyStatus.contest),
+                      })
+                    : t('settings.contestAids.history.none')}
+                  {historyStatus && historyStatus.contest !== ((form.fdEvent ?? '').trim() || 'arrlfd')
+                    ? ` ${t('settings.contestAids.history.otherContest', {
+                        contest: contestName(historyStatus.contest),
+                      })}`
+                    : ''}
+                </span>
+                <span>
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    disabled={remote || historyBusy}
+                    onClick={() => historyFileRef.current?.click()}
+                    title={t('settings.contestAids.history.import.title', {
+                      contest: contestName(form.fdEvent?.trim()),
+                    })}
+                  >
+                    {historyBusy
+                      ? t('settings.contestAids.history.import.busy')
+                      : t('settings.contestAids.history.import.action')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    disabled={remote || historyBusy || !historyStatus}
+                    onClick={() => {
+                      clearCallHistory()
+                        .then(() => {
+                          setHistoryStatus(null)
+                          window.dispatchEvent(new Event(CONTEST_LISTS_CHANGED))
+                        })
+                        .catch(() => {})
+                    }}
+                  >
+                    {t('settings.contestAids.history.clear.action')}
+                  </button>
+                </span>
+                {/* The TLE import's pattern: the file is read here and handed over as text, and
+                    it is bound to the contest picked above at this moment. */}
+                <input disabled={remote}
+                  ref={historyFileRef}
+                  type="file"
+                  accept=".txt,.csv"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    e.target.value = ''
+                    if (!f) return
+                    // The id the strip compares against: a blank picker is ARRL Field Day, as
+                    // `canonical_contest` reads it (the station canonicalises it again).
+                    const contest = (form.fdEvent ?? '').trim() || 'arrlfd'
+                    setHistoryBusy(true)
+                    f.text()
+                      .then((text) => importCallHistory(text, f.name, contest))
+                      .then((st) => {
+                        setHistoryStatus(st)
+                        window.dispatchEvent(new Event(CONTEST_LISTS_CHANGED))
+                        pushToast(
+                          t('settings.contestAids.history.import.ok', {
+                            count: st.count,
+                            contest: contestName(st.contest),
+                          }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((err) =>
+                        pushToast(
+                          t('settings.contestAids.history.import.failed', {
+                            error: `${err instanceof Error ? err.message : err}`,
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setHistoryBusy(false))
+                  }}
+                />
+              </div>
+            </fieldset>
+          )}
+
+          {tab === 'contesting' && (
+            <fieldset className="settings-section" id="settings-contest-keys">
+              <legend>{t('settings.contestKeys.legend')}</legend>
+              {/* ENTER SENDS MESSAGE — off in every cockpit until the operator turns it on here, one
+                  switch per cockpit, then the steps each cockpit's set sends (the role picker). It
+                  all saves with the form. ESM never runs on the hosted Remote page, and its
+                  switches are not part of what the station sends there, so the page says so
+                  rather than showing switches that would read off. */}
+              <span className="settings-hint">{t('settings.contestKeys.hint')}</span>
+              {remote ? (
+                <span className="settings-hint">{t('settings.contestKeys.remote')}</span>
+              ) : (
+                <>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.cw.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmCw}
+                        className={`toggle${form.contestEsmCw ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmCw', !form.contestEsmCw)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.rtty.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmRtty}
+                        className={`toggle${form.contestEsmRtty ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmRtty', !form.contestEsmRtty)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.phone.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmPhone}
+                        className={`toggle${form.contestEsmPhone ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmPhone', !form.contestEsmPhone)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                    <span className="settings-hint">{t('settings.contestKeys.phone.hint')}</span>
+                  </div>
+                  <div className="settings-field">
+                    <label className="settings-toggle">
+                      <span className="settings-label">{t('settings.contestKeys.callOnce.label')}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!!form.contestEsmCallOnce}
+                        className={`toggle${form.contestEsmCallOnce ? ' on' : ''}`}
+                        onClick={() => updateBool('contestEsmCallOnce', !form.contestEsmCallOnce)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </label>
+                    <span className="settings-hint">{t('settings.contestKeys.callOnce.hint')}</span>
+                  </div>
+                  {/* CW: the ACTIVE profile's steps. A profile on the built-in sets is not the
+                      operator's to map — its texts change with the contest — so it shows the
+                      built-in steps and no control; Customize in Settings ▸ CW makes it theirs. */}
+                  <div className="settings-field cw-macro-editor">
+                    <span className="settings-label">
+                      {t('settings.contestKeys.cw.steps.label', {
+                        profile:
+                          cwProfiles[activeCwIdx]?.name ||
+                          t('settings.cw.macros.profiles.unnamed', { n: activeCwIdx + 1 }),
+                      })}
+                    </span>
+                    {activeCwMacros.length ? (
+                      <EsmRolePicker
+                        cockpit="cw"
+                        builtIn={cwBuiltInRoles(activeCwMacros)}
+                        own={cwProfiles[activeCwIdx]?.esmRoles}
+                        slots={activeCwMacros}
+                        keys={MACRO_KEYS}
+                        onChange={setCwEsmRoles}
+                      />
+                    ) : (
+                      <EsmRolePicker cockpit="cw" builtIn={CW_BUILT_IN_ROLES} keys={MACRO_KEYS} />
+                    )}
+                    <span className="settings-hint">
+                      {activeCwMacros.length
+                        ? t('settings.contestKeys.cw.steps.own')
+                        : t('settings.contestKeys.cw.steps.builtIn')}
+                    </span>
+                  </div>
+                  <div className="settings-field cw-macro-editor">
+                    <span className="settings-label">{t('settings.contestKeys.rtty.steps.label')}</span>
+                    <div className="cw-macro-row">
+                      <select
+                        className="settings-input"
+                        aria-label={t('rtty.macroSet.aria')}
+                        value={esmRttySet}
+                        onChange={(e) => setEsmRttySet(macroSetId(e.target.value))}
+                      >
+                        <option value="everyday">{t('rtty.macroSet.everyday')}</option>
+                        <option value="contest">{t('rtty.macroSet.contest')}</option>
+                      </select>
+                    </div>
+                    <EsmRolePicker
+                      cockpit="rtty"
+                      builtIn={RTTY_SET_ROLES[esmRttySet]}
+                      own={form.macros.rttyEsmRoles?.[esmRttySet]}
+                      slots={resolveRttySet(form.macros.rttyProfiles, esmRttySet, t)}
+                      keys={MACRO_KEYS}
+                      onChange={(roles) => setRttyEsmRoles(esmRttySet, roles)}
+                    />
+                    <span className="settings-hint">{t('settings.contestKeys.rtty.steps.hint')}</span>
+                  </div>
+                  <div className="settings-field cw-macro-editor">
+                    <span className="settings-label">{t('settings.contestKeys.phone.steps.label')}</span>
+                    <EsmRolePicker
+                      cockpit="phone"
+                      builtIn={VOICE_SLOT_ROLES}
+                      own={form.voiceEsmRoles}
+                      slots={esmVoiceSlots(form.voiceMessages ?? [])}
+                      keys={VOICE_KEYS}
+                      onChange={setVoiceEsmRoles}
+                    />
+                    <span className="settings-hint">{t('settings.contestKeys.phone.steps.hint')}</span>
+                  </div>
+                </>
               )}
             </fieldset>
           )}

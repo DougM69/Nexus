@@ -2021,8 +2021,8 @@ contest's rules rather than sending a blank — you find out while setting up, n
 
 ### Contest Category
 
-- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots and
-  the PSK Reporter needs feed together, and records the change with a timestamp.
+- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
+  PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
   **Takes effect at once**" — its own command, not Save, because an operator
   flips it as an event starts. "Your own settings for each of those are left
   alone and come back when you switch this off."
@@ -2034,6 +2034,80 @@ contest's rules rather than sending a blank — you find out while setting up, n
 
 *Contest Category in Nexus 1.10.3. The badge states what you are entitled to
 claim right now; the record underneath is the evidence, kept across restarts.*
+
+### Super Check Partial and call history
+
+- **Super Check Partial** — on by default. As you type a call in the contest strip,
+  the line under the boxes lists the calls in the list that contain what you have
+  typed, from the third character. Calls already in this contest's log come first;
+  from the fourth character, calls one character different follow, underlined. A
+  click puts a call in the Call box. Nothing is put there on its own, and a call
+  that is not in the list is not an error: new calls exist, and the list covers
+  two years.
+- **What is downloaded, from where and when** — the list is `MASTER.SCP`, about
+  360 KB of callsigns, from supercheckpartial.com, which W9KKN maintains. Nexus
+  downloads it the first time a contest starts with this switch on, finds it
+  through the site's own file listing, and keeps it in a `contest-lists` folder
+  beside your logbook. It is never shipped with Nexus. Nothing is downloaded while
+  the switch is off or while Unassisted mode is on.
+- **Check for a newer list once a day** — on by default. While a contest runs,
+  Nexus asks the site at most once a day whether the list has changed (it sends
+  back the version it holds, so an unchanged list is not downloaded again) and
+  downloads it only if it has. Turn it off to keep the list you have; **Update
+  now** checks straight away either way. A download that is not a whole list
+  never replaces the one you have. The line under the switch shows the call count
+  and when the list was downloaded, and why the last check failed if it did. At a
+  field site without internet, the last list keeps working.
+- **Fill the exchange from call history** — on. With a file imported, typing a call
+  that is in it fills the exchange boxes Nexus can check: a county, state, section
+  or zone the contest accepts. A filled box says **history** in its caption, and
+  typing over it makes it yours. What you have typed is never replaced, and a value
+  the contest would refuse is never filled, so a report, a serial number, a Field
+  Day class or a Sweepstakes check never comes from the file. A mobile or rover
+  (a call ending /M or /R) is never filled.
+- **Call history** — **Import a file…** reads an N1MM-format call-history file (a
+  `!!Order!!` line names its columns; comma or semicolon; `#` lines are comments)
+  for the contest picked at the top of this tab. It is used for that contest only
+  and stays on this computer: it never goes to the club network or to Remote.
+  **Clear** forgets it.
+
+Unassisted mode turns both off, as it does the cluster and the AI CW decoder, and
+the assistance record lists them.
+
+### Enter Sends Message
+
+ESM, as N1MM Logger+ calls it. "With ESM on, Enter in the contest log strip sends
+the contact’s next message from your F-keys, as N1MM Logger+ does, and the
+contact logs at its last step. ESM is off until you turn it on, in each cockpit
+separately. Enter never turns TX on, and nothing is sent by a timer." How a
+contact runs, step by step, and the rules ESM keeps are in the
+[Field Day manual](../manual/Field-Day.md#enter-sends-message-esm).
+
+- **ESM in the CW cockpit**, **in the RTTY cockpit**, **in the Phone cockpit** —
+  one switch per cockpit, so you can run CW with it and leave Phone without it.
+  All three are off on a new install. In Phone, "Enter plays the voice keyer’s
+  recordings. When you are running, you say his call and your exchange
+  yourself: a recording cannot say a callsign."
+- **Call once (S&P)** — "In search and pounce, your call goes once per station.
+  The next Enter asks for a repeat instead of sending your call again." Off by
+  default.
+- **CW steps** — which keys of the active CW profile send each step: CQ, his
+  call and your exchange, TU, your call, your S&P exchange and AGN. A step can
+  send two keys as one message, such as F5 then F2. The mapping is saved with
+  the profile. A profile still on the built-in sets shows their steps and has
+  nothing to map until you **Customize** it under [CW](#cw).
+- **RTTY steps** — the same for each RTTY set, Everyday and Contest, each with
+  its own mapping. The Contest set's built-in key for each step is shown beside
+  your choice, and a step left on *Built in* sends it. A key you changed in the
+  cockpit keeps its place, so its step sends your text.
+- **Voice keyer steps** — which recording each step plays, one slot per step.
+  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F5
+  AGN. An empty slot plays nothing.
+
+Every step row shows what Enter would send there, or why it would send nothing:
+no key mapped, or a key with nothing on it. A set with no step mapped makes ESM
+step aside, and Enter logs as it does with ESM off. On the hosted Remote page
+this section only says that ESM is set at the station.
 
 ### Field Day Setup
 

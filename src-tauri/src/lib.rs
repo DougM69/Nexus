@@ -53,6 +53,9 @@ mod command_classes;
 /// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
 /// revision a whole save is checked against.
 mod command_dispatch;
+/// The contest strip's Super Check Partial download and call-history file: the HTTP and the
+/// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
+mod contest_lists;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
@@ -15263,11 +15266,45 @@ enum AimedAt {
     Country(&'static str),
 }
 
-/// A point-at-call's short-path bearing (degrees true) and what it was taken to.
+/// A point-at-call's short-path bearing (degrees true), how far away that is, and what it was
+/// taken to.
 #[derive(Debug, Clone, PartialEq)]
 struct Aim {
     bearing: f64,
+    /// Great-circle kilometres to the point the bearing is taken to.
+    km: f64,
     to: AimedAt,
+}
+
+/// Why [`aim_at_call`] has no bearing to give.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NoAim {
+    /// The operator's own grid is not set, so there is nowhere to take a bearing from.
+    MyGrid,
+    /// Nothing places the station: no fix, and its call is in no DXCC entity.
+    Station,
+}
+
+impl NoAim {
+    /// What a point-at-call says when it cannot aim (its toast's `{{error}}`), word for word what
+    /// it has always said.
+    fn sentence(self, call: &str) -> String {
+        match self {
+            NoAim::MyGrid => {
+                "Set your grid square in Settings so a bearing can be computed.".to_string()
+            }
+            NoAim::Station => format!("Couldn't locate {call} (unknown callsign)."),
+        }
+    }
+
+    /// What [`rotator_bearing_to_call`] answers instead: a code, and the UI owns the words (the
+    /// `PENDING_LOG_MOVED_ON` shape).
+    fn code(self) -> &'static str {
+        match self {
+            NoAim::MyGrid => "noGrid",
+            NoAim::Station => "unknownStation",
+        }
+    }
 }
 
 /// Every place Nexus already knows `call`'s station to be, MOST TRUSTED FIRST — the order
@@ -15304,10 +15341,9 @@ fn aim_at_call(
     mygrid: &str,
     call: &str,
     fixes: Vec<propagation::geo::StationFix>,
-) -> Result<Aim, String> {
-    use propagation::geo::{bearing_deg, best_fix, maidenhead_to_latlon, StationFix};
-    let me = maidenhead_to_latlon(mygrid.trim())
-        .ok_or("Set your grid square in Settings so a bearing can be computed.")?;
+) -> Result<Aim, NoAim> {
+    use propagation::geo::{bearing_deg, best_fix, haversine_km, maidenhead_to_latlon, StationFix};
+    let me = maidenhead_to_latlon(mygrid.trim()).ok_or(NoAim::MyGrid)?;
     if let Some(fix) = best_fix(fixes) {
         if let Some(at) = fix.latlon() {
             let to = match fix {
@@ -15316,14 +15352,16 @@ fn aim_at_call(
             };
             return Ok(Aim {
                 bearing: bearing_deg(me, at),
+                km: haversine_km(me, at),
                 to,
             });
         }
     }
-    let info = propagation::dxcc::resolve(call)
-        .ok_or_else(|| format!("Couldn't locate {call} (unknown callsign)."))?;
+    let info = propagation::dxcc::resolve(call).ok_or(NoAim::Station)?;
+    let at = (info.lat, info.lon);
     Ok(Aim {
-        bearing: bearing_deg(me, (info.lat, info.lon)),
+        bearing: bearing_deg(me, at),
+        km: haversine_km(me, at),
         to: AimedAt::Country(info.entity),
     })
 }
@@ -15358,6 +15396,46 @@ impl PointedAtDto {
     }
 }
 
+/// What [`rotator_bearing_to_call`] answers: what a short-path point at the call answers
+/// ([`PointedAtDto`]), and how far away that is.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CallBearingDto {
+    pointed: PointedAtDto,
+    /// Great-circle kilometres to the point the bearing is taken to.
+    km: f64,
+}
+
+/// The bearing a short-path [`point_rotator_at_call`] turns the antenna to for `call`, and how far
+/// away that is, from what `eng` knows now: the point's own inputs (the operator's grid and
+/// [`station_fixes`]) through the point's own resolver ([`aim_at_call`]).
+fn call_bearing(eng: &tempo_app::engine::Engine, call: &str) -> Result<CallBearingDto, NoAim> {
+    let aim = aim_at_call(&eng.settings().mygrid, call, station_fixes(eng, call))?;
+    Ok(CallBearingDto {
+        km: aim.km,
+        pointed: PointedAtDto::new(aim.bearing, aim.to),
+    })
+}
+
+/// The rotor box's line 2 beside a cockpit: the bearing [`point_rotator_at_call`] would turn the
+/// antenna to for the call in that cockpit's log entry, and how far away that is, WITHOUT turning
+/// it. A read-only twin of the point: the same resolver on the same engine state
+/// ([`call_bearing`]), so the bearing the box shows is the one its Point turns to; and it never
+/// talks to rotctld, so nothing it does can move the mast. Polled every 2 s while a call stands in
+/// the entry, because what the station knows of the call moves under it (the log form's grid lands
+/// from the callbook a moment after the call is typed), so it waits for the engine on the blocking
+/// pool, as every polled command does. No bearing is a code (`noGrid`, `unknownStation`), never a
+/// sentence.
+#[tauri::command]
+async fn rotator_bearing_to_call(
+    state: State<'_, SharedEngine>,
+    call: String,
+) -> Result<CallBearingDto, String> {
+    with_engine(&state, move |eng| call_bearing(&eng, &call))
+        .await?
+        .map_err(|why| why.code().to_string())
+}
+
 /// Point the rotator at a callsign's station — the great-circle bearing from your grid to the
 /// best location Nexus has for it ([`aim_at_call`]). Returns the bearing and what it was taken
 /// to, for the toast.
@@ -15367,10 +15445,20 @@ async fn point_rotator_at_call(
     call: String,
     long_path: Option<bool>,
 ) -> Result<PointedAtDto, String> {
+    point_at_call(&state, call, long_path).await
+}
+
+/// [`point_rotator_at_call`]'s whole body, on any handle to the engine, so a test can drive the
+/// point through a rotctld on loopback: no unit test can hand a command its managed state.
+async fn point_at_call(
+    engine: &SharedEngine,
+    call: String,
+    long_path: Option<bool>,
+) -> Result<PointedAtDto, String> {
     #[cfg(feature = "radio")]
     {
         let (host, external, mygrid, fixes) = {
-            let eng = engine_lock(&state);
+            let eng = engine_lock(engine);
             (
                 effective_rotator_addr(eng.settings()),
                 eng.settings().rotator_host.clone(),
@@ -15384,7 +15472,7 @@ async fn point_rotator_at_call(
                     .to_string(),
             );
         };
-        let aim = aim_at_call(&mygrid, &call, fixes)?;
+        let aim = aim_at_call(&mygrid, &call, fixes).map_err(|why| why.sentence(&call))?;
         let short = aim.bearing;
         // ⭐ LONG PATH IS THE SAME GREAT CIRCLE THE OTHER WAY, so it is the reciprocal exactly
         // — no second computation and nothing to drift apart. `rem_euclid` rather than `%`
@@ -15410,7 +15498,7 @@ async fn point_rotator_at_call(
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = (state, call, long_path);
+        let _ = (engine, call, long_path);
         Err("radio support is not built into this binary".to_string())
     }
 }
@@ -15572,6 +15660,126 @@ mod point_at_call_tests {
             ("grid", Some("FN42KH"), None)
         );
     }
+
+    /// A rotctld on loopback that answers `RPRT 0` to the two lines a point at a call sends and
+    /// hands back each line it was sent. A `\dump_state` answered that way declares nothing, so
+    /// the point goes out as the plain `P <az> 0` line an azimuth move has always sent.
+    #[cfg(feature = "radio")]
+    fn rotctld() -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for conn in l.incoming().take(2) {
+                let Ok(mut sock) = conn else { break };
+                let mut line = String::new();
+                let Ok(read) = sock.try_clone() else { break };
+                if BufReader::new(read).read_line(&mut line).is_err() {
+                    break;
+                }
+                let _ = tx.send(line.trim().to_string());
+                let _ = sock.write_all(b"RPRT 0\n");
+            }
+        });
+        (addr, rx)
+    }
+
+    /// ⭐ THE BEARING THE ROTOR BOX SHOWS IS THE BEARING ITS POINT TURNS TO, by value, for the
+    /// tester's EC1DD: its callbook grid IN52TK is at 227°, the centre of Spain at 207°. The box
+    /// asks `rotator_bearing_to_call` ([`call_bearing`]); Point runs the whole point-at-call
+    /// against a rotctld on loopback, and the azimuth on the wire is the one the box showed.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_bearing_the_box_shows_is_the_one_point_turns_the_antenna_to() {
+        use propagation::geo::{haversine_km, maidenhead_to_latlon};
+        let (addr, sent) = rotctld();
+        let mut eng = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: ME.into(),
+            rotator_host: addr,
+            ..Default::default()
+        });
+        eng.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: None,
+            },
+        );
+        let shown = call_bearing(&eng, "EC1DD").expect("a bearing");
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let pointed = tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), None))
+            .expect("the point went out");
+
+        // The grid's bearing, not the country's: the two disagree by 20°.
+        let country = aim_at_call(ME, "EC1DD", Vec::new()).expect("Spain");
+        assert_eq!(country.to, AimedAt::Country("Spain"));
+        assert!(
+            apart(shown.pointed.bearing, country.bearing) > 15.0,
+            "{:.1}° is the centre of Spain's {:.1}°",
+            shown.pointed.bearing,
+            country.bearing
+        );
+        assert!(apart(shown.pointed.bearing, bearing_to("IN52TK")) < 1e-9);
+        assert_eq!(
+            (shown.pointed.to, shown.pointed.grid.as_deref()),
+            ("grid", Some("IN52TK"))
+        );
+        // …and the distance is to the same point: IN52TK's, a few km off the centre of Spain's.
+        let (me, there) = (
+            maidenhead_to_latlon(ME).unwrap(),
+            maidenhead_to_latlon("IN52TK").unwrap(),
+        );
+        assert!(
+            (shown.km - haversine_km(me, there)).abs() < 1e-9,
+            "{:.1} km, IN52TK is {:.1} km and the centre of Spain {:.1} km",
+            shown.km,
+            haversine_km(me, there),
+            country.km
+        );
+
+        // What Point answered is the same number, and so is what reached the mast.
+        assert_eq!(
+            pointed.bearing.to_bits(),
+            shown.pointed.bearing.to_bits(),
+            "Point answered {}°, the box showed {}°",
+            pointed.bearing,
+            shown.pointed.bearing
+        );
+        let lines: Vec<String> = sent.try_iter().collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "\\dump_state");
+        let wire: f64 = lines[1]
+            .strip_prefix("P ")
+            .and_then(|l| l.strip_suffix(" 0"))
+            .and_then(|az| az.parse().ok())
+            .unwrap_or_else(|| panic!("not an azimuth move: {:?}", lines[1]));
+        assert!(
+            (wire - shown.pointed.bearing).abs() <= 0.05,
+            "the box showed {:.2}°, the mast was sent {wire}°",
+            shown.pointed.bearing
+        );
+    }
+
+    /// No bearing is a code the box puts into words, and the point's own sentence is unchanged.
+    #[test]
+    fn no_bearing_is_a_code_for_the_box_and_the_old_sentence_for_the_point() {
+        let unset = Engine::new("KD9TAW", "", 0);
+        let why = call_bearing(&unset, "EC1DD").map(|_| ()).unwrap_err();
+        assert_eq!(why.code(), "noGrid");
+        assert_eq!(
+            why.sentence("EC1DD"),
+            "Set your grid square in Settings so a bearing can be computed."
+        );
+        let eng = Engine::new("KD9TAW", ME, 0);
+        let why = call_bearing(&eng, "QQ1QQ").map(|_| ()).unwrap_err();
+        assert_eq!(why.code(), "unknownStation");
+        assert_eq!(
+            why.sentence("QQ1QQ"),
+            "Couldn't locate QQ1QQ (unknown callsign)."
+        );
+    }
 }
 
 #[cfg(test)]
@@ -15597,11 +15805,13 @@ mod manual_pointing_tests {
     #[test]
     fn a_manual_move_keeps_the_axis_it_was_not_given() {
         let src = include_str!("lib.rs");
-        for name in [
-            "point_rotator",
-            "point_rotator_at_call",
-            "point_rotator_elevation",
-        ] {
+        // The point-at-call command is its helper, which a test can drive on loopback: the helper
+        // is what is read below.
+        assert!(
+            body(src, "point_rotator_at_call").contains("point_at_call(&state, call, long_path)"),
+            "point_rotator_at_call must run point_at_call, which this scan reads"
+        );
+        for name in ["point_rotator", "point_at_call", "point_rotator_elevation"] {
             let body = body(src, name);
             assert!(
                 body.contains("tempo_audio::rotator::point_keeping("),
@@ -15611,6 +15821,34 @@ mod manual_pointing_tests {
                 !body.contains("tempo_audio::rotator::point("),
                 "{name} sends `P <az> 0`, the elevation of zero, on every move"
             );
+        }
+    }
+
+    /// The rotor box's bearing is a READ. Its command answers through the point's resolver
+    /// (`call_bearing`), and neither reaches rotctld, so asking can never turn the mast.
+    #[test]
+    fn the_bearing_the_rotor_box_asks_for_never_moves_the_rotator() {
+        let src = include_str!("lib.rs");
+        let twin = body(src, "rotator_bearing_to_call");
+        assert!(twin.contains("call_bearing("), "{twin}");
+        let resolver = src
+            .split_once("\nfn call_bearing(")
+            .expect("call_bearing")
+            .1
+            .split_once("\n}\n")
+            .expect("its end")
+            .0;
+        for read in [twin.as_str(), resolver] {
+            for reach in [
+                "tempo_audio::rotator::",
+                "effective_rotator_addr(",
+                "spawn_blocking(",
+            ] {
+                assert!(
+                    !read.contains(reach),
+                    "the bearing read reaches the rotator ({reach}):\n{read}"
+                );
+            }
         }
     }
 }
@@ -18033,6 +18271,16 @@ fn send_cw(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, 
     Ok(eng.snapshot())
 }
 
+/// Queue CW for Enter Sends Message: `Engine::send_cw_armed`, which never turns TX on and asks
+/// every gate before it takes anything. `Err` is why nothing was taken, and the contest strip
+/// then logs nothing. No Remote operation reaches it: ESM is the station's own window's.
+#[tauri::command(async)]
+fn send_cw_armed(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.send_cw_armed(&text)?;
+    Ok(eng.snapshot())
+}
+
 /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW-macro
 /// tokens. Pushed by the log form when a callbook lookup resolves; `call` keys it to the contact
 /// so a stale lookup never keys the wrong name. Empty `call` clears it. Fire-and-forget (no
@@ -18972,6 +19220,20 @@ fn set_rtty_macros(
     eng.save_rtty_macros(profiles, active)
         .map_err(|reason| format!("RTTY macros were not saved ({reason:?})"))?;
     Ok(eng.settings().macros.clone())
+}
+
+/// The ESM switch in the CW, RTTY or Phone cockpit's TX dock (`cockpit`: `cw`, `rtty`, `phone`):
+/// one atomic write of that switch through `Engine::set_contest_esm`, NEVER the settings form,
+/// which clears the transmit queues and advances the TX gate generation mid-contest.
+#[tauri::command(async)]
+fn set_contest_esm(
+    state: State<'_, SharedEngine>,
+    cockpit: String,
+    on: bool,
+) -> Result<(), String> {
+    engine_lock(&state)
+        .set_contest_esm(&cockpit, on)
+        .map_err(|reason| format!("Enter Sends Message was not saved ({reason:?})"))
 }
 
 /// The PSK cockpit's macro editor and its Everyday/Contest switch (#316) — `set_rtty_macros`'
@@ -28343,6 +28605,134 @@ fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
     Ok(eng.snapshot())
 }
 
+/// A contest contact the operator removed, as the contest screen lists it: its rows as the log
+/// table shows them, when it was removed, and the id Restore takes.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemovedContestDto {
+    id: u64,
+    removed_unix: u64,
+    rows: Vec<tempo_app::dto::FieldDayQso>,
+}
+
+impl From<&tempo_app::engine::contest_removal::ContestRemoval> for RemovedContestDto {
+    fn from(r: &tempo_app::engine::contest_removal::ContestRemoval) -> Self {
+        Self {
+            id: r.entry.id(),
+            removed_unix: r.entry.removed_unix,
+            rows: r.rows.clone(),
+        }
+    }
+}
+
+/// Where a removed contact had already gone — places a removal cannot take it back from.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContestSentToDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n3fjp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n1mm: Option<String>,
+    wsjtx: bool,
+    /// The logbook holds a copy merged from the contest.
+    logbook: bool,
+    /// The services holding that copy, by its upload marks.
+    uploaded: Vec<&'static str>,
+}
+
+/// What a removal or a restore came to.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestRemovalDto {
+    #[serde(rename_all = "camelCase")]
+    Removed {
+        entry: RemovedContestDto,
+        sent_to: ContestSentToDto,
+    },
+    Restored {
+        entry: RemovedContestDto,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Remove the newest contest contact** — the strip's Ctrl+D pressed twice (or Remove last)
+/// and the contest screen's Remove on the newest row — when it is still the contact named.
+///
+/// Kept, never deleted ([`tempo_app::engine::contest_removal`]): the contest journal keeps it
+/// marked, its serial and club seq stay spent, and [`contest_restore`] puts it back. Refused
+/// while club sync runs. The answer names where it had already gone, which nothing here takes
+/// it back from. Answers once the contest journal holds the change; the logbook's copies are
+/// read with the engine lock released, on the blocking pool, as [`journaled_command`] waits.
+///
+/// ⛔ Not one of Remote's operations: removal is refused from afar.
+#[tauri::command]
+async fn contest_remove_last(
+    state: State<'_, SharedEngine>,
+    call: String,
+    when_unix: u64,
+) -> Result<ContestRemovalDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::remove_last(&engine, &call, when_unix)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(match answer {
+        Ok(removed) => {
+            let sent = &removed.removal.sent;
+            ContestRemovalDto::Removed {
+                entry: RemovedContestDto::from(&removed.removal),
+                sent_to: ContestSentToDto {
+                    n3fjp: sent.n3fjp.clone(),
+                    n1mm: sent.n1mm.clone(),
+                    wsjtx: sent.wsjtx,
+                    logbook: removed.logbook.is_some(),
+                    uploaded: removed.logbook.clone().unwrap_or_default(),
+                },
+            }
+        }
+        Err(refusal) => ContestRemovalDto::Refused {
+            refusal: refusal.code(),
+        },
+    })
+}
+
+/// Put a removed contest contact back exactly as it was, by the id the Removed list gave it —
+/// refused when the station was worked again since on that band and mode, and while club sync
+/// runs. Answers once the contest journal holds the change.
+#[tauri::command]
+async fn contest_restore(
+    state: State<'_, SharedEngine>,
+    id: u64,
+) -> Result<ContestRemovalDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::restore(&engine, id)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(match answer {
+        Ok(restored) => ContestRemovalDto::Restored {
+            entry: RemovedContestDto::from(&restored),
+        },
+        Err(refusal) => ContestRemovalDto::Refused {
+            refusal: refusal.code(),
+        },
+    })
+}
+
+/// The contest screen's Removed list: the removed contacts, oldest removal first.
+#[tauri::command(async)]
+fn contest_removed(state: State<'_, SharedEngine>) -> Vec<RemovedContestDto> {
+    engine_lock(&state)
+        .contest_removed()
+        .iter()
+        .map(RemovedContestDto::from)
+        .collect()
+}
+
 /// What one merge into the general logbook did (§3.2).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33444,10 +33834,19 @@ fn start_on_the_logbook(
                             let name = e.settings().fd_event_name.clone();
                             e.fd_host_start(fd_event_journal_path(&name, &contest))
                         };
-                        let bound = started.map_err(|e| e.to_string()).and_then(|()| {
-                            std::net::TcpListener::bind(("0.0.0.0", port))
-                                .map_err(|e| e.to_string())
-                        });
+                        // A club the engine will not host is not a port problem: it says
+                        // its own reason, and nothing about the port.
+                        let bound = started
+                            .map_err(|e| format!("couldn't host the club event: {e}."))
+                            .and_then(|()| {
+                                std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
+                                    format!(
+                                        "couldn't host on port {port}: {e} — change the Host \
+                                         port in Settings ▸ Contesting or stop the program \
+                                         using it."
+                                    )
+                                })
+                            });
                         match bound {
                             Ok(listener) => {
                                 let shutdown = Arc::new(AtomicBool::new(false));
@@ -33495,15 +33894,7 @@ fn start_on_the_logbook(
                             Err(e) => {
                                 engine_lock(&mgr_engine).fd_host_stop();
                                 if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
-                                    conn_log(
-                                        "FD sync",
-                                        "error",
-                                        format!(
-                                            "couldn't host on port {port}: {e} — change the \
-                                             Host port in Settings ▸ Contesting or stop the \
-                                             program using it. Retrying quietly."
-                                        ),
-                                    );
+                                    conn_log("FD sync", "error", format!("{e} Retrying quietly."));
                                 }
                                 bind_failed = Some((port, now));
                             }
@@ -34177,6 +34568,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         stop_sat_track,
         sat_track_status,
         point_rotator_at_call,
+        rotator_bearing_to_call,
         read_rotator,
         read_rotator_state,
         cw_decode,
@@ -34266,8 +34658,16 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_connection_log,
         get_openings_log,
         get_assistance_journal,
+        contest_lists::scp_ensure,
+        contest_lists::get_scp_status,
+        contest_lists::get_scp_calls,
+        contest_lists::import_call_history,
+        contest_lists::get_call_history_status,
+        contest_lists::get_call_history,
+        contest_lists::clear_call_history,
         get_credentials_status,
         send_cw,
+        send_cw_armed,
         set_cw_peer_info,
         set_cw_wpm,
         set_decode_depth,
@@ -34357,6 +34757,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         contest_log_satellite,
         contest_working,
         contest_entry_reset,
+        contest_remove_last,
+        contest_restore,
+        contest_removed,
         fd_merge_to_general,
         fd_set_upload,
         contest_i_moved,
@@ -34367,6 +34770,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_hold_tx_freq,
         set_blocked_calls,
         set_rtty_macros,
+        set_contest_esm,
         set_psk_macros,
         set_beta_updates,
         retire_wanted_calls,
@@ -36320,6 +36724,53 @@ mod tests {
         );
     }
 
+    /// ⭐ Removing the newest contest contact reaches the app only if its three commands are
+    /// REGISTERED, and the two that change the contest log answer only once its journal holds
+    /// the change (the tempo-app functions that wait for it). And none of them is one of Remote's
+    /// operations: removal is refused from afar, so the Remote dispatcher must never name them.
+    #[test]
+    fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for (command, waits_through) in [
+            ("contest_remove_last", Some("contest_removal::remove_last(")),
+            ("contest_restore", Some("contest_removal::restore(")),
+            ("contest_removed", None),
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{command},")),
+                "{command} is not registered — the strip or the contest screen would fail at runtime"
+            );
+            let body = src
+                .split_once(&format!("\nfn {command}("))
+                .or_else(|| src.split_once(&format!("\nasync fn {command}(")))
+                .expect("the command exists")
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            if let Some(call) = waits_through {
+                assert!(body.contains(call), "{command} must go through {call}");
+            }
+        }
+        // The Remote dispatcher's change table. The POSITIVE CONTROL: it does carry the
+        // Logbook's delete, so a check that read nothing could not pass for one that read it.
+        let remote = include_str!("remote_service/operations/logging.rs");
+        assert!(
+            remote.contains("LogOp::Delete"),
+            "the control: Remote's own delete is there"
+        );
+        for name in ["contest_removal", "contest_remove_last", "contest_restore"] {
+            assert!(!remote.contains(name), "Remote must not reach {name}");
+        }
+    }
+
     /// The RF scope pane's poll is also its request for the radio's scope, so it must be
     /// REGISTERED and must answer from the feed's RF read — a command with a precedence of its own
     /// could hand the pane the audio FFT, and would place no request.
@@ -36812,6 +37263,67 @@ mod tests {
             }),
         ));
         assert_eq!(super::EngineRig::new(digital).mode().0, "PKTUSB");
+    }
+
+    /// ⭐ WHAT WSJT-X READS FROM `\dump_state` THROUGH THE CAT BROKER, byte for byte. A NET-rigctl
+    /// client reads this reply to decide the radio is usable, and its RX and TX rows are wide so the
+    /// client may set any frequency. Typed out here rather than taken from the constant, so a change
+    /// to the constant, or to the code that assembles the reply, shows up as a diff of these lines.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_cat_broker_answers_dump_state_with_the_bytes_wsjtx_has_always_read() {
+        use std::io::{Read, Write};
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        let backend: std::sync::Arc<dyn tempo_audio::rigctld_server::RigBackend> =
+            std::sync::Arc::new(super::EngineRig::new(shared));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || tempo_audio::rigctld_server::serve(listener, backend));
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        // Protocol 0 puts no terminator after the dump, so `\chk_vfo`'s one line marks its end.
+        client.write_all(b"\\dump_state\n\\chk_vfo\n").unwrap();
+        let mut got = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !got.ends_with(b"CHKVFO 0\n") {
+            let n = client.read(&mut chunk).unwrap();
+            assert!(n > 0, "closed after {:?}", String::from_utf8_lossy(&got));
+            got.extend_from_slice(&chunk[..n]);
+        }
+        assert_eq!(
+            String::from_utf8(got).unwrap(),
+            concat!(
+                "0\n",
+                "2\n",
+                "1\n",
+                "135700 1300000000 0xffffffff -1 -1 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "135700 1300000000 0xffffffff 5000 100000 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "0xffffffff 1\n",
+                "0 0\n",
+                "0xffffffff 2700\n",
+                "0xffffffff 500\n",
+                "0 0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "CHKVFO 0\n",
+            )
+        );
     }
 
     /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It
@@ -39340,7 +39852,7 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 18] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 19] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
@@ -39351,6 +39863,7 @@ mod tests {
         "get_sat_transponder",
         "read_rotator",
         "read_rotator_state",
+        "rotator_bearing_to_call",
         "get_aprs_heard",
         "get_aprs_health",
         "get_aprs_tx_notice",
