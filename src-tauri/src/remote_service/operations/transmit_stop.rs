@@ -363,7 +363,8 @@ fn halt_off_thread(addr: Option<String>) {
 /// Stops that land while that thread waits for the Engine are one stop, run once it is free, after
 /// all of them have landed: it stops whatever is on the air then, as each of them would. One that
 /// lands while it runs is run again after. However many datagrams a computer sends, there is one
-/// thread, never one per Stop.
+/// thread, never one per Stop. A verb that panics ends neither the thread nor the Stops after it:
+/// each later Stop is acknowledged, so each still runs every verb.
 pub(crate) struct RoadStop {
     authority: std::sync::Arc<Authority>,
     signal: std::sync::Arc<RoadSignal>,
@@ -383,6 +384,25 @@ impl RoadStop {
         authority: std::sync::Arc<Authority>,
         engine: crate::SharedEngine,
     ) -> Option<Self> {
+        Self::running(authority, engine, stop)
+    }
+
+    /// [`RoadStop::new`], with `verbs` run in place of the stop verbs: a test's stand-in for a verb
+    /// that fails.
+    #[cfg(test)]
+    pub(crate) fn with_verbs(
+        authority: std::sync::Arc<Authority>,
+        engine: crate::SharedEngine,
+        verbs: fn(&mut tempo_app::engine::Engine) -> Option<String>,
+    ) -> Option<Self> {
+        Self::running(authority, engine, verbs)
+    }
+
+    fn running(
+        authority: std::sync::Arc<Authority>,
+        engine: crate::SharedEngine,
+        verbs: fn(&mut tempo_app::engine::Engine) -> Option<String>,
+    ) -> Option<Self> {
         let signal = std::sync::Arc::new(RoadSignal::default());
         let theirs = signal.clone();
         let stopper = std::thread::Builder::new()
@@ -390,11 +410,21 @@ impl RoadStop {
             .spawn(move || {
                 while !theirs.gone.load(Ordering::SeqCst) {
                     if theirs.wanted.swap(false, Ordering::SeqCst) {
-                        let mut e = tempo_app::engine::engine_lock_result(&engine)
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let halt = stop(&mut e);
-                        drop(e);
-                        halt_off_thread(halt);
+                        // ⛔ Caught, as the command link's runner catches a command's: the thread
+                        // lives on, and the Engine's guard goes before the mast is halted.
+                        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let mut e = tempo_app::engine::engine_lock_result(&engine)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            verbs(&mut e)
+                        }));
+                        match ran {
+                            Ok(halt) => halt_off_thread(halt),
+                            Err(_) => tempo_core::applog::warn(
+                                "remote",
+                                "a stop verb panicked on Stop's second road; the next Stop runs \
+                                 every verb again",
+                            ),
+                        }
                         continue;
                     }
                     std::thread::park();
@@ -421,5 +451,64 @@ impl Drop for RoadStop {
     fn drop(&mut self) {
         self.signal.gone.store(true, Ordering::SeqCst);
         self.stopper.unpark();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    /// How many times [`fails_first`] ran.
+    static RAN: AtomicUsize = AtomicUsize::new(0);
+
+    /// The stop verbs as this test stands them in: the first run panics, as a verb that met
+    /// something it could not handle would, and every run is counted.
+    fn fails_first(_: &mut tempo_app::engine::Engine) -> Option<String> {
+        if RAN.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("a stop verb that fails");
+        }
+        None
+    }
+
+    /// Waits up to two seconds for the verbs to have run `runs` times.
+    fn ran(runs: usize) -> bool {
+        for _ in 0..400 {
+            if RAN.load(Ordering::SeqCst) >= runs {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// ⛔ A stop verb that panics never ends the road's stopper: the next Stop on the road still runs
+    /// the verbs. The first Stop's verbs panic (the test's stand-in); the second Stop, a moment
+    /// later, runs them again. CONTROL: the first Stop's verbs ran, and each Stop retired the
+    /// transmit generation at once, whatever its verbs then did.
+    #[test]
+    fn a_stop_verb_that_panics_never_ends_the_roads_stopper() {
+        let authority = std::sync::Arc::new(Authority::default());
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let road = RoadStop::with_verbs(authority.clone(), engine, fails_first).unwrap();
+        let before = authority.transmit_revocation().generation();
+        road.stop();
+        assert!(ran(1), "CONTROL: the first Stop's verbs ran");
+        std::thread::sleep(Duration::from_millis(50));
+        road.stop();
+        let again = ran(2);
+        assert_eq!(
+            authority.transmit_revocation().generation(),
+            before + 2,
+            "CONTROL: each Stop retired the generation"
+        );
+        assert!(
+            again,
+            "the second Stop on the road ran no verb: {} runs",
+            RAN.load(Ordering::SeqCst)
+        );
     }
 }
