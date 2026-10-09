@@ -864,6 +864,60 @@ mod tests {
         assert_eq!(unpack(&[1 << 34]), Err(UnpackError::BadFrames));
     }
 
+    /// The quoted three-letter names in the Fortran list that opens at `start`
+    /// and closes at the first `end` after it.
+    fn section_list(src: &str, start: &str, end: &str) -> Vec<String> {
+        let from = src.find(start).expect("the list's opening") + start.len();
+        let to = from + src[from..].find(end).expect("the list's close");
+        src[from..to]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(|name| name.trim().to_string())
+            .collect()
+    }
+
+    /// JTTY's class-and-section atom indexes upstream's 3.3 section registry
+    /// (`packjt77_grammar.f90`); Nexus's FT8 Field Day messages index the
+    /// `csec` tables of its own 3.0.2-era `packjt77.f90`, one in the unpacker
+    /// and one in the packer. The three lists must be the same 86 sections in
+    /// the same order, and JTTY must put every one on the air under its FT8
+    /// index (section field: source bits 13-19).
+    #[test]
+    fn the_arrl_rac_sections_match_the_ft8_tables() {
+        const GRAMMAR: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../libtempo/vendor/wsjtx/lib/77bit/packjt77_grammar.f90"
+        ));
+        const PACKJT77: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../libtempo/vendor/wsjtx/lib/77bit/packjt77.f90"
+        ));
+        let grammar = |src: &str| section_list(src, "PACK77_ARRL_SECTIONS(PACK77_NSEC)=(/", "/)");
+        let jtty = grammar(GRAMMAR);
+        assert_eq!(jtty.len(), 86, "{jtty:?}");
+        let mut tables = PACKJT77
+            .match_indices("data csec/")
+            .map(|(at, _)| section_list(&PACKJT77[at..], "data csec/", "/"));
+        let (unpacker, packer) = (tables.next().unwrap(), tables.next().unwrap());
+        assert!(tables.next().is_none(), "two csec tables, no more");
+        assert_eq!(unpacker, jtty, "packjt77 unpacker's csec");
+        assert_eq!(packer, jtty, "packjt77 packer's csec");
+        // Control: the comparison sees a single changed name.
+        assert_ne!(
+            grammar(&GRAMMAR.replacen("\"EMA\"", "\"EMB\"", 1)),
+            unpacker
+        );
+
+        for (i, section) in jtty.iter().enumerate() {
+            let text = format!("1A {section}");
+            let p = pack(&text, Profile::FieldDay, true).expect("a Field Day exchange");
+            assert_eq!(p.frames.len(), 1, "{text}: one class-and-section frame");
+            assert_eq!((p.frames[0] >> 15) & 0x7F, i as u64 + 1, "{text}");
+            assert_eq!(unpack(&p.frames).unwrap().text, text);
+        }
+    }
+
     #[test]
     fn empty_and_overlong_text_are_refused() {
         assert_eq!(encode("", Profile::Unknown), Err(EncodeError::Empty));
