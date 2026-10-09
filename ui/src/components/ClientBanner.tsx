@@ -15,9 +15,21 @@
 // the air in it so far, in amber, why it ended, or that the station has gone quiet while a press
 // is held. The short tone that goes with an end is played by Nexus itself, in this computer's
 // headset.
+//
+// In a test build it carries the road switch too (`src-tauri/src/bench_road_switch.rs`): Normal,
+// Block the command link, Block the Stop road, one click each, and a mark while a road is blocked.
+// Only a test build's status names the switch, so a shipped build draws none of it.
 
 import { useEffect, useState } from 'react'
-import { clientStatus, isTauri, leaveClientMode, type ClientOver, type ClientStatus } from '../api'
+import {
+  benchRoadSwitch,
+  clientStatus,
+  isTauri,
+  leaveClientMode,
+  type BenchPosition,
+  type ClientOver,
+  type ClientStatus,
+} from '../api'
 import { t } from '../i18n'
 import { lanReachLine } from '../remote-native/lanReach'
 
@@ -86,6 +98,53 @@ function line(status: ClientStatus): string {
   }
 }
 
+/** The road switch of a test build. Each move draws the switch's own answer at once; a move it
+ *  refuses changes nothing, and the next ask after the link says where it is. A road can be
+ *  blocked only while the other is open, as the switch itself allows. */
+function RoadSwitch({
+  position,
+  moved,
+}: {
+  position: BenchPosition
+  moved: (now: BenchPosition) => void
+}) {
+  const move = (to: BenchPosition) => {
+    void benchRoadSwitch(to).then(moved, () => undefined)
+  }
+  return (
+    <span className="client-banner-bench" role="group" aria-label={t('client.bench.label')}>
+      <span className="client-banner-bench-label" aria-hidden="true">
+        {t('client.bench.label')}
+      </span>
+      <button type="button" aria-pressed={position === 'normal'} onClick={() => move('normal')}>
+        {t('client.bench.normal')}
+      </button>
+      <button
+        type="button"
+        aria-pressed={position === 'blockLink'}
+        disabled={position === 'blockStopRoad'}
+        onClick={() => move('blockLink')}
+      >
+        {t('client.bench.blockLink')}
+      </button>
+      <button
+        type="button"
+        aria-pressed={position === 'blockStopRoad'}
+        disabled={position === 'blockLink'}
+        onClick={() => move('blockStopRoad')}
+      >
+        {t('client.bench.blockStopRoad')}
+      </button>
+      {position === 'blockLink' && (
+        <span className="client-banner-bench-mark">{t('client.bench.blocked.link')}</span>
+      )}
+      {position === 'blockStopRoad' && (
+        <span className="client-banner-bench-mark">{t('client.bench.blocked.stopRoad')}</span>
+      )}
+    </span>
+  )
+}
+
 export function ClientBanner() {
   const [status, setStatus] = useState<ClientStatus | null>(null)
   const [leaving, setLeaving] = useState(false)
@@ -114,13 +173,26 @@ export function ClientBanner() {
     setLeaving(true)
     void leaveClientMode().catch(() => setLeaving(false))
   }
+  const bench = status.bench
   return (
-    <div className="client-banner" data-phase={status.phase} role="status" aria-live="polite">
+    <div
+      className="client-banner"
+      data-phase={status.phase}
+      data-bench={bench}
+      role="status"
+      aria-live="polite"
+    >
       <span className="client-banner-line">{line(status)}</span>
       {over && (
         <span className="client-banner-over" data-over={status.over?.phase}>
           {over}
         </span>
+      )}
+      {bench && (
+        <RoadSwitch
+          position={bench}
+          moved={(now) => setStatus((was) => (was ? { ...was, bench: now } : was))}
+        />
       )}
       <button
         type="button"

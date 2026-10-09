@@ -2,19 +2,22 @@
 // The banner of a computer driving another station. On a station's own screen it must say
 // nothing and ask once; on a driving computer it must say which station and how the link stands,
 // in every state the backend names, with why a refusal happened, and Leave must start this
-// computer's Nexus again as itself.
+// computer's Nexus again as itself. In a test build it also carries the road switch, which a
+// shipped build's status never names, so it draws none there.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { ClientStatus } from '../api'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import type { BenchPosition, ClientStatus } from '../api'
 import { EN } from '../i18n/en'
 
 let desktop = true
 const mockStatus = vi.fn<() => Promise<ClientStatus | null>>()
 const mockLeave = vi.fn<() => Promise<void>>()
+const mockSwitch = vi.fn<(to: BenchPosition) => Promise<BenchPosition>>()
 vi.mock('../api', () => ({
   isTauri: () => desktop,
   clientStatus: () => mockStatus(),
   leaveClientMode: () => mockLeave(),
+  benchRoadSwitch: (to: BenchPosition) => mockSwitch(to),
 }))
 import { ClientBanner, CLIENT_STATUS_EVERY_MS } from './ClientBanner'
 
@@ -27,6 +30,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   mockStatus.mockReset()
   mockLeave.mockReset().mockResolvedValue(undefined)
+  mockSwitch.mockReset()
 })
 afterEach(() => {
   cleanup()
@@ -187,5 +191,91 @@ describe('this computer’s over, as the station says it', () => {
     })
     const quiet = await shown()
     expect(quiet.querySelector('.client-banner-over')?.textContent).toBe(EN['client.over.noWord'])
+  })
+})
+
+describe('a test build’s road switch', () => {
+  /** Lets the switch's answer, and the renders after it, land. */
+  async function settled(): Promise<void> {
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+    })
+  }
+
+  it('is drawn only when the status names it: a shipped build’s never does', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null })
+    const container = await shown()
+    expect(container.querySelector('.client-banner-bench')).toBeNull()
+    expect(screen.queryByRole('group')).toBeNull()
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      EN['client.banner.leave'],
+    ])
+    expect(screen.getByRole('status').hasAttribute('data-bench')).toBe(false)
+    for (const key of ['client.bench.normal', 'client.bench.blockLink', 'client.bench.blockStopRoad'] as const) {
+      expect(container.textContent).not.toContain(EN[key])
+    }
+    expect(mockSwitch).not.toHaveBeenCalled()
+  })
+
+  it('moves with one click each, marks a blocked road, and offers one road at a time', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, bench: 'normal' })
+    const container = await shown()
+    const banner = screen.getByRole('status')
+    const group = within(banner).getByRole('group', { name: EN['client.bench.label'] })
+    const button = (key: 'client.bench.normal' | 'client.bench.blockLink' | 'client.bench.blockStopRoad') =>
+      within(group).getByRole('button', { name: EN[key] }) as HTMLButtonElement
+    const pressed = () =>
+      within(group)
+        .getAllByRole('button')
+        .filter((b) => b.getAttribute('aria-pressed') === 'true')
+        .map((b) => b.textContent)
+    const mark = () => container.querySelector('.client-banner-bench-mark')?.textContent ?? null
+
+    expect(pressed()).toEqual([EN['client.bench.normal']])
+    expect(banner.getAttribute('data-bench')).toBe('normal')
+    expect(mark()).toBeNull()
+    expect([button('client.bench.blockLink').disabled, button('client.bench.blockStopRoad').disabled]).toEqual([false, false])
+
+    for (const [key, to, sentence, other] of [
+      ['client.bench.blockLink', 'blockLink', EN['client.bench.blocked.link'], 'client.bench.blockStopRoad'],
+      ['client.bench.blockStopRoad', 'blockStopRoad', EN['client.bench.blocked.stopRoad'], 'client.bench.blockLink'],
+    ] as const) {
+      mockSwitch.mockResolvedValueOnce(to)
+      fireEvent.click(button(key))
+      await settled()
+      expect(mockSwitch).toHaveBeenLastCalledWith(to)
+      // The switch's own answer is drawn at once, before the next ask after the link.
+      expect(pressed()).toEqual([EN[key]])
+      expect(banner.getAttribute('data-bench')).toBe(to)
+      expect(mark()).toBe(sentence)
+      expect(button(other).disabled).toBe(true)
+      expect(button('client.bench.normal').disabled).toBe(false)
+
+      mockSwitch.mockResolvedValueOnce('normal')
+      fireEvent.click(button('client.bench.normal'))
+      await settled()
+      expect(mockSwitch).toHaveBeenLastCalledWith('normal')
+      expect(pressed()).toEqual([EN['client.bench.normal']])
+      expect(mark()).toBeNull()
+    }
+  })
+
+  it('a move the switch refuses changes nothing drawn, and the status then says where it is', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, bench: 'normal' })
+    const container = await shown()
+    mockSwitch.mockRejectedValueOnce('oneRoadAtATime')
+    fireEvent.click(screen.getByRole('button', { name: EN['client.bench.blockLink'] }))
+    await settled()
+    expect(screen.getByRole('status').getAttribute('data-bench')).toBe('normal')
+    expect(container.querySelector('.client-banner-bench-mark')).toBeNull()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, bench: 'blockStopRoad' })
+    await act(async () => {
+      vi.advanceTimersByTime(CLIENT_STATUS_EVERY_MS)
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('status').getAttribute('data-bench')).toBe('blockStopRoad')
+    expect(container.querySelector('.client-banner-bench-mark')?.textContent).toBe(
+      EN['client.bench.blocked.stopRoad'],
+    )
   })
 })

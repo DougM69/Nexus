@@ -27422,6 +27422,49 @@ tr.sel .aprs-sym {
   color: inherit;
   cursor: pointer;
 }
+/* A test build's road switch (only a test build's status names it): its three positions, the one
+   it is at filled, and while a road is blocked a mark in the bad state's colour, the banner's edge
+   with it. In the flow like the rest, so it covers nothing; the banner wraps rather than squeeze
+   its line while the switch is there. */
+.client-banner[data-bench] {
+  flex-wrap: wrap;
+}
+.client-banner[data-bench='blockLink'],
+.client-banner[data-bench='blockStopRoad'] {
+  border-bottom-color: var(--state-bad);
+}
+.client-banner-bench {
+  flex: none;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.client-banner-bench-label {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.client-banner-bench > button {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+.client-banner-bench > button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.client-banner-bench > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.client-banner-bench-mark {
+  color: var(--state-bad);
+  font-weight: 700;
+}
 
 .update-banner {
   position: fixed;

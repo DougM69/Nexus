@@ -3924,7 +3924,12 @@ export interface ClientStatus {
   phase: 'connecting' | 'live' | 'notLive' | 'busy' | 'refused'
   reason: string | null
   over?: ClientOver | null
+  /** A test build's road switch: where it is. A shipped build's status never names it. */
+  bench?: BenchPosition
 }
+
+/** The test build's road switch: both roads as they are, or one of them blocked. */
+export type BenchPosition = 'normal' | 'blockLink' | 'blockStopRoad'
 
 /** One of this computer's audio devices: the name kept, and the label shown. */
 export interface ClientAudioDevice {
@@ -3971,6 +3976,12 @@ export async function clientAudioTest(): Promise<{ played: boolean; trouble?: st
 
 export async function clientStatus(): Promise<ClientStatus | null> {
   return invoke<ClientStatus | null>('client_status')
+}
+
+/** Moves a test build's road switch: where it is now. Blocking one road while the other is
+ *  blocked is refused (`oneRoadAtATime`); a shipped build has no such command. */
+export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition> {
+  return invoke<BenchPosition>('bench_road_switch', { to })
 }
 
 /** Leave: this computer's Nexus starts again as itself, the station handed back first. */
