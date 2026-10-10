@@ -357,11 +357,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
+  new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
+  contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
+  the FETCH — check your Logbook API key" every five minutes, and the last pull time stopped
+  moving. A pull that finds nothing new is now a pull that worked. The same answer is read the same
+  way everywhere else: Sync from QRZ on an empty QRZ logbook reports no new contacts, Check
+  confirmations says that logbook holds no contacts and checks nothing, and Correct at QRZ, for a
+  call QRZ holds no contact with, says QRZ has no matching record.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16
-  of one browser's addresses. A browser on your own network or on Tailscale still connects
-  directly.
+  of one browser's addresses and takes at most 64 in all. A browser on your own network or on
+  Tailscale still connects directly.
 - **Another radio's rigctld can no longer land on wfview's port.** With a radio on NET rigctl at a
   rigctld on this computer (wfview's, or one you run), Nexus could give a second radio's rigctld
   that same port, when it moved two radios off a port they shared or picked the port for a radio
@@ -470,6 +478,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own laptop holds its own position from the moment it starts hosting, two positions with one name
   read apart on every board, the TV and Remote, and a contest contact can no longer be removed
   through the Remote stream.
+- **Through the Remote stream, the Contest screen no longer exports anything, restores a removed
+  contact or merges contacts into your logbook.** A press of **Export Cabrillo**, **Export ADIF**,
+  **Summary**, **Dupe sheet**, **Club Cabrillo**, **Club ADIF**, **Restore** or **Merge … into my
+  logbook** that comes through the stream does nothing and says so ("Only at the station: …"), as
+  Remove already does. The same press at the station works as before.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to

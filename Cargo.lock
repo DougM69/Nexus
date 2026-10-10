@@ -2824,6 +2824,7 @@ version = "0.2.0"
 dependencies = [
  "js8",
  "modes",
+ "ring",
  "serde",
  "serde_json",
  "socket2",
