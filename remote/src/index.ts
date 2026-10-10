@@ -1,7 +1,7 @@
-// Same-origin browser API and outbound station admission. No radio command router.
-import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, browserOrigin, caller, cookie, device, deviceCookie, deviceKeys, digest, id, label,
-  lifetime, native, proof, publicKey, rate, Refusal, renewsUntil, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
-  trial, TRIAL_MS, uuid } from './authority'
+// Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
+import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, bodyBytes, browserOrigin, caller, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, digest,
+  deviceKinds, fieldsOf, id, label, lifetime, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, Refusal, renewsUntil, requireAdmin, requireEligible,
+  requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, trial, TRIAL_MS, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
 import { APPLICATION_VERSION, negotiatedApplicationVersion } from './application-version'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
@@ -22,7 +22,7 @@ function json(value: unknown, status = 200, headers?: HeadersInit): Response {
 }
 async function room(env: RemoteEnv, stationId: string, path: string, value?: unknown): Promise<Response> {
   // Construct fresh internal headers. Public requests cannot supply an admission.
-  const upgrade = path === 'station' || path === 'browser'
+  const upgrade = path === 'station' || path === 'browser' || path === 'client-pipe' || path === 'station-pipe'
   return env.STATIONS.get(env.STATIONS.idFromName(stationId)).fetch(new Request(`https://station.internal/${path}`, {
     method: upgrade ? 'GET' : 'POST',
     headers: upgrade ? { upgrade: 'websocket', 'x-nexus-admission': JSON.stringify(value) } : { 'content-type': 'application/json' },
@@ -56,9 +56,20 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     streamVersion: 1,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
-  if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
+  // The native client's routes (Nexus on another computer), on its own token and its device key's
+  // signature, with no Origin and no cookie. No other route takes that caller, and it takes no other.
+  if (path.startsWith('client/') || match?.[2].startsWith('client/')) return client(request, env, path, match, now)
+  if (request.method === 'GET' && match && ['connect', 'observe', 'pipe'].includes(match[2])) {
     const stationId = id(match[1])
     requireValue(request.headers.get('upgrade')?.toLowerCase() === 'websocket', 'webSocketRequired', 426)
+    // The station's end of a native client's pipe (room.ts, pipe.ts): a second socket of its own,
+    // opened when its main socket was asked to, for the pipe that message named.
+    if (match[2] === 'pipe') {
+      const row = await native(request, env, stationId)
+      await rate(env, `station-pipe:${stationId}`, now, 60)
+      return room(env, stationId, 'station-pipe', { access: await access(env, row, now), pipeId: id(request.headers.get('x-nexus-pipe-id')),
+        identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + STATION_ADMISSION_MS } })
+    }
     if (match[2] === 'connect') {
       const row = await native(request, env, stationId)
       await rate(env, `connect:${stationId}`, now, 20)
@@ -83,6 +94,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         // The browser's proof on the operation and audio lanes (S1-M1): handed on only to a station that
         // takes it, because any other refuses a field it does not know by closing its socket.
         laneVersion: request.headers.get('x-nexus-lane-signature-version') === '1' ? 1 : 0,
+        // The native client's pipe, on the same terms: only a station that sends this header is ever
+        // asked to open one (`pipeOpen`), a message any other would close its socket on.
+        pipeVersion: request.headers.get('x-nexus-pipe-version') === '1' ? 1 : 0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + STATION_ADMISSION_MS } })
     }
     browserOrigin(request, env)
@@ -130,6 +144,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       env.DB.prepare('DELETE FROM enrollments WHERE expires_at<=?').bind(now),
       env.DB.prepare('DELETE FROM tickets WHERE expires_at<=?').bind(now),
       env.DB.prepare('DELETE FROM rate_limits WHERE expires_at<=?').bind(now),
+      env.DB.prepare('DELETE FROM challenges WHERE expires_at<=?').bind(now),
     ])
     await rate(env, 'enroll-global', now, 1000, 600000)
     const input = await body(request, ['name']), stationId = uuid(), credential = secret(), code = secret().slice(0, 16)
@@ -249,12 +264,16 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // The generation and the renewal limit go ONLY to a Nexus that asks. 1.12.0 parses this list with
       // deny_unknown_fields, so a field added for everyone would fail every refresh it makes. The device
       // key (A5) likewise, on its own header.
-      const key = deviceKeys(request) ? ',public_key AS publicKey' : ''
+      // The native client's devices go only to a Nexus that asks for kinds, and with their kind and
+      // platform, for its approval pop-up; a browser is listed there as kind 'browser' on no platform.
+      const kinds = deviceKinds(request)
+      const key = (deviceKeys(request) ? ',public_key AS publicKey' : '') + (kinds ? ",COALESCE(kind,'browser') AS kind,platform" : '')
+      const only = kinds ? '' : ' AND kind IS NULL'
       const devices = lifetime(request)
         ? await env.DB.prepare(`SELECT id,name,approved,expires_at AS expiresAt,generation,
             CASE WHEN approved=1 AND approved_at IS NOT NULL THEN approved_at+? END AS renewsUntil${key}
-            FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8`).bind(APPROVAL_LIMIT_MS, row.id, now).all()
-        : await env.DB.prepare(`SELECT id,name,approved,expires_at AS expiresAt${key} FROM devices WHERE station_id=? AND expires_at>? ORDER BY id LIMIT 8`)
+            FROM devices WHERE station_id=? AND expires_at>?${only} ORDER BY id LIMIT 8`).bind(APPROVAL_LIMIT_MS, row.id, now).all()
+        : await env.DB.prepare(`SELECT id,name,approved,expires_at AS expiresAt${key} FROM devices WHERE station_id=? AND expires_at>?${only} ORDER BY id LIMIT 8`)
           .bind(row.id, now).all()
       return json({ devices: devices.results })
     }
@@ -496,6 +515,122 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
   await sync(env, await station(env, stationId), now)
 }
 
+// THE NATIVE CLIENT. Nexus on another computer (later a phone app) driving its station over the
+// internet: signed in through the system browser to the Native application (authority.ts,
+// `nativeAccount`), with no Origin and no cookie, and acting as a device of that station, approved at
+// the shack as a browser is and on the same terms: thirty days renewed on use, ninety at most, eight
+// devices a station, revoked at the shack or by itself. Its credential is its key: every request that
+// acts as the device is signed by it over a one-use challenge (`signedBy`), and the shack pins that
+// same key when it approves the device, for the pipe's own TLS to prove.
+//
+//   POST client/challenge              a challenge for the next signed request, good for a minute
+//   POST client/session                the account's stations, each with its station key
+//   POST stations/:id/client/device    this device's key registered (signed by that key), or found again
+//   POST stations/:id/client/turn      TURN credentials for its internet roads
+//   GET  stations/:id/client/pipe      its pipe to the station, through the room (pipe.ts)
+//   POST stations/:id/client/renew     the pipe's lease renewed, as a browser renews its session
+//   POST stations/:id/client/forget    its own approval ended, as a browser forgets itself
+async function client(request: Request, env: RemoteEnv, path: string, match: RegExpExecArray | null, now: number): Promise<Response> {
+  const caller = await nativeAccount(request, env, now)
+  await rate(env, `client:${caller.accountId}`, now, 120)
+  const entitlement = await trial(env, caller.accountId, now)
+  if (path === 'client/challenge') {
+    requireValue(request.method === 'POST', 'methodNotAllowed', 405)
+    await body(request, [])
+    const challenge = secret(), expiresAt = now + CHALLENGE_MS
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM challenges WHERE expires_at<=?').bind(now),
+      env.DB.prepare('INSERT INTO challenges(digest,account_id,expires_at) VALUES(?,?,?)').bind(await digest(challenge), caller.accountId, expiresAt),
+    ])
+    return json({ challenge, expiresAt })
+  }
+  if (path === 'client/session') {
+    requireValue(request.method === 'POST', 'methodNotAllowed', 405)
+    await body(request, [])
+    // The station key (S3-M1) over the signed-in API, never through the relay: the key the station's
+    // end of the pipe must prove, which the computer keeps at first sight.
+    const rows = await env.DB.prepare('SELECT id,name,public_key FROM stations WHERE account_id=? AND enabled=1 ORDER BY id LIMIT 2')
+      .bind(caller.accountId).all<{ id: string; name: string; public_key: string | null }>()
+    return json({ accountId: caller.accountId, entitlement, identityVerified: caller.verified, serverNow: now,
+      stations: rows.results.map(row => ({ id: row.id, name: row.name, stationKey: row.public_key })) })
+  }
+  requireValue(match, 'notFound', 404)
+  const row = await station(env, match[1]), verb = match[2].slice('client/'.length)
+  requireValue(row.account_id === caller.accountId && row.enabled === 1, 'stationUnavailable', 404)
+  // Every verb but `device` is this device's own: the device the request names, of this account and
+  // station, within its approval or its wait for one, and the request signed by its key.
+  const signer = async (bytes: Uint8Array): Promise<DeviceRow> => {
+    const current = await nativeDevice(request, env, row.id, caller.accountId, now)
+    requireValue(current?.public_key, 'deviceNotApproved')
+    await signedBy(request, env, caller.accountId, current.public_key, bytes, now)
+    return current
+  }
+  const identity = (current: DeviceRow) => ({ accountId: caller.accountId, deviceId: current.id,
+    deviceGeneration: current.generation, expiresAt: Math.min(caller.expiresAt, current.expires_at) })
+  if (verb === 'pipe') {
+    requireValue(request.method === 'GET' && request.headers.get('upgrade')?.toLowerCase() === 'websocket', 'webSocketRequired', 426)
+    requireTrial(entitlement, now)
+    const current = await signer(new Uint8Array())
+    requireValue(current.approved === 1, 'deviceNotApproved')
+    await rate(env, `pipe:${row.id}:${current.id}`, now, 12)
+    const response = await room(env, row.id, 'client-pipe', { access: await access(env, row, now), identity: identity(current), entitlement })
+    // Opening the station from this computer is use, as a browser's ticket is.
+    if (response.status === 101) await extendApproval(env, row.id, current, now)
+    return response
+  }
+  requireValue(request.method === 'POST', 'methodNotAllowed', 405)
+  const bytes = await bodyBytes(request)
+  // Above the trial, as a browser's own is: an operator whose access lapsed may still tidy up.
+  if (verb === 'forget') {
+    fieldsOf(bytes, [])
+    const current = await signer(bytes)
+    await env.DB.batch([
+      env.DB.prepare('UPDATE devices SET approved=0,generation=generation+1,expires_at=? WHERE id=?').bind(now, current.id),
+      env.DB.prepare('UPDATE stations SET policy_version=policy_version+1 WHERE id=?').bind(row.id),
+    ])
+    await sync(env, await station(env, row.id), now)
+    return json({ ok: true })
+  }
+  requireTrial(entitlement, now)
+  if (verb === 'device') {
+    const input = fieldsOf(bytes, ['name', 'kind', 'platform', 'publicKey'])
+    const name = label(input.name), key = await publicKey(input.publicKey), { kind, platform } = nativeKind(input.kind, input.platform)
+    // Signed by the key it registers, so whoever sends it holds that key.
+    await signedBy(request, env, caller.accountId, key, bytes, now)
+    const current = await env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
+      WHERE station_id=? AND account_id=? AND public_key=? AND kind IS NOT NULL AND expires_at>? ORDER BY expires_at DESC LIMIT 1`)
+      .bind(row.id, caller.accountId, key, now).first<DeviceRow>()
+    if (current) return json({ deviceId: current.id, approved: current.approved === 1, expiresAt: current.expires_at, renewsUntil: renewsUntil(current) })
+    // Ten minutes to be approved at the shack, as a browser has. The credential digest is of a value
+    // nobody holds: this device's credential is its key, and no cookie can ever match its row.
+    const deviceId = uuid(), expiresAt = now + 600000
+    const inserted = await env.DB.prepare(`INSERT INTO devices(id,station_id,account_id,name,credential_hash,expires_at,public_key,kind,platform)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM devices WHERE station_id=? AND expires_at>?)<8 RETURNING id`)
+      .bind(deviceId, row.id, caller.accountId, name, await digest(secret()), expiresAt, key, kind, platform, row.id, now).first()
+    requireValue(inserted, 'deviceLimit', 409)
+    return json({ deviceId, approved: false, expiresAt, renewsUntil: null })
+  }
+  fieldsOf(bytes, [])
+  const current = await signer(bytes)
+  requireValue(current.approved === 1, 'deviceNotApproved')
+  const policy = await access(env, row, now)
+  // Past exactly the checks a browser's ticket is.
+  observerDeadline(policy, identity(current), entitlement, now)
+  if (verb === 'turn') {
+    // The relay a browser's stream has, for this device's two internet roads. Each entry is a username
+    // and a password, which is what the client core's TURN client takes.
+    await rate(env, `turn:${row.id}:${current.id}`, now, 12)
+    return json({ iceServers: await relayServers(env, Math.min(STATION_ADMISSION_MS, entitlement.expiresAt - now)) })
+  }
+  if (verb === 'renew') {
+    const response = await room(env, row.id, 'pipe-renew', { access: policy, identity: identity(current), entitlement })
+    requireValue(response.ok, 'pipeClosed', 404)
+    await extendApproval(env, row.id, current, now)
+    return json({ ok: true, serverNow: now })
+  }
+  throw new Refusal('notFound', 404)
+}
+
 // Browser approval lifetime (operator decision 2026-09-14). Reached only from `ticket` and `renew`, after
 // the request has been admitted: the account's token, THIS browser's own credential, an approved and
 // unexpired device, a live trial, and for `renew` the live session. So a page load, another browser of
@@ -509,15 +644,22 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
 // approval's new lifetime, or nothing.
 const RENEWAL_STEP_MS = 3600000
 async function renewApproval(request: Request, env: RemoteEnv, stationId: string, current: DeviceRow, now: number): Promise<HeadersInit | undefined> {
-  if (current.approved !== 1 || current.approved_at === null) return undefined
+  const until = await extendApproval(env, stationId, current, now)
+  const credential = deviceCookie(request, stationId)
+  return until !== null && credential ? { 'set-cookie': cookie(stationId, credential, Math.floor((until - now) / 1000)) } : undefined
+}
+/** The write itself, on the same terms: the approval's new end once written, or null. A native
+ *  client's device renews by its own use (its pipe opened or renewed) through this alone: it has no
+ *  credential to re-issue. */
+async function extendApproval(env: RemoteEnv, stationId: string, current: DeviceRow, now: number): Promise<number | null> {
+  if (current.approved !== 1 || current.approved_at === null) return null
   const limit = current.approved_at + APPROVAL_LIMIT_MS, until = Math.min(now + APPROVAL_MS, limit)
   // At most one write an hour per browser, except the final step, which lands exactly on the limit.
-  if (until <= current.expires_at || (until < limit && until - current.expires_at < RENEWAL_STEP_MS)) return undefined
+  if (until <= current.expires_at || (until < limit && until - current.expires_at < RENEWAL_STEP_MS)) return null
   const renewed = await env.DB.prepare(`UPDATE devices SET expires_at=? WHERE id=? AND station_id=? AND approved=1
     AND generation=? AND approved_at=? AND expires_at=? AND expires_at>? RETURNING id`)
     .bind(until, current.id, stationId, current.generation, current.approved_at, current.expires_at, now).first()
-  const credential = deviceCookie(request, stationId)
-  return renewed && credential ? { 'set-cookie': cookie(stationId, credential, Math.floor((until - now) / 1000)) } : undefined
+  return renewed ? until : null
 }
 
 // Every response sent over TLS tells the browser to keep to https:// here for a year, so after one

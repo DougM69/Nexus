@@ -11,6 +11,11 @@ export interface RemoteEnv {
   AUTH0_ISSUER: string
   AUTH0_AUDIENCE: string
   AUTH0_CLIENT_ID: string
+  /** The Native application's client id: Nexus on another computer, signed in through the system
+   *  browser. Its tokens are taken on the native client's routes only, beside a signature by the
+   *  device's own key, and the SPA's never are there. Unset or 'unconfigured', every one of those
+   *  routes refuses `serviceNotConfigured`. */
+  AUTH0_NATIVE_CLIENT_ID?: string
   /** The provider subject allowed to administer trials. Unset or empty means NOBODY can, which is
    *  the only safe default: this gates a write to the entitlement table, so a check that fails
    *  OPEN would let anyone grant themselves the trial the one-trial-ever rule exists to refuse. */
@@ -62,6 +67,10 @@ export async function publicKey(value: unknown): Promise<string> {
 
 /** A JSON object carrying exactly `fields`, and any of `optional`, within 4 KiB. */
 export async function body(request: Request, fields: string[], optional: string[] = []): Promise<Record<string, unknown>> {
+  return fieldsOf(await bodyBytes(request), fields, optional)
+}
+/** A JSON request's body within 4 KiB, as the bytes sent: what a native request's signature covers. */
+export async function bodyBytes(request: Request): Promise<Uint8Array> {
   requireValue(request.headers.get('content-type')?.split(';')[0] === 'application/json', 'invalidRequest', 400)
   const reader = request.body?.getReader()
   requireValue(reader, 'invalidRequest', 400)
@@ -77,6 +86,10 @@ export async function body(request: Request, fields: string[], optional: string[
   const buffer = new Uint8Array(bytes)
   let offset = 0
   for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length }
+  return buffer
+}
+/** Those bytes as a JSON object carrying exactly `fields`, and any of `optional`. */
+export function fieldsOf(buffer: Uint8Array, fields: string[], optional: string[] = []): Record<string, unknown> {
   let value: unknown
   try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(buffer)) }
   catch { throw new Refusal('invalidRequest', 400) }
@@ -127,8 +140,26 @@ const CLAIM_NS = 'https://nexus.hamradiotools.io/'
 
 export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
   browserOrigin(request, env)
+  return signedIn(request, env, now, env.AUTH0_CLIENT_ID)
+}
+/** The native client's caller: Nexus on another computer, signed in through the system browser to
+ *  the Native application. The same issuer, API and account as the hosted page's, but only a token
+ *  that Native application was given (`azp`), so the page's tokens open no native route and these
+ *  open no route of the page's (which takes only the SPA's, and only with its exact Origin).
+ *
+ *  It carries no Origin and holds no cookie. A request with either came from a browser, so it is
+ *  refused before its token is read: that is what keeps every native route out of a page's reach
+ *  (no CSRF, whatever credential the page holds), as `native()` keeps the station's. */
+export async function nativeAccount(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+  requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
+  const clientId = env.AUTH0_NATIVE_CLIENT_ID || 'unconfigured'
+  // Never the SPA's own id, which would let the page's tokens in here.
+  requireValue(clientId !== env.AUTH0_CLIENT_ID, 'serviceNotConfigured', 503)
+  return signedIn(request, env, now, clientId)
+}
+async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean }> {
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
-    env.AUTH0_CLIENT_ID !== 'unconfigured', 'serviceNotConfigured', 503)
+    clientId !== 'unconfigured', 'serviceNotConfigured', 503)
   if (jwks?.issuer !== env.AUTH0_ISSUER) {
     jwks = { issuer: env.AUTH0_ISSUER, keys: createRemoteJWKSet(new URL('.well-known/jwks.json', env.AUTH0_ISSUER)) }
   }
@@ -139,7 +170,7 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
       requiredClaims: ['sub', 'exp', 'iat'], currentDate: new Date(now), clockTolerance: 0,
     })
     requireValue(typeof payload.sub === 'string' && payload.sub.length > 0 && payload.sub.length <= 256 &&
-      payload.azp === env.AUTH0_CLIENT_ID && typeof payload.iat === 'number' && payload.iat * 1000 <= now + 30000)
+      payload.azp === clientId && typeof payload.iat === 'number' && payload.iat * 1000 <= now + 30000)
     subject = payload.sub
     until = Math.min(Number(payload.exp) * 1000, now + 3600000)
     // Only a VERIFIED address counts. An unverified one is a claim the holder typed, so keying
@@ -213,8 +244,9 @@ export async function trial(env: RemoteEnv, accountId: string, now: number): Pro
     state, startedAt: row?.started_at ?? null, source: row?.source ?? null }
 }
 
-// The strict gate: is the service usable right now? ONE call site, index.ts:222, and it is
-// reached only by `device`, `ticket`, `renew` and `turn` - the `observe` route returns before it.
+// The strict gate: is the service usable right now? Called in index.ts for the browser's `device`,
+// `ticket`, `renew` and `turn`, and the native client's `device`, `turn`, `pipe` and `renew` - the
+// `observe` route returns before it.
 // Observe IS entitlement-gated, but by observerDeadline inside connectObserver (relay.ts:41),
 // which is also what expires a session already in flight. Do not read this function as the
 // whole entitlement story; an audit that does will conclude observe is unguarded here, or that
@@ -384,6 +416,12 @@ export function lifetime(request: Request): boolean {
 export function deviceKeys(request: Request): boolean {
   return request.headers.get('x-nexus-device-key') === '1'
 }
+/** Sent by a Nexus that knows the native client's devices. Only that Nexus is listed them, with every
+ *  device's kind and platform: an older one could show a computer only as a browser, and parses the
+ *  list with deny_unknown_fields besides. */
+export function deviceKinds(request: Request): boolean {
+  return request.headers.get('x-nexus-device-kind') === '1'
+}
 /** The end that use cannot move, or null for an approval that never renews. */
 export function renewsUntil(row: Pick<DeviceRow, 'approved' | 'approved_at'>): number | null {
   return row.approved === 1 && row.approved_at !== null ? row.approved_at + APPROVAL_LIMIT_MS : null
@@ -396,4 +434,49 @@ export async function device(request: Request, env: RemoteEnv, stationId: string
   return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
     WHERE station_id=? AND account_id=? AND credential_hash=? AND expires_at>?`)
     .bind(stationId, owner, await digest(credential), now).first<DeviceRow>()
+}
+
+/** What a native request's signature covers begins with this, so a signature made for one is never one
+ *  for anything else a device key signs (a stream's offer, the older lanes' proofs). */
+export const NATIVE_REQUEST = 'nexus-native-request/1'
+/** How long a challenge waits for the request it was asked for. */
+export const CHALLENGE_MS = 60000
+const fromHex = (hex: string) => new Uint8Array(hex.length / 2).map((_, i) => parseInt(hex.slice(2 * i, 2 * i + 2), 16))
+/** A native request signed by `key`: its `x-nexus-signature` (ECDSA P-256 over SHA-256, IEEE P1363
+ *  r||s, lowercase hex) over five lines - the label, its `x-nexus-challenge`, the method, the path,
+ *  and SHA-256 of the body exactly as sent, in lowercase hex.
+ *
+ *  The challenge is one this service gave the same account within the last minute, and it is DELETED
+ *  as it is read, before any signature is tried. So a request is taken once: a replay finds nothing,
+ *  and a challenge another account was given, or one past its minute, is refused the same way.
+ *  DELETE ... RETURNING is what makes that hold across concurrent Worker instances, as for tickets. */
+export async function signedBy(request: Request, env: RemoteEnv, accountId: string, key: string, bytes: Uint8Array, now: number): Promise<void> {
+  const challenge = request.headers.get('x-nexus-challenge') ?? '', signature = request.headers.get('x-nexus-signature') ?? ''
+  requireValue(/^[0-9a-f]{64}$/.test(challenge) && /^[0-9a-f]{128}$/.test(signature), 'invalidRequest', 400)
+  const taken = await env.DB.prepare('DELETE FROM challenges WHERE digest=? AND account_id=? AND expires_at>? RETURNING digest')
+    .bind(await digest(challenge), accountId, now).first()
+  requireValue(taken, 'invalidChallenge', 401)
+  const sent = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
+  const signed = new TextEncoder().encode([NATIVE_REQUEST, challenge, request.method, new URL(request.url).pathname, sent].join('\n'))
+  let valid = false
+  try {
+    const verifier = await crypto.subtle.importKey('spki', fromHex(key), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
+    valid = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, verifier, fromHex(signature), signed)
+  } catch { valid = false }
+  requireValue(valid, 'invalidSignature', 401)
+}
+/** The native device a request names (`x-nexus-device-id`), of this station and account and not
+ *  lapsed, or null. A browser's row is never one, whatever its id: a native caller is never admitted on
+ *  a browser's approval, and a browser never on a native device's. */
+export async function nativeDevice(request: Request, env: RemoteEnv, stationId: string, accountId: string, now: number): Promise<DeviceRow | null> {
+  return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
+    WHERE id=? AND station_id=? AND account_id=? AND kind IS NOT NULL AND expires_at>?`)
+    .bind(id(request.headers.get('x-nexus-device-id')), stationId, accountId, now).first<DeviceRow>()
+}
+/** A native device's kind and the platforms it may name, as the shack shows them at approval. */
+const PLATFORMS: Record<string, readonly string[]> = { computer: ['windows', 'macos', 'linux'], phone: ['ios', 'android'] }
+export function nativeKind(kind: unknown, platform: unknown): { kind: string; platform: string } {
+  requireValue(typeof kind === 'string' && typeof platform === 'string' && Object.hasOwn(PLATFORMS, kind) &&
+    PLATFORMS[kind].includes(platform), 'invalidRequest', 400)
+  return { kind, platform }
 }
