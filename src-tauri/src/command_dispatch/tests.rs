@@ -1909,7 +1909,7 @@ fn a_radio_save_is_checked_on_what_it_writes() {
         "the bands changed at the shack"
     );
     let (_, moved) = patch_with_port(&engine, "COM9");
-    at_the_shack(&engine, |e| e.update_radio_profile(radio, moved));
+    at_the_shack(&engine, |e| e.update_radio_profile(radio, moved).unwrap());
     assert_eq!(
         saving(&shack, 4, "update_radio_profile", profile_save, &copy),
         refused(Refusal::ChangedAtShack)

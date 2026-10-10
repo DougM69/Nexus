@@ -339,9 +339,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way goes away, Test CAT names its address rather than rigctld TCP Port. NEEDS-BENCH: wfview's
   rigctld on a real radio, with rigctld TCP Port left at 4534, should connect, follow the dial and
   key PTT, Rear/Data keying the DATA input, with wfview started before Nexus and after it.
+- **A second radio on NET rigctl, and a Remote selection of it, use a rigctld on this computer
+  directly too.** The radio you are not operating, kept connected in the radio switcher, now talks
+  to wfview's rigctld (or yours) itself, as the operated radio does, and so does a Remote selection
+  of it. Neither starts a rigctld of its own in front of it any more; in front of wfview that one
+  refused every command, PTT included, whenever wfview reported the radio switched off. While
+  nothing answers at the address, Nexus starts nothing there and asks again on its own. A Network
+  Address on Nexus's own Share this radio port is never taken for a radio. NEEDS-BENCH: two radios,
+  one on wfview's rigctld, switched between and selected from the Remote, with wfview started
+  before Nexus and after it.
 
 ### Fixed
 
+- **Another radio's rigctld can no longer land on wfview's port.** With a radio on NET rigctl at a
+  rigctld on this computer (wfview's, or one you run), Nexus could give a second radio's rigctld
+  that same port, when it moved two radios off a port they shared or picked the port for a radio
+  you added. The two radios then read, and could command, each other's radio. Nexus now keeps
+  every rigctld of its own, and the Share this radio port, off a NET rigctl radio's Network Address
+  on this computer. Save refuses a change that would put one there and says which port to change.
+  A setup an earlier version saved that way is kept as it is, and the status bar names it until you
+  change it. A rotator's port there is moved for you, since Settings has no control for it.
+- **CAT that could not connect as Nexus started is tried again on its own.** When the first attempt
+  opened no connection at all (your own rigctld not started yet, a port something else holds,
+  Hamlib's rigctld missing, OmniRig not starting), Nexus waited for Test CAT or a Save. It now
+  tries again after 10 seconds, then less often, at most 5 minutes apart, and each time says what
+  that attempt found. A retry never cuts an over on the air: it waits for the over to end. Nor does
+  it turn transmit off in the digital modes any more, which a retry after a failed reconnect used to
+  do. NEEDS-BENCH: a radio keyed by VOX, its CAT not answering, transmitting FT8 across a retry.
 - **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
   sound card that failed, a headphone monitor that was held off and every other notice on that line
   all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
@@ -393,6 +417,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positions send their call too and are refused the same way. ARRL Field Day is the exception,
   because its GOTA station must use a call of its own: there a position on any call joins as
   before.
+- **ARRL Field Day: the club's Cabrillo writes the GOTA station's contacts under its own call.**
+  The GOTA station must use a callsign of its own (ARRL Field Day rule 4.1.1.1), and its laptop
+  joins the club on that call, but the club's file wrote every contact under the host's call, so
+  each GOTA contact read as one the main station made. Each of them now carries the GOTA laptop's
+  Callsign on the air, and every other contact the club's call as before. The host keeps that call
+  with each contact, so the file is the same after the host restarts, even once the GOTA laptop
+  has gone. The header, the club ADIF and the score are unchanged, and so is the club file of
+  every other contest.
+- **Club sync takes a laptop's contacts only as that laptop, and only ones the club's file can
+  hold.** The host turns away, by name, a laptop whose Callsign on the air is not a call sign, at
+  ARRL Field Day too, and one whose club position id Nexus did not make. It keeps out of the club's
+  log a contact whose call is not a call sign, or that holds something the club's Cabrillo or ADIF
+  file cannot carry, and lists it on its own screen, with the laptop that sent it, for the rest of
+  the event and through a restart; the contact stays in that laptop's own log. A laptop can no longer send contacts as
+  another one. Names, calls and contest names another laptop sent show as plain text on the
+  host's screen, the club board, the TV and Remote, with a ? where a character cannot be shown,
+  and the diagnostic log keeps every entry on its own line. Every other club file is unchanged.
+- **Club sync takes each club position only from the laptop that first joined as it.** Each
+  laptop's Nexus now makes a key of its own the first time it starts, and every time it joins a
+  club it proves its position with it. Another laptop naming the same position is turned away by
+  name, on its screen and the host's, and nothing it sends reaches the club's log. The host keeps
+  each position for the rest of the event, through a restart; a new Event name starts afresh.
+  Every laptop of a club needs this version: the host turns away an older Nexus by name, saying to
+  update Nexus on that laptop, and an older host turns this one away the same way.
 - **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
   file Nexus loaded does not have the contest you picked, club sync does not run, and now the
   Contest screen, the club board window and Settings say so, by the contest's name, with where to
