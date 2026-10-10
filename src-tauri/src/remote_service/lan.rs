@@ -142,6 +142,8 @@ pub(crate) use tempo_client::wire;
 
 pub use book::Book;
 pub(crate) use book::{device_id, valid_name, NAME_CHARS};
+/// Who may hold a session on a listener: the LAN's paired computers, or the room's tunnel's own.
+pub(crate) use channel::Roster;
 
 /// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
 /// them: the shack's own, and the ones its paired computers' window says.
@@ -702,16 +704,31 @@ async fn supervise(state: Arc<State>, deps: Deps) {
 /// presence, the held PTT and the microphone over the stream installed in the engine, and who is
 /// paired. `None` if the Stop path's own thread would not start.
 fn powers(deps: &Deps) -> Option<stop_road::Powers> {
+    let book = deps.book.clone();
+    road_powers(
+        &deps.authority,
+        &deps.engine,
+        &deps.feeds,
+        deps.book.verifier().0,
+        Arc::new(move || book.revisions()),
+    )
+}
+
+/// The same powers for any listener: who is on it, `paired`, and how many times that has changed.
+fn road_powers(
+    authority: &Arc<Authority>,
+    engine: &crate::SharedEngine,
+    feeds: &Feeds,
+    paired: tls::Paired,
+    pairings: Arc<dyn Fn() -> u64 + Send + Sync>,
+) -> Option<stop_road::Powers> {
     Some(stop_road::Powers {
-        stop: RoadStop::new(deps.authority.clone(), deps.engine.clone())?,
-        presence: RoadPresence::new(deps.authority.clone(), deps.engine.clone()),
-        ptt: deps.feeds.stream.ptt.clone(),
-        mic: deps.feeds.stream.mic.clone(),
-        paired: deps.book.verifier().0,
-        pairings: {
-            let book = deps.book.clone();
-            Arc::new(move || book.revisions())
-        },
+        stop: RoadStop::new(authority.clone(), engine.clone())?,
+        presence: RoadPresence::new(authority.clone(), engine.clone()),
+        ptt: feeds.stream.ptt.clone(),
+        mic: feeds.stream.mic.clone(),
+        paired,
+        pairings,
     })
 }
 
@@ -720,14 +737,103 @@ fn powers(deps: &Deps) -> Option<stop_road::Powers> {
 /// the engine.
 #[cfg(feature = "radio")]
 fn audio_powers(deps: &Deps) -> audio_road::Powers {
-    let authority = deps.authority.clone();
+    audio_powers_of(&deps.authority, &deps.feeds)
+}
+
+#[cfg(feature = "radio")]
+fn audio_powers_of(authority: &Arc<Authority>, feeds: &Feeds) -> audio_road::Powers {
+    let authority = authority.clone();
     audio_road::Powers {
-        receive: deps.feeds.audio.clone(),
+        receive: feeds.audio.clone(),
         admitted: Arc::new(move |session, device, lease, now| {
             authority.audio_admitted(session, device, lease, now)
         }),
-        ptt: deps.feeds.stream.ptt.clone(),
-        mic: deps.feeds.stream.mic.clone(),
+        ptt: feeds.stream.ptt.clone(),
+        mic: feeds.stream.mic.clone(),
+    }
+}
+
+/// What the room's tunnel serves its computers with, beside the LAN's own listener and sharing its
+/// one authority and its command lane's dispatcher, so a computer that reconnects by either road
+/// finds the journal of its calls.
+#[derive(Clone)]
+pub(crate) struct TunnelDeps {
+    pub authority: Arc<Authority>,
+    pub engine: crate::SharedEngine,
+    pub feeds: Feeds,
+    pub dispatcher: crate::command_dispatch::Dispatcher<crate::command_dispatch::ShackStores>,
+    pub commands: commands::Commands,
+}
+
+/// The room's tunnel, as this road serves it (`super::tunnel`): the channel from its TLS on, on the
+/// station's hosted key, held to the computers approved for it at the shack, with internet roads
+/// in place of the LAN's, and nothing that pairs or streams. Cheap to clone.
+#[derive(Clone)]
+pub(crate) struct Tunnel {
+    shared: channel::Shared,
+}
+
+impl Tunnel {
+    /// The tunnel on `identity` (the station's hosted key), held to `roster`, whose changes
+    /// `revisions` counts; its internet roads bound at `bind`, learning their reflexive address
+    /// from `stun`. `None` if TLS could not be made or Stop's own thread would not start.
+    pub(crate) fn new(
+        deps: &TunnelDeps,
+        identity: Arc<tls::Identity>,
+        roster: Roster,
+        revisions: Arc<dyn Fn() -> u64 + Send + Sync>,
+        bind: std::net::IpAddr,
+        stun: Option<SocketAddr>,
+    ) -> Option<Self> {
+        // No pairing window ever opens here.
+        let tls = tls::server(&identity, roster.paired.clone(), Arc::new(|| false)).ok()?;
+        let powers = road_powers(
+            &deps.authority,
+            &deps.engine,
+            &deps.feeds,
+            roster.paired.clone(),
+            revisions,
+        )?;
+        Some(Self {
+            shared: channel::Shared {
+                authority: deps.authority.clone(),
+                engine: deps.engine.clone(),
+                feeds: deps.feeds.clone(),
+                tls,
+                identity,
+                roster,
+                desk: None,
+                network: None,
+                port: 0,
+                gate: Arc::new(gate::Gate::default()),
+                handshake: channel::HANDSHAKE,
+                silence: channel::SILENCE,
+                dispatcher: deps.dispatcher.clone(),
+                commands: deps.commands.clone(),
+                build: (wire::APP, wire::contract()),
+                stop_road: None,
+                #[cfg(feature = "radio")]
+                audio_road: None,
+                internet: Some(channel::InternetRoads {
+                    stop: stop_road::StopRoad::internet_only(powers),
+                    #[cfg(feature = "radio")]
+                    audio: Some(audio_road::AudioRoad::internet_only(audio_powers_of(
+                        &deps.authority,
+                        &deps.feeds,
+                    ))),
+                    bind,
+                    stun,
+                }),
+            },
+        })
+    }
+
+    /// One computer through the room, from the pipe's first byte to its end.
+    pub(crate) async fn serve<S>(&self, stream: S, stop: watch::Receiver<bool>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        channel::tunnel(stream, self.shared.clone(), stop).await;
     }
 }
 
@@ -830,8 +936,9 @@ impl Listener {
             feeds: deps.feeds.clone(),
             tls,
             identity: Arc::new(identity),
-            desk,
-            network,
+            roster: channel::Roster::lan(&deps.book),
+            desk: Some(desk),
+            network: Some(network),
             port,
             gate: Arc::new(gate::Gate::default()),
             handshake: channel::HANDSHAKE,

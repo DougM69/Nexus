@@ -20,6 +20,7 @@ mod drops;
 mod hostile;
 mod link;
 mod stop_road;
+mod tunnel;
 
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
@@ -227,9 +228,10 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
             stream: super::super::stream::Host::default(),
         },
         tls: tls::server(&identity, paired, pairing).unwrap(),
-        desk: super::pairing::Desk::new(book, &identity).unwrap(),
+        roster: channel::Roster::lan(&book),
+        desk: Some(super::pairing::Desk::new(book, &identity).unwrap()),
         identity: Arc::new(identity),
-        network,
+        network: Some(network),
         port: DEFAULT_PORT,
         gate: Arc::new(Gate::default()),
         handshake: channel::HANDSHAKE,

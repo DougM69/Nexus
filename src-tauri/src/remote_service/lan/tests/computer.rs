@@ -60,7 +60,7 @@ fn lan_on(s: &Shack, scratch: &Scratch) -> Lan {
         s,
         scratch,
         Arc::new(|_| only(Err(NoNetwork::Choose))),
-        s.shared.desk.book.clone(),
+        s.shared.desk.as_ref().unwrap().book.clone(),
     );
     lan.turn_on(None, None).unwrap();
     lan
@@ -132,7 +132,7 @@ pub(super) fn recorded() -> (String, String) {
 async fn the_pinned_road_refuses_another_key_before_showing_its_own() {
     let mut s = shack(home());
     let shown = Arc::new(AtomicUsize::new(0));
-    let (paired, pairing) = s.shared.desk.book.verifier();
+    let (paired, pairing) = s.shared.desk.as_ref().unwrap().book.verifier();
     let counted = shown.clone();
     let counting: tls::Paired = Arc::new(move |pin: &[u8; 32]| {
         counted.fetch_add(1, Ordering::SeqCst);
@@ -1112,7 +1112,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
             &s,
             &scratch,
             Arc::new(move |_| only(Ok(network))),
-            s.shared.desk.book.clone(),
+            s.shared.desk.as_ref().unwrap().book.clone(),
         );
         lan.turn_on(None, Some(port)).unwrap();
         let at = SocketAddr::new(address.into(), port);

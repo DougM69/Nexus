@@ -22,6 +22,8 @@ pub(crate) mod stream;
 #[cfg(test)]
 mod tests;
 mod transport;
+/// The tunnel through the room: Nexus on another computer driving this station over the internet.
+mod tunnel;
 pub(crate) mod vault;
 
 use serde::{Deserialize, Serialize};
@@ -134,6 +136,16 @@ impl Kind {
                 | (Kind::Phone, Some(Platform::Ios | Platform::Android))
         )
     }
+}
+/// The station's key (S3-M1), and the same key as TLS presents it for the room's tunnel: both, or
+/// neither, but for a key TLS would not take, which then signs answers alone.
+type StationKeys = (
+    Option<Arc<station_key::Signer>>,
+    Option<Arc<lan::tls::Identity>>,
+);
+/// The station's key as the room's tunnel proves it, for the pairing's station.
+fn tunnel_identity(pkcs8: &str, binding: &Binding) -> Option<Arc<lan::tls::Identity>> {
+    lan::tls::Identity::new(pkcs8, binding.station_id.clone()).map(Arc::new)
 }
 /// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). The station's own key is
 /// shown the same way (S3-L1). `None` for anything that is not the shape of a P-256 key.
@@ -505,6 +517,18 @@ struct Control {
     /// Remote over this network (`lan`), beside the relay's road and sharing its authority.
     /// Taken out of the lock to be used. `None` in a test build of the service.
     lan: Option<Arc<lan::Lan>>,
+    /// The same key as `station_key`, as TLS presents it: what the room's tunnel proves itself
+    /// with. Made from the same vault entry at the same moments.
+    station_identity: Option<Arc<lan::tls::Identity>>,
+    /// The computers approved here for the room's tunnel, kept in step with the pins and the
+    /// service's list ([`Control::sync_approved`]).
+    approved: Arc<tunnel::Approved>,
+    /// The computers (and phones) the service lists as approved, by device id, with the SHA-256 of
+    /// the key it lists for each: what a pin is compared with.
+    natives: BTreeMap<String, String>,
+    /// What the room's tunnel serves its computers with: the LAN road's authority, feeds and
+    /// command lane. `None` in a build of the service without the LAN road.
+    tunnel: Option<lan::TunnelDeps>,
 }
 impl Control {
     fn stop(&mut self) {
@@ -526,6 +550,31 @@ impl Control {
                 let _ = writer.send(write);
             }
         }
+        self.sync_approved();
+    }
+    /// The computers the service lists as approved (`devices`): who the room's tunnel takes, with
+    /// the pins.
+    fn listed(&mut self, devices: &[Device]) {
+        self.natives = devices
+            .iter()
+            .filter(|d| d.kind != Kind::Browser && d.approved == 1)
+            .filter_map(|d| Some((d.id.clone(), d.key.clone()?)))
+            .collect();
+        self.sync_approved();
+    }
+    /// Who the room's tunnel takes: each computer the service lists as approved whose listed key is
+    /// the one pinned for it here. Never a browser, whatever its pin.
+    fn sync_approved(&self) {
+        let keys = self
+            .natives
+            .iter()
+            .filter(|(id, key)| self.remembered.pins.get(*id) == Some(*key))
+            .filter_map(|(id, key)| {
+                let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(key)?.try_into().ok()?;
+                Some((pin, id.clone()))
+            })
+            .collect();
+        self.approved.set(keys);
     }
 }
 /// A command, the Remote generation it was issued under, the authority epoch at that moment (so a
@@ -639,6 +688,15 @@ impl Service {
                 crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
                     engine: engine.clone(),
                 });
+            // The room's tunnel serves its computers with the same authority, feeds and command
+            // lane, so a computer that reconnects by either road finds the journal of its calls.
+            let tunnel = lan::TunnelDeps {
+                authority: authority.clone(),
+                engine: engine.clone(),
+                feeds: feeds.clone(),
+                dispatcher: dispatcher.clone(),
+                commands: commands.clone(),
+            };
             let lan = Arc::new(lan::Lan::start(
                 path,
                 lan::Deps {
@@ -655,6 +713,7 @@ impl Service {
             ));
             if let Ok(mut control) = self.control.lock() {
                 control.lan = Some(lan);
+                control.tunnel = Some(tunnel);
             }
         }
         self
@@ -1108,7 +1167,7 @@ impl Controller {
                     .all(|(id, key)| identifier(id) && pin_shape(key))
         });
         // S3-M1: this pairing's signing key, made here once for a pairing from before it existed.
-        let key = self.station_key(&binding);
+        let (key, identity) = self.station_key(&binding);
         // Decide under the lock BEFORE the pairing becomes visible, so a Turn off that arrives
         // afterwards is ordered after this decision and wins.
         let resumed = {
@@ -1117,6 +1176,7 @@ impl Controller {
             };
             let enabled = remembered.as_ref().is_some_and(|s| s.enabled);
             control.station_key = key;
+            control.station_identity = identity;
             control.key_refused = false;
             control.remember(Persist::Bound(binding, remembered, pins.map(Box::new)));
             if enabled {
@@ -1152,6 +1212,7 @@ impl Controller {
         match self.devices().await {
             Ok(devices) => {
                 self.apply_restore(&devices);
+                self.listed(&devices);
                 if let Ok(mut status) = self.status.lock() {
                     status.devices = devices;
                 }
@@ -1222,6 +1283,12 @@ impl Controller {
             }
         }
     }
+    /// The service's list, as the room's tunnel reads it (`Control::listed`).
+    fn listed(&self, devices: &[Device]) {
+        if let Ok(mut control) = self.control.lock() {
+            control.listed(devices);
+        }
+    }
     async fn devices(&self) -> Result<Vec<Device>, &'static str> {
         let (binding, token) = self.bound()?;
         let value = self
@@ -1254,29 +1321,39 @@ impl Controller {
     /// This pairing's signing key (S3-M1), made once: the one the vault holds for it, or a new one
     /// saved there first. A store that will not answer (locked) makes nothing, because the key may
     /// be in it: the station's answers go unsigned until it does.
-    fn station_key(&self, binding: &Binding) -> Option<Arc<station_key::Signer>> {
+    fn station_key(&self, binding: &Binding) -> StationKeys {
         match self.vault.station_key() {
             Ok(Some(kept)) if kept.binding == *binding => {
                 if let Some(signer) = station_key::Signer::restore(&kept.pkcs8) {
-                    return Some(Arc::new(signer));
+                    return (
+                        Some(Arc::new(signer)),
+                        tunnel_identity(&kept.pkcs8, binding),
+                    );
                 }
             }
             Ok(_) => {}
-            Err(_) => return None,
+            Err(_) => return (None, None),
         }
         self.new_station_key(binding)
     }
     /// A new signing key for `binding`, saved before it is used: a key the vault did not keep would
     /// be gone at the next start, and the service would refuse the one made then.
-    fn new_station_key(&self, binding: &Binding) -> Option<Arc<station_key::Signer>> {
-        let (signer, pkcs8) = station_key::Signer::generate()?;
-        self.vault
+    fn new_station_key(&self, binding: &Binding) -> StationKeys {
+        let Some((signer, pkcs8)) = station_key::Signer::generate() else {
+            return (None, None);
+        };
+        let identity = tunnel_identity(&pkcs8, binding);
+        if self
+            .vault
             .save_station_key(&vault::StationKey {
                 binding: binding.clone(),
                 pkcs8,
             })
-            .ok()?;
-        Some(Arc::new(signer))
+            .is_err()
+        {
+            return (None, None);
+        }
+        (Some(Arc::new(signer)), identity)
     }
     fn reflect(&self, value: &str) {
         if let Ok(mut status) = self.status.lock() {
@@ -1525,6 +1602,7 @@ impl Controller {
                     let devices = self.devices().await?;
                     // A fresh list is also what a restore after a restart is waiting for.
                     self.apply_restore(&devices);
+                    self.listed(&devices);
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                         status.error = None;
@@ -1577,7 +1655,7 @@ impl Controller {
                 }
                 self.vault.save(&binding, &token)?;
                 // S3-M1: a new pairing is a new station, with a signing key of its own.
-                let key = self.new_station_key(&binding);
+                let (key, identity) = self.new_station_key(&binding);
                 // One approval: the service approved the browser that confirmed this pairing along
                 // with the station. It gets what any approved browser gets, waiting in the record
                 // for Turn on. A service that reports no browser pairs exactly as it used to.
@@ -1599,6 +1677,7 @@ impl Controller {
                     .filter(|(id, approval, _)| identifier(id) && approval.expires_at > now_ms());
                 if let Ok(mut control) = self.control.lock() {
                     control.station_key = key;
+                    control.station_identity = identity;
                     control.key_refused = false;
                     // A new pairing starts with nothing remembered: off, no grants, no pins.
                     control.remember(Persist::Bound(binding.clone(), None, None));
@@ -1652,6 +1731,7 @@ impl Controller {
                 let _ = self.vault.remove_station_key();
                 if let Ok(mut control) = self.control.lock() {
                     control.station_key = None;
+                    control.station_identity = None;
                     control.key_refused = false;
                     control.remember(Persist::Removed);
                 }
@@ -1696,6 +1776,7 @@ impl Controller {
                         key,
                         (generation, epoch),
                     );
+                    self.listed(&devices);
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                     }

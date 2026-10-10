@@ -367,17 +367,11 @@ impl StopRoad {
                 })
                 .ok()?
         };
-        let start = {
-            use ring::rand::SecureRandom;
-            let mut bytes = [0; 8];
-            let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
-            u64::from_be_bytes(bytes)
-        };
         Some(Running {
             road: StopRoad {
                 port,
                 changes,
-                tags: Arc::new(AtomicU64::new(start)),
+                tags: Arc::new(AtomicU64::new(first_tag())),
                 powers,
                 stopping: stopping.clone(),
                 afterlife,
@@ -385,6 +379,21 @@ impl StopRoad {
             stopping,
             thread,
         })
+    }
+
+    /// The road of a listener with no socket of its own on the LAN, the room's tunnel's: only
+    /// internet roads open on it ([`StopRoad::open_internet`]), each on its own socket and thread
+    /// from `powers`, ending with its connection. It has no thread, so nothing of its own to stop.
+    pub(crate) fn internet_only(powers: Powers) -> Self {
+        Self {
+            port: 0,
+            // Nothing reads it: a road of the LAN's never opens here.
+            changes: mpsc::channel().0,
+            tags: Arc::new(AtomicU64::new(first_tag())),
+            powers: Arc::new(powers),
+            stopping: Arc::new(AtomicBool::new(false)),
+            afterlife: AFTERLIFE,
+        }
     }
 
     /// Opens a connection's road, as the shack welcomes it: its keys from `exported` (the
@@ -490,6 +499,14 @@ impl StopRoad {
         };
         Some((tag, road, ready))
     }
+}
+
+/// Where a road's tags start: at random, so no two runs name their roads alike.
+pub(crate) fn first_tag() -> u64 {
+    use ring::rand::SecureRandom;
+    let mut bytes = [0; 8];
+    let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
+    u64::from_be_bytes(bytes)
 }
 
 /// A connection's road, open: what its welcome names. Closed when dropped.

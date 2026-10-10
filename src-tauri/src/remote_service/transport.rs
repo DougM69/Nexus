@@ -237,6 +237,13 @@ enum ServerMessage {
         session_id: String,
         reason: tempo_stream::protocol::StreamReason,
     },
+    /// An approved computer opened its end of a pipe, and the room asks this station to open the
+    /// other (`super::tunnel`). Sent only to a station that advertised the pipe
+    /// (`x-nexus-pipe-version`).
+    PipeOpen {
+        #[serde(rename = "pipeId")]
+        pipe_id: String,
+    },
 }
 /// An operation request's `request`, exactly as the relay wrote it: the bytes a proof covers.
 #[derive(Deserialize)]
@@ -290,6 +297,8 @@ pub async fn connected(
     let mut request = format!("{origin}/api/remote/stations/{station_id}/connect")
         .into_client_request()
         .map_err(|_| "invalidResponse")?;
+    // The room's tunnel, when this station can serve one (`super::tunnel`).
+    let ends = super::tunnel::ends(client, station_id, token, status).await;
     request.headers_mut().insert(
         "authorization",
         format!("Bearer {token}")
@@ -435,6 +444,15 @@ pub async fn connected(
             .parse()
             .map_err(|_| "invalidResponse")?,
     );
+    // Nexus on another computer, through a pipe in the room (`super::tunnel`): advertised only by a
+    // station that can serve one, so a relay never asks another to open a pipe (`pipeOpen`), a
+    // message it would close this socket on.
+    if ends.is_some() {
+        request.headers_mut().insert(
+            "x-nexus-pipe-version",
+            "1".parse().map_err(|_| "invalidResponse")?,
+        );
+    }
     // `true`: no Nagle. A small message, a Stop among them, could otherwise wait for the
     // acknowledgement of the one before: one round trip of about 40 ms a session, measured through
     // a relay room on 2026-10-07.
@@ -454,7 +472,7 @@ pub async fn connected(
     if *stop.borrow() {
         return Ok(());
     }
-    serve(socket, stop, engine, feeds, status).await
+    serve(socket, stop, engine, feeds, status, ends).await
 }
 
 /// The station socket configuration, one definition for the real connection and the tests: the
@@ -475,6 +493,7 @@ pub(super) async fn serve<S>(
     engine: &crate::SharedEngine,
     feeds: &Feeds,
     status: &super::SessionStatus,
+    ends: Option<super::tunnel::Ends>,
 ) -> Result<(), &'static str>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -586,10 +605,13 @@ where
         }),
         signer,
     };
+    // The tunnels this connection opened: each ends with it, its session's lease with it.
+    let mut tunnels = tokio::task::JoinSet::new();
     let result: Result<(), &'static str> = async { loop {
         tokio::select! {
             biased;
             _ = stop.changed() => return Ok(()),
+            Some(_) = tunnels.join_next(), if !tunnels.is_empty() => {}
             // The writer gave up on a send (see `send_deadline`) or the socket failed under it.
             ended = &mut writer => return Err(match ended { Ok(Err(reason)) => reason, _ => "serviceUnavailable" }),
             response = async { operation_task.as_mut().expect("guarded operation task").await }, if operation_task.is_some() => {
@@ -622,6 +644,14 @@ where
                         ServerMessage::StreamEnd{session_id,reason}=>{
                             if !identifier(&session_id){return Err("invalidResponse")}
                             stream_lane.end(&stream_station, &session_id, reason);
+                        },
+                        ServerMessage::PipeOpen{pipe_id}=>{
+                            if !identifier(&pipe_id){return Err("invalidResponse")}
+                            // Past the room's own bound, unanswered: the room tells the computer
+                            // to try again.
+                            if let Some(ends) = ends.as_ref().filter(|_| tunnels.len() < super::tunnel::MAX_TUNNELS) {
+                                tunnels.spawn(super::tunnel::run(ends.opener.clone(), pipe_id, ends.tunnel.clone(), stop.clone()));
+                            }
                         },
                         ServerMessage::AudioListen{session_id,device_id,listening,lease_id,proof}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
@@ -1045,6 +1075,7 @@ mod server_message_schema {
             json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID,"proof":proof()}),
             json!({"type":"streamSignal","sessionId":ID,"deviceId":ID,"leaseId":ID,"payload":{"kind":"close"}}),
             json!({"type":"streamEnd","sessionId":ID,"reason":"remoteOff"}),
+            json!({"type":"pipeOpen","pipeId":ID}),
         ]
     }
 
@@ -1204,6 +1235,10 @@ mod server_message_schema {
         "session_id: String,",
         "reason: tempo_stream::protocol::StreamReason,",
         "},",
+        "PipeOpen {",
+        "#[serde(rename = \"pipeId\")]",
+        "pipe_id: String,",
+        "},",
         "}",
         "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]",
         "pub struct Request {",
@@ -1314,6 +1349,10 @@ mod server_message_schema {
         "operationRequest.proof: optional",
         "operationRequest.request: required",
         "operationRequest.sessionId: required",
+        // Named by a relay only to a station that advertised x-nexus-pipe-version, so no older
+        // station is ever sent it.
+        "pipeOpen.<unknown key>: refused",
+        "pipeOpen.pipeId: required",
         "streamEnd.<unknown key>: refused",
         "streamEnd.reason: required",
         "streamEnd.sessionId: required",

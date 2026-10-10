@@ -92,9 +92,15 @@ pub(super) struct Shared {
     pub feeds: Feeds,
     pub tls: Arc<rustls::ServerConfig>,
     pub identity: Arc<Identity>,
-    /// Who is paired, and the pairing window: all a pairing-only connection keeps of this.
-    pub desk: Desk,
-    pub network: tempo_stream::lan::Network,
+    /// Who may hold a session here, by the key its TLS proved, and what tells a session that its
+    /// computer was removed ([`Roster`]).
+    pub roster: Roster,
+    /// Who is paired, and the pairing window: all a pairing-only connection keeps of this. `None`
+    /// through the room's pipe, where no computer pairs: a request to pair there is refused.
+    pub desk: Option<Desk>,
+    /// The LAN's own network, whose subnet alone is heard. `None` through the room's pipe, which
+    /// carries no address of anyone's and signals no stream.
+    pub network: Option<tempo_stream::lan::Network>,
     pub port: u16,
     pub gate: Arc<Gate>,
     /// [`HANDSHAKE`] and [`SILENCE`]; a test's own, shorter, so it need not wait them out.
@@ -119,6 +125,33 @@ pub(super) struct Shared {
     /// welcome named no road of the LAN's. `None` on the LAN's own listener, where every road is
     /// the LAN's.
     pub internet: Option<InternetRoads>,
+}
+
+/// Who may hold a session on this channel, by the SHA-256 of the key its TLS proved: that
+/// computer's device id, or `None`. And what tells a session its computer was removed, so it ends
+/// at once. On the LAN, the computers paired there (`super::Book`); through the room's pipe, the
+/// computers approved at the shack for hosted Remote, each by the key pinned as it was approved
+/// (`super::super::tunnel`).
+#[derive(Clone)]
+pub(crate) struct Roster {
+    pub paired: super::tls::Paired,
+    /// Told each time who may changes.
+    pub subscribe: Arc<dyn Fn() -> watch::Receiver<u64> + Send + Sync>,
+}
+
+impl Roster {
+    /// The LAN's: the computers paired in `book`.
+    pub(crate) fn lan(book: &Arc<super::Book>) -> Self {
+        let (paired, book) = (book.verifier().0, book.clone());
+        Self {
+            paired,
+            subscribe: Arc::new(move || book.subscribe()),
+        }
+    }
+
+    fn paired(&self, pin: &[u8; 32]) -> Option<String> {
+        (self.paired)(pin)
+    }
 }
 
 /// What a connection's internet roads are opened with: the listener's own Stop road and audio road
@@ -371,8 +404,12 @@ pub(super) async fn connection<S>(
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    // 1. The subnet, then the caps. Nothing is read from a refused source.
-    if !shared.network.contains(peer.ip()) {
+    // 1. The subnet, then the caps. Nothing is read from a refused source, and a listener with no
+    // network of its own (the room's pipe has none) takes nothing here.
+    if !shared
+        .network
+        .is_some_and(|network| network.contains(peer.ip()))
+    {
         return;
     }
     let Ok(_ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
@@ -382,7 +419,7 @@ pub(super) async fn connection<S>(
     let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
     match handshake {
         Ok(Ok(Opened::Session(socket, pin, device))) => {
-            session(socket, pin, device, shared, stop, peer.ip()).await;
+            session(socket, pin, device, shared, stop, Some(peer.ip())).await;
         }
         Ok(Ok(Opened::Pairing(socket, asked))) => {
             // From here on this connection holds the pairing desk and nothing else: no operations
@@ -390,13 +427,29 @@ pub(super) async fn connection<S>(
             let (gate, desk, deadline) =
                 (shared.gate.clone(), shared.desk.clone(), shared.handshake);
             drop(shared);
-            if pairing::session(socket, asked, desk, deadline, stop).await == Outcome::Failed {
-                gate.failed(peer.ip(), Instant::now());
+            if let Some(desk) = desk {
+                if pairing::session(socket, asked, desk, deadline, stop).await == Outcome::Failed {
+                    gate.failed(peer.ip(), Instant::now());
+                }
             }
         }
         // Refused for its version, and told which side to update: not counted.
         Ok(Ok(Opened::Told)) => {}
         Ok(Err(())) | Err(_) => shared.gate.failed(peer.ip(), Instant::now()),
+    }
+}
+
+/// One computer through the room's pipe (`super::super::tunnel`), from its first byte to its end:
+/// the ladder from step 2 on, held to this channel's roster. No address is anyone's there, so no
+/// subnet or gate is read: the room has admitted the computer by its account and its approval, and
+/// limits its pipes. A request to pair is refused, and no stream is signalled.
+pub(super) async fn tunnel<S>(stream: S, shared: Shared, stop: watch::Receiver<bool>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
+    if let Ok(Ok(Opened::Session(socket, pin, device))) = handshake {
+        session(socket, pin, device, shared, stop, None).await;
     }
 }
 
@@ -462,8 +515,7 @@ where
             // Asked again here, after the verifier: a computer revoked during its own handshake
             // is out, and a key the verifier took only for the pairing window is no paired one.
             let device = shared
-                .desk
-                .book
+                .roster
                 .paired(&pin)
                 .filter(|d| identifier(d))
                 .ok_or(())?;
@@ -472,6 +524,8 @@ where
                 None => Ok(Opened::Session(socket, pin, device)),
             }
         }
+        // Nothing pairs through the room's pipe.
+        Ok(FromComputer::Pair { .. }) if shared.desk.is_none() => Err(()),
         Ok(FromComputer::Pair {
             protocol,
             stream,
@@ -545,16 +599,16 @@ async fn session<S>(
     device: String,
     shared: Shared,
     mut stop: watch::Receiver<bool>,
-    source: IpAddr,
+    source: Option<IpAddr>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let book = shared.desk.book.clone();
+    let roster = shared.roster.clone();
     // Told when who is paired changes: removed at the shack, this computer is out at once. Asked
     // once more now, for a removal since the handshake asked.
-    let mut revised = book.subscribe();
+    let mut revised = (roster.subscribe)();
     let Some(session) =
-        session_id().filter(|_| book.paired(&pin).as_deref() == Some(device.as_str()))
+        session_id().filter(|_| roster.paired(&pin).as_deref() == Some(device.as_str()))
     else {
         return;
     };
@@ -611,7 +665,7 @@ async fn session<S>(
     let mut internet: Option<Internet> = None;
     // The lease this computer takes is bound to this connection, and goes with it.
     let connection = LanConnection::new(shared.authority.clone());
-    let paired = book.clone();
+    let paired = roster.clone();
     let signed_by = device.clone();
     let station = Station {
         authority: shared.authority.clone(),
@@ -662,7 +716,7 @@ async fn session<S>(
             // Removed at the shack, or the station's network identity reset: out at once, before
             // anything else it sent is answered.
             Ok(()) = revised.changed() => {
-                if book.paired(&pin).as_deref() != Some(device.as_str()) {
+                if roster.paired(&pin).as_deref() != Some(device.as_str()) {
                     break StreamReason::NotController;
                 }
             }
@@ -796,6 +850,13 @@ async fn session<S>(
                     }
                     FromComputer::StreamSignal { lease_id, payload } => {
                         if !identifier(&lease_id) || !payload.valid() { break StreamReason::StreamClosed }
+                        // Through the room's pipe there is no picture: the hosted stream has its own road.
+                        let Some(network) = shared.network else {
+                            let refused = RoomToPage::StreamState { streaming: false, reason: Some(StreamReason::StreamUnavailable) };
+                            let Ok(text) = serde_json::to_string(&refused) else { break StreamReason::StreamClosed };
+                            if outbox.text(text).is_err() { break StreamReason::ConnectionFailed }
+                            continue;
+                        };
                         let now = Instant::now();
                         // The relay's budget, kept here, since this channel is this road's relay.
                         if !matches!(payload, BrowserSignal::Close {}) {
@@ -811,7 +872,7 @@ async fn session<S>(
                             signals.push_back(now);
                         }
                         let said_now = stream_lane.signal_lan(&station, &to_peer, (session.clone(), device.clone(), lease_id),
-                            payload, shared.network, shared.port);
+                            payload, network, shared.port);
                         if let Some(text) = said_now.as_deref().and_then(to_page) {
                             if outbox.text(text).is_err() { break StreamReason::ConnectionFailed }
                         }
@@ -857,6 +918,9 @@ async fn session<S>(
     writer.abort();
     tempo_core::applog::info(
         "remote",
-        &format!("on this network: a computer at {source} left ({ended:?})"),
+        &match source {
+            Some(source) => format!("on this network: a computer at {source} left ({ended:?})"),
+            None => format!("through the room: a computer left ({ended:?})"),
+        },
     );
 }

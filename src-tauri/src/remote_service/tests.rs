@@ -1139,6 +1139,178 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
         server.abort();
     });
 }
+/// ★ The room's tunnel at the station's own socket: a station that can serve one advertises the
+/// pipe (`x-nexus-pipe-version: 1`), and for each `pipeOpen` the room sends it opens its end of
+/// that pipe, a socket of its own on the pairing's credential, naming the pipe; never more than the
+/// room's four at once. CONTROL: a station that cannot serve one (no LAN road in this build of the
+/// service) advertises nothing and opens nothing, whatever it is sent.
+#[test]
+fn a_station_that_can_serve_a_tunnel_advertises_the_pipe_and_opens_its_end_of_each() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::Message;
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for serves in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let client = Client::new(&origin).unwrap();
+            let engine: crate::SharedEngine =
+                Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+            let feeds = transport::Feeds {
+                monitor: crate::remote_monitor::Publisher::default(),
+                spectrum: None,
+                meters: Default::default(),
+                sources: None,
+                #[cfg(feature = "radio")]
+                audio: None,
+                stream: Default::default(),
+            };
+            let mut control = Control {
+                enabled: true,
+                ..Default::default()
+            };
+            if serves {
+                let (signer, pkcs8) = station_key::Signer::generate().unwrap();
+                drop(signer);
+                control.station_identity = Some(Arc::new(
+                    lan::tls::Identity::new(&pkcs8, STATION.into()).unwrap(),
+                ));
+                control.tunnel = Some(lan::TunnelDeps {
+                    authority: control.operations.clone(),
+                    engine: engine.clone(),
+                    feeds: feeds.clone(),
+                    dispatcher: crate::command_dispatch::Dispatcher::new(
+                        crate::command_dispatch::ShackStores {
+                            engine: engine.clone(),
+                        },
+                    ),
+                    commands: lan::commands::Commands::default(),
+                });
+            }
+            let control = Arc::new(Mutex::new(control));
+            let status = SessionStatus {
+                status: Arc::new(Mutex::new(Status::default())),
+                control,
+                generation: 0,
+            };
+            let (cancel, cancellation) = watch::channel(false);
+            let token = transport::random_secret().unwrap();
+            // The service: the station's main socket first, then each pipe end it opens.
+            let (seen, mut heard) = tokio::sync::mpsc::unbounded_channel::<(
+                String,
+                Option<String>,
+                Option<String>,
+                bool,
+            )>();
+            let pipes: Vec<String> = (1..=5)
+                .map(|n| format!("50000000-0000-4000-8000-00000000000{n}"))
+                .collect();
+            let sent = pipes.clone();
+            let server = tokio::spawn(async move {
+                let mut held = Vec::new();
+                while let Ok((stream, _)) = listener.accept().await {
+                    let seen = seen.clone();
+                    let mut asked = None;
+                    let socket = tokio_tungstenite::accept_hdr_async(
+                        stream,
+                        |request: &Request, response: Response| {
+                            let header = |name: &str| {
+                                request
+                                    .headers()
+                                    .get(name)
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(str::to_string)
+                            };
+                            asked = Some((
+                                request.uri().path().to_string(),
+                                header("x-nexus-pipe-version"),
+                                header("x-nexus-pipe-id"),
+                                header("authorization").is_some(),
+                            ));
+                            Ok(response)
+                        },
+                    )
+                    .await;
+                    let (Ok(mut socket), Some(asked)) = (socket, asked) else {
+                        continue;
+                    };
+                    if asked.0.ends_with("/connect") {
+                        for pipe in &sent {
+                            socket
+                                .send(Message::Text(
+                                    format!(r#"{{"type":"pipeOpen","pipeId":"{pipe}"}}"#).into(),
+                                ))
+                                .await
+                                .unwrap();
+                        }
+                    }
+                    let _ = seen.send(asked);
+                    held.push(socket);
+                }
+            });
+            let binding = Binding {
+                origin: origin.clone(),
+                station_id: STATION.into(),
+                account_id: ACCOUNT.into(),
+            };
+            let supervised = tokio::spawn(transport::supervise(
+                client,
+                binding,
+                token,
+                cancellation,
+                engine,
+                feeds,
+                status.clone(),
+            ));
+            // The main socket and four ends, then a moment for a fifth end that must not come.
+            let mut asked = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while let Ok(Some(one)) = tokio::time::timeout_at(deadline, heard.recv()).await {
+                asked.push(one);
+                if asked.len() == 1 + super::tunnel::MAX_TUNNELS || (!serves && asked.len() == 1) {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            while let Ok(one) = heard.try_recv() {
+                asked.push(one)
+            }
+            let _ = cancel.send(true);
+            supervised.await.unwrap();
+            server.abort();
+            let connect = format!("/api/remote/stations/{STATION}/connect");
+            let main: Vec<_> = asked.iter().filter(|a| a.0 == connect).collect();
+            assert!(!main.is_empty(), "premise: the station connected");
+            assert_eq!(
+                main[0].1.as_deref(),
+                serves.then_some("1"),
+                "the pipe advertised only by a station that can serve it"
+            );
+            let ends: Vec<_> = asked.iter().filter(|a| a.0 != connect).collect();
+            if !serves {
+                assert!(
+                    ends.is_empty(),
+                    "a station that cannot serve a tunnel opened a pipe: {ends:?}"
+                );
+                continue;
+            }
+            assert_eq!(
+                ends.len(),
+                super::tunnel::MAX_TUNNELS,
+                "one end for each pipe, up to the room's bound: {ends:?}"
+            );
+            for end in &ends {
+                assert_eq!(end.0, format!("/api/remote/stations/{STATION}/pipe"));
+                assert!(end.3, "on the pairing's credential");
+                assert!(
+                    pipes[..4].contains(end.2.as_ref().unwrap()),
+                    "names a pipe the room asked for: {end:?}"
+                );
+            }
+        }
+    });
+}
 /// Exclusive use of the process-wide satellite track badge — the crate's one implementation,
 /// delegated to so the guard-on-the-guard scanner sees the same `alone()` name in every test
 /// module that reaches the badge. See `crate::sat_track_alone`.
@@ -1242,7 +1414,7 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
         let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
-        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped, not because a send timed out");
     });
@@ -1377,7 +1549,7 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
             let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
             let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
             let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: None, stream: Default::default() };
-            let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+            let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
             relay.await.unwrap();
             assert_eq!(served, Ok(()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -1601,7 +1773,7 @@ fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
         let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
-        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped");
     });
@@ -1655,7 +1827,7 @@ fn s1m1_listen_takes_only_what_the_pinned_device_key_signed() {
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
         let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: Some(audio::ReceiveFanout::new(feed.feed.clone())), stream: Default::default() };
-        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped");
     });
@@ -3361,6 +3533,87 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
 }
 fn pinned_device(service: &Service, device: &str) -> Option<[u8; 32]> {
     service.control.lock().unwrap().remembered.pinned(device)
+}
+
+/// ★ The room's tunnel takes a computer approved here by the key pinned as it was approved, and
+/// nothing else: a browser's pin is never one; a computer the service lists with another key than
+/// its pin is not one; and a computer removed here is out, with the change told at once to every
+/// session through the room.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tunnel_takes_an_approved_computer_by_its_pinned_key_and_never_a_browser() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let mut told = approved.roster().subscribe.as_ref()();
+    // A browser, approved with its key pinned (A5): the tunnel never takes it.
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&browser.pin())), false).await;
+    assert_eq!(
+        pinned(&service),
+        Some(browser.pin()),
+        "premise: the browser is pinned"
+    );
+    assert_eq!(approved.paired(&browser.pin()), None, "a browser's pin");
+    // A computer, approved with its key pinned: taken, by that key alone.
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(approved.paired(&key.pin()), None, "waiting: not yet");
+    let before = approved.revisions();
+    service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: true,
+            transmit: false,
+            key: Some(hex(&key.pin())),
+        })
+        .await
+        .unwrap();
+    assert_eq!(approved.paired(&key.pin()).as_deref(), Some(COMPUTER));
+    assert!(approved.revisions() > before, "the change is counted");
+    assert!(told.has_changed().unwrap(), "and told");
+    told.mark_unchanged();
+    // The service lists another key for it: not the pin, so not taken.
+    let other = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(1, &other)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&key.pin()),
+        None,
+        "a listing with another key"
+    );
+    assert_eq!(
+        approved.paired(&other.pin()),
+        None,
+        "nor the key never pinned"
+    );
+    assert!(told.has_changed().unwrap(), "told");
+    // Listed with its pinned key again, then removed here: out, and told.
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(1, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&key.pin()).as_deref(),
+        Some(COMPUTER),
+        "control: back"
+    );
+    told.mark_unchanged();
+    service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(approved.paired(&key.pin()), None, "removed here");
+    assert!(told.has_changed().unwrap(), "told at once");
 }
 
 /// ★ Operator ruling D6 (2026-09-28): the operator moves between the stream test build and normal

@@ -212,17 +212,11 @@ impl AudioRoad {
                 })
                 .ok()?
         };
-        let start = {
-            use ring::rand::SecureRandom;
-            let mut bytes = [0; 8];
-            let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
-            u64::from_be_bytes(bytes)
-        };
         Some(Running {
             road: AudioRoad {
                 port,
                 changes,
-                tags: Arc::new(AtomicU64::new(start)),
+                tags: Arc::new(AtomicU64::new(super::stop_road::first_tag())),
                 powers,
                 counts: counts.clone(),
                 stopping: stopping.clone(),
@@ -237,6 +231,21 @@ impl AudioRoad {
     /// connection's TLS exporter under `datagram::AUDIO_LABEL`, with `session` as the context), for
     /// `device`, whose presses Stop's road on the same connection names by `stop`. The road goes
     /// when the returned handle does. `None` once the road has stopped.
+    /// The road of a listener with no socket of its own on the LAN, the room's tunnel's: only
+    /// internet roads open on it ([`AudioRoad::open_internet`]), each on its own socket and thread
+    /// from `powers`, ending with its connection. It has no thread, so nothing of its own to stop.
+    pub(crate) fn internet_only(powers: Powers) -> Self {
+        Self {
+            port: 0,
+            // Nothing reads it: a road of the LAN's never opens here.
+            changes: mpsc::channel().0,
+            tags: Arc::new(AtomicU64::new(super::stop_road::first_tag())),
+            powers: Arc::new(powers),
+            counts: Arc::new(Counts::default()),
+            stopping: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub(crate) fn open(
         &self,
         exported: &[u8; EXPORTED],

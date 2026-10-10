@@ -175,7 +175,7 @@ fn lan_on(s: &Shack, scratch: &Scratch) -> Lan {
         s,
         scratch,
         Arc::new(|_| only(Err(NoNetwork::Choose))),
-        s.shared.desk.book.clone(),
+        s.shared.desk.as_ref().unwrap().book.clone(),
     );
     lan.turn_on(None, None).unwrap();
     lan
@@ -199,7 +199,7 @@ fn controls(s: &Shack, device: &str) -> bool {
 #[tokio::test]
 async fn a_good_code_pairs_the_computer_at_once() {
     let s = shack(home());
-    let book = s.shared.desk.book.clone();
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
     let newcomer = Computer::new();
     let (_stop, stop) = watch::channel(false);
     let (_task, refused) = dial(&s, &newcomer.key, PEER, stop.clone()).await;
@@ -259,7 +259,7 @@ async fn a_good_code_pairs_the_computer_at_once() {
 async fn three_wrong_codes_close_the_window() {
     for wrongs in [WRONG_PROOFS - 1, WRONG_PROOFS] {
         let s = shack(home());
-        let book = s.shared.desk.book.clone();
+        let book = s.shared.desk.as_ref().unwrap().book.clone();
         let (_stop, stop) = watch::channel(false);
         book.open(Instant::now(), 0).unwrap();
         let code = shown_code(&book);
@@ -294,7 +294,7 @@ async fn three_wrong_codes_close_the_window() {
 #[tokio::test]
 async fn a_used_code_pairs_nobody_else() {
     let s = shack(home());
-    let book = s.shared.desk.book.clone();
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
     let (_stop, stop) = watch::channel(false);
     book.open(Instant::now(), 0).unwrap();
     let code = shown_code(&book);
@@ -334,7 +334,7 @@ async fn a_used_code_pairs_nobody_else() {
 #[tokio::test]
 async fn an_expired_code_pairs_nobody() {
     let s = shack(home());
-    let book = s.shared.desk.book.clone();
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
     let (_stop, stop) = watch::channel(false);
     let opened = Instant::now()
         .checked_sub(PAIRING_FOR + Duration::from_secs(1))
@@ -380,7 +380,7 @@ async fn an_expired_code_pairs_nobody() {
 #[test]
 fn the_window_keeps_its_rules() {
     let s = shack(home());
-    let book = s.shared.desk.book.clone();
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
     let now = Instant::now();
     let t = [9; 32];
     book.open(now, 0).unwrap();
@@ -516,7 +516,7 @@ async fn a_pairing_only_connection_reaches_nothing() {
     let s = shack(home());
     let scratch = Scratch::new();
     let _lan = lan_on(&s, &scratch);
-    let book = s.shared.desk.book.clone();
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
     book.open(Instant::now(), 0).unwrap();
     let code = shown_code(&book);
     let (_stop, stop) = watch::channel(false);
@@ -872,8 +872,14 @@ async fn removing_a_computer_ends_it_at_once() {
     let other = Computer::new();
     s.shared
         .desk
+        .as_ref()
+        .unwrap()
         .book
-        .add(other.pin, "Other", &s.shared.desk.station_id)
+        .add(
+            other.pin,
+            "Other",
+            &s.shared.desk.as_ref().unwrap().station_id,
+        )
         .unwrap();
     let (_stop, stop) = watch::channel(false);
     let (mut socket, session, acquired) =
@@ -892,7 +898,10 @@ async fn removing_a_computer_ends_it_at_once() {
     );
     assert!(halted(&s), "the over outlived the removal");
     assert!(!controls(&s, &s.device), "control outlived the removal");
-    assert_eq!(s.shared.desk.book.paired(&s.computer.pin), None);
+    assert_eq!(
+        s.shared.desk.as_ref().unwrap().book.paired(&s.computer.pin),
+        None
+    );
     assert_eq!(
         book_on(&s.store).paired(&s.computer.pin),
         None,
@@ -932,7 +941,7 @@ async fn resetting_the_identity_pairs_nobody_with_a_new_key() {
     let s = shack(home());
     let scratch = Scratch::new();
     let lan = lan_on(&s, &scratch);
-    let book = s.shared.desk.book.clone();
+    let book = s.shared.desk.as_ref().unwrap().book.clone();
     let before = book.view(Instant::now()).key.unwrap();
     let (_stop, stop) = watch::channel(false);
     let (mut socket, _, acquired) = acquire_as_paired(&s, &s.computer, PEER, stop).await;
@@ -975,8 +984,14 @@ async fn paired_computers_come_back_after_a_restart() {
     first
         .shared
         .desk
+        .as_ref()
+        .unwrap()
         .book
-        .add(removed.pin, "Removed", &first.shared.desk.station_id)
+        .add(
+            removed.pin,
+            "Removed",
+            &first.shared.desk.as_ref().unwrap().station_id,
+        )
         .unwrap();
     lan.revoke(&removed.device).unwrap();
     drop(lan);
@@ -993,7 +1008,7 @@ async fn paired_computers_come_back_after_a_restart() {
         &s,
         &scratch,
         Arc::new(|_| only(Err(NoNetwork::Choose))),
-        s.shared.desk.book.clone(),
+        s.shared.desk.as_ref().unwrap().book.clone(),
     );
     eventually(&lan, "LAN came back off", |st| st.on).await;
     let (_stop, stop) = watch::channel(false);
@@ -1003,7 +1018,10 @@ async fn paired_computers_come_back_after_a_restart() {
         !controls(&s, &removed.device),
         "a removed computer came back"
     );
-    assert_eq!(s.shared.desk.book.paired(&removed.pin), None);
+    assert_eq!(
+        s.shared.desk.as_ref().unwrap().book.paired(&removed.pin),
+        None
+    );
 
     lan.turn_off();
     drop(lan);
@@ -1017,11 +1035,16 @@ async fn paired_computers_come_back_after_a_restart() {
         &off,
         &scratch,
         Arc::new(|_| only(Err(NoNetwork::Choose))),
-        off.shared.desk.book.clone(),
+        off.shared.desk.as_ref().unwrap().book.clone(),
     );
     eventually(&lan, "LAN came back on", |st| !st.on).await;
     assert_eq!(
-        off.shared.desk.book.paired(&first.computer.pin),
+        off.shared
+            .desk
+            .as_ref()
+            .unwrap()
+            .book
+            .paired(&first.computer.pin),
         Some(first.device.clone()),
         "premise: still paired"
     );
@@ -1054,7 +1077,7 @@ async fn pairing_over_the_listener_and_a_reset_restarting_it_on_a_new_key() {
         &s,
         &scratch,
         Arc::new(move |_| only(Ok(network))),
-        s.shared.desk.book.clone(),
+        s.shared.desk.as_ref().unwrap().book.clone(),
     );
     assert_eq!(lan.pair(), Err("invalidRequest"), "a code with LAN off");
     lan.turn_on(None, Some(port)).unwrap();

@@ -150,9 +150,9 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
         presence: RoadPresence::new(s.shared.authority.clone(), s.shared.engine.clone()),
         ptt: ptt.clone(),
         mic: mic.clone(),
-        paired: s.shared.desk.book.verifier().0,
+        paired: s.shared.desk.as_ref().unwrap().book.verifier().0,
         pairings: {
-            let book = s.shared.desk.book.clone();
+            let book = s.shared.desk.as_ref().unwrap().book.clone();
             Arc::new(move || book.revisions())
         },
     };
@@ -785,7 +785,7 @@ fn a_removed_computer_or_a_stranger_stops_nothing() {
         );
         assert!(keyed(&r.s), "a stranger stops nothing");
         // Removed at the shack.
-        assert!(r.s.shared.desk.book.forget(&r.s.device));
+        assert!(r.s.shared.desk.as_ref().unwrap().book.forget(&r.s.device));
         assert!(seat.closed().await, "its connection ends");
         assert_eq!(
             seat.road.road_stop(2, NOTHING).await,
@@ -1110,7 +1110,7 @@ fn a_stop_is_acknowledged_while_the_pairing_book_is_held() {
         let r = roadside(&app);
         let mut seat = seated(&r).await;
         key_the_mic(&r.s);
-        let book = r.s.shared.desk.book.clone();
+        let book = r.s.shared.desk.as_ref().unwrap().book.clone();
         let (held, holding) = std::sync::mpsc::channel();
         let holder = std::thread::spawn(move || {
             let guard = book.held();
