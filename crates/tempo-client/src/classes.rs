@@ -128,6 +128,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("export_log_for_operator",        RunsAtShack, "One operator's log as text; this computer saves it."),
     ("export_settings_bundle",         RunsAtShack, "The shack's settings as text, with no secrets; this computer saves it."),
     ("fd_club_export",                 RunsAtShack, "The club log as text; this computer saves it."),
+    ("fd_club_give_position",          RefusedHere, "Gives a held club position to a laptop the host turned away; a club change is made at the shack only."),
     ("fd_discover_events",             RunsAtShack, "Listens for club events on the shack's network."),
     ("fd_log_manual",                  RunsAtShack, "Logs a Field Day contact at the shack."),
     ("fd_merge_to_general",            RunsAtShack, "Merges the contest session into the shack's logbook."),
