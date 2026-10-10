@@ -43,7 +43,8 @@ and the Opus codecs, resamplers and headset rings both ends use are `crates/temp
 internet the two roads beside the link each get a socket of their own at both ends, find their
 pair by ICE (`is`, the agent str0m runs; `tempo-client`'s `ice`) and, at the computer, a relayed
 address from a TURN client of the crate's own (`turn`); their credentials and candidates cross
-inside the command link, and each road hears only the pair ICE selected. Receiver
+inside the command link, each road hears only the pair ICE selected, and its checks go only to an
+address of the internet. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh

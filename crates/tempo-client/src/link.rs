@@ -540,6 +540,16 @@ impl Link {
         self.shared.audio.clone()
     }
 
+    /// Each internet road's pair as its ICE selected it, by the road's name: for a test.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn internet_routes(&self) -> Vec<(&'static str, Option<crate::ice::Route>)> {
+        self.shared
+            .ice
+            .iter()
+            .map(|(name, ice)| (*name, ice.route()))
+            .collect()
+    }
+
     /// Whether the link has ended.
     pub fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::SeqCst)
@@ -742,7 +752,8 @@ impl Shared {
             }
             // The rig keyed mutes the station's audio here (M9); `null` when it cannot tell.
             "status" => self.on_air.rig(message["rigKeyed"].as_bool()),
-            // One more of the station's candidates for an internet road this link opened.
+            // One more of the station's candidates for an internet road this link opened. One its
+            // ICE reads but will not probe (`crate::ice`'s rule) is dropped there; the link goes on.
             "candidate" => {
                 let road = message["road"].as_str().ok_or(())?;
                 let line = message["candidate"].as_str().ok_or(())?;
@@ -997,5 +1008,84 @@ mod tests {
         ] {
             assert_eq!(said(wrong.clone()), Err(()), "{wrong}");
         }
+    }
+
+    /// ⛔ A candidate the station trickles for an internet road reaches that road's ICE only as the
+    /// road's rule allows: one naming this computer's loopback, for a road on every interface, is
+    /// read and dropped, the link is kept, and nothing ever reaches the address. CONTROL: a line no
+    /// station sends ends the link, and a test's road on loopback, given the same message, probes
+    /// the address.
+    #[test]
+    fn a_trickled_candidate_off_the_internet_is_dropped_and_the_link_kept() {
+        use crate::ice::Counter;
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let road = |at: &str| {
+            let gather = Gather {
+                direct: true,
+                stun: None,
+                relay: None,
+            };
+            let at = at.parse().unwrap();
+            let road = IceRoad::bind(
+                at,
+                crate::ice::Role::Computer,
+                gather,
+                Duration::from_millis(5),
+            );
+            let road = Arc::new(road.unwrap());
+            assert!(road.answer(&Offer {
+                ufrag: "0011223344556677".into(),
+                pwd: "00112233445566778899aabbccddeeff".into(),
+                candidates: Vec::new(),
+            }));
+            road
+        };
+        let (internet, control) = (road("0.0.0.0:0"), road("127.0.0.1:0"));
+        let localhost = std::net::Ipv4Addr::LOCALHOST.into();
+        let (refused, probed) = (Counter::on(localhost), Counter::on(localhost));
+        let candidate = |line: String| {
+            Whole::Text(json!({"type":"candidate","road":"stop","candidate":line}).to_string())
+        };
+        let on_internet = Shared::new(None, None, Arc::default(), vec![("stop", internet.clone())]);
+        let on_control = Shared::new(None, None, Arc::default(), vec![("stop", control.clone())]);
+        assert_eq!(
+            on_internet.heard(candidate(refused.line())),
+            Ok(()),
+            "the link is kept"
+        );
+        assert_eq!(on_control.heard(candidate(probed.line())), Ok(()));
+        assert_eq!(
+            on_internet.heard(candidate("candidate:no such line".into())),
+            Err(()),
+            "CONTROL: a line no station sends ends the link"
+        );
+        // Each road read by a thread of its own, as its road's thread reads it.
+        let stopping = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = [internet, control]
+            .into_iter()
+            .map(|road| {
+                let stopping = stopping.clone();
+                std::thread::spawn(move || {
+                    let mut buffer = [0u8; 2048];
+                    while !stopping.load(SeqCst) {
+                        let _ = road.recv(&mut buffer);
+                    }
+                })
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        while probed.heard() == 0 && started.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        stopping.store(true, SeqCst);
+        for reader in readers {
+            reader.join().unwrap();
+        }
+        assert!(
+            probed.heard() > 0,
+            "CONTROL: the road on loopback probed nothing"
+        );
+        assert_eq!(refused.heard(), 0, "the loopback candidate was probed");
     }
 }

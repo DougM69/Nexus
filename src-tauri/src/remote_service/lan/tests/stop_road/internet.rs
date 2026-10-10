@@ -14,7 +14,7 @@ use super::*;
 use crate::lan_client::audio_road::{Headset, StandIn as Earphones};
 use crate::lan_client::link::{Answer, Internet, Link};
 use crate::lan_client::stop_road::StopRoad as ComputerRoad;
-use tempo_client::ice::Relay;
+use tempo_client::ice::{Counter, Relay, Route};
 use tempo_client::turn::stand_in::StandIn;
 
 /// The relay's throwaway credential.
@@ -608,4 +608,182 @@ async fn over_the_internet_the_stations_audio_reaches_this_computers_headset() {
     assert_eq!(before, 0, "played before it listened");
     assert!(played > 0, "the station's band never reached the headset");
     assert_eq!(relayed, 2, "a relayed address for each road");
+}
+
+// ----- Where an internet road's checks go -----
+
+/// A listener whose roads are the internet's, bound at `bind`, as the roadside's Stop and audio
+/// roads open them.
+fn internet_at(r: &mut Roadside, bind: Ipv4Addr) -> Shared {
+    r.s.shared
+        .authority
+        .permit_station(&r.s.device, true)
+        .unwrap();
+    let mut internet = r.s.shared.clone();
+    let stop = internet.stop_road.take().expect("the roadside's Stop road");
+    let audio = internet.audio_road.take();
+    internet.internet = Some(InternetRoads {
+        stop,
+        audio,
+        bind: bind.into(),
+        stun: None,
+    });
+    internet
+}
+
+/// ⛔ Over the internet the shack never probes an address off the internet that a computer names:
+/// a candidate on the shack's loopback for each road in the `open`, and one for each road on the
+/// network the shack's own roads are on (the address its offer names), trickled after it, are read
+/// and dropped, nothing ever reaches any of them, and the connection goes on. CONTROL: a shack
+/// whose roads are on loopback, as a test's are, probes each such address it is given.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn over_the_internet_the_shack_never_probes_an_address_off_the_internet() {
+    let app = App::new();
+    for bind in [Ipv4Addr::LOCALHOST, Ipv4Addr::UNSPECIFIED] {
+        let mut r = roadside(&app);
+        let internet = internet_at(&mut r, bind);
+        let (station, computer) = pair().await;
+        let (_listening, stopped) = watch::channel(false);
+        tokio::spawn(channel::connection(
+            station,
+            PEER.parse().unwrap(),
+            internet,
+            stopped,
+        ));
+        let mut socket = open(computer, &r.s.computer.key, &r.s.public_key)
+            .await
+            .unwrap();
+        assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
+        let localhost = Ipv4Addr::LOCALHOST.into();
+        let (stop_loopback, audio_loopback) = (Counter::on(localhost), Counter::on(localhost));
+        let offer = |line: String| {
+            json!({"ufrag":"0011223344556677","pwd":"00112233445566778899aabbccddeeff",
+                "candidates":[line]})
+        };
+        send(
+            &mut socket,
+            json!({"type":"open","profile":"desktop","app":wire::APP,"contract":wire::contract(),
+                "run":1,"roads":{"stop":offer(stop_loopback.line()),"audio":offer(audio_loopback.line())}}),
+        )
+        .await;
+        let opened = next(&mut socket).await;
+        assert_eq!(opened["type"], "opened", "{opened}");
+        // The network the shack's own roads are on: the address its offer names.
+        let own: std::net::IpAddr = opened["roads"]["stop"]["ice"]["candidates"][0]
+            .as_str()
+            .and_then(|line| line.split(' ').nth(4))
+            .and_then(|ip| ip.parse().ok())
+            .expect("the shack's host candidate");
+        let (stop_own, audio_own) = (Counter::on(own), Counter::on(own));
+        for (road, counter) in [("stop", &stop_own), ("audio", &audio_own)] {
+            send(
+                &mut socket,
+                json!({"type":"candidate","road":road,"candidate":counter.line()}),
+            )
+            .await;
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let heard = [&stop_loopback, &audio_loopback, &stop_own, &audio_own].map(Counter::heard);
+        let state = ask(&mut socket, json!({"type":"state"})).await;
+        assert!(
+            state["value"]["stationBootId"].is_string(),
+            "the connection goes on: {state}"
+        );
+        if bind.is_loopback() {
+            assert!(
+                heard.iter().all(|&n| n > 0),
+                "CONTROL: a shack on loopback probes each: {heard:?}"
+            );
+        } else {
+            assert!(
+                matches!(own, std::net::IpAddr::V4(v4) if v4.is_private()),
+                "premise: the shack is on a private network ({own})"
+            );
+            assert_eq!(
+                heard, [0; 4],
+                "(each road's candidate on loopback, each road's on the shack's own network)"
+            );
+        }
+    }
+}
+
+/// ⛔ Over the internet this computer never asks its relay to reach an address off the internet
+/// that the shack names: a shack whose roads are on loopback, as a test's are, names their loopback
+/// addresses in its `opened`, and this computer's two roads, on every interface as an internet road
+/// is and relayed only, ask the TURN server for no permission and send nothing through it, so
+/// neither selects a pair, while the link goes on. CONTROL: this computer's roads on loopback,
+/// through the same kind of relay, are permitted the shack's address and each selects it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn over_the_internet_this_computer_never_asks_its_relay_for_an_address_off_the_internet() {
+    let app = App::new();
+    for bind in [Ipv4Addr::LOCALHOST, Ipv4Addr::UNSPECIFIED] {
+        let mut r = roadside(&app);
+        let internet = internet_at(&mut r, Ipv4Addr::LOCALHOST);
+        let (_listening, stopped) = watch::channel(false);
+        let at = behind_a_port_with(internet, stopped).await;
+        let turn = StandIn::start(USER, PASSWORD);
+        let headset: Arc<dyn Headset> = Earphones::new();
+        let ours = Internet {
+            bind: bind.into(),
+            direct: false,
+            stun: None,
+            relay: Some(Relay {
+                server: turn.address,
+                username: USER.into(),
+                password: PASSWORD.into(),
+            }),
+        };
+        let (link, _) = Link::connect_over(
+            &paired_record(&r.s, at),
+            &[at],
+            41,
+            Some(headset),
+            Some(&ours),
+        )
+        .await
+        .expect("the link");
+        let until = Instant::now() + Duration::from_millis(1500);
+        while Instant::now() < until
+            && !link
+                .internet_routes()
+                .iter()
+                .all(|(_, route)| route.is_some())
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let (routes, seen) = (link.internet_routes(), turn.seen());
+        let state = operate(&link, json!({"type":"state"})).await;
+        link.close();
+        assert!(
+            state["value"]["stationBootId"].is_string(),
+            "the link goes on: {state}"
+        );
+        if bind.is_loopback() {
+            assert!(
+                routes.len() == 2
+                    && routes
+                        .iter()
+                        .all(|(_, route)| matches!(route, Some(Route::Relayed { .. }))),
+                "CONTROL: {routes:?}"
+            );
+            assert!(
+                seen.permissions.contains(&Ipv4Addr::LOCALHOST.into()),
+                "CONTROL: {:?}",
+                seen.permissions
+            );
+        } else {
+            assert_eq!(
+                (
+                    routes,
+                    seen.allocations,
+                    seen.permissions,
+                    seen.sent_by_indication,
+                    seen.sent_by_channel
+                ),
+                (vec![("stop", None), ("audio", None)], 2, Vec::new(), 0, 0),
+                "(each road's pair, the relayed addresses, the permissions asked, what went through \
+                 the relay)"
+            );
+        }
+    }
 }

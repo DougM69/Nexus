@@ -751,7 +751,9 @@ async fn session<S>(
                         let Some(lane) = lane.as_mut().filter(|_| feeds.len() <= WATCH) else { break StreamReason::StreamClosed };
                         lane.watch(feeds);
                     }
-                    // Only for a road this connection opened, and only a line its ICE reads.
+                    // Only for a road this connection opened, and only a line its ICE reads. One it
+                    // reads but will not probe (`tempo_client::ice`'s rule) is dropped there, and the
+                    // connection goes on.
                     FromComputer::Candidate { road: name, candidate } => {
                         let taken = internet.as_ref().is_some_and(|net| {
                             net.ice().iter().any(|(road, ice)| *road == name && ice.add_candidate(&candidate))

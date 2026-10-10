@@ -19,6 +19,24 @@
 //!   the shack follows what it nominates. Through the relay, each peer is given a permission and a
 //!   channel before anything is sent to it.
 //!
+//! ## Where a road's checks go
+//!
+//! ⛔ **Only to an address of the internet** (`Reach`): ICE sends its checks to whatever the other
+//! end's candidates name, and through the relay asks the TURN server to reach them, so each one is
+//! held to the rule where it enters the agent (`State::candidate`), at both ends:
+//! - never this computer (loopback, or unspecified: 0.0.0.0/8 and `::`), a group (multicast, or
+//!   IPv4's broadcast) or a link's own address (link-local, 169.254/16 and fe80::/10, where a cloud's
+//!   metadata service sits);
+//! - never a private (RFC 1918) or unique-local (fc00::/7) address either, whatever kind of
+//!   candidate the other end says it is: across a LAN the LAN road is the way, under its subnet rule;
+//! - an IPv4-mapped address is read as the IPv4 one, and port 0 is refused;
+//! - a road takes at most [`CANDIDATES`] in all, so a peer cannot have it probe a range.
+//!
+//! A refused candidate is dropped, and noted once in this build's own words, never echoed; the link
+//! goes on, since a computer behind a NAT names its private host address as any end does. A check
+//! from such an address is never answered, so it never becomes a peer-reflexive candidate either.
+//! Only a test's road, bound to loopback, reaches loopback (and nothing else), in a test build.
+//!
 //! ## What is heard
 //!
 //! ⛔ **A road's datagram is heard only at the pair ICE selected** ([`Route`]): from that pair's
@@ -47,8 +65,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::turn::{self, Turn, Wrap};
 
-/// The most candidates one end names for a road, and the longest a candidate's line may be: what
-/// one offer may make the command link carry.
+/// The most candidates one end names for a road (and the most a road takes from the other end, in
+/// all), and the longest a candidate's line may be: what one offer may make the command link carry.
 pub const CANDIDATES: usize = 8;
 pub const CANDIDATE_BYTES: usize = 256;
 /// The longest a username fragment or password may be (RFC 8445 §5.3 asks at most 256 characters
@@ -121,6 +139,64 @@ fn line_shaped(line: &str) -> bool {
         && Candidate::from_sdp_string(line).is_ok_and(|c| c.proto() == Protocol::Udp)
 }
 
+/// ⛔ Where a road's checks may go, and whose checks it answers: the addresses the other end's
+/// candidates may name, and the sources a check is read from. Read off the road's own host address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// An internet road, as every road of the app is: an address of the internet alone.
+    Internet,
+    /// A test's road on this computer's loopback: loopback alone. No road of the app is bound
+    /// there, and outside a test build there is no such reach.
+    #[cfg(any(test, feature = "test-util"))]
+    Loopback,
+}
+
+impl Reach {
+    /// The reach of a road whose own host address is `host`.
+    #[cfg_attr(not(any(test, feature = "test-util")), allow(unused_variables))]
+    fn of(host: SocketAddr) -> Self {
+        #[cfg(any(test, feature = "test-util"))]
+        if host.ip().is_loopback() {
+            return Reach::Loopback;
+        }
+        Reach::Internet
+    }
+
+    /// Whether the road may send a check to `to`, or answer one from it: never at port 0, and an
+    /// IPv4-mapped address as the IPv4 one.
+    fn reaches(self, to: SocketAddr) -> bool {
+        let ip = to.ip().to_canonical();
+        to.port() != 0
+            && match self {
+                Reach::Internet => on_the_internet(ip),
+                #[cfg(any(test, feature = "test-util"))]
+                Reach::Loopback => ip.is_loopback(),
+            }
+    }
+}
+
+/// ⛔ Whether an internet road may probe `ip`: not this computer, a group, a link's own address, or
+/// a private or unique-local network's (the module header).
+fn on_the_internet(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            !(v4.is_loopback()
+                || v4.octets()[0] == 0
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_link_local()
+                || v4.is_private())
+        }
+        IpAddr::V6(v6) => {
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || v6.is_unicast_link_local()
+                || v6.is_unique_local())
+        }
+    }
+}
+
 /// A TURN server and the credential for it. Never logged, shown or sent but to that server, under
 /// the long-term mechanism: no `Debug`.
 #[derive(Clone)]
@@ -183,6 +259,11 @@ struct State {
     /// This end's own candidates, in the order found, and how many have been told.
     gathered: Vec<String>,
     told: usize,
+    /// What the other end's candidates may name, how many of them were taken, and how many were
+    /// refused (the first is noted).
+    reach: Reach,
+    taken: usize,
+    refused: usize,
     /// The remote candidates' addresses: each is a peer the relay must permit.
     peers: Vec<SocketAddr>,
     /// The pair the agent last nominated: this end's address on it and the other end's.
@@ -318,6 +399,9 @@ impl IceRoad {
                 reflexive: false,
                 gathered,
                 told: 0,
+                reach: Reach::of(host),
+                taken: 0,
+                refused: 0,
                 peers: Vec::new(),
                 nominated: None,
             }),
@@ -356,8 +440,9 @@ impl IceRoad {
         new
     }
 
-    /// The other end's offer: its credentials, and its candidates, each paired with this end's.
-    /// `false`, and nothing taken, for an offer no end of this build makes.
+    /// The other end's offer: its credentials, and its candidates, each paired with this end's if the
+    /// road may take it (`State::candidate`). `false`, and nothing taken, for an offer no end of
+    /// this build makes.
     pub fn answer(&self, theirs: &Offer) -> bool {
         if !theirs.shaped() {
             return false;
@@ -374,7 +459,7 @@ impl IceRoad {
     }
 
     /// One more of the other end's candidates, trickled. `false` for a line this build does not
-    /// read, or one too many.
+    /// read; one it reads but will not probe is dropped, and `true` (`State::candidate`).
     pub fn add_candidate(&self, line: &str) -> bool {
         line_shaped(line) && lock(&self.state).candidate(line, Instant::now())
     }
@@ -437,10 +522,11 @@ impl Drop for IceRoad {
 }
 
 impl State {
-    /// One of the other end's candidates, paired with this end's, and permitted at the relay. `false`
-    /// for one this build does not read, or past [`CANDIDATES`].
+    /// ⛔ One of the other end's candidates, paired with this end's, and permitted at the relay, if
+    /// the road may reach its address and has taken fewer than [`CANDIDATES`]; otherwise dropped
+    /// ([`State::refuse`]). `false` for a line this build does not read.
     fn candidate(&mut self, line: &str, now: Instant) -> bool {
-        if self.peers.len() >= CANDIDATES || line.len() > CANDIDATE_BYTES {
+        if line.len() > CANDIDATE_BYTES {
             return false;
         }
         let Ok(candidate) = Candidate::from_sdp_string(line) else {
@@ -450,6 +536,11 @@ impl State {
             return false;
         }
         let peer = candidate.addr();
+        if !self.reach.reaches(peer) || self.taken >= CANDIDATES {
+            self.refuse();
+            return true;
+        }
+        self.taken += 1;
         self.agent.add_remote_candidate(candidate);
         if !self.peers.contains(&peer) {
             self.peers.push(peer);
@@ -458,6 +549,19 @@ impl State {
             relay.permit(peer, now);
         }
         true
+    }
+
+    /// A candidate the road will not take, dropped: noted once for the road, in this build's own
+    /// words (nothing the other end sent is ever written).
+    fn refuse(&mut self) {
+        self.refused += 1;
+        if self.refused == 1 {
+            tempo_base::applog::warn(
+                "remote",
+                "an internet road refused a candidate: an address no internet road may reach, \
+                 or one more than a road takes",
+            );
+        }
     }
 
     /// One packet off the socket, from `from`: the TURN server's, the STUN server's, a check or its
@@ -503,6 +607,11 @@ impl State {
         local: SocketAddr,
         now: Instant,
     ) -> Option<usize> {
+        // ⛔ Nothing from an address the road may not reach is read: a check from one is never
+        // answered, so it never becomes a peer-reflexive candidate the agent would probe.
+        if !self.reach.reaches(from) {
+            return None;
+        }
         if turn::is_stun(&buffer[..length]) {
             // The agent takes only a check under this road's credentials, or the answer to one of
             // its own (`IceAgent::accepts_message`, asked inside).
@@ -620,6 +729,54 @@ impl State {
         } else {
             Some(Route::Direct(theirs))
         }
+    }
+}
+
+/// A socket that counts what reaches it, named as one of the other end's host candidates: for the
+/// tests that show where a road's checks go, at this computer and at the shack.
+#[cfg(any(test, feature = "test-util"))]
+pub struct Counter {
+    socket: UdpSocket,
+    heard: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Counter {
+    /// A counter at a port of its own on `ip`.
+    pub fn on(ip: IpAddr) -> Self {
+        let socket = UdpSocket::bind(SocketAddr::new(ip, 0)).expect("a counter's socket");
+        socket
+            .set_nonblocking(true)
+            .expect("a counter's socket never waits");
+        Self {
+            socket,
+            heard: Default::default(),
+        }
+    }
+
+    /// Where it listens.
+    pub fn at(&self) -> SocketAddr {
+        self.socket.local_addr().expect("a counter's address")
+    }
+
+    /// The host candidate line that names it.
+    pub fn line(&self) -> String {
+        let at = self.at();
+        format!(
+            "candidate:1 1 udp 2130706431 {} {} typ host",
+            at.ip(),
+            at.port()
+        )
+    }
+
+    /// How many datagrams have reached it so far.
+    pub fn heard(&self) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut buffer = [0u8; 2048];
+        while self.socket.recv_from(&mut buffer).is_ok() {
+            self.heard.fetch_add(1, Relaxed);
+        }
+        self.heard.load(Relaxed)
     }
 }
 
@@ -1032,5 +1189,344 @@ mod tests {
         }
         let unknown = json.replacen('{', "{\"port\":42077,", 1);
         assert!(serde_json::from_str::<Offer>(&unknown).is_err());
+    }
+
+    // ----- Where a road's checks go -----
+
+    /// The other end's offer as the link carries it: credentials of this build's shape, and these
+    /// candidates.
+    fn offer_naming(candidates: Vec<String>) -> Offer {
+        Offer {
+            ufrag: "0011223344556677".into(),
+            pwd: "00112233445566778899aabbccddeeff".into(),
+            candidates,
+        }
+    }
+
+    /// A road on every interface, as an internet road is bound: its host address is the one the
+    /// route to the internet leaves by, on the computers these tests run on a private one.
+    fn on_every_interface(role: Role, gather: Gather) -> IceRoad {
+        let road = IceRoad::bind("0.0.0.0:0".parse().unwrap(), role, gather, TICK).unwrap();
+        assert!(
+            matches!(road.host().ip(), IpAddr::V4(own) if own.is_private()),
+            "premise: this computer is on a private network ({})",
+            road.host()
+        );
+        road
+    }
+
+    fn on_loopback() -> Counter {
+        Counter::on(Ipv4Addr::LOCALHOST.into())
+    }
+
+    /// Whether `counter` heard anything within three seconds; and then half a second more, for any
+    /// other road's checks begun at the same time.
+    fn until_heard(counter: &Counter) -> bool {
+        let started = Instant::now();
+        while counter.heard() == 0 && started.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        counter.heard() > 0
+    }
+
+    /// ⛔ An internet road never probes an address the other end names that no internet road may
+    /// reach, at either end: one on this computer's loopback (in the offer) and one on the network
+    /// the road itself is on (trickled) are read, and nothing ever reaches either. CONTROL: a test's
+    /// road on loopback probes a loopback address it is given, within the same wait.
+    #[test]
+    fn an_internet_road_never_probes_loopback_or_the_network_it_is_on() {
+        let heard: Vec<_> = [Role::Shack, Role::Computer]
+            .into_iter()
+            .map(|role| {
+                let road = on_every_interface(role, host_only());
+                let (loopback_one, its_network) = (on_loopback(), Counter::on(road.host().ip()));
+                assert!(road.answer(&offer_naming(vec![loopback_one.line()])));
+                assert!(road.add_candidate(&its_network.line()), "read");
+                let probed = on_loopback();
+                let control = IceRoad::bind(loopback(), role, host_only(), TICK).unwrap();
+                assert!(control.answer(&offer_naming(vec![probed.line()])));
+                let _driven = (Driven::new(road), Driven::new(control));
+                assert!(
+                    until_heard(&probed),
+                    "CONTROL: {role:?}'s road on loopback probed nothing"
+                );
+                (role, loopback_one.heard(), its_network.heard())
+            })
+            .collect();
+        assert_eq!(
+            heard,
+            [(Role::Shack, 0, 0), (Role::Computer, 0, 0)],
+            "(the end, what reached this computer's loopback, what reached the road's own network)"
+        );
+    }
+
+    /// ⛔ A road takes at most [`CANDIDATES`] of the other end's candidates in all, however they
+    /// are named: eight lines naming one address, each a candidate of its own to the agent (their
+    /// related addresses differ), fill it, and a ninth, naming another address, is read and never
+    /// probed. CONTROL: the first address is probed.
+    #[test]
+    fn a_road_takes_at_most_eight_candidates_however_they_are_named() {
+        let (first, ninth) = (on_loopback(), on_loopback());
+        let at = first.at();
+        let eight = (1..=CANDIDATES)
+            .map(|n| {
+                format!(
+                    "candidate:{n} 1 udp 1694498815 {} {} typ srflx raddr 192.0.2.{n} rport {n}",
+                    at.ip(),
+                    at.port()
+                )
+            })
+            .collect();
+        let road = IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap();
+        assert!(road.answer(&offer_naming(eight)));
+        assert!(road.add_candidate(&ninth.line()), "read");
+        let _road = Driven::new(road);
+        assert!(
+            until_heard(&first),
+            "CONTROL: the first address was never probed"
+        );
+        assert_eq!(ninth.heard(), 0, "the ninth candidate was probed");
+    }
+
+    /// ⛔ A check from an address an internet road may not reach is never answered, so the road
+    /// never takes it as a peer-reflexive candidate, and never probes it: a test's road on loopback,
+    /// given the internet road's credentials and its port on loopback, checks it from there, and
+    /// neither end selects a pair. CONTROL: the same checks at a road on loopback are answered, and
+    /// both ends select the pair.
+    #[test]
+    fn a_check_from_an_address_the_road_may_not_reach_is_never_answered() {
+        for internet in [false, true] {
+            let road = match internet {
+                true => on_every_interface(Role::Shack, host_only()),
+                false => IceRoad::bind(loopback(), Role::Shack, host_only(), TICK).unwrap(),
+            };
+            let checking = IceRoad::bind(loopback(), Role::Computer, host_only(), TICK).unwrap();
+            let (ours, theirs) = (road.offer(), checking.offer());
+            let at = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), road.host().port());
+            assert!(road.answer(&Offer {
+                candidates: Vec::new(),
+                ..theirs
+            }));
+            assert!(checking.answer(&Offer {
+                candidates: vec![format!(
+                    "candidate:1 1 udp 2130706431 {} {} typ host",
+                    at.ip(),
+                    at.port()
+                )],
+                ..ours
+            }));
+            let (road, checking) = (Driven::new(road), Driven::new(checking));
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_millis(1500)
+                && !(road.road.route().is_some() && checking.road.route().is_some())
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let routes = (road.road.route(), checking.road.route());
+            if internet {
+                assert_eq!(
+                    routes,
+                    (None, None),
+                    "(the internet road's pair, the checking road's)"
+                );
+            } else {
+                assert_eq!(
+                    routes,
+                    (
+                        Some(Route::Direct(checking.road.host())),
+                        Some(Route::Direct(at))
+                    ),
+                    "CONTROL: a road on loopback answers the checks"
+                );
+            }
+        }
+    }
+
+    /// ⛔ The relay is never asked to reach an address the road may not: an internet road at this
+    /// computer, relayed only, given the other end's candidates on this computer's loopback (in the
+    /// offer, before its relayed address is allocated) and on the network the road is on (trickled
+    /// after), asks the TURN server for no permission and sends nothing through it, and nothing
+    /// reaches either address. CONTROL: a test's road on loopback, given a loopback one trickled
+    /// after its allocation, is permitted it at the relay, and its checks reach it through the relay.
+    #[test]
+    fn the_relay_is_never_asked_to_reach_an_address_the_road_may_not() {
+        let relayed = |turn: &StandIn| Gather {
+            direct: false,
+            stun: None,
+            relay: Some(Relay {
+                server: turn.address,
+                username: "road".into(),
+                password: "throwaway-password".into(),
+            }),
+        };
+        let allocated = |turn: &StandIn| {
+            let started = Instant::now();
+            while turn.seen().allocations == 0 && started.elapsed() < Duration::from_secs(3) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            turn.seen().allocations == 1
+        };
+        let turn = StandIn::start("road", "throwaway-password");
+        let road = on_every_interface(Role::Computer, relayed(&turn));
+        let (loopback_one, its_network) = (on_loopback(), Counter::on(road.host().ip()));
+        assert!(road.answer(&offer_naming(vec![loopback_one.line()])));
+        let road = Driven::new(road);
+        assert!(
+            allocated(&turn),
+            "premise: the internet road has its relayed address"
+        );
+        assert!(road.road.add_candidate(&its_network.line()), "read");
+        let control_turn = StandIn::start("road", "throwaway-password");
+        let probed = on_loopback();
+        let control =
+            IceRoad::bind(loopback(), Role::Computer, relayed(&control_turn), TICK).unwrap();
+        assert!(control.answer(&offer_naming(Vec::new())));
+        let control = Driven::new(control);
+        assert!(
+            allocated(&control_turn),
+            "premise: the control has its relayed address"
+        );
+        assert!(control.road.add_candidate(&probed.line()));
+        assert!(
+            until_heard(&probed),
+            "CONTROL: nothing reached the loopback address through the relay"
+        );
+        assert!(
+            control_turn
+                .seen()
+                .permissions
+                .contains(&Ipv4Addr::LOCALHOST.into()),
+            "CONTROL: {:?}",
+            control_turn.seen().permissions
+        );
+        let seen = turn.seen();
+        assert_eq!(
+            (
+                seen.permissions,
+                seen.sent_by_indication,
+                seen.sent_by_channel,
+                loopback_one.heard(),
+                its_network.heard()
+            ),
+            (Vec::new(), 0, 0, 0, 0),
+            "(the permissions asked, what went through the relay, what reached each address)"
+        );
+    }
+
+    /// ⛔ The rule, by value. An internet road refuses each class, and each in its IPv4-mapped form,
+    /// and port 0; it takes an address of the internet, the edges of each private block among them.
+    /// Through the road, the kind of candidate the other end names changes nothing: a private
+    /// address is refused as a server-reflexive or relayed one too, and a server-reflexive, relayed
+    /// or IPv6 host address of the internet is taken; each refusal is counted, and what is taken is
+    /// the road's peers. A test's road on loopback reaches loopback alone.
+    #[test]
+    fn an_internet_road_reaches_the_internet_alone() {
+        let refused = [
+            // This computer: loopback, and unspecified ("this network").
+            "127.0.0.1:4532",
+            "127.255.255.254:9",
+            "[::1]:9",
+            "[::ffff:127.0.0.1]:9",
+            "0.0.0.0:9",
+            "0.1.2.3:9",
+            "[::]:9",
+            "[::ffff:0.0.0.0]:9",
+            // A group: multicast, and IPv4's broadcast.
+            "224.0.0.251:5353",
+            "239.255.255.250:1900",
+            "[ff02::1]:9",
+            "[ff05::1:3]:547",
+            "[::ffff:239.255.255.250]:1900",
+            "255.255.255.255:9",
+            "[::ffff:255.255.255.255]:9",
+            // A link's own address, a cloud's metadata service among them.
+            "169.254.169.254:80",
+            "169.254.0.1:9",
+            "[fe80::1]:9",
+            "[febf::1]:9",
+            "[::ffff:169.254.169.254]:80",
+            // A private network, IPv4's and IPv6's unique-local.
+            "10.0.0.1:9",
+            "172.16.0.1:9",
+            "172.31.255.254:9",
+            "192.168.1.1:9",
+            "[::ffff:10.1.2.3]:9",
+            "[::ffff:192.168.1.1]:9",
+            "[fc00::1]:9",
+            "[fd12:3456::1]:9",
+            // Port 0, at an address otherwise taken.
+            "198.51.100.7:0",
+            "[2001:db8::1]:0",
+        ];
+        let taken = [
+            "8.8.8.8:3478",
+            "203.0.113.7:61000",
+            "1.1.1.1:65535",
+            "1.0.0.0:9",
+            "9.255.255.255:9",
+            "11.0.0.0:9",
+            "126.255.255.255:9",
+            "128.0.0.0:9",
+            "169.253.255.255:9",
+            "169.255.0.0:9",
+            "172.15.255.255:9",
+            "172.32.0.0:9",
+            "192.167.255.255:9",
+            "192.169.0.0:9",
+            "223.255.255.255:9",
+            "[2606:4700:4700::1111]:3478",
+            "[2001:db8::1]:9",
+            "[::ffff:8.8.8.8]:9",
+            "[fbff::1]:9",
+            "[fe7f::1]:9",
+        ];
+        let reaches = |reach: Reach, at: &str| reach.reaches(at.parse().unwrap());
+        let wrong: Vec<_> = refused
+            .iter()
+            .filter(|at| reaches(Reach::Internet, at))
+            .chain(taken.iter().filter(|at| !reaches(Reach::Internet, at)))
+            .collect();
+        assert!(wrong.is_empty(), "read the wrong way: {wrong:?}");
+        let on_loopback: Vec<_> = [
+            "127.0.0.1:9",
+            "[::1]:9",
+            "[::ffff:127.0.0.1]:9",
+            "127.0.0.1:0",
+            "10.0.0.1:9",
+            "8.8.8.8:9",
+        ]
+        .iter()
+        .map(|at| reaches(Reach::Loopback, at))
+        .collect();
+        assert_eq!(on_loopback, [true, true, true, false, false, false]);
+
+        let road = on_every_interface(Role::Shack, host_only());
+        assert_eq!(lock(&road.state).reach, Reach::Internet);
+        assert!(road.answer(&offer_naming(Vec::new())));
+        for line in [
+            "candidate:1 1 udp 1694498815 192.168.1.1 9 typ srflx raddr 0.0.0.0 rport 0",
+            "candidate:2 1 udp 16777215 10.0.0.1 9 typ relay raddr 0.0.0.0 rport 0",
+            "candidate:3 1 udp 2130706431 127.0.0.1 9 typ host",
+            "candidate:4 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0",
+            "candidate:5 1 udp 16777215 198.51.100.9 50000 typ relay raddr 0.0.0.0 rport 0",
+            "candidate:6 1 udp 2130706431 2001:db8::1 40000 typ host",
+        ] {
+            assert!(road.add_candidate(line), "read: {line}");
+        }
+        let state = lock(&road.state);
+        assert_eq!(
+            (state.peers.clone(), state.taken, state.refused),
+            (
+                vec![
+                    "203.0.113.7:61000".parse().unwrap(),
+                    "198.51.100.9:50000".parse().unwrap(),
+                    "[2001:db8::1]:40000".parse().unwrap()
+                ],
+                3,
+                3
+            ),
+            "(the road's peers, how many it took, how many it refused)"
+        );
     }
 }
