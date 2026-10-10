@@ -240,6 +240,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         stop_road: None,
         #[cfg(feature = "radio")]
         audio_road: None,
+        internet: None,
     };
     Shack {
         shared,

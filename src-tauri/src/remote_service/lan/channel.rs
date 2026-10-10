@@ -28,7 +28,13 @@
 //!    runs. A window's session never opens it. On it go the calls, routed by class, and their
 //!    answers, the pushed feeds and the events. One writer writes everything on the connection
 //!    (`super::outbox`), a Stop and its answer ahead of all else.
-//! 6. **The close.** However the connection ends (the computer closes it, it falls silent for
+//! 6. **Internet roads**, in place of the LAN's: an `open` may ask for them on a connection whose
+//!    welcome named no road of the LAN's, where the listener offers them (`InternetRoads`). Each
+//!    is a socket, ICE and thread of its own at the shack (`super::stop_road`,
+//!    `super::audio_road`), keyed from this TLS session under the internet roads' own labels; the
+//!    computer's ICE offer comes in its `open`, the shack's goes back in its `opened`, and each
+//!    end's later candidates follow on this connection, never on a relay lane.
+//! 7. **The close.** However the connection ends (the computer closes it, it falls silent for
 //!    [`SILENCE`], LAN is switched off, the computer is removed at the shack), its stream ends with
 //!    it, the stream's presence at once, and the lease it holds goes with the connection, so the
 //!    radio loop halts anything it was keeping on the air on its next tick.
@@ -52,10 +58,11 @@ use super::datagram;
 use super::gate::Gate;
 use super::outbox::Outbox;
 use super::pairing::{self, Asked, Desk, Outcome};
-use super::stop_road::{StateClock, StopRoad};
+use super::stop_road::{Opened as StopOpened, StateClock, StopRoad};
 use super::tls::{pin, Identity};
 use super::wire::{self, End, Whole};
 use crate::command_dispatch::{Call, Dispatcher, Profile, Revision, ShackStores};
+use tempo_client::ice::{Gather, IceRoad, Offer, Role};
 
 /// The LAN protocol this shack speaks, and the operation version every request on this channel is
 /// answered at: the wire's (`super::wire`), which the computer's end reads too.
@@ -108,6 +115,110 @@ pub(super) struct Shared {
     /// not open: the welcome then names none, and the computer hears nothing.
     #[cfg(feature = "radio")]
     pub audio_road: Option<super::audio_road::AudioRoad>,
+    /// Where a connection's internet roads are opened, when its `open` asks for them and its
+    /// welcome named no road of the LAN's. `None` on the LAN's own listener, where every road is
+    /// the LAN's.
+    pub internet: Option<InternetRoads>,
+}
+
+/// What a connection's internet roads are opened with: the listener's own Stop road and audio road
+/// (whose `open_internet` gives each internet road a socket and a thread of its own), the address
+/// those sockets bind, and the STUN server this end learns its server-reflexive address from.
+#[derive(Clone)]
+pub(crate) struct InternetRoads {
+    pub stop: StopRoad,
+    #[cfg(feature = "radio")]
+    pub audio: Option<super::audio_road::AudioRoad>,
+    pub bind: IpAddr,
+    pub stun: Option<SocketAddr>,
+}
+
+/// The internet roads a computer asks for in its `open`: its ICE offer for each.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoadsAsked {
+    stop: Offer,
+    #[serde(default)]
+    audio: Option<Offer>,
+}
+
+/// A connection's internet roads, open: each road's handle (it closes as it drops) and its ICE.
+struct Internet {
+    stop: (StopOpened, Arc<IceRoad>),
+    #[cfg(feature = "radio")]
+    audio: Option<(super::audio_road::Opened, Arc<IceRoad>)>,
+}
+
+impl Internet {
+    /// Each road's ICE, by the road's name on the link.
+    fn ice(&self) -> Vec<(&'static str, &Arc<IceRoad>)> {
+        let mut ice = vec![("stop", &self.stop.1)];
+        #[cfg(feature = "radio")]
+        if let Some((_, audio)) = &self.audio {
+            ice.push(("audio", audio));
+        }
+        ice
+    }
+
+    /// What the `opened` names of them: each road's tag, as lowercase hex, and this end's offer.
+    fn named(&self) -> Value {
+        let hex = |tag: &[u8]| -> String { tag.iter().map(|b| format!("{b:02x}")).collect() };
+        let mut roads = json!({"stop": {"tag": hex(&self.stop.0.tag), "ice": self.stop.1.offer()}});
+        #[cfg(feature = "radio")]
+        if let Some((opened, ice)) = &self.audio {
+            roads["audio"] = json!({"tag": hex(&opened.tag), "ice": ice.offer()});
+        }
+        roads
+    }
+}
+
+/// Opens a connection's internet roads, as its `open` asked: each its own socket at `net.bind`
+/// and ICE (controlled: the computer nominates), the computer's offer taken, keys from this
+/// connection's TLS session under the internet roads' own labels (`keys`). `None`, and no road
+/// open, if the Stop road's could not be had: Stop then has the link alone.
+#[allow(clippy::too_many_arguments)]
+fn open_internet(
+    net: &InternetRoads,
+    asked: RoadsAsked,
+    keys: (
+        Option<[u8; datagram::EXPORTED]>,
+        Option<[u8; datagram::EXPORTED]>,
+    ),
+    session: &str,
+    device: &str,
+    pin: [u8; 32],
+    clock: Arc<StateClock>,
+) -> Option<Internet> {
+    let bind = |tick| {
+        let gather = Gather {
+            direct: true,
+            stun: net.stun,
+            relay: None,
+        };
+        IceRoad::bind(SocketAddr::new(net.bind, 0), Role::Shack, gather, tick).map(Arc::new)
+    };
+    let stop_ice = bind(super::stop_road::TICK)?;
+    if !stop_ice.answer(&asked.stop) {
+        return None;
+    }
+    let stop = net
+        .stop
+        .open_internet(stop_ice.clone(), &keys.0?, session, device, pin, clock)?;
+    #[cfg(feature = "radio")]
+    let audio = match (asked.audio, &net.audio, keys.1) {
+        (Some(offer), Some(road), Some(key)) => bind(super::audio_road::TICK).and_then(|ice| {
+            ice.write_timeout(Some(super::audio_road::SEND_WAIT));
+            ice.answer(&offer).then_some(())?;
+            let opened = road.open_internet(ice.clone(), &key, session, device, Some(stop.tag))?;
+            Some((opened, ice))
+        }),
+        _ => None,
+    };
+    Some(Internet {
+        stop: (stop, stop_ice),
+        #[cfg(feature = "radio")]
+        audio,
+    })
 }
 
 /// What a remote PC sends. Parsed whole and exactly: anything else closes the connection.
@@ -144,6 +255,9 @@ enum FromComputer {
         app: String,
         contract: String,
         run: u64,
+        /// Internet roads in place of the LAN's: the computer's ICE offer for each.
+        #[serde(default)]
+        roads: Option<RoadsAsked>,
     },
     /// One call on the open lane: its id, rising within the run, the command and its arguments,
     /// for a whole save the revision of the copy it was made from, and how many Stops the computer
@@ -164,6 +278,12 @@ enum FromComputer {
     /// The feeds to push from now on, in place of the ones before.
     Watch {
         feeds: Vec<String>,
+    },
+    /// One more of the computer's candidates for one of this connection's internet roads, named
+    /// `stop` or `audio`, as it finds it.
+    Candidate {
+        road: String,
+        candidate: String,
     },
 }
 
@@ -471,6 +591,24 @@ async fn session<S>(
             .ok()?;
         audio.open(&exported, &session, &device, road.as_ref().map(|r| r.tag))
     });
+    // An internet road's keys, made now from this TLS session (the link's halves part below), and
+    // kept for its `open` alone: used only if the computer asks for the roads there, and only on a
+    // connection the welcome named no road of the LAN's.
+    let mut internet_keys = (road.is_none() && shared.internet.is_some()).then(|| {
+        let export = |label: &[u8]| {
+            socket
+                .get_ref()
+                .get_ref()
+                .1
+                .export_keying_material([0; datagram::EXPORTED], label, Some(session.as_bytes()))
+                .ok()
+        };
+        (
+            export(datagram::INTERNET_STOP_LABEL),
+            export(datagram::INTERNET_AUDIO_LABEL),
+        )
+    });
+    let mut internet: Option<Internet> = None;
     // The lease this computer takes is bound to this connection, and goes with it.
     let connection = LanConnection::new(shared.authority.clone());
     let paired = book.clone();
@@ -493,7 +631,7 @@ async fn session<S>(
     let (sink, mut reader) = socket.split();
     let (outbox, mut writer) = Outbox::spawn(sink);
     // Each snapshot's number, and when its state was taken: the clock the road reads a state echo by.
-    outbox.keep_time("snapshot/1", clock);
+    outbox.keep_time("snapshot/1", clock.clone());
     let (app, contract) = shared.build;
     let mut welcome = json!({"type":"welcome","sessionId":session,"deviceId":device,
         "stationId":shared.identity.station_id,"app":app,"contract":contract});
@@ -559,7 +697,7 @@ async fn session<S>(
                 }
                 match message {
                     FromComputer::Hello { .. } | FromComputer::Pair { .. } => break StreamReason::StreamClosed,
-                    FromComputer::Open { profile, app, contract, run } => {
+                    FromComputer::Open { profile, app, contract, run, roads } => {
                         if lane.is_some() || run == 0 { break StreamReason::StreamClosed }
                         let profile = Profile::named(&profile);
                         let refused = match profile {
@@ -574,6 +712,16 @@ async fn session<S>(
                             outbox.written(DRAIN_FOR).await;
                             break StreamReason::StreamClosed;
                         };
+                        // Internet roads in place of the LAN's, when asked for on a connection the
+                        // welcome named none of the LAN's: each its own socket, ICE and thread.
+                        internet = match (roads, internet_keys.take(), shared.internet.as_ref()) {
+                            (Some(asked), Some(keys), Some(net)) => {
+                                open_internet(net, asked, keys, &session, &device, pin, clock.clone())
+                            }
+                            _ => None,
+                        };
+                        let ready = road.as_ref().map(|road| road.ready())
+                            .or_else(|| internet.as_ref().map(|net| net.stop.0.ready()));
                         lane = Some(Lane::open(Opening {
                             dispatcher: shared.dispatcher.clone(),
                             commands: shared.commands.clone(),
@@ -583,9 +731,13 @@ async fn session<S>(
                             run,
                             profile,
                             outbox: outbox.clone(),
-                            ready: road.as_ref().map(|road| road.ready()),
+                            ready,
                         }));
-                        if outbox.text(json!({"type":"opened"}).to_string()).is_err() { break StreamReason::ConnectionFailed }
+                        let mut opened = json!({"type":"opened"});
+                        if let Some(net) = &internet {
+                            opened["roads"] = net.named();
+                        }
+                        if outbox.text(opened.to_string()).is_err() { break StreamReason::ConnectionFailed }
                     }
                     FromComputer::Call { id, cmd, args, base, stops } => {
                         let Some(lane) = lane.as_mut() else { break StreamReason::StreamClosed };
@@ -598,6 +750,13 @@ async fn session<S>(
                     FromComputer::Watch { feeds } => {
                         let Some(lane) = lane.as_mut().filter(|_| feeds.len() <= WATCH) else { break StreamReason::StreamClosed };
                         lane.watch(feeds);
+                    }
+                    // Only for a road this connection opened, and only a line its ICE reads.
+                    FromComputer::Candidate { road: name, candidate } => {
+                        let taken = internet.as_ref().is_some_and(|net| {
+                            net.ice().iter().any(|(road, ice)| *road == name && ice.add_candidate(&candidate))
+                        });
+                        if !taken { break StreamReason::StreamClosed }
                     }
                     FromComputer::OperationRequest { request } => {
                         let id = request.id().to_string();
@@ -663,6 +822,16 @@ async fn session<S>(
                 }
             }
             _ = status_tick.tick() => {
+                // Each internet road's candidates as it finds them (its server-reflexive address
+                // once the STUN server answers), on the link.
+                if let Some(net) = &internet {
+                    for (name, ice) in net.ice() {
+                        for line in ice.trickle() {
+                            let said = json!({"type":"candidate","road":name,"candidate":line});
+                            if outbox.text(said.to_string()).is_err() { break }
+                        }
+                    }
+                }
                 if let Ok(frame) = shared.feeds.monitor.read(&shared.engine, Instant::now()) {
                     let keyed = frame.station.radio.rig_keyed;
                     if said != Some(keyed) {
@@ -680,8 +849,9 @@ async fn session<S>(
     drop(stream_lane);
     drop(lane);
     drop(connection);
-    // Its Stop road closes now, and keeps its keys for a Stop that comes late.
+    // Its Stop road closes now, and keeps its keys for a Stop that comes late: on the internet too.
     drop(road);
+    drop(internet);
     writer.abort();
     tempo_core::applog::info(
         "remote",

@@ -1,7 +1,8 @@
 //! Stop's second road, this computer's end: a UDP socket of its own to the road the station named
-//! in its welcome (`remote_service::lan::stop_road`), keyed from the command link's TLS session, and
-//! a thread that reads it and does nothing else. The command link knows nothing of it, and it knows
-//! nothing of the link: either road alone stops the station.
+//! in its welcome (`remote_service::lan::stop_road`), or on the internet a road of its own over ICE
+//! (`crate::ice`), keyed from the command link's TLS session, and a thread that reads it and does
+//! nothing else. The command link knows nothing of it, and it knows nothing of the link: either road
+//! alone stops the station.
 //!
 //! - **A Stop press** ([`StopRoad::stop`]) is written to the socket by the caller itself, on the
 //!   caller's own thread, before anything else is asked: client mode's Stop handler, beside the
@@ -51,6 +52,7 @@ use tempo_base::ptt_hold::HoldEnd;
 
 use self::wire::{Down, Up, AFTERLIFE};
 use crate::datagram::{End, Keys, Opener, Sealer, Tag, EXPORTED};
+use crate::ice::{IceRoad, Path};
 
 /// How often an unacknowledged Stop is sent again.
 pub const REPEAT: Duration = Duration::from_millis(50);
@@ -59,8 +61,9 @@ pub const REPEAT: Duration = Duration::from_millis(50);
 pub const GIVE_UP: Duration = Duration::from_secs(5);
 /// How often the heartbeat goes.
 pub const HEARTBEAT: Duration = Duration::from_millis(500);
-/// The longest the thread waits for the station before it looks at its own work again.
-const TICK: Duration = Duration::from_millis(10);
+/// The longest the thread waits for the station before it looks at its own work again: the read
+/// timeout an internet road's ICE road is bound with too.
+pub const TICK: Duration = Duration::from_millis(10);
 /// What is kept of what the station said, each kind.
 const KEPT: usize = 16;
 /// How long a press may be held with no word from the station before the screens say the over may
@@ -213,7 +216,8 @@ struct Pending {
 }
 
 struct Shared {
-    socket: UdpSocket,
+    /// The road's way to the station: the LAN's socket, or its internet road.
+    path: Path,
     /// Whether this computer's over may be on the air, shared with the audio road and the link.
     on_air: Arc<OnAir>,
     /// The sending half of the keys, until the road's thread ends and drops it.
@@ -265,13 +269,35 @@ impl StopRoad {
         on_air: Arc<OnAir>,
         afterlife: Duration,
     ) -> Option<Arc<Self>> {
-        let Keys { send, receive } = Keys::new(exported, tag, End::Computer)?;
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
         // Connected: only the station's road is heard on it.
         socket.connect(to).ok()?;
         socket.set_read_timeout(Some(TICK)).ok()?;
+        Self::on(Path::Lan(socket), tag, exported, on_air, afterlife)
+    }
+
+    /// The road over the internet: on `ice` (bound with [`TICK`], its pair found by ICE, and heard
+    /// only there), tagged `tag`, under the keys the link's exporter gave for an internet Stop road
+    /// (`datagram::INTERNET_STOP_LABEL`), with its thread.
+    pub fn internet(
+        ice: Arc<IceRoad>,
+        tag: Tag,
+        exported: &[u8; EXPORTED],
+        on_air: Arc<OnAir>,
+    ) -> Option<Arc<Self>> {
+        Self::on(Path::Internet(ice), tag, exported, on_air, AFTERLIFE)
+    }
+
+    fn on(
+        path: Path,
+        tag: Tag,
+        exported: &[u8; EXPORTED],
+        on_air: Arc<OnAir>,
+        afterlife: Duration,
+    ) -> Option<Arc<Self>> {
+        let Keys { send, receive } = Keys::new(exported, tag, End::Computer)?;
         let shared = Arc::new(Shared {
-            socket,
+            path,
             on_air,
             send: Mutex::new(Some(send)),
             afterlife,
@@ -409,7 +435,7 @@ impl Shared {
         if self.blocked() {
             return sealed.is_some();
         }
-        sealed.is_some_and(|datagram| self.socket.send(&datagram).is_ok())
+        sealed.is_some_and(|datagram| self.path.send(&datagram))
     }
 
     /// Whether a test build's road switch blocks this road now.
@@ -495,7 +521,7 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
     let mut buffer = [0u8; 256];
     let mut beat: Option<Instant> = None;
     loop {
-        match shared.socket.recv(&mut buffer) {
+        match shared.path.recv(&mut buffer) {
             // Blocked by a test build's switch: dropped unread, as a firewall here would drop it.
             #[cfg(feature = "bench-road-switch")]
             Ok(_) if shared.blocked() => {}

@@ -63,6 +63,10 @@ pub const AUDIO_MAX: usize = 512;
 pub const STOP_LABEL: &[u8] = b"EXPORTER-nexus-stop-road";
 /// The exporter's label for the audio road: its keys are never Stop's.
 pub const AUDIO_LABEL: &[u8] = b"EXPORTER-nexus-audio-road";
+/// The labels of a connection's internet roads (`crate::ice`): their own, so that even a
+/// connection with a road of each kind could never seal two roads' datagrams under one key.
+pub const INTERNET_STOP_LABEL: &[u8] = b"EXPORTER-nexus-internet-stop-road";
+pub const INTERNET_AUDIO_LABEL: &[u8] = b"EXPORTER-nexus-internet-audio-road";
 /// One export: a key and a salt for each direction.
 pub const EXPORTED: usize = 2 * (KEY + NONCE_LEN);
 const KEY: usize = 16;

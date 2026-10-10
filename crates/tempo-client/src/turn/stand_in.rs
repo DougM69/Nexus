@@ -3,6 +3,9 @@
 //! writer. One user under the long-term credential; one allocation per client address, each with a
 //! relayed socket of its own; permissions, channels, Send and Data indications and ChannelData; and
 //! a count of everything it did ([`Seen`]), so a test can say by value which way a datagram went.
+//! Like the internet between two computers, it can hold back a road's datagrams of one kind until
+//! told, or lose the next one of a kind ([`StandIn::hold`], [`StandIn::lose_next`]): a datagram's
+//! kind is in its clear header, so it reads no more of one than a network could.
 //!
 //! It shares the client's codec, so a mistake made the same way at both ends passes here: a TURN
 //! server of someone else's, run once as the positive control, is what proves the client against
@@ -70,6 +73,26 @@ impl Default for Behaviour {
     }
 }
 
+/// What the stand-in does to a road's own datagrams (never a STUN message) as it relays them.
+#[derive(Default)]
+struct Rules {
+    /// A client's datagrams of this kind are held back until released: each with its client and
+    /// its peer.
+    holding: Option<u8>,
+    held: Vec<(SocketAddr, SocketAddr, Vec<u8>)>,
+    releasing: bool,
+    /// The next datagram of this kind to a client is lost.
+    lose: Option<u8>,
+    lost: usize,
+}
+
+/// A road datagram's kind, the byte after its version; `None` for a STUN message.
+fn kind(payload: &[u8]) -> Option<u8> {
+    (!super::is_stun(payload))
+        .then(|| payload.get(1).copied())
+        .flatten()
+}
+
 /// One allocation: its relayed socket, its permissions and channels, and when it lapses.
 struct Allocation {
     relay: UdpSocket,
@@ -90,6 +113,7 @@ pub struct StandIn {
     pub address: SocketAddr,
     seen: Arc<Mutex<Seen>>,
     behaviour: Arc<Mutex<Behaviour>>,
+    rules: Arc<Mutex<Rules>>,
     stopping: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -108,6 +132,7 @@ impl StandIn {
         let address = socket.local_addr().expect("its address");
         let seen = Arc::new(Mutex::new(Seen::default()));
         let behaviour = Arc::new(Mutex::new(behaviour));
+        let rules = Arc::new(Mutex::new(Rules::default()));
         let stopping = Arc::new(AtomicBool::new(false));
         let mut server = Server {
             socket,
@@ -118,6 +143,7 @@ impl StandIn {
             allocations: HashMap::new(),
             seen: seen.clone(),
             behaviour: behaviour.clone(),
+            rules: rules.clone(),
         };
         let theirs = stopping.clone();
         let thread = std::thread::Builder::new()
@@ -128,6 +154,7 @@ impl StandIn {
             address,
             seen,
             behaviour,
+            rules,
             stopping,
             thread: Some(thread),
         }
@@ -141,6 +168,40 @@ impl StandIn {
     /// Relay nothing, either way, while `mute` holds.
     pub fn mute(&self, mute: bool) {
         self.behaviour.lock().unwrap().mute = mute;
+    }
+
+    /// Hold back every road datagram of `kind` from a client, until [`StandIn::release`].
+    pub fn hold(&self, kind: u8) {
+        self.rules.lock().unwrap().holding = Some(kind);
+    }
+
+    /// The datagrams held back so far, in the order they came: for a test to send them some other
+    /// way.
+    pub fn held(&self) -> Vec<Vec<u8>> {
+        let rules = self.rules.lock().unwrap();
+        rules
+            .held
+            .iter()
+            .map(|(_, _, payload)| payload.clone())
+            .collect()
+    }
+
+    /// Let what was held back through, to the peers it was for, in the order it came, and hold
+    /// nothing back from now.
+    pub fn release(&self) {
+        let mut rules = self.rules.lock().unwrap();
+        rules.holding = None;
+        rules.releasing = true;
+    }
+
+    /// Lose the next road datagram of `kind` to a client.
+    pub fn lose_next(&self, kind: u8) {
+        self.rules.lock().unwrap().lose = Some(kind);
+    }
+
+    /// How many road datagrams to a client were lost.
+    pub fn lost(&self) -> usize {
+        self.rules.lock().unwrap().lost
     }
 }
 
@@ -162,6 +223,7 @@ struct Server {
     allocations: HashMap<SocketAddr, Allocation>,
     seen: Arc<Mutex<Seen>>,
     behaviour: Arc<Mutex<Behaviour>>,
+    rules: Arc<Mutex<Rules>>,
 }
 
 impl Server {
@@ -177,7 +239,35 @@ impl Server {
                 self.heard_from_client(&packet, from, Instant::now());
             }
             self.relay_from_peers(Instant::now());
+            self.release_held();
         }
+    }
+
+    /// What was held back, once released: each to its peer, from its client's relayed socket.
+    fn release_held(&mut self) {
+        let held = {
+            let mut rules = self.rules.lock().unwrap();
+            if !rules.releasing {
+                return;
+            }
+            rules.releasing = false;
+            std::mem::take(&mut rules.held)
+        };
+        for (client, peer, payload) in held {
+            if let Some(allocation) = self.allocations.get(&client) {
+                let _ = allocation.relay.send_to(&payload, peer);
+            }
+        }
+    }
+
+    /// Whether `payload`, from `client` for `peer`, is held back, as the rules say: kept if so.
+    fn held_back(&self, client: SocketAddr, peer: SocketAddr, payload: &[u8]) -> bool {
+        let mut rules = self.rules.lock().unwrap();
+        if rules.holding.is_none() || rules.holding != kind(payload) {
+            return false;
+        }
+        rules.held.push((client, peer, payload.to_vec()));
+        true
     }
 
     fn behaviour(&self) -> Behaviour {
@@ -205,6 +295,14 @@ impl Server {
                     continue;
                 }
                 let payload = &buffer[..length];
+                {
+                    let mut rules = self.rules.lock().unwrap();
+                    if rules.lose.is_some() && rules.lose == kind(payload) {
+                        rules.lose = None;
+                        rules.lost += 1;
+                        continue;
+                    }
+                }
                 if !super::is_stun(payload) {
                     if seen.delivered.len() >= 16 {
                         seen.delivered.remove(0);
@@ -252,7 +350,10 @@ impl Server {
                 return;
             };
             if let Some(peer) = allocation.channels.get(&number) {
-                if allocation.permits(peer.ip(), now) && !mute {
+                if allocation.permits(peer.ip(), now)
+                    && !mute
+                    && !self.held_back(from, *peer, payload)
+                {
                     let _ = allocation.relay.send_to(payload, *peer);
                     self.seen.lock().unwrap().sent_by_channel += 1;
                 }
@@ -270,7 +371,7 @@ impl Server {
             ) else {
                 return;
             };
-            if allocation.permits(peer.ip(), now) && !mute {
+            if allocation.permits(peer.ip(), now) && !mute && !self.held_back(from, peer, payload) {
                 let _ = allocation.relay.send_to(payload, peer);
                 self.seen.lock().unwrap().sent_by_indication += 1;
             }

@@ -842,6 +842,8 @@ impl Listener {
             stop_road: road.as_ref().map(stop_road::Running::road),
             #[cfg(feature = "radio")]
             audio_road: audio.as_ref().map(audio_road::Running::road),
+            // This listener's roads are the LAN's: a computer reaching it is on its subnet.
+            internet: None,
         };
         let (stop, stopped) = watch::channel(false);
         #[cfg(test)]

@@ -13,6 +13,9 @@
 //!   tag and its own keys, from that connection's TLS session under the audio road's own label
 //!   (`super::datagram::AUDIO_LABEL`), so they are never Stop's. They go the moment the connection
 //!   does: late audio is worth nothing.
+//! - **An internet road** ([`AudioRoad::open_internet`]), one connection's in place of the LAN's:
+//!   a socket of its own, ICE to find the pair its computer reaches it on (`tempo_client::ice`), and
+//!   a thread of its own built from the same [`Powers`], heard only at the pair ICE selected.
 //! - **One thread** for every connection's road (as Stop's road keeps one), holding the socket,
 //!   the roads' keys and [`Powers`]: the station's one receive encoder, the audio lane's admission
 //!   (which never waits), the held PTT, read only, and the microphone over's feed. No Engine, no
@@ -58,9 +61,10 @@ use tempo_audio::mic_decode::{MicDecoder, FRAME_SAMPLES};
 
 use super::super::audio::{ReceiveFanout, Subscription};
 use super::datagram::{self, End, Keys, Tag, AUDIO_MAX, EXPORTED};
-use super::stop_road::{press_id, Hears};
+use super::stop_road::{press_id, Carrier, Hears};
 /// What the road carries (the client core's, which both ends read).
 pub(crate) use tempo_client::audio_road::wire::{Down, Up};
+use tempo_client::ice::IceRoad;
 
 /// The road's port, past the listener's TCP port: 42076 beside 42075.
 pub(crate) const PORT_AFTER: u16 = 1;
@@ -69,9 +73,9 @@ pub(crate) const LISTEN_LAPSE: Duration = Duration::from_secs(2);
 /// How often a listening computer's admission is asked again: the audio lane's own second.
 const RECHECK: Duration = Duration::from_secs(1);
 /// How long a frame may wait for the socket before it is dropped.
-const SEND_WAIT: Duration = Duration::from_millis(1);
+pub(crate) const SEND_WAIT: Duration = Duration::from_millis(1);
 /// The longest the thread waits for a datagram before it looks at its roads again: half a frame.
-const TICK: Duration = Duration::from_millis(10);
+pub(crate) const TICK: Duration = Duration::from_millis(10);
 /// The audio lane's admission, as the road asks it: a session, a device and a lease, now. Never
 /// waits: `remoteBusy` when the authority is busy, which is not a refusal.
 pub(crate) type Admitted =
@@ -142,6 +146,11 @@ pub(crate) struct AudioRoad {
     port: u16,
     changes: mpsc::Sender<Change>,
     tags: Arc<AtomicU64>,
+    /// What an internet road's own thread is built from: the same powers and counts, and the
+    /// listener's stop.
+    powers: Arc<Powers>,
+    counts: Arc<Counts>,
+    stopping: Arc<AtomicBool>,
 }
 
 /// The road's socket and thread, as the listener holds them until it stops.
@@ -185,14 +194,14 @@ impl AudioRoad {
         let (changes, changed) = mpsc::channel();
         let stopping = Arc::new(AtomicBool::new(false));
         let counts = Arc::new(Counts::default());
+        let powers = Arc::new(powers);
         let thread = {
-            let (stopping, counts) = (stopping.clone(), counts.clone());
+            let (stopping, counts, powers) = (stopping.clone(), counts.clone(), powers.clone());
             std::thread::Builder::new()
                 .name("nexus-remote-audio-road".into())
                 .spawn(move || {
                     Thread {
-                        socket,
-                        hears,
+                        carrier: Carrier::Lan(socket, hears),
                         powers,
                         changed,
                         stopping,
@@ -214,6 +223,9 @@ impl AudioRoad {
                 port,
                 changes,
                 tags: Arc::new(AtomicU64::new(start)),
+                powers,
+                counts: counts.clone(),
+                stopping: stopping.clone(),
             },
             stopping,
             thread,
@@ -232,7 +244,68 @@ impl AudioRoad {
         device: &str,
         stop: Option<Tag>,
     ) -> Option<Opened> {
-        let tag = self.tags.fetch_add(1, Ordering::SeqCst).to_be_bytes();
+        let (tag, road) = self.road(exported, session, device, stop)?;
+        self.changes.send(Change::Open(tag, Box::new(road))).ok()?;
+        Some(Opened {
+            port: self.port,
+            tag,
+            closing: self.changes.clone(),
+        })
+    }
+
+    /// Opens a connection's internet road: on `ice` (its own socket, bound with the road's tick
+    /// and written with [`SEND_WAIT`], heard only at the pair ICE selects), with a thread of its own
+    /// built from the same powers, its keys from `exported` (the connection's TLS exporter under
+    /// `datagram::INTERNET_AUDIO_LABEL`, with `session` as the context). It goes, its thread with
+    /// it, when the returned handle does. `None` once the listener has stopped, or if no thread
+    /// started.
+    pub(crate) fn open_internet(
+        &self,
+        ice: Arc<IceRoad>,
+        exported: &[u8; EXPORTED],
+        session: &str,
+        device: &str,
+        stop: Option<Tag>,
+    ) -> Option<Opened> {
+        if self.stopping.load(Ordering::SeqCst) {
+            return None;
+        }
+        let (tag, road) = self.road(exported, session, device, stop)?;
+        let (closing, changed) = mpsc::channel();
+        let thread = Thread {
+            carrier: Carrier::Internet(ice),
+            powers: self.powers.clone(),
+            changed,
+            stopping: self.stopping.clone(),
+            counts: self.counts.clone(),
+            roads: HashMap::from([(tag, road)]),
+        };
+        std::thread::Builder::new()
+            .name("nexus-remote-internet-audio-road".into())
+            .spawn(move || thread.run())
+            .ok()?;
+        Some(Opened {
+            port: 0,
+            tag,
+            closing,
+        })
+    }
+
+    /// A new road's tag and its keys at the shack's end. Tags rise from a random start, and none
+    /// reads as a STUN message on an internet road's socket.
+    fn road(
+        &self,
+        exported: &[u8; EXPORTED],
+        session: &str,
+        device: &str,
+        stop: Option<Tag>,
+    ) -> Option<(Tag, Road)> {
+        let tag = loop {
+            let tag = self.tags.fetch_add(1, Ordering::SeqCst).to_be_bytes();
+            if !tempo_client::ice::reads_as_stun(&tag) {
+                break tag;
+            }
+        };
         let road = Road {
             keys: Keys::sized(exported, tag, End::Shack, AUDIO_MAX)?,
             device: device.to_string(),
@@ -242,19 +315,14 @@ impl AudioRoad {
             listening: None,
             decoding: None,
         };
-        self.changes.send(Change::Open(tag, Box::new(road))).ok()?;
-        Some(Opened {
-            port: self.port,
-            tag,
-            closing: self.changes.clone(),
-        })
+        Some((tag, road))
     }
 }
 
 /// A connection's audio road, open: what its welcome names. Closed when dropped.
 pub(crate) struct Opened {
     port: u16,
-    tag: Tag,
+    pub(crate) tag: Tag,
     closing: mpsc::Sender<Change>,
 }
 
@@ -272,18 +340,20 @@ impl Drop for Opened {
     }
 }
 
-/// `down`, sealed under `road`'s keys, to where its computer last spoke from: whether it went.
-fn send(socket: &UdpSocket, road: &Road, down: &Down) -> bool {
+/// `down`, sealed under `road`'s keys, to where its computer last spoke from (on the internet, by
+/// the pair ICE selected): whether it went.
+fn send(carrier: &Carrier, road: &Road, down: &Down) -> bool {
     match (road.peer, road.keys.send.seal(down.kind(), &down.body())) {
-        (Some(peer), Some(datagram)) => socket.send_to(&datagram, peer).is_ok(),
+        (Some(peer), Some(datagram)) => carrier.send_to(&datagram, peer),
         _ => false,
     }
 }
 
+/// One thread of the road: the listener's, for every connection's LAN road on its one socket, or
+/// one connection's internet road, alone on its own.
 struct Thread {
-    socket: UdpSocket,
-    hears: Hears,
-    powers: Powers,
+    carrier: Carrier,
+    powers: Arc<Powers>,
     changed: mpsc::Receiver<Change>,
     stopping: Arc<AtomicBool>,
     counts: Arc<Counts>,
@@ -295,10 +365,12 @@ impl Thread {
         let mut buffer = [0u8; 2048];
         let mut looked = Instant::now();
         while !self.stopping.load(Ordering::SeqCst) {
-            let received = self.socket.recv_from(&mut buffer);
+            let received = self.carrier.recv_from(&mut buffer);
             // A road opened before its welcome went out is in the table before anything its
-            // computer sent after reading that welcome is read.
-            if !self.take_changes() {
+            // computer sent after reading that welcome is read. An internet road's thread opens no
+            // other, and goes with its one road.
+            let internet = matches!(self.carrier, Carrier::Internet(_));
+            if (!self.take_changes() && !internet) || (internet && self.roads.is_empty()) {
                 break;
             }
             match received {
@@ -340,7 +412,7 @@ impl Thread {
     /// One datagram: dropped unread unless it comes from the subnet, names a road here, and verifies
     /// under that road's keys with a sequence it has not seen; then read, and acted on.
     fn datagram(&mut self, bytes: &[u8], from: SocketAddr, now: Instant) {
-        if !self.hears.hears(from.ip()) {
+        if !self.carrier.hears(from) {
             return;
         }
         let Some(tag) = datagram::tag_of(bytes, AUDIO_MAX) else {
@@ -463,7 +535,7 @@ impl Thread {
                     seq: frame.seq,
                     packet: frame.packet,
                 };
-                let counted = if send(&self.socket, road, &down) {
+                let counted = if send(&self.carrier, road, &down) {
                     &self.counts.rx_sent
                 } else {
                     &self.counts.rx_dropped

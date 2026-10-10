@@ -27,6 +27,11 @@
 //!    headset: the station's audio and this computer's microphone (`super::audio_road`), keyed
 //!    under its own label. It ends with the link. The station's status line says whether its rig is
 //!    keyed, which mutes the station's audio here (M9), kept with the over's state ([`OnAir`]).
+//! 8. **Internet roads** in their place ([`Link::connect_over`]), when this computer asks for them
+//!    and the welcome named no road of the LAN's: each road its own socket and ICE (`crate::ice`),
+//!    keyed under the internet roads' own labels. This computer's credentials and candidates go in
+//!    its `open`, the station's come back in its `opened`, and each end's later candidates follow
+//!    on the link as they are found, never on any relay lane.
 //!
 //! Anything the station sends that no station of this build sends ends the link: it fails closed.
 use std::collections::{HashMap, VecDeque};
@@ -47,6 +52,7 @@ use super::road::{self, Ids, Socket};
 use super::stop_road::{OnAir, StopRoad};
 use crate::datagram;
 use crate::dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
+use crate::ice::{Gather, IceRoad, Offer, Relay, Role};
 use crate::outbox::Outbox;
 use crate::wire::{self, Assembly, End, Inflate, Whole, OUTCOMES};
 use crate::PairedStation;
@@ -55,6 +61,47 @@ use crate::PairedStation;
 const OPERATIONS: [&str; 5] = ["state", "acquire", "heartbeat", "release", "stopTransmit"];
 /// Events kept for a screen that has fallen behind.
 const EVENTS: usize = 64;
+/// How often this computer's newly found candidates go to the station while an internet road
+/// gathers.
+const TRICKLE_EVERY: Duration = Duration::from_millis(20);
+
+/// What this computer's internet roads gather, each for itself (one socket per road): the address
+/// their sockets bind (any port), whether they offer their direct addresses (left out to force the
+/// relay), a STUN server, and a TURN server with the credential for it.
+pub struct Internet {
+    pub bind: std::net::IpAddr,
+    pub direct: bool,
+    pub stun: Option<std::net::SocketAddr>,
+    pub relay: Option<Relay>,
+}
+
+impl Internet {
+    fn gather(&self) -> Gather {
+        Gather {
+            direct: self.direct,
+            stun: self.stun,
+            relay: self.relay.clone(),
+        }
+    }
+}
+
+/// One internet road as the station named it in its `opened`: its tag, and its ICE offer.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InternetOffer {
+    tag: String,
+    ice: Offer,
+}
+
+impl InternetOffer {
+    fn tag(&self) -> Option<datagram::Tag> {
+        road::RoadOffer {
+            port: 1,
+            tag: self.tag.clone(),
+        }
+        .tag()
+    }
+}
 
 /// This run of Nexus, as the station's journal knows it: made once, at random, never 0.
 pub fn run_id() -> u64 {
@@ -147,6 +194,9 @@ struct Shared {
     audio: Option<Arc<AudioRoad>>,
     /// Whether this computer's over may be on the air: the status line's rig keyed goes here.
     on_air: Arc<OnAir>,
+    /// The internet roads' ICE, by the road's name on the link (`stop`, `audio`): what the
+    /// station's candidates go to, and where this computer's come from.
+    ice: Vec<(&'static str, Arc<IceRoad>)>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -185,6 +235,20 @@ impl Link {
         run: u64,
         headset: Option<Arc<dyn Headset>>,
     ) -> Result<(Self, SocketAddrV4), &'static str> {
+        Self::connect_over(record, order, run, headset, None).await
+    }
+
+    /// [`Link::connect_at`], with internet roads in place of the LAN's when `internet` asks for
+    /// them and the welcome named no road of the LAN's: each road's own socket and ICE, gathering
+    /// as `internet` says, its offer in this computer's `open` and the station's in its `opened`.
+    /// A station that opens none leaves Stop this link alone, as on the LAN without a road.
+    pub async fn connect_over(
+        record: &PairedStation,
+        order: &[SocketAddrV4],
+        run: u64,
+        headset: Option<Arc<dyn Headset>>,
+        internet: Option<&Internet>,
+    ) -> Result<(Self, SocketAddrV4), &'static str> {
         let road::Reached {
             mut socket,
             ids,
@@ -200,8 +264,34 @@ impl Link {
             let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
             return Err(reason);
         }
-        let open = json!({"type":"open","profile":Profile::Desktop.name(),"app":ours.0,
+        let mut open = json!({"type":"open","profile":Profile::Desktop.name(),"app":ours.0,
             "contract":ours.1,"run":run});
+        // The internet roads, bound and gathering before the `open` names their offers: a socket
+        // of each road's own, the audio road's only with a headset to carry.
+        let ice = match (internet, &stop_road) {
+            (Some(internet), None) => {
+                let bind = |tick| {
+                    let at = std::net::SocketAddr::new(internet.bind, 0);
+                    IceRoad::bind(at, Role::Computer, internet.gather(), tick).map(Arc::new)
+                };
+                let stop = bind(super::stop_road::TICK).ok_or("unreachable")?;
+                let audio = match &headset {
+                    Some(_) => {
+                        let audio = bind(super::audio_road::TICK).ok_or("unreachable")?;
+                        audio.write_timeout(Some(super::audio_road::SEND_WAIT));
+                        Some(audio)
+                    }
+                    None => None,
+                };
+                let mut roads = json!({ "stop": stop.offer() });
+                if let Some(audio) = &audio {
+                    roads["audio"] = json!(audio.offer());
+                }
+                open["roads"] = roads;
+                Some((stop, audio))
+            }
+            _ => None,
+        };
         road::say(&mut socket, open.to_string())
             .await
             .map_err(|_| "unreachable")?;
@@ -223,51 +313,63 @@ impl Link {
             }
             _ => return Err("notStation"),
         }
-        // Stop's second road, from this session's own keys: at the address that welcomed this
-        // computer, at the port and under the tag the welcome named. Without one, Stop has this link.
-        let stop_road = stop_road.and_then(|offer| {
-            let tag = offer.tag()?;
-            let exported = socket
+        let export = |label: &[u8]| {
+            socket
                 .get_ref()
                 .get_ref()
                 .1
                 .export_keying_material(
                     [0; datagram::EXPORTED],
-                    datagram::STOP_LABEL,
+                    label,
                     Some(ids.session.as_bytes()),
                 )
-                .ok()?;
-            StopRoad::open(
-                SocketAddrV4::new(*at.ip(), offer.port).into(),
-                tag,
-                &exported,
-                on_air.clone(),
-            )
-        });
-        // The audio road the same way, under its own label, when this computer has a headset.
-        let audio_road = audio_road.zip(headset).and_then(|(offer, headset)| {
-            let tag = offer.tag()?;
-            let exported = socket
-                .get_ref()
-                .get_ref()
-                .1
-                .export_keying_material(
-                    [0; datagram::EXPORTED],
-                    datagram::AUDIO_LABEL,
-                    Some(ids.session.as_bytes()),
-                )
-                .ok()?;
-            AudioRoad::open(
-                SocketAddrV4::new(*at.ip(), offer.port).into(),
-                tag,
-                &exported,
-                headset,
-                on_air.clone(),
-            )
-        });
+                .ok()
+        };
+        // The internet roads the station opened, each on its own ICE: its offer taken, its keys
+        // from this session under the internet roads' own labels.
+        let offered = |name: &str| -> Option<InternetOffer> {
+            let roads = said.as_ref()?.get("roads")?;
+            serde_json::from_value(roads.get(name)?.clone()).ok()
+        };
+        let mut internet_ice = Vec::new();
+        let (stop_road, audio_road) = match ice {
+            Some((stop_ice, audio_ice)) => {
+                let stop = offered("stop").and_then(|offer| {
+                    let tag = offer.tag()?;
+                    stop_ice.answer(&offer.ice).then_some(())?;
+                    internet_ice.push(("stop", stop_ice.clone()));
+                    StopRoad::internet(
+                        stop_ice,
+                        tag,
+                        &export(datagram::INTERNET_STOP_LABEL)?,
+                        on_air.clone(),
+                    )
+                });
+                let audio = audio_ice
+                    .zip(headset.clone())
+                    .zip(offered("audio"))
+                    .and_then(|((audio_ice, headset), offer)| {
+                        let tag = offer.tag()?;
+                        audio_ice.answer(&offer.ice).then_some(())?;
+                        internet_ice.push(("audio", audio_ice.clone()));
+                        AudioRoad::internet(
+                            audio_ice,
+                            tag,
+                            &export(datagram::INTERNET_AUDIO_LABEL)?,
+                            headset,
+                            on_air.clone(),
+                        )
+                    });
+                (stop, audio)
+            }
+            None => (
+                Self::lan_stop_road(stop_road, at, &export, &on_air),
+                Self::lan_audio_road(audio_road, headset, at, &export, &on_air),
+            ),
+        };
         let (sink, stream) = socket.split();
         let (outbox, writer) = Outbox::spawn(sink);
-        let shared = Arc::new(Shared::new(stop_road, audio_road, on_air));
+        let shared = Arc::new(Shared::new(stop_road, audio_road, on_air, internet_ice));
         let writing = writer.abort_handle();
         let reader = tokio::spawn(read(stream, shared.clone()));
         let keeper = tokio::spawn(keep(outbox.clone(), writer, shared.clone()));
@@ -281,6 +383,43 @@ impl Link {
             },
             at,
         ))
+    }
+
+    /// Stop's second road on the LAN, from this session's own keys: at the address that welcomed
+    /// this computer, at the port and under the tag the welcome named. Without one, Stop has this
+    /// link.
+    fn lan_stop_road(
+        offer: Option<road::RoadOffer>,
+        at: SocketAddrV4,
+        export: &dyn Fn(&[u8]) -> Option<[u8; datagram::EXPORTED]>,
+        on_air: &Arc<OnAir>,
+    ) -> Option<Arc<StopRoad>> {
+        let offer = offer?;
+        StopRoad::open(
+            SocketAddrV4::new(*at.ip(), offer.port).into(),
+            offer.tag()?,
+            &export(datagram::STOP_LABEL)?,
+            on_air.clone(),
+        )
+    }
+
+    /// The audio road on the LAN the same way, under its own label, when this computer has a
+    /// headset.
+    fn lan_audio_road(
+        offer: Option<road::RoadOffer>,
+        headset: Option<Arc<dyn Headset>>,
+        at: SocketAddrV4,
+        export: &dyn Fn(&[u8]) -> Option<[u8; datagram::EXPORTED]>,
+        on_air: &Arc<OnAir>,
+    ) -> Option<Arc<AudioRoad>> {
+        let (offer, headset) = offer.zip(headset)?;
+        AudioRoad::open(
+            SocketAddrV4::new(*at.ip(), offer.port).into(),
+            offer.tag()?,
+            &export(datagram::AUDIO_LABEL)?,
+            headset,
+            on_air.clone(),
+        )
     }
 
     /// One station command, with the revision of the copy a whole save was made from and how many
@@ -483,17 +622,33 @@ async fn keep(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>, shared: A
     let mut every = tokio::time::interval(road::PING_EVERY);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     every.tick().await;
+    let mut trickle = tokio::time::interval(TRICKLE_EVERY);
+    trickle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = &mut writer => break,
             _ = every.tick() => if outbox.ping().is_err() { break },
+            // Each internet road's candidates as it finds them, on the link.
+            _ = trickle.tick(), if !shared.ice.is_empty() => {
+                for (name, ice) in &shared.ice {
+                    for line in ice.trickle() {
+                        let said = json!({"type":"candidate","road":name,"candidate":line});
+                        let _ = outbox.send(Whole::Text(said.to_string()));
+                    }
+                }
+            }
         }
     }
     shared.end();
 }
 
 impl Shared {
-    fn new(road: Option<Arc<StopRoad>>, audio: Option<Arc<AudioRoad>>, on_air: Arc<OnAir>) -> Self {
+    fn new(
+        road: Option<Arc<StopRoad>>,
+        audio: Option<Arc<AudioRoad>>,
+        on_air: Arc<OnAir>,
+        ice: Vec<(&'static str, Arc<IceRoad>)>,
+    ) -> Self {
         Self {
             calls: Default::default(),
             operations: Default::default(),
@@ -506,6 +661,7 @@ impl Shared {
             road,
             audio,
             on_air,
+            ice,
         }
     }
 
@@ -586,6 +742,15 @@ impl Shared {
             }
             // The rig keyed mutes the station's audio here (M9); `null` when it cannot tell.
             "status" => self.on_air.rig(message["rigKeyed"].as_bool()),
+            // One more of the station's candidates for an internet road this link opened.
+            "candidate" => {
+                let road = message["road"].as_str().ok_or(())?;
+                let line = message["candidate"].as_str().ok_or(())?;
+                let (_, ice) = self.ice.iter().find(|(name, _)| *name == road).ok_or(())?;
+                if !ice.add_candidate(line) {
+                    return Err(());
+                }
+            }
             _ => return Err(()),
         }
         Ok(())
@@ -657,7 +822,7 @@ mod tests {
         let (outbox, writer) = Outbox::spawn(sink);
         let link = Link {
             outbox,
-            shared: Arc::new(Shared::new(None, None, Arc::default())),
+            shared: Arc::new(Shared::new(None, None, Arc::default(), Vec::new())),
             tasks: vec![writer.abort_handle()],
             ids: Ids {
                 station: String::new(),
@@ -760,7 +925,7 @@ mod tests {
     /// are each kept, the newest with its number.
     #[test]
     fn a_feed_value_out_of_its_order_ends_the_link() {
-        let shared = Shared::new(None, None, Arc::default());
+        let shared = Shared::new(None, None, Arc::default(), Vec::new());
         for frame in frames("snapshot/1", &[1, 2, 3]) {
             assert_eq!(shared.heard(Whole::Binary(frame)), Ok(()));
         }
@@ -774,7 +939,7 @@ mod tests {
             (&[1, 2, 1][..], "a step back"),
             (&[2][..], "a first value past 1"),
         ] {
-            let shared = Shared::new(None, None, Arc::default());
+            let shared = Shared::new(None, None, Arc::default(), Vec::new());
             let mut heard: Vec<Result<(), ()>> = frames("meters/1", numbers)
                 .into_iter()
                 .map(|frame| shared.heard(Whole::Binary(frame)))
@@ -782,7 +947,7 @@ mod tests {
             assert_eq!(heard.pop(), Some(Err(())), "{why}");
             assert!(heard.iter().all(Result::is_ok), "{why}");
         }
-        let shared = Shared::new(None, None, Arc::default());
+        let shared = Shared::new(None, None, Arc::default(), Vec::new());
         let unknown = frames("noSuchFeed/1", &[1]).remove(0);
         assert_eq!(
             shared.heard(Whole::Binary(unknown)),
@@ -803,7 +968,7 @@ mod tests {
     /// status line are taken.
     #[test]
     fn a_message_no_station_sends_ends_the_link() {
-        let shared = Shared::new(None, None, Arc::default());
+        let shared = Shared::new(None, None, Arc::default(), Vec::new());
         let said = |value: Value| shared.heard(Whole::Text(value.to_string()));
         assert_eq!(
             said(json!({"type":"result","id":1,"value":{"ok":true}})),

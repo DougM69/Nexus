@@ -334,6 +334,7 @@ pub fn contract() -> &'static str {
         }
         text.push_str(&crate::stop_road::wire::contract_text());
         text.push_str(&crate::audio_road::wire::contract_text());
+        text.push_str(&crate::ice::contract_text());
         digest(&SHA256, text.as_bytes())
             .as_ref()
             .iter()

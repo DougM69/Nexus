@@ -48,6 +48,8 @@ mod bench;
 mod ends;
 /// A section change from afar arms nothing.
 mod entry;
+/// Stop's road over the internet: ICE, through a TURN relay.
+mod internet;
 /// Stop's second road through a relay, as the internet stands between the two computers.
 mod relayed;
 /// Stop wins over a start that was in flight.
@@ -2278,39 +2280,59 @@ fn a_datagram_from_outside_the_subnet_is_dropped_unread() {
 }
 
 /// ★ The road's thread names nothing of the station but its powers: no Engine, command link,
-/// outbox, runtime, audio or authority of its own. CONTROL: the scan reads the code (a name the
-/// file uses is found).
+/// outbox, runtime, audio or authority of its own, nor does what an internet road's thread runs
+/// besides (the client core's ICE and TURN client). CONTROL: the scan reads the code (names each
+/// file uses are found).
 #[test]
 fn road_names_nothing_of_the_station() {
-    let code: String = include_str!("../stop_road.rs")
-        .lines()
-        .map(|line| line.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let code = &code[..code.find("#[cfg(test)]\nmod tests").unwrap_or(code.len())];
-    assert!(
-        code.contains("RoadStop") && code.contains("PttHold"),
-        "the scan reads the code"
-    );
-    for name in [
-        "SharedEngine",
-        "Engine",
-        "engine",
-        "Outbox",
-        "outbox",
-        "Lane",
-        "Commands",
-        "Runner",
-        "tokio",
-        "TcpStream",
-        "WebSocket",
-        "audio",
-        "Authority",
-        "channel::",
-        "Link",
-        "lan_client",
-    ] {
-        assert!(!code.contains(name), "the road names `{name}`");
+    let files = [
+        (
+            "stop_road.rs",
+            include_str!("../stop_road.rs"),
+            ["RoadStop", "PttHold"],
+        ),
+        (
+            "tempo-client's ice.rs",
+            include_str!("../../../../../crates/tempo-client/src/ice.rs"),
+            ["IceAgent", "Turn"],
+        ),
+        (
+            "tempo-client's turn.rs",
+            include_str!("../../../../../crates/tempo-client/src/turn.rs"),
+            ["CHANNEL_BIND", "long_term_key"],
+        ),
+    ];
+    for (file, text, used) in files {
+        let code: String = text
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let code = &code[..code.find("#[cfg(test)]\nmod tests").unwrap_or(code.len())];
+        assert!(
+            used.iter().all(|name| code.contains(name)),
+            "the scan reads {file}'s code"
+        );
+        for name in [
+            "SharedEngine",
+            "Engine",
+            "engine",
+            "Outbox",
+            "outbox",
+            "Lane",
+            "Commands",
+            "Runner",
+            "tokio",
+            "TcpStream",
+            "WebSocket",
+            "audio",
+            "Authority",
+            "channel::",
+            "Link",
+            "lan_client",
+        ] {
+            assert!(!code.contains(name), "{file} names `{name}`");
+        }
     }
 }
 

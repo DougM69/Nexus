@@ -1,6 +1,6 @@
 //! The audio road, this computer's end: a UDP socket of its own to the road the station named in
-//! its welcome (`remote_service::lan::audio_road`), keyed from the command link's TLS session under
-//! the audio road's own label, and one thread that carries this computer's headset
+//! its welcome (`remote_service::lan::audio_road`), or on the internet a road of its own over ICE
+//! (`crate::ice`), keyed from the command link's TLS session under the audio road's own label, and one thread that carries this computer's headset
 //! (`tempo_codec::headset`) both ways. It shares nothing with Stop's road: its own socket, thread
 //! and keys, and no lock a Stop takes.
 //!
@@ -49,6 +49,7 @@ use tempo_codec::receive_decode::{ReceiveDecoder, PLAY_FRAME_SAMPLES, PLAY_RATE_
 use self::wire::{Down, Up};
 use super::stop_road::OnAir;
 use crate::datagram::{End, Keys, Opener, Sealer, Tag, AUDIO_MAX, EXPORTED};
+use crate::ice::{IceRoad, Path};
 
 pub use tempo_codec::headset::{
     sound, Rings, Sound, GAIN_DB as VOLUME_DB, VOLUME_DB_MAX, VOLUME_DB_MIN,
@@ -64,9 +65,9 @@ pub const LISTEN_EVERY: Duration = Duration::from_millis(500);
 /// station's lead-in, past which it could no longer play it at its moment anyway.
 pub const LATE: Duration = Duration::from_millis(60);
 /// How long a send may take before its frame is dropped.
-const SEND_WAIT: Duration = Duration::from_millis(1);
+pub const SEND_WAIT: Duration = Duration::from_millis(1);
 /// The longest the thread waits for the station before it looks at its own work again.
-const TICK: Duration = Duration::from_millis(10);
+pub const TICK: Duration = Duration::from_millis(10);
 /// The longest gap in the station's frames played as the bed; a longer one runs the cushion dry.
 const BED_FRAMES: u32 = 8;
 
@@ -217,7 +218,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 struct Shared {
-    socket: UdpSocket,
+    /// The road's way to the station: the LAN's socket, or its internet road.
+    path: Path,
     /// The sending half of the keys, until the road's thread ends and drops it.
     send: Mutex<Option<Sealer>>,
     headset: Arc<dyn Headset>,
@@ -243,14 +245,37 @@ impl AudioRoad {
         headset: Arc<dyn Headset>,
         on_air: Arc<OnAir>,
     ) -> Option<Arc<Self>> {
-        let Keys { send, receive } = Keys::sized(exported, tag, End::Computer, AUDIO_MAX)?;
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
         // Connected: only the station's road is heard on it.
         socket.connect(to).ok()?;
         socket.set_read_timeout(Some(TICK)).ok()?;
         socket.set_write_timeout(Some(SEND_WAIT)).ok()?;
+        Self::on(Path::Lan(socket), tag, exported, headset, on_air)
+    }
+
+    /// The road over the internet: on `ice` (bound with [`TICK`] and written with [`SEND_WAIT`], its
+    /// pair found by ICE, and heard only there), tagged `tag`, under the keys the link's exporter
+    /// gave for an internet audio road (`datagram::INTERNET_AUDIO_LABEL`), on `headset`.
+    pub fn internet(
+        ice: Arc<IceRoad>,
+        tag: Tag,
+        exported: &[u8; EXPORTED],
+        headset: Arc<dyn Headset>,
+        on_air: Arc<OnAir>,
+    ) -> Option<Arc<Self>> {
+        Self::on(Path::Internet(ice), tag, exported, headset, on_air)
+    }
+
+    fn on(
+        path: Path,
+        tag: Tag,
+        exported: &[u8; EXPORTED],
+        headset: Arc<dyn Headset>,
+        on_air: Arc<OnAir>,
+    ) -> Option<Arc<Self>> {
+        let Keys { send, receive } = Keys::sized(exported, tag, End::Computer, AUDIO_MAX)?;
         let shared = Arc::new(Shared {
-            socket,
+            path,
             send: Mutex::new(Some(send)),
             headset,
             on_air,
@@ -282,7 +307,7 @@ impl Shared {
         let sealed = lock(&self.send)
             .as_ref()
             .and_then(|send| send.seal(up.kind(), &up.body()));
-        sealed.is_some_and(|datagram| self.socket.send(&datagram).is_ok())
+        sealed.is_some_and(|datagram| self.path.send(&datagram))
     }
 }
 
@@ -443,7 +468,7 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
     let mut no_word_for: Option<u64> = None;
     loop {
         let rings = shared.headset.rings();
-        match shared.socket.recv(&mut buffer) {
+        match shared.path.recv(&mut buffer) {
             Ok(length) => {
                 let heard = receive
                     .open(&buffer[..length])

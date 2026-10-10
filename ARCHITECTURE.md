@@ -39,7 +39,11 @@ computer's command link, the two roads beside it and what both ends of them read
 a crate of their own (`crates/tempo-client`, no Tauri and no webview), which client mode drives
 and the shack's listener speaks with. Without its `device` feature it builds on no crate of the
 engine: the app's log and what Stop's road carries of the engine's state are `crates/tempo-base`,
-and the Opus codecs, resamplers and headset rings both ends use are `crates/tempo-codec`. Receiver
+and the Opus codecs, resamplers and headset rings both ends use are `crates/tempo-codec`. Over the
+internet the two roads beside the link each get a socket of their own at both ends, find their
+pair by ICE (`is`, the agent str0m runs; `tempo-client`'s `ice`) and, at the computer, a relayed
+address from a TURN client of the crate's own (`turn`); their credentials and candidates cross
+inside the command link, and each road hears only the pair ICE selected. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh

@@ -123,6 +123,7 @@ fn line_shaped(line: &str) -> bool {
 
 /// A TURN server and the credential for it. Never logged, shown or sent but to that server, under
 /// the long-term mechanism: no `Debug`.
+#[derive(Clone)]
 pub struct Relay {
     pub server: SocketAddr,
     pub username: String,
@@ -215,6 +216,25 @@ fn route_address() -> Option<IpAddr> {
     let probe = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     Some(probe.local_addr().ok()?.ip())
+}
+
+/// Whether a road's datagrams under `tag` could read as a STUN message on an internet road's
+/// socket: their bytes 4 to 8 are the tag's 2 to 6, and a STUN message has the magic cookie there
+/// (RFC 7983's first byte, from 0 to 3, a datagram's version already meets). The shack never gives
+/// out such a tag.
+pub fn reads_as_stun(tag: &crate::datagram::Tag) -> bool {
+    tag[2..6] == 0x2112_A442u32.to_be_bytes()
+}
+
+/// What an internet road's ends must agree on, for the build's contract: the labels its keys are
+/// exported under, and how much of ICE one offer may carry.
+pub fn contract_text() -> String {
+    format!(
+        "internet roads {} {} candidates {CANDIDATES} of {CANDIDATE_BYTES} credentials \
+         {CREDENTIAL_BYTES} open.roads opened.roads candidate\n",
+        String::from_utf8_lossy(crate::datagram::INTERNET_STOP_LABEL),
+        String::from_utf8_lossy(crate::datagram::INTERNET_AUDIO_LABEL),
+    )
 }
 
 /// How one road's datagrams cross: on the LAN, the road's own socket, connected to the other end's
