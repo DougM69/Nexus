@@ -26,10 +26,16 @@
 //! held to the rule where it enters the agent (`State::candidate`), at both ends:
 //! - never this computer (loopback, or unspecified: 0.0.0.0/8 and `::`), a group (multicast, or
 //!   IPv4's broadcast) or a link's own address (link-local, 169.254/16 and fe80::/10, where a cloud's
-//!   metadata service sits);
+//!   metadata service sits), nor the reserved 240/4, and in IPv6 nothing outside its global unicast
+//!   space (2000::/3: never the old site-local fec0::/10, for one);
 //! - never a private (RFC 1918) or unique-local (fc00::/7) address either, whatever kind of
 //!   candidate the other end says it is: across a LAN the LAN road is the way, under its subnet rule;
-//! - an IPv4-mapped address is read as the IPv4 one, and port 0 is refused;
+//!   nor any other block that is a network's own, never the internet's: a carrier-grade NAT's shared
+//!   100.64/10 (Tailscale's: over Tailscale, too, the LAN road is the way), the IETF's 192.0.0/24 and
+//!   the benchmarking 198.18/15;
+//! - an IPv6 address that carries an IPv4 one (mapped, compatible, NAT64, 6to4 or Teredo) is read as
+//!   that IPv4 address, as the hosted stream reads it (`tempo_stream::session::reachable`), and port 0
+//!   is refused;
 //! - a road takes at most [`CANDIDATES`] in all, so a peer cannot have it probe a range.
 //!
 //! A refused candidate is dropped, and noted once in this build's own words, never echoed; the link
@@ -175,26 +181,25 @@ impl Reach {
     }
 }
 
-/// ⛔ Whether an internet road may probe `ip`: not this computer, a group, a link's own address, or
-/// a private or unique-local network's (the module header).
+/// ⛔ Whether an internet road may probe `ip`: an address of the internet alone (the module header).
+/// The hosted stream's reading of an address (`tempo_stream::session::reachable`), with unique-local
+/// IPv6 refused and IPv4 held to [`internet_v4`], in every IPv6 form that carries an IPv4 address too.
 fn on_the_internet(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            !(v4.is_loopback()
-                || v4.octets()[0] == 0
-                || v4.is_multicast()
-                || v4.is_broadcast()
-                || v4.is_link_local()
-                || v4.is_private())
-        }
-        IpAddr::V6(v6) => {
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || v6.is_unicast_link_local()
-                || v6.is_unique_local())
-        }
-    }
+    tempo_stream::session::reachable(ip, internet_v4, false)
+}
+
+/// ⛔ The IPv4 addresses an internet road may probe: those a viewer of the stream could be at
+/// (`tempo_stream::session::viewer_v4`: unicast, not loopback or link-local), less every block that is
+/// a network's own and never the internet's: a private network (RFC 1918), a carrier-grade NAT's
+/// shared space (100.64/10, where Tailscale numbers its machines: over Tailscale the LAN road is the
+/// way), the IETF's protocol assignments (192.0.0/24) and the benchmarking block (198.18/15).
+fn internet_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    tempo_stream::session::viewer_v4(ip)
+        && !ip.is_private()
+        && !(o[0] == 100 && o[1] & 0xc0 == 64)
+        && !(o[0] == 192 && o[1] == 0 && o[2] == 0)
+        && !(o[0] == 198 && o[1] & 0xfe == 18)
 }
 
 /// A TURN server and the credential for it. Never logged, shown or sent but to that server, under
@@ -1414,6 +1419,177 @@ mod tests {
         );
     }
 
+    /// `(probed though refused, refused though taken)` for an internet road, by address.
+    fn misread(refused: &[&str], taken: &[&str]) -> (Vec<String>, Vec<String>) {
+        let reaches = |at: &&str| Reach::Internet.reaches(at.parse().unwrap());
+        (
+            refused
+                .iter()
+                .filter(|at| reaches(at))
+                .map(|at| at.to_string())
+                .collect(),
+            taken
+                .iter()
+                .filter(|at| !reaches(at))
+                .map(|at| at.to_string())
+                .collect(),
+        )
+    }
+    const NONE: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+
+    /// ⛔ The carrier-grade NAT's shared space, 100.64/10, is no address of the internet: a carrier's
+    /// own customers, and the machines of a Tailscale network, are numbered there. Over Tailscale
+    /// the LAN road is the way.
+    #[test]
+    fn an_internet_road_never_probes_a_carrier_nats_shared_space() {
+        let refused = [
+            "100.64.0.0:9",
+            "100.64.0.1:41641",
+            "100.100.100.100:53",
+            "100.85.152.128:41641",
+            "100.127.255.255:9",
+            "[::ffff:100.64.1.2]:9",
+            "[64:ff9b::6440:102]:9",
+            "[2002:6440:102::1]:9",
+        ];
+        let taken = [
+            "100.63.255.255:9",
+            "100.128.0.0:9",
+            "99.255.255.255:9",
+            "101.0.0.0:9",
+        ];
+        assert_eq!(
+            misread(&refused, &taken),
+            NONE,
+            "(probed though refused, refused though taken)"
+        );
+    }
+
+    /// ⛔ The benchmarking block, 198.18/15 (RFC 2544), is a test network's, never the internet's.
+    #[test]
+    fn an_internet_road_never_probes_the_benchmarking_block() {
+        let refused = [
+            "198.18.0.0:9",
+            "198.18.0.1:3478",
+            "198.19.255.255:9",
+            "[::ffff:198.19.1.1]:9",
+            "[2002:c612:1::1]:9",
+        ];
+        let taken = ["198.17.255.255:9", "198.20.0.0:9", "198.51.100.9:50000"];
+        assert_eq!(
+            misread(&refused, &taken),
+            NONE,
+            "(probed though refused, refused though taken)"
+        );
+    }
+
+    /// ⛔ The IETF's protocol assignments, 192.0.0/24 (RFC 6890): special addresses such as DS-Lite's
+    /// and the dummy 192.0.0.8, none an end of an internet road.
+    #[test]
+    fn an_internet_road_never_probes_the_ietfs_protocol_block() {
+        let refused = [
+            "192.0.0.0:9",
+            "192.0.0.1:9",
+            "192.0.0.8:9",
+            "192.0.0.255:9",
+            "[::ffff:192.0.0.170]:9",
+        ];
+        let taken = ["191.255.255.255:9", "192.0.1.0:9", "192.0.2.1:3478"];
+        assert_eq!(
+            misread(&refused, &taken),
+            NONE,
+            "(probed though refused, refused though taken)"
+        );
+    }
+
+    /// ⛔ The reserved 240/4, broadcast at its top, is nobody's unicast address.
+    #[test]
+    fn an_internet_road_never_probes_the_reserved_block() {
+        let refused = [
+            "240.0.0.0:9",
+            "240.0.0.1:9",
+            "250.1.2.3:9",
+            "255.255.255.254:9",
+            "255.255.255.255:9",
+            "[::ffff:240.0.0.1]:9",
+            "[64:ff9b::f000:1]:9",
+        ];
+        let taken = ["223.255.255.255:9", "8.8.8.8:3478"];
+        assert_eq!(
+            misread(&refused, &taken),
+            NONE,
+            "(probed though refused, refused though taken)"
+        );
+    }
+
+    /// ⛔ IPv6 is probed only in its global unicast space, 2000::/3: never the old site-local
+    /// fec0::/10, the discard prefix, or any block outside it (unique-local and the rest are in
+    /// `an_internet_road_reaches_the_internet_alone`).
+    #[test]
+    fn an_internet_road_probes_ipv6_only_in_its_global_unicast_space() {
+        let refused = [
+            "[fec0::1]:9",
+            "[fed0::1]:9",
+            "[feff:ffff::1]:9",
+            "[100::1]:9",
+            "[1fff:ffff::1]:9",
+            "[4000::1]:9",
+            "[e000::1]:9",
+            "[fbff::1]:9",
+            "[fe7f::1]:9",
+        ];
+        let taken = [
+            "[2000::1]:9",
+            "[2001:db8::1]:40000",
+            "[2606:4700:4700::1111]:3478",
+            "[3fff:ffff::1]:9",
+        ];
+        assert_eq!(
+            misread(&refused, &taken),
+            NONE,
+            "(probed though refused, refused though taken)"
+        );
+    }
+
+    /// ⛔ An IPv6 address that carries an IPv4 one is that IPv4 address, held to the internet road's
+    /// IPv4 rule: IPv4-mapped and IPv4-compatible, NAT64's well-known and local-use prefixes, 6to4,
+    /// and Teredo (its client inverted). Each carrying a private, a loopback or a shared address is
+    /// refused; each carrying an address of the internet is taken.
+    #[test]
+    fn an_internet_road_reads_every_form_that_carries_an_ipv4_address_as_that_address() {
+        let refused = [
+            // 10.0.0.1, 127.0.0.1 and 100.64.1.2, in each form.
+            "[::ffff:10.0.0.1]:9",
+            "[::10.0.0.1]:9",
+            "[::127.0.0.1]:9",
+            "[::100.64.1.2]:9",
+            "[64:ff9b::a00:1]:9",
+            "[64:ff9b::7f00:1]:9",
+            // NAT64's local-use prefix, private by its /48, /56, /64 and /96 readings in turn.
+            "[64:ff9b:1:a01:71:708:90a:b0c]:9",
+            "[64:ff9b:1:cb0a:71:708:90a:b0c]:9",
+            "[64:ff9b:1:cb01:a:708:90a:b0c]:9",
+            "[64:ff9b:1:cb01:71:708:a0a:b0c]:9",
+            "[2002:a00:1::1]:9",
+            "[2002:7f00:1::1]:9",
+            "[2001:0:4136:e378:8000:63bf:f5ff:fffe]:9",
+            "[2001:0:4136:e378:8000:63bf:9bbf:fefd]:9",
+        ];
+        let taken = [
+            "[::ffff:8.8.8.8]:9",
+            "[::203.0.113.7]:9",
+            "[64:ff9b::cb00:7107]:9",
+            "[64:ff9b:1:cb01:71:708:90a:b0c]:9",
+            "[2002:cb00:7107::1]:9",
+            "[2001:0:4136:e378:8000:63bf:34ff:8ef8]:9",
+        ];
+        assert_eq!(
+            misread(&refused, &taken),
+            NONE,
+            "(probed though refused, refused though taken)"
+        );
+    }
+
     /// ⛔ The rule, by value. An internet road refuses each class, and each in its IPv4-mapped form,
     /// and port 0; it takes an address of the internet, the edges of each private block among them.
     /// Through the road, the kind of candidate the other end names changes nothing: a private
@@ -1478,8 +1654,6 @@ mod tests {
             "[2606:4700:4700::1111]:3478",
             "[2001:db8::1]:9",
             "[::ffff:8.8.8.8]:9",
-            "[fbff::1]:9",
-            "[fe7f::1]:9",
         ];
         let reaches = |reach: Reach, at: &str| reach.reaches(at.parse().unwrap());
         let wrong: Vec<_> = refused
