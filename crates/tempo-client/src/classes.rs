@@ -90,6 +90,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("confirm_sat_uplink",             RunsAtShack, "Records the shack's satellite VFO mapping; keys nothing."),
     ("confirmation_check",             RunsAtShack, "Checks one service's confirmations (LoTW, eQSL or QRZ) against the shack's logbook, with its stored credential; changes nothing."),
     ("connect_web_status",             RunsAtShack, "The shack's Connect web page state."),
+    ("contest_entry_put",              RunsAtShack, "Shares the contest line being typed with the shack's contest logger window; text in memory only."),
     ("contest_entry_reset",            RunsAtShack, "Clears the shack's contest entry line."),
     ("contest_i_moved",                RunsAtShack, "Records a move of the station during the contest session."),
     ("contest_log_manual",             RunsAtShack, "Logs a contest contact at the shack."),

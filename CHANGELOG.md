@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A contest logger window, for a second person logging at a second monitor and keyboard.** Click
+  **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box.
+  It holds the whole Contest screen with a log line under it, and that line shares the contact in
+  progress with your own contest strip: whatever either of you types shows in both windows as it is
+  typed, with the same dupe warning, Super Check Partial line, call-history fill and Ctrl+D take-back
+  line, and Enter in either window logs it once, even when you both press it at the same moment.
+  Nothing in the logger window transmits: no PTT, no F-key messages, no Tune; the F-keys and Space do
+  nothing there but type, and its Esc clears the log line without touching your over. Stop TX and
+  every transmit control stay on your screen, and the contest switch, Running / S&P and scoring are
+  read-only in the logger window. It logs as this computer's own position under the mode you are
+  operating, so club sync and your exports are unchanged, and it reopens on the monitor where you
+  left it. A Remote viewer sees the main window only. NEEDS-BENCH: two monitors, two keyboards and
+  mice with MouseMux, logging voice contacts.
 - **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
   ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
   and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,
@@ -365,6 +378,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way everywhere else: Sync from QRZ on an empty QRZ logbook reports no new contacts, Check
   confirmations says that logbook holds no contacts and checks nothing, and Correct at QRZ, for a
   call QRZ holds no contact with, says QRZ has no matching record.
+- **Repair clock no longer comes back every few minutes on a clock that is right.** Since 1.17.0
+  the button under the clock chip could reappear at every clock check, about every ten minutes, on
+  Windows PCs whose clock was fine: on any Windows not set to English, whose time service report
+  Nexus could not read; whenever the Windows Time service's latest check had not taken although it
+  had synchronised; and after the clock stepped, including the step a repair itself makes. For
+  those it now shows only while the clock is more than a second off UTC, which is when the clock
+  chip turns amber. A stopped Windows Time service, or one that has never synchronised, still gets
+  the button whatever the clock reads.
+- **A clock repair that Windows refuses part-way says so.** Repair clock said "Clock repaired"
+  whenever the administrator prompt was accepted, even when Windows then refused a step of the
+  repair, so the button went away and came back at the next clock check. It now says the clock
+  was not repaired and stays, so you can press it again.
+- **Fake It split puts the dial back after an over, and the dial no longer walks off FT8.** With
+  Split Operation set to Fake It, Nexus moves the radio to its TX frequency for an over and back
+  after it. When the radio did not take the move back, Nexus never sent it again, and then took the
+  TX frequency it read for your own QSY, so the dial walked 500 Hz off the FT8 channel (the band
+  readout said "custom") and every later over walked with it. Nexus now moves the radio back 100 ms
+  after the unkey, as WSJT-X does, sends it again up to three times if the radio does not take it,
+  and never takes that over's TX frequency for a QSY. If the radio still has not gone back, the CAT
+  status says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300
+  MK2 in Fake It.
+- **Rig split on Nexus's own Icom CI-V puts the TX VFO in USB with DATA for FT8.** With Split
+  Operation set to Rig on an Icom that uses Nexus's own CI-V, the transmit VFO was never put in a
+  data mode, so FT8 went out in whatever mode that VFO was left in. Nexus now sets it to USB with
+  the radio's DATA mode before each over (D1, D2 or D3 on an IC-7610, as Settings' Data mode says),
+  as it already did through Hamlib. NEEDS-BENCH: an IC-7610 in Rig split.
 - **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
   sends connection checks to an address a browser names on the shack itself, on the local link
   (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16
