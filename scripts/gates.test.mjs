@@ -785,6 +785,23 @@ test('a gate whose program is missing is skipped with a named reason, not run bl
   assert.ok(r.out.includes('SKIPPED'));
 });
 
+test('a cargo gate for a Rust target this box lacks is skipped by name, never run blind', () => {
+  // CI adds the phone checks' targets in its toolchain step; a box without one would fail such a
+  // gate on nothing a change did. The triple planted here is no real target, so no toolchain has it.
+  const planted = (target) => scratch(`target-${target}.yml`, MINIMAL.replace('        run: echo alpha-ran\n',
+    `        run: echo planted-target-ran; cargo check --target ${target}\n`));
+  const r = gates(['--workflow', planted('x86_64-nexus-planted')]);
+  assert.equal(r.code, 3, 'a skipped gate is incomplete coverage, not a green run');
+  assert.ok(r.out.includes('the Rust target x86_64-nexus-planted is not installed here'), r.out);
+  assert.ok(r.out.includes('SKIPPED'));
+  assert.ok(!r.out.includes('planted-target-ran'), 'the gate ran on a box without its target');
+  // CONTROL: the host's own target is installed wherever rustc runs, so the same step is a gate.
+  const host = /^host: (\S+)$/m.exec(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout)[1];
+  const list = gates(['--list', '--workflow', planted(host)]).out;
+  assert.ok(list.includes('  gate     alpha gate'), list);
+  assert.ok(!list.includes('is not installed here'), list);
+});
+
 test('--job scopes the run, and an unknown job id is an error not a silent empty run', () => {
   const file = scratch(
     'two-jobs.yml',

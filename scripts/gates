@@ -398,6 +398,20 @@ function which(bin) {
   return found;
 }
 
+// Is a Rust target installed for the toolchain a gate here would run? The mapping is exact, like
+// `cargo install <name>`: `cargo … --target <triple>` needs that triple's standard library under the
+// toolchain's sysroot, and CI adds it in its toolchain step (`targets:`) where this box may never
+// have it (the phone targets are added in CI only). Without it the gate fails on nothing a change
+// did. No rustc at all is the PATH check's to report, so that reads as installed here.
+let sysroot;
+function targetInstalled(triple) {
+  if (sysroot === undefined) {
+    const r = spawnSync('rustc', ['--print', 'sysroot'], { encoding: 'utf8', cwd: ROOT });
+    sysroot = r.status === 0 ? String(r.stdout).trim() : null;
+  }
+  return !sysroot || fs.existsSync(path.join(sysroot, 'lib', 'rustlib', triple, 'lib'));
+}
+
 // A shell body as the scanner should see it: continuations joined, heredoc
 // bodies removed (they are data for another interpreter, not commands), and
 // comments dropped. Only ever used for ANALYSIS — what gets executed is always
@@ -811,6 +825,11 @@ function stepBlockers(jobInst, step) {
   }
   for (const prog of programsUsed(step.command)) {
     if (!which(prog)) why.push(`\`${prog}\` is not on PATH`);
+  }
+  for (const m of scannable(step.command).matchAll(/\bcargo\b[^\n]*?\s--target[= ]([\w.-]+)/g)) {
+    if (!targetInstalled(m[1])) {
+      why.push(`the Rust target ${m[1]} is not installed here — CI adds it in its toolchain step`);
+    }
   }
   for (const [k, v] of Object.entries(step.env || {})) {
     if (!/(_PREFIX|_DIR|_HOME|_PATH)$/.test(k)) continue;
