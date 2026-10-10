@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
-import type { RemoteStationAction, RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, type RemoteStationAction, type RemoteStationStatus } from './types'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import '../remote-web/remote.css'
 
@@ -73,6 +73,11 @@ export function RemoteStation() {
   }
   const connected = status && ['connected', 'connecting', 'reconnecting'].includes(status.phase)
   const issue = error ?? status?.error, phase = status?.phase
+  // The browsers, and the computers running Nexus (the native client) apart from them: a computer's
+  // approval pins its key and grants nothing on the relay's lanes, so it has no transmit tick and no
+  // switches, here or under Advanced.
+  const browsers = status?.devices.filter(device => !isNative(device)) ?? []
+  const computers = status?.devices.filter(isNative) ?? []
   // One card (the operator, 2026-10-02: "Settings ▸ Remote access becomes one card"): where this
   // station stands with the Remote service and the one thing to do next, then the browsers with their
   // keys. Everything else the panel had folds under Advanced, unchanged: the same state, the same
@@ -134,8 +139,8 @@ export function RemoteStation() {
       {/* The browsers, each with its key and the one thing to do next: the same actions as the
           per-browser block under Advanced, with its transmit tick (off unless ticked there). */}
       <h3>{t('remote.native.browsers')}</h3>
-      {status.devices.length === 0 ? <p>{t('remote.noBrowsers')}</p> : <ul className="remote-native-browsers">
-        {status.devices.map(device => { const key = device.key ?? undefined
+      {browsers.length === 0 ? <p>{t('remote.noBrowsers')}</p> : <ul className="remote-native-browsers">
+        {browsers.map(device => { const key = device.key ?? undefined
           const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
           return <li key={device.id} className="remote-native-browser">
             <span className="remote-native-browser-name">{device.name}</span>
@@ -150,6 +155,28 @@ export function RemoteStation() {
             </span>
           </li> })}
       </ul>}
+      {/* The computers running Nexus, each by its name, its platform and its key in eight groups. Approve
+          is the pop-up's own: the key shown pinned, transmit never ticked. */}
+      {computers.length > 0 && <>
+        <h3>{t('remote.native.computers')}</h3>
+        <ul className="remote-native-browsers">
+          {computers.map(device => { const key = device.key ?? undefined
+            const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
+            return <li key={device.id} className="remote-native-browser">
+              <span className="remote-native-browser-name">{device.name}</span>
+              {device.platform && <span>{t('remote.native.computerPlatform', { platform: PLATFORM_NAMES[device.platform] })}</span>}
+              {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
+              <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.computerAsks')
+                : unpinned ? t('remote.native.computerKeyNotPinned') : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+              <span className="remote-actions">
+                {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
+                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: false, key })}>{t('remote.approve')}</button>}
+                {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
+                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
+              </span>
+            </li> })}
+        </ul>
+      </>}
     </>}
     {/* Advanced: the old panel's options, kept as they were (the operator, 2026-10-02: "The old
         pairing and permission options fold under "Advanced" (kept, not deleted)"). */}
@@ -166,7 +193,7 @@ export function RemoteStation() {
         {status.stationPermissions && <p>{t('remote.controlLocalHint')}</p>}
         {status.transmitPermissions && <p>{t('remote.transmitLocalHint')}</p>}
         <h3>{t('remote.browserApprovals')}</h3><p>{t('remote.browserMatch')}</p>
-        {status.devices.map(device => { const key = device.key ?? undefined
+        {browsers.map(device => { const key = device.key ?? undefined
           // A5: approved, with a key the service lists, and that key not the one pinned here (approved
           // before keys, or the browser came back with a new one): it cannot stream until approved again.
           const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)

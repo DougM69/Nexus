@@ -3,7 +3,7 @@ import { getRemoteStationStatus, remoteStationAction } from '../api'
 import { Dialog } from '../components/ui/Dialog'
 import { t } from '../i18n'
 import { shortFingerprint } from '../remote-web/stream-protocol'
-import type { RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, type RemoteStationStatus } from './types'
 
 /** How often the shack looks for a browser asking to stream, while Remote is on. Each look is the
  *  Refresh the Remote access panel makes (one request to the service); with Remote off, none is made. */
@@ -15,7 +15,9 @@ export const APPROVAL_ARM_MS = 1_000
 type Device = RemoteStationStatus['devices'][number]
 /** The browsers asking to stream: a request waiting here, or a browser approved before its key was
  *  pinned (it is refused a stream until approved again). Only with a key: the key is what the
- *  operator compares, and a browser with none could not stream after approval anyway. */
+ *  operator compares, and a browser with none could not stream after approval anyway. A computer
+ *  running Nexus (the native client) asks the same way to connect, and its key is what the tunnel
+ *  through the room is held to once it is pinned. */
 function asking(status: RemoteStationStatus | null, now: number): Device[] {
   if (!status?.stationId) return []
   const pinned = status.pinnedDevices
@@ -36,7 +38,12 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *  opens, so Enter alone denies; Escape or a click outside closes it and answers nothing; and Approve
  *  takes no click for its first second. Deny refuses a waiting request; for a browser approved before,
  *  it leaves its approval exactly as it is (it still cannot stream). Either way it is not asked again
- *  this session for the same browser and key. */
+ *  this session for the same browser and key.
+ *
+ *  A computer running Nexus is asked about the same way, by its name, its platform and its key in
+ *  eight groups, and its Approve is the same press: its key pinned, for the tunnel through the room to
+ *  check. It never carries the transmit tick, and approving it grants nothing on the relay's lanes:
+ *  what the computer may do once connected is the station's own rules for a computer driving it. */
 export function RemoteApprovalPrompt() {
   const [status, setStatus] = useState<RemoteStationStatus | null>(null)
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set())
@@ -90,14 +97,19 @@ export function RemoteApprovalPrompt() {
   }
 
   const fingerprint = device?.key ? shortFingerprint(device.key) : ''
+  const platform = device?.platform ? PLATFORM_NAMES[device.platform] : ''
   return <Dialog
     open={!!device}
     // Escape and a click outside: closed, and nothing answered. The request stays in Settings.
     onOpenChange={open => { if (!open && current) settle(current) }}
-    title={device ? t('remote.approval.title', { browser: device.name }) : ''}
-    description={device ? device.approved === 1
-      ? t('remote.approval.bodyAgain', { key: fingerprint })
-      : t('remote.approval.body', { key: fingerprint }) : undefined}
+    title={!device ? '' : isNative(device) ? t('remote.approval.computerTitle', { computer: device.name })
+      : t('remote.approval.title', { browser: device.name })}
+    description={!device ? undefined : isNative(device) ? device.approved === 1
+      ? t('remote.approval.computerBodyAgain', { platform, key: fingerprint })
+      : t('remote.approval.computerBody', { platform, key: fingerprint })
+      : device.approved === 1
+        ? t('remote.approval.bodyAgain', { key: fingerprint })
+        : t('remote.approval.body', { key: fingerprint })}
     className="remote-approval"
   >
     {/* The key again, large, for comparing group by group with the browser's screen. */}

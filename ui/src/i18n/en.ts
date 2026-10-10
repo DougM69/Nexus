@@ -564,6 +564,10 @@ export const EN = {
   "remote.native.browsers": "Your browsers",
   "remote.native.asks": "Asks to stream this station.",
   "remote.native.remove": "Remove",
+  "remote.native.computers": "Your computers",
+  "remote.native.computerPlatform": "Nexus on {{platform}}",
+  "remote.native.computerAsks": "Asks to operate this station over the internet.",
+  "remote.native.computerKeyNotPinned": "This computer can’t connect until you approve it again here. First check this key matches the one Nexus shows on it.",
   "remote.native.advanced": "Advanced",
   "remote.approve": "Approve",
   // The question Nexus asks at the shack when a browser asks to stream. Never approved by default:
@@ -571,6 +575,9 @@ export const EN = {
   "remote.approval.title": "Let {{browser}} stream this station?",
   "remote.approval.body": "A browser signed in to your Remote account asks to stream this station and operate it as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
   "remote.approval.bodyAgain": "This browser was approved before, but it can’t stream until you approve it again here. When it streams, it can operate this station as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
+  "remote.approval.computerTitle": "Let {{computer}} operate this station?",
+  "remote.approval.computerBody": "Nexus on {{platform}}, signed in to your Remote account, asks to operate this station over the internet as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: {{key}}.",
+  "remote.approval.computerBodyAgain": "Nexus on {{platform}} was approved before, but it can’t connect until you approve it again here. Connected, it can operate this station as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: {{key}}.",
   "remote.approval.deny": "Deny",
   // Remote over this network (Settings ▸ Station ▸ Remote access): this station's own listener, for
   // Nexus on another computer on the same network, with no internet. Pairing is one press at the shack

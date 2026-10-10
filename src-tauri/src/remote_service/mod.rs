@@ -90,6 +90,50 @@ struct Device {
     /// approving it pins. Worked out here from the listed key, never taken from the service.
     #[serde(skip_deserializing)]
     key: Option<String>,
+    /// What it is. Listed only to a Nexus that asks (`transport::Client::post` does); a service
+    /// without kinds lists browsers alone, so a device it names no kind for is a browser.
+    #[serde(default)]
+    kind: Kind,
+    /// The platform a native device runs on, one its kind may name ([`Kind::fits`]); none for a
+    /// browser.
+    #[serde(default)]
+    platform: Option<Platform>,
+}
+/// A device's kind, held to the service's own values: a browser, or Nexus itself on another
+/// computer or a phone (the native client). Approving a native device grants nothing on the
+/// relay's lanes: it pins its key, which the tunnel through the room checks, and that is all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Kind {
+    #[default]
+    Browser,
+    Computer,
+    Phone,
+}
+/// The platforms a native device may name, held to the service's own values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Platform {
+    Windows,
+    Macos,
+    Linux,
+    Ios,
+    Android,
+}
+impl Kind {
+    /// May a device of this kind name this platform? A browser names none, a computer Windows,
+    /// macOS or Linux, and a phone iOS or Android, as the service registers them.
+    fn fits(self, platform: Option<Platform>) -> bool {
+        matches!(
+            (self, platform),
+            (Kind::Browser, None)
+                | (
+                    Kind::Computer,
+                    Some(Platform::Windows | Platform::Macos | Platform::Linux)
+                )
+                | (Kind::Phone, Some(Platform::Ios | Platform::Android))
+        )
+    }
 }
 /// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). The station's own key is
 /// shown the same way (S3-L1). `None` for anything that is not the shape of a P-256 key.
@@ -806,10 +850,11 @@ impl Service {
                 let mut approval = None;
                 if *allow {
                     let status = self.status.lock().map_err(|_| "serviceUnavailable")?;
+                    // A browser's alone: a computer holds nothing on the relay's lanes to allow.
                     let Some(device) = status
                         .devices
                         .iter()
-                        .find(|d| d.id == *device_id && d.approved == 1)
+                        .find(|d| d.id == *device_id && d.approved == 1 && d.kind == Kind::Browser)
                         .filter(|_| control.enabled)
                     else {
                         return Err("accessDenied");
@@ -1190,10 +1235,12 @@ impl Controller {
         }
         let mut value: Devices = serde_json::from_value(value).map_err(|_| "invalidResponse")?;
         if value.devices.len() > 8
-            || value
-                .devices
-                .iter()
-                .any(|d| !identifier(&d.id) || !valid_name(&d.name) || d.approved > 1)
+            || value.devices.iter().any(|d| {
+                !identifier(&d.id)
+                    || !valid_name(&d.name)
+                    || d.approved > 1
+                    || !d.kind.fits(d.platform)
+            })
         {
             return Err("invalidResponse");
         }
@@ -1290,20 +1337,26 @@ impl Controller {
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(());
         }
-        if control.enabled {
+        // A computer (the native client) is granted nothing on the relay's lanes, whatever the
+        // approval said of transmit: it never reaches them. Its approval is its pin, below, which
+        // the tunnel through the room checks.
+        let browser = device.kind == Kind::Browser;
+        if control.enabled && browser {
             let operations = control.operations.clone();
             operations.permit(&device_id, true)?;
             operations.permit_station(&device_id, true)?;
             // A fresh approval without the tick holds no transmit, even if an earlier one did.
             operations.permit_transmit(&device_id, transmit)?;
         }
-        control.remember(Persist::Browser {
-            device_id: device_id.clone(),
-            approval: Some(approval),
-            logging: Some(true),
-            control: Some(true),
-            transmit: Some(transmit),
-        });
+        if browser {
+            control.remember(Persist::Browser {
+                device_id: device_id.clone(),
+                approval: Some(approval),
+                logging: Some(true),
+                control: Some(true),
+                transmit: Some(transmit),
+            });
+        }
         control.remember(Persist::Listed(approved));
         control.remember(Persist::Pin {
             device_id,

@@ -287,6 +287,57 @@ test('actual native A5: approving the pairing pins the key the confirming browse
   }
 })
 
+// The native client through the real service and the real station: Nexus on another computer registers
+// its key as a device of the station (signed by that key, over a challenge, on the Native application's
+// token, the runtime's stand-in issuer), the station is listed it as a computer with its platform because
+// it asks for kinds, and approving it there pins its key and grants nothing on the relay's lanes.
+test('actual native: a computer running Nexus is listed to the station as one, and approving it pins its key and grants nothing on the lanes', { timeout: 60000 }, async () => {
+  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
+  const NATIVE = 'remote-test-native'
+  const app = await runtime({ bindings: { AUTH0_NATIVE_CLIENT_ID: NATIVE } }), probe = await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY, app.origin)
+  try {
+    await probe.ready()
+    const browser = await app.owner(), begin = await probe.send({ type: 'begin', name: 'Computer bench' })
+    const stationId = begin.status.pairingId
+    await browser.post('pair/claim', { code: begin.status.pairingCode })
+    await browser.post('pair/confirm', { id: stationId })
+    await probe.send({ type: 'refresh' })
+    const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })
+    assert.equal(paired.ok, true, paired.error)
+    // The computer: its key made in memory, its requests signed as the native client signs them.
+    const subject = JSON.parse(Buffer.from(browser.jwt.split('.')[1], 'base64url')).sub
+    const computer = app.client(null, '', await app.token(subject, { azp: NATIVE }))
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+    const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey))
+    const hex = bytes => Buffer.from(bytes).toString('hex')
+    const fingerprint = hex(await crypto.subtle.digest('SHA-256', spki))
+    const path = `stations/${stationId}/client/device`, body = { name: 'Shack laptop', kind: 'computer', platform: 'windows', publicKey: hex(spki) }
+    const { value: { challenge } } = await computer.post('client/challenge')
+    const signed = ['nexus-native-request/1', challenge, 'POST', `/api/remote/${path}`,
+      hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body))))].join('\n')
+    const signature = hex(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, new TextEncoder().encode(signed)))
+    const { value: registered } = await computer.post(path, body, 200, { 'x-nexus-challenge': challenge, 'x-nexus-signature': signature })
+    assert.equal(registered.approved, false, 'premise: it waits for the shack')
+    const listed = await probe.send({ type: 'refresh' })
+    const shown = listed.status.devices.find(d => d.id === registered.deviceId)
+    assert.deepEqual(shown && { kind: shown.kind, platform: shown.platform, key: shown.key, name: shown.name, approved: shown.approved },
+      { kind: 'computer', platform: 'windows', key: fingerprint, name: 'Shack laptop', approved: 0 }, 'listed to the station as a computer')
+    assert.equal('publicKey' in shown, false, 'the key itself never reaches the desktop page')
+    assert.deepEqual(listed.status.devices.filter(d => d.id !== registered.deviceId).map(d => d.kind), ['browser'],
+      'control: the pairing\'s browser beside it, as a browser')
+    const approved = await probe.send({ type: 'device', deviceId: registered.deviceId, approve: true, transmit: true, key: fingerprint })
+    assert.equal(approved.ok, true, approved.error)
+    assert.deepEqual(approved.status.pinnedDevices, [registered.deviceId], 'its key is pinned, as a browser\'s is')
+    for (const lane of ['loggingPermissions', 'stationPermissions', 'transmitPermissions']) {
+      assert.equal(approved.status[lane]?.includes(registered.deviceId), false, `nothing on the relay's lanes: ${lane}`)
+    }
+    assert.ok(approved.status.stationPermissions?.length, 'control: the pairing\'s browser holds station control')
+    assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
+  } finally {
+    try { await probe.stop() } finally { await app.mf.dispose() }
+  }
+})
+
 // S1-M1 and S3-M1 through the real relay and the real station: the station records its own key with
 // the service when it connects, and its pages read it there; and the station takes control only on
 // the proof of the key pinned for the browser at the radio, while state and Stop need none.

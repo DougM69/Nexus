@@ -3,9 +3,12 @@ export type RemoteStationStatus = {
   origin: string; stationId: string | null; accountId: string | null
   pairingId: string | null; pairingCode: string | null; expiresAt: number | null
   /** `renewsUntil` is the end that use cannot move; null (or absent) for an approval that never renews.
-   *  `key` is the SHA-256 of the browser's listed device key (A5), lowercase hex, when it has one. */
+   *  `key` is the SHA-256 of the browser's listed device key (A5), lowercase hex, when it has one.
+   *  `kind`: a browser, or Nexus itself on another computer or a phone (the native client), whose
+   *  approval pins its key and grants nothing on the relay's lanes; absent from an older station, where
+   *  every device is a browser. `platform`: a native device's, none for a browser. */
   devices: { id: string; name: string; approved: number; expiresAt: number; generation?: number | null; renewsUntil?: number | null
-    key?: string | null }[]
+    key?: string | null; kind?: DeviceKind; platform?: DevicePlatform | null }[]
   loggingPermissions?: string[]
   stationPermissions?: string[]
   transmitPermissions?: string[]
@@ -48,6 +51,13 @@ export type LanStatus = {
   /** Each paired computer: its device id, the name it gave, and its key's fingerprint. */
   devices: { id: string; name: string; key: string }[]
 }
+/** A device's kind and a native device's platform, as the station lists them (the service's own values). */
+export type DeviceKind = 'browser' | 'computer' | 'phone'
+export type DevicePlatform = 'windows' | 'macos' | 'linux' | 'ios' | 'android'
+/** The platforms by name: proper nouns, the same in every language. */
+export const PLATFORM_NAMES: Record<DevicePlatform, string> = { windows: 'Windows', macos: 'macOS', linux: 'Linux', ios: 'iOS', android: 'Android' }
+/** Nexus on another computer or a phone (the native client), not a browser. */
+export const isNative = (device: { kind?: DeviceKind }) => device.kind === 'computer' || device.kind === 'phone'
 export type RemoteStationAction =
   | { type: 'begin'; name: string }
   | { type: 'refresh' | 'cancel' | 'enable' | 'disable' | 'forget' }

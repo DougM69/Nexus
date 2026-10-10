@@ -429,3 +429,40 @@ it.each([
   // Refused at approval, the station was never attached, so it cannot have "stopped connecting".
   expect(alert.textContent).not.toMatch(/stopped connecting/i)
 })
+
+it('a computer running Nexus is listed apart from the browsers, by its name, its platform and its key in eight groups, with no transmit tick or switch, and Approve pins its key with transmit off', async () => {
+  const browserId = crypto.randomUUID(), computerId = crypto.randomUUID(), actions: RemoteStationAction[] = []
+  const key = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
+  let status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io', stationId: crypto.randomUUID(),
+    accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
+    devices: [{ id: browserId, name: 'Chrome on Windows', approved: 1, expiresAt: Date.now() + 86400000, kind: 'browser', platform: null },
+      { id: computerId, name: 'Shack laptop', approved: 0, expiresAt: Date.now() + 600000, key, kind: 'computer', platform: 'windows' }],
+    loggingPermissions: [browserId], stationPermissions: [browserId], transmitPermissions: [], pinnedDevices: [] }
+  window.__TAURI_INTERNALS__ = { invoke: (async (command: string, input: unknown) => {
+    if (command === 'get_remote_station_status') return status
+    if (command !== 'remote_station_action') throw Error('unexpectedCommand')
+    const action = (input as { action: RemoteStationAction }).action
+    actions.push(action)
+    if (action.type === 'device' && action.approve) status = { ...status, pinnedDevices: [action.deviceId],
+      devices: status.devices.map(d => d.id === action.deviceId ? { ...d, approved: 1, expiresAt: Date.UTC(2026, 10, 9) } : d) }
+    return status
+  }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<form><RemoteStation /></form>)
+  const heading = await screen.findByRole('heading', { name: 'Your computers' })
+  const list = heading.nextElementSibling as HTMLElement
+  const row = within(list).getByText('Shack laptop').closest('li')!
+  within(row).getByText('Nexus on Windows')
+  within(row).getByText('Key A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90')
+  within(row).getByText('Asks to operate this station over the internet.')
+  expect(within(row).queryByRole('checkbox'), 'no transmit tick').toBeNull()
+  // Not among the browsers, and nowhere under Advanced, where the switches and the transmit tick are.
+  const browsers = screen.getByRole('heading', { name: 'Your browsers' }).nextElementSibling as HTMLElement
+  expect(within(browsers).queryByText('Shack laptop')).toBeNull()
+  within(browsers).getByText('Chrome on Windows')
+  expect(screen.queryByText(computerId.slice(-6)), 'not under Advanced').toBeNull()
+  screen.getByText(browserId.slice(-6))
+  fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
+  await within(row).findByText('Approved until 2026-11-09 UTC.')
+  expect(actions.filter(a => a.type === 'device')).toEqual([{ type: 'device', deviceId: computerId, approve: true, transmit: false, key }])
+  within(row).getByRole('button', { name: 'Remove' })
+})

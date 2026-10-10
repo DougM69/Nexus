@@ -97,6 +97,10 @@ impl Client {
             // This Nexus pins browsers' device keys (A5), so the service may list each browser's
             // key to it. A service without them ignores the header.
             .header("x-nexus-device-key", "1")
+            // This Nexus knows the native client's devices (Nexus on another computer), so the
+            // service may list them to it, each device with its kind and platform. A service
+            // without them ignores the header and lists browsers alone.
+            .header("x-nexus-device-kind", "1")
             .json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);

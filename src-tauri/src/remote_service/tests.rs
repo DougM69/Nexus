@@ -1738,6 +1738,7 @@ async fn fake_cloud() -> FakeCloud {
                 }
                 let lifetime = head.contains("\r\nx-nexus-device-lifetime: 1\r\n");
                 let keys = head.contains("\r\nx-nexus-device-key: 1\r\n");
+                let kinds = head.contains("\r\nx-nexus-device-kind: 1\r\n");
                 let (status, body) = if head.contains("/enroll ") {
                     let enrollment = json!({"id":STATION,"proof":"a".repeat(64),
                         "code":"0123456789abcdef","expiresAt":now_ms() + 600000});
@@ -1784,21 +1785,34 @@ async fn fake_cloud() -> FakeCloud {
                             device.as_object_mut().unwrap().remove("publicKey");
                         }
                     }
+                    if !kinds {
+                        // The native client's devices, and every device's kind and platform, only
+                        // to a Nexus that asks: any other is listed its browsers alone.
+                        let devices = listed["devices"].as_array_mut().unwrap();
+                        devices.retain(|d| d.get("kind").is_none_or(|k| k == "browser"));
+                        for device in devices {
+                            let device = device.as_object_mut().unwrap();
+                            device.remove("kind");
+                            device.remove("platform");
+                        }
+                    }
                     ("200 OK", listed.to_string())
                 } else if head.contains("/native/approve-device ") {
                     // The service writes a new approval, and with it the approval generation. The
-                    // browser's device key (A5) is the browser's, and approving leaves it as it is.
-                    let key = serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
-                        .ok()
-                        .and_then(|l| l["devices"][0]["publicKey"].as_str().map(str::to_string));
+                    // browser's device key (A5) is the browser's, and approving leaves it as it is,
+                    // as it leaves a device's kind and platform.
+                    let listed = serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .unwrap_or_default();
                     let mut approved: serde_json::Value = serde_json::from_str(&if lifetime {
                         device_list_at(1, APPROVED_UNTIL, 2)
                     } else {
                         device_list(1, APPROVED_UNTIL)
                     })
                     .unwrap();
-                    if let Some(key) = key {
-                        approved["devices"][0]["publicKey"] = key.into();
+                    for field in ["id", "publicKey", "kind", "platform", "name"] {
+                        if let Some(value) = listed["devices"][0].get(field) {
+                            approved["devices"][0][field] = value.clone();
+                        }
                     }
                     *served.lock().unwrap() = approved.to_string();
                     ("200 OK", r#"{"ok":true}"#.to_string())
@@ -2739,6 +2753,8 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         renews_until: None,
         public_key: None,
         key: None,
+        kind: Kind::Browser,
+        platform: None,
     });
     assert!(matches!(
         service.action(grant()).await,
@@ -3097,6 +3113,254 @@ async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revokin
         vault.pins().unwrap().is_none(),
         "revoking left the pins entry"
     );
+}
+
+/// A computer running Nexus (the native client), as the service lists it to a Nexus that asks for
+/// kinds: its device key, its kind and its platform.
+const COMPUTER: &str = "10000000-0000-4000-8000-00000000000d";
+fn computer_listed(approved: u8, key: &DeviceKey) -> serde_json::Value {
+    json!({"id":COMPUTER,"name":"Shack laptop","approved":approved,
+        "expiresAt":if approved == 1 { APPROVED_UNTIL } else { APPROVED_UNTIL - 1 },
+        "kind":"computer","platform":"windows","publicKey":key.public_key})
+}
+
+/// ★ The native client's devices reach the shack: this Nexus asks for kinds, so the service lists a
+/// computer beside the browsers, each with its kind and platform, and the desktop is given both. A
+/// service without kinds lists browsers alone, with neither field, and each is a browser.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_is_listed_with_its_kind_and_platform_and_a_service_without_kinds_lists_browsers(
+) {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let key = DeviceKey::new();
+    // The fake lists the computer only to a Nexus that sends the kinds header, as the service does,
+    // so seeing it here is the header having been sent.
+    *cloud.devices.lock().unwrap() = json!({"devices":[
+        {"id":BROWSER,"name":"Test browser","approved":1,"expiresAt":APPROVED_UNTIL,
+            "kind":"browser","platform":null},
+        computer_listed(0, &key),
+    ]})
+    .to_string();
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    let shown: Vec<_> = listed
+        .devices
+        .iter()
+        .map(|d| (d.id.as_str(), d.kind, d.platform, d.key.clone()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (BROWSER, Kind::Browser, None, None),
+            (
+                COMPUTER,
+                Kind::Computer,
+                Some(Platform::Windows),
+                Some(hex(&key.pin()))
+            ),
+        ]
+    );
+    let page = serde_json::to_value(&listed).unwrap();
+    assert_eq!(
+        (
+            &page["devices"][0]["kind"],
+            &page["devices"][0]["platform"],
+            &page["devices"][1]["kind"],
+            &page["devices"][1]["platform"],
+        ),
+        (
+            &json!("browser"),
+            &json!(null),
+            &json!("computer"),
+            &json!("windows")
+        ),
+        "what the desktop is given"
+    );
+    assert!(
+        page["devices"][1].get("publicKey").is_none(),
+        "the key itself never reaches the desktop page"
+    );
+    // A service without kinds: 1.12.0's shape, which names no kind.
+    *cloud.devices.lock().unwrap() = device_list(1, APPROVED_UNTIL);
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    let shown: Vec<_> = listed
+        .devices
+        .iter()
+        .map(|d| (d.id.as_str(), d.kind, d.platform))
+        .collect();
+    assert_eq!(shown, [(BROWSER, Kind::Browser, None)]);
+}
+
+/// ★ Each device's kind and platform are held to the service's own values: a pair it never lists
+/// refuses the list, as an id or a name out of shape does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_devices_kind_and_platform_are_held_to_the_services_values() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let key = DeviceKey::new();
+    let listing = |kind: serde_json::Value, platform: serde_json::Value| {
+        let mut device = computer_listed(0, &key);
+        device["kind"] = kind;
+        device["platform"] = platform;
+        json!({ "devices": [device] }).to_string()
+    };
+    for (kind, platform) in [
+        ("computer", "windows"),
+        ("computer", "macos"),
+        ("computer", "linux"),
+        ("phone", "ios"),
+        ("phone", "android"),
+    ] {
+        *cloud.devices.lock().unwrap() = listing(json!(kind), json!(platform));
+        let listed = service.action(Action::Refresh {}).await;
+        assert!(listed.is_ok(), "control: {kind} on {platform} is taken");
+    }
+    *cloud.devices.lock().unwrap() = listing(json!("browser"), json!(null));
+    assert!(
+        service.action(Action::Refresh {}).await.is_ok(),
+        "control: a browser on none"
+    );
+    for (kind, platform) in [
+        (json!("browser"), json!("windows")),
+        (json!("computer"), json!(null)),
+        (json!("computer"), json!("ios")),
+        (json!("computer"), json!("android")),
+        (json!("phone"), json!("linux")),
+        (json!("phone"), json!(null)),
+        (json!("tablet"), json!("windows")),
+        (json!("computer"), json!("beos")),
+        (json!("Computer"), json!("windows")),
+        (json!(null), json!("windows")),
+    ] {
+        *cloud.devices.lock().unwrap() = listing(kind.clone(), platform.clone());
+        assert!(
+            matches!(
+                service.action(Action::Refresh {}).await,
+                Err("invalidResponse")
+            ),
+            "{kind} on {platform} is no device the service lists"
+        );
+    }
+}
+
+/// ★ Approving a computer pins the key the shack showed beside it, as a browser's is (A5), for the
+/// tunnel's TLS to check, and grants nothing on the relay's lanes: no logging, no station control
+/// and no transmit, even with transmit asked for, and none of the switches can give it one. The pin
+/// outlives a restart, still granting nothing; revoking the computer removes it.
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lanes() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    let key = DeviceKey::new();
+    let fingerprint = hex(&key.pin());
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert!(listed.pinned_devices.is_empty(), "premise: nothing pinned");
+    let status = service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: true,
+            transmit: true,
+            key: Some(fingerprint.clone()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status.devices[0].approved, 1, "premise: approved");
+    assert_eq!(status.pinned_devices, [COMPUTER], "its key is pinned");
+    assert_eq!(pinned_device(&service, COMPUTER), Some(key.pin()));
+    let granted = |status: &Status| {
+        (
+            status.logging_permissions.clone(),
+            status.station_permissions.clone(),
+            status.transmit_permissions.clone(),
+        )
+    };
+    assert_eq!(
+        granted(&status),
+        (vec![], vec![], vec![]),
+        "nothing on the relay's lanes"
+    );
+    assert!(
+        service
+            .control
+            .lock()
+            .unwrap()
+            .remembered
+            .grants()
+            .is_empty(),
+        "nothing remembered to give back"
+    );
+    for allow in [
+        Action::LoggingPermission {
+            device_id: COMPUTER.into(),
+            allow: true,
+        },
+        Action::StationPermission {
+            device_id: COMPUTER.into(),
+            allow: true,
+        },
+        Action::TransmitPermission {
+            device_id: COMPUTER.into(),
+            allow: true,
+        },
+    ] {
+        assert!(matches!(service.action(allow).await, Err("accessDenied")));
+    }
+    assert_eq!(
+        granted(&service.status().unwrap()),
+        (vec![], vec![], vec![])
+    );
+    settle().await;
+    assert_eq!(
+        vault
+            .pins()
+            .unwrap()
+            .and_then(|p| p.keys.get(COMPUTER).cloned()),
+        Some(fingerprint.clone()),
+        "the pins entry"
+    );
+    // A restart: the pin comes back, and still nothing on the lanes.
+    drop(service);
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert_eq!(
+        pinned_device(&service, COMPUTER),
+        Some(key.pin()),
+        "the pin survived"
+    );
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        listed.pinned_devices,
+        [COMPUTER],
+        "shown pinned after the restart"
+    );
+    assert_eq!(granted(&listed), (vec![], vec![], vec![]));
+    service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        pinned_device(&service, COMPUTER),
+        None,
+        "revoking left the pin"
+    );
+}
+fn pinned_device(service: &Service, device: &str) -> Option<[u8; 32]> {
+    service.control.lock().unwrap().remembered.pinned(device)
 }
 
 /// ★ Operator ruling D6 (2026-09-28): the operator moves between the stream test build and normal
