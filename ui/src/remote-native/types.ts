@@ -66,8 +66,9 @@ export type RemoteStationAction =
   | { type: 'stationPermission'; deviceId: string; allow: boolean }
   | { type: 'transmitPermission'; deviceId: string; allow: boolean }
   | { type: 'takeOverLogging' }
-  /** `key`: the device key shown beside the browser, pinned if the service still lists it (A5). */
-  | { type: 'device'; deviceId: string; approve: boolean; transmit?: boolean; key?: string }
+  /** `key`: the device key shown beside the browser, pinned if the service still lists it (A5). `kind`: the
+   *  kind it was shown as; the station grants and pins nothing for a device the service now names another. */
+  | { type: 'device'; deviceId: string; approve: boolean; transmit?: boolean; key?: string; kind?: DeviceKind }
   /** Remote over this network: only ever pressed at the shack (`LanStation`). */
   | { type: 'lanOn'; address?: string; port?: number }
   /** Where it listens: one of `networks`' addresses, or none to let the station choose. */

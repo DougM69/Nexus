@@ -50,7 +50,7 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
     const key = await deviceKey()
     const { value: device, response } = await browser.post(`stations/${stationId}/device`, { name: 'FT logging browser', publicKey: key.publicKey })
     browser.setCookie(response.headers.get('set-cookie')); await probe.send({ type: 'refresh' })
-    await probe.send({ type: 'device', deviceId: device.deviceId, approve: true, key: key.fingerprint }); await probe.send({ type: 'enable' })
+    await probe.send({ type: 'device', deviceId: device.deviceId, approve: true, key: key.fingerprint, kind: 'browser' }); await probe.send({ type: 'enable' })
     const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(stationId))
     for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
     assert.equal((await roomStatus(room)).online, true)
@@ -234,7 +234,7 @@ test('actual native A5: the station pins the device key it showed, and keeps it 
     assert.equal(shown?.key, fingerprint, 'the station shows the SHA-256 of the key the browser sent')
     assert.equal('publicKey' in shown, false, 'the key itself never reaches the desktop page')
     assert.deepEqual(listed.status.pinnedDevices, [], 'control: nothing pinned before the approval')
-    const approved = await probe.send({ type: 'device', deviceId: requested.deviceId, approve: true, key: fingerprint })
+    const approved = await probe.send({ type: 'device', deviceId: requested.deviceId, approve: true, key: fingerprint, kind: 'browser' })
     assert.equal(approved.ok, true, approved.error)
     assert.deepEqual(approved.status.pinnedDevices, [requested.deviceId])
     await delay(300)
@@ -325,7 +325,8 @@ test('actual native: a computer running Nexus is listed to the station as one, a
     assert.equal('publicKey' in shown, false, 'the key itself never reaches the desktop page')
     assert.deepEqual(listed.status.devices.filter(d => d.id !== registered.deviceId).map(d => d.kind), ['browser'],
       'control: the pairing\'s browser beside it, as a browser')
-    const approved = await probe.send({ type: 'device', deviceId: registered.deviceId, approve: true, transmit: true, key: fingerprint })
+    // The shack's press, as its screen sends it: the key shown, and the kind it was shown as.
+    const approved = await probe.send({ type: 'device', deviceId: registered.deviceId, approve: true, transmit: true, key: fingerprint, kind: 'computer' })
     assert.equal(approved.ok, true, approved.error)
     assert.deepEqual(approved.status.pinnedDevices, [registered.deviceId], 'its key is pinned, as a browser\'s is')
     for (const lane of ['loggingPermissions', 'stationPermissions', 'transmitPermissions']) {
@@ -550,7 +551,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     await browser.post(`stations/${stationId}/ticket`, {}, 403)
     const requests = await probe.send({ type: 'refresh' })
     assert.equal(requests.status.devices.find(d => d.id === request.deviceId)?.approved, 0)
-    assert.equal((await probe.send({ type: 'device', deviceId: request.deviceId, approve: true })).ok, true)
+    assert.equal((await probe.send({ type: 'device', deviceId: request.deviceId, approve: true, kind: 'browser' })).ok, true)
     assert.equal((await probe.send({ type: 'enable' })).ok, true)
     const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
     const room = namespace.get(namespace.idFromName(stationId))

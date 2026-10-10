@@ -13,10 +13,16 @@
 //! it in place of the LAN's. The room only ever holds ciphertext.
 //!
 //! - **Who may hold a session** ([`Approved`]): a computer (or a phone) the service lists as
-//!   approved for this station, whose listed key is the one pinned here when it was approved. A
-//!   browser's pin is never one. Read at each handshake and again after it; when it changes, a
-//!   session whose computer is no longer on it ends at once. An approval's lapse is the room's to
-//!   enforce: it opens no pipe past it, and closes one as it ends.
+//!   approved for this station, whose listed key is the one pinned here when the shack approved it
+//!   as one, under that same approval. A browser's pin is never one, and neither is the pin of an
+//!   approval before. Read at each handshake and again after it; when it changes, a session whose
+//!   computer is no longer on it ends at once, and one whose approval reached the end the service
+//!   last listed for it ends within a status tick. The room closes a pipe as an approval ends, too.
+//! - **Named by its key** (`lan::tunnel_device_id`): the shack names each computer from the key it
+//!   pinned, under a label of the tunnel's own, as the LAN names its computers from theirs, never by
+//!   the service's id. The authority, the command lane's journal and the roads key everything they
+//!   hold by that name, and they are shared with the relay's road and the LAN's: so a device the
+//!   service names, or a LAN computer, can never be one the tunnel takes, nor hold what it holds.
 //! - **No pairing and no picture**: nothing pairs through the room, and no stream is signalled on
 //!   the tunnel. The hosted stream has its own road.
 //! - **The pipe** ([`bridge`]): each binary message is bytes of the TLS stream, in order; anything
@@ -50,9 +56,11 @@ const CHUNK: usize = 16 * 1024 + 256;
 const OPEN: Duration = Duration::from_secs(10);
 
 /// The computers approved here for the tunnel, each by the SHA-256 of the key pinned when it was
-/// approved. Its own lock, never held while another is taken: TLS asks it at each handshake.
+/// approved: the name it is taken as, and when its approval ends (ms since the epoch, the service's
+/// own clock as listed). Its own lock, never held while another is taken: TLS asks it at each
+/// handshake.
 pub(crate) struct Approved {
-    keys: Mutex<BTreeMap<[u8; 32], String>>,
+    keys: Mutex<BTreeMap<[u8; 32], (String, u64)>>,
     revision: watch::Sender<u64>,
     revisions: AtomicU64,
 }
@@ -68,12 +76,15 @@ impl Default for Approved {
 }
 
 impl Approved {
-    /// Who may from now on: each approved computer's device id by its pinned key. A change is told
-    /// to every session at once; the same set again tells nothing.
-    pub(crate) fn set(&self, keys: BTreeMap<[u8; 32], String>) {
-        let Ok(mut held) = self.keys.lock() else {
-            return;
-        };
+    /// Who may from now on: each approved computer's name and approval's end by its pinned key. A
+    /// change is told to every session at once; the same set again tells nothing. A lock a panic
+    /// poisoned still takes the change and tells it, so a removal is never lost: [`Approved::paired`]
+    /// then takes nobody, and every session asked again ends.
+    pub(crate) fn set(&self, keys: BTreeMap<[u8; 32], (String, u64)>) {
+        let mut held = self
+            .keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *held == keys {
             return;
         }
@@ -83,14 +94,30 @@ impl Approved {
         self.revision.send_modify(|r| *r = r.wrapping_add(1));
     }
 
-    /// The device holding the key with this pin, if it may.
+    /// The device holding the key with this pin, if it may now: approved, and its approval not yet
+    /// ended. Nobody while the lock is poisoned.
     pub(crate) fn paired(&self, pin: &[u8; 32]) -> Option<String> {
-        self.keys.lock().ok()?.get(pin).cloned()
+        let keys = self.keys.lock().ok()?;
+        let (device, until) = keys.get(pin)?;
+        (super::now_ms() < *until).then(|| device.clone())
     }
 
     /// How many times who may has changed, read without a lock.
     pub(crate) fn revisions(&self) -> u64 {
         self.revisions.load(Ordering::SeqCst)
+    }
+
+    /// Its lock poisoned, as a thread that panicked holding it would leave it.
+    #[cfg(test)]
+    pub(crate) fn poison(&self) {
+        let _ = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _held = self.keys.lock();
+                    panic!("the roster's lock, poisoned for a test");
+                })
+                .join()
+        });
     }
 
     /// As the channel and its roads ask it.

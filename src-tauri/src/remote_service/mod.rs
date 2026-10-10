@@ -106,7 +106,7 @@ struct Device {
 /// relay's lanes: it pins its key, which the tunnel through the room checks, and that is all.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-enum Kind {
+pub enum Kind {
     #[default]
     Browser,
     Computer,
@@ -166,11 +166,50 @@ fn fingerprint(public_key: &str) -> Option<String> {
 fn pin_shape(key: &str) -> bool {
     key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
+/// What a computer's (or phone's) pin begins with.
+const NATIVE_PIN_LABEL: &[u8] = b"nexus-native-pin/1";
+/// The pin approving a computer or a phone makes: SHA-256 over [`NATIVE_PIN_LABEL`], the approval's
+/// generation and its key's fingerprint (`key`, lowercase hex), as lowercase hex. Never a browser's
+/// pin, which is the fingerprint itself, so a browser's approval admits nothing through the room's
+/// tunnel and a computer's admits nothing on the relay's lanes; and never another approval's, so a
+/// computer the service lists as approved again, under an approval the shack did not give, is not
+/// taken on the pin made for the one before. A renewal on use keeps the generation, and the pin.
+fn native_pin(key: &str, generation: u64) -> Option<String> {
+    let fingerprint = tempo_stream::protocol::hex_bytes(key).filter(|f| f.len() == 32)?;
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    hash.update(NATIVE_PIN_LABEL);
+    hash.update(&generation.to_be_bytes());
+    hash.update(&fingerprint);
+    Some(
+        hash.finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+/// An id the service made for a device: the shape every id has, at version 4 (the service makes them
+/// with `crypto.randomUUID`). The shack's own names for computers are version 8 (`lan::device_id`,
+/// `lan::tunnel_device_id`), so no device the service lists can stand for one of them in the
+/// authority they share, or take its grants.
+fn hosted(id: &str) -> bool {
+    identifier(id) && id.as_bytes()[14] == b'4'
+}
 impl Device {
     fn approval(&self) -> Approval {
         Approval {
             expires_at: self.expires_at,
             generation: self.generation,
+        }
+    }
+    /// The pin approving it as it is listed makes: a browser's key's fingerprint, or a computer's or
+    /// phone's [`native_pin`]. `None` with no key, and for a computer or phone with no approval
+    /// generation, which pins nothing.
+    fn pin(&self) -> Option<String> {
+        let key = self.key.as_deref()?;
+        match self.kind {
+            Kind::Browser => Some(key.to_string()),
+            Kind::Computer | Kind::Phone => native_pin(key, self.generation?),
         }
     }
 }
@@ -248,6 +287,11 @@ pub enum Action {
         /// list's `key`). Pinned only if the service still lists that key once it has approved.
         #[serde(default)]
         key: Option<String>,
+        /// The kind the operator was shown it as: a browser, a computer or a phone. Approving grants
+        /// and pins only for a device the service still lists as that kind once it has approved; with
+        /// none shown, it grants and pins nothing. Ignored when revoking.
+        #[serde(default)]
+        kind: Option<Kind>,
     },
     /// Remote over this network on, at the shack (`lan`): on `address`, this computer's private
     /// IPv4 address the operator picked, or with none as `lan` chooses; on `port`, or as it was.
@@ -324,8 +368,8 @@ enum Persist {
     /// The pairing was removed.
     Removed,
     /// A5: the operator approved this browser at the radio with its device key shown (`Some`: the
-    /// key's SHA-256, now pinned), or the approval pinned nothing, or the browser was revoked
-    /// (`None`: no pin).
+    /// key's SHA-256, now pinned; for a computer or phone, its [`native_pin`]), or the approval
+    /// pinned nothing, or the browser was revoked (`None`: no pin).
     Pin {
         device_id: String,
         key: Option<String>,
@@ -346,9 +390,10 @@ enum Write {
 struct Remembered {
     binding: Option<Binding>,
     state: Option<vault::State>,
-    /// A5: browser id to the SHA-256 of the device key the operator pinned for it, kept in the
-    /// vault's pins entry. A pin is an approval's, not a permission's: the switches, take over and
-    /// Turn off leave it; approving at the radio sets it and revoking the browser removes it.
+    /// A5: browser id to the SHA-256 of the device key the operator pinned for it (a computer's or
+    /// phone's: its [`native_pin`]), kept in the vault's pins entry. A pin is an approval's, not a
+    /// permission's: the switches, take over and Turn off leave it; approving at the radio sets it
+    /// and revoking the browser removes it.
     pins: BTreeMap<String, String>,
 }
 impl Remembered {
@@ -523,9 +568,9 @@ struct Control {
     /// The computers approved here for the room's tunnel, kept in step with the pins and the
     /// service's list ([`Control::sync_approved`]).
     approved: Arc<tunnel::Approved>,
-    /// The computers (and phones) the service lists as approved, by device id, with the SHA-256 of
-    /// the key it lists for each: what a pin is compared with.
-    natives: BTreeMap<String, String>,
+    /// The computers (and phones) the service lists as approved and not yet ended, by device id:
+    /// what a pin is compared with.
+    natives: BTreeMap<String, Native>,
     /// What the room's tunnel serves its computers with: the LAN road's authority, feeds and
     /// command lane. `None` in a build of the service without the LAN road.
     tunnel: Option<lan::TunnelDeps>,
@@ -552,30 +597,50 @@ impl Control {
         }
         self.sync_approved();
     }
-    /// The computers the service lists as approved (`devices`): who the room's tunnel takes, with
-    /// the pins.
+    /// The computers the service lists as approved and not yet ended (`devices`): who the room's
+    /// tunnel takes, with the pins.
     fn listed(&mut self, devices: &[Device]) {
+        let now = now_ms();
         self.natives = devices
             .iter()
-            .filter(|d| d.kind != Kind::Browser && d.approved == 1)
-            .filter_map(|d| Some((d.id.clone(), d.key.clone()?)))
+            .filter(|d| d.kind != Kind::Browser && d.approved == 1 && d.expires_at > now)
+            .filter_map(|d| {
+                let native = Native {
+                    pin: d.pin()?,
+                    key: d.key.clone()?,
+                    until: d.expires_at,
+                };
+                Some((d.id.clone(), native))
+            })
             .collect();
         self.sync_approved();
     }
-    /// Who the room's tunnel takes: each computer the service lists as approved whose listed key is
-    /// the one pinned for it here. Never a browser, whatever its pin.
+    /// Who the room's tunnel takes, until when: each computer the service lists as approved whose
+    /// pin here is the one approving it as listed makes ([`Device::pin`]: its key, under this same
+    /// approval, approved as a computer). Never a browser, whatever its pin. Each is named from the
+    /// key pinned for it (`lan::tunnel_device_id`), never by the service's id, so it can stand for
+    /// no other device in the authority it shares with the relay's road and the LAN's.
     fn sync_approved(&self) {
         let keys = self
             .natives
             .iter()
-            .filter(|(id, key)| self.remembered.pins.get(*id) == Some(*key))
-            .filter_map(|(id, key)| {
-                let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(key)?.try_into().ok()?;
-                Some((pin, id.clone()))
+            .filter(|(id, native)| self.remembered.pins.get(*id) == Some(&native.pin))
+            .filter_map(|(_, native)| {
+                let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(&native.key)?
+                    .try_into()
+                    .ok()?;
+                Some((pin, (lan::tunnel_device_id(&pin), native.until)))
             })
             .collect();
         self.approved.set(keys);
     }
+}
+/// A computer (or phone) the service lists as approved: the pin approving it as listed makes, the
+/// fingerprint of the key listed for it, and when its approval ends.
+struct Native {
+    pin: String,
+    key: String,
+    until: u64,
 }
 /// A command, the Remote generation it was issued under, the authority epoch at that moment (so a
 /// local decision made after it wins), and where to reply.
@@ -689,7 +754,8 @@ impl Service {
                     engine: engine.clone(),
                 });
             // The room's tunnel serves its computers with the same authority, feeds and command
-            // lane, so a computer that reconnects by either road finds the journal of its calls.
+            // lane: one lease for the station, and one revision of each store, whichever road a
+            // call comes by. Its computers are named by their own keys (`Control::sync_approved`).
             let tunnel = lan::TunnelDeps {
                 authority: authority.clone(),
                 engine: engine.clone(),
@@ -853,7 +919,10 @@ impl Service {
         status.pinned_devices = status
             .devices
             .iter()
-            .filter(|d| d.key.is_some() && control.remembered.pins.get(&d.id) == d.key.as_ref())
+            .filter(|d| {
+                d.pin()
+                    .is_some_and(|pin| control.remembered.pins.get(&d.id) == Some(&pin))
+            })
             .map(|d| d.id.clone())
             .collect();
         status.station_key = control
@@ -1301,12 +1370,15 @@ impl Controller {
             devices: Vec<Device>,
         }
         let mut value: Devices = serde_json::from_value(value).map_err(|_| "invalidResponse")?;
+        // One id names one device, and only ever an id the service made: a press, a pin and a grant
+        // are each made for an id, so a second device under it, or one under a name the shack gives
+        // its own computers, refuses the list as a malformed id does.
+        let ids: std::collections::BTreeSet<&str> =
+            value.devices.iter().map(|d| d.id.as_str()).collect();
         if value.devices.len() > 8
+            || ids.len() != value.devices.len()
             || value.devices.iter().any(|d| {
-                !identifier(&d.id)
-                    || !valid_name(&d.name)
-                    || d.approved > 1
-                    || !d.kind.fits(d.platform)
+                !hosted(&d.id) || !valid_name(&d.name) || d.approved > 1 || !d.kind.fits(d.platform)
             })
         {
             return Err("invalidResponse");
@@ -1390,12 +1462,17 @@ impl Controller {
     /// A5: the device key the operator was shown (`shown`) is pinned if the service still lists that
     /// key for the browser now that it has approved it. A key that changed in between pins nothing,
     /// and that browser is approved again before it streams.
+    ///
+    /// The approval is of the device as it was shown (`kind`): a device the service now lists as
+    /// another kind is granted nothing and pinned for nothing, and is asked about again in its own
+    /// words. A computer's pin is its own ([`Device::pin`]), made for this approval.
     fn grant_approved(
         &self,
         devices: &[Device],
         device_id: String,
         transmit: bool,
         shown: Option<String>,
+        kind: Option<Kind>,
         (generation, epoch): (u64, u64),
     ) -> Result<(), &'static str> {
         let now = now_ms();
@@ -1404,7 +1481,10 @@ impl Controller {
             .find(|d| d.id == device_id && d.approved == 1 && d.expires_at > now)
             .ok_or("invalidResponse")?;
         let approval = device.approval();
-        let pin = shown.filter(|shown| device.key.as_ref() == Some(shown));
+        let as_shown = kind == Some(device.kind);
+        let pin = shown
+            .filter(|shown| as_shown && device.key.as_ref() == Some(shown))
+            .and_then(|_| device.pin());
         let approved: Vec<String> = devices
             .iter()
             .filter(|d| d.approved == 1 && d.expires_at > now)
@@ -1416,8 +1496,8 @@ impl Controller {
         }
         // A computer (the native client) is granted nothing on the relay's lanes, whatever the
         // approval said of transmit: it never reaches them. Its approval is its pin, below, which
-        // the tunnel through the room checks.
-        let browser = device.kind == Kind::Browser;
+        // the tunnel through the room checks. A browser is granted only if it was shown as one.
+        let browser = as_shown && device.kind == Kind::Browser;
         if control.enabled && browser {
             let operations = control.operations.clone();
             operations.permit(&device_id, true)?;
@@ -1744,6 +1824,7 @@ impl Controller {
                 approve,
                 transmit,
                 key,
+                kind,
             } => {
                 if !identifier(&device_id) || key.as_deref().is_some_and(|key| !pin_shape(key)) {
                     return Err("invalidRequest");
@@ -1774,6 +1855,7 @@ impl Controller {
                         device_id,
                         transmit,
                         key,
+                        kind,
                         (generation, epoch),
                     );
                     self.listed(&devices);

@@ -141,7 +141,7 @@ pub mod tls;
 pub(crate) use tempo_client::wire;
 
 pub use book::Book;
-pub(crate) use book::{device_id, valid_name, NAME_CHARS};
+pub(crate) use book::{device_id, tunnel_device_id, valid_name, NAME_CHARS};
 /// Who may hold a session on a listener: the LAN's paired computers, or the room's tunnel's own.
 pub(crate) use channel::Roster;
 
@@ -754,8 +754,10 @@ fn audio_powers_of(authority: &Arc<Authority>, feeds: &Feeds) -> audio_road::Pow
 }
 
 /// What the room's tunnel serves its computers with, beside the LAN's own listener and sharing its
-/// one authority and its command lane's dispatcher, so a computer that reconnects by either road
-/// finds the journal of its calls.
+/// one authority and its command lane's dispatcher (the station's one lease, and one revision of
+/// each store). Each keeps what it holds by the device's name, and the tunnel's computers have
+/// names of their own (`tunnel_device_id`): no LAN computer's and no hosted device's, so nothing
+/// held for one road's peer is ever another's.
 #[derive(Clone)]
 pub(crate) struct TunnelDeps {
     pub authority: Arc<Authority>,

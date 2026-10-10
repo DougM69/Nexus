@@ -65,7 +65,7 @@ it('a browser asking to stream: the shack asks with its name and the key the sit
   await wait(APPROVAL_ARM_MS)
   fireEvent.click(approve())
   await flush()
-  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, transmit: false, key: KEY }])
+  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, transmit: false, key: KEY, kind: 'browser' }])
   expect(dialog(), 'answered: it goes').toBeNull()
 })
 
@@ -160,7 +160,8 @@ it('a computer running Nexus asking to connect: the shack names it as one, with 
   await wait(APPROVAL_ARM_MS)
   fireEvent.click(approve())
   await flush()
-  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, transmit: false, key: KEY }])
+  // The kind it was shown as goes with the press, as its key does: the shack grants and pins as shown.
+  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, transmit: false, key: KEY, kind: 'computer' }])
   expect(dialog(), 'answered: it goes').toBeNull()
 })
 

@@ -149,7 +149,7 @@ export function RemoteStation() {
               : unpinned ? t('remote.browserKeyNotPinned') : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
             <span className="remote-actions">
               {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
-                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approve')}</button>}
+                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
               {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
                 onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
             </span>
@@ -170,7 +170,7 @@ export function RemoteStation() {
                 : unpinned ? t('remote.native.computerKeyNotPinned') : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
               <span className="remote-actions">
                 {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
-                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: false, key })}>{t('remote.approve')}</button>}
+                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: false, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
                 {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
                   onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
               </span>
@@ -209,7 +209,7 @@ export function RemoteStation() {
                 <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
                   onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
                 <button type="button" className="remote-button" disabled={busy}
-                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approveBrowser')}</button>
+                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key, kind: device.kind ?? 'browser' })}>{t('remote.approveBrowser')}</button>
               </>}
           {device.approved === 1 && <p>{device.renewsUntil
             ? t('remote.browserRenewsUntil', { until: utcDate(device.expiresAt), limit: utcDate(device.renewsUntil) })
@@ -223,7 +223,7 @@ export function RemoteStation() {
             <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
               onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
             <button type="button" className="remote-button" disabled={busy}
-              onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approveAgain')}</button>
+              onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key, kind: device.kind ?? 'browser' })}>{t('remote.approveAgain')}</button>
           </>}
           {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
           {device.approved===1&&status.stationPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'stationPermission',deviceId:device.id,allow:!status.stationPermissions!.includes(device.id)})}>{status.stationPermissions.includes(device.id)?t('remote.controlRevoke'):t('remote.controlAllow')}</button>}

@@ -885,6 +885,11 @@ async fn session<S>(
                 }
             }
             _ = status_tick.tick() => {
+                // Asked again at each tick, for what tells no session: an approval that reached its
+                // end (the room's tunnel holds each one's), or a roster that cannot be read.
+                if roster.paired(&pin).as_deref() != Some(device.as_str()) {
+                    break StreamReason::NotController;
+                }
                 // Each internet road's candidates as it finds them (its server-reflexive address
                 // once the STUN server answers), on the link.
                 if let Some(net) = &internet {

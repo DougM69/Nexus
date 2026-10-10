@@ -88,7 +88,7 @@ export function RemoteApprovalPrompt() {
     setBusy(true); setFailed(false)
     try {
       const next = await remoteStationAction(approve
-        ? { type: 'device', deviceId: device.id, approve: true, transmit: false, key: device.key ?? undefined }
+        ? { type: 'device', deviceId: device.id, approve: true, transmit: false, key: device.key ?? undefined, kind: device.kind ?? 'browser' }
         : { type: 'device', deviceId: device.id, approve: false })
       if (!mounted.current) return
       setStatus(next); settle(key)

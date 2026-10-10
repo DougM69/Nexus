@@ -11,10 +11,15 @@ use std::collections::BTreeMap;
 /// LAN's, which is made from the key.
 const APPROVED: &str = "10000000-0000-4000-8000-00000000000d";
 
-/// Who the tunnel takes: `computer`, approved under [`APPROVED`], or nobody.
-fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], String> {
+/// Who the tunnel takes: `computer`, approved under [`APPROVED`] with no end in sight, or nobody.
+fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], (String, u64)> {
+    approved_until(computer, u64::MAX)
+}
+
+/// The same, its approval ending at `until` (ms since the epoch).
+fn approved_until(computer: Option<&Computer>, until: u64) -> BTreeMap<[u8; 32], (String, u64)> {
     computer
-        .map(|c| (c.pin, APPROVED.to_string()))
+        .map(|c| (c.pin, (APPROVED.to_string(), until)))
         .into_iter()
         .collect()
 }
@@ -328,4 +333,97 @@ async fn through_the_room_a_welcomed_computer_holds_no_control_of_its_own() {
     s.shared.authority.permit_station(APPROVED, true).unwrap();
     let acquired = ask_through(&mut socket, acquire).await;
     assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+}
+
+/// ★ A removal reaches every session through the room even past a roster whose lock a panic
+/// poisoned: the removed computer is out at once, and nobody is taken after, since a roster that
+/// cannot be read takes nobody.
+#[tokio::test]
+async fn a_removal_reaches_every_session_even_past_a_poisoned_roster() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    approved.poison();
+    let told = (approved.roster().subscribe)();
+    let removed = Instant::now();
+    approved.set(approved_for(None));
+    assert!(
+        told.has_changed().unwrap(),
+        "a removal past a poisoned lock was told to no session"
+    );
+    let ended = heard(&mut socket).await;
+    assert!(
+        ended.get("closed").is_some(),
+        "a removed computer is still connected: {ended}"
+    );
+    assert!(
+        removed.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        removed.elapsed()
+    );
+    let again = match through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key).await {
+        Ok(mut socket) => hello_through(&mut socket).await,
+        Err(e) => json!({"refused": e}),
+    };
+    assert!(
+        again["type"] != "welcome",
+        "taken past a poisoned roster: {again}"
+    );
+}
+
+/// ★ An approval that reaches its end ends the session through the room with it, within a status
+/// tick, though nothing told the roster; and the computer is refused after. CONTROL: before its end
+/// the same computer is welcomed.
+#[tokio::test]
+async fn a_session_through_the_room_ends_with_its_approval() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let ends = now + 1500;
+    approved.set(approved_until(Some(&s.computer), ends));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    let ended = heard(&mut socket).await;
+    let late = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(
+        ended.get("closed").is_some(),
+        "still connected past its approval: {ended}"
+    );
+    assert!(
+        late >= ends && late < ends + 1500,
+        "ended {}ms after its approval's end",
+        late as i64 - ends as i64
+    );
+    let again = match through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key).await {
+        Ok(mut socket) => hello_through(&mut socket).await,
+        Err(e) => json!({"refused": e}),
+    };
+    assert!(
+        again["type"] != "welcome",
+        "taken past its approval: {again}"
+    );
 }

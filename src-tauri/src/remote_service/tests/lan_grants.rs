@@ -60,8 +60,9 @@ fn fresh_id() -> String {
 
 /// Can `device` take control on the LAN road now? The state and an acquire on a LAN connection
 /// of its own, through the station's operations authority, then the connection closes. The
-/// acquire's phase, or the refusal.
-fn lan_acquire(service: &Service, engine: &crate::SharedEngine, device: &str) -> String {
+/// acquire's phase, or the refusal. The room's tunnel takes the lease exactly so, as the device
+/// its roster names.
+pub(super) fn lan_acquire(service: &Service, engine: &crate::SharedEngine, device: &str) -> String {
     let authority = service.control.lock().unwrap().operations.clone();
     let connection = operations::LanConnection::new(authority.clone());
     let session = fresh_id();
@@ -169,6 +170,7 @@ async fn a_lan_computer_keeps_control_through_hosted_turn_off_and_on() {
             approve: false,
             transmit: false,
             key: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -216,4 +218,54 @@ async fn a_service_without_a_lan_road_says_nothing_of_it() {
     let service = with_lan(service, &engine, &lan_store(), &scratch);
     let status = serde_json::to_value(service.status().unwrap()).unwrap();
     assert_eq!(status["lan"]["on"], false, "control: {status}");
+}
+
+/// ★ The shack's own names for its computers and the service's ids for its devices never meet in
+/// the authority they share. A device the service lists under a LAN computer's id is refused with
+/// the list, so a computer approved here for the room's tunnel can never stand for that LAN
+/// computer there and take its station control.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_listed_under_a_lan_computers_id_never_holds_its_control_through_the_room() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let store = lan_store();
+    let scratch = Scratch::new();
+    let service = with_lan(launch(&cloud, &vault, &engine), &engine, &store, &scratch);
+    service
+        .action(Action::LanOn {
+            address: None,
+            port: None,
+        })
+        .await
+        .unwrap();
+    let status = eventually(&service, "the LAN book was read", |s| {
+        s.lan.as_ref().is_some_and(|lan| !lan.devices.is_empty())
+    })
+    .await;
+    let lan_computer = status.lan.unwrap().devices[0].id.clone();
+    assert_eq!(
+        lan_acquire(&service, &engine, &lan_computer),
+        "controlling",
+        "premise: the LAN computer's control"
+    );
+    service.action(Action::Enable {}).await.unwrap();
+    let key = DeviceKey::new();
+    let mut listed = computer_listed(0, &key);
+    listed["id"] = lan_computer.clone().into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [listed] }).to_string();
+    let refreshed = service.action(Action::Refresh {}).await;
+    let _ = approve_computer(&service, &lan_computer, &key).await;
+    let approved = service.control.lock().unwrap().approved.clone();
+    if let Some(taken) = approved.paired(&key.pin()) {
+        assert_eq!(
+            lan_acquire(&service, &engine, &taken),
+            "localPermissionRequired",
+            "through the room as {taken}, the LAN computer's control"
+        );
+    }
+    assert!(
+        matches!(refreshed, Err("invalidResponse")),
+        "a device under a LAN computer's id was listed"
+    );
 }

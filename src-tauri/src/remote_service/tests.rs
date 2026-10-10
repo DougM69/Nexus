@@ -1851,6 +1851,8 @@ struct FakeCloud {
     devices: Arc<Mutex<String>>,
     /// The signing key the service holds for the station (S3-M1): the first one sent to it.
     station_key: Arc<Mutex<Option<String>>>,
+    /// While set, the device list is not answered (a 503), as a service that is down answers.
+    refusing: Arc<AtomicBool>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
@@ -1873,10 +1875,13 @@ async fn fake_cloud() -> FakeCloud {
     let served = devices.clone();
     let station_key = Arc::new(Mutex::new(None::<String>));
     let held = station_key.clone();
+    let refusing = Arc::new(AtomicBool::new(false));
+    let down = refusing.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let served = served.clone();
             let held = held.clone();
+            let down = down.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -1940,6 +1945,8 @@ async fn fake_cloud() -> FakeCloud {
                     }
                     let approved = json!({"stationId":STATION,"accountId":ACCOUNT,"device":device});
                     ("200 OK", approved.to_string())
+                } else if head.contains("/native/devices ") && down.load(Ordering::SeqCst) {
+                    ("503 Service Unavailable", "{}".to_string())
                 } else if head.contains("/native/devices ") {
                     let mut listed: serde_json::Value =
                         serde_json::from_str(&served.lock().unwrap()).unwrap();
@@ -1969,6 +1976,29 @@ async fn fake_cloud() -> FakeCloud {
                         }
                     }
                     ("200 OK", listed.to_string())
+                } else if head.contains("/native/approve-device ")
+                    && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .is_ok_and(|l| l["devices"].as_array().is_some_and(|d| d.len() > 1))
+                {
+                    // Of several devices, the one the request names (every one under its id) gets
+                    // the new approval, and the others are left as they are.
+                    let asked = serde_json::from_slice::<serde_json::Value>(&request[head_end..])
+                        .ok()
+                        .and_then(|v| v["deviceId"].as_str().map(str::to_string));
+                    let mut listed: serde_json::Value =
+                        serde_json::from_str(&served.lock().unwrap()).unwrap();
+                    for device in listed["devices"].as_array_mut().unwrap() {
+                        if device["id"].as_str() == asked.as_deref() {
+                            device["approved"] = 1.into();
+                            device["expiresAt"] = APPROVED_UNTIL.into();
+                            if lifetime {
+                                device["generation"] = 2.into();
+                                device["renewsUntil"] = (APPROVED_UNTIL + 60 * DAY_MS).into();
+                            }
+                        }
+                    }
+                    *served.lock().unwrap() = listed.to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/approve-device ") {
                     // The service writes a new approval, and with it the approval generation. The
                     // browser's device key (A5) is the browser's, and approving leaves it as it is,
@@ -2034,6 +2064,7 @@ async fn fake_cloud() -> FakeCloud {
         origin,
         devices,
         station_key,
+        refusing,
     }
 }
 fn paired_vault(origin: &str) -> MemoryVault {
@@ -2284,6 +2315,7 @@ async fn approve(service: &Service, transmit: bool) -> Status {
             approve: true,
             transmit,
             key: None,
+            kind: Some(Kind::Browser),
         })
         .await
         .unwrap()
@@ -2385,6 +2417,7 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
                     approve: false,
                     transmit: false,
                     key: None,
+                    kind: None,
                 })
                 .await
                 .unwrap();
@@ -3073,6 +3106,7 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
         origin: refusing_cloud("403 Forbidden", r#"{"error":"serviceMoved"}"#).await,
         devices: Arc::new(Mutex::new(String::new())),
         station_key: Default::default(),
+        refusing: Default::default(),
     };
     let vault = paired_vault(&refused.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -3157,6 +3191,7 @@ async fn approve_shown(service: &Service, shown: Option<String>, transmit: bool)
             approve: true,
             transmit,
             key: shown,
+            kind: Some(Kind::Browser),
         })
         .await
         .unwrap()
@@ -3276,6 +3311,7 @@ async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revokin
             approve: false,
             transmit: false,
             key: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -3291,9 +3327,14 @@ async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revokin
 /// kinds: its device key, its kind and its platform.
 const COMPUTER: &str = "10000000-0000-4000-8000-00000000000d";
 fn computer_listed(approved: u8, key: &DeviceKey) -> serde_json::Value {
-    json!({"id":COMPUTER,"name":"Shack laptop","approved":approved,
+    let mut listed = json!({"id":COMPUTER,"name":"Shack laptop","approved":approved,
         "expiresAt":if approved == 1 { APPROVED_UNTIL } else { APPROVED_UNTIL - 1 },
-        "kind":"computer","platform":"windows","publicKey":key.public_key})
+        "kind":"computer","platform":"windows","publicKey":key.public_key});
+    if approved == 1 {
+        // The approval the fake service writes when the shack approves it.
+        listed["generation"] = 2.into();
+    }
+    listed
 }
 
 /// ★ The native client's devices reach the shack: this Nexus asks for kinds, so the service lists a
@@ -3443,12 +3484,19 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
             approve: true,
             transmit: true,
             key: Some(fingerprint.clone()),
+            kind: Some(Kind::Computer),
         })
         .await
         .unwrap();
     assert_eq!(status.devices[0].approved, 1, "premise: approved");
     assert_eq!(status.pinned_devices, [COMPUTER], "its key is pinned");
-    assert_eq!(pinned_device(&service, COMPUTER), Some(key.pin()));
+    // As a computer's, under this approval: never the fingerprint a browser's pin is.
+    let pin = native_pin(&fingerprint, 2).unwrap();
+    assert_ne!(pin, fingerprint);
+    assert_eq!(
+        pinned_device(&service, COMPUTER).map(|p| hex(&p)),
+        Some(pin.clone())
+    );
     let granted = |status: &Status| {
         (
             status.logging_permissions.clone(),
@@ -3497,7 +3545,7 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
             .pins()
             .unwrap()
             .and_then(|p| p.keys.get(COMPUTER).cloned()),
-        Some(fingerprint.clone()),
+        Some(pin.clone()),
         "the pins entry"
     );
     // A restart: the pin comes back, and still nothing on the lanes.
@@ -3505,8 +3553,8 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
     let service = launch(&cloud, &vault, &engine);
     eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
     assert_eq!(
-        pinned_device(&service, COMPUTER),
-        Some(key.pin()),
+        pinned_device(&service, COMPUTER).map(|p| hex(&p)),
+        Some(pin),
         "the pin survived"
     );
     let listed = service.action(Action::Refresh {}).await.unwrap();
@@ -3522,6 +3570,7 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
             approve: false,
             transmit: false,
             key: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -3572,10 +3621,14 @@ async fn the_tunnel_takes_an_approved_computer_by_its_pinned_key_and_never_a_bro
             approve: true,
             transmit: false,
             key: Some(hex(&key.pin())),
+            kind: Some(Kind::Computer),
         })
         .await
         .unwrap();
-    assert_eq!(approved.paired(&key.pin()).as_deref(), Some(COMPUTER));
+    // Taken as the name its key gives through the room, never as the service's id for it.
+    let named = lan::tunnel_device_id(&key.pin());
+    assert_ne!(named, COMPUTER);
+    assert_eq!(approved.paired(&key.pin()), Some(named.clone()));
     assert!(approved.revisions() > before, "the change is counted");
     assert!(told.has_changed().unwrap(), "and told");
     told.mark_unchanged();
@@ -3597,11 +3650,7 @@ async fn the_tunnel_takes_an_approved_computer_by_its_pinned_key_and_never_a_bro
     // Listed with its pinned key again, then removed here: out, and told.
     *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(1, &key)] }).to_string();
     service.action(Action::Refresh {}).await.unwrap();
-    assert_eq!(
-        approved.paired(&key.pin()).as_deref(),
-        Some(COMPUTER),
-        "control: back"
-    );
+    assert_eq!(approved.paired(&key.pin()), Some(named), "control: back");
     told.mark_unchanged();
     service
         .action(Action::Device {
@@ -3609,11 +3658,384 @@ async fn the_tunnel_takes_an_approved_computer_by_its_pinned_key_and_never_a_bro
             approve: false,
             transmit: false,
             key: None,
+            kind: None,
         })
         .await
         .unwrap();
     assert_eq!(approved.paired(&key.pin()), None, "removed here");
     assert!(told.has_changed().unwrap(), "told at once");
+}
+
+use lan_grants::lan_acquire;
+
+/// The shack's own screen's press, read as `remote_station_action` reads it.
+fn press(value: serde_json::Value) -> Action {
+    serde_json::from_value(value).unwrap()
+}
+/// Approve `device` here as the operator was shown it: a computer, with `key` beside it.
+async fn approve_computer(
+    service: &Service,
+    device: &str,
+    key: &DeviceKey,
+) -> Result<Status, &'static str> {
+    service
+        .action(Action::Device {
+            device_id: device.into(),
+            approve: true,
+            transmit: false,
+            key: Some(hex(&key.pin())),
+            kind: Some(Kind::Computer),
+        })
+        .await
+}
+/// A service with Remote on, through `cloud`.
+async fn on_at(cloud: &FakeCloud, engine: &crate::SharedEngine) -> Service {
+    let service = launch(cloud, &paired_vault(&cloud.origin), engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    service
+}
+fn engine() -> crate::SharedEngine {
+    Arc::new(Mutex::new(Engine::with_settings(Settings::default())))
+}
+
+/// ★ An approval is of the device as the operator was shown it. A computer shown as one (Nexus on
+/// Windows, its key, nothing on the relay's lanes) that the service names a browser once the press
+/// is in is granted nothing on those lanes and pinned for nothing: the press is the shack's own
+/// screen's, as it sent it before it carried the kind it showed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_approved_as_shown_is_never_granted_as_the_browser_the_service_names_after() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    let shown = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        shown.devices[0].kind,
+        Kind::Computer,
+        "premise: shown as one"
+    );
+    // Once the press is in, the service names it a browser.
+    let mut renamed = computer_listed(0, &key);
+    renamed["kind"] = "browser".into();
+    renamed.as_object_mut().unwrap().remove("platform");
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renamed] }).to_string();
+    let status = service
+        .action(press(
+            json!({"type":"device","deviceId":COMPUTER,"approve":true,
+            "transmit":false,"key":hex(&key.pin())}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            status.logging_permissions.clone(),
+            status.station_permissions.clone(),
+            status.transmit_permissions.clone()
+        ),
+        (vec![], vec![], vec![]),
+        "the computer approved was granted as a browser"
+    );
+    assert!(
+        status.pinned_devices.is_empty(),
+        "pinned as something it was not shown as"
+    );
+}
+
+/// ★ The press carries the kind it was shown, and the shack grants and pins only for that kind. A
+/// computer shown as one that the service names a browser after the press: nothing on the relay's
+/// lanes, no pin. CONTROL: a browser shown and listed as one is granted what one approval gives; a
+/// computer shown and listed as one is pinned as a computer, and granted nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_press_carries_the_kind_shown_and_the_shack_acts_on_no_other() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let granted = |status: &Status| {
+        (
+            status.logging_permissions.clone(),
+            status.station_permissions.clone(),
+            status.transmit_permissions.clone(),
+        )
+    };
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let mut renamed = computer_listed(0, &key);
+    renamed["kind"] = "browser".into();
+    renamed.as_object_mut().unwrap().remove("platform");
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renamed] }).to_string();
+    let status = approve_computer(&service, COMPUTER, &key).await.unwrap();
+    assert_eq!(
+        granted(&status),
+        (vec![], vec![], vec![]),
+        "granted as a browser"
+    );
+    assert!(status.pinned_devices.is_empty(), "pinned as a browser");
+    // CONTROL: a browser shown and listed as one.
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    let status = approve_shown(&service, Some(hex(&browser.pin())), true).await;
+    let one = vec![BROWSER.to_string()];
+    assert_eq!(granted(&status), (one.clone(), one.clone(), one));
+    assert_eq!(status.pinned_devices, [BROWSER]);
+    // CONTROL: a computer shown and listed as one.
+    let computer = DeviceKey::new();
+    *cloud.devices.lock().unwrap() =
+        json!({ "devices": [computer_listed(0, &computer)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let status = approve_computer(&service, COMPUTER, &computer)
+        .await
+        .unwrap();
+    assert_eq!(status.pinned_devices, [COMPUTER]);
+    assert!(
+        !status.station_permissions.contains(&COMPUTER.to_string()),
+        "a computer granted on the relay's lanes"
+    );
+}
+
+/// ★ The service's ids never meet the names the shack gives its computers: a browser the service
+/// lists under the name an approved computer is taken as through the room is refused with the list,
+/// so approving it can never hand that computer station control there. CONTROL: before, the
+/// computer through the room holds nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browser_listed_under_a_computers_name_through_the_room_is_refused() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let taken = approved.paired(&key.pin()).expect("premise: taken");
+    assert_eq!(
+        lan_acquire(&service, &engine, &taken),
+        "localPermissionRequired",
+        "control: it holds nothing"
+    );
+    let browser = DeviceKey::new();
+    let mut listed: serde_json::Value =
+        serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
+    let mut twin: serde_json::Value = serde_json::from_str(&device_list(0, APPROVED_UNTIL - 1))
+        .map(|l: serde_json::Value| l["devices"][0].clone())
+        .unwrap();
+    twin["id"] = taken.clone().into();
+    twin["publicKey"] = browser.public_key.clone().into();
+    listed["devices"].as_array_mut().unwrap().push(twin);
+    *cloud.devices.lock().unwrap() = listed.to_string();
+    let refreshed = service.action(Action::Refresh {}).await;
+    let _ = service
+        .action(Action::Device {
+            device_id: taken.clone(),
+            approve: true,
+            transmit: true,
+            key: Some(hex(&browser.pin())),
+            kind: Some(Kind::Browser),
+        })
+        .await;
+    assert_eq!(
+        lan_acquire(&service, &engine, &taken),
+        "localPermissionRequired",
+        "the computer through the room took the control granted the browser named after it"
+    );
+    assert!(
+        matches!(refreshed, Err("invalidResponse")),
+        "a browser named as the shack names a computer was listed"
+    );
+}
+
+/// ★ One id names one device. A list naming two devices under one id is refused whole, as a
+/// malformed id is, so a press meant for one never reaches the other: here a computer listed under
+/// the id of a browser approved with its key pinned, whose approval would have unpinned the browser.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_naming_two_devices_under_one_id_is_refused_whole() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&browser.pin())), false).await;
+    assert_eq!(pinned(&service), Some(browser.pin()), "premise: pinned");
+    let computer = DeviceKey::new();
+    let mut twin = computer_listed(0, &computer);
+    twin["id"] = BROWSER.into();
+    let mut listed: serde_json::Value =
+        serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
+    listed["devices"].as_array_mut().unwrap().push(twin);
+    *cloud.devices.lock().unwrap() = listed.to_string();
+    let refreshed = service.action(Action::Refresh {}).await;
+    let _ = service
+        .action(press(
+            json!({"type":"device","deviceId":BROWSER,"approve":true,
+            "transmit":false,"key":hex(&computer.pin())}),
+        ))
+        .await;
+    assert_eq!(
+        pinned(&service),
+        Some(browser.pin()),
+        "a press under a shared id reached the browser"
+    );
+    let approved = service.control.lock().unwrap().approved.clone();
+    assert_eq!(approved.paired(&computer.pin()), None);
+    assert!(
+        matches!(refreshed, Err("invalidResponse")),
+        "two devices under one id were listed"
+    );
+}
+
+/// ★ Through the room a computer holds nothing granted to another device under the service's id
+/// for it. Approved here, shown as a computer, under the id of a browser approved with station
+/// control and transmit, the device the tunnel takes it as cannot take the lease.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_through_the_room_never_holds_a_browsers_grants_under_its_id() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    let granted = approve_shown(&service, Some(hex(&browser.pin())), true).await;
+    assert!(
+        granted.transmit_permissions.contains(&BROWSER.to_string()),
+        "premise: the browser's grants"
+    );
+    let computer = DeviceKey::new();
+    let mut listed = computer_listed(0, &computer);
+    listed["id"] = BROWSER.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [listed] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, BROWSER, &computer)
+        .await
+        .unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let taken = approved
+        .paired(&computer.pin())
+        .expect("premise: the tunnel takes the computer approved here");
+    assert_eq!(
+        lan_acquire(&service, &engine, &taken),
+        "localPermissionRequired",
+        "the computer through the room took the browser's control"
+    );
+    assert_ne!(taken, BROWSER, "named by the service's id");
+}
+
+/// ★ A browser's approval admits nothing through the room: a browser approved here with its key
+/// pinned, which the service then names an approved computer under the same id and key, is not
+/// taken by the tunnel. CONTROL: approved here as a computer, the same key is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browsers_pin_never_admits_a_computer_through_the_room() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&browser.pin())), false).await;
+    assert_eq!(pinned(&service), Some(browser.pin()), "premise: pinned");
+    let approved = service.control.lock().unwrap().approved.clone();
+    let mut renamed = computer_listed(1, &browser);
+    renamed["id"] = BROWSER.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renamed] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&browser.pin()),
+        None,
+        "a browser's pin admitted a computer"
+    );
+    approve_computer(&service, BROWSER, &browser).await.unwrap();
+    assert!(
+        approved.paired(&browser.pin()).is_some(),
+        "control: approved as a computer"
+    );
+}
+
+/// ★ A computer's pin is its approval's. One the service lists as approved again under an approval
+/// the shack never gave (another generation) is not taken on the pin made for the one before.
+/// CONTROL: renewed on use (the same approval, a later end), it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approval_the_shack_never_gave_is_not_taken_on_an_older_pin() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    assert!(approved.paired(&key.pin()).is_some(), "premise: taken");
+    let mut renewed = computer_listed(1, &key);
+    renewed["expiresAt"] = (APPROVED_UNTIL + DAY_MS).into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renewed] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        approved.paired(&key.pin()).is_some(),
+        "control: renewed on use"
+    );
+    let mut again = computer_listed(1, &key);
+    again["generation"] = 4.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [again] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&key.pin()),
+        None,
+        "an approval the shack never gave was taken"
+    );
+}
+
+/// ★ An approval ends where the service last said it ends, at the shack as at the room: a computer
+/// whose approval has run out is not taken by the tunnel, before the service is asked again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_whose_approval_ran_out_is_not_taken() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let mut ending = computer_listed(1, &key);
+    ending["expiresAt"] = (now_ms() + 1500).into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [ending] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        approved.paired(&key.pin()).is_some(),
+        "premise: taken before its end"
+    );
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    assert_eq!(
+        approved.paired(&key.pin()),
+        None,
+        "taken after its approval ran out"
+    );
+}
+
+/// A lookup that fails is never read as approved: an approval whose list will not come pins
+/// nothing, and the tunnel takes nobody. An empty list takes nobody either. CONTROL: the list back,
+/// the same approval pins and is taken.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_that_fails_or_is_empty_admits_nobody() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    cloud.refusing.store(true, Ordering::SeqCst);
+    assert!(approve_computer(&service, COMPUTER, &key).await.is_err());
+    assert_eq!(pinned_device(&service, COMPUTER), None, "pinned on no list");
+    assert_eq!(approved.paired(&key.pin()), None, "taken on no list");
+    cloud.refusing.store(false, Ordering::SeqCst);
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    assert!(approved.paired(&key.pin()).is_some(), "control: taken");
+    *cloud.devices.lock().unwrap() = json!({ "devices": [] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(approved.paired(&key.pin()), None, "taken on an empty list");
 }
 
 /// ★ Operator ruling D6 (2026-09-28): the operator moves between the stream test build and normal

@@ -44,7 +44,7 @@ it('renders local pairing and device approval through only the isolated Remote c
   fireEvent.click(screen.getByRole('button', { name: 'Turn off Remote' }))
   await screen.findByRole('button', { name: 'Turn on Remote' })
   expect(actions).toContainEqual({ type: 'approve', accountId, enrollmentId: pairingId, transmit: false })
-  expect(actions).toContainEqual({ type: 'device', deviceId, approve: true, transmit: false })
+  expect(actions).toContainEqual({ type: 'device', deviceId, approve: true, transmit: false, kind: 'browser' })
   expect(actions).toContainEqual({ type: 'disable' })
   expect([...document.querySelectorAll('button')].every(button => button.type === 'button')).toBe(true)
 })
@@ -151,8 +151,8 @@ it('approves the pairing and each browser in one step, with the transmit tick on
   fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve browser' })).toBeNull())
   expect(actions.slice(1)).toEqual([
-    { type: 'device', deviceId: second, approve: true, transmit: true },
-    { type: 'device', deviceId: first, approve: true, transmit: false },
+    { type: 'device', deviceId: second, approve: true, transmit: true, kind: 'browser' },
+    { type: 'device', deviceId: first, approve: true, transmit: false, kind: 'browser' },
   ])
   expect(screen.getAllByRole('button', { name: 'Revoke browser approval' })).toHaveLength(2)
 })
@@ -275,7 +275,7 @@ it('shows each browser approval expiry, and warns and offers approval again in i
   const phone = await card(capped)
   fireEvent.click(within(phone).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
   fireEvent.click(within(phone).getByRole('button', { name: 'Approve again' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, transmit: true }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, transmit: true, kind: 'browser' }))
   // Ending it is still one click away, beside the warning.
   expect(within(phone).getByRole('button', { name: 'Revoke browser approval' })).toBeTruthy()
 })
@@ -318,9 +318,9 @@ it('shows each browser key beside its name, approves with the key shown, and ask
     expect(within(await card(id)).queryByRole('button', { name: 'Approve again' })).toBeNull()
   }
   fireEvent.click(within(await card(waiting)).getByRole('button', { name: 'Approve browser' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: keys[waiting] }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: keys[waiting], kind: 'browser' }))
   fireEvent.click(within(await card(unpinned)).getByRole('button', { name: 'Approve again' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: unpinned, approve: true, transmit: false, key: keys[unpinned] }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: unpinned, approve: true, transmit: false, key: keys[unpinned], kind: 'browser' }))
 })
 
 function offerHarness(options: { failLaunchAtLogin?: boolean } = {}) {
@@ -463,6 +463,6 @@ it('a computer running Nexus is listed apart from the browsers, by its name, its
   screen.getByText(browserId.slice(-6))
   fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
   await within(row).findByText('Approved until 2026-11-09 UTC.')
-  expect(actions.filter(a => a.type === 'device')).toEqual([{ type: 'device', deviceId: computerId, approve: true, transmit: false, key }])
+  expect(actions.filter(a => a.type === 'device')).toEqual([{ type: 'device', deviceId: computerId, approve: true, transmit: false, key, kind: 'computer' }])
   within(row).getByRole('button', { name: 'Remove' })
 })

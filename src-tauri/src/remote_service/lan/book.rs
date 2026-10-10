@@ -62,6 +62,8 @@ pub const WRONG_PROOFS: u8 = 3;
 const CREDENTIAL_BYTES: usize = 2560;
 /// What a device id's hash begins with.
 const DEVICE_LABEL: &[u8] = b"nexus-lan-device/1";
+/// What the hash of a computer's name through the room's tunnel begins with.
+const TUNNEL_DEVICE_LABEL: &[u8] = b"nexus-tunnel-device/1";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -69,10 +71,22 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The device id a computer's key gives: SHA-256 over [`DEVICE_LABEL`] and its pin, the first
 /// sixteen bytes, shaped as every id the authority takes is. Its version digit is 8 (RFC 9562's
-/// own-use form), so it is never a hosted browser's id, which the service makes as version 4.
+/// own-use form), so it is never a hosted browser's id, which the service makes as version 4 (and
+/// the shack takes no other: `remote_service::hosted`).
 pub fn device_id(pin: &[u8; 32]) -> String {
+    named(DEVICE_LABEL, pin)
+}
+
+/// The name a computer approved at the shack for the room's tunnel is taken as, from the key pinned
+/// when it was approved: [`device_id`]'s form under a label of the tunnel's own, so it is never a
+/// LAN computer's id, nor a hosted device's.
+pub fn tunnel_device_id(pin: &[u8; 32]) -> String {
+    named(TUNNEL_DEVICE_LABEL, pin)
+}
+
+fn named(label: &[u8], pin: &[u8; 32]) -> String {
     let mut hash = Context::new(&SHA256);
-    hash.update(DEVICE_LABEL);
+    hash.update(label);
     hash.update(pin);
     let mut bytes = [0; 16];
     bytes.copy_from_slice(&hash.finish().as_ref()[..16]);

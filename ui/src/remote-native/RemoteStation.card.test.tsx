@@ -60,7 +60,7 @@ it('one card: the sign-in status, then each browser with its key and the one thi
   expect(within(rows[1]).getByRole('button', { name: 'Approve' })).toBeTruthy()
   expect(rows[2].textContent).toContain('Asks to stream this station.')
   fireEvent.click(within(rows[2]).getByRole('button', { name: 'Approve' }))
-  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: fingerprint('c') }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, transmit: false, key: fingerprint('c'), kind: 'browser' }))
   fireEvent.click(within(rows[0]).getByRole('button', { name: 'Remove' }))
   await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: pinned, approve: false }))
   // The permission and housekeeping controls are all under Advanced, which starts folded.
@@ -84,7 +84,7 @@ it('the approve in the card honours the transmit tick under Advanced, exactly as
   const row = (await screen.findAllByRole('listitem'))[0]
   fireEvent.click(within(document.querySelector('.remote-native-advanced') as HTMLElement).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit from the Remote page' }))
   fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
-  await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: waiting, approve: true, transmit: true, key: fingerprint('d') }]))
+  await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: waiting, approve: true, transmit: true, key: fingerprint('d'), kind: 'browser' }]))
 })
 
 it('not linked yet, the card says so and holds the pairing steps; Remote off, the card says so with Turn on Remote beside it', async () => {

@@ -49,7 +49,8 @@ pipe (`remote/src/pipe.ts`): a second station socket it passes binary on unread,
 station that advertised it, so the station's main socket keeps its message shapes. At the station
 (`src-tauri/src/remote_service/tunnel.rs`) the LAN road's own channel runs inside it from its TLS
 on, the station proving its hosted key and taking only a computer approved at the shack by the key
-pinned then, with internet roads in place of the LAN's and nothing that pairs or streams. Receiver
+pinned then (as a computer, under that same approval, until it ends), named from that key and never
+by the service's id, with internet roads in place of the LAN's and nothing that pairs or streams. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh
