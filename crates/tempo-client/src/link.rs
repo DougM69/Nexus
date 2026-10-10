@@ -644,6 +644,103 @@ fn outcome_of(message: &Value) -> Option<Outcome> {
 mod tests {
     use super::*;
     use crate::wire::Deflate;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    use tokio_tungstenite::WebSocketStream;
+
+    /// A link whose writer writes into an in-memory pipe that holds `room` bytes, and the station's
+    /// end of the pipe: nothing more is written until the station reads.
+    async fn piped(room: usize) -> (Arc<Link>, WebSocketStream<tokio::io::DuplexStream>) {
+        let (ours, theirs) = tokio::io::duplex(room);
+        let ours = WebSocketStream::from_raw_socket(ours, Role::Client, None).await;
+        let theirs = WebSocketStream::from_raw_socket(theirs, Role::Server, None).await;
+        let (sink, _stream) = ours.split();
+        let (outbox, writer) = Outbox::spawn(sink);
+        let link = Link {
+            outbox,
+            shared: Arc::new(Shared::new(None, None, Arc::default())),
+            tasks: vec![writer.abort_handle()],
+            ids: Ids {
+                station: String::new(),
+                device: String::new(),
+                session: String::new(),
+            },
+        };
+        (Arc::new(link), theirs)
+    }
+
+    /// Lets every task handed something run as far as it can, and the writer stall on the full
+    /// pipe.
+    async fn stalled() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    /// ★ Stop first, at this end: a Stop, the off half of a transmit switch and a `stopTransmit`,
+    /// each asked for while calls are already waiting to be written, all go out ahead of every one
+    /// of them, behind only the frame already being written; among themselves in any order, as
+    /// each stops. CONTROL: the calls that waited go out after them, in the order they were made,
+    /// the on half of the same switch among them in its turn.
+    #[tokio::test]
+    async fn a_stop_goes_out_ahead_of_the_calls_already_waiting() {
+        let (link, mut station) = piped(64).await;
+        let ask = |cmd: &'static str, args: Value| {
+            let link = link.clone();
+            tokio::spawn(async move { link.call(cmd, args, None, 0).await })
+        };
+        let _writing = ask("add_radio", json!({"name": "x".repeat(1000)}));
+        stalled().await;
+        let mut waiting: Vec<_> = (0..4).map(|n| ask("ask_log", json!({"n": n}))).collect();
+        waiting.push(ask("set_beacon", json!({"on": true})));
+        stalled().await;
+        let _halt = ask("halt_tx", json!({}));
+        let _off = ask("set_beacon", json!({"on": false}));
+        let _stop = {
+            let link = link.clone();
+            let request =
+                json!({"type":"stopTransmit","requestId":"10000000-0000-4000-8000-00000000000a"});
+            tokio::spawn(async move { link.operation(request).await })
+        };
+        stalled().await;
+        let mut heard = Vec::new();
+        while heard.len() < 9 {
+            let next = tokio::time::timeout(Duration::from_secs(5), station.next()).await;
+            let Ok(Some(Ok(Message::Text(text)))) = next else {
+                panic!("the station heard no more messages after {heard:?}")
+            };
+            let message: Value = serde_json::from_str(&text).unwrap();
+            heard.push(match (message["type"].as_str(), message["cmd"].as_str()) {
+                (Some("call"), Some("add_radio")) => format!(
+                    "add_radio of {}",
+                    message["args"]["name"].as_str().unwrap_or_default().len()
+                ),
+                (Some("call"), Some(cmd)) => format!("{cmd} {}", message["args"]),
+                (Some("operationRequest"), _) => format!("{}", message["request"]["type"]),
+                _ => panic!("{message}"),
+            });
+        }
+        assert_eq!(heard[0], "add_radio of 1000", "{heard:?}");
+        let mut stops = heard[1..4].to_vec();
+        stops.sort();
+        assert_eq!(
+            stops,
+            [
+                "\"stopTransmit\"",
+                "halt_tx {}",
+                "set_beacon {\"on\":false}",
+            ],
+            "{heard:?}"
+        );
+        assert_eq!(
+            heard[4..],
+            [
+                "ask_log {\"n\":0}",
+                "ask_log {\"n\":1}",
+                "ask_log {\"n\":2}",
+                "ask_log {\"n\":3}",
+                "set_beacon {\"on\":true}",
+            ],
+            "{heard:?}"
+        );
+    }
 
     /// The station's frames for values of `feed` numbered as given, from one deflate stream.
     fn frames(feed: &str, numbers: &[u64]) -> Vec<Vec<u8>> {
