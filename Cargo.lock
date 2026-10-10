@@ -2865,8 +2865,11 @@ version = "0.1.0"
 name = "tempo-client"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "flate2",
  "futures-util",
+ "is",
+ "md-5",
  "ring",
  "rustls",
  "serde",

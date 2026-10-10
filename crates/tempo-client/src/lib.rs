@@ -13,6 +13,9 @@
 //!   and a thread of its own, keyed from the link's TLS session. Their datagrams ([`datagram`]) and
 //!   what each road carries ([`stop_road::wire`], [`audio_road::wire`]) are read and written the same
 //!   way at both ends.
+//! - **The internet roads' way across** ([`ice`]): each road's own socket, ICE to find a pair of
+//!   addresses that reach the other end, and at this computer a relayed address on a TURN server
+//!   ([`turn`]) for when none does.
 //! - **The tables both ends route and admit by**: every command's class ([`classes`]); the refusals,
 //!   the outcomes, the starts wired from afar and Stop's rules ([`dispatch`]); the alert's event
 //!   ([`alert`]).
@@ -62,6 +65,8 @@ pub mod classes;
 pub mod datagram;
 /// What both ends route and admit a call by.
 pub mod dispatch;
+/// An internet road's way across: its socket, ICE, and the relay.
+pub mod ice;
 /// The command link, protocol 2, which client mode drives.
 pub mod link;
 /// One connection's writer, at either end of the command link.
@@ -72,6 +77,8 @@ pub mod road;
 pub mod stop_road;
 /// The LAN road's TLS, this computer's half.
 pub mod tls;
+/// The TURN client the internet roads' relayed addresses come from.
+pub mod turn;
 /// The command link's wire, as both ends read and write it.
 pub mod wire;
 
