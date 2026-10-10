@@ -3,9 +3,9 @@
 //! actually chose, read off the packets rather than off our own settings.
 //!
 //! ```text
-//! cargo run -p tempo-audio --example remote_audio_frames
-//! cargo run -p tempo-audio --example remote_audio_frames -- offair.wav
-//! cargo run -p tempo-audio --example remote_audio_frames -- offair.wav --out coded.wav
+//! cargo run -p tempo-codec --example remote_audio_frames
+//! cargo run -p tempo-codec --example remote_audio_frames -- offair.wav
+//! cargo run -p tempo-codec --example remote_audio_frames -- offair.wav --out coded.wav
 //! ```
 //!
 //! **Why it exists.** The CELT-vs-SILK choice this encoder rests on was measured on
@@ -25,7 +25,7 @@
 
 use std::f32::consts::PI;
 
-use tempo_audio::receive_encode::{encode_offline, EncodedFrame, ENCODE_RATE_HZ, FRAME_MS};
+use tempo_codec::receive_encode::{encode_offline, EncodedFrame, ENCODE_RATE_HZ, FRAME_MS};
 
 const DEFAULT_RATE: u32 = 48_000;
 const DEFAULT_SECONDS: usize = 10;

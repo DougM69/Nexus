@@ -165,11 +165,11 @@ impl ReceiveAudioFeed {
     }
 
     /// Called with the capture-source publication, never from an audio callback.
-    pub(crate) fn replace_source(&self, source: Option<ReceiveSource>) {
+    pub fn replace_source(&self, source: Option<ReceiveSource>) {
         self.replace_source_with_origin(source, None);
     }
 
-    pub(crate) fn replace_source_with_origin(
+    pub fn replace_source_with_origin(
         &self,
         source: Option<ReceiveSource>,
         origin: Option<ReceiveOrigin>,
@@ -186,7 +186,7 @@ impl ReceiveAudioFeed {
 
     /// RX DSP producer only. No network/consumer can make this call wait. The
     /// largest copied block and the total retained samples are both bounded.
-    pub(crate) fn publish(&self, source: ReceiveSource, at: Instant, samples: &[f32]) {
+    pub fn publish(&self, source: ReceiveSource, at: Instant, samples: &[f32]) {
         if !self.active.load(Ordering::Acquire) || samples.is_empty() {
             return;
         }

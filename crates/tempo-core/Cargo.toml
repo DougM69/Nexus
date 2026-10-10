@@ -11,6 +11,9 @@ description = "Nexus transceiver core — slot timing, virtual-air channel, TX/R
 workspace = true
 
 [dependencies]
+# The app's log and its UTC calendar (`applog`, `logbook::datetime_utc`): below the engine, so
+# that a build without it has them.
+tempo-base = { path = "../tempo-base" }
 tempo-fast = { path = "../tempo-fast" }
 modes = { path = "../modes" }
 wspr = { path = "../wspr" }

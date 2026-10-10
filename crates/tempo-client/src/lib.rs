@@ -27,8 +27,10 @@
 //! ceremony, the OS credential store, the window's loopback origin and client mode itself stay in
 //! src-tauri. Nothing here needs Windows: the crate builds on its own wherever the workspace builds,
 //! and its manifest names no Tauri, webview or Windows-only dependency, nor do its path dependencies
-//! name a Tauri or webview one (the test below holds both). This computer's own sound devices (cpal)
-//! are behind the `device` feature.
+//! name a Tauri or webview one (the first test below holds both). This computer's own sound devices
+//! (cpal, through tempo-audio) are behind the `device` feature; without it nothing the crate builds
+//! on is a crate of the engine or builds the decoders' Fortran or SQLite, so a phone can build it
+//! (the second test below holds that).
 // A write to the link, and a piece read off it, fail only once the connection is over, which is
 // all their `Err(())` says and all a caller acts on: the app's own contract since protocol 2,
 // public now only so that the shack's side in src-tauri reads the same wire.
@@ -316,6 +318,8 @@ mod tests {
             "tempo-audio",
             "tempo-core",
             "tempo-stream",
+            "tempo-base",
+            "tempo-codec",
         ] {
             assert!(
                 read.iter().any(|dir| dir == crate_dir),
@@ -379,6 +383,190 @@ mod tests {
             };
             let found = refusals(&manifest(), &read, &mut BTreeSet::new());
             assert_eq!(found.len(), 1, "planted {to:?}: {found:?}");
+        }
+    }
+
+    /// Whether `name` is a crate of the engine, or one that builds the decoders' Fortran or SQLite:
+    /// what a build of the client core alone, a phone's, has no use for.
+    fn engine(name: &str) -> bool {
+        [
+            "tempo-app",
+            "tempo-core",
+            "tempo-audio",
+            "tempo-fast-sys",
+            "rusqlite",
+            "libsqlite3-sys",
+        ]
+        .contains(&name)
+    }
+
+    /// What the manifest at `path`, read through `read`, builds on of the engine with no feature
+    /// asked for, each with its manifest and line; then the same of each path dependency it builds
+    /// on that way, in turn. An optional dependency is left out unless its manifest turns a feature
+    /// on by default; a table of one dependency (`[dependencies.name]`) is judged by its name; a
+    /// crate of the engine is named and not read further. Each manifest is read once, and `seen`
+    /// keeps which.
+    fn engine_reached(
+        path: &Path,
+        read: &dyn Fn(&Path) -> Option<String>,
+        seen: &mut BTreeSet<PathBuf>,
+    ) -> Vec<String> {
+        if !seen.insert(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())) {
+            return Vec::new();
+        }
+        let Some(text) = read(path) else {
+            return vec![format!("{}: not there", path.display())];
+        };
+        let by_default = text.lines().any(|line| {
+            let code: String = line
+                .split('#')
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect();
+            code.starts_with("default=[") && code != "default=[]"
+        });
+        let mut found = Vec::new();
+        let mut built = false;
+        let mut paths = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let at = format!("{}:{}", path.display(), n + 1);
+            let code = line.split('#').next().unwrap_or_default().trim_end();
+            if code.starts_with('[') {
+                built = dependency_table(code).is_some() && !code.contains("dev-dependencies");
+                if let Some((_, name)) = code
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .rsplit_once("dependencies.")
+                {
+                    if built && engine(name) {
+                        found.push(format!("{at}: builds on {name}"));
+                    }
+                }
+                continue;
+            }
+            if !built
+                || code.starts_with(|c: char| c.is_whitespace() || c == '"' || c == ']' || c == '}')
+            {
+                continue;
+            }
+            let Some((name, value)) = code.split_once('=') else {
+                continue;
+            };
+            let name = name.trim().split('.').next().unwrap_or_default();
+            if value.contains("optional = true") && !by_default {
+                continue;
+            }
+            if engine(name) {
+                found.push(format!("{at}: builds on {name}"));
+            } else if let Some(dependency) = value
+                .split("path = \"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+            {
+                paths.push(
+                    path.parent()
+                        .unwrap_or(Path::new(""))
+                        .join(dependency)
+                        .join("Cargo.toml"),
+                );
+            }
+        }
+        for dependency in paths {
+            found.extend(engine_reached(&dependency, read, seen));
+        }
+        found
+    }
+
+    /// ★ The client core builds without the engine: with no feature asked for, nothing it builds on
+    /// is a crate of the engine (tempo-app, tempo-core, tempo-audio) or one that builds the decoders'
+    /// Fortran or SQLite, so a phone can build it. The guard read exactly what such a build reads:
+    /// the core, tempo-base, tempo-codec and tempo-stream, and not tempo-audio, whose sound devices
+    /// are the `device` feature's. CONTROL: one planted line of each kind is named, alone: the
+    /// engine in the core's manifest, the sound devices built always or turned on by default, SQLite
+    /// in tempo-codec's, the decoders' Fortran in tempo-base's, and a decoder that brings it in
+    /// from further down.
+    #[test]
+    fn the_client_core_builds_without_the_engine() {
+        let from_disk = |path: &Path| std::fs::read_to_string(path).ok();
+        let mut seen = BTreeSet::new();
+        assert_eq!(
+            engine_reached(&manifest(), &from_disk, &mut seen),
+            Vec::<String>::new()
+        );
+        let read: BTreeSet<String> = seen
+            .iter()
+            .filter_map(|path| path.parent()?.file_name()?.to_str().map(str::to_string))
+            .collect();
+        assert_eq!(
+            read,
+            BTreeSet::from(
+                ["tempo-base", "tempo-client", "tempo-codec", "tempo-stream"].map(String::from)
+            )
+        );
+
+        let core = manifest();
+        let crates = core.parent().unwrap().parent().unwrap();
+        let base = crates.join("tempo-base/Cargo.toml");
+        let codec = crates.join("tempo-codec/Cargo.toml");
+        let planted: [(&Path, &str, &str, &str); 6] = [
+            (
+                &core,
+                "[dependencies]\n",
+                "[dependencies]\ntempo-core = { path = \"../tempo-core\" }\n",
+                "tempo-core",
+            ),
+            (
+                &core,
+                "tempo-audio = { path = \"../tempo-audio\", optional = true }",
+                "tempo-audio = { path = \"../tempo-audio\" }",
+                "tempo-audio",
+            ),
+            (
+                &core,
+                "[features]\n",
+                "[features]\ndefault = [\"device\"]\n",
+                "tempo-audio",
+            ),
+            (
+                &codec,
+                "[dependencies]\n",
+                "[dependencies]\nrusqlite = { version = \"0.37.0\", features = [\"bundled\"] }\n",
+                "rusqlite",
+            ),
+            (
+                &base,
+                "[lints]\n",
+                "[dependencies]\ntempo-fast-sys = { path = \"../tempo-fast-sys\" }\n\n[lints]\n",
+                "tempo-fast-sys",
+            ),
+            (
+                &core,
+                "[dependencies]\n",
+                "[dependencies]\nft8 = { path = \"../ft8\" }\n",
+                "tempo-fast-sys",
+            ),
+        ];
+        for (file, from, to, named) in planted {
+            let text = std::fs::read_to_string(file).unwrap();
+            assert!(
+                text.contains(from),
+                "{} has no {from:?} to plant in",
+                file.display()
+            );
+            let changed = text.replacen(from, to, 1);
+            let read = |path: &Path| {
+                if std::fs::canonicalize(path).ok() == std::fs::canonicalize(file).ok() {
+                    Some(changed.clone())
+                } else {
+                    std::fs::read_to_string(path).ok()
+                }
+            };
+            let found = engine_reached(&manifest(), &read, &mut BTreeSet::new());
+            assert_eq!(found.len(), 1, "planted {to:?}: {found:?}");
+            assert!(
+                found[0].ends_with(&format!(": builds on {named}")),
+                "planted {to:?}: {found:?}"
+            );
         }
     }
 }

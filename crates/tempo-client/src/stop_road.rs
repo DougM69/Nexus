@@ -46,8 +46,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tempo_app::mic::{MicEnded, MicStatus};
-use tempo_app::remote_control::ptt_hold::HoldEnd;
+use tempo_base::mic::{MicEnded, MicStatus};
+use tempo_base::ptt_hold::HoldEnd;
 
 use self::wire::{Down, Up, AFTERLIFE};
 use crate::datagram::{End, Keys, Opener, Sealer, Tag, EXPORTED};
@@ -523,7 +523,7 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
             stops.retain(|pending| {
                 let keep = now.saturating_duration_since(pending.first) < GIVE_UP;
                 if !keep {
-                    tempo_core::applog::warn(
+                    tempo_base::applog::warn(
                         "client",
                         "a Stop on the second road was not acknowledged within five seconds",
                     );

@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tempo_app::mic::{MicEnded, MicStatus};
-use tempo_app::remote_control::ptt_hold::HoldEnd;
+use tempo_base::mic::{MicEnded, MicStatus};
+use tempo_base::ptt_hold::HoldEnd;
 
 use crate::datagram;
 

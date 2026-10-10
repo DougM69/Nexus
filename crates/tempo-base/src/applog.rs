@@ -343,7 +343,7 @@ impl Sink {
 
     /// Write one line. Timestamped, redacted, and rotated if it took the file over the cap.
     fn write(&mut self, level: Level, text: &str) {
-        let (y, mo, d, h, mi, s) = crate::logbook::datetime_utc(now_unix());
+        let (y, mo, d, h, mi, s) = crate::datetime_utc(now_unix());
         let line = format!(
             "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}Z  {}  {}\n",
             level.tag(),

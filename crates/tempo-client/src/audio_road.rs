@@ -1,7 +1,7 @@
 //! The audio road, this computer's end: a UDP socket of its own to the road the station named in
 //! its welcome (`remote_service::lan::audio_road`), keyed from the command link's TLS session under
 //! the audio road's own label, and one thread that carries this computer's headset
-//! (`tempo_audio::headset`) both ways. It shares nothing with Stop's road: its own socket, thread
+//! (`tempo_codec::headset`) both ways. It shares nothing with Stop's road: its own socket, thread
 //! and keys, and no lock a Stop takes.
 //!
 //! - **The station's audio.** While the link is open and this computer holds the lease, the thread
@@ -41,16 +41,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use tempo_audio::capture_resample::CaptureResampler;
-use tempo_audio::headset::BED_LEVEL;
-use tempo_audio::mic_encode::{MicEncoder, MIC_ENCODE_RATE_HZ, MIC_FRAME_MS, MIC_FRAME_SAMPLES};
-use tempo_audio::receive_decode::{ReceiveDecoder, PLAY_FRAME_SAMPLES, PLAY_RATE_HZ};
+use tempo_codec::capture_resample::CaptureResampler;
+use tempo_codec::headset::BED_LEVEL;
+use tempo_codec::mic_encode::{MicEncoder, MIC_ENCODE_RATE_HZ, MIC_FRAME_MS, MIC_FRAME_SAMPLES};
+use tempo_codec::receive_decode::{ReceiveDecoder, PLAY_FRAME_SAMPLES, PLAY_RATE_HZ};
 
 use self::wire::{Down, Up};
 use super::stop_road::OnAir;
 use crate::datagram::{End, Keys, Opener, Sealer, Tag, AUDIO_MAX, EXPORTED};
 
-pub use tempo_audio::headset::{
+pub use tempo_codec::headset::{
     sound, Rings, Sound, GAIN_DB as VOLUME_DB, VOLUME_DB_MAX, VOLUME_DB_MIN,
 };
 /// This computer's headset for client mode (`tempo_audio::headset::Headset`).
@@ -116,14 +116,14 @@ impl Drop for Recording {
 
 /// A recorded message as the shack's voice keyer imports one: a 12 kHz mono WAV, whole.
 pub fn voice_message(voice: &[f32]) -> std::io::Result<Vec<u8>> {
-    tempo_audio::voice::wav_12k(voice)
+    tempo_codec::voice::wav_12k(voice)
 }
 
 /// The recording's thread: what the microphone captured from its start, at the keyer's rate,
 /// until it is stopped or reaches [`RECORD_MAX`].
 fn record(headset: &dyn Headset, stop: &AtomicBool) -> Vec<f32> {
     let rings = headset.rings();
-    let most = tempo_audio::voice::VOICE_RATE as usize * RECORD_MAX.as_secs() as usize;
+    let most = tempo_codec::voice::VOICE_RATE as usize * RECORD_MAX.as_secs() as usize;
     // Nothing from before Record was pressed.
     let _ = rings.take_mic();
     let mut voice = Vec::new();
@@ -141,7 +141,7 @@ fn record(headset: &dyn Headset, stop: &AtomicBool) -> Vec<f32> {
             from = Some((
                 opened,
                 rate,
-                CaptureResampler::new(rate, tempo_audio::voice::VOICE_RATE),
+                CaptureResampler::new(rate, tempo_codec::voice::VOICE_RATE),
             ));
         }
         if let Some((_, _, resampler)) = from.as_mut() {
@@ -556,10 +556,10 @@ mod tests {
     use super::*;
     use crate::stop_road::wire as shack_stop;
     use crate::stop_road::{Over, StopRoad};
-    use tempo_app::mic::{MicEnded, MicStatus};
-    use tempo_audio::headset::{gain, Cushion};
-    use tempo_audio::mic_decode::{MicDecoder, FRAME_SAMPLES};
-    use tempo_audio::receive_encode::encode_offline;
+    use tempo_base::mic::{MicEnded, MicStatus};
+    use tempo_codec::headset::{gain, Cushion};
+    use tempo_codec::mic_decode::{MicDecoder, FRAME_SAMPLES};
+    use tempo_codec::receive_encode::encode_offline;
 
     const TAG: Tag = [4; 8];
     const LEASE: &str = "30000000-0000-4000-8000-000000000002";
@@ -821,7 +821,7 @@ mod tests {
         assert!(numbers.windows(2).all(|w| w[1] == w[0] + 1), "{numbers:?}");
         let mut decoder = MicDecoder::new().unwrap();
         for (_, _, packet, _) in &sent {
-            assert_eq!(packet.len(), tempo_audio::mic_encode::MIC_PACKET_BYTES);
+            assert_eq!(packet.len(), tempo_codec::mic_encode::MIC_PACKET_BYTES);
             assert_eq!(decoder.decode(packet).map(|s| s.len()), Some(FRAME_SAMPLES));
         }
         assert!(after.is_empty(), "the microphone went on after the press");

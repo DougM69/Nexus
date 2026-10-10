@@ -40,10 +40,12 @@ pub mod backend;
 /// the exact "fix the app / fix the rig menu" verdict. Pure logic unit-tested; the real
 /// probe rides the `serial` feature and runs only in the `test_cat` command context.
 pub mod baud_ladder;
-/// Stateful, anti-aliased capture-path resampler (device rate → 12 kHz). Pure
-/// DSP — no audio device — so it builds and unit-tests without the `device`
-/// feature; `device::CpalBackend` owns one per capture stream.
-pub mod capture_resample;
+// The audio a remote over carries each way and what feeds and plays it: tempo-codec's, below the
+// engine, so that the client core builds without this crate; named here as they always were.
+pub use tempo_codec::{
+    capture_resample, mic_decode, mic_encode, receive_audio, receive_decode, receive_encode,
+    resample, voice,
+};
 pub mod civ;
 /// Who owns this machine's clock, whether it is working, and whether anything
 /// Nexus can do would help. Unprivileged, read-only detection through the OS's
@@ -79,10 +81,6 @@ pub mod headset;
 /// rides the `device` feature like the Flex client.
 #[cfg(feature = "device")]
 pub mod icomlan;
-pub mod mic_decode;
-/// The microphone of a computer driving a shack, encoded for the audio road: Opus voice, 20 ms,
-/// 32 kbit/s constant, no DTX, no FEC. Pure; tested.
-pub mod mic_encode;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
 /// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.
@@ -94,12 +92,6 @@ pub mod proc_util;
 /// RX side of PSK31 (TX runs in the radio loop — `service.rs`).
 #[cfg(feature = "device")]
 pub mod pskrx;
-pub mod receive_audio;
-/// The shack's receive audio, decoded on a computer driving it: one road packet in, 20 ms at
-/// 48 kHz out. Pure; tested.
-pub mod receive_decode;
-pub mod receive_encode;
-pub mod resample;
 pub mod rig;
 pub mod rigctld_proc;
 pub mod rigctld_server;
@@ -126,7 +118,6 @@ pub mod sstvrx;
 pub mod usbrig;
 /// Which rig a sound card or serial port belongs to, from USB topology (macOS).
 pub mod usbtopo;
-pub mod voice;
 pub mod winkeyer;
 /// FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge.
 pub mod yaesu_wf;

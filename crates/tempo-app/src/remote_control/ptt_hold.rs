@@ -40,18 +40,9 @@ pub const GAP: Duration = Duration::from_millis(200);
 /// How many ended press ids are remembered, so a late hold for one is ignored.
 pub const ENDED_KEPT: usize = 64;
 
-/// Why a press ended, or was never keyed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HoldEnd {
-    /// The station would not key it.
-    Refused,
-    /// No hold arrived for [`GAP`].
-    Lapsed,
-    /// The page released it.
-    Released,
-    /// Something at the station unkeyed it: a Stop, a halt, the stream ending.
-    Stopped,
-}
+// Why a press ended: tempo-base's, below the engine, so that Stop's road reads and writes it in a
+// build without it.
+pub use tempo_base::ptt_hold::HoldEnd;
 
 /// One thing the page should be told about a press.
 #[derive(Clone, Debug, PartialEq, Eq)]

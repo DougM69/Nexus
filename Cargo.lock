@@ -2828,6 +2828,7 @@ dependencies = [
  "serde_json",
  "socket2",
  "tempo-app",
+ "tempo-base",
  "tempo-core",
  "tempo-net",
 ]
@@ -2841,14 +2842,13 @@ dependencies = [
  "coreaudio-sys",
  "cpal",
  "deepcw",
- "hound",
  "io-kit-sys",
- "opus",
  "png",
  "propagation",
  "serde_json",
  "serialport",
  "tempo-app",
+ "tempo-codec",
  "tempo-core",
  "tempo-flexsim",
  "tempo-net",
@@ -2856,6 +2856,10 @@ dependencies = [
  "windows 0.54.0",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "tempo-base"
+version = "0.1.0"
 
 [[package]]
 name = "tempo-client"
@@ -2867,13 +2871,21 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "tempo-app",
  "tempo-audio",
- "tempo-core",
+ "tempo-base",
+ "tempo-codec",
  "tempo-stream",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "tempo-codec"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "opus",
 ]
 
 [[package]]
@@ -2892,6 +2904,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempo-base",
  "tempo-fast",
  "wspr",
 ]

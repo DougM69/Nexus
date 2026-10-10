@@ -13,14 +13,15 @@ workspace = true
 # Each crate below is one src-tauri already builds, at the version it names there, with no feature
 # it does not turn on itself: in the app's own build this crate adds nothing to the tree.
 [dependencies]
-# What Stop's road carries of the shack's state: the microphone over's status and a held press's
-# end, as the shack's engine publishes them (`tempo_app::mic`, `tempo_app::remote_control`).
-tempo-app = { path = "../tempo-app" }
+# The app's log (`applog`), and what Stop's road carries of the shack's state: the microphone
+# over's status and a held press's end (`mic`, `ptt_hold`), as the shack's engine publishes them.
+tempo-base = { path = "../tempo-base" }
 # This computer's headset: its rings, the Opus codecs both ways, the resampler and the voice keyer's
-# WAV. The sound devices themselves are the `device` feature's.
-tempo-audio = { path = "../tempo-audio" }
-# The app's log (`tempo_core::applog`).
-tempo-core = { path = "../tempo-core" }
+# WAV.
+tempo-codec = { path = "../tempo-codec" }
+# The sound devices behind the headset (tempo-audio's `headset::Headset`, on cpal): the `device`
+# feature's alone, so a build without it reaches no crate of the engine.
+tempo-audio = { path = "../tempo-audio", optional = true }
 # The stream's wire contract (ids, keys, offers and their answers) and the network's addresses.
 tempo-stream = { path = "../tempo-stream" }
 serde = { version = "1", features = ["derive"] }
@@ -38,9 +39,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 
 [features]
-# This computer's own sound devices behind the headset (cpal): client mode's. Without it the roads
-# run on any `audio_road::Headset`, as the tests' stand-in does.
-device = ["tempo-audio/device"]
+# This computer's own sound devices behind the headset (cpal, through tempo-audio): client mode's.
+# Without it the roads run on any `audio_road::Headset`, as the tests' stand-in does, and nothing
+# the crate builds on is a crate of the engine.
+device = ["dep:tempo-audio", "tempo-audio/device"]
 # A test build's road switch (`bench_road_switch`). Only src-tauri's feature of the same name turns
 # it on: its tests fail if anything else could (`shipped_without_the_road_switch`).
 bench-road-switch = []
