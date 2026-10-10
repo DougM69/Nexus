@@ -904,8 +904,11 @@ mod tests {
         let (road, mut station, headset, on_air) = road();
         let shack_keys = Keys::new(&[6; EXPORTED], [2; 8], End::Shack).unwrap();
         let stop_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        // The road's thread names the lease at its next turn, a tick away, but a loaded machine can
+        // wake that thread later than any small multiple of a tick: the first heartbeat is waited
+        // for as long as such a machine may take. Nothing else reads this socket.
         stop_socket
-            .set_read_timeout(Some(Duration::from_millis(20)))
+            .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let stop = StopRoad::open(
             stop_socket.local_addr().unwrap(),
