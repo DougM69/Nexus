@@ -264,6 +264,14 @@ jobs:
       - name: cargo test propagation --features live
         run: cargo test -p propagation --features live --no-fail-fast
 
+      # The client core's feature-gated shapes, which no other step lints: src-tauri builds the
+      # crate as a path dependency, so its clippy steps read none of it, and `--workspace` takes its
+      # default features alone. Here as the app builds it (this computer's sound devices, beside
+      # tempo-audio's serial as the app has it) and in a test build's shape (the road switch), its
+      # code and its tests both.
+      - name: cargo clippy tempo-client --features device,bench-road-switch
+        run: cargo clippy -p tempo-client --features device,bench-road-switch,tempo-audio/serial --all-targets -- -D warnings
+
       # The DeepCW inference bridge: compiled by no other Linux job (the model
       # file is gitignored, so only compile coverage is possible here — see the
       # documented silent-lobotomy trap in the release runbook).

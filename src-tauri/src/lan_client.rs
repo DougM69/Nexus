@@ -75,15 +75,16 @@
 //! Remote on or off, revoking a browser), and gives the grant back at once. The page acquires
 //! again after `notController` or `leaseExpired`, when nobody else holds control; nothing at the
 //! station changes for it.
-/// The audio road, beside the command link, and this computer's headset.
-pub(crate) mod audio_road;
-/// The command link, protocol 2, which client mode drives.
-pub(crate) mod link;
+/// The audio road, beside the command link, and this computer's headset (the client core's).
+pub(crate) use tempo_client::audio_road;
+/// The command link, protocol 2, which client mode drives (the client core's).
+pub(crate) use tempo_client::link;
 mod origin;
 pub(crate) mod pairing;
-pub(crate) mod road;
-/// Stop's second road, beside the command link.
-pub(crate) mod stop_road;
+/// The road to a paired station (the client core's).
+pub(crate) use tempo_client::road;
+/// Stop's second road, beside the command link (the client core's).
+pub(crate) use tempo_client::stop_road;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -94,10 +95,11 @@ pub(crate) use origin::{Origin, Reach};
 use std::net::SocketAddrV4;
 use std::sync::{Arc, Mutex};
 
-use ring::digest::{digest, SHA256};
-use ring::rand::SystemRandom;
-use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use serde::Serialize;
+use tempo_client::hex;
+/// This computer's key for a station, and a paired station as the page shows it (the client
+/// core's).
+pub(crate) use tempo_client::{ComputerKey, StationView};
 use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
@@ -109,69 +111,6 @@ pub(crate) const MAX_STATIONS: usize = 8;
 pub(crate) const MAX_ADDRESSES: usize = 4;
 /// The smallest OS credential blob, Windows': 2560 bytes of UTF-16.
 const CREDENTIAL_BYTES: usize = 2560;
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// This computer's own key for one station. See the module header for what may never happen to it.
-pub(crate) struct ComputerKey {
-    pair: EcdsaKeyPair,
-    /// The public half: SPKI DER, lowercase hex, the shape a device key has (182 characters).
-    public_key: String,
-}
-
-impl ComputerKey {
-    /// A new key, and its PKCS#8 document as lowercase hex for the station's record: the one copy
-    /// of the private key that ever leaves this type, and it goes only there.
-    pub(crate) fn generate() -> Option<(Self, String)> {
-        let pkcs8 =
-            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
-                .ok()?;
-        let document = hex(pkcs8.as_ref());
-        Some((Self::restore(&document)?, document))
-    }
-
-    /// The key a record holds, or `None` for anything that is not one.
-    pub(crate) fn restore(pkcs8: &str) -> Option<Self> {
-        let pair = EcdsaKeyPair::from_pkcs8(
-            &ECDSA_P256_SHA256_FIXED_SIGNING,
-            &protocol::hex_bytes(pkcs8)?,
-            &SystemRandom::new(),
-        )
-        .ok()?;
-        let public_key = format!(
-            "{}{}",
-            protocol::P256_SPKI_PREFIX_HEX,
-            hex(pair.public_key().as_ref())
-        );
-        Some(Self { pair, public_key })
-    }
-
-    /// The public half, SPKI as lowercase hex: what the station pinned while pairing.
-    pub(crate) fn public_key(&self) -> &str {
-        &self.public_key
-    }
-
-    /// This computer's signature over an offer (A5): over SHA-256 of `sdp`'s DTLS fingerprint and
-    /// the station's, device's and session's ids, as the station checks it (`stream::verify`).
-    /// `None` for an offer with no single fingerprint, which no station would take.
-    pub(crate) fn sign_offer(
-        &self,
-        sdp: &str,
-        station: &str,
-        device: &str,
-        session: &str,
-    ) -> Option<String> {
-        let fingerprint: [u8; 32] = digest(&SHA256, &protocol::offer_fingerprint(sdp)?)
-            .as_ref()
-            .try_into()
-            .ok()?;
-        let signed = protocol::offer_binding(&fingerprint, station, device, session);
-        let signature = self.pair.sign(&SystemRandom::new(), &signed).ok()?;
-        Some(hex(signature.as_ref()))
-    }
-}
 
 /// The code as the operator typed it: sixteen hexadecimal characters, either case, with spaces
 /// anywhere (the shack shows it in groups of four). `None` for anything else.
@@ -210,27 +149,6 @@ pub(crate) fn computer_name() -> String {
 fn fits<T: Serialize>(record: &T) -> bool {
     serde_json::to_string(record)
         .is_ok_and(|value| value.encode_utf16().count() * 2 <= CREDENTIAL_BYTES)
-}
-
-/// A paired station as the page shows it: never this computer's key, only the station's
-/// fingerprint (SHA-256 of its SPKI, lowercase hex) and where it answered.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct StationView {
-    pub id: String,
-    pub addresses: Vec<String>,
-    pub key: String,
-}
-
-impl StationView {
-    fn of(record: &PairedStation) -> Option<Self> {
-        let spki = protocol::hex_bytes(&record.station_key)?;
-        Some(Self {
-            id: record.station_id.clone(),
-            addresses: record.addresses.clone(),
-            key: hex(digest(&SHA256, &spki).as_ref()),
-        })
-    }
 }
 
 /// Is this a record this module could have written: ids that are ids, a station key that is a

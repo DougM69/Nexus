@@ -11,8 +11,10 @@
 //!      and its own `--bench-road-switch` option: the option a test build passes and the release
 //!      never can, since passing it would name the feature in a workflow;
 //!    - none of them asks for every feature;
-//!    - `Cargo.toml` declares the feature once, enabling nothing, and names it nowhere else, so no
-//!      other feature and no default turns it on;
+//!    - src-tauri's `Cargo.toml` declares the feature once, turning on the client core's switch and
+//!      nothing else, and the client core's manifest declares its own once, enabling nothing;
+//!      neither names it anywhere else, and no other crate's manifest names it, so no other
+//!      feature, no default and no dependency turns it on;
 //!    - no Tauri config, build script or cargo config names it.
 //!
 //!    It runs over this tree, which must give nothing, and over scratch copies of the same files,
@@ -34,9 +36,17 @@ const WORKFLOWS: [&str; 2] = [
 /// The script a test build passes the feature's option to, and the option, as its case arm reads.
 const CROSS: &str = "scripts/build-windows-cross.sh";
 const OPTION: &str = "--bench-road-switch)";
-/// The manifest that declares the feature, and its one declaration.
+/// The manifests that declare the feature, and each one's one declaration: src-tauri's, which turns
+/// on the client core's switch and nothing else, and the client core's, which enables nothing.
 const MANIFEST: &str = "src-tauri/Cargo.toml";
-const DECLARED: &str = "bench-road-switch = []";
+const CORE: &str = "crates/tempo-client/Cargo.toml";
+const DECLARATIONS: [(&str, &str); 2] = [
+    (
+        MANIFEST,
+        "bench-road-switch = [\"tempo-client/bench-road-switch\"]",
+    ),
+    (CORE, "bench-road-switch = []"),
+];
 /// What else src-tauri's build reads a cfg from, when it is there.
 const BUILD_FILES: [&str; 3] = [
     "src-tauri/build.rs",
@@ -121,24 +131,47 @@ fn refusals(root: &Path, read: &mut Vec<String>) -> Vec<String> {
             waiting.extend(scripts_named(line));
         }
     }
-    match std::fs::read_to_string(root.join(MANIFEST)) {
-        Err(_) => found.push(format!("{MANIFEST}: not there")),
-        Ok(text) => {
-            read.push(MANIFEST.to_string());
-            let mut declared = 0;
-            for (n, line) in text.lines().enumerate() {
-                let code = line.split('#').next().unwrap_or_default();
-                if !code.contains(FEATURE) {
-                    continue;
+    for (manifest, declaration) in DECLARATIONS {
+        match std::fs::read_to_string(root.join(manifest)) {
+            Err(_) => found.push(format!("{manifest}: not there")),
+            Ok(text) => {
+                read.push(manifest.to_string());
+                let mut declared = 0;
+                for (n, line) in text.lines().enumerate() {
+                    let code = line.split('#').next().unwrap_or_default();
+                    if !code.contains(FEATURE) {
+                        continue;
+                    }
+                    if code.trim() == declaration {
+                        declared += 1;
+                    } else {
+                        found.push(format!("{manifest}:{}: names {FEATURE}", n + 1));
+                    }
                 }
-                if code.trim() == DECLARED {
-                    declared += 1;
-                } else {
-                    found.push(format!("{MANIFEST}:{}: names {FEATURE}", n + 1));
+                if declared != 1 {
+                    found.push(format!("{manifest}: declares {FEATURE} {declared} times"));
                 }
             }
-            if declared != 1 {
-                found.push(format!("{MANIFEST}: declares {FEATURE} {declared} times"));
+        }
+    }
+    // Every other crate src-tauri can be built on: one naming the feature would turn the client
+    // core's switch on as a dependency of it.
+    let mut crates: Vec<String> = std::fs::read_dir(root.join("crates"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| format!("crates/{}/Cargo.toml", entry.file_name().to_string_lossy()))
+        .filter(|manifest| manifest != CORE)
+        .collect();
+    crates.sort();
+    for manifest in crates {
+        let Ok(text) = std::fs::read_to_string(root.join(&manifest)) else {
+            continue;
+        };
+        read.push(manifest.clone());
+        for (n, line) in text.lines().enumerate() {
+            if line.split('#').next().unwrap_or_default().contains(FEATURE) {
+                found.push(format!("{manifest}:{}: names {FEATURE}", n + 1));
             }
         }
     }
@@ -176,12 +209,15 @@ fn scratch_copy(label: &str, files: &[String]) -> PathBuf {
 
 /// ★ The release never turns the road switch on: over this tree, nothing would, and the guard read
 /// what the release builds from (both workflows, the three scripts that build Nexus, followed from
-/// them, the manifest, the Tauri config and the build script). CONTROL: in scratch copies of those
-/// files, each way of turning the switch on is named, at its file and line, and nothing else is:
-/// the macOS build passing the feature; the Windows build given the test build's option; a build
-/// asking for every feature; the cross-build's own default carrying it; another feature turning
-/// it on; a platform's Tauri config; a cfg set by the build script; and a new script the release
-/// runs, found by following the workflow to it. The copy untouched gives nothing.
+/// them, the manifests, the client core's and every other crate's among them, the Tauri config and
+/// the build script). CONTROL: in scratch copies of those files, each way of turning the switch on
+/// is named, at its file and line, and nothing else is: the macOS build passing the feature; the
+/// Windows build given the test build's option; a build asking for every feature; the
+/// cross-build's own default carrying it; another feature turning it on; a platform's Tauri
+/// config; a cfg set by the build script; a new script the release runs, found by following the
+/// workflow to it; the client core's own default carrying its switch; src-tauri's dependency on
+/// the client core asking for it; and another crate asking for it. The copy untouched gives
+/// nothing.
 #[test]
 fn the_release_never_turns_the_road_switch_on() {
     let mut read = Vec::new();
@@ -195,6 +231,8 @@ fn the_release_never_turns_the_road_switch_on() {
         "scripts/Dockerfile.pi",
         CROSS,
         MANIFEST,
+        CORE,
+        "crates/tempo-app/Cargo.toml",
         "src-tauri/tauri.conf.json",
         "src-tauri/build.rs",
     ]) {
@@ -211,7 +249,7 @@ fn the_release_never_turns_the_road_switch_on() {
     std::fs::remove_dir_all(&untouched).unwrap();
 
     const RELEASE: &str = ".github/workflows/release.yml";
-    let planted: [(&str, &str, &str, &str); 8] = [
+    let planted: [(&str, &str, &str, &str); 11] = [
         (
             RELEASE,
             "--features radio,custom-protocol",
@@ -258,6 +296,24 @@ fn the_release_never_turns_the_road_switch_on() {
             "scripts/build-linux.sh",
             "set -euo pipefail\n",
             "set -euo pipefail\nbash scripts/build-bench.sh\n",
+            "names bench-road-switch",
+        ),
+        (
+            CORE,
+            "bench-road-switch = []\n",
+            "bench-road-switch = []\ndefault = [\"bench-road-switch\"]\n",
+            "names bench-road-switch",
+        ),
+        (
+            MANIFEST,
+            "features = [\"device\"] }\n",
+            "features = [\"device\", \"bench-road-switch\"] }\n",
+            "names bench-road-switch",
+        ),
+        (
+            "crates/tempo-app/Cargo.toml",
+            "[dependencies]\n",
+            "[dependencies]\ntempo-client = { path = \"../tempo-client\", features = [\"bench-road-switch\"] }\n",
             "names bench-road-switch",
         ),
     ];

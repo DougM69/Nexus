@@ -34,7 +34,10 @@ session; the shack's LAN key and its paired computers live in the OS keychain. T
 end (`lan_client`) keeps a key of its own for each station beside the station's pinned key,
 signs its offers and checks the station's answers in Rust, and serves its window's page from a
 loopback origin that Tauri treats as remote, behind a launch secret, `Host` and `Origin`; that
-page's pairing dialog offers the stations found by name, through the same socket. Receiver
+page's pairing dialog offers the stations found by name, through the same socket. The
+computer's command link, the two roads beside it and what both ends of them read and write are
+a crate of their own (`crates/tempo-client`, no Tauri and no webview), which client mode drives
+and the shack's listener speaks with. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh

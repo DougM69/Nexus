@@ -5492,7 +5492,6 @@ dependencies = [
 name = "tempo"
 version = "1.17.0"
 dependencies = [
- "flate2",
  "futures-util",
  "gdk",
  "keyring",
@@ -5512,6 +5511,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempo-app",
  "tempo-audio",
+ "tempo-client",
  "tempo-core",
  "tempo-net",
  "tempo-sstv",
@@ -5556,6 +5556,25 @@ dependencies = [
  "tempo-sstv",
  "windows 0.54.0",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "tempo-client"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "futures-util",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempo-app",
+ "tempo-audio",
+ "tempo-core",
+ "tempo-stream",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
 ]
 
 [[package]]

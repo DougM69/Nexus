@@ -71,8 +71,8 @@ use tempo_app::remote_control::Revocation;
 /// Calls one computer may have waiting at once, admitted or not: the dispatcher's own cap on calls
 /// in flight, and as many again being admitted. One more is refused `busy` without a thread.
 pub(crate) const PENDING: usize = 2 * crate::command_dispatch::IN_FLIGHT;
-/// The most ids one `outcomes` may ask after: the calls in flight when a link dropped.
-pub(crate) const OUTCOMES: usize = 64;
+/// The most ids one `outcomes` may ask after: the calls in flight when a link dropped (the wire's).
+pub(crate) use super::wire::OUTCOMES;
 /// The most feeds one `watch` may name.
 pub(crate) const WATCH: usize = 8;
 /// Events kept for a lane that has fallen behind; older ones are skipped.

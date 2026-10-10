@@ -161,22 +161,9 @@ pub struct LanDevice {
     pub name: String,
 }
 
-/// A station this computer is paired with over its network (`crate::lan_client`). No `Debug` and
-/// no `Clone`, as [`StationKey`]: it holds this computer's own key for the station.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PairedStation {
-    pub station_id: String,
-    /// The device id the station gave this computer: what it stamps on everything it sends.
-    pub device_id: String,
-    /// The station's LAN key, SPKI as lowercase hex, exactly as it presented it while pairing:
-    /// pinned from then on.
-    pub station_key: String,
-    /// This computer's own key for this station: PKCS#8, lowercase hex.
-    pub pkcs8: String,
-    /// Where the station answered, `address:port`, the last that worked first.
-    pub addresses: Vec<String>,
-}
+/// A station this computer is paired with over its network (`crate::lan_client`), as the client
+/// core reads and keeps its record.
+pub use tempo_client::PairedStation;
 
 /// The stations this computer is paired with, by LAN station id, in the order they were paired.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

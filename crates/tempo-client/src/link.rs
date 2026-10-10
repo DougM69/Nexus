@@ -1,7 +1,7 @@
 //! The command link, this computer's end: the road to a paired station at protocol 2, for client
 //! mode, which hands every station command its screens make to [`Link::call`] and answers their
 //! polls from what the station pushes ([`Link::latest`]). The other end is the shack's command lane
-//! (`remote_service::lan::commands`); the wire is `remote_service::lan::wire`'s.
+//! (src-tauri's `remote_service::lan::commands`); the wire is [`crate::wire`]'s.
 //!
 //! 1. **The road, and the same build** (the operator's ruling of 2026-10-05, "the same version at
 //!    both ends"). The window's road reaches the station ([`super::road::reach`]: TLS 1.3 with the
@@ -10,7 +10,7 @@
 //!    this computer opens anything; the station checks the `open` the same way.
 //! 2. **Calls.** Each has an id that rises across every link of this run of Nexus ([`run_id`]), so
 //!    the station's journal runs each at most once whichever link carried it. The dispatcher routes
-//!    each first (`command_dispatch::route`): one that runs on this computer, or is refused here,
+//!    each first ([`crate::dispatch::route`]): one that runs on this computer, or is refused here,
 //!    never leaves it. A Stop, or the off half of a transmit switch, goes ahead of everything
 //!    waiting to be written, and a call bigger than a frame goes in pieces, so a Stop goes between
 //!    them. A link that ends with calls in flight answers them [`Answer::Gone`]; the next one asks
@@ -45,12 +45,11 @@ use tokio_tungstenite::tungstenite::Message;
 use super::audio_road::{AudioRoad, Headset};
 use super::road::{self, Ids, Socket};
 use super::stop_road::{OnAir, StopRoad};
-use crate::command_dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
-use crate::remote_service::lan::commands::OUTCOMES;
-use crate::remote_service::lan::datagram;
-use crate::remote_service::lan::outbox::Outbox;
-use crate::remote_service::lan::wire::{self, Assembly, End, Inflate, Whole};
-use crate::remote_service::vault::PairedStation;
+use crate::datagram;
+use crate::dispatch::{forwards, is_stop, route, Outcome, Profile, Refusal, Route};
+use crate::outbox::Outbox;
+use crate::wire::{self, Assembly, End, Inflate, Whole, OUTCOMES};
+use crate::PairedStation;
 
 /// The operation requests the link carries, as the window's road does.
 const OPERATIONS: [&str; 5] = ["state", "acquire", "heartbeat", "release", "stopTransmit"];
@@ -58,7 +57,7 @@ const OPERATIONS: [&str; 5] = ["state", "acquire", "heartbeat", "release", "stop
 const EVENTS: usize = 64;
 
 /// This run of Nexus, as the station's journal knows it: made once, at random, never 0.
-pub(crate) fn run_id() -> u64 {
+pub fn run_id() -> u64 {
     static RUN: OnceLock<u64> = OnceLock::new();
     *RUN.get_or_init(|| {
         use ring::rand::SecureRandom;
@@ -83,13 +82,7 @@ fn next_id() -> u64 {
 /// The call the link writes: its id, the command and its arguments, how many Stops had been pressed
 /// here when it was made (a Stop counting itself), and for a whole save the revision of the copy it
 /// was made from.
-pub(crate) fn call_message(
-    id: u64,
-    cmd: &str,
-    args: Value,
-    base: Option<&str>,
-    stops: u64,
-) -> Value {
+pub fn call_message(id: u64, cmd: &str, args: Value, base: Option<&str>, stops: u64) -> Value {
     let mut message = json!({"type":"call","id":id,"cmd":cmd,"args":args,"stops":stops});
     if let Some(base) = base {
         message["base"] = json!(base);
@@ -99,7 +92,7 @@ pub(crate) fn call_message(
 
 /// What became of a call.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Answer {
+pub enum Answer {
     /// It ran, and this is what it answered, with the revision of the store it read or saved.
     Value {
         value: Value,
@@ -119,11 +112,11 @@ pub(crate) enum Answer {
 
 /// An event raised at the station, as it arrived.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Event {
-    pub(crate) name: String,
-    pub(crate) id: u64,
-    pub(crate) at_ms: u64,
-    pub(crate) data: Value,
+pub struct Event {
+    pub name: String,
+    pub id: u64,
+    pub at_ms: u64,
+    pub data: Value,
 }
 
 /// One feed as this computer holds it: the number of the last value, its deflate stream, and the
@@ -163,11 +156,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// A paired station's command link, open.
-pub(crate) struct Link {
+pub struct Link {
     outbox: Outbox,
     shared: Arc<Shared>,
     tasks: Vec<tokio::task::AbortHandle>,
-    pub(crate) ids: Ids,
+    pub ids: Ids,
 }
 
 impl Link {
@@ -176,7 +169,7 @@ impl Link {
     /// the link and the address that answered, or the most telling reason it did not open (the
     /// road's, `updateStation`, `updateComputer`, `otherBuild`, or `notStation` for a station that
     /// said something no station says).
-    pub(crate) async fn connect(
+    pub async fn connect(
         record: &PairedStation,
         typed: Option<SocketAddrV4>,
         run: u64,
@@ -186,7 +179,7 @@ impl Link {
     }
 
     /// [`Link::connect`], at each of `order` in turn.
-    pub(crate) async fn connect_at(
+    pub async fn connect_at(
         record: &PairedStation,
         order: &[SocketAddrV4],
         run: u64,
@@ -294,8 +287,8 @@ impl Link {
     /// Stops had been pressed here when it was made (a Stop counting itself: the number its second
     /// road carries too): its id in this run, and what became of it. Routed first, deny by default:
     /// a command that runs on this computer, or is refused here, is answered here and never sent.
-    /// The ui-state pair goes as given, already split (`command_dispatch::split_ui_state`).
-    pub(crate) async fn call(
+    /// The ui-state pair goes as given, already split ([`crate::dispatch::split_ui_state`]).
+    pub async fn call(
         &self,
         cmd: &str,
         args: Value,
@@ -331,7 +324,7 @@ impl Link {
 
     /// What became of each of `ids` (calls of this run, from a link that ended), in the order
     /// asked; `None` once this link has ended too, or for more ids than one question may ask.
-    pub(crate) async fn outcomes(&self, ids: &[u64]) -> Option<Vec<Outcome>> {
+    pub async fn outcomes(&self, ids: &[u64]) -> Option<Vec<Outcome>> {
         if ids.is_empty() || ids.len() > OUTCOMES {
             return None;
         }
@@ -348,7 +341,7 @@ impl Link {
     /// One of protocol 1's operation requests (the lease's, and Stop): the station's whole
     /// `operationResponse`, or `None` for a request the link does not carry or once it has ended.
     /// A Stop goes ahead of everything waiting.
-    pub(crate) async fn operation(&self, request: Value) -> Option<Value> {
+    pub async fn operation(&self, request: Value) -> Option<Value> {
         let kind = request["type"]
             .as_str()
             .filter(|kind| OPERATIONS.contains(kind))?;
@@ -376,45 +369,45 @@ impl Link {
 
     /// Watch these feeds from now on, in place of the ones before. The station answers with the
     /// ones it has ([`Link::watching`]).
-    pub(crate) fn watch(&self, feeds: &[&str]) -> bool {
+    pub fn watch(&self, feeds: &[&str]) -> bool {
         let watch = json!({"type":"watch","feeds":feeds});
         self.outbox.text(watch.to_string()).is_ok()
     }
 
     /// The station's last answer to a watch: the feeds it pushes, and the names it has no feed for.
-    pub(crate) fn watching(&self) -> Option<Value> {
+    pub fn watching(&self) -> Option<Value> {
         lock(&self.shared.watching).clone()
     }
 
     /// The newest value of a feed, with its number.
-    pub(crate) fn latest(&self, feed: &str) -> Option<(u64, Value)> {
+    pub fn latest(&self, feed: &str) -> Option<(u64, Value)> {
         lock(&self.shared.feeds)
             .get(feed)
             .and_then(|feed| feed.latest.clone())
     }
 
     /// The station's events from now on.
-    pub(crate) fn events(&self) -> broadcast::Receiver<Event> {
+    pub fn events(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
     }
 
     /// This link's Stop road, when the station opened one.
-    pub(crate) fn stop_road(&self) -> Option<Arc<StopRoad>> {
+    pub fn stop_road(&self) -> Option<Arc<StopRoad>> {
         self.shared.road.clone()
     }
 
     /// This link's audio road, when the station opened one and this computer has a headset.
-    pub(crate) fn audio_road(&self) -> Option<Arc<AudioRoad>> {
+    pub fn audio_road(&self) -> Option<Arc<AudioRoad>> {
         self.shared.audio.clone()
     }
 
     /// Whether the link has ended.
-    pub(crate) fn ended(&self) -> bool {
+    pub fn ended(&self) -> bool {
         self.shared.ended.load(Ordering::SeqCst)
     }
 
     /// Waits until the link has ended.
-    pub(crate) async fn closed(&self) {
+    pub async fn closed(&self) {
         loop {
             let ending = self.shared.end.notified();
             if self.ended() {
@@ -428,7 +421,7 @@ impl Link {
 impl Link {
     /// Closes the link: its socket goes with its tasks, and every call still waiting is answered
     /// gone.
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         for task in &self.tasks {
             task.abort();
         }
@@ -650,7 +643,7 @@ fn outcome_of(message: &Value) -> Option<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_service::lan::wire::Deflate;
+    use crate::wire::Deflate;
 
     /// The station's frames for values of `feed` numbered as given, from one deflate stream.
     fn frames(feed: &str, numbers: &[u64]) -> Vec<Vec<u8>> {

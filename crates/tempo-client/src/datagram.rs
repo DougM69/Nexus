@@ -1,7 +1,8 @@
 //! The datagram layer of the native client's roads beside the command link: Stop's second road
-//! (`super::stop_road` at the shack, `crate::lan_client::stop_road` on the other computer) and the
-//! audio road (`super::audio_road`, `crate::lan_client::audio_road`). A datagram is small, sent
-//! once, and either verifies under the road's keys or is dropped before anything reads its body.
+//! (src-tauri's `remote_service::lan::stop_road` at the shack, [`crate::stop_road`] on the other
+//! computer) and the audio road (`remote_service::lan::audio_road`, [`crate::audio_road`]), both
+//! ends reading and writing it with this module. A datagram is small, sent once, and either
+//! verifies under the road's keys or is dropped before anything reads its body.
 //!
 //! ## The keys
 //!
@@ -46,41 +47,41 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_128_GCM, NONCE_LEN};
 
 /// The datagram format this build speaks.
-pub(crate) const VERSION: u8 = 1;
+pub const VERSION: u8 = 1;
 /// The clear header: the version, the kind, the tag and the sequence.
-pub(crate) const HEADER: usize = 18;
+pub const HEADER: usize = 18;
 /// The AEAD's tag, after the body.
 const SEAL: usize = 16;
 /// The largest datagram either way on Stop's road, so none is ever split or waits behind another.
-pub(crate) const MAX: usize = 128;
+pub const MAX: usize = 128;
 /// The largest datagram either way on the audio road: one 20 ms receive frame, whose Opus packet is
 /// variable in size (the receive encoder's ceiling is 400 bytes), with its header, numbers and
 /// seal. Far under any network's packet size, so it is never split either.
-pub(crate) const AUDIO_MAX: usize = 512;
+pub const AUDIO_MAX: usize = 512;
 /// The exporter's label for Stop's second road: ours, beginning `EXPORTER` as RFC 5705 §4 asks, so
 /// it cannot collide with a label of TLS's own.
-pub(crate) const STOP_LABEL: &[u8] = b"EXPORTER-nexus-stop-road";
+pub const STOP_LABEL: &[u8] = b"EXPORTER-nexus-stop-road";
 /// The exporter's label for the audio road: its keys are never Stop's.
-pub(crate) const AUDIO_LABEL: &[u8] = b"EXPORTER-nexus-audio-road";
+pub const AUDIO_LABEL: &[u8] = b"EXPORTER-nexus-audio-road";
 /// One export: a key and a salt for each direction.
-pub(crate) const EXPORTED: usize = 2 * (KEY + NONCE_LEN);
+pub const EXPORTED: usize = 2 * (KEY + NONCE_LEN);
 const KEY: usize = 16;
 /// The replay window's width.
 const WINDOW: u64 = 64;
 
 /// A road's tag: eight bytes the shack picks for each connection's road and names in its welcome.
-pub(crate) type Tag = [u8; 8];
+pub type Tag = [u8; 8];
 
 /// Which end of a road this is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum End {
+pub enum End {
     Shack,
     Computer,
 }
 
 /// One direction's sending half: its key, its salt, the road's tag and the next sequence. Shared
 /// by every thread that sends on the road, so the sequence is an atomic and never handed out twice.
-pub(crate) struct Sealer {
+pub struct Sealer {
     key: LessSafeKey,
     salt: [u8; NONCE_LEN],
     tag: Tag,
@@ -90,7 +91,7 @@ pub(crate) struct Sealer {
 }
 
 /// One direction's receiving half: its key, its salt, the road's tag and the replay window.
-pub(crate) struct Opener {
+pub struct Opener {
     key: LessSafeKey,
     salt: [u8; NONCE_LEN],
     tag: Tag,
@@ -100,21 +101,21 @@ pub(crate) struct Opener {
 }
 
 /// Both directions of one road, as one end holds them.
-pub(crate) struct Keys {
-    pub(crate) send: Sealer,
-    pub(crate) receive: Opener,
+pub struct Keys {
+    pub send: Sealer,
+    pub receive: Opener,
 }
 
 impl Keys {
     /// The road `tag`'s keys at `end`, from the exporter's `exported` bytes: up's key and salt, then
     /// down's. The shack sends down and receives up; the computer the other way. Stop's road: at
     /// most [`MAX`] bytes a datagram.
-    pub(crate) fn new(exported: &[u8; EXPORTED], tag: Tag, end: End) -> Option<Self> {
+    pub fn new(exported: &[u8; EXPORTED], tag: Tag, end: End) -> Option<Self> {
         Self::sized(exported, tag, end, MAX)
     }
 
     /// The same for a road whose datagrams may be up to `max` bytes (the audio road's [`AUDIO_MAX`]).
-    pub(crate) fn sized(exported: &[u8; EXPORTED], tag: Tag, end: End, max: usize) -> Option<Self> {
+    pub fn sized(exported: &[u8; EXPORTED], tag: Tag, end: End, max: usize) -> Option<Self> {
         let (up, down) = exported.split_at(KEY + NONCE_LEN);
         let (send, receive) = match end {
             End::Shack => (down, up),
@@ -175,7 +176,7 @@ fn header(datagram: &[u8], max: usize) -> Option<(u8, u8, Tag, u64)> {
 /// The tag a datagram names, read off its clear header alone, for the shack to find the road whose
 /// keys may open it. `None` for anything that is not shaped as a datagram of this version on a road
 /// whose datagrams are at most `max` bytes.
-pub(crate) fn tag_of(datagram: &[u8], max: usize) -> Option<Tag> {
+pub fn tag_of(datagram: &[u8], max: usize) -> Option<Tag> {
     header(datagram, max)
         .filter(|(version, ..)| *version == VERSION)
         .map(|(_, _, tag, _)| tag)
@@ -184,7 +185,7 @@ pub(crate) fn tag_of(datagram: &[u8], max: usize) -> Option<Tag> {
 impl Sealer {
     /// A datagram of `kind` carrying `body`, sealed under the next sequence. `None` once the
     /// sequence is spent (it never wraps into one already used) or for a body that would not fit.
-    pub(crate) fn seal(&self, kind: u8, body: &[u8]) -> Option<Vec<u8>> {
+    pub fn seal(&self, kind: u8, body: &[u8]) -> Option<Vec<u8>> {
         if HEADER + body.len() + SEAL > self.max {
             return None;
         }
@@ -213,7 +214,7 @@ impl Sealer {
 impl Opener {
     /// `datagram`'s kind and body, once it has verified under this road's key and its sequence is
     /// one the window has not seen; `None`, with nothing read past the clear header, otherwise.
-    pub(crate) fn open(&mut self, datagram: &[u8]) -> Option<(u8, Vec<u8>)> {
+    pub fn open(&mut self, datagram: &[u8]) -> Option<(u8, Vec<u8>)> {
         let (version, kind, tag, sequence) = header(datagram, self.max)?;
         if version != VERSION || tag != self.tag || !self.window.fresh(sequence) {
             return None;

@@ -18,7 +18,7 @@
 //!   on the over's clock by its number. ⛔ NOTHING IS EVER QUEUED: a frame that cannot go now, or
 //!   that is already later than the station's lead-in could still play ([`LATE`]), is dropped and
 //!   its number skipped, so after a stall the station plays a hole where the stall was, never a
-//!   burst. The press is client mode's, a held press on Stop's road (`crate::client_mode`), and
+//!   burst. The press is client mode's, a held press on Stop's road (src-tauri's `client_mode`), and
 //!   the station takes a frame only for the press its held PTT keyed for this computer.
 //! - **The over's end, heard here.** When Stop's road hears an over end other than by the
 //!   operator letting go, or a press is held with no word from the station for half a second, the
@@ -30,6 +30,12 @@
 //!
 //! The keys are made from the link's session, held in memory only, never written, logged or shown,
 //! and go when the road's thread ends, which it does as soon as its link has ended.
+//!
+//! What the road carries, either way, is [`wire`]'s, which the shack reads and writes too. This
+//! computer's own sound devices behind the headset (`headset`, `devices`) are the `device`
+//! feature's; without it the road runs on any [`Headset`].
+/// What the audio road carries, as both ends read and write it.
+pub mod wire;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,22 +46,23 @@ use tempo_audio::headset::BED_LEVEL;
 use tempo_audio::mic_encode::{MicEncoder, MIC_ENCODE_RATE_HZ, MIC_FRAME_MS, MIC_FRAME_SAMPLES};
 use tempo_audio::receive_decode::{ReceiveDecoder, PLAY_FRAME_SAMPLES, PLAY_RATE_HZ};
 
+use self::wire::{Down, Up};
 use super::stop_road::OnAir;
-use crate::remote_service::lan::audio_road::{Down, Up};
-use crate::remote_service::lan::datagram::{End, Keys, Opener, Sealer, Tag, AUDIO_MAX, EXPORTED};
+use crate::datagram::{End, Keys, Opener, Sealer, Tag, AUDIO_MAX, EXPORTED};
 
-pub(crate) use tempo_audio::headset::{
+pub use tempo_audio::headset::{
     sound, Rings, Sound, GAIN_DB as VOLUME_DB, VOLUME_DB_MAX, VOLUME_DB_MIN,
 };
 /// This computer's headset for client mode (`tempo_audio::headset::Headset`).
-pub(crate) type ThisHeadset = tempo_audio::headset::Headset;
+#[cfg(feature = "device")]
+pub type ThisHeadset = tempo_audio::headset::Headset;
 
 /// How often this computer says `listen` while it wants the station's audio: four in the
 /// station's two seconds.
-pub(crate) const LISTEN_EVERY: Duration = Duration::from_millis(500);
+pub const LISTEN_EVERY: Duration = Duration::from_millis(500);
 /// A microphone frame later than this, by the press's own clock, is dropped rather than sent: the
 /// station's lead-in, past which it could no longer play it at its moment anyway.
-pub(crate) const LATE: Duration = Duration::from_millis(60);
+pub const LATE: Duration = Duration::from_millis(60);
 /// How long a send may take before its frame is dropped.
 const SEND_WAIT: Duration = Duration::from_millis(1);
 /// The longest the thread waits for the station before it looks at its own work again.
@@ -65,20 +72,20 @@ const BED_FRAMES: u32 = 8;
 
 /// The longest voice message recorded here: a minute, for the keyer's short calls. Its import
 /// stays well inside the command link's largest call.
-pub(crate) const RECORD_MAX: Duration = Duration::from_secs(60);
+pub const RECORD_MAX: Duration = Duration::from_secs(60);
 
 /// A voice message being recorded on this computer's microphone for a slot of the shack's voice
 /// keyer: the headset's input, kept open while it runs and taken every [`TICK`], folded to the
 /// keyer's 12 kHz, for at most [`RECORD_MAX`]. Finished, the voice is the caller's to send; dropped,
 /// nothing is kept.
-pub(crate) struct Recording {
+pub struct Recording {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Vec<f32>>>,
 }
 
 impl Recording {
     /// A recording on `headset` from now, on a thread of its own; `None` if none could start.
-    pub(crate) fn start(headset: Arc<dyn Headset>) -> Option<Self> {
+    pub fn start(headset: Arc<dyn Headset>) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::Builder::new()
@@ -92,7 +99,7 @@ impl Recording {
     }
 
     /// The voice recorded, at 12 kHz, and the recording over.
-    pub(crate) fn finish(mut self) -> Vec<f32> {
+    pub fn finish(mut self) -> Vec<f32> {
         self.stop.store(true, Ordering::Release);
         self.thread
             .take()
@@ -108,7 +115,7 @@ impl Drop for Recording {
 }
 
 /// A recorded message as the shack's voice keyer imports one: a 12 kHz mono WAV, whole.
-pub(crate) fn voice_message(voice: &[f32]) -> std::io::Result<Vec<u8>> {
+pub fn voice_message(voice: &[f32]) -> std::io::Result<Vec<u8>> {
     tempo_audio::voice::wav_12k(voice)
 }
 
@@ -154,7 +161,7 @@ fn record(headset: &dyn Headset, stop: &AtomicBool) -> Vec<f32> {
 /// This computer's headset, as an audio road uses it: its rings, and a direction kept open a
 /// while longer. The real one in client mode (`tempo_audio::headset::Headset`); a stand-in in a
 /// test, which opens no device.
-pub(crate) trait Headset: Send + Sync + 'static {
+pub trait Headset: Send + Sync + 'static {
     fn rings(&self) -> &Arc<Rings>;
     /// Keep the output open a while longer: the road is listening, or a sound is to play.
     fn want_output(&self);
@@ -163,8 +170,10 @@ pub(crate) trait Headset: Send + Sync + 'static {
 }
 
 /// How long each want keeps a direction open: a want renewed every half second outlives it.
+#[cfg(feature = "device")]
 const WANT: Duration = Duration::from_millis(1500);
 
+#[cfg(feature = "device")]
 impl Headset for tempo_audio::headset::Headset {
     fn rings(&self) -> &Arc<Rings> {
         tempo_audio::headset::Headset::rings(self)
@@ -181,15 +190,17 @@ impl Headset for tempo_audio::headset::Headset {
 
 /// This computer's headset for client mode, on the devices chosen ("" for the system default),
 /// opening nothing until a road or the meter wants it. `None` if its thread would not start.
-pub(crate) fn headset(output: &str, input: &str) -> Option<Arc<tempo_audio::headset::Headset>> {
+#[cfg(feature = "device")]
+pub fn headset(output: &str, input: &str) -> Option<Arc<tempo_audio::headset::Headset>> {
     tempo_audio::headset::Headset::start(output, input).map(Arc::new)
 }
 
 /// Devices as This computer ▸ Audio lists them: each a name to keep and a label to show.
-pub(crate) type Listed = Vec<(String, String)>;
+pub type Listed = Vec<(String, String)>;
 
 /// This computer's audio devices, for This computer ▸ Audio: `(inputs, outputs)`.
-pub(crate) fn devices() -> (Listed, Listed) {
+#[cfg(feature = "device")]
+pub fn devices() -> (Listed, Listed) {
     let (inputs, outputs) = tempo_audio::device::available_devices();
     let named = |list: Vec<tempo_audio::audiodev::AudioDevice>| {
         list.into_iter()
@@ -217,7 +228,7 @@ struct Shared {
 }
 
 /// This computer's end of one link's audio road. Cheap to share: every holder is the same road.
-pub(crate) struct AudioRoad {
+pub struct AudioRoad {
     shared: Arc<Shared>,
 }
 
@@ -225,7 +236,7 @@ impl AudioRoad {
     /// The road to `to`, tagged `tag`, under the keys the link's exporter gave (`exported`, under
     /// `datagram::AUDIO_LABEL` with the welcome's session as the context), on `headset`, with the
     /// link's [`OnAir`]. `None` if no socket could be had or no thread started.
-    pub(crate) fn open(
+    pub fn open(
         to: SocketAddr,
         tag: Tag,
         exported: &[u8; EXPORTED],
@@ -255,12 +266,12 @@ impl AudioRoad {
     }
 
     /// The lease `listen` names, or none while this computer holds none (and then it listens not).
-    pub(crate) fn lease(&self, lease: Option<String>) {
+    pub fn lease(&self, lease: Option<String>) {
         *lock(&self.shared.lease) = lease;
     }
 
     /// The link this road was made for has ended: the road goes, its keys with it.
-    pub(crate) fn link_ended(&self) {
+    pub fn link_ended(&self) {
         self.shared.ended.store(true, Ordering::Release);
     }
 }
@@ -467,7 +478,7 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
             }
         }
         // The microphone, only while a press is live: a new press starts on fresh audio.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         let _sending = lock(&shared.on_air.sender);
         match shared.on_air.press() {
             Some(press) => {
@@ -507,16 +518,16 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
 
 /// A headset with no device behind it, for a test: rings open at 48 kHz both ways, and how often
 /// each direction was wanted.
-#[cfg(test)]
-pub(crate) struct StandIn {
-    pub(crate) rings: Arc<Rings>,
-    pub(crate) outputs: std::sync::atomic::AtomicU32,
-    pub(crate) inputs: std::sync::atomic::AtomicU32,
+#[cfg(any(test, feature = "test-util"))]
+pub struct StandIn {
+    pub rings: Arc<Rings>,
+    pub outputs: std::sync::atomic::AtomicU32,
+    pub inputs: std::sync::atomic::AtomicU32,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 impl StandIn {
-    pub(crate) fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
             rings: Arc::new(Rings::stand_in(48_000, 48_000)),
             outputs: Default::default(),
@@ -525,7 +536,7 @@ impl StandIn {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 impl Headset for StandIn {
     fn rings(&self) -> &Arc<Rings> {
         &self.rings
@@ -543,8 +554,8 @@ impl Headset for StandIn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lan_client::stop_road::{Over, StopRoad};
-    use crate::remote_service::lan::stop_road as shack_stop;
+    use crate::stop_road::wire as shack_stop;
+    use crate::stop_road::{Over, StopRoad};
     use tempo_app::mic::{MicEnded, MicStatus};
     use tempo_audio::headset::{gain, Cushion};
     use tempo_audio::mic_decode::{MicDecoder, FRAME_SAMPLES};

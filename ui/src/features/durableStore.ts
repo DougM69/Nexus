@@ -106,7 +106,8 @@ function isMainWindowPanelLayout(key: string): boolean {
 /** The station's own data among the durable keys: on a computer driving another station they
  *  live at that station, and every other durable key stays on the computer the operator sits at
  *  (the rail, its order, the UI scale's cap, the main window's layouts). The same list as
- *  `STATION_KEYS` in `src-tauri/src/command_dispatch.rs`, which a test there holds to this one. */
+ *  `STATION_KEYS` in `crates/tempo-client/src/dispatch.rs`, which a test in
+ *  `src-tauri/src/command_dispatch/tests.rs` holds to this one. */
 export const STATION_KEYS: readonly string[] = [
   'nexus.dxped.alarms',
   'nexus.dxped.alarms.fired',

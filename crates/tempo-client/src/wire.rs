@@ -1,6 +1,6 @@
 //! The command link's wire, protocol 2, as both ends read and write it: the shack's channel
-//! (`super::channel`, with its command lane in `super::commands`) and the computer's link
-//! (`crate::lan_client::link`).
+//! (src-tauri's `remote_service::lan::channel`, with its command lane in
+//! `remote_service::lan::commands`) and the computer's link ([`crate::link`]).
 //!
 //! ## Frames
 //!
@@ -40,8 +40,23 @@ use std::time::Duration;
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
 use ring::digest::{digest, SHA256};
 
+/// The LAN protocol both ends speak: the hello and everything after it on the shack's channel. 2
+/// adds the command lane (the channel's step 5, and this module).
+pub const PROTOCOL_VERSION: u8 = 2;
+/// The operation version every request on the shack's channel is answered at: the one that
+/// carries the stop token, as on the stream's own `control` channel.
+pub const OPERATION_VERSION: u8 = 4;
+/// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
+/// them: the shack's own, and the ones its paired computers' window says.
+pub const VERSIONS: (u8, u8, u8) = (
+    PROTOCOL_VERSION,
+    tempo_stream::protocol::STREAM_VERSION,
+    OPERATION_VERSION,
+);
+/// The largest message either way, the relay's own bound.
+pub const MESSAGE_BYTES: usize = 8192;
 /// The most bytes one WebSocket message may carry, either way: protocol 1's own bound.
-pub(crate) const FRAME: usize = super::channel::MESSAGE_BYTES;
+pub const FRAME: usize = MESSAGE_BYTES;
 /// A piece's header: its kind, its stream and its flags.
 const PIECE_HEADER: usize = 6;
 const KIND_PIECE: u8 = 1;
@@ -50,33 +65,36 @@ const LAST: u8 = 1;
 const BINARY: u8 = 2;
 /// The most a call may be, in pieces: an ADIF import, a voice message, an SSTV picture. The
 /// computer refuses a bigger one itself, so a bigger one at the shack ends the connection.
-pub(crate) const CALL_BYTES: usize = 16 * 1024 * 1024;
+pub const CALL_BYTES: usize = 16 * 1024 * 1024;
 /// The most an answer may be: a whole logbook exported as text. A bigger one is answered with the
 /// error [`ANSWER_TOO_LARGE`] instead.
-pub(crate) const ANSWER_BYTES: usize = 64 * 1024 * 1024;
+pub const ANSWER_BYTES: usize = 64 * 1024 * 1024;
+/// The most ids one `outcomes` may ask after: the calls in flight when a link dropped.
+pub const OUTCOMES: usize = 64;
 /// The error an answer bigger than [`ANSWER_BYTES`] is replaced with.
-pub(crate) const ANSWER_TOO_LARGE: &str = "answerTooLarge";
+pub const ANSWER_TOO_LARGE: &str = "answerTooLarge";
 /// Messages one end may be putting together at once.
 const STREAMS: usize = 16;
 /// The most one feed's value may be once inflated.
-pub(crate) const FEED_BYTES: usize = 4 * 1024 * 1024;
+pub const FEED_BYTES: usize = 4 * 1024 * 1024;
 
-/// The app's version, the same number the installer and the updater show.
-pub(crate) const APP: &str = env!("CARGO_PKG_VERSION");
+/// The app's version, the same number the installer and the updater show: src-tauri's own
+/// package version, which this crate's build script reads from its manifest.
+pub const APP: &str = env!("NEXUS_APP_VERSION");
 
 /// One feed: its name and version, the command the shack runs for it, how often, and whether a
 /// value is pushed every time or only when it changed.
-pub(crate) struct Feed {
-    pub(crate) name: &'static str,
-    pub(crate) command: &'static str,
-    pub(crate) every: Duration,
-    pub(crate) always: bool,
+pub struct Feed {
+    pub name: &'static str,
+    pub command: &'static str,
+    pub every: Duration,
+    pub always: bool,
 }
 
 /// The feeds a computer may watch. The snapshot goes every 300 ms whether or not it changed, so
 /// its number always moves while the link is live; the waterfall's row and the meters go when they
 /// change, polled a little faster than the screen polls them at the shack.
-pub(crate) const FEEDS: &[Feed] = &[
+pub const FEEDS: &[Feed] = &[
     Feed {
         name: "snapshot/1",
         command: "get_snapshot",
@@ -98,13 +116,13 @@ pub(crate) const FEEDS: &[Feed] = &[
 ];
 
 /// The feed named `name`, if there is one.
-pub(crate) fn feed(name: &str) -> Option<&'static Feed> {
+pub fn feed(name: &str) -> Option<&'static Feed> {
     FEEDS.iter().find(|feed| feed.name == name)
 }
 
 /// A whole message, before it is split or once it is put back together.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Whole {
+pub enum Whole {
     Text(String),
     Binary(Vec<u8>),
 }
@@ -119,7 +137,7 @@ impl Whole {
 }
 
 /// `whole` as the frames it goes in: itself, when it fits one, or its pieces under `stream`.
-pub(crate) fn split(whole: Whole, stream: u32) -> Vec<Vec<u8>> {
+pub fn split(whole: Whole, stream: u32) -> Vec<Vec<u8>> {
     let (binary, bytes) = match whole {
         Whole::Text(text) => (false, text.into_bytes()),
         Whole::Binary(bytes) => (true, bytes),
@@ -140,21 +158,21 @@ pub(crate) fn split(whole: Whole, stream: u32) -> Vec<Vec<u8>> {
 }
 
 /// Whether `whole` goes as one frame of its own.
-pub(crate) fn fits(whole: &Whole) -> bool {
+pub fn fits(whole: &Whole) -> bool {
     whole.len() <= FRAME
 }
 
 /// The pieces one end is putting back together. Anything a sender of this protocol never sends
 /// (a piece of no kind, a message over the limit, too many at once, a message whose pieces
 /// disagree on its kind, text that is not UTF-8) is refused, and the connection ends.
-pub(crate) struct Assembly {
+pub struct Assembly {
     open: std::collections::HashMap<u32, (bool, Vec<u8>)>,
     limit: usize,
 }
 
 impl Assembly {
     /// For messages of at most `limit` bytes.
-    pub(crate) fn new(limit: usize) -> Self {
+    pub fn new(limit: usize) -> Self {
         Self {
             open: Default::default(),
             limit,
@@ -162,7 +180,7 @@ impl Assembly {
     }
 
     /// One piece frame, its kind byte included: the whole message when this was its last piece.
-    pub(crate) fn piece(&mut self, frame: &[u8]) -> Result<Option<Whole>, ()> {
+    pub fn piece(&mut self, frame: &[u8]) -> Result<Option<Whole>, ()> {
         if frame.len() < PIECE_HEADER || frame[0] != KIND_PIECE {
             return Err(());
         }
@@ -196,12 +214,12 @@ impl Assembly {
 }
 
 /// Whether a binary message is a piece (as against a feed).
-pub(crate) fn is_piece(frame: &[u8]) -> bool {
+pub fn is_piece(frame: &[u8]) -> bool {
     frame.first() == Some(&KIND_PIECE)
 }
 
 /// One feed's stream at the shack: every value it sends is compressed after the ones before it.
-pub(crate) struct Deflate(Compress);
+pub struct Deflate(Compress);
 
 impl Default for Deflate {
     fn default() -> Self {
@@ -213,7 +231,7 @@ impl Default for Deflate {
 impl Deflate {
     /// `json` compressed, flushed so the other end can read it whole now. `None` only if the
     /// compressor fails, which ends the connection.
-    pub(crate) fn value(&mut self, json: &[u8]) -> Option<Vec<u8>> {
+    pub fn value(&mut self, json: &[u8]) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(json.len() / 4 + 64);
         let before = self.0.total_in();
         loop {
@@ -234,7 +252,7 @@ impl Deflate {
 }
 
 /// One feed's stream at the computer, the other half of [`Deflate`].
-pub(crate) struct Inflate(Decompress);
+pub struct Inflate(Decompress);
 
 impl Default for Inflate {
     fn default() -> Self {
@@ -245,7 +263,7 @@ impl Default for Inflate {
 impl Inflate {
     /// The value `deflated` carries, or `None` for anything the shack's [`Deflate`] never makes or
     /// a value over [`FEED_BYTES`]: the link then ends, since the stream is lost.
-    pub(crate) fn value(&mut self, deflated: &[u8]) -> Option<Vec<u8>> {
+    pub fn value(&mut self, deflated: &[u8]) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity((deflated.len() * 8).min(FEED_BYTES) + 64);
         let before = self.0.total_in();
         loop {
@@ -273,7 +291,7 @@ impl Inflate {
 }
 
 /// A feed's value as it goes on the wire, `number` the feed's count of values sent.
-pub(crate) fn feed_frame(name: &str, number: u64, deflated: &[u8]) -> Vec<u8> {
+pub fn feed_frame(name: &str, number: u64, deflated: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(2 + name.len() + 8 + deflated.len());
     frame.push(KIND_FEED);
     frame.push(name.len() as u8);
@@ -284,7 +302,7 @@ pub(crate) fn feed_frame(name: &str, number: u64, deflated: &[u8]) -> Vec<u8> {
 }
 
 /// A feed frame read back: its name, number and deflated value.
-pub(crate) fn read_feed(frame: &[u8]) -> Option<(&str, u64, &[u8])> {
+pub fn read_feed(frame: &[u8]) -> Option<(&str, u64, &[u8])> {
     if frame.first() != Some(&KIND_FEED) {
         return None;
     }
@@ -300,14 +318,11 @@ pub(crate) fn read_feed(frame: &[u8]) -> Option<(&str, u64, &[u8])> {
 /// the dispatcher's tables, the feeds, and the datagrams of Stop's second road and the audio road.
 /// Two builds with the same contract route, admit and push every command alike, and read each
 /// other's roads.
-pub(crate) fn contract() -> &'static str {
+pub fn contract() -> &'static str {
     static CONTRACT: OnceLock<String> = OnceLock::new();
     CONTRACT.get_or_init(|| {
-        let mut text = format!(
-            "nexus command link\nprotocol {}\n",
-            super::channel::PROTOCOL_VERSION
-        );
-        text.push_str(&crate::command_dispatch::contract_text());
+        let mut text = format!("nexus command link\nprotocol {}\n", PROTOCOL_VERSION);
+        text.push_str(&crate::dispatch::contract_text());
         for feed in FEEDS {
             text.push_str(&format!(
                 "feed {} {} {} {}\n",
@@ -317,9 +332,8 @@ pub(crate) fn contract() -> &'static str {
                 feed.always
             ));
         }
-        text.push_str(&super::stop_road::contract_text());
-        #[cfg(feature = "radio")]
-        text.push_str(&super::audio_road::contract_text());
+        text.push_str(&crate::stop_road::wire::contract_text());
+        text.push_str(&crate::audio_road::wire::contract_text());
         digest(&SHA256, text.as_bytes())
             .as_ref()
             .iter()
@@ -330,7 +344,7 @@ pub(crate) fn contract() -> &'static str {
 
 /// Who is speaking: the end deciding which side should update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum End {
+pub enum End {
     Shack,
     Computer,
 }
@@ -338,7 +352,7 @@ pub(crate) enum End {
 /// Which side to update when the other end runs `app` with `contract` and this end runs `ours`
 /// (an app and a contract): the older one, or `otherBuild` for two builds of one version (or a
 /// version this build cannot read). `None` for the same build.
-pub(crate) fn refusal(us: End, ours: (&str, &str), theirs: (&str, &str)) -> Option<&'static str> {
+pub fn refusal(us: End, ours: (&str, &str), theirs: (&str, &str)) -> Option<&'static str> {
     if ours == theirs {
         return None;
     }
@@ -587,15 +601,15 @@ mod tests {
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         assert_eq!(digest, contract());
-        let text = crate::command_dispatch::contract_text();
-        for (cmd, class) in crate::command_classes::classes() {
+        let text = crate::dispatch::contract_text();
+        for (cmd, class) in crate::classes::classes() {
             assert_eq!(
                 text.matches(&format!("class {cmd} {class:?}\n")).count(),
                 1,
                 "{cmd}"
             );
         }
-        for (cmd, wired) in crate::command_dispatch::WIRED {
+        for (cmd, wired) in crate::dispatch::WIRED {
             assert_eq!(
                 text.matches(&format!("wired {cmd} {wired:?}\n")).count(),
                 1,
@@ -603,9 +617,8 @@ mod tests {
             );
         }
         assert!(text.contains("event alert\n") && text.contains("profile desktop\n"));
-        assert!(super::super::stop_road::contract_text().starts_with("stop road 1 "));
-        #[cfg(feature = "radio")]
-        assert!(super::super::audio_road::contract_text()
+        assert!(crate::stop_road::wire::contract_text().starts_with("stop road 1 "));
+        assert!(crate::audio_road::wire::contract_text()
             .starts_with("audio road 1 EXPORTER-nexus-audio-road format 1 max 512 "));
     }
 }

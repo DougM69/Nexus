@@ -71,8 +71,9 @@ use super::tls;
 
 /// What the transcript and the code's key begin with.
 pub const LABEL: &[u8] = b"nexus-lan-pairing/1";
-/// The TLS exporter label: 32 bytes, no context, from each side of this one session.
-pub const EXPORTER: &[u8] = b"EXPORTER-nexus-lan-pairing";
+/// The TLS exporter label: 32 bytes, no context, from each side of this one session (the road's,
+/// which exports it on every session it opens).
+pub use tempo_client::road::EXPORTER;
 
 /// Which side a proof is from.
 #[derive(Clone, Copy)]

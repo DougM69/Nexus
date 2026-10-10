@@ -26,15 +26,15 @@ use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use super::stop_road::StateClock;
-use super::wire::{self, Deflate, Whole};
+use crate::stop_road::wire::StateClock;
+use crate::wire::{self, Deflate, Whole};
 
 /// Messages waiting to be written before the other end is judged to have stopped reading.
-pub(crate) const WAITING: usize = 256;
+pub const WAITING: usize = 256;
 
 /// A connection's writer. Cloned into whatever answers on the connection.
 #[derive(Clone)]
-pub(crate) struct Outbox {
+pub struct Outbox {
     shared: Arc<Shared>,
 }
 
@@ -111,7 +111,7 @@ fn deadline(bytes: usize) -> Duration {
 
 impl Outbox {
     /// The writer for `sink`, and its task, which ends when the connection's writing does.
-    pub(crate) fn spawn<S>(
+    pub fn spawn<S>(
         mut sink: SplitSink<WebSocketStream<S>, Message>,
     ) -> (Self, tokio::task::JoinHandle<()>)
     where
@@ -147,22 +147,22 @@ impl Outbox {
     }
 
     /// A Stop, or its answer: ahead of everything waiting. `Err` once the connection is over.
-    pub(crate) fn urgent(&self, whole: Whole) -> Result<(), ()> {
+    pub fn urgent(&self, whole: Whole) -> Result<(), ()> {
         self.queue(whole, true)
     }
 
     /// Any other message, in its turn. `Err` once the connection is over.
-    pub(crate) fn send(&self, whole: Whole) -> Result<(), ()> {
+    pub fn send(&self, whole: Whole) -> Result<(), ()> {
         self.queue(whole, false)
     }
 
     /// A message of JSON text, in its turn.
-    pub(crate) fn text(&self, text: String) -> Result<(), ()> {
+    pub fn text(&self, text: String) -> Result<(), ()> {
         self.send(Whole::Text(text))
     }
 
     /// A ping, in its turn: the other end then knows this one is there.
-    pub(crate) fn ping(&self) -> Result<(), ()> {
+    pub fn ping(&self) -> Result<(), ()> {
         let mut queues = lock(&self.shared.queues);
         if queues.closed {
             return Err(());
@@ -178,7 +178,7 @@ impl Outbox {
 
     /// The feed `name`'s newest value, as JSON, taken at `taken`, in place of any value of it still
     /// waiting.
-    pub(crate) fn feed(&self, name: &'static str, json: Vec<u8>, taken: Instant) {
+    pub fn feed(&self, name: &'static str, json: Vec<u8>, taken: Instant) {
         let mut queues = lock(&self.shared.queues);
         match queues.feeds.iter_mut().find(|slot| slot.name == name) {
             Some(slot) => slot.latest = Some((json, taken)),
@@ -195,14 +195,14 @@ impl Outbox {
     }
 
     /// Records each number the feed `name` is given in `clock`, with when its value was taken: the
-    /// clock Stop's second road reads a heartbeat's state echo by (`super::stop_road`).
-    pub(crate) fn keep_time(&self, name: &'static str, clock: Arc<StateClock>) {
+    /// clock Stop's second road reads a heartbeat's state echo by (the shack's `stop_road`).
+    pub fn keep_time(&self, name: &'static str, clock: Arc<StateClock>) {
         lock(&self.shared.queues).clock = Some((name, clock));
     }
 
     /// Waits, for at most `within`, until everything handed over is on the socket: a refusal said
     /// before the connection ends.
-    pub(crate) async fn written(&self, within: Duration) {
+    pub async fn written(&self, within: Duration) {
         let settled = || {
             let queues = lock(&self.shared.queues);
             queues.closed

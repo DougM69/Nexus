@@ -39,16 +39,17 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use super::ComputerKey;
-use crate::remote_service::lan::{tls, VERSIONS};
-use crate::remote_service::vault::PairedStation;
+use crate::tls;
+use crate::wire::VERSIONS;
+use crate::PairedStation;
 
 /// A TCP connection to an address, before anything else: a station on the same network answers
 /// at once.
 const CONNECT: Duration = Duration::from_secs(3);
 /// TLS, the upgrade and the station's first word: the station's own handshake deadline.
-pub(super) const HANDSHAKE: Duration = Duration::from_secs(5);
+pub const HANDSHAKE: Duration = Duration::from_secs(5);
 /// How often this computer pings, so the station never takes it for gone (it waits 15 s).
-pub(crate) const PING_EVERY: Duration = Duration::from_secs(5);
+pub const PING_EVERY: Duration = Duration::from_secs(5);
 /// The largest message this computer sends: the station's own bound.
 const TO_STATION_BYTES: usize = 8192;
 /// The largest message the station may send: an operation answer is a few KiB.
@@ -59,18 +60,21 @@ const HELD_CANDIDATES: usize = 64;
 const OPERATIONS: [&str; 5] = ["state", "acquire", "heartbeat", "release", "stopTransmit"];
 /// The operation version every request on this road is answered at.
 const OPERATION_VERSION: u8 = VERSIONS.2;
+/// The TLS exporter label of a pairing's proofs: 32 bytes, no context, from each side of this one
+/// session (src-tauri's `remote_service::lan::pairing`, the ceremony's both halves).
+pub const EXPORTER: &[u8] = b"EXPORTER-nexus-lan-pairing";
 
 #[cfg(not(feature = "bench-road-switch"))]
-pub(super) type Socket = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+pub type Socket = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
 /// In a test build every road to a station's listener is under the road switch it was opened
 /// under, if it was opened under one (`crate::bench_road_switch`).
 #[cfg(feature = "bench-road-switch")]
-pub(super) type Socket =
+pub type Socket =
     WebSocketStream<tokio_rustls::client::TlsStream<crate::bench_road_switch::Gated<TcpStream>>>;
 
 /// A TLS session with a station, upgraded: the socket, the key the station presented (SPKI) and
 /// this session's exporter, which a pairing's proofs are bound to.
-pub(super) struct Opened {
+pub struct Opened {
     pub socket: Socket,
     pub station: Vec<u8>,
     pub exporter: [u8; 32],
@@ -78,7 +82,7 @@ pub(super) struct Opened {
 
 /// Why a connection did not open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Failed {
+pub enum Failed {
     /// Nothing answered, or it went away before the handshake was done.
     Unreachable,
     /// No TCP connection was made: how it ended (`TimedOut` when nothing answered in time), for
@@ -114,7 +118,7 @@ fn socket_config() -> WebSocketConfig {
 }
 
 /// TCP, TLS with `config`, and the upgrade, at `at`.
-pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<Opened, Failed> {
+pub async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<Opened, Failed> {
     // A test build's road switch with the command link blocked: no connection leaves this
     // computer, and it is given up after the connect's own wait, as an unanswered one is.
     #[cfg(feature = "bench-road-switch")]
@@ -154,7 +158,7 @@ pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<
     let exporter = tls
         .get_ref()
         .1
-        .export_keying_material([0; 32], crate::remote_service::lan::pairing::EXPORTER, None)
+        .export_keying_material([0; 32], EXPORTER, None)
         .map_err(|_| Failed::Unreachable)?;
     // In TLS 1.3 the station judges this computer's key after this computer's side of the
     // handshake is done, so its refusal is the first thing read here.
@@ -176,7 +180,7 @@ pub(super) async fn open(at: SocketAddrV4, config: Arc<ClientConfig>) -> Result<
 }
 
 /// Send one text message.
-pub(super) async fn say(socket: &mut Socket, text: String) -> Result<(), ()> {
+pub async fn say(socket: &mut Socket, text: String) -> Result<(), ()> {
     socket
         .send(Message::Text(text.into()))
         .await
@@ -214,7 +218,7 @@ enum First {
 /// computer, and the road's tag.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RoadOffer {
+pub struct RoadOffer {
     pub port: u16,
     /// Eight bytes, as sixteen lowercase hexadecimal characters.
     pub tag: String,
@@ -222,7 +226,7 @@ pub(crate) struct RoadOffer {
 
 impl RoadOffer {
     /// The tag's eight bytes, or `None` for a tag or a port no station gives.
-    pub(crate) fn tag(&self) -> Option<[u8; 8]> {
+    pub fn tag(&self) -> Option<[u8; 8]> {
         let shaped = self.tag.len() == 16
             && self
                 .tag
@@ -238,11 +242,11 @@ impl RoadOffer {
 /// The reasons that say nothing answered (`tempo_stream::lan::unreached`'s, and `unreachable` for a
 /// connection that went away before the handshake was done), as against a station that answered
 /// and said no.
-pub(crate) const UNREACHED: [&str; 4] = ["unreachable", "otherNetwork", "refused", "noAnswer"];
+pub const UNREACHED: [&str; 4] = ["unreachable", "otherNetwork", "refused", "noAnswer"];
 
 /// How much a reason says, for the one to tell when no address welcomed this computer. Nothing
 /// answering says least, and of its words a refusal says most: the station's computer answered.
-pub(crate) fn weight(reason: &str) -> u8 {
+pub fn weight(reason: &str) -> u8 {
     match reason {
         "updateStation" | "updateComputer" | "otherBuild" => 7,
         "notPaired" => 6,
@@ -258,7 +262,7 @@ pub(crate) fn weight(reason: &str) -> u8 {
 /// The ids a road was opened under: the station's, the device id it gave this computer, and the
 /// session it stamped.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Ids {
+pub struct Ids {
     pub station: String,
     pub device: String,
     pub session: String,
@@ -266,7 +270,7 @@ pub(crate) struct Ids {
 
 /// What a station welcomed this computer with: the session it stamped, its build, and Stop's
 /// second road and the audio road, if it opened them.
-pub(crate) struct Welcomed {
+pub struct Welcomed {
     pub session: String,
     pub app: String,
     pub contract: String,
@@ -333,7 +337,7 @@ async fn hello(
 
 /// A look by name (`tempo_stream::lan::dnssd::find`, or a test's own): the stations that answer
 /// within a wait. It blocks for that long, so it is only called on a thread that may wait.
-pub(crate) type Look = Arc<
+pub type Look = Arc<
     dyn Fn(
             Duration,
         )
@@ -344,14 +348,14 @@ pub(crate) type Look = Arc<
 
 /// Whether a road that did not open is worth a look by name: nothing answered at the addresses
 /// tried, or another key did (another station at an address that was this one's).
-pub(crate) fn look_further(why: &str) -> bool {
+pub fn look_further(why: &str) -> bool {
     UNREACHED.contains(&why) || why == "keyChanged"
 }
 
 /// Where a look by name finds the station `record` names, at addresses not in `tried`: each advert
 /// whose key tag starts the fingerprint of the key pinned for it, so another station's is never
 /// tried (it could only fail the handshake, and say the key had changed).
-pub(crate) fn found_for(
+pub fn found_for(
     record: &PairedStation,
     tried: &[SocketAddrV4],
     found: Vec<tempo_stream::lan::dnssd::Found>,
@@ -376,7 +380,7 @@ pub(crate) fn found_for(
 /// was found by name told more; an advert that answered with another key is a forged or foreign
 /// one, since an advert is a hint and never an identity, so it is never told as this station's key
 /// having changed.
-pub(crate) fn told(why: &'static str, later: &'static str, found: bool) -> &'static str {
+pub fn told(why: &'static str, later: &'static str, found: bool) -> &'static str {
     if !found || (why == "keyChanged" && weight(later) <= weight(why)) {
         why
     } else if later == "keyChanged" {
@@ -388,7 +392,7 @@ pub(crate) fn told(why: &'static str, later: &'static str, found: bool) -> &'sta
 
 /// The addresses the road to the station `record` names is tried at, in turn: `typed` first when
 /// the operator gave an address, then each remembered one, the last that worked first.
-pub(crate) fn order(record: &PairedStation, typed: Option<SocketAddrV4>) -> Vec<SocketAddrV4> {
+pub fn order(record: &PairedStation, typed: Option<SocketAddrV4>) -> Vec<SocketAddrV4> {
     let mut order: Vec<SocketAddrV4> = typed.into_iter().collect();
     for remembered in record
         .addresses
@@ -405,7 +409,7 @@ pub(crate) fn order(record: &PairedStation, typed: Option<SocketAddrV4>) -> Vec<
 /// Open the road to the station `record` names: at `typed` first when the operator gave an
 /// address, then at each remembered one in turn. The road and the address that welcomed this
 /// computer, or the most telling reason none did.
-pub(crate) async fn connect(
+pub async fn connect(
     record: &PairedStation,
     typed: Option<SocketAddrV4>,
 ) -> Result<(Road, SocketAddrV4), &'static str> {
@@ -415,7 +419,7 @@ pub(crate) async fn connect(
 /// Open the road to the station `record` names at each of `order` in turn: the road and the
 /// address that welcomed this computer, or the most telling reason none did (`unreachable`, with
 /// nowhere to try).
-pub(crate) async fn connect_at(
+pub async fn connect_at(
     record: &PairedStation,
     order: &[SocketAddrV4],
 ) -> Result<(Road, SocketAddrV4), &'static str> {
@@ -427,7 +431,7 @@ pub(crate) async fn connect_at(
 
 /// A station welcomed this computer: the socket, the ids it was welcomed under, the station's
 /// build, Stop's second road and the audio road if it opened them, and the address that answered.
-pub(crate) struct Reached {
+pub struct Reached {
     pub socket: Socket,
     pub ids: Ids,
     pub app: String,
@@ -440,7 +444,7 @@ pub(crate) struct Reached {
 /// The hello to the station `record` names at each of `order` in turn, the window's road and the
 /// command link alike: the first that welcomes this computer, or the most telling reason none did
 /// (`unreachable`, with nowhere to try).
-pub(crate) async fn reach(
+pub async fn reach(
     record: &PairedStation,
     order: &[SocketAddrV4],
 ) -> Result<Reached, &'static str> {
@@ -479,7 +483,7 @@ pub(crate) async fn reach(
 /// this computer pinned) over both DTLS fingerprints and the three ids, for exactly `offer`?
 /// `stationNotSigned` with no signature line, `stationKeyMismatch` for any other failure: the
 /// page's own words for the same two refusals (`station-key.ts`).
-pub(crate) fn check_answer(
+pub fn check_answer(
     station_key: &str,
     answer: &str,
     offer: &str,
@@ -515,7 +519,7 @@ pub(crate) fn check_answer(
 
 /// What the page is told from the road.
 #[derive(Debug, PartialEq)]
-pub(crate) enum ToPage {
+pub enum ToPage {
     /// One of the station's own messages, as it sent it.
     Station(String),
     /// The station's answer did not hold, and was not passed on: the stream is ended at the
@@ -535,13 +539,13 @@ enum Answer {
 }
 
 /// The road, open: this computer welcomed by the station, under [`Ids`].
-pub(crate) struct Road {
+pub struct Road {
     sink: SplitSink<Socket, Message>,
     stream: SplitStream<Socket>,
     key: ComputerKey,
     /// The station's key, SPKI as lowercase hex, as this computer pinned it.
     station_key: String,
-    pub(crate) ids: Ids,
+    pub ids: Ids,
     /// The last offer signed here, and the lease it went under.
     offered: Option<(String, String)>,
     answer: Answer,
@@ -585,7 +589,7 @@ impl Road {
     /// One of the page's operation requests, on to the station. `Ok(Some(answer))` for a request
     /// answered here instead, as the station would answer it: one this road does not carry, or
     /// one asked at another operation version. `Err`: the road has gone.
-    pub(crate) async fn operation(
+    pub async fn operation(
         &mut self,
         version: Option<u8>,
         request: &serde_json::Value,
@@ -609,7 +613,7 @@ impl Road {
 
     /// One of the page's stream signals, on to the station: an offer signed here first, with this
     /// computer's key for this station and this session (A5).
-    pub(crate) async fn signal(&mut self, lease: String, payload: BrowserSignal) -> Result<(), ()> {
+    pub async fn signal(&mut self, lease: String, payload: BrowserSignal) -> Result<(), ()> {
         if !protocol::identifier(&lease) {
             return Err(());
         }
@@ -644,7 +648,7 @@ impl Road {
     /// The next thing to tell the page, or `None` once the station has gone (or said something no
     /// station says, which ends the road as surely). While it waits, it pings the station every
     /// [`PING_EVERY`], so the station never takes this computer for gone.
-    pub(crate) async fn next(&mut self) -> Option<ToPage> {
+    pub async fn next(&mut self) -> Option<ToPage> {
         loop {
             if let Some(told) = self.outbox.pop_front() {
                 return Some(told);
@@ -731,7 +735,7 @@ impl Road {
     }
 
     /// Close the road. The station ends this computer's stream and lease with it.
-    pub(crate) async fn close(mut self) {
+    pub async fn close(mut self) {
         let _ = tokio::time::timeout(Duration::from_secs(1), self.sink.close()).await;
     }
 }

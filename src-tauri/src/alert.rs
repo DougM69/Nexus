@@ -11,8 +11,9 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 
-/// The event every alert is raised as, on each window and on the command link.
-pub(crate) const EVENT: &str = "alert";
+/// The event every alert is raised as, on each window and on the command link (the client core's,
+/// so both ends name it alike).
+pub(crate) use tempo_client::alert::EVENT;
 /// The shape's version.
 pub(crate) const VERSION: u32 = 1;
 

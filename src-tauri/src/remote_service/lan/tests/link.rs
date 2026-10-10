@@ -324,3 +324,16 @@ fn a_calls_count_of_stops_crosses_the_link_as_written() {
     let garbled = json!({"type":"call","id":9,"cmd":"halt_tx","args":{},"stops":"two"}).to_string();
     assert_eq!(read_call(&garbled), None);
 }
+
+/// ★ Both ends name this app's own version on the wire: the client core reads it from this crate's
+/// manifest at build time (its build script), and it is the version this app is built as, so the
+/// build check compares the apps themselves. CONTROL: the build check reads it as a version, and
+/// tells an older one which side to update.
+#[test]
+fn the_wire_names_this_apps_own_version() {
+    assert_eq!(wire::APP, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        wire::refusal(wire::End::Shack, (wire::APP, "c"), ("0.0.1", "c")),
+        Some("updateComputer")
+    );
+}

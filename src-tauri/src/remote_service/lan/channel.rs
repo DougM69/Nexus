@@ -57,12 +57,9 @@ use super::tls::{pin, Identity};
 use super::wire::{self, End, Whole};
 use crate::command_dispatch::{Call, Dispatcher, Profile, Revision, ShackStores};
 
-/// The LAN protocol this shack speaks: the hello and everything after it on this channel. 2 adds
-/// the command lane (step 5 in the module header, `super::wire`).
-pub const PROTOCOL_VERSION: u8 = 2;
-/// The operation version every request on this channel is answered at: the one that carries the
-/// stop token, as on the stream's own `control` channel.
-pub const OPERATION_VERSION: u8 = 4;
+/// The LAN protocol this shack speaks, and the operation version every request on this channel is
+/// answered at: the wire's (`super::wire`), which the computer's end reads too.
+pub use super::wire::{OPERATION_VERSION, PROTOCOL_VERSION};
 /// TLS, the upgrade and the hello must all be done within this.
 pub(super) const HANDSHAKE: Duration = Duration::from_secs(5);
 /// What comes behind a refused key is read for this long in all ([`drain`]), and no more than
@@ -71,8 +68,8 @@ const DRAIN_FOR: Duration = Duration::from_secs(1);
 const DRAIN_BYTES: usize = 16 * 1024;
 /// A computer that says nothing for this long is gone. Its own pings every 5 s keep it.
 pub(super) const SILENCE: Duration = Duration::from_secs(15);
-/// The largest message either way, the relay's own bound.
-pub(super) const MESSAGE_BYTES: usize = 8192;
+/// The largest message either way, the relay's own bound (the wire's).
+pub(super) use super::wire::MESSAGE_BYTES;
 /// The relay's budget for a page's stream signals: forty-eight in ten seconds, a close always
 /// allowed (`ui/src/remote-web/stream-relay.ts`).
 pub(super) const SIGNALS: usize = 48;

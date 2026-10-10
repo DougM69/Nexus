@@ -120,32 +120,32 @@
 //! ## The other end
 //!
 //! The paired computer's side, its key, its pairing and its road, is `crate::lan_client`, which
-//! speaks this wire with this module's own functions and versions.
+//! speaks this wire with this module's own functions and versions. The wire itself, both ends' half
+//! of each road and the computer's link are the client core's (`tempo_client`), read here as there.
 #[cfg(feature = "radio")]
 pub(crate) mod audio_road;
 mod book;
 mod channel;
 pub(crate) mod commands;
-pub(crate) mod datagram;
+/// The datagram layer of the roads beside the link (the client core's, which both ends read).
+pub(crate) use tempo_client::datagram;
 mod gate;
-pub(crate) mod outbox;
+/// One connection's writer, at either end of the link (the client core's).
+pub(crate) use tempo_client::outbox;
 pub(crate) mod pairing;
 pub(crate) mod stop_road;
 #[cfg(test)]
 pub(super) mod tests;
 pub mod tls;
-pub(crate) mod wire;
+/// The command link's wire, as both ends read and write it (the client core's).
+pub(crate) use tempo_client::wire;
 
 pub use book::Book;
 pub(crate) use book::{device_id, valid_name, NAME_CHARS};
 
 /// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
 /// them: the shack's own, and the ones its paired computers' window says.
-pub(crate) const VERSIONS: (u8, u8, u8) = (
-    channel::PROTOCOL_VERSION,
-    tempo_stream::protocol::STREAM_VERSION,
-    channel::OPERATION_VERSION,
-);
+pub(crate) use tempo_client::wire::VERSIONS;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};

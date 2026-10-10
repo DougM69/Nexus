@@ -22,6 +22,7 @@ members = [
     "crates/tempo-flexsim",
     "crates/tempo-sstv",
     "crates/tempo-stream",
+    "crates/tempo-client",
     "crates/deepcw",
 ]
 

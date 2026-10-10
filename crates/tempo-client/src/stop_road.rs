@@ -35,6 +35,10 @@
 //! The keys are made from the link's session and held in memory only; nothing here writes, logs or
 //! shows them. They go with the afterlife: the road's thread drops them as it ends, whoever still
 //! holds the road.
+//!
+//! What the road carries, either way, is [`wire`]'s, which the shack reads and writes too.
+/// What Stop's second road carries, as both ends read and write it.
+pub mod wire;
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -45,31 +49,31 @@ use serde::Serialize;
 use tempo_app::mic::{MicEnded, MicStatus};
 use tempo_app::remote_control::ptt_hold::HoldEnd;
 
-use crate::remote_service::lan::datagram::{End, Keys, Opener, Sealer, Tag, EXPORTED};
-use crate::remote_service::lan::stop_road::{Down, Up, AFTERLIFE};
+use self::wire::{Down, Up, AFTERLIFE};
+use crate::datagram::{End, Keys, Opener, Sealer, Tag, EXPORTED};
 
 /// How often an unacknowledged Stop is sent again.
-pub(crate) const REPEAT: Duration = Duration::from_millis(50);
+pub const REPEAT: Duration = Duration::from_millis(50);
 /// How long a Stop is sent again before it is given up: by then presence has lapsed at the
 /// station, which halts it anyway.
-pub(crate) const GIVE_UP: Duration = Duration::from_secs(5);
+pub const GIVE_UP: Duration = Duration::from_secs(5);
 /// How often the heartbeat goes.
-pub(crate) const HEARTBEAT: Duration = Duration::from_millis(500);
+pub const HEARTBEAT: Duration = Duration::from_millis(500);
 /// The longest the thread waits for the station before it looks at its own work again.
 const TICK: Duration = Duration::from_millis(10);
 /// What is kept of what the station said, each kind.
 const KEPT: usize = 16;
 /// How long a press may be held with no word from the station before the screens say the over may
 /// have ended.
-pub(crate) const NO_WORD: Duration = Duration::from_millis(500);
+pub const NO_WORD: Duration = Duration::from_millis(500);
 /// How long an ended over's words stay on the screens.
-pub(crate) const ENDED_SHOWN: Duration = Duration::from_secs(10);
+pub const ENDED_SHOWN: Duration = Duration::from_secs(10);
 
 /// Whether this computer's over may be on the air, and what the station last said of it, in
 /// atomics only: Stop's road and the command link write it, the audio road and the screens read
 /// it, and none of them ever waits for another. M9 reads it: the station's audio is muted, never
 /// ducked, while the over may be on the air.
-pub(crate) struct OnAir {
+pub struct OnAir {
     /// The press live at this computer, 0 for none.
     press: AtomicU64,
     /// The station's microphone over, as Stop's road last heard it: keyed.
@@ -82,8 +86,8 @@ pub(crate) struct OnAir {
     heard: AtomicU64,
     epoch: Instant,
     /// A test's hold on the audio road's sender: the stand-in for a sender stuck mid-send.
-    #[cfg(test)]
-    pub(crate) sender: Mutex<()>,
+    #[cfg(any(test, feature = "test-util"))]
+    pub sender: Mutex<()>,
 }
 
 impl Default for OnAir {
@@ -95,7 +99,7 @@ impl Default for OnAir {
             ended: AtomicU64::new(0),
             heard: AtomicU64::new(0),
             epoch: Instant::now(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-util"))]
             sender: Mutex::new(()),
         }
     }
@@ -103,19 +107,19 @@ impl Default for OnAir {
 
 impl OnAir {
     /// M9: this computer's press, the station saying its over is keyed, or its rig keyed.
-    pub(crate) fn may_be_on_air(&self) -> bool {
+    pub fn may_be_on_air(&self) -> bool {
         self.press().is_some()
             || self.over_keyed.load(Ordering::Acquire)
             || self.rig_keyed.load(Ordering::Acquire)
     }
 
     /// The press live at this computer.
-    pub(crate) fn press(&self) -> Option<u64> {
+    pub fn press(&self) -> Option<u64> {
         Some(self.press.load(Ordering::Acquire)).filter(|press| *press != 0)
     }
 
     /// A press is live (its number, never 0), or none is. An atomic store: never waits.
-    pub(crate) fn pressing(&self, press: Option<u64>) {
+    pub fn pressing(&self, press: Option<u64>) {
         self.press.store(press.unwrap_or(0), Ordering::Release);
     }
 
@@ -128,18 +132,18 @@ impl OnAir {
     }
 
     /// The station's rig, as its status line says (`None` when it cannot tell).
-    pub(crate) fn rig(&self, keyed: Option<bool>) {
+    pub fn rig(&self, keyed: Option<bool>) {
         self.rig_keyed
             .store(keyed.unwrap_or(false), Ordering::Release);
     }
 
     /// How many overs have ended other than by the operator letting go.
-    pub(crate) fn ended(&self) -> u64 {
+    pub fn ended(&self) -> u64 {
         self.ended.load(Ordering::Acquire)
     }
 
     /// The station was heard just now, on either road.
-    pub(crate) fn heard(&self) {
+    pub fn heard(&self) {
         let ms = Instant::now()
             .saturating_duration_since(self.epoch)
             .as_millis();
@@ -148,7 +152,7 @@ impl OnAir {
     }
 
     /// How long since the station was last heard, on either road, at `now`.
-    pub(crate) fn silent_for(&self, now: Instant) -> Duration {
+    pub fn silent_for(&self, now: Instant) -> Duration {
         let last = self.epoch + Duration::from_millis(self.heard.load(Ordering::Acquire));
         now.saturating_duration_since(last)
     }
@@ -158,7 +162,7 @@ impl OnAir {
 /// ended and why, or a press held with no word from the station.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
-pub(crate) enum Over {
+pub enum Over {
     /// Keyed at the station: the holes on the air in it so far.
     #[serde(rename_all = "camelCase")]
     OnAir { holes: u32, hole_ms: u32 },
@@ -188,17 +192,17 @@ fn ended_why(ended: MicEnded) -> Option<&'static str> {
 /// until then only the tests read it.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Heard {
+pub struct Heard {
     /// The Stops it acknowledged, by their numbers, the newest last.
-    pub(crate) stopped: VecDeque<u64>,
+    pub stopped: VecDeque<u64>,
     /// Its reports on presses, the newest last.
-    pub(crate) presses: VecDeque<Down>,
+    pub presses: VecDeque<Down>,
     /// The microphone over, as it last said.
-    pub(crate) mic: Option<MicStatus>,
+    pub mic: Option<MicStatus>,
     /// The last presence deadline it gave: when it came, and how long it had to run.
-    pub(crate) presence: Option<(Instant, Duration)>,
+    pub presence: Option<(Instant, Duration)>,
     /// The last over it said had ended other than by the operator letting go: when, and why.
-    pub(crate) ended: Option<(Instant, &'static str)>,
+    pub ended: Option<(Instant, &'static str)>,
 }
 
 /// A Stop the station has not acknowledged yet.
@@ -237,7 +241,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// This computer's end of one link's Stop road. Cheap to share: every holder is the same road.
-pub(crate) struct StopRoad {
+pub struct StopRoad {
     shared: Arc<Shared>,
 }
 
@@ -245,7 +249,7 @@ impl StopRoad {
     /// The road to `to`, tagged `tag`, under the keys the link's exporter gave (`exported`, under
     /// `datagram::STOP_LABEL` with the welcome's session as the context), with its thread. `None`
     /// if no socket could be had or no thread started.
-    pub(crate) fn open(
+    pub fn open(
         to: SocketAddr,
         tag: Tag,
         exported: &[u8; EXPORTED],
@@ -254,7 +258,7 @@ impl StopRoad {
         Self::open_with(to, tag, exported, on_air, AFTERLIFE)
     }
 
-    pub(crate) fn open_with(
+    pub fn open_with(
         to: SocketAddr,
         tag: Tag,
         exported: &[u8; EXPORTED],
@@ -292,7 +296,7 @@ impl StopRoad {
     /// included: the number the command link's Stop carries): written to the socket now, on this
     /// thread, and then sent again by the road's thread until the station acknowledges it; then
     /// this computer's own press is over. Returns at once.
-    pub(crate) fn stop(&self, stop: u64) {
+    pub fn stop(&self, stop: u64) {
         let now = Instant::now();
         self.shared.say(&Up::Stop { stop });
         lock(&self.shared.stops).push(Pending {
@@ -305,7 +309,7 @@ impl StopRoad {
     }
 
     /// What the screens say of this computer's over at `now`, if anything.
-    pub(crate) fn over(&self, now: Instant) -> Option<Over> {
+    pub fn over(&self, now: Instant) -> Option<Over> {
         let on_air = &self.shared.on_air;
         let pressing = on_air.press().is_some();
         if pressing && on_air.silent_for(now) >= NO_WORD {
@@ -327,14 +331,14 @@ impl StopRoad {
     /// One message, sent now: whether it went on the socket. For the tests, which speak on the
     /// road by hand; the app speaks through the calls below.
     #[cfg(test)]
-    pub(crate) fn say(&self, up: &Up) -> bool {
+    pub fn say(&self, up: &Up) -> bool {
         self.shared.say(up)
     }
 
     /// A new press, numbered `press`, begun when this run had pressed `stops` Stops: its first hold
     /// written now, on this thread, and the press live here (the microphone sends, and the station's
     /// audio here is muted). Each hold of it names the same `stops`.
-    pub(crate) fn press(&self, press: u64, stops: u64) {
+    pub fn press(&self, press: u64, stops: u64) {
         self.shared.press_stops.store(stops, Ordering::SeqCst);
         self.shared.say(&Up::Hold { press, stops });
         self.shared.on_air.pressing(Some(press));
@@ -343,7 +347,7 @@ impl StopRoad {
     /// The press `press` held again, as the screen re-asserted it: one hold, written now, while
     /// the press is still live here. `false`, and nothing sent, once it has ended: a Stop pressed
     /// here, or the station saying it ended.
-    pub(crate) fn hold(&self, press: u64) -> bool {
+    pub fn hold(&self, press: u64) -> bool {
         if self.shared.on_air.press() != Some(press) {
             return false;
         }
@@ -353,44 +357,44 @@ impl StopRoad {
     }
 
     /// The press `press` let go: its release written now, and the press over here.
-    pub(crate) fn release(&self, press: u64) {
+    pub fn release(&self, press: u64) {
         self.shared.say(&Up::Release { press });
         self.shared.on_air.end_press(press);
     }
 
     /// Whether presence is live as the station last said it on this road: the deadline it gave at
     /// its last renewal not past.
-    pub(crate) fn presence_live(&self, now: Instant) -> bool {
+    pub fn presence_live(&self, now: Instant) -> bool {
         lock(&self.shared.heard)
             .presence
             .is_some_and(|(at, left)| now < at + left)
     }
 
     /// The lease the heartbeat names, or none while this computer holds none.
-    pub(crate) fn lease(&self, lease: Option<String>) {
+    pub fn lease(&self, lease: Option<String>) {
         *lock(&self.shared.lease) = lease;
     }
 
     /// The main window fetched the snapshot numbered `state` on this road's link.
-    pub(crate) fn fetched(&self, state: u64) {
+    pub fn fetched(&self, state: u64) {
         self.shared.state.store(state, Ordering::SeqCst);
     }
 
     /// The link this road was made for has ended: no more heartbeats, and the road goes once its
     /// afterlife is over.
-    pub(crate) fn link_ended(&self) {
+    pub fn link_ended(&self) {
         lock(&self.shared.ended).get_or_insert_with(Instant::now);
     }
 
     /// Is the road past its afterlife, so a Stop pressed now would find no keys at the station?
-    pub(crate) fn gone(&self, now: Instant) -> bool {
+    pub fn gone(&self, now: Instant) -> bool {
         self.shared.gone(now)
     }
 
     /// What the station has said on the road so far.
     // See `Heard`.
     #[allow(dead_code)]
-    pub(crate) fn heard(&self) -> Heard {
+    pub fn heard(&self) -> Heard {
         lock(&self.shared.heard).clone()
     }
 }
@@ -903,7 +907,10 @@ mod tests {
     fn a_road_the_switch_blocks_carries_nothing_either_way() {
         use crate::bench_road_switch::{Position, Switch};
         let switch = Arc::new(Switch::default());
-        let (switched, mut station) = tauri::async_runtime::block_on(switch.over(async { road() }));
+        let (switched, mut station) = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(switch.over(async { road() }));
         switched.lease(Some(LEASE.to_string()));
         switched.fetched(9);
         let first = 1;

@@ -92,6 +92,20 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+// The tables both ends route and admit by are the client core's (`tempo_client::dispatch`), read
+// here as the other computer reads them there: the refusals, the routes, the starts wired from
+// afar, Stop's rules, the stores, the ui-state split, the events that cross, the profiles and
+// what became of a call. This module is the shack's dispatcher over them.
+#[cfg(all(test, feature = "bench-road-switch"))]
+pub(crate) use tempo_client::dispatch::contract_text;
+use tempo_client::dispatch::{argument_refusal, runs_as_stop, Access, STORES};
+pub(crate) use tempo_client::dispatch::{
+    forwards, is_stop, join_ui_state, press_from_afar, route, split_ui_state, store_access,
+    transmit_from_afar, Outcome, Profile, Refusal, Route, Store, Wired, FORWARDED_EVENTS,
+};
+#[cfg(test)]
+pub(crate) use tempo_client::dispatch::{off_args, Off, OFF_HALVES, STATION_KEYS, WIRED};
+
 #[cfg(test)]
 mod tests;
 
@@ -114,197 +128,7 @@ const CALLERS: usize = 16;
 /// The longest command error a journal keeps, in bytes.
 const ERROR_BYTES: usize = 512;
 
-/// Why a call was refused. Its [`code`](Refusal::code) is what the other computer is told.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Refusal {
-    /// The command has no class. Refused at both ends.
-    Unclassed,
-    /// The command runs on the computer the operator sits at, never at the shack.
-    RunsHere,
-    /// The command is given only from the shack's own screen.
-    ShackOnly,
-    /// The command starts a transmission that is not wired for another computer ([`WIRED`]).
-    TransmitNotYet,
-    /// `set_ptt` sent from another computer: its PTT is a held press on Stop's road, never the
-    /// command, which keys the shack's own audio source.
-    HeldPress,
-    /// A start from a connection with no Stop road: Stop would have one road only.
-    NoStopRoad,
-    /// A start while the computer's Stop road holds no live presence.
-    NoPresence,
-    /// A start while the newest heartbeat on the Stop road named shack state older than two seconds.
-    StaleState,
-    /// A password typed on the other computer: credentials are set and used at the shack.
-    TypedPassword,
-    /// Another device holds station control.
-    NotController,
-    /// Over a cap on calls in flight.
-    Busy,
-    /// Over the cap on calls a second.
-    RateLimited,
-    /// An id already used, whose outcome is no longer kept. It is never run again.
-    Replayed,
-    /// A whole save made from a copy older than the shack's, or naming no copy at all.
-    ChangedAtShack,
-    /// Arguments that are not what the command is invoked with.
-    BadArguments,
-    /// A start pressed before a Stop, or a halt at the station, that has since been taken: it never
-    /// ran. Stop wins over a start that was in flight ([`still_bound`]).
-    Stopped,
-}
-
-impl Refusal {
-    /// Every refusal, for reading one back from its code.
-    const ALL: [Refusal; 16] = [
-        Refusal::Unclassed,
-        Refusal::RunsHere,
-        Refusal::ShackOnly,
-        Refusal::TransmitNotYet,
-        Refusal::HeldPress,
-        Refusal::NoStopRoad,
-        Refusal::NoPresence,
-        Refusal::StaleState,
-        Refusal::TypedPassword,
-        Refusal::NotController,
-        Refusal::Busy,
-        Refusal::RateLimited,
-        Refusal::Replayed,
-        Refusal::ChangedAtShack,
-        Refusal::BadArguments,
-        Refusal::Stopped,
-    ];
-
-    /// The refusal a code names, as the other computer reads it back.
-    pub(crate) fn named(code: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|refusal| refusal.code() == code)
-    }
-
-    /// The refusal's name on the wire.
-    pub(crate) fn code(self) -> &'static str {
-        match self {
-            Refusal::Unclassed => "unclassed",
-            Refusal::RunsHere => "runsHere",
-            Refusal::ShackOnly => "shackOnly",
-            Refusal::TransmitNotYet => "transmitNotYet",
-            Refusal::HeldPress => "heldPress",
-            Refusal::NoStopRoad => "noStopRoad",
-            Refusal::NoPresence => "noPresence",
-            Refusal::StaleState => "staleState",
-            Refusal::TypedPassword => "typedPassword",
-            Refusal::NotController => "notController",
-            Refusal::Busy => "busy",
-            Refusal::RateLimited => "rateLimited",
-            Refusal::Replayed => "replayed",
-            Refusal::ChangedAtShack => "changedAtShack",
-            Refusal::BadArguments => "badArguments",
-            Refusal::Stopped => "stopped",
-        }
-    }
-}
-
 // --- The other computer's end ------------------------------------------------------------------
-
-/// Where the computer the operator sits at sends a command its screens make.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Route {
-    /// Run it on this computer.
-    Here,
-    /// Send it to the shack.
-    Shack,
-    /// The ui-state pair: the station's keys go to and come from the shack, every other key stays
-    /// on this computer ([`split_ui_state`], [`join_ui_state`]).
-    Split,
-    /// Refuse it on this computer; nothing is sent.
-    Refused(Refusal),
-}
-
-/// The route for `cmd`, invoked with `args`. A command with no class is refused, as is one only the
-/// shack's own screen may give and an argument that may not leave this computer.
-pub(crate) fn route(cmd: &str, args: &Value) -> Route {
-    let Some(class) = class_of(cmd) else {
-        return Route::Refused(Refusal::Unclassed);
-    };
-    match class {
-        Class::RunsHere => Route::Here,
-        Class::RefusedHere => Route::Refused(Refusal::ShackOnly),
-        Class::RunsAtShack | Class::StartsTx | Class::StopsTx => {
-            if let Some(refusal) = argument_refusal(cmd, args) {
-                Route::Refused(refusal)
-            } else if UI_STATE.contains(&cmd) {
-                Route::Split
-            } else {
-                Route::Shack
-            }
-        }
-    }
-}
-
-/// A refusal read off a command's arguments, made at both ends so that what it refuses never
-/// leaves the other computer. One today: `winlink_connect` with a password typed on the other
-/// computer (the operator's ruling of 2026-10-07, "Shack's stored password"). An empty password is
-/// the command's own "use the one in the keychain", so the session still runs at the shack with the
-/// password stored there; anything else is refused. The value is only tested for being empty:
-/// never kept, logged, compared or echoed, and the refusal carries none of it.
-pub(crate) fn argument_refusal(cmd: &str, args: &Value) -> Option<Refusal> {
-    match cmd {
-        "winlink_connect" => match args.get("password") {
-            Some(Value::String(typed)) if typed.is_empty() => None,
-            _ => Some(Refusal::TypedPassword),
-        },
-        _ => None,
-    }
-}
-
-/// How a transmission start wired for another computer goes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Wired {
-    /// One of the desktop's FT buttons. None carries a time: slot timing, the clock, sequencing,
-    /// its timeouts and the auto-log stay at the shack.
-    Ft,
-    /// The shack's voice keyer playing one of its slots: a message recorded on the other computer
-    /// reaches the slot as an import, and plays here as one recorded here does.
-    VoiceKeyer,
-    /// The PTT. From another computer never this command, which keys the shack's own audio
-    /// source: a held press on Stop's road, re-asserted by that computer's screen, that arms its
-    /// microphone over; its voice keys it.
-    HeldPress,
-}
-
-/// ⛔ THE TRANSMISSION STARTS WIRED FOR ANOTHER COMPUTER, and how each goes; every other start is
-/// refused, by name, at both ends. In name order. The FT rows are exactly the desktop's FT buttons
-/// that start a transmission; its other FT buttons key nothing and run at the shack by their
-/// class.
-pub(crate) const WIRED: &[(&str, Wired)] = &[
-    ("call_cq", Wired::Ft),
-    ("call_station", Wired::Ft),
-    ("override_next_tx", Wired::Ft),
-    ("play_voice_message", Wired::VoiceKeyer),
-    ("qso_freetext", Wired::Ft),
-    ("qso_resend", Wired::Ft),
-    ("set_ptt", Wired::HeldPress),
-    ("set_tx_enabled", Wired::Ft),
-    ("start_cq", Wired::Ft),
-];
-
-/// ⛔ THE ONE SWITCH FOR A TRANSMISSION STARTED FROM ANOTHER COMPUTER: how the start `cmd` goes
-/// from afar, or the refusal of one that is not wired. Every refusal of one reads it: the shack's
-/// own class check ([`Dispatcher::admit`]), the other computer's routing (`client_mode::way`), a
-/// held press on Stop's second road (`remote_service::lan::stop_road`), and a press's microphone on
-/// the audio road (`remote_service::lan::audio_road`), the last two asking for `set_ptt`'s held
-/// press. Past it, a start still needs the stream's transmit rules ([`Caller::roads`]).
-pub(crate) fn transmit_from_afar(cmd: &str) -> Result<Wired, Refusal> {
-    WIRED
-        .iter()
-        .find(|(name, _)| *name == cmd)
-        .map(|&(_, wired)| wired)
-        .ok_or(Refusal::TransmitNotYet)
-}
-
-/// Whether the held press is wired from afar: what Stop's road asks of a hold, and the audio road
-/// of a press's microphone.
-pub(crate) fn press_from_afar() -> bool {
-    transmit_from_afar("set_ptt") == Ok(Wired::HeldPress)
-}
 
 /// What the shack's command lane writes into a call it admitted from another computer that a
 /// handler must run as from afar, under the argument [`AFAR`]: the transmit stand-down generation
@@ -362,43 +186,6 @@ pub(crate) const STOPPED_SINCE: &str =
 
 // --- Stop's rules --------------------------------------------------------------------------------
 
-/// How the off half of a transmit switch reads in its argument.
-#[derive(Clone, Copy, Debug)]
-enum Off {
-    /// A `bool` argument that is `false`.
-    False,
-    /// A string argument naming one of these values.
-    OneOf(&'static [&'static str]),
-}
-
-/// The off half of each transmit switch: the command, the argument the app invokes it with that
-/// says on or off, and how "off" reads in it. The off half runs under Stop's rules; anything else in
-/// that argument, a missing one included, is the on half, under the command's class. A test holds
-/// each argument to the command's own signature, and fails on a transmit command with an on/off
-/// argument and no row here.
-const OFF_HALVES: &[(&str, &str, Off)] = &[
-    ("aprs_arm", "on", Off::False),
-    ("js8_arm", "on", Off::False),
-    ("js8_cq_repeat", "on", Off::False),
-    ("psk_set_latched", "on", Off::False),
-    // It runs at the shack either way: turning the sequencer on keys nothing, but turning it off
-    // ends a live session, so the off half is a stop.
-    ("rtty_set_auto", "on", Off::False),
-    ("rtty_set_latched", "on", Off::False),
-    ("set_beacon", "on", Off::False),
-    ("set_chat_cq", "on", Off::False),
-    // A run mode ("qso-run", "fieldday-run") calls CQ; these three are passive on entry, and
-    // entering one ends a run and drops the queue.
-    (
-        "set_mode",
-        "mode",
-        Off::OneOf(&["chat", "qso-monitor", "fieldday-sp"]),
-    ),
-    ("set_ptt", "on", Off::False),
-    ("set_tune", "on", Off::False),
-    ("set_tx_enabled", "enabled", Off::False),
-];
-
 /// A Stop, or the off half of a transmit switch, admitted at once with no lock taken: `Ok` with the
 /// call to run as it came, or `Err` with the call back when it is anything else. The command link
 /// asks this on its reading task before it hands a call anywhere, so a Stop never waits for another
@@ -411,87 +198,7 @@ pub(crate) fn admit_stop(call: Call) -> Result<Call, Call> {
     }
 }
 
-/// Arguments that read as the off half of `cmd`, when it is a transmit switch: for the other
-/// computer's tests, which hold its routing to Stop's rules.
-#[cfg(test)]
-pub(crate) fn off_args(cmd: &str) -> Option<Value> {
-    OFF_HALVES
-        .iter()
-        .find(|(name, ..)| *name == cmd)
-        .map(|(_, arg, off)| match off {
-            Off::False => serde_json::json!({ *arg: false }),
-            Off::OneOf(values) => serde_json::json!({ *arg: values[0] }),
-        })
-}
-
-/// Whether a call runs under Stop's rules, so the other computer sends it ahead of everything.
-pub(crate) fn is_stop(cmd: &str, args: &Value) -> bool {
-    runs_as_stop(class_of(cmd), cmd, args)
-}
-
-/// Whether a call runs under Stop's rules: its command stops a transmission, or it is the off half
-/// of a transmit switch.
-fn runs_as_stop(class: Option<Class>, cmd: &str, args: &Value) -> bool {
-    class == Some(Class::StopsTx)
-        || OFF_HALVES.iter().any(|(name, arg, off)| {
-            *name == cmd
-                && match (off, args.get(*arg)) {
-                    (Off::False, Some(Value::Bool(false))) => true,
-                    (Off::OneOf(values), Some(Value::String(value))) => {
-                        values.contains(&value.as_str())
-                    }
-                    _ => false,
-                }
-        })
-}
-
 // --- Stores and their revisions ------------------------------------------------------------------
-
-/// A store a whole save replaces, and whose reads answer with its revision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Store {
-    /// The shack's settings.
-    Settings,
-    /// The station's keys of `ui-state.json` ([`STATION_KEYS`]).
-    UiState,
-}
-
-/// How a command meets its store.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Access {
-    /// It reads the store whole.
-    Read,
-    /// It replaces the store whole: what it sends is what the other computer's copy held, so a
-    /// copy older than the shack's would put back what changed since.
-    WholeSave,
-    /// It replaces one part of the store ([`parts`]) with what the other computer's copy held, and
-    /// is checked on that part alone.
-    PartSave,
-}
-
-/// The commands that read a store whole or replace it, whole or a part. The list saves each replace
-/// one part of the settings with a list the screen took from them.
-const STORES: &[(&str, Store, Access)] = &[
-    ("get_settings", Store::Settings, Access::Read),
-    ("set_blocked_calls", Store::Settings, Access::PartSave),
-    ("set_psk_macros", Store::Settings, Access::PartSave),
-    ("set_radio_bands", Store::Settings, Access::PartSave),
-    ("set_routing_rules", Store::Settings, Access::PartSave),
-    ("set_rtty_macros", Store::Settings, Access::PartSave),
-    ("set_settings", Store::Settings, Access::WholeSave),
-    ("ui_state_load", Store::UiState, Access::Read),
-    ("ui_state_save", Store::UiState, Access::WholeSave),
-    ("update_radio_profile", Store::Settings, Access::PartSave),
-];
-
-/// The store `cmd` reads or saves, and whether it saves it: what the other computer keeps the
-/// revision of, and sends a save with.
-pub(crate) fn store_access(cmd: &str) -> Option<(Store, bool)> {
-    STORES
-        .iter()
-        .find(|(name, ..)| *name == cmd)
-        .map(|&(_, store, access)| (store, access != Access::Read))
-}
 
 /// The settings copies kept, by revision, for list saves made from them.
 const SERVED: usize = 32;
@@ -578,9 +285,6 @@ fn with_parts(mut copy: Value, saved: &Value, paths: &[Vec<Step>]) -> Value {
     copy
 }
 
-/// The ui-state pair, which splits by key at both ends.
-const UI_STATE: &[&str] = &["ui_state_load", "ui_state_save"];
-
 /// A store's revision: the SHA-256 of its JSON, as the hosted road's Settings revision is. Two
 /// copies have one revision exactly when their contents are the same.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -657,46 +361,6 @@ impl Stores for ShackStores {
 
 // --- The one mixed store -------------------------------------------------------------------------
 
-/// The keys of `ui-state.json` that hold the station's own data: its memory channels, its watch
-/// list, the satellite and DXpedition chase sets and their alarms, and its settings profiles. They
-/// live at the shack. Every other key (the UI scale's cap, the rail's order, which modes the rail
-/// shows, the main window's pane layout) belongs to the computer the operator sits at and stays
-/// there. This is `DURABLE_KEYS` in `ui/src/features/durableStore.ts` split in two, and a test fails
-/// on a durable key that is in neither half.
-pub(crate) const STATION_KEYS: &[&str] = &[
-    "nexus.dxped.alarms",
-    "nexus.dxped.alarms.fired",
-    "nexus.dxped.chasing",
-    "nexus.memory.bank.v1",
-    "nexus.memory.bank.v2",
-    "nexus.profiles",
-    "nexus.sats.alarms",
-    "nexus.sats.alarms.fired",
-    "nexus.sats.chasing",
-    "nexus.watchlist",
-];
-
-/// A ui-state map split in two: the station's keys, and every other key.
-pub(crate) fn split_ui_state(
-    map: BTreeMap<String, String>,
-) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
-    map.into_iter()
-        .partition(|(key, _)| STATION_KEYS.contains(&key.as_str()))
-}
-
-/// One map from two: the station's keys from `station`, every other key from `rest`. The other
-/// computer's screen loads the shack's station keys joined to its own other keys, so a station key
-/// in its own store, an old copy, gives way; and a save from afar writes the station keys it sent
-/// joined to the shack's own other keys.
-pub(crate) fn join_ui_state(
-    station: BTreeMap<String, String>,
-    rest: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut joined = split_ui_state(rest).1;
-    joined.extend(split_ui_state(station).0);
-    joined
-}
-
 /// The station's part of a `ui_state_load` answer, which is all the shack sends; a malformed answer
 /// sends nothing.
 fn station_answer(value: Value) -> Value {
@@ -713,19 +377,6 @@ fn merged_save(shack: BTreeMap<String, String>, args: &Value) -> Option<Value> {
     Some(serde_json::json!({ "state": join_ui_state(sent, shack) }))
 }
 
-// --- Events --------------------------------------------------------------------------------------
-
-/// The shack's events that another computer is sent, and the only ones it takes in: the alert
-/// (`crate::alert`), made once where it is raised (the pounce detector's today), the app's one push
-/// (everything else polls), so both computers' screens hear it under the same id. Any other event
-/// stays where it was raised.
-pub(crate) const FORWARDED_EVENTS: &[&str] = &[crate::alert::EVENT];
-
-/// Whether the event `name` crosses between the two computers.
-pub(crate) fn forwards(name: &str) -> bool {
-    FORWARDED_EVENTS.contains(&name)
-}
-
 // --- The shack's end -----------------------------------------------------------------------------
 
 /// One run of Nexus on one paired computer. Its journal follows it across a reconnect; a new run
@@ -736,29 +387,6 @@ pub(crate) struct CallerKey {
     pub(crate) device: String,
     /// That computer's run of Nexus, as its hello names it.
     pub(crate) run: u64,
-}
-
-/// The kind of client a computer's Nexus is, as its hello names it. This build serves the desktop
-/// alone; a phone is a later build's, with what it may call written here first, so a new kind is a
-/// new rule in the dispatcher and leaves how a computer is admitted as it is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Profile {
-    /// The desktop app, the same build at both ends: every classed command, by its class.
-    Desktop,
-}
-
-impl Profile {
-    /// The profile a hello names, or `None` for one this build does not serve.
-    pub(crate) fn named(name: &str) -> Option<Self> {
-        (name == "desktop").then_some(Profile::Desktop)
-    }
-
-    /// Its name in the hello.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Profile::Desktop => "desktop",
-        }
-    }
 }
 
 /// Who is calling, the kind of client it is, whether it holds the station's controller lease
@@ -790,24 +418,6 @@ pub(crate) struct Call {
     /// lane's, `remote_service::lan::stop_road::Ready`). Nothing else reads it, and it never
     /// refuses a Stop.
     pub(crate) stops: u64,
-}
-
-/// What became of a call, as the journal keeps it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    /// Admitted, and not finished yet.
-    Running,
-    /// It ran, and succeeded.
-    Done,
-    /// It ran, and failed with the command's own error.
-    Failed(String),
-    /// It was refused, and nothing ran.
-    Refused(Refusal),
-    /// It was admitted, and its result never came back.
-    Lost,
-    /// Nothing is known of it: never seen, no longer kept, or the shack restarted since. The
-    /// screen says to check, and never guesses.
-    Unknown,
 }
 
 /// The dispatcher's answer to a call.
@@ -1331,34 +941,6 @@ pub(crate) fn tauri_runner<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Runne
             }),
         );
     })
-}
-
-/// This dispatcher's tables as text, for the build's contract (`remote_service::lan::wire`): every
-/// command's class, the starts wired from afar, the off halves, the stores and how each command
-/// meets them, the station's ui-state keys, the events that cross and the profiles served.
-pub(crate) fn contract_text() -> String {
-    use std::fmt::Write;
-    let mut text = String::new();
-    for (cmd, class) in crate::command_classes::classes() {
-        let _ = writeln!(text, "class {cmd} {class:?}");
-    }
-    for (cmd, wired) in WIRED {
-        let _ = writeln!(text, "wired {cmd} {wired:?}");
-    }
-    for (cmd, arg, off) in OFF_HALVES {
-        let _ = writeln!(text, "off {cmd} {arg} {off:?}");
-    }
-    for (cmd, store, access) in STORES {
-        let _ = writeln!(text, "store {cmd} {store:?} {access:?}");
-    }
-    for key in STATION_KEYS {
-        let _ = writeln!(text, "station {key}");
-    }
-    for event in FORWARDED_EVENTS {
-        let _ = writeln!(text, "event {event}");
-    }
-    let _ = writeln!(text, "profile {}", Profile::Desktop.name());
-    text
 }
 
 /// A command's error, cut to [`ERROR_BYTES`] on a character boundary.

@@ -57,8 +57,10 @@ use tempo_app::remote_control::ptt_hold::PttHold;
 use tempo_audio::mic_decode::{MicDecoder, FRAME_SAMPLES};
 
 use super::super::audio::{ReceiveFanout, Subscription};
-use super::datagram::{self, End, Keys, Tag, AUDIO_MAX, EXPORTED, HEADER};
+use super::datagram::{self, End, Keys, Tag, AUDIO_MAX, EXPORTED};
 use super::stop_road::{press_id, Hears};
+/// What the road carries (the client core's, which both ends read).
+pub(crate) use tempo_client::audio_road::wire::{Down, Up};
 
 /// The road's port, past the listener's TCP port: 42076 beside 42075.
 pub(crate) const PORT_AFTER: u16 = 1;
@@ -70,129 +72,6 @@ const RECHECK: Duration = Duration::from_secs(1);
 const SEND_WAIT: Duration = Duration::from_millis(1);
 /// The longest the thread waits for a datagram before it looks at its roads again: half a frame.
 const TICK: Duration = Duration::from_millis(10);
-/// The road's message format, in the build's contract.
-const FORMAT: u8 = 1;
-/// The AEAD's tag after the body.
-const SEAL: usize = 16;
-/// The longest body a datagram on this road carries.
-const BODY: usize = AUDIO_MAX - HEADER - SEAL;
-
-const LISTEN: u8 = 1;
-const MIC: u8 = 2;
-const RX: u8 = 16;
-
-/// What a computer sends on its audio road.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Up {
-    /// Send the station's audio here: the computer's lease.
-    Listen { lease: String },
-    /// One frame of the computer's microphone: its press, its number in that press, and the packet.
-    Mic {
-        press: u64,
-        frame: u32,
-        packet: Vec<u8>,
-    },
-}
-
-/// What the shack sends back.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Down {
-    /// One frame of receive audio: the capture's epoch, its number in that epoch, and the packet.
-    Rx {
-        epoch: u64,
-        seq: u32,
-        packet: Vec<u8>,
-    },
-}
-
-impl Up {
-    pub(crate) fn kind(&self) -> u8 {
-        match self {
-            Up::Listen { .. } => LISTEN,
-            Up::Mic { .. } => MIC,
-        }
-    }
-
-    pub(crate) fn body(&self) -> Vec<u8> {
-        match self {
-            Up::Listen { lease } => lease.as_bytes().to_vec(),
-            Up::Mic {
-                press,
-                frame,
-                packet,
-            } => {
-                let mut body = press.to_be_bytes().to_vec();
-                body.extend_from_slice(&frame.to_be_bytes());
-                body.extend_from_slice(packet);
-                body
-            }
-        }
-    }
-
-    /// A body that verified, read exactly: a lease the station could have issued, or a frame with a
-    /// packet in it.
-    pub(crate) fn read(kind: u8, body: &[u8]) -> Option<Self> {
-        Some(match kind {
-            LISTEN if body.len() == 36 => {
-                let lease = std::str::from_utf8(body).ok()?;
-                if !super::super::transport::identifier(lease) {
-                    return None;
-                }
-                Up::Listen {
-                    lease: lease.to_string(),
-                }
-            }
-            MIC if (13..=BODY).contains(&body.len()) => Up::Mic {
-                press: u64::from_be_bytes(body[..8].try_into().ok()?),
-                frame: u32::from_be_bytes(body[8..12].try_into().ok()?),
-                packet: body[12..].to_vec(),
-            },
-            _ => return None,
-        })
-    }
-}
-
-impl Down {
-    pub(crate) fn kind(&self) -> u8 {
-        match self {
-            Down::Rx { .. } => RX,
-        }
-    }
-
-    pub(crate) fn body(&self) -> Vec<u8> {
-        match self {
-            Down::Rx { epoch, seq, packet } => {
-                let mut body = epoch.to_be_bytes().to_vec();
-                body.extend_from_slice(&seq.to_be_bytes());
-                body.extend_from_slice(packet);
-                body
-            }
-        }
-    }
-
-    /// A body that verified, read exactly.
-    pub(crate) fn read(kind: u8, body: &[u8]) -> Option<Self> {
-        match kind {
-            RX if (13..=BODY).contains(&body.len()) => Some(Down::Rx {
-                epoch: u64::from_be_bytes(body[..8].try_into().ok()?),
-                seq: u32::from_be_bytes(body[8..12].try_into().ok()?),
-                packet: body[12..].to_vec(),
-            }),
-            _ => None,
-        }
-    }
-}
-
-/// The road's format, for the build's contract (`super::wire::contract`).
-pub(crate) fn contract_text() -> String {
-    format!(
-        "audio road {} {} format {FORMAT} max {AUDIO_MAX} up listen={LISTEN}(lease) \
-         mic={MIC}(press,frame,opus) down rx={RX}(epoch,seq,opus)\n",
-        datagram::VERSION,
-        String::from_utf8_lossy(datagram::AUDIO_LABEL),
-    )
-}
-
 /// The audio lane's admission, as the road asks it: a session, a device and a lease, now. Never
 /// waits: `remoteBusy` when the authority is busy, which is not a refusal.
 pub(crate) type Admitted =
