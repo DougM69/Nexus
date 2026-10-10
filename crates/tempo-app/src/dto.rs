@@ -1089,6 +1089,36 @@ pub enum StreamMic {
     Keyed,
 }
 
+/// Which kind of problem the station's audio-error line reports ([`RadioStatus::audio_error_kind`]).
+/// Named by the line's writer beside its sentence, so the UI never reads the sentence to learn what
+/// it is about. The words, and how loudly each is shown, are the UI's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioErrorKind {
+    /// The radio loop ended: nothing is sent or received until Nexus restarts.
+    EngineStopped,
+    /// The sound card failed to open, or stopped delivering and is being reopened.
+    SoundCard,
+    /// No receive audio is arriving: a reopened card that has not delivered yet, or a capture
+    /// that delivers nothing but digital zero.
+    NoReceiveAudio,
+    /// The rig did not accept a PTT key (or did not answer it in time).
+    Ptt,
+    /// Flex native audio was selected and none arrived, so receive went back to the sound card.
+    FlexAudio,
+    /// The Flex native panadapter is switched on with no radio address to start it on.
+    FlexAddress,
+    /// The headphone monitor could not open, or is held off because its output is the rig's TX
+    /// device.
+    Monitor,
+    /// The voice-message mic could not open; a recording uses the shared input instead.
+    VoiceMic,
+    /// A recording could not be written: a QSO recording that could not start, or a period's WAV.
+    Recording,
+    /// A decode crashed and was contained; that period is lost and receive continues.
+    DecodeCrash,
+}
+
 /// A slot over's key the radio did not accept ([`RadioStatus::slot_key_refused`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1102,6 +1132,22 @@ pub struct SlotKeyRefused {
     /// its transmit audio from: the UI says that in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_audio: Option<FlexAudioRefusal>,
+}
+
+/// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it
+/// ([`RadioStatus::flex_tune`]). Read and shown; Nexus writes neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexTune {
+    /// The radio's tune power, 0–100 % (`transmit tunepower`), as SmartSDR sets it: the level the
+    /// carrier keys at. `None` until the radio reports it.
+    #[serde(default)]
+    pub power_pct: Option<u8>,
+    /// The radio's own transmit timeout in milliseconds (`interlock timeout`), 0 when it is off:
+    /// the only thing that ends the carrier if Nexus or the network fails during a tune. `None`
+    /// until the radio reports it.
+    #[serde(default)]
+    pub tx_timeout_ms: Option<u64>,
 }
 
 /// Why Nexus's own Flex client kept a slot over's key off the air
@@ -1509,10 +1555,17 @@ pub struct RadioStatus {
     /// spots), `None` = simplex. Drives the SPLIT badge.
     #[serde(default)]
     pub split_tx_mhz: Option<f64>,
-    /// Set when the sound-card input/output failed to open, so the UI can show
-    /// why the waterfall is blank instead of failing silently.
+    /// The station's audio-error line, one sentence: a sound card that failed to open (why the
+    /// waterfall is blank), a PTT key the rig did not accept, a headphone monitor held off …
+    /// [`Self::audio_error_kind`] says which.
     #[serde(default)]
     pub audio_error: Option<String>,
+    /// Which kind of problem [`Self::audio_error`] is, so the status lane can head the sentence
+    /// with true words and tier it by what it costs: a refused PTT key sat under "RADIO STOPPED"
+    /// beside a dial and a CAT link that both worked. Written with the sentence, by its writer.
+    /// ABSENT while there is no line, so every snapshot without one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_error_kind: Option<AudioErrorKind>,
     /// Why this station is NOT sharing its radio, when the CAT broker asked for its port and
     /// could not have it — `None` = it is serving, or sharing is switched off (#165).
     ///
@@ -1676,6 +1729,19 @@ pub struct RadioStatus {
     /// snapshot every other radio sends is byte for byte what it was.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flex_radio_has_mic: bool,
+    /// While Nexus's own Flex client tunes with the radio's own carrier (Beta, off until a
+    /// tester's bench): the radio's tune power and its own transmit timeout, shown beside Tune.
+    /// See `Engine::observe_flex_tune`.
+    ///
+    /// Skipped when `None`, which is every other station, so their snapshots are byte for byte
+    /// what they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flex_tune: Option<FlexTune>,
+    /// While Tune is the radio's own carrier (`flex_tune`), the licence refuses it here though it
+    /// allows the mode's own emission: the carrier is judged as CW at the frequency the radio
+    /// transmits on too. Tune then keys nothing, and the screen says why beside it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flex_tune_refused: bool,
     /// The Flex VITA **meter** worker is running, which on a Flex is the only producer of a
     /// FlexLib-scaled SWR. OBSERVED from the worker, never read from `flex_native_pan` — see
     /// `Engine::observe_flex_meter_stream`. Read it with [`Self::swr_scale_verified`]: that
@@ -4310,6 +4376,57 @@ mod tests {
             AMP_REASONS,
             ["portBusy", "noAnswer", "wrongModel", "malformed"]
         );
+    }
+
+    /// The audio-error kinds by the wire names the status lane's table is keyed on
+    /// (`ui/src/features/audioError.ts`): a renamed kind would reach the screen as one the UI does
+    /// not know, headed with the plain words. And a healthy line sends no kind at all.
+    #[test]
+    fn the_audio_error_kinds_go_out_under_the_names_the_ui_reads() {
+        use AudioErrorKind::*;
+        let names: Vec<String> = [
+            EngineStopped,
+            SoundCard,
+            NoReceiveAudio,
+            Ptt,
+            FlexAudio,
+            FlexAddress,
+            Monitor,
+            VoiceMic,
+            Recording,
+            DecodeCrash,
+        ]
+        .iter()
+        .map(|kind| {
+            serde_json::to_value(kind)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+        assert_eq!(
+            names,
+            [
+                "engineStopped",
+                "soundCard",
+                "noReceiveAudio",
+                "ptt",
+                "flexAudio",
+                "flexAddress",
+                "monitor",
+                "voiceMic",
+                "recording",
+                "decodeCrash",
+            ]
+        );
+        let healthy =
+            serde_json::to_value(crate::AppState::new("W9XYZ", "EN37").snapshot()).unwrap();
+        assert!(
+            healthy["radio"].get("audioError").is_some(),
+            "premise: the radio status"
+        );
+        assert!(healthy["radio"].get("audioErrorKind").is_none());
     }
 
     /// `Tier::Js8`: the wire name the UI switches on, the label, the degrade-don't-refuse

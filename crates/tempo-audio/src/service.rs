@@ -766,7 +766,7 @@ fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
     )
 }
 
-use tempo_app::dto::{FieldDayQso, SourceKind, Tier};
+use tempo_app::dto::{AudioErrorKind, FieldDayQso, SourceKind, Tier};
 use tempo_app::settings::{RadioProfile, Settings};
 use tempo_core::message::Msg;
 // Band label → club-log meter string. Lives in `tempo_net` beside the two
@@ -1811,7 +1811,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // see only a silent, blank waterfall).
             {
                 let mut eng = engine_lock(&engine);
-                eng.set_audio_error(Some(format!("Sound card failed to open: {e}")));
+                eng.set_audio_error(Some((
+                    AudioErrorKind::SoundCard,
+                    format!("Sound card failed to open: {e}"),
+                )));
             }
             // ⚠️ Do NOT die here when a device was NAMED. `CpalBackend::open` became strict
             // about a configured-but-unresolvable device (device.rs `resolve_configured`),
@@ -1842,10 +1845,13 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                         attempt += 1;
                         {
                             let mut eng = engine_lock(&engine);
-                            eng.set_audio_error(Some(format!(
-                                "Sound card failed to open: {e} The system default failed too \
-                                 ({fallback}). Retrying every {}s — attempt {attempt}.",
-                                (AUDIO_RETRY_MS / 1000.0) as u64
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::SoundCard,
+                                format!(
+                                    "Sound card failed to open: {e} The system default failed \
+                                     too ({fallback}). Retrying every {}s — attempt {attempt}.",
+                                    (AUDIO_RETRY_MS / 1000.0) as u64
+                                ),
                             )));
                         }
                         std::thread::sleep(Duration::from_millis(AUDIO_RETRY_MS as u64));
@@ -3284,6 +3290,9 @@ struct RadioLoop {
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
     tuning_keyed: bool,
+    /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
+    /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
+    tune_native: bool,
     /// Was the operator in a DATA mode (FT8/PKTUSB → DATA-U) when this tune started? The Icom
     /// tune keys in DATA mode regardless; on release we restore THIS state, not a hardcoded OFF —
     /// else an FT8 operator gets dropped from DATA-U to plain USB.
@@ -3619,6 +3628,12 @@ struct RadioLoop {
     /// Whether the radio has the mic while native audio is on, as last pushed to the engine (the
     /// voice keyer's refusal).
     flex_radio_has_mic_pushed: Option<bool>,
+    /// What the Flex client's radio reports beside Tune while Tune is its own carrier, as last
+    /// pushed to the engine (`None` inside: Tune is Nexus's tone).
+    flex_tune_pushed: Option<Option<tempo_app::dto::FlexTune>>,
+    /// The CW speed the Flex client's radio last reported, while its CW is switched on: a change
+    /// to a speed this loop did not set is followed (`last_cat_wpm`).
+    cw_radio_wpm: Option<u32>,
     /// When the current native audio source started, for the starvation check. `None` once
     /// starvation has been reported (the check is one-shot per source — it must not re-fire every
     /// tick).
@@ -4035,6 +4050,7 @@ impl RadioLoop {
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
             tuning_keyed: false,
+            tune_native: false,
             tune_was_data: false,
             tune_phase: 0.0,
             tune_started_ms: None,
@@ -4117,6 +4133,8 @@ impl RadioLoop {
             flex_client_audio_failed: false,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
+            flex_tune_pushed: None,
+            cw_radio_wpm: None,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
             silent_capture_since: None,
@@ -4985,12 +5003,13 @@ impl RadioLoop {
         if flex_enabled && ip.is_empty() {
             {
                 let mut eng = engine_lock(engine);
-                eng.set_audio_error(Some(
+                eng.set_audio_error(Some((
+                    AudioErrorKind::FlexAddress,
                     "Flex native panadapter is switched on but no Flex radio IP is set — \
                      nothing will start. Put the radio's LAN address in Settings ▸ Radio ▸ \
                      \"Flex radio IP\" (Find Radios fills it in), then Save."
                         .to_string(),
-                ));
+                )));
             }
             self.err_owner = ErrOwner::Dax;
         }
@@ -5187,10 +5206,11 @@ impl RadioLoop {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(
+                    eng.set_audio_error(Some((
+                        AudioErrorKind::Ptt,
                         "The rig didn't accept PTT — check your PTT method and CAT/port."
                             .to_string(),
-                    ));
+                    )));
                 }
                 self.err_owner = ErrOwner::Ptt;
             }
@@ -5267,6 +5287,32 @@ impl RadioLoop {
     /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
     /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
     /// all, and an over that goes out unkeys at its end as any over does.
+    /// Start the radio's own tune carrier through Nexus's Flex client, held at most `hold_ms`
+    /// ([`crate::flex::FlexDaemon::tune_on`]). A refusal goes on the PTT line in the operator's
+    /// words, as a refused key's does ([`Self::report_ptt`]), and comes back for the log; a start
+    /// clears that line.
+    fn key_radio_tune(&mut self, engine: &Arc<Mutex<Engine>>, hold_ms: u64) -> Option<String> {
+        let started = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .map(|d| d.tune_on(hold_ms));
+        let why = match started {
+            Some(Ok(())) => {
+                self.report_ptt(engine, false);
+                return None;
+            }
+            Some(Err(refusal)) => crate::flex::tune_refusal_words(refusal.as_ref()),
+            None => crate::flex::tune_refusal_words(None),
+        };
+        tempo_core::applog::info("tx", &format!("{why} (dropped)"));
+        if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
+            engine_lock(engine).set_audio_error(Some((AudioErrorKind::Ptt, why.clone())));
+            self.err_owner = ErrOwner::Ptt;
+        }
+        Some(why)
+    }
+
     fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
         let key = if plain {
@@ -5785,6 +5831,7 @@ impl RadioLoop {
         self.mode_giveup = None;
         self.mode_saw_reject = false;
         self.last_cat_wpm = 0;
+        self.cw_radio_wpm = None;
         // The WinKeyer is not the thing being handed off (it is its own box on its own
         // port), but the handoff resets every "already told it" cache and this one costs
         // two bytes to be wrong about, so it goes with the rest.
@@ -6015,12 +6062,13 @@ impl RadioLoop {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(
+                    eng.set_audio_error(Some((
+                        AudioErrorKind::FlexAudio,
                         "Native Flex audio is selected but no audio is arriving — switched back \
                          to the sound card. Check the Flex API address, that DAX is enabled on \
                          the radio, and that a firewall isn't blocking its UDP audio."
                             .to_string(),
-                    ));
+                    )));
                 }
                 self.err_owner = ErrOwner::Dax;
             }
@@ -6087,6 +6135,17 @@ impl RadioLoop {
         if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
             self.flex_radio_has_mic_pushed = Some(radio_has_mic);
             engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
+        }
+        // …and, while Tune is the client's radio's own carrier (switched on only once a tester's
+        // bench has confirmed it), what that radio reports beside Tune: its tune power and its own
+        // transmit timeout. The engine then judges a tune as CW where the radio puts the carrier
+        // too. Pushed on the change, before the tune branch below reads `tuning`.
+        let flex_tune = flex
+            .filter(|d| d.tunes_natively())
+            .map(crate::flex::FlexDaemon::radio_tune);
+        if self.flex_tune_pushed != Some(flex_tune) {
+            self.flex_tune_pushed = Some(flex_tune);
+            engine_lock(engine).observe_flex_tune(flex_tune);
         }
 
         self.apply_remote_radio(engine, rig, now);
@@ -6550,8 +6609,9 @@ impl RadioLoop {
                     self.audio_suspect = None;
                     {
                         let mut eng = engine_lock(engine);
-                        eng.set_audio_error(Some(format!(
-                            "Sound card stopped — {err}. Reopening…"
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::SoundCard,
+                            format!("Sound card stopped — {err}. Reopening…"),
                         )));
                     }
                     // A REAL device error owns the line, same as the open-failure arm below.
@@ -6604,10 +6664,13 @@ impl RadioLoop {
                         };
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!(
-                                "Audio input is open but delivering pure silence — every \
-                                 sample is zero. Check the rig's USB audio cable and the \
-                                 input's level.{mac_hint}"
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::NoReceiveAudio,
+                                format!(
+                                    "Audio input is open but delivering pure silence — every \
+                                     sample is zero. Check the rig's USB audio cable and the \
+                                     input's level.{mac_hint}"
+                                ),
                             )));
                         }
                         // The receive side finally says something. This condition was detected
@@ -6778,9 +6841,10 @@ impl RadioLoop {
                         // erase the wait.
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::NoReceiveAudio,
                                 "Audio device reopened, waiting for samples…".to_string(),
-                            ));
+                            )));
                         }
                         self.err_owner = ErrOwner::Device;
                         self.audio_awaiting_samples = true;
@@ -6800,7 +6864,10 @@ impl RadioLoop {
                         );
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::SoundCard,
+                                format!("Audio device failed to open: {e}"),
+                            )));
                         }
                         // A REAL device error owns the line — monitor/voice-mic
                         // notices may neither overwrite nor clear it.
@@ -6876,20 +6943,22 @@ impl RadioLoop {
                             // Device error outranks us; a VoiceMic notice is the
                             // operator's more recent concern.
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some(format!(
-                                    "Headphone monitor could not open: {e}"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Monitor,
+                                    format!("Headphone monitor could not open: {e}"),
                                 )));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
                         Ok(()) if want.monitor_enabled && guarded => {
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some(
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Monitor,
                                     "Headphone monitor is off: the chosen output is the rig's TX \
                                      device — monitoring it would transmit the received band. Pick a \
                                      separate headphone or speaker device."
                                         .to_string(),
-                                ));
+                                )));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
@@ -8943,6 +9012,31 @@ impl RadioLoop {
             // not polling HOLDS the word in the engine's queue, so the macro resumes on the
             // radio it was typed for instead of keying the one being switched away from.
             let ready = now >= self.cw_busy_until && self.may_key();
+            // THE RADIO'S CW SPEED IS FOLLOWED, NEVER FOUGHT (Nexus's Flex client, once its CW is
+            // switched on). The radio's keyer sends each word at the speed it reports, and another
+            // program can change that speed (SmartSDR, a Maestro). A change the radio reports to a
+            // speed this loop did not set (`last_cat_wpm`) becomes the WPM control's: the CW screen
+            // shows what the radio keys at, the pacing below uses it, and nothing sets it back.
+            // Nexus's own speed still reaches the radio with the next word when the operator moves
+            // the control. Not persisted: the operator's saved speed is the operator's.
+            if let Some(d) = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .filter(|d| d.sends_cw())
+            {
+                let radio = d.cw_speed();
+                if radio != self.cw_radio_wpm {
+                    self.cw_radio_wpm = radio;
+                    if let Some(wpm) = radio.filter(|w| *w != self.last_cat_wpm) {
+                        let mut eng = engine_lock(engine);
+                        eng.set_cw_wpm(wpm);
+                        // The control's range is narrower than the radio's: what it holds is what
+                        // this loop would send, so the radio's speed is not sent back over it.
+                        self.last_cat_wpm = eng.cw_wpm();
+                    }
+                }
+            }
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
                 (
@@ -10109,9 +10203,12 @@ impl RadioLoop {
                         if matches!(self.err_owner, ErrOwner::None | ErrOwner::VoiceMic) {
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_audio_error(Some(format!(
-                                    "Voice mic could not open: {e} — recording from the shared \
-                                     input instead"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::VoiceMic,
+                                    format!(
+                                        "Voice mic could not open: {e} — recording from the \
+                                         shared input instead"
+                                    ),
                                 )));
                             }
                             self.err_owner = ErrOwner::VoiceMic;
@@ -10212,8 +10309,9 @@ impl RadioLoop {
                             Err(e) => {
                                 let mut eng = engine_lock(engine);
                                 eng.stop_qso_recording();
-                                eng.set_audio_error(Some(format!(
-                                    "Could not start QSO recording: {e}"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Recording,
+                                    format!("Could not start QSO recording: {e}"),
                                 )));
                             }
                         }
@@ -11244,12 +11342,11 @@ impl RadioLoop {
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
         let mut is_tuning = eng.tuning();
+        // Operator-configurable auto-release (WSJT-X "Tune after t s"), floored at 1 s and
+        // CLAMPED to the MAX_TUNE_MS hard ceiling.
+        let max_ms = ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
         if is_tuning {
             if let Some(start) = self.tune_started_ms {
-                // Operator-configurable auto-release (WSJT-X "Tune after t s"),
-                // floored at 1 s and CLAMPED to the MAX_TUNE_MS hard ceiling.
-                let max_ms =
-                    ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
                 if now - start > max_ms {
                     eng.set_tune(false);
                     is_tuning = false;
@@ -11265,9 +11362,26 @@ impl RadioLoop {
         }
         if is_tuning {
             let keying = !self.tuning_keyed;
+            // THE RADIO'S OWN TUNE CARRIER (Nexus's Flex client, Beta, switched on only once a
+            // tester's bench has confirmed its readback). The radio makes the carrier itself at its
+            // own tune power (`transmit tune 1`), so this loop plays no tone, DAX carries nothing,
+            // and the client's typed calls start and end it: rigctld has no verb for it. The
+            // loop's timeout above and its release below stand; the client's session also ends the
+            // carrier by itself at the hold handed to it plus its margin, whether or not this loop
+            // runs. Decided at the key, kept to the release.
+            let native = if keying {
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(crate::flex::FlexDaemon::tunes_natively)
+            } else {
+                self.tune_native
+            };
             // TUNE POWER (`Settings::tune_power_pct`) — the level a tune-up keys at, read while
             // the lock is still held. Applied in the LOOP and not in a cockpit, so every path
-            // that starts a tune gets it.
+            // that starts a tune gets it. Not to the radio's own carrier, which keys at the tune
+            // power set on the radio: Nexus shows that one and writes nothing (operator ruling,
+            // 2026-10-08, "Radio's, shown, nothing written").
             //
             // SAFE-DIRECTION ONLY: the lower of the operator's tune level and the level already
             // commanded, so a tune can turn the rig DOWN and never up — and it inherits the
@@ -11281,6 +11395,7 @@ impl RadioLoop {
             let tune_pct = eng
                 .settings()
                 .tune_power_pct
+                .filter(|_| !native)
                 .map(|pct| f32::from(pct.min(100)) / 100.0);
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
@@ -11375,25 +11490,43 @@ impl RadioLoop {
                 }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                let key = self.key_over(rig, false);
-                // The tune's line, in the words the voice keyer gives a refused key.
-                self.report_ptt(engine, key.warns());
+                let refused = if native {
+                    // Held at most the auto-release's time: the client's session ends it at that
+                    // plus its margin even if this loop stalls.
+                    self.key_radio_tune(engine, max_ms as u64)
+                } else {
+                    let key = self.key_over(rig, false);
+                    // The tune's line, in the words the voice keyer gives a refused key.
+                    self.report_ptt(engine, key.warns());
+                    match key {
+                        KeyUp::Refused(why) => {
+                            note_refused_key("tune not keyed", &why);
+                            Some(why)
+                        }
+                        _ => None,
+                    }
+                };
                 self.tuning_keyed = true;
+                self.tune_native = native;
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
                 self.tune_last_chunk_ms = None;
                 self.tune_queued_ms = 0.0;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
-                if let KeyUp::Refused(why) = &key {
-                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`). The tune
-                    // ends here, through the same call its auto-release makes, and the next
-                    // tick's release below unkeys and puts the DATA mode and the power back, as
-                    // it does for every tune.
-                    note_refused_key("tune not keyed", why);
+                if refused.is_some() {
+                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`; the client's
+                    // carrier was never started). The tune ends here, through the same call its
+                    // auto-release makes, and the next tick's release below unkeys and puts the
+                    // DATA mode and the power back, as it does for every tune.
                     engine_lock(engine).set_tune(false);
                     return Ok(());
                 }
+            }
+            if native {
+                // The radio makes the carrier: nothing to play.
+                self.rx.clear(); // don't decode our own carrier
+                return Ok(());
             }
             // TOP THE CARRIER'S LEAD UP TOWARD [`TUNE_LEAD_MS`] — never add to it.
             //
@@ -11437,7 +11570,21 @@ impl RadioLoop {
             // took to play out. Nothing but tune carrier can be queued here — the tune branch
             // supersedes any pending slot over and returns early on every tick it runs.
             backend.flush_output();
-            let _ = rig.ptt(false);
+            // The radio's own carrier ends with its own stop, the client's typed call; every other
+            // tune with the unkey, as does a native tune whose client has gone.
+            match self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .filter(|_| self.tune_native)
+            {
+                Some(d) => {
+                    d.tune_off();
+                }
+                None => {
+                    let _ = rig.ptt(false);
+                }
+            }
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
                 // Restore the PRE-TUNE data state — NOT a hardcoded OFF. An FT8/DATA-U operator
                 // (tune_was_data) stays in DATA-U; only a plain USB/LSB operator gets DATA off.
@@ -12426,7 +12573,10 @@ impl RadioLoop {
                     let name = format!("{y:04}{mo:02}{d:02}_{h:02}{m:02}{sec:02}_{band}.wav");
                     let path = std::path::Path::new(&dir).join(name);
                     if let Err(e) = crate::voice::write_wav_12k(&path, frame) {
-                        eng.set_audio_error(Some(format!("period WAV save failed: {e}")));
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::Recording,
+                            format!("period WAV save failed: {e}"),
+                        )));
                     }
                 }
             }
@@ -19603,6 +19753,11 @@ mod tests {
         assert!(
             said.contains("Flex radio IP"),
             "the message names the field to fill in: {said}"
+        );
+        assert_eq!(
+            line_kind(&engine),
+            "flexAddress",
+            "named as the missing address, not as a stopped radio"
         );
 
         // …then types the address. THIS is the transition the key must see.
@@ -30365,9 +30520,10 @@ mod tests {
 
         // The state the no-address warning leaves behind: a Dax-owned banner with the native
         // pan's key, which carries no address, still recorded.
-        engine.lock().unwrap().set_audio_error(Some(
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::FlexAddress,
             "Flex native panadapter is switched on but no Flex radio IP is set (…)".to_string(),
-        ));
+        )));
         state.err_owner = ErrOwner::Dax;
         state.spectrum_src_key = Some((2036, true, String::new()));
 
@@ -30382,10 +30538,10 @@ mod tests {
         assert_eq!(state.err_owner, ErrOwner::None, "the line is handed back");
 
         // …and the same transition must not clear a line another writer owns.
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Audio device failed to open".to_string()));
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::SoundCard,
+            "Audio device failed to open".to_string(),
+        )));
         state.err_owner = ErrOwner::Device;
         state.spectrum_src_key = Some((2036, true, String::new()));
         state.reconcile_spectrum_source(&engine, 0, false);
@@ -30407,32 +30563,40 @@ mod tests {
         state.report_ptt(&engine, true);
         assert!(banner(&engine).is_some(), "PTT NAK shows the banner");
         assert_eq!(state.err_owner, ErrOwner::Ptt);
+        assert_eq!(
+            line_kind(&engine),
+            "ptt",
+            "named as a PTT problem, so the lane does not say the radio stopped"
+        );
         state.report_ptt(&engine, false);
         assert!(
             banner(&engine).is_none(),
             "a good key clears the PTT status"
         );
         assert_eq!(state.err_owner, ErrOwner::None);
+        assert_eq!(line_kind(&engine), serde_json::Value::Null, "and its kind");
 
         // A PTT status must NOT clobber a higher-priority device error, and clearing PTT
         // must not wipe the device error either.
         state.err_owner = ErrOwner::Device;
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Sound card failed".to_string()));
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::SoundCard,
+            "Sound card failed".to_string(),
+        )));
         state.report_ptt(&engine, true);
         assert_eq!(
             banner(&engine).as_deref(),
             Some("Sound card failed"),
             "device error wins"
         );
+        assert_eq!(line_kind(&engine), "soundCard", "and so does its kind");
         state.report_ptt(&engine, false);
         assert_eq!(
             banner(&engine).as_deref(),
             Some("Sound card failed"),
             "clearing PTT leaves a device error intact"
         );
+        assert_eq!(line_kind(&engine), "soundCard", "kind and all");
     }
 
     #[test]
@@ -31271,6 +31435,13 @@ mod tests {
             .unwrap();
     }
 
+    /// The kind the snapshot gives the audio-error line, as the UI reads it off the wire
+    /// (`Null` = no line).
+    fn line_kind(engine: &Arc<Mutex<Engine>>) -> serde_json::Value {
+        let snapshot = engine.lock().unwrap().snapshot();
+        serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"].clone()
+    }
+
     /// One `step` at `now`, with a rebuild closure that must never be called.
     fn quiet_step(
         engine: &Arc<Mutex<Engine>>,
@@ -31358,6 +31529,11 @@ mod tests {
                 .is_some_and(|m| m.contains("waiting for samples")),
             "control: the banner must be up before the card delivers"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "noReceiveAudio",
+            "an open card that has delivered nothing is named for what the operator lacks"
+        );
 
         // The rebuilt stream comes to life.
         backend.queue_capture(vec![0.01_f32; 512]);
@@ -31366,6 +31542,11 @@ mod tests {
             engine.lock().unwrap().snapshot().radio.audio_error,
             None,
             "the first delivered frame IS the recovery — the banner must come down on it"
+        );
+        assert_eq!(
+            line_kind(&engine),
+            serde_json::Value::Null,
+            "and its kind with it"
         );
         assert!(
             !state.audio_awaiting_samples,
@@ -31376,6 +31557,74 @@ mod tests {
             ErrOwner::None,
             "the audio-error line is released too, so a monitor/voice-mic notice can use it again"
         );
+    }
+
+    /// A card that dies, and then will not reopen, is named a SOUND CARD failure on the line at
+    /// both steps: while the confirmed death waits for its rebuild, and when the rebuild's open
+    /// fails. Not a stopped radio: CAT carries on throughout.
+    #[test]
+    fn a_card_that_dies_and_will_not_reopen_is_named_a_sound_card_failure() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        // Every reopen fails: the device is gone for good.
+        let mut ra =
+            |_t: &Transport| -> Result<MockBackend, String> { Err("no such device".to_string()) };
+        let mut step = |state: &mut RadioLoop, backend: &mut MockBackend, now: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let line = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error;
+
+        // Settle, so nothing but the death below can explain a rebuild.
+        step(&mut state, &mut backend, 0.0);
+        engine.lock().unwrap().set_audio_error(None);
+        backend.stream_error = Some("capture stream: device no longer available".to_string());
+        step(&mut state, &mut backend, 20.0);
+        // The death is confirmed, and its rebuild held back (as it is while keyed, or inside the
+        // debounce after a recent one).
+        state.audio_rebuild_floor = f64::MAX;
+        step(
+            &mut state,
+            &mut backend,
+            20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+        );
+        let said = line(&engine);
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Sound card stopped")),
+            "premise: the death is on the line, its rebuild still to come: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "soundCard");
+
+        // The rebuild runs, and the card will not open.
+        state.audio_rebuild_floor = 0.0;
+        step(
+            &mut state,
+            &mut backend,
+            40.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+        );
+        let said = line(&engine);
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Audio device failed to open")),
+            "premise: the reopen failed: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "soundCard");
     }
 
     #[test]
@@ -32641,6 +32890,65 @@ mod tests {
                 .contains("Voice mic could not open"),
             "the failure is surfaced on the audio-status line, got {err:?}"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "voiceMic",
+            "named as the voice mic's notice: the radio works through it"
+        );
+    }
+
+    /// A headphone monitor held off because its output is the rig's TX device is named a MONITOR
+    /// notice on the line: the radio receives and transmits through it.
+    #[test]
+    fn a_monitor_held_off_by_the_tx_device_guard_is_named_a_monitor_notice() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.monitor_enabled = true;
+            s.monitor_device = "Rig USB CODEC".to_string();
+            s.audio_out = "Rig USB CODEC".to_string();
+            eng.apply_settings(s);
+        }
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        // The new output device rebuilds the card, which holds the line until it delivers.
+        quiet_step(&engine, &mut state, &mut backend, 0.0);
+        backend.queue_capture(vec![0.01_f32; 512]);
+        quiet_step(&engine, &mut state, &mut backend, 20.0);
+        // The monitor applies itself again (as after a voice-mic notice comes down).
+        state.monitor_reapply = true;
+        quiet_step(&engine, &mut state, &mut backend, 40.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Headphone monitor is off")),
+            "premise: the guard held the monitor off: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "monitor");
+    }
+
+    /// A QSO recording that cannot start is named a RECORDING notice on the line: the radio works
+    /// through it.
+    #[test]
+    fn a_qso_recording_that_cannot_start_is_named_a_recording_notice() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        // No file can be created at an empty path.
+        engine.lock().unwrap().start_qso_recording("");
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        quiet_step(&engine, &mut state, &mut backend, 0.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Could not start QSO recording")),
+            "premise: the recording could not start: {said:?}"
+        );
+        assert!(
+            !engine.lock().unwrap().is_qso_recording(),
+            "premise: the REC flag came down"
+        );
+        assert_eq!(line_kind(&engine), "recording");
     }
 
     #[test]

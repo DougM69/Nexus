@@ -593,6 +593,9 @@ const MIGRATED = [
   'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // …and the headline for the station's audio-error line, by the kind the station names —
+  // migrated from birth. The sentence passes through as data.
+  'features/audioError.ts',
   // Enter Sends Message's step table — migrated from birth. It holds no sentence: its reasons
   // are typed, and the strip words them from the catalog.
   'features/esm.ts',
@@ -607,6 +610,9 @@ const MIGRATED = [
   // dock's ESM plate — both migrated from birth; ESM, N1MM's name for it, is held as a token.
   'features/esmHost.ts',
   'components/EsmPlate.tsx',
+  // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
+  // birth.
+  'components/RadioTuneNote.tsx',
 ]
 
 /**

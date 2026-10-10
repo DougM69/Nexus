@@ -265,6 +265,8 @@ impl AppState {
                 rig_confirmed: false,
                 flex_dax_tx: false,
                 flex_radio_has_mic: false,
+                flex_tune: None,
+                flex_tune_refused: false,
                 flex_meter_stream: false,
                 rated_watts: 100,
                 dial_mhz: 14.074, // FT8 20m (default mode)
@@ -348,6 +350,7 @@ impl AppState {
                 cw_wpm: 25,
                 split_tx_mhz: None,
                 audio_error: None,
+                audio_error_kind: None,
                 cat_share_error: None,
                 scope_error: None,
                 scope_span_refused: None,
