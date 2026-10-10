@@ -217,6 +217,68 @@ pub(super) async fn behind_a_port_on(
     at
 }
 
+/// Until `s`'s station has let go of every connection the window made to it (its own count, at its
+/// gate): a refused try ends at the station when the computer's last bytes and its close arrive, and
+/// on a loaded machine those can come a retransmission after the window gave up (about 200 ms,
+/// measured), each holding one of the two places an address may have open. A try made sooner is
+/// dropped as it arrives, which the window reads as nothing answering. So a test that tries an
+/// address again waits for the station's own count, never for the window's answer alone.
+pub(super) async fn let_go(s: &Shack) {
+    let peer = PEER.parse::<SocketAddr>().unwrap().ip();
+    let given_up = tokio::time::Instant::now() + Duration::from_secs(10);
+    while s.shared.gate.open(peer) > 0 {
+        assert!(
+            tokio::time::Instant::now() < given_up,
+            "the station still holds a connection"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// How late a refused connection's end reaches the station through [`ending_late`].
+const LATE: Duration = Duration::from_millis(300);
+
+/// A relay to `to` on `ip` that ends each connection at the station late, as a loaded machine
+/// does: the station's bytes go back at once and the computer's first read (its hello) goes on at
+/// once, then everything else the computer sends, its close too, [`LATE`] behind.
+async fn ending_late(to: SocketAddrV4, ip: Ipv4Addr) -> SocketAddrV4 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+    let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
+        unreachable!()
+    };
+    tokio::spawn(async move {
+        while let Ok((computer, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(station) = tokio::net::TcpStream::connect(to).await else {
+                    return;
+                };
+                let (mut from_computer, mut to_computer) = computer.into_split();
+                let (mut from_station, mut to_station) = station.into_split();
+                let back = tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut from_station, &mut to_computer).await;
+                    let _ = to_computer.shutdown().await;
+                });
+                let mut buffer = vec![0u8; 16 * 1024];
+                let mut first = true;
+                loop {
+                    let read = from_computer.read(&mut buffer).await.unwrap_or(0);
+                    if !first || read == 0 {
+                        tokio::time::sleep(LATE).await;
+                    }
+                    if read == 0 || to_station.write_all(&buffer[..read]).await.is_err() {
+                        break;
+                    }
+                    first = false;
+                }
+                let _ = to_station.shutdown().await;
+                let _ = back.await;
+            });
+        }
+    });
+    at
+}
+
 /// ★ Remembered addresses, on this box's own private address (a station's are private, and only a
 /// private one is remembered): the one the operator typed is tried first, then the remembered ones
 /// in their order, the last that worked first, and the first to welcome this computer is the
@@ -1318,6 +1380,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     assert_eq!(connected["address"], live.to_string());
     assert_eq!(looks.load(Ordering::SeqCst), 1);
 
+    let_go(&other).await;
     remembered(&[taken, live]);
     let connected = page_connect(&mut page, None).await;
     assert_eq!(
@@ -1332,6 +1395,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     );
 
     adverts.lock().unwrap().clear();
+    let_go(&other).await;
     remembered(&[taken]);
     assert_eq!(
         page_connect(&mut page, None).await,
@@ -1348,6 +1412,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
         protocol: 1,
         key: hex(digest(&SHA256, &spki).as_ref())[..16].to_string(),
     }];
+    let_go(&other).await;
     remembered(&[taken]);
     assert_eq!(
         page_connect(&mut page, None).await,
@@ -1355,6 +1420,47 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
         "found by name where nothing listens"
     );
     assert_eq!(looks.load(Ordering::SeqCst), 3);
+}
+
+/// ★ Another station's refusals that end late at it still leave this station's key told, however
+/// often the window tries: each try waits until that station has let the one before go. Here each
+/// try's end reaches the other station [`LATE`] after the window gave up on it, as a loaded machine
+/// delays a connection's last segment and its close, and every try is told `keyChanged`. Without
+/// the wait, the third try finds the two before still held there, is dropped as it arrives, and
+/// reads as nothing answering (`unreachable`). Skipped, saying so, on a box with no private address
+/// of its own.
+#[tokio::test]
+async fn another_stations_refusals_that_end_late_still_tell_the_key() {
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let other = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let taken = ending_late(behind_a_port_on(&other, private, stop).await, private).await;
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let origin = Origin::start(Reach {
+        assets: Arc::new(|_: &str| None),
+        stations: Arc::new(Stations::new(Arc::new(store.clone()))),
+        find: Arc::new(|_| Ok(Vec::new())),
+        name: "Den PC".into(),
+        operate: Arc::new(|_| {}),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    let mut kept = paired_record(&s, taken);
+    kept.addresses = vec![taken.to_string()];
+    stations.keep(&kept).unwrap();
+    for attempt in 1..=4 {
+        let_go(&other).await;
+        assert_eq!(
+            page_connect(&mut page, None).await,
+            json!({"type":"connectRefused","reason":"keyChanged"}),
+            "try {attempt}"
+        );
+    }
 }
 
 /// ★ Pairing again with a station this computer is paired with already keeps this computer's own
