@@ -502,6 +502,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CQ FD PJ4/K1ABC FN42`, which FT8 cannot carry and sent as another station's call, `CQ FD K1ABC
   FN42`. The Tx6 row already sends the plain CQ. NEEDS-BENCH: Call CQ with a compound call in ARRL
   Field Day.
+- **With a compound or nonstandard call, the rest of a contest contact carries your call too, as
+  WSJT-X writes it.** The answer to a CQ, the reports, RR73 and 73 went out with the base call
+  (`W9XYZ K1ABC FN42`), another station's. They now send your call hashed beside a grid or report
+  (`W9XYZ <PJ4/K1ABC> FN42`) and whole in RR73 and 73 (`<W9XYZ> PJ4/K1ABC RR73`); a reply to your
+  hashed call moves the contact on, and the log records the other station's call without the
+  `< >`. NEEDS-BENCH: a contest contact with a compound call, as S&P and as Running.
 - **A contest picked in Settings no longer stops FT8 QSO mode and Chat.** With a contest picked
   whose exchange was not filled in (the Texas QSO Party with no county or state, say), switching to
   FT8 QSO mode, to call CQ or to search and pounce, or to Chat was refused with that contest's

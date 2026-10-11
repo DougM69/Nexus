@@ -1732,6 +1732,252 @@ fn a_nonstandard_call_calls_the_plain_cq_on_every_contest_path() {
     );
 }
 
+/// One contest contact by `me`, the Contest screen's S&P with TX on or its Running, against a
+/// partner whose overs come in the order given, each heard as this station's decoder prints it
+/// from the air. Ten slots, this station's the even ones. Returns the station and what it keyed.
+fn contact_as(
+    me: &str,
+    contest: &str,
+    tier: Tier,
+    running: bool,
+    partner: &[String],
+) -> (Engine, Vec<String>) {
+    let mut e = engine_for(contest, MY_GRID);
+    let mut s = e.settings().clone();
+    s.mycall = me.into();
+    e.apply_settings(s);
+    e.set_tier(tier);
+    if running {
+        e.set_mode("fieldday-run")
+            .expect("the Contest screen's Running");
+    } else {
+        e.set_mode("fieldday-sp").expect("the Contest screen's S&P");
+        e.set_tx_enabled(true);
+    }
+    let mut theirs = partner.iter();
+    let mut ours = Vec::new();
+    for slot in 0..10u64 {
+        if slot % 2 == 0 {
+            ours.extend(keyed(&mut e, slot));
+        } else {
+            let over: Vec<_> = theirs
+                .next()
+                .map(|t| heard(&air_form(t).1))
+                .into_iter()
+                .collect();
+            e.ingest_decodes_for_test(&over, slot + 1);
+        }
+    }
+    (e, ours)
+}
+
+/// ⭐ A NONSTANDARD CALL GOES OUT IN EVERY OVER OF A CONTEST CONTACT AS WSJT-X WRITES IT, and
+/// never as another station's call. With `PJ4/K1ABC` and `K1ABC/QRP`, as S&P and as Running, in
+/// Field Day, an ARRL VHF contest and a QSO party, on FT8 and FT4, against a partner sending what
+/// WSJT-X 3.0.2 sends to such a call (`genStdMsgs`, mainwindow.cpp: `t0a`, the call hashed beside
+/// its grid, report or exchange, 9596 and 9629-9631; its own hashed in RR73 and 73, 9701 and 9709).
+/// By value: every over this station keys (its call hashed beside a grid or a report, whole
+/// beside the other's hashed call in RR73, 73 and the standard messages' answer to a CQ, whole in
+/// Field Day's exchange), what a receiver decodes from each, and the call the contest logs.
+#[test]
+fn a_nonstandard_call_goes_out_as_wsjtx_writes_it_in_every_contest_over() {
+    for me in ["PJ4/K1ABC", "K1ABC/QRP"] {
+        let h = format!("<{me}>");
+        let cq = format!("CQ {me}");
+        // (contest, running, the partner's overs, this station's)
+        let scenes = [
+            (
+                "arrlfd",
+                false,
+                vec![
+                    "CQ FD W9XYZ EN37".to_string(),
+                    format!("{me} W9XYZ R 1D WI"),
+                    format!("{me} <W9XYZ> 73"),
+                ],
+                vec![format!("W9XYZ {me} 2B EMA"), format!("<W9XYZ> {me} RR73")],
+            ),
+            (
+                "arrlfd",
+                true,
+                vec![format!("{me} W9XYZ 1D WI"), format!("{me} <W9XYZ> RR73")],
+                vec![
+                    cq.clone(),
+                    format!("W9XYZ {me} R 2B EMA"),
+                    format!("<W9XYZ> {me} 73"),
+                    cq.clone(),
+                    cq.clone(),
+                ],
+            ),
+            (
+                "arrlvhf_jan",
+                false,
+                vec![
+                    "CQ TEST W9XYZ EN37".to_string(),
+                    format!("{h} W9XYZ R EN37"),
+                    format!("{me} <W9XYZ> 73"),
+                ],
+                vec![format!("W9XYZ {h} FN42"), format!("<W9XYZ> {me} RR73")],
+            ),
+            (
+                "arrlvhf_jan",
+                true,
+                vec![format!("{h} W9XYZ EN37"), format!("{me} <W9XYZ> RR73")],
+                vec![
+                    cq.clone(),
+                    format!("W9XYZ {h} R FN42"),
+                    format!("<W9XYZ> {me} 73"),
+                    cq.clone(),
+                    cq.clone(),
+                ],
+            ),
+            (
+                "txqp",
+                false,
+                vec![
+                    "CQ W9XYZ EN37".to_string(),
+                    format!("{h} W9XYZ {DX_RPT}"),
+                    format!("{me} <W9XYZ> RR73"),
+                ],
+                vec![
+                    format!("<W9XYZ> {me}"),
+                    format!("W9XYZ {h} R{DX_SNR:+03}"),
+                    format!("<W9XYZ> {me} 73"),
+                ],
+            ),
+            (
+                "txqp",
+                true,
+                vec![
+                    format!("{h} W9XYZ EN37"),
+                    format!("{h} W9XYZ R{DX_RPT}"),
+                    format!("{me} <W9XYZ> 73"),
+                ],
+                vec![
+                    cq.clone(),
+                    format!("W9XYZ {h} {DX_SNR:+03}"),
+                    format!("<W9XYZ> {me} RR73"),
+                    cq.clone(),
+                    cq.clone(),
+                ],
+            ),
+        ];
+        for (contest, running, partner, want) in scenes {
+            for tier in [Tier::Ft8, Tier::Ft4] {
+                let what = format!("{me} {contest:?} {} running={running}", tier_name(tier));
+                let (e, ours) = contact_as(me, contest, tier, running, &partner);
+                assert_eq!(ours, want, "{what}");
+                for over in &ours {
+                    let air = air_form(over).1;
+                    let words: Vec<&str> = air.split_whitespace().collect();
+                    assert!(
+                        words.iter().any(|w| *w == me || *w == h),
+                        "{what}: {over:?} carries {me}: {air:?}"
+                    );
+                    assert!(
+                        !words
+                            .iter()
+                            .any(|w| w.contains("K1ABC") && *w != me && *w != h),
+                        "{what}: {over:?} names no other station: {air:?}"
+                    );
+                }
+                let Mode::FieldDay { station, .. } = &e.mode else {
+                    panic!("{what}: the contest runs");
+                };
+                assert_eq!(
+                    station.log.qsos().last().map(|q| q.call.as_str()),
+                    Some("W9XYZ"),
+                    "{what}: logged"
+                );
+            }
+        }
+    }
+    // The control: a `/P` call is standard, and keeps the standard forms.
+    let partner = [
+        "CQ TEST W9XYZ EN37".to_string(),
+        "K1ABC/P W9XYZ R EN37".to_string(),
+    ];
+    let (_, ours) = contact_as("K1ABC/P", "arrlvhf_jan", Tier::Ft8, false, &partner);
+    assert_eq!(ours, ["W9XYZ K1ABC/P FN42", "W9XYZ K1ABC/P RR73"]);
+    // Field Day's exchange goes with the call whole, and the packer hashes it. WSJT-X 3.0.2 writes
+    // it bracketed (`t0b`, 9597), which the packer takes from a suffixed call alone: for a
+    // prefixed one `chkcall` reads `K1ABC>` as the base call, and WSJT-X's own exchange, and the
+    // reply to it, go out as free text.
+    let ft8 = |t: &str| tones_of(modes::ModeKind::Ft8, t);
+    assert_eq!(
+        ft8("W9XYZ K1ABC/QRP 2B EMA"),
+        ft8("W9XYZ <K1ABC/QRP> 2B EMA"),
+        "a suffixed call: WSJT-X's exchange, bit for bit"
+    );
+    assert_eq!(
+        air_form("W9XYZ PJ4/K1ABC 2B EMA"),
+        (
+            "i3=0 n3=3".to_string(),
+            "W9XYZ <PJ4/K1ABC> 2B EMA".to_string()
+        )
+    );
+    for wsjtx in ["W9XYZ <PJ4/K1ABC> 2B EMA", "<PJ4/K1ABC> W9XYZ R 1D WI"] {
+        assert_eq!(air_form(wsjtx).0, "i3=0 n3=0", "{wsjtx}: free text");
+    }
+}
+
+/// ⭐ A REPLY TO THIS STATION'S HASHED CALL IS DECODED AS ITS OWN, AND THE CONTACT GOES ON. A
+/// nonstandard call goes out hashed beside a grid, and comes back hashed: `<ZK3/K1ABC> W9XYZ R
+/// EN37`. The decoder prints a hash as a call only while its table holds that call, and the
+/// packer fills the table on every message it encodes (`pack28` → `save_hash_call`), this
+/// station's own over included, in the one table the decoder reads. By value, with a call no
+/// other test sends: once S&P has keyed its answer, the runner's reply carrying that answer's
+/// own hash decodes as `<ZK3/K1ABC> …`, is taken, and closes with RR73; the same reply with a
+/// hash the table does not hold decodes as `<...> …` and is not.
+#[test]
+fn a_reply_to_our_hashed_call_is_decoded_as_ours_and_goes_on() {
+    let me = "ZK3/K1ABC";
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    let mut s = e.settings().clone();
+    s.mycall = me.into();
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-sp").expect("the Contest screen's S&P");
+    e.set_tx_enabled(true);
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
+    let answer = keyed(&mut e, 2).expect("S&P answers the CQ");
+    assert_eq!(answer, "W9XYZ <ZK3/K1ABC> FN42");
+    // The reply: the call fields of a standard message are bits 0-27 and 29-56. Its first holds
+    // the hash from this station's own answer, where that hash is the second.
+    let bits = |t: &str| {
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t)).expect("the text packs")
+    };
+    let mut reply = bits("K2DEF W9XYZ R EN37");
+    reply[..28].copy_from_slice(&bits(&answer)[29..57]);
+    let mut unknown = reply.clone();
+    unknown[27] ^= 1;
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    assert_eq!(
+        print(&unknown),
+        "<...> W9XYZ R EN37",
+        "a hash the table does not hold"
+    );
+    e.ingest_decodes_for_test(&[heard(&print(&unknown))], 4);
+    assert_eq!(
+        keyed(&mut e, 4).as_deref(),
+        Some("W9XYZ <ZK3/K1ABC> FN42"),
+        "a reply to an unknown hash is not to this station"
+    );
+    assert_eq!(print(&reply), "<ZK3/K1ABC> W9XYZ R EN37");
+    e.ingest_decodes_for_test(&[heard(&print(&reply))], 6);
+    assert_eq!(
+        keyed(&mut e, 6).as_deref(),
+        Some("<W9XYZ> ZK3/K1ABC RR73"),
+        "the reply to its hashed call is this station's, and the contact goes on"
+    );
+    let Mode::FieldDay { station, .. } = &e.mode else {
+        panic!("the contest runs");
+    };
+    assert_eq!(
+        station.log.qsos().last().map(|q| q.call.as_str()),
+        Some("W9XYZ")
+    );
+}
+
 /// ⛔ The transmit guards hold for the cockpit's gestures exactly as for the Contest screen's
 /// buttons: a contest whose messages carry the grid keys nothing on Call CQ without one; the
 /// wall-clock watchdog ends a run Call CQ started; Halt stops a contact a double-click started;

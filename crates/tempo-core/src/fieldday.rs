@@ -3351,11 +3351,7 @@ impl FieldDayStation {
     pub fn answer_cq(&mut self, de: &str, grid: &str) {
         let answer = match self.messages {
             FtMessages::FieldDay => self.my_exch_msg(de, false),
-            FtMessages::NaVhf | FtMessages::Standard => Msg::Grid {
-                to: de.to_string(),
-                de: self.mycall().to_string(),
-                grid: self.air_grid(),
-            },
+            FtMessages::NaVhf | FtMessages::Standard => self.grid_answer(de),
         };
         self.dxcall = Some(de.to_string());
         // The standard messages never carry the runner's grid again, so its CQ's is the one
@@ -3422,6 +3418,85 @@ impl FieldDayStation {
             .is_some_and(|dx| crate::message::same_call(dx, de))
     }
 
+    /// Addressed to my call in Field Day's messages: exactly, as always, or — my call being
+    /// nonstandard — hashed. Field Day's message carries each call in a 28-bit field, which
+    /// holds a nonstandard call only as its hash (`pack28`), so a reply to my exchange names it
+    /// `<K1ABC/QRP>`. A standard call is matched exactly, as before.
+    fn to_my_call(&self, to: &str) -> bool {
+        let me = self.mycall();
+        to == me || (!crate::message::is_std_call(me) && crate::message::unhash_call(to) == me)
+    }
+
+    /// My call as WSJT-X 3.0.2 writes it beside a grid or a report, its Tx2 and Tx3
+    /// (`genStdMsgs`, mainwindow.cpp): whole when `stdCall` passes it (`/P` and `/R` too), else
+    /// hashed, `t0b=hisCall + " <" + my_callsign + "> "` (9597, taken by `if(!bMyCall) { t=t0b;`
+    /// at 9625-9626). Whole, the packer would send the base call: `W9XYZ PJ4/K1ABC FN42` goes
+    /// out as `W9XYZ K1ABC FN42`, another station.
+    fn my_call_beside(&self) -> String {
+        let me = self.mycall();
+        if crate::message::is_std_call(me) {
+            me.to_string()
+        } else {
+            format!("<{me}>")
+        }
+    }
+
+    /// The two calls of an over to `to` that carries no grid, report or exchange — RR73, 73,
+    /// and the standard messages' answer to a CQ: as they always were with a standard call of
+    /// mine, and with a nonstandard one `to` hashed and mine whole, as WSJT-X writes them:
+    /// `t0a="<"+hisCall + "> " + my_callsign + " "` (9596), the answer `if(!bMyCall) t=t0a;`
+    /// (9601), RR73 and 73 `if(bHisCall and !bMyCall) t="<" + hisCall + "> " + my_callsign …`
+    /// (9702, 9710).
+    ///
+    /// WSJT-X also asks whether `to`'s call is standard. Here it always is, or arrives already
+    /// hashed: a station with a nonstandard call cannot send the grid, report or exchange these
+    /// overs answer (its own message packs as free text), and its RR73 or 73 names it hashed.
+    fn closing_calls(&self, to: &str) -> (String, String) {
+        let me = self.mycall().to_string();
+        if crate::message::is_std_call(&me) {
+            (to.to_string(), me)
+        } else {
+            (format!("<{}>", crate::message::unhash_call(to)), me)
+        }
+    }
+
+    /// RR73 to `to` (WSJT-X's Tx4), its calls as [`closing_calls`](Self::closing_calls) writes
+    /// them.
+    fn rr73(&self, to: &str) -> Msg {
+        let (to, de) = self.closing_calls(to);
+        Msg::Rr73 { to, de }
+    }
+
+    /// 73 to `to` (WSJT-X's Tx5), its calls as [`closing_calls`](Self::closing_calls) writes
+    /// them.
+    fn bye73(&self, to: &str) -> Msg {
+        let (to, de) = self.closing_calls(to);
+        Msg::Bye73 { to, de }
+    }
+
+    /// My answer to `to`'s CQ outside Field Day's messages: my grid, WSJT-X's Tx2 in the ARRL
+    /// VHF contests (whose Tx1 is switched off, 8238-8248) and its Tx1 in the standard messages.
+    /// A nonstandard call goes hashed beside the grid in the Tx2
+    /// ([`my_call_beside`](Self::my_call_beside)), and whole in the Tx1, which is then `t0a`
+    /// alone: no grid, which that message has no room for (`msgtype(t0a, ui->tx1)`, 9627).
+    fn grid_answer(&self, to: &str) -> Msg {
+        match self.messages {
+            FtMessages::Standard if !crate::message::is_std_call(self.mycall()) => {
+                let (to, de) = self.closing_calls(to);
+                Msg::Grid {
+                    to,
+                    de,
+                    grid: String::new(),
+                }
+            }
+            _ => Msg::Grid {
+                to: to.to_string(),
+                de: self.my_call_beside(),
+                grid: self.air_grid(),
+            },
+        }
+    }
+
     /// The contest's fields a contact with a station on `grid` exchanges: its GRID received
     /// and mine sent where the contest exchanges one, the way a typed entry records them, and
     /// nothing otherwise — the standard messages carry none of the exchange. One builder for
@@ -3462,8 +3537,11 @@ impl FieldDayStation {
         self.log.is_dupe_row(call, &self.log.band, "DIG", &rx, &tx)
     }
 
-    /// Log the contact with `call`, whose grid was `grid` ([`exchanged`](Self::exchanged)).
+    /// Log the contact with `call`, whose grid was `grid` ([`exchanged`](Self::exchanged)). A
+    /// call that came hashed is logged without the brackets: a station answering a nonstandard
+    /// call of mine sends its RR73 or 73 with its own call hashed, `PJ4/K1ABC <W9XYZ> RR73`.
     fn log_worked(&mut self, call: &str, grid: Option<&str>, slot: u64) {
+        let call = crate::message::unhash_call(call);
         let (rx, tx) = self.exchanged(grid);
         let submode = self.log.current_submode.clone();
         self.log
@@ -3472,6 +3550,14 @@ impl FieldDayStation {
             .push(format!("logged {call} {}", grid.unwrap_or_default()));
     }
 
+    /// My Field Day exchange to `to`, rogered or not (WSJT-X's Tx3 and Tx2).
+    ///
+    /// ⚠️ **A nonstandard call goes in whole, not as WSJT-X writes it.** Field Day's packer
+    /// hashes a nonstandard call itself (`pack28`), so `W9XYZ K1ABC/QRP 2B EMA` goes out
+    /// bit for bit as WSJT-X's `W9XYZ <K1ABC/QRP> 2B EMA` (`t0b`, mainwindow.cpp 9597) does. A
+    /// prefixed call it refuses bracketed: `chkcall` reads `K1ABC>` as the base call, so
+    /// WSJT-X 3.0.2's own `W9XYZ <PJ4/K1ABC> 2B EMA` goes out as the free text `W9XYZ  PJ4/K1`,
+    /// where `W9XYZ PJ4/K1ABC 2B EMA` goes out as the exchange with the call hashed.
     fn my_exch_msg(&self, to: &str, roger: bool) -> Msg {
         Msg::FieldDay {
             to: to.to_string(),
@@ -3518,7 +3604,7 @@ impl FieldDayStation {
                         class,
                         section,
                     },
-                ) if to == self.mycall() => {
+                ) if self.to_my_call(to) => {
                     self.dxcall = Some(de.clone());
                     self.peer_exch = Some((de.clone(), class.clone(), section.clone()));
                     self.pending = Some(self.my_exch_msg(de, true));
@@ -3542,13 +3628,10 @@ impl FieldDayStation {
                         class,
                         section,
                     },
-                ) if to == self.mycall() => {
+                ) if self.to_my_call(to) => {
                     self.dxcall = Some(de.clone());
                     self.log.log(de, class, section, slot);
-                    self.pending = Some(Msg::Rr73 {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                    });
+                    self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                     self.transcript.push(format!(
                         "caller {de} {class} {section} rogered early → log + RR73"
@@ -3564,12 +3647,9 @@ impl FieldDayStation {
                         class,
                         section,
                     },
-                ) if to == self.mycall() => {
+                ) if self.to_my_call(to) => {
                     self.log.log(de, class, section, slot);
-                    self.pending = Some(Msg::Rr73 {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                    });
+                    self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                     self.transcript
                         .push(format!("logged {de} {class} {section}; send RR73"));
@@ -3589,7 +3669,7 @@ impl FieldDayStation {
                 (FdState::AwaitConfirm, Msg::Rr73 { to, .. })
                 | (FdState::AwaitConfirm, Msg::Rrr { to, .. })
                 | (FdState::AwaitConfirm, Msg::Bye73 { to, .. })
-                    if to == self.mycall() =>
+                    if self.to_my_call(to) =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
                         self.log.log(&call, &class, &section, slot);
@@ -3600,10 +3680,7 @@ impl FieldDayStation {
                         Msg::Rr73 { de, .. } | Msg::Rrr { de, .. }
                             if self.wsjtx_field_day && self.from_dx(de) =>
                         {
-                            Some(Msg::Bye73 {
-                                to: de.clone(),
-                                de: self.mycall().to_string(),
-                            })
+                            Some(self.bye73(de))
                         }
                         _ => None,
                     };
@@ -3631,11 +3708,7 @@ impl FieldDayStation {
                         continue;
                     }
                     self.dxcall = Some(de.clone());
-                    self.pending = Some(Msg::Grid {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                        grid: self.air_grid(),
-                    });
+                    self.pending = Some(self.grid_answer(de));
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("answer CQ {de}"));
                 }
@@ -3645,7 +3718,7 @@ impl FieldDayStation {
                 {
                     self.dxcall = Some(de.clone());
                     self.peer_grid = Some(grid.clone());
-                    self.pending = Some(rogered_grid(de, self.mycall(), &self.air_grid()));
+                    self.pending = Some(rogered_grid(de, &self.my_call_beside(), &self.air_grid()));
                     self.state = FdState::AwaitConfirm;
                     self.transcript
                         .push(format!("caller {de} {grid} → R + my grid"));
@@ -3656,10 +3729,7 @@ impl FieldDayStation {
                 {
                     let grid = self.peer_grid.take();
                     self.log_worked(de, grid.as_deref(), slot);
-                    self.pending = Some(Msg::Bye73 {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                    });
+                    self.pending = Some(self.bye73(de));
                     self.state = FdState::Done;
                 }
                 // S&P: the runner rogered and sent its grid → log it, and close with RR73.
@@ -3671,10 +3741,7 @@ impl FieldDayStation {
                         continue;
                     }
                     self.log_worked(&de, Some(&grid), slot);
-                    self.pending = Some(Msg::Rr73 {
-                        to: de,
-                        de: self.mycall().to_string(),
-                    });
+                    self.pending = Some(self.rr73(&de));
                     self.state = FdState::Done;
                 }
                 _ => {}
@@ -3700,11 +3767,7 @@ impl FieldDayStation {
                     }
                     self.dxcall = Some(de.clone());
                     self.peer_grid = Some(grid.clone());
-                    self.pending = Some(Msg::Grid {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                        grid: self.air_grid(),
-                    });
+                    self.pending = Some(self.grid_answer(de));
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("answer CQ {de}"));
                 }
@@ -3716,7 +3779,7 @@ impl FieldDayStation {
                     self.peer_grid = Some(grid.clone());
                     self.pending = Some(Msg::Report {
                         to: de.clone(),
-                        de: self.mycall().to_string(),
+                        de: self.my_call_beside(),
                         snr: rpt,
                     });
                     self.state = FdState::AwaitExchange;
@@ -3727,7 +3790,7 @@ impl FieldDayStation {
                     self.dxcall = Some(de.clone());
                     self.pending = Some(Msg::RReport {
                         to: de.clone(),
-                        de: self.mycall().to_string(),
+                        de: self.my_call_beside(),
                         snr: rpt,
                     });
                     self.state = FdState::AwaitConfirm;
@@ -3740,7 +3803,7 @@ impl FieldDayStation {
                 {
                     self.pending = Some(Msg::RReport {
                         to: de.clone(),
-                        de: self.mycall().to_string(),
+                        de: self.my_call_beside(),
                         snr: rpt,
                     });
                     self.state = FdState::AwaitConfirm;
@@ -3751,10 +3814,7 @@ impl FieldDayStation {
                 {
                     let grid = self.peer_grid.take();
                     self.log_worked(de, grid.as_deref(), slot);
-                    self.pending = Some(Msg::Rr73 {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                    });
+                    self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                 }
                 // RR73 or RRR after my `R` and report → log, and close with 73.
@@ -3763,10 +3823,7 @@ impl FieldDayStation {
                 {
                     let grid = self.peer_grid.take();
                     self.log_worked(de, grid.as_deref(), slot);
-                    self.pending = Some(Msg::Bye73 {
-                        to: de.clone(),
-                        de: self.mycall().to_string(),
-                    });
+                    self.pending = Some(self.bye73(de));
                     self.state = FdState::Done;
                 }
                 _ => {}
@@ -3788,7 +3845,9 @@ fn rogered_grid(to: &str, de: &str, grid: &str) -> Msg {
 
 /// The `(to, de, grid)` of a [`rogered_grid`] message, or `None`: two callsigns, `R`, and a
 /// four-character locator in the packer's own form — letters `A` to `R`, then two digits —
-/// that is not `RR73` (`packjt77.f90` `pack77_1`'s `is_grid4`).
+/// that is not `RR73` (`packjt77.f90` `pack77_1`'s `is_grid4`). The first call may be hashed,
+/// as the decoder prints a nonstandard call the runner's message carries: `<PJ4/K1ABC> W9XYZ R
+/// EN37` is the R and grid to `PJ4/K1ABC`.
 fn rogered_grid_of(text: &str) -> Option<(String, String, String)> {
     let t: Vec<&str> = text.split_whitespace().collect();
     let &[to, de, "R", grid] = t.as_slice() else {
@@ -3801,7 +3860,7 @@ fn rogered_grid_of(text: &str) -> Option<(String, String, String)> {
         && (b'A'..=b'R').contains(&b[1])
         && b[2].is_ascii_digit()
         && b[3].is_ascii_digit();
-    (is_grid && crate::message::is_callsign(to) && crate::message::is_callsign(de))
+    (is_grid && crate::message::looks_like_call(to) && crate::message::is_callsign(de))
         .then(|| (to.to_string(), de.to_string(), grid.to_string()))
 }
 
@@ -5157,19 +5216,24 @@ mod tests {
     /// A station in the rules file's `event`, with `mygrid` in Settings, speaking what the
     /// engine picks for that contest on FT8.
     fn ft8_station(event: &str, mygrid: &str, running: bool) -> FieldDayStation {
+        ft8_station_as("K1ABC", event, mygrid, running)
+    }
+
+    /// [`ft8_station`] for the station `mycall`.
+    fn ft8_station_as(mycall: &str, event: &str, mygrid: &str, running: bool) -> FieldDayStation {
         let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
             .expect("a shipped ruleset");
         let data = crate::contest::StationData {
-            mycall: "K1ABC".into(),
+            mycall: mycall.into(),
             mygrid: mygrid.into(),
             contest_qth_state: "MA".into(),
             ..Default::default()
         };
         let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
         let mut st = if running {
-            FieldDayStation::running("K1ABC", mygrid, session, "6M")
+            FieldDayStation::running(mycall, mygrid, session, "6M")
         } else {
-            FieldDayStation::search_and_pounce("K1ABC", mygrid, session, "6M")
+            FieldDayStation::search_and_pounce(mycall, mygrid, session, "6M")
         };
         st.set_messages(FtMessages::for_contest(rs, "FT8"), running);
         st
@@ -5620,6 +5684,11 @@ mod tests {
             ok("K1ABC W9XYZ R EN37").as_deref(),
             Some("K1ABC W9XYZ EN37")
         );
+        // A nonstandard call it goes to comes hashed, as the decoder prints it.
+        assert_eq!(
+            ok("<PJ4/K1ABC> W9XYZ R EN37").as_deref(),
+            Some("<PJ4/K1ABC> W9XYZ EN37")
+        );
         assert_eq!(
             rogered_grid("W9XYZ", "K1ABC", "FN42").to_text(),
             "W9XYZ K1ABC R FN42"
@@ -5739,6 +5808,149 @@ mod tests {
             run.pending.as_ref().map(Msg::to_text).as_deref(),
             Some("CQ PJ4/K1ABC"),
             "the first CQ of a new Running"
+        );
+    }
+
+    /// The station `mycall` runs in `event`: Field Day's with its own exchange, `2B EMA`, and a
+    /// caller running WSJT-X's Field Day activity; the other contests' from the rules file.
+    fn contest_station(mycall: &str, event: &str, running: bool) -> FieldDayStation {
+        if event != "arrlfd" {
+            return ft8_station_as(mycall, event, "FN42", running);
+        }
+        let session = ContestSession::field_day(FdEvent::ArrlFd, "2B", "EMA");
+        let mut st = if running {
+            FieldDayStation::running(mycall, "FN42", session, "20M")
+        } else {
+            FieldDayStation::search_and_pounce(mycall, "FN42", session, "20M")
+        };
+        st.set_wsjtx_field_day(true);
+        st
+    }
+
+    /// One contact by `mycall` in `event`: each step is what is heard (nothing, for a Running's
+    /// first CQ) and what goes on the air next. It must end logged, with W9XYZ's call bare.
+    fn contact(mycall: &str, event: &str, running: bool, steps: &[(String, String)]) {
+        let mut st = contest_station(mycall, event, running);
+        for (slot, (heard, sent)) in steps.iter().enumerate() {
+            if !heard.is_empty() {
+                st.observe(&[dec(heard)], slot as u64);
+            }
+            assert_eq!(
+                &next(&st),
+                sent,
+                "{mycall} {event} running={running}, {heard:?}"
+            );
+        }
+        assert_eq!(
+            st.state,
+            FdState::Done,
+            "{mycall} {event} running={running}"
+        );
+        assert_eq!(
+            last_row(&st).0,
+            "W9XYZ",
+            "{mycall} {event} running={running}"
+        );
+    }
+
+    /// ⭐ A nonstandard call (a prefix, or any suffix but `/P` and `/R`) goes on the air in every
+    /// over of a contest contact as WSJT-X 3.0.2 writes it (`genStdMsgs`, mainwindow.cpp
+    /// 9596-9597, 9601, 9625-9627, 9655-9657, 9702, 9710): hashed beside a grid or a report;
+    /// whole beside the other station's hashed call in RR73, 73 and the standard messages'
+    /// answer to a CQ, which then carries no grid; and whole in Field Day's exchange, which its
+    /// packer hashes. What is heard is what the decoder prints from a station answering that
+    /// call: mine hashed beside its grid, report or exchange, its own hashed in its RR73 and 73.
+    #[test]
+    fn a_nonstandard_call_goes_out_as_wsjtx_writes_it() {
+        for me in ["PJ4/K1ABC", "K1ABC/QRP"] {
+            let h = format!("<{me}>");
+            let s = |heard: &str, sent: String| (heard.to_string(), sent);
+            let fd_sp = [
+                s("CQ FD W9XYZ EN37", format!("W9XYZ {me} 2B EMA")),
+                s(&format!("{h} W9XYZ R 1D WI"), format!("<W9XYZ> {me} RR73")),
+            ];
+            let fd_run = [
+                s("", format!("CQ {me}")),
+                s(&format!("{h} W9XYZ 1D WI"), format!("W9XYZ {me} R 2B EMA")),
+                s(&format!("{me} <W9XYZ> RR73"), format!("<W9XYZ> {me} 73")),
+            ];
+            let vhf_sp = [
+                s("CQ TEST W9XYZ EN37", format!("W9XYZ {h} FN42")),
+                s(&format!("{h} W9XYZ R EN37"), format!("<W9XYZ> {me} RR73")),
+            ];
+            let vhf_run = [
+                s("", format!("CQ {me}")),
+                s(&format!("{h} W9XYZ EN37"), format!("W9XYZ {h} R FN42")),
+                s(&format!("{me} <W9XYZ> RR73"), format!("<W9XYZ> {me} 73")),
+            ];
+            let std_sp = [
+                s("CQ W9XYZ EN37", format!("<W9XYZ> {me}")),
+                s(&format!("{h} W9XYZ -07"), format!("W9XYZ {h} R-05")),
+                s(&format!("{me} <W9XYZ> RR73"), format!("<W9XYZ> {me} 73")),
+            ];
+            let std_run = [
+                s("", format!("CQ {me}")),
+                s(&format!("{h} W9XYZ EN37"), format!("W9XYZ {h} -05")),
+                s(&format!("{h} W9XYZ R-07"), format!("<W9XYZ> {me} RR73")),
+            ];
+            contact(me, "arrlfd", false, &fd_sp);
+            contact(me, "arrlfd", true, &fd_run);
+            contact(me, "arrlvhf_jun", false, &vhf_sp);
+            contact(me, "arrlvhf_jun", true, &vhf_run);
+            contact(me, "txqp", false, &std_sp);
+            contact(me, "txqp", true, &std_run);
+        }
+    }
+
+    /// The control: a standard call, `/P` included (`stdCall` passes it), goes on the air exactly
+    /// as before, and Field Day still takes only a reply naming it whole. Its hashed form reaches
+    /// a standard call only from a station whose own call is nonstandard, which this leaves as it
+    /// was.
+    #[test]
+    fn a_standard_call_goes_out_and_is_heard_exactly_as_before() {
+        for me in ["K1ABC", "K1ABC/P"] {
+            let s = |heard: String, sent: String| (heard, sent);
+            let fd_sp = [
+                s("CQ FD W9XYZ EN37".into(), format!("W9XYZ {me} 2B EMA")),
+                s(format!("{me} W9XYZ R 1D WI"), format!("W9XYZ {me} RR73")),
+            ];
+            let fd_run = [
+                s(String::new(), format!("CQ FD {me} FN42")),
+                s(format!("{me} W9XYZ 1D WI"), format!("W9XYZ {me} R 2B EMA")),
+                s(format!("{me} W9XYZ RR73"), format!("W9XYZ {me} 73")),
+            ];
+            let vhf_sp = [
+                s("CQ TEST W9XYZ EN37".into(), format!("W9XYZ {me} FN42")),
+                s(format!("{me} W9XYZ R EN37"), format!("W9XYZ {me} RR73")),
+            ];
+            let vhf_run = [
+                s(String::new(), format!("CQ TEST {me} FN42")),
+                s(format!("{me} W9XYZ EN37"), format!("W9XYZ {me} R FN42")),
+                s(format!("{me} W9XYZ RR73"), format!("W9XYZ {me} 73")),
+            ];
+            let std_sp = [
+                s("CQ W9XYZ EN37".into(), format!("W9XYZ {me} FN42")),
+                s(format!("{me} W9XYZ -07"), format!("W9XYZ {me} R-05")),
+                s(format!("{me} W9XYZ RR73"), format!("W9XYZ {me} 73")),
+            ];
+            let std_run = [
+                s(String::new(), format!("CQ {me} FN42")),
+                s(format!("{me} W9XYZ EN37"), format!("W9XYZ {me} -05")),
+                s(format!("{me} W9XYZ R-07"), format!("W9XYZ {me} RR73")),
+            ];
+            contact(me, "arrlfd", false, &fd_sp);
+            contact(me, "arrlfd", true, &fd_run);
+            contact(me, "arrlvhf_jun", false, &vhf_sp);
+            contact(me, "arrlvhf_jun", true, &vhf_run);
+            contact(me, "txqp", false, &std_sp);
+            contact(me, "txqp", true, &std_run);
+        }
+        let mut run = contest_station("K1ABC", "arrlfd", true);
+        run.observe(&[dec("<K1ABC> W9XYZ 1D WI")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::CallingCq, "CQ FD K1ABC FN42".to_string()),
+            "a standard call's hashed form is not taken"
         );
     }
 
