@@ -11,6 +11,7 @@ import {
   isOnAir,
   type AppSnapshot,
   type ContestFieldSpec,
+  type ContestFieldValue,
   type FieldDayQso,
   type FieldDayStatus,
   type LoggedQso,
@@ -1883,12 +1884,23 @@ export function LogEntry({
    *  "that's a separate entry. End this session and start a new one?" — which surfaces
    *  through the error toast verbatim. It is deliberately NOT a catalog string: the
    *  refusal is the engine's, and a second copy here could drift from the one the
-   *  engine actually enforces. */
+   *  engine actually enforces.
+   *
+   *  ⭐ A box means what the received box for the same slot would mean by it — `fdSlotValue`,
+   *  the QTH box's own reading — so a county given by NAME (`DuPage`) goes as its code (DUPG),
+   *  and naming the county already being sent moves nothing. A name that resolves to no code
+   *  goes as typed, for the engine to refuse in its own words. */
   const commitMove = async () => {
     if (movingTo === null) return
+    const meant = (v: ContestFieldValue): string => {
+      const typed = movingTo[v.key] ?? ''
+      const f = fdReceives.find((s) => s.key === v.key)
+      // A slot this role sends and never receives (no shipped role has one) keeps what was typed.
+      return f ? fdSlotValue(f, typed) : typed.trim().toUpperCase()
+    }
     const values = fdComposing
-      .filter((v) => (movingTo[v.key] ?? '').trim().toUpperCase() !== v.raw.toUpperCase())
-      .map((v) => [v.key, (movingTo[v.key] ?? '').trim().toUpperCase()] as [string, string])
+      .filter((v) => meant(v) !== v.raw.toUpperCase())
+      .map((v) => [v.key, meant(v)] as [string, string])
     if (values.length === 0) {
       setMovingTo(null)
       return
