@@ -5,8 +5,7 @@ which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
 **Contest mode is the exception**: it stays off until you switch it on at the
-top of the **Contest** screen (the tent in the left bar), in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
+top of the **Contest** screen (the tent in the left bar) or in
 [Contesting ▸ Contest mode](settings-reference.md#contest-mode), because it
 reshapes the app for a weekend most operators are not having. It is one switch for
 whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),

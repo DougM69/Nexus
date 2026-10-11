@@ -442,6 +442,14 @@ describe('searchSettings — the operator types their own words', () => {
     expect(searchSettings('cw')[0].section.id).toBe('cw')
   })
 
+  it('"contest mode" finds the switch on Contesting, and nothing in Features, where it no longer is', () => {
+    for (const q of ['contest mode', 'field day mode']) {
+      const found = searchSettings(q).map((h) => h.section.id)
+      expect(found[0], q).toBe('field-day')
+      expect(found, q).not.toContain('features')
+    }
+  })
+
   it('says WHAT matched, so a result never looks arbitrary', () => {
     const hit = searchSettings('sound card').find((h) => h.section.id === 'audio')
     expect(hit?.matched).toBe('sound card')

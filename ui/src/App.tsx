@@ -195,6 +195,7 @@ import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
+import { useContestSwitch } from './contestSwitch'
 import { OperateDecodes } from './components/OperateDecodes'
 import { Logbook } from './components/Logbook'
 import { RoamPanel } from './components/RoamPanel'
@@ -2791,6 +2792,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     handleHaltTx,
   )
 
+  // ⭐ A contest switched by a saved pick, for the Contest screen to say so (`contestSwitch.ts`):
+  // kept here, because the pick is saved in Settings, where that screen is not mounted.
+  const contestSwitch = useContestSwitch(snap?.fieldDay)
+
   if (!snap) {
     return (
       <div className="app loading">
@@ -3218,6 +3223,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             tier={tier}
             onOpenSettings={openSettingsAt}
             onSettingsSaved={handleSettingsSaved}
+            contestSwitch={contestSwitch}
           />
         </main>
       )

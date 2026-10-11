@@ -4062,8 +4062,10 @@ export const EN = {
   'fieldDay.mode.rule.cluster': 'DX cluster assistance is not permitted.',
   'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
   'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
-  'fieldDay.mode.picked':
-    'Picked in Settings: {{picked}}. Turn Contest mode off and on again to switch to it.',
+  // After a save of a new pick switched the running contest. `{{contest}}` and `{{previous}}` are
+  // the contests' own names, invariant.
+  'fieldDay.mode.switched':
+    'Now running {{contest}}. Saving the new pick ended {{previous}}, and its contacts stay apart from this contest\'s.',
   'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
   'fieldDay.mode.needs.two':
     'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
@@ -4202,7 +4204,7 @@ export const EN = {
   // Shown beside the picker while a contest session runs. `{{contest}}` is the running contest's
   // own name, invariant.
   'settings.contestPick.contest.running':
-    'Contest mode is on for {{contest}}. A new pick takes effect after you save it and turn Contest mode off and on again.',
+    'Contest mode is on for {{contest}}. Saving a different pick ends it and starts the new one at once, without calling CQ. Each contest keeps its own contacts.',
   'settings.contestPick.role.label': 'Your role',
   'settings.contestPick.role.value': 'Your station is {{role}}. Your location decides this, so moving across the line changes it.',
   'settings.contestPick.role.symmetric':
@@ -8276,8 +8278,6 @@ export const EN = {
     'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.',
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
-  'settings.features.fieldDay.hint':
-    'For {{contest}}, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the

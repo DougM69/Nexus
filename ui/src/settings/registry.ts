@@ -676,8 +676,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'features',
     label: 'Features',
     tab: 'appearance',
+    // Not 'contest mode': the switch is on the Contesting tab (`field-day`) and the Contest
+    // screen only, so a search for it lands there.
     keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
-      'pota', 'setup wizard', 'field day mode', 'contest mode'],
+      'pota', 'setup wizard'],
   },
   {
     id: 'app-updates',
