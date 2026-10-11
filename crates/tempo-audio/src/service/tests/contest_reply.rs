@@ -18,7 +18,8 @@ use std::time::Instant;
 
 /// A store-backed station on FT8 in `mode`, ARRL Field Day picked and Contest mode `on`, whose
 /// contest journal holds a contact an hour old and whose log holds K9NEW, worked half an hour ago.
-/// W1AW's CQ FD has been decoded.
+/// W1AW's CQ FD has been decoded. "Double-click on call sets Tx enable" is off: a logger's Reply
+/// arms TX whatever it says, as WSJT-X's does.
 fn station(tag: &str, on: bool, mode: &str) -> (std::path::PathBuf, Arc<Mutex<Engine>>) {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -65,6 +66,7 @@ fn station(tag: &str, on: bool, mode: &str) -> (std::path::PathBuf, Arc<Mutex<En
     s.fd_class = "1D".into();
     s.fd_section = "WI".into();
     s.fd_active = on;
+    s.double_click_sets_tx = false;
     e.apply_settings(s);
     e.set_tier(Tier::Ft8);
     e.set_mode("qso-monitor").expect("FT8 QSO mode");
