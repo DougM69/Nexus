@@ -3,9 +3,10 @@
 // THE VOICE KEYER'S F-KEYS: each slot's own, F1–F6 and F8. F8 is AGN, the slot Enter Sends
 // Message plays for AGN in a contest, from the key AGN is on in the CW and RTTY contest sets and
 // in N1MM's default message sets (the operator, 2026-10-10). A key with no slot, F7 among them,
-// plays nothing and is left to the rest of the window; the line over the slots names no range.
-// Until the slot list is there, or when it cannot be read, F1–F12 are all held and play nothing,
-// so none reaches the webview, where F5 reloads the app on Windows (the operator, 2026-10-11).
+// plays nothing; the line over the slots names no range. F1–F12 are all held, with a slot or
+// without, and before the slot list is there or when it cannot be read, so none reaches the
+// webview, where F5 reloads the app on Windows; with Alt, Ctrl or Cmd held a key is the system's
+// (the operator, 2026-10-11). The keys from the log line's boxes: PhoneCockpit.fkeys.test.tsx.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { VoiceKeyer } from './VoiceKeyer'
@@ -50,10 +51,10 @@ async function renderKeyer() {
 }
 
 /** Press `key` on the window; true when the keyer left it alone (its default not prevented). */
-async function press(key: string) {
+async function press(key: string, mods: KeyboardEventInit = {}) {
   let free = false
   await act(async () => {
-    free = fireEvent.keyDown(document.body, { key })
+    free = fireEvent.keyDown(document.body, { key, ...mods })
   })
   return free
 }
@@ -73,11 +74,19 @@ describe('the voice keyer’s F-keys', () => {
     expect(played()).toEqual([8])
   })
 
-  it('a key with no slot plays nothing, and is left to the rest of the window', async () => {
+  it('a key with no slot plays nothing, and is held too', async () => {
     await renderKeyer()
-    for (const key of ['F7', 'F9']) {
-      expect(await press(key), `the keyer took ${key}`).toBe(true)
+    for (const key of ['F7', 'F9', 'F10', 'F11', 'F12']) {
+      expect(await press(key), `${key} reached the window`).toBe(false)
     }
+    expect(played()).toEqual([])
+  })
+
+  it('with Alt, Ctrl or Cmd held an F-key is the system’s: nothing plays and nothing is held', async () => {
+    await renderKeyer()
+    expect(await press('F4', { altKey: true }), 'Alt+F4 was held').toBe(true)
+    expect(await press('F5', { ctrlKey: true }), 'Ctrl+F5 was held').toBe(true)
+    expect(await press('F1', { metaKey: true }), 'Cmd+F1 was held').toBe(true)
     expect(played()).toEqual([])
   })
 
@@ -100,6 +109,7 @@ describe('the voice keyer’s F-keys before its slots are there', () => {
     }
     expect(played()).toEqual([])
     expect(await press('a'), 'a key that is not an F-key is not the keyer’s').toBe(true)
+    expect(await press('F4', { altKey: true }), 'Alt+F4 was held').toBe(true)
   })
 
   it('holds F1–F12 when the slot list could not be read', async () => {

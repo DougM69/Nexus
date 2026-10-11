@@ -289,30 +289,29 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     if (list) setMsgs(list)
   }
 
-  // A slot's F-key plays it; a key with no slot (F7 among them) is left alone. Esc stops. Ignored
-  // while typing in a field.
+  // A slot's F-key plays it from anywhere on the Phone screen, the log line's boxes included, as
+  // CW's macros send from anywhere in the CW cockpit (operator, 2026-10-11). F1–F12 are all held,
+  // with a slot or without, before the slot list is there, when it could not be read and while
+  // recording, so none reaches the webview, where F5 reloads the app on Windows. With Alt, Ctrl or
+  // Cmd held a key is the system's (Alt+F4 closes the window), as in CW. Esc stops; in a text box
+  // it is left to the shared Esc stop (useEscStop: App's halt), as it always was.
   useEffect(() => {
     const isField = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
     const onKey = (e: KeyboardEvent) => {
-      if (isField(e.target)) return
       // Esc always stops playback (and is the only key honored mid-record).
       if (e.key === 'Escape') {
+        if (isField(e.target)) return
         e.preventDefault()
         stop()
         return
       }
+      if (!/^F([1-9]|1[0-2])$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      e.preventDefault()
       // Don't let an F-key key the rig while a recording is in progress.
       if (recording !== null) return
-      // Until the slot list is there, or when it could not be read, F1–F12 are all held and play
-      // nothing, so none reaches the webview, where F5 reloads the app on Windows (operator,
-      // 2026-10-11). Once the slots are there, a slot's own key is the only one held.
-      if (msgs.length === 0 && /^F([1-9]|1[0-2])$/.test(e.key)) e.preventDefault()
       const slot = Number(/^F(\d)$/.exec(e.key)?.[1])
-      if (msgs.some((x) => x.slot === slot)) {
-        e.preventDefault()
-        play(slot)
-      }
+      if (msgs.some((x) => x.slot === slot)) play(slot)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
