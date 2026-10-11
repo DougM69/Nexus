@@ -215,7 +215,7 @@ fn the_club_clock_reaches_no_clock_slot_or_stamp_ft_reads() {
             "scene: FT steers by what SNTP measured, or by nothing"
         );
 
-        let club = EnginePositionSync(runner.clone());
+        let club = EnginePositionSync::new(runner.clone());
         club.on_welcome(0, "TEST FD", "W9ABC", now().as_secs());
         let base = now().as_millis() as u64;
         for i in 0..100u64 {

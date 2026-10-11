@@ -78,7 +78,7 @@ fn start_host(eng: &Shared, listener: std::net::TcpListener) -> Arc<AtomicBool> 
 
 fn start_pump(eng: &Shared, addr: &str) -> Arc<AtomicBool> {
     let sd = Arc::new(AtomicBool::new(false));
-    let backend: Arc<dyn PositionSync> = Arc::new(EnginePositionSync(eng.clone()));
+    let backend: Arc<dyn PositionSync> = Arc::new(EnginePositionSync::new(eng.clone()));
     let (a, sd2) = (addr.to_string(), sd.clone());
     std::thread::spawn(move || fdsync::run_position_until(&a, backend, sd2));
     sd

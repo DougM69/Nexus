@@ -384,6 +384,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A joined laptop no longer shows Offline and "Lost the host" after the contest changes.**
+  Changing the contest restarts this laptop's link to the club host, and the old link's last
+  report, that it had gone down, could arrive after the new link was up: the chip read Offline and
+  the line said the host was lost while contacts were syncing. A replaced link's reports are now
+  ignored.
 - **A laptop joining a club event now says whether it is in.** After Find club events or a host
   address typed into Join event at, a joining laptop said nothing about its join unless Field Day
   mode was on and a club block appeared. Settings ▸ Contesting, under Join event at, and the

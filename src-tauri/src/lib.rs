@@ -33988,7 +33988,7 @@ fn start_on_the_logbook(
                         if ready {
                             let shutdown = Arc::new(AtomicBool::new(false));
                             let backend: Arc<dyn tempo_net::fdsync::PositionSync> = Arc::new(
-                                tempo_app::fdbridge::EnginePositionSync(mgr_engine.clone()),
+                                tempo_app::fdbridge::EnginePositionSync::new(mgr_engine.clone()),
                             );
                             let (a2, sd) = (addr.clone(), shutdown.clone());
                             std::thread::spawn(move || {
@@ -34066,6 +34066,10 @@ fn start_on_the_logbook(
                                     tempo_app::fd_scoreboard::serve_until(listener, source, sd)
                                 });
                                 running = Some((port, shutdown));
+                        // The stopped pump reports its own link down up to a quarter of a
+                        // second from now, perhaps after the next pump is in: nothing it says
+                        // reaches the mirror from here (`Engine::fd_link_take_over`).
+                        e.fd_link_take_over();
                                 bind_failed = None;
                                 {
                                     let mut st =

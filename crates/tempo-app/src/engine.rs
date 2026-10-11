@@ -2751,6 +2751,14 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// ⭐ **Which position pump owns the club link** ([`Self::fd_link_take_over`]): the
+    /// generation the newest pump's bridge carries. The shell's supervisor stops a pump and
+    /// starts the next for the same address when the contest changes; the stopped one notices
+    /// within a quarter of a second and then reports its link down, and on a LAN the next one is
+    /// often in by then. That late report took the chip Offline and the line to "Lost the host"
+    /// while the new link was up. Every call a pump makes into the mirror is checked against
+    /// this, so a stopped pump's last calls land on nothing.
+    fd_link_gen: u64,
     /// The host's network addresses as its beacon last listed them (`fdsync::lan_addrs`): where
     /// its hosting line tells a joiner to join. Empty while not hosting.
     fd_host_lan: Vec<tempo_net::fdsync::LanAddr>,
@@ -5438,6 +5446,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_link_gen: 0,
             fd_host_lan: Vec::new(),
             fd_host_failure: None,
             fd_position_key: Default::default(),
@@ -12824,6 +12833,19 @@ impl Engine {
     /// The mirror, for the pump's welcome/ack/club/link callbacks.
     pub fn fd_mirror_mut(&mut self) -> &mut crate::fdevent::ClubMirror {
         &mut self.fd_mirror
+    }
+
+    /// ⭐ **A new position pump takes the club link over** (`fdbridge::EnginePositionSync::new`,
+    /// and the shell's supervisor as it stops one): from now on every older pump's calls into
+    /// the mirror are ignored ([`Self::fd_link_owned_by`]). Returns the new owner's generation.
+    pub fn fd_link_take_over(&mut self) -> u64 {
+        self.fd_link_gen = self.fd_link_gen.wrapping_add(1);
+        self.fd_link_gen
+    }
+
+    /// Is the pump with this generation the one that owns the club link now?
+    pub fn fd_link_owned_by(&self, gen: u64) -> bool {
+        self.fd_link_gen == gen
     }
 
     /// ⭐ **The contest this position's ROWS belong to** — the JOIN's `contest`.
