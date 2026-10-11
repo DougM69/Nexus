@@ -14448,16 +14448,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
         reply_snr: Option<i32>,
         dx_freq: Option<f32>,
     ) -> Result<(), String> {
-        if let (Some(text), Some(messages)) = (reply_msg, self.contest_ft_messages()) {
-            if let Msg::Cq { de, grid, .. } = Msg::parse(text) {
-                if tempo_core::message::same_call(&de, dxcall)
-                    && !tempo_core::message::same_call(&de, &self.settings.mycall)
-                {
-                    return self.answer_cq_in_contest(messages, &de, &grid, text, dx_freq);
-                }
-            }
+        if let (Some(text), Some((messages, de, grid))) =
+            (reply_msg, self.contest_cq(dxcall, reply_msg))
+        {
+            return self.answer_cq_in_contest(messages, &de, &grid, text, dx_freq);
         }
         self.call_station_ctx(dxcall, dxgrid, reply_msg, reply_snr, dx_freq)
+    }
+
+    /// The CQ a click hands to the running contest's S&P ([`Self::work_station`]): the click's
+    /// message is a CQ from the clicked station, not from you, while the contest's own FT8/FT4
+    /// messages apply. Those messages, and the CQ's sender and grid.
+    fn contest_cq(
+        &self,
+        dxcall: &str,
+        reply_msg: Option<&str>,
+    ) -> Option<(FtMessages, String, String)> {
+        let messages = self.contest_ft_messages()?;
+        let Msg::Cq { de, grid, .. } = Msg::parse(reply_msg?) else {
+            return None;
+        };
+        (tempo_core::message::same_call(&de, dxcall)
+            && !tempo_core::message::same_call(&de, &self.settings.mycall))
+        .then_some((messages, de, grid))
+    }
+
+    /// Whether [`Self::work_station`] for this click opens a contest session: a CQ handed to a
+    /// contest the station is not in. A command that may open one runs through
+    /// [`act_opening_session`], so the session opens with its rows (SPEC-2 v3 C19).
+    pub fn work_station_opens_session(&self, dxcall: &str, reply_msg: Option<&str>) -> bool {
+        self.contest_cq(dxcall, reply_msg).is_some() && self.mode_opens_session("fieldday-sp")
     }
 
     /// The messages a running contest's own FT8/FT4 sequencer sends — what the Operate cockpit's
@@ -22115,11 +22135,20 @@ contact yourself."
     /// The Tx6 row and the Remote page call `start_cq` directly, with the CQ they show.
     pub fn start_running(&mut self) -> Result<(), String> {
         if self.contest_ft_messages().is_some() {
+            // The screen's Running refuses a run without a valid callsign at the command (the
+            // `set_mode` command's identity check), and so does this one.
+            self.structured_tx_ready(false)?;
             self.set_mode("fieldday-run")?;
             self.cq_dir = None;
             return Ok(());
         }
         self.start_cq(None)
+    }
+
+    /// Whether [`Self::start_running`] opens a contest session: the contest's Running entered
+    /// from another mode. See [`Self::work_station_opens_session`].
+    pub fn start_running_opens_session(&self) -> bool {
+        self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-run")
     }
 
     /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.
@@ -25757,7 +25786,27 @@ contact yourself."
         self.app.pending_count()
     }
 
-    #[cfg(test)]
+    /// Test hook for the shell's tests (the `test-util` feature, never in a shipped build): hear
+    /// `message` at `snr`, decoded at the boundary of `slot`, through
+    /// [`Self::ingest_decodes_for_test`]'s fold.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn hear_for_test(&mut self, message: &str, snr: i32, slot: u64) {
+        let d = modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        self.ingest_decodes_for_test(&[d], slot);
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.
         let decodes: Vec<modes::Decode> = self.hound_split(decodes.to_vec());
@@ -26969,6 +27018,28 @@ pub fn with_session_rows_at_launch<T>(
 ) -> Result<T, String> {
     session_rows_within(engine, opens, then, 3, crate::logstore::SESSION_READ_WAIT)
         .map_err(|()| SESSION_NOT_RESUMED.to_string())
+}
+
+/// ★ A command that may open a contest session, run as the `set_mode` command runs one: `act`
+/// under the Engine lock, the session's rows read before it when `opens` says it opens one
+/// ([`with_session_rows`]), the session's sweep installed from them right after `act`, and only
+/// then `finish` (a snapshot, say), all in the same hold. The cockpit's own gestures that can
+/// enter a contest from another mode (Call CQ, a double-click on a CQ) take it, so a session is
+/// opened with its rows or not at all (SPEC-2 v3 C19). `act` failing installs nothing and does
+/// not `finish`; a log too busy to read refuses with [`SESSION_BUSY`] before `act`.
+pub fn act_opening_session<T>(
+    engine: &std::sync::Mutex<Engine>,
+    opens: impl Fn(&Engine) -> bool,
+    act: impl FnOnce(&mut Engine) -> Result<(), String>,
+    finish: impl FnOnce(&mut Engine) -> T,
+) -> Result<T, String> {
+    with_session_rows(engine, opens, |eng, rows| {
+        act(eng)?;
+        if let Some(rows) = rows {
+            eng.open_session_from(rows);
+        }
+        Ok(finish(eng))
+    })?
 }
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.

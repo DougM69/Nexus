@@ -1380,3 +1380,18 @@ fn the_runners_73_follows_the_tier_it_is_on() {
         }
     }
 }
+
+/// ⛔ Call CQ into a contest's Running needs a valid callsign, as the Contest screen's Running
+/// does (the `set_mode` command's identity check): refused with the reason, and nothing changes.
+#[test]
+fn call_cq_without_a_callsign_is_refused_as_the_screens_running_is() {
+    let mut e = engine_for("arrlfd", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    let mut s = e.settings().clone();
+    s.mycall = String::new();
+    e.apply_settings(s);
+    let r = e.start_running();
+    assert!(r.is_err(), "no callsign: {r:?}");
+    assert!(listening(&e), "still the contest's S&P, listening");
+    assert!(!e.tx_enabled, "TX stays off");
+}

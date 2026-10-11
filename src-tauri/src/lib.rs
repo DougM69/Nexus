@@ -18966,9 +18966,18 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
 /// `start_cq`, which sends the CQ it shows.
 #[tauri::command(async)]
 fn start_running(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    eng.start_running()?;
-    Ok(eng.snapshot())
+    start_running_on(&state)
+}
+
+/// [`start_running`]'s body, over a plain handle. Call CQ can enter the contest's Running from
+/// another mode, so it opens the session as the `set_mode` command does, with its rows.
+fn start_running_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
+    tempo_app::engine::act_opening_session(
+        engine,
+        |eng| eng.start_running_opens_session(),
+        |eng| eng.start_running(),
+        |eng| eng.snapshot(),
+    )
 }
 
 /// Call CQ from Tempo (chat-first): emit ONE structured `CQ <mycall> <mygrid>` frame
@@ -19542,37 +19551,45 @@ fn call_station_on(
         let places = ota_park_places(ota_cache, parks, &program, &reference);
         (program, reference, places)
     });
-    let mut eng = engine_lock(engine);
-    // Working a station keys a standard structured message (your grid in Tx1) — refuse
-    // without a valid callsign + grid so we never emit a grid-less directed call. The
-    // mode plugin decides which tiers are gated (Capabilities::structured_identity).
-    eng.structured_tx_ready(true)?;
     let g = grid.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let msg = message.as_deref().map(str::trim).filter(|s| !s.is_empty());
     // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
     // double-click). Ignore non-positive values (no usable frequency).
     let dx_freq = freq.filter(|f| *f > 0.0);
-    eng.work_station(call, g, msg, snr, dx_freq)?;
-    // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls it
-    // does not act on, and a pend armed for one would wait four hours to stamp the park on some
-    // later contact. Ambiguous or absent: the pending hunt is left exactly as it was, so a park
-    // the operator picked on the POTA/SOTA board survives. And the tag never costs the call: a
-    // reference `set_hunt_target` will not accept leaves this contact untagged, as an
-    // ambiguous one does.
-    if let Some((program, reference, places)) = park {
-        let started = eng
-            .qso_dxcall()
-            .is_some_and(|c| tempo_core::message::same_call(c, call));
-        if started {
-            if let Err(e) = eng.set_hunt_target(call, &program, &reference, places) {
-                tempo_core::applog::warn(
-                    "hunt",
-                    &format!("{call}: {program} {reference} not tagged: {e}"),
-                );
+    // A double-click on a CQ can enter a running contest from another mode, so the call opens
+    // the contest's session as the `set_mode` command does, with its rows.
+    tempo_app::engine::act_opening_session(
+        engine,
+        |eng| eng.work_station_opens_session(call, msg),
+        |eng| {
+            // Working a station keys a standard structured message (your grid in Tx1) — refuse
+            // without a valid callsign + grid so we never emit a grid-less directed call. The
+            // mode plugin decides which tiers are gated (Capabilities::structured_identity).
+            eng.structured_tx_ready(true)?;
+            eng.work_station(call, g, msg, snr, dx_freq)?;
+            // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls
+            // it does not act on, and a pend armed for one would wait four hours to stamp the park
+            // on some later contact. Ambiguous or absent: the pending hunt is left exactly as it
+            // was, so a park the operator picked on the POTA/SOTA board survives. And the tag never
+            // costs the call: a reference `set_hunt_target` will not accept leaves this contact
+            // untagged, as an ambiguous one does.
+            if let Some((program, reference, places)) = park {
+                let started = eng
+                    .qso_dxcall()
+                    .is_some_and(|c| tempo_core::message::same_call(c, call));
+                if started {
+                    if let Err(e) = eng.set_hunt_target(call, &program, &reference, places) {
+                        tempo_core::applog::warn(
+                            "hunt",
+                            &format!("{call}: {program} {reference} not tagged: {e}"),
+                        );
+                    }
+                }
             }
-        }
-    }
-    Ok(eng.snapshot())
+            Ok(())
+        },
+        |eng| eng.snapshot(),
+    )
 }
 
 /// Toggle Skip Tx1 (WSJT-X parity). Session-only — the engine flag resets to off each
@@ -47145,5 +47162,109 @@ mod tests {
         );
         assert!(matches!(made, Ok(Ok(_))));
         assert_eq!(folds(), 3, "an edit folds each tally again");
+    }
+}
+
+/// The cockpit's gestures that enter a running contest from another mode (Call CQ, a double-click
+/// on a CQ) open its session as the `set_mode` command does: with the log's rows, so the session's
+/// sweep is there for its first snapshot (SPEC-2 v3 C19). Opened without them, the session's B4
+/// left out what was worked outside the contest since it began, and a debug build stopped at the
+/// first snapshot.
+#[cfg(test)]
+mod contest_entry_command_tests {
+    use super::*;
+
+    /// A store-backed station in ARRL Field Day, Contest mode on, back out of the contest in FT8
+    /// QSO mode. The contest's journal holds a contact from an hour ago, so the session reaches
+    /// back to it; K9NEW, worked half an hour ago outside the contest, is in the station log.
+    /// W9XYZ is calling CQ FD, and K9NEW is calling CQ.
+    fn back_in_ft8_qso_mode(tag: &str) -> (PathBuf, SharedEngine) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        let now = now_unix() as u64;
+        let rec = |call: &str, when: u64| {
+            let mut log = tempo_core::logbook::Logbook::new();
+            log.import_adif(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>120000<EOR>",
+                call.len()
+            ));
+            let mut r = tempo_core::logbook::QsoRecord::clone(&log.records()[0]);
+            r.id = None;
+            r.when_unix = when;
+            r
+        };
+        let row = tempo_core::logbook::adif_record(&rec("K1JNL", now - 3_600));
+        let at = row.rfind("<EOR>").expect("a record ends");
+        let journal = format!(
+            "{}{}<CLASS:2>2A<ARRL_SECT:3>EMA{}",
+            tempo_core::logbook::adif_header(),
+            &row[..at],
+            &row[at..]
+        );
+        std::fs::write(dir.join("fd.adi"), journal).expect("the journal");
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_fd_log_path(dir.join("fd.adi"));
+            eng.log_qso(rec("K9NEW", now - 1_800));
+            eng.flush_log_store(std::time::Duration::from_secs(30))
+                .expect("the log is written");
+            let mut s = eng.settings().clone();
+            s.fd_class = "1D".into();
+            s.fd_section = "WI".into();
+            s.fd_active = true;
+            eng.apply_settings(s);
+            eng.set_tier(tempo_app::dto::Tier::Ft8);
+            eng.set_mode("qso-monitor")
+                .expect("out of the contest, in FT8 QSO mode");
+            eng.hear_for_test("CQ FD W9XYZ EN37", -12, 2);
+            eng.hear_for_test("CQ K9NEW EN38", -10, 2);
+        }
+        (dir, engine)
+    }
+
+    /// What the snapshot says about K9NEW, worked outside the contest since its session began.
+    fn k9new_worked(snap: &AppSnapshot) -> bool {
+        snap.stations
+            .iter()
+            .find(|s| s.call == "K9NEW")
+            .expect("K9NEW is heard")
+            .worked
+    }
+
+    /// ★ A double-click on W9XYZ's CQ FD re-enters the contest's S&P with the session's sweep:
+    /// K9NEW reads worked this session.
+    #[test]
+    fn a_double_click_on_a_cq_enters_the_contest_with_its_rows() {
+        let (dir, engine) = back_in_ft8_qso_mode("contest-entry-click");
+        let ota: SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let snap = crate::call_station_on(
+            &engine,
+            &ota,
+            &crate::SharedParks::default(),
+            "W9XYZ",
+            None,
+            Some("CQ FD W9XYZ EN37".into()),
+            Some(-12),
+            None,
+        )
+        .expect("the double-click is taken");
+        let fd = snap.field_day.as_ref().expect("in the contest");
+        assert!(
+            !fd.running && fd.dxcall.as_deref() == Some("W9XYZ"),
+            "the contest's S&P, working W9XYZ"
+        );
+        assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ Call CQ re-enters the contest's Running with the session's sweep: K9NEW reads worked
+    /// this session.
+    #[test]
+    fn call_cq_enters_the_contest_with_its_rows() {
+        let (dir, engine) = back_in_ft8_qso_mode("contest-entry-cq");
+        let snap = crate::start_running_on(&engine).expect("the run starts");
+        let fd = snap.field_day.as_ref().expect("in the contest");
+        assert!(fd.running, "the contest's Running");
+        assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
