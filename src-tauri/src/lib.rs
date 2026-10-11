@@ -13235,8 +13235,10 @@ fn apply_and_persist(
 /// assistance mirror and its journal, the QTH the spot ranking reads.
 ///
 /// A save that turns the Field Day master on while Field Day is not running re-enters it, opening
-/// a contest session: the session's rows are read from the logbook first, off the lock, and the
-/// session is opened with its dupe sweep in the same hold of the lock as the save (SPEC-2 v3 C19).
+/// a contest session, and so does a save that moves the contest pick off the contest running, which
+/// ends that session first ([`tempo_app::engine::Engine::save_opens_session`]): the session's rows
+/// are read from the logbook first, off the lock, and the session is opened with its dupe sweep in
+/// the same hold of the lock as the save (SPEC-2 v3 C19).
 /// Every other save reads nothing. When the logbook is too busy to read them, the save is refused
 /// whole ([`tempo_app::engine::SESSION_BUSY`]): nothing applied, persisted or published, and the
 /// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
@@ -13248,10 +13250,9 @@ fn save_and_publish(
     authoritative_roster: bool,
 ) -> Result<AppSnapshot, String> {
     let published = settings.clone();
-    let opens_session = settings.fd_active;
     let snap = tempo_app::engine::with_session_rows(
         engine,
-        |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
+        |eng| eng.save_opens_session(&published),
         |eng, rows| {
             // A form save that would put a daemon of Nexus's, or its CAT broker, on a NET rigctl
             // radio's Network Address is refused whole, before anything below touches the engine
@@ -13431,6 +13432,81 @@ mod contest_session_tests {
             "and Field Day was not entered"
         );
         drop(eng);
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SAVE THAT SWITCHES THE CONTEST READS THE NEW SESSION'S ROWS BEFORE ANYTHING ELSE, as the
+    /// turn-on does. The station runs Field Day; another program holds the logbook. A save that
+    /// moves the pick to the Illinois QSO Party is refused for the busy logbook — the party's
+    /// session would open without its dupe sweep — and Field Day runs on, the pick where it was.
+    /// The form also carries a port clash, refused inside the save, so the two refusals tell a
+    /// save that read first from one that did not, and neither persists anything. The CONTROL:
+    /// the same form with the pick left alone reads nothing and meets the clash.
+    #[test]
+    fn a_save_that_switches_the_contest_reads_its_rows_before_anything_else() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("save-switch", 3);
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            tempo_app::settings::RadioProfile {
+                id: 0,
+                name: "IC-9700".into(),
+                rig_model: 2,
+                rig_conn: "network".into(),
+                rig_addr: "127.0.0.1:4533".into(),
+                rigctld_port: 4534,
+                ..Default::default()
+            },
+            tempo_app::settings::RadioProfile {
+                id: 1,
+                name: "FTDX10".into(),
+                rig_model: 1042,
+                serial_port: "COM3".into(),
+                rigctld_port: 4535,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 1;
+        station.cat_broker = true;
+        station.cat_broker_port = 4532;
+        station.sync_flat_from_active();
+        station.fd_active = true;
+        station.fd_class = "1D".into();
+        station.fd_section = "EMA".into();
+        station.contest_qth_state = "IL".into();
+        station.contest_qth_county = "COOK".into();
+        engine_lock(&engine).apply_restored_settings(station);
+        let running = |e: &SharedEngine| engine_lock(e).fd_position_contest();
+        assert_eq!(running(&engine), "arrlfd", "premise: Field Day runs");
+        let hold = held_up(&engine, &dir);
+        let held = engine_lock(&engine).settings().clone();
+        let mut form = held.clone();
+        form.rigctld_port = 4533;
+        let clash = Err(
+            "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's rigctld \
+             TCP Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+             radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+                .to_string(),
+        );
+        assert_eq!(
+            save_and_publish(&engine, form.clone(), false).map(|_| ()),
+            clash,
+            "CONTROL: the pick left alone, the save reads nothing and meets the clash"
+        );
+        form.fd_event = "ilqp".into();
+        assert_eq!(
+            save_and_publish(&engine, form, false).map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "the pick moved, the save reads the party's rows first and is refused for the logbook"
+        );
+        assert_eq!(
+            (
+                running(&engine),
+                engine_lock(&engine).settings().fd_event.clone()
+            ),
+            ("arrlfd".to_string(), held.fd_event),
+            "Field Day runs on, the pick where it was"
+        );
         drop(hold);
         let _ = std::fs::remove_dir_all(&dir);
     }

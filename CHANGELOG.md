@@ -87,8 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contest's rules apply, the modes it does not permit, and during Winter Field Day that no spots
   are posted over the internet. With club sync on it says that turning the mode off keeps this
   station in the club event, sends no contacts until the mode is back on, and loses nothing from
-  the log. A contest picked while another is running says that turning the mode off and on again
-  switches to it. The scoreboard's own window and the main window's title read Contest too. ARRL
+  the log. The scoreboard's own window and the main window's title read Contest too. ARRL
   Field Day and Winter Field Day keep their names.
 - **Move panes by dragging them with the mouse.** In FT8/FT4, Phone, CW and JS8, pick a pane up by
   its title bar and drop it onto another column, between two panes, or (in Phone, on a window wide
@@ -307,18 +306,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Day, and the contest log strip (its dupe check, Super Check Partial, call history, Enter Sends
   Message and Ctrl+D), the operator box, the Contest screen and the exports work in every contest it
   starts, as club sync does in every contest it can run. Now its name says so, at the top of the
-  Contest screen, in Settings ▸ Contesting and in Settings ▸ Appearance ▸ Features, and it names the
-  contest: "Enable Contest mode: Illinois QSO Party". Its Settings section is called Contest mode, no
+  Contest screen and in Settings ▸ Contesting, and it names the contest: "Enable Contest mode:
+  Illinois QSO Party". Its Settings section is called Contest mode, no
   line shown for another contest says Field Day, and ARRL Field Day's power multiplier shows only
-  when ARRL Field Day is picked. Turned on from the features list, it now opens the Contesting tab
-  whenever the picked contest is missing something, a QSO party's county included, not only Field
-  Day's class or section. Your saved setting carries over as it is. The exported files are named for
+  when ARRL Field Day is picked. Your saved setting carries over as it is. The exported files are named for
   the contest too (`ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`) rather than `fd-…`; a QSO party
   shows your side in words (in-state, out-of-state, W/VE or DX) in Settings and beside Sending on the
-  log strip, never `in_state`; while a contest runs, Settings says beside the picker that a new pick
-  takes effect after you save it and turn Contest mode off and on again; the upload switch under the
+  log strip, never `in_state`; while a contest runs, Settings says beside the picker which contest it
+  is and that saving a different pick switches at once; the upload switch under the
   merge button reads "Upload merged contacts to:"; and the N3FJP and N1MM settings, the Club Board
   window and the Remote page's contest view describe whichever contest is running.
+- **A contest picked while Contest mode is on starts when you save it.** Saving a different contest
+  in Settings ▸ Contesting ▸ Contest ends the running one and starts the new one at once, exactly as
+  turning Contest mode off and on did: the new contest starts in Search-and-Pounce and never calls
+  CQ, a CQ run in the old one ends, each contest's contacts stay apart, and club sync starts again
+  for the new contest. The Contest screen says "Now running Illinois QSO Party" and names the
+  contest that ended. Saving anything else keeps the running contest as it is. When the new contest
+  cannot start yet (a QSO party's county, say), the old one still ends and the Contest screen says
+  what is missing.
+- **The Contest mode switch is no longer in Settings ▸ Appearance ▸ Features.** It stays at the top
+  of the Contest screen and in Settings ▸ Contesting ▸ Contest mode, and a Settings search for
+  "contest mode" goes there. Your setting is unchanged.
 - **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
   Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
   elevation boxes, with the line for the call in your log entry under them, so the bearing (and

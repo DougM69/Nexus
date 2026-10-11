@@ -174,7 +174,6 @@ import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api
 import { getDxccEntityNames } from '../api'
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { continentName } from './CountryExclude'
-import { startBlocker } from './ContestView'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
@@ -4505,13 +4504,13 @@ export function SettingsPanel({
             </div>
 
             {/* Optional features, grouped by category. Field Day is NOT a plain feature
-                toggle: its visibility is driven by the persisted master switch
-                (settings.fdActive), so the Contesting group hosts that master toggle in
-                place of the old standalone fieldDay flag. */}
+                toggle: what the Contest screen reveals is driven by the Contest mode switch
+                (settings.fdActive), and that switch lives on the Contest screen and on the
+                Contesting tab only, so it has no row here — and a category with no row left
+                (Contesting) shows no group. */}
             {FEATURE_CATEGORY_ORDER.map((cat) => {
               const inCat = FEATURES.filter((f) => f.category === cat && !f.core && f.id !== 'fieldDay')
-              const isContesting = cat === 'Contesting'
-              if (inCat.length === 0 && !isContesting) return null
+              if (inCat.length === 0) return null
               return (
                 <div className="settings-featgroup" key={cat}>
                   {/* ⚠️ The category is the REGISTRY's own vocabulary (`FeatureCategory` in
@@ -4519,40 +4518,6 @@ export function SettingsPanel({
                       screen resolves through the registry, beside every feature label. */}
                   <span className="settings-featgroup-title">{featureCategoryLabel(cat)}</span>
                   <div className="settings-grid">
-                    {isContesting && (
-                      <div className="settings-field">
-                        <label className="settings-toggle">
-                          {/* One master switch offered in two places — the label and its two
-                              accessible names are shared with Settings ▸ Contesting, so both
-                              read the same entries. Only the hint differs. */}
-                          <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
-                          <button disabled={remote}
-                            type="button"
-                            role="switch"
-                            aria-checked={!!form.fdActive}
-                            className={`toggle${form.fdActive ? ' on' : ''}`}
-                            onClick={() => {
-                              const next = !form.fdActive
-                              updateBool('fdActive', next)
-                              // Turning on a contest that cannot start yet → the Contesting tab,
-                              // where what it needs is set: Field Day's class and section, or the
-                              // station data another contest sends. The Contest screen's own test.
-                              if (next && startBlocker(form, previewHere)) setTab('contesting')
-                            }}
-                            aria-label={
-                              form.fdActive
-                                ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
-                                : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
-                            }
-                          >
-                            <span className="toggle-knob" />
-                          </button>
-                        </label>
-                        <span className="settings-hint">
-                          {t('settings.features.fieldDay.hint', { contest: pickedContest })}
-                        </span>
-                      </div>
-                    )}
                     {inCat.map(featureRow)}
                   </div>
                 </div>
@@ -12087,9 +12052,10 @@ export function SettingsPanel({
                   ))}
                 </div>
                 <span className="settings-hint">{t('settings.contestPick.contest.hint')}</span>
-                {/* While a contest runs, a pick waits for Contest mode to go off and on again:
-                    the session is kept across every save, which is what protects its log. The
-                    Contest screen says so beside its switch; this is where the pick is made. */}
+                {/* While a contest runs, saving a different pick ends it and starts the new one
+                    at once, as turning Contest mode off and on does (`Engine::save_switches_contest`);
+                    every other save keeps the session, which is what protects its log. Said here,
+                    where the pick is made; the Contest screen says it switched. */}
                 {fieldDay && (
                   <span className="settings-hint">
                     {t('settings.contestPick.contest.running', { contest: contestName(fieldDay.event || 'arrlfd') })}

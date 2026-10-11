@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
 // CONTEST MODE IN SETTINGS — the one switch that starts whichever contest is picked, offered on
-// the Contesting tab and among the Appearance tab's features, and at the top of the Contest
-// screen (`ContestView.modeSwitch.test.tsx`).
+// the Contesting tab and at the top of the Contest screen (`ContestView.modeSwitch.test.tsx`),
+// and nowhere else: the copy among the Appearance tab's features is gone.
 //
 // It was named "Field Day mode" and described as Field Day's ("Turn on for Field Day weekend: the
 // Class/Section exchange appears across all modes"), while it already started the Illinois QSO
@@ -124,16 +124,19 @@ describe('Settings ▸ Contesting: the switch is Contest mode, and names the pic
   })
 })
 
-describe('Settings ▸ Appearance ▸ Features: the same switch under the same name', () => {
-  it('names the picked contest, and its hint says where that is picked', async () => {
+describe('Settings ▸ Appearance ▸ Features: no Contest mode switch, and no Contesting group', () => {
+  const groups = () => [...document.querySelectorAll('.settings-featgroup-title')].map((g) => g.textContent)
+
+  it('the switch is on the Contesting tab and the Contest screen only', async () => {
     holding({ fdEvent: 'ilqp' })
     renderPanel()
     await openTab('Appearance')
-    const sw = await switchNamed('Enable Contest mode: Illinois QSO Party')
-    expect(sw.closest('.settings-field')!.querySelector('.settings-label')!.textContent).toBe('Contest mode')
-    expect(hintOf(sw)).toBe(
-      'For Illinois QSO Party, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
-    )
+    expect(groups()).toContain('Core — always on')
+    expect(screen.queryByRole('switch', { name: /Contest mode/ })).toBeNull()
+    expect(groups()).not.toContain('Contesting')
+    // CONTROL: the Contesting tab still has it, named for the picked contest.
+    await openTab('Contesting')
+    expect(await switchNamed('Enable Contest mode: Illinois QSO Party')).not.toBeNull()
   })
 })
 
@@ -164,64 +167,6 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     await openTab('Contesting')
     await switchNamed('Disable Contest mode: Illinois QSO Party')
     expect(prompt()).toBeNull()
-  })
-})
-
-describe('turned on among the features: Contesting opens when the picked contest cannot start yet', () => {
-  // The switch on the Appearance tab sends the operator to the Contesting tab when what the
-  // contest needs is not set. It asked Field Day's question of every contest: with the class and
-  // section set (left from June) a QSO party with no county did not go there, and the station
-  // silently stayed out of the contest; with them blank a QSO party ready to start went there
-  // for nothing. It asks the Contest screen's own question now (`startBlocker`).
-  const selected = (name: string) => screen.getByRole('tab', { name }).getAttribute('aria-selected')
-  const PREVIEW = {
-    event: 'ilqp',
-    rulesYear: 2026,
-    bannedModes: [],
-    spottingAllowed: true,
-    clusterAllowed: true,
-    enforcement: 'warn',
-    role: 'in_state',
-    exchange: ['599', 'COOK'],
-    problem: '',
-  }
-  const NO_COUNTY =
-    'Your COUNTY is empty — it is part of the exchange you transmit. Fill it in on the Contesting tab in Settings.'
-  const turnOn = async (contest: string) => {
-    renderPanel()
-    await openTab('Appearance')
-    fireEvent.click(await switchNamed(`Enable Contest mode: ${contest}`))
-  }
-
-  it('a QSO party with no county opens Contesting, though June’s class and section are still set', async () => {
-    holding({ fdEvent: 'ilqp', fdClass: '1D', fdSection: 'WI', contestQthState: 'IL', contestQthCounty: '' })
-    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ ...PREVIEW, exchange: [], problem: NO_COUNTY }))
-    await turnOn('Illinois QSO Party')
-    expect(selected('Contesting')).toBe('true')
-  })
-
-  it('a QSO party ready to start stays where it is, though it has no class or section', async () => {
-    holding({ fdEvent: 'ilqp', fdClass: '', fdSection: '', contestQthState: 'IL', contestQthCounty: 'COOK' })
-    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(PREVIEW))
-    await turnOn('Illinois QSO Party')
-    expect(selected('Appearance')).toBe('true')
-    expect((await switchNamed('Disable Contest mode: Illinois QSO Party')).getAttribute('aria-checked')).toBe('true')
-  })
-
-  it('turning it OFF never goes anywhere, whatever the contest is missing', async () => {
-    holding({ fdEvent: 'ilqp', fdActive: true, contestQthState: 'IL', contestQthCounty: '' })
-    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ ...PREVIEW, exchange: [], problem: NO_COUNTY }))
-    renderPanel()
-    await openTab('Appearance')
-    fireEvent.click(await switchNamed('Disable Contest mode: Illinois QSO Party'))
-    expect(selected('Appearance')).toBe('true')
-  })
-
-  it('CONTROL: ARRL Field Day with no class opens Contesting, as it always has', async () => {
-    holding({ fdEvent: 'arrlfd', fdClass: '', fdSection: 'WI' })
-    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ ...PREVIEW, event: 'arrlfd', role: '', exchange: [] }))
-    await turnOn('ARRL Field Day')
-    expect(selected('Contesting')).toBe('true')
   })
 })
 

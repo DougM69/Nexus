@@ -14,6 +14,7 @@ import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, Settings } from '../types'
 import type { FdRulesetDto } from '../api'
+import type { ContestSwitch } from '../contestSwitch'
 import { setSettings } from '../api'
 
 let station: Record<string, unknown> = {}
@@ -87,6 +88,7 @@ interface Open {
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
   observed?: boolean
+  contestSwitch?: ContestSwitch | null
 }
 
 /** Open the screen with the backend holding `held`, and App's props as `o` says. */
@@ -106,6 +108,7 @@ async function openOn(held: Partial<Settings>, o: Open = {}) {
       }
       onOpenSettings={onOpenSettings}
       onSettingsSaved={onSettingsSaved}
+      contestSwitch={o.contestSwitch}
     />,
   )
   await settle()
@@ -303,7 +306,26 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(lines()).toContain('Not permitted: FT8, FT4. Contacts in them are logged but do not count.')
   })
 
-  it('a contest picked since it started: the switch is the way over, and no rules from the wrong one', async () => {
+  it('a saved pick switched the contest: said first, naming the contest it ended', async () => {
+    await openOn(
+      { ...ILQP_STATION, fdActive: true },
+      { fieldDay: session(), fdActive: true, contestSwitch: { from: 'arrlfd', to: 'ilqp' } },
+    )
+    expect(lines()).toEqual([
+      "Now running Illinois QSO Party. Saving the new pick ended ARRL Field Day, and its contacts stay apart from this contest's.",
+      'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+    ])
+    // CONTROL: no switch, no such line.
+    cleanup()
+    await openOn({ ...ILQP_STATION, fdActive: true }, { fieldDay: session(), fdActive: true })
+    expect(lines()).toEqual([
+      'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+    ])
+  })
+
+  it('a preview of another pick (a pop-out not yet caught up with a save): no rules from the wrong one, and no off-and-on', async () => {
     await openOn(
       { ...ILQP_STATION, fdEvent: 'cqww_cw', fdActive: true },
       { fieldDay: session(), fdActive: true, fdRuleset: rules({ event: 'cqww_cw', bannedModes: ['RTTY'] }) },
@@ -311,7 +333,6 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(document.querySelector('.fd-event-name')!.textContent).toBe('Illinois QSO Party')
     expect(lines()).toEqual([
       'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
-      'Picked in Settings: CQ World-Wide DX Contest (CW). Turn Contest mode off and on again to switch to it.',
     ])
     // The switch names the contest it would leave: the one running, not the one picked.
     expect(theSwitch().getAttribute('aria-label')).toBe('Disable Contest mode: Illinois QSO Party')

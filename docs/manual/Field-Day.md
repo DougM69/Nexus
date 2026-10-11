@@ -377,7 +377,7 @@ A plain-text check sheet: every section multiplier with the call and band that f
 
 ## Other Contests, and CQ WW RTTY
 
-The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Contest mode**, which is the switch for every contest: at the top of the **Contest** screen (the tent in the left bar), or in Settings → Contesting ▸ Contest mode. If the contest cannot start yet, the Contest screen says what is missing and leaves the switch off. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
+The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Contest mode**, which is the switch for every contest: at the top of the **Contest** screen (the tent in the left bar), or in Settings → Contesting ▸ Contest mode. If the contest cannot start yet, the Contest screen says what is missing and leaves the switch off. The log strip, the contest screen and the exports then follow that contest's rules. With Contest mode on, saving a different pick switches at once, exactly as turning the mode off and on does: the running contest ends (a CQ run with it), the new one starts in Search-and-Pounce without calling CQ, each contest's contacts stay apart in the journal, club sync starts again for the new contest, and the Contest screen says "Now running …" and names the contest that ended. Saving anything else keeps the running contest as it is. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
 
 **CQ WW RTTY** (last full weekend of September, 0000Z Saturday for 48 hours):
 
@@ -414,7 +414,7 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
 
 Before the party, on every laptop:
 
-- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Contest mode** on (a contest picked while Contest mode is already on takes effect only after it is turned off and on again; the Contest screen says so, beside the switch).
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Contest mode** on (a contest picked while Contest mode is already on starts when you save it, and the Contest screen says "Now running Illinois QSO Party").
 - [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's. A laptop set up out of state, or on another callsign, is refused when it joins, and both its club block and the host's say why.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.

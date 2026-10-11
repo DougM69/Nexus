@@ -17,6 +17,7 @@ import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
 import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -181,12 +182,14 @@ interface Props {
    *  path that keeps an over already planned from keying. Everything else works as it does here:
    *  the operator box, the exports, the merge, the club, Remove and Restore. */
   logger?: boolean
+  /** The switch a saved pick just made, for the session shown here (`useContestSwitch`, kept by
+   *  App and the logger window): the screen says the station switched, and from what. */
+  contestSwitch?: ContestSwitch | null
 }
 
 /**
  * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
- * turn on while there is something, and says what it is. Settings asks the same question
- * where its copy of the switch is turned on, so the two cannot disagree about a contest.
+ * turn on while there is something, and says what it is.
  *
  * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
  * both events need a class (WFD calls it a category) and a section before the station enters
@@ -1867,6 +1870,7 @@ export function ContestView({
   onOpenSettings,
   onSettingsSaved,
   logger = false,
+  contestSwitch = null,
 }: Props) {
   const observed = observation !== undefined
   // The clock the spot advisory judges the event window by.
@@ -2267,6 +2271,14 @@ export function ContestView({
     : (refusal ?? (fieldDay ? null : startBlocker(nativeSettings, fdRuleset)))
   const modeLines: { key: string; text: string }[] = []
   if (fieldDay) {
+    // ⭐ A SAVED PICK SWITCHED THE CONTEST: said first, naming the one it ended. Its contacts
+    // are the journal's, kept out of this session (the kept-out note counts them).
+    if (contestSwitch) {
+      modeLines.push({
+        key: 'switched',
+        text: t('fieldDay.mode.switched', { contest: eventName, previous: contestName(contestSwitch.from) }),
+      })
+    }
     // Which rules apply now, plainly. The ruleset facts are the PICKED contest's, so they are
     // read only while that is the contest running; the line below says when it is not.
     modeLines.push({ key: 'on', text: t('fieldDay.mode.on', { contest: eventName }) })
@@ -2294,12 +2306,6 @@ export function ContestView({
       nowUnix < fieldDay.eventEndUnix
     ) {
       modeLines.push({ key: 'spotsRfOnly', text: t('fieldDay.mode.rule.spotsRfOnly') })
-    }
-    // A contest picked while this one runs takes effect when the mode goes off and on again
-    // (the session is kept across every save, which is what protects its log). Say so here,
-    // beside the switch that does it.
-    if (pickedEvent && pickedEvent !== (fieldDay.event || 'arrlfd')) {
-      modeLines.push({ key: 'picked', text: t('fieldDay.mode.picked', { picked: contestName(pickedEvent) }) })
     }
   } else if (!observed && !blocker && !modeOn) {
     modeLines.push({ key: 'off', text: t('fieldDay.mode.off', { contest: eventName }) })
