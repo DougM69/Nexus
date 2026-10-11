@@ -406,7 +406,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The pop-up switch (#391), in the words of the report: "how do I turn off the popup
       // notifications in the bottom right". The search is punctuation-blind, so 'popup' covers
       // 'pop-up' too.
-      'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right'],
+      'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right',
+      // The new DXCC / grid alert's own switch, and the three band menus the Needed boards
+      // follow. Searched for by what they do: the beep, or what the board lists.
+      'beep', 'needed board'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------

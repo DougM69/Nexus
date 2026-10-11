@@ -3609,18 +3609,23 @@ export const EN = {
   'settings.alerts.scope.hf': 'HF only',
   'settings.alerts.scope.vhf': 'VHF+ (6 m and up)',
   'settings.alerts.scope.all': 'All bands',
+  // The decode alert's own switch, beside the three menus. It turns the sound and the pop-up on
+  // and off, and nothing else: the boards and the icons follow the menus whatever it says.
+  'settings.alerts.newAlerts.label': 'New DXCC and grid alerts',
+  'settings.alerts.newAlerts.hint':
+    'The sound and the pop-up when you decode a new DXCC, a new grid or a rare grid 💎 on a band its menu allows. Off silences them and changes nothing else: the Needed boards and the NEW ONE and GRID icons keep following the three menus.',
   'settings.alerts.dxcc.label': 'New DXCC',
-  'settings.alerts.dxcc.aria': 'New DXCC alert bands',
+  'settings.alerts.dxcc.aria': 'New DXCC bands',
   'settings.alerts.dxcc.hint':
-    'Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode. The band choice also decides where the NEW ONE icon is shown.',
+    'The bands where a new DXCC entity — a “new one” — counts: the Needed boards, the NEW ONE icon and its loud alert all follow this choice. Off takes NEW ONE off every board.',
   'settings.alerts.grid.label': 'New grid',
-  'settings.alerts.grid.aria': 'New grid alert bands',
+  'settings.alerts.grid.aria': 'New grid bands',
   'settings.alerts.grid.hint':
-    "Quiet toast on a grid you haven't worked. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid. The band choice also decides where the GRID icon is shown, on the roster and the decode rows.",
+    "The bands where a grid you haven't worked counts: the Needed boards, the GRID icon on the roster and the decode rows, and its quiet toast all follow this choice. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.",
   'settings.alerts.rareGrid.label': 'Rare grid 💎',
-  'settings.alerts.rareGrid.aria': 'Rare grid alert bands',
+  'settings.alerts.rareGrid.aria': 'Rare grid bands',
   'settings.alerts.rareGrid.hint':
-    'The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing HF chatter keeps the gems. Covers their GRID icon too.',
+    'The bands where a rare or water-only grid (rovers, maritime, DXpeditions) counts: the Needed boards, its GRID icon and the loud 💎 alert all follow this choice. Separate from plain grids, so silencing HF chatter keeps the gems.',
   'settings.alerts.geo.label': 'Alert only about these continents',
   'settings.alerts.geo.hint':
     'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
