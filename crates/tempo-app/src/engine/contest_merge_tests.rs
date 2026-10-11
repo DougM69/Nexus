@@ -540,6 +540,63 @@ fn deleting_a_duplicate_an_earlier_build_wrote_keeps_the_contest_row() {
     assert_eq!(e.contest_removed()[0].rows[0].call, "W9BBB");
 }
 
+/// ⭐ **…and at a club, deleting one of the two takes nothing back from the club either**: the
+/// host is owed the take-back with the contact's last copy, when it leaves the contest log.
+#[test]
+fn at_a_club_deleting_a_duplicate_takes_nothing_back_until_the_last_copy() {
+    use tempo_net::fdsync::Mark;
+    let d = Dir::new("contest-merge-earlier-doubled-club");
+    let e = earlier_build_merged_as(&d, &["IL QSO Party:KANE", "IL QSO Party:WILL"]);
+    // The same laptop, joining a club now.
+    let mut s = quit(e);
+    s.fd_join_addr = "192.168.1.20:42073".into();
+    let e = launch(&d, &s);
+    assert!(e.fd_sync_enabled(), "PREMISE: club sync runs");
+    assert_eq!(
+        calls(&e),
+        ["K9AAA", "W9BBB", "K9AAA", "W9BBB"],
+        "PREMISE: the logbook that build doubled"
+    );
+    assert!(
+        e.fd_sync_marks().is_empty(),
+        "PREMISE: nothing owed the host: {:?}",
+        e.fd_sync_marks()
+    );
+    let copy = |e: &Engine, qid: &str| {
+        e.stored_log()
+            .iter()
+            .find(|r| r.contest.as_deref().is_some_and(|c| c.qid == qid))
+            .and_then(|r| r.id)
+            .expect("the copy")
+    };
+    let delete = |e: Engine, id| {
+        let shared = Mutex::new(e);
+        let (made, _) =
+            crate::logwrite::change_ops(&shared, id, None, &[LogOp::Delete(id)], "delete");
+        assert!(made.is_ok(), "the logbook delete is made: {made:?}");
+        shared.into_inner().unwrap()
+    };
+    let id = copy(&e, &format!("IL QSO Party:WILL:{POS}:2"));
+    let e = delete(e, id);
+    assert_eq!(contest_calls(&e), ["K9AAA", "W9BBB"]);
+    assert!(
+        e.fd_sync_marks().is_empty(),
+        "another copy of W9BBB is in the logbook, so the club keeps it: {:?}",
+        e.fd_sync_marks()
+    );
+    // The last copy: the contact leaves the contest log, and the club is owed its take-back.
+    let id = copy(&e, &format!("IL QSO Party:KANE:{POS}:2"));
+    let e = delete(e, id);
+    assert_eq!(contest_calls(&e), ["K9AAA"]);
+    assert_eq!(
+        e.fd_sync_marks(),
+        [Mark::Retract {
+            pos: POS.into(),
+            seq: 2
+        }]
+    );
+}
+
 // ---- the exchange each contact was sent with, and its number, across the same ----------
 
 /// What each contest contact sent in slot `key` (its county, its section), in log order.

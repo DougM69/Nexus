@@ -67,8 +67,11 @@ impl ClubBackend for EngineClubBackend {
         engine_lock(&self.0).fd_club_pos_status(pos, report);
     }
 
-    fn counts(&self) -> (usize, usize) {
-        engine_lock(&self.0).fd_club_counts()
+    fn counts(&self) -> (usize, usize, u64) {
+        // One lock, so the cursors and the generation they belong to are read together.
+        let e = engine_lock(&self.0);
+        let (dupes, sections) = e.fd_club_counts();
+        (dupes, sections, e.fd_club_generation())
     }
 
     fn club_state(&self, dupes_from: usize, sections_from: usize, mark_seen: &str) -> ClubState {
@@ -77,6 +80,18 @@ impl ClubBackend for EngineClubBackend {
 
     fn disconnect(&self, pos: &str, link: u64) {
         engine_lock(&self.0).fd_club_disconnect(pos, link);
+    }
+
+    fn retract(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        engine_lock(&self.0).fd_club_retract(hold, pos, seq)
+    }
+
+    fn restore(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        engine_lock(&self.0).fd_club_restore(hold, pos, seq)
+    }
+
+    fn retracted(&self, pos: &str) -> Vec<u64> {
+        engine_lock(&self.0).fd_club_retracted(pos)
     }
 }
 
@@ -133,8 +148,14 @@ impl PositionSync for EnginePositionSync {
         engine_lock(&self.engine).fd_accept_host_contest(contest)
     }
 
-    fn outbox_after(&self, after: u64) -> Vec<WireQso> {
-        engine_lock(&self.engine).fd_sync_outbox(after)
+    fn outbox_after(&self, after: u64) -> tempo_net::fdsync::Outbox {
+        // One lock: a contact taken back or put back between the two reads would otherwise
+        // leave one of them wrong for a tick.
+        let e = engine_lock(&self.engine);
+        tempo_net::fdsync::Outbox {
+            marks: e.fd_sync_marks(),
+            rows: e.fd_sync_outbox(after),
+        }
     }
 
     fn on_welcome(&self, acked: u64, event: &str, host_call: &str, host_now_unix: u64) {
@@ -148,6 +169,10 @@ impl PositionSync for EnginePositionSync {
 
     fn on_ack(&self, seq: u64) {
         self.mirror(|m| m.acked = m.acked.max(seq));
+    }
+
+    fn on_retracted(&self, seq: u64, gone: bool) {
+        self.mirror(|m| m.on_retracted(seq, gone));
     }
 
     fn on_club(&self, _snap: bool, st: &ClubState) {
@@ -237,6 +262,7 @@ mod tests {
             t3: 1_002,
         });
         old.on_welcome(7, "Another event", "K1OLD", now_unix());
+        old.on_retracted(5, true);
         assert_eq!(link(&engine), (LinkState::Joined, true));
         {
             let mut eng = engine_lock(&engine);
@@ -244,6 +270,11 @@ mod tests {
             assert_eq!(m.last_error, None);
             assert_eq!(m.unreachable, None);
             assert_eq!((m.acked, m.score), (0, 0));
+            assert!(
+                m.retracted.is_empty(),
+                "the old host's take-backs are not the new host's: {:?}",
+                m.retracted
+            );
             assert_eq!(
                 m.clock.skew_ms(),
                 None,
@@ -256,8 +287,17 @@ mod tests {
         }
         // CONTROL: the pump that owns the link is heard, its link going down included.
         new.on_ack(3);
+        new.on_retracted(3, true);
         new.on_link(false);
         assert_eq!(link(&engine), (LinkState::Lost(None), false));
         assert_eq!(engine_lock(&engine).fd_mirror_mut().acked, 3);
+        assert_eq!(
+            engine_lock(&engine)
+                .fd_mirror_mut()
+                .retracted
+                .iter()
+                .collect::<Vec<_>>(),
+            [&3]
+        );
     }
 }
