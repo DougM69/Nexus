@@ -319,6 +319,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after sending 73 now leaves TX off after those contacts (the ID turned it back on). Q65, FST4 and
   MSK144 send the ID as before, and the setting keeps its value. NEEDS-BENCH: an FT8 and a Q65
   contact into a dummy load with the setting on.
+- **In an FT8/FT4 contest, the Tx6 row shows and calls the contest's own CQ, as WSJT-X does.** It
+  reads `CQ FD`, `CQ TEST` or the plain CQ, whichever the contest's Running calls, and Tx 6 starts
+  that Running, as Call CQ does, and is refused with the reason where the contest's exchange is not
+  filled in. Outside a contest, in a contest that bans the mode, on FT1, DX1 and FT2, and on the
+  Remote page, Tx6 is as before. NEEDS-BENCH: Tx 6 in ARRL Field Day and an ARRL VHF contest.
 - **Running in ARRL Field Day on FT8 and FT4 answers the caller's RR73 with 73**, as WSJT-X does,
   and then calls CQ FD again. FT1 and Winter Field Day close as before, without the 73.
   NEEDS-BENCH: a contact with a station running WSJT-X in Field Day mode.

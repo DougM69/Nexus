@@ -725,9 +725,10 @@ fn scene_period(contest: &str, tier: Tier) -> String {
     out
 }
 
-/// A plain gesture with a contest picked whose exchange is not filled in (the Texas QSO Party with
-/// no county or state): with Contest mode off the strip's Call CQ, with it on the Tx6 row's plain
-/// CQ; against a WSJT-X partner with no activity answering it.
+/// A gesture with a contest picked whose exchange is not filled in (the Texas QSO Party with no
+/// county or state): with Contest mode off the strip's Call CQ, a plain run; with it on the Tx6
+/// row, which shows the contest's CQ there and calls the contest's Running, refused for the
+/// exchange it lacks as Call CQ is; against a WSJT-X partner with no activity answering it.
 fn unfilled_contest(on: bool) -> String {
     let mut e = Engine::new(ME, MY_GRID, 0);
     let mut s = e.settings().clone();
@@ -736,7 +737,10 @@ fn unfilled_contest(on: bool) -> String {
     s.tx_even = true;
     e.apply_settings(s);
     e.set_tier(Tier::Ft8);
-    let entered = if on {
+    // The Tx6 row on this computer: the contest's Running while it reports a contest CQ.
+    let entered = if on && e.contest_running_cq().is_some() {
+        e.start_running()
+    } else if on {
         e.start_cq(None)
     } else {
         e.start_running()
@@ -1367,10 +1371,11 @@ fn call_cq_in_a_contest_that_cannot_start_changes_nothing() {
     assert_eq!(keyed(&mut e, 0), None, "nothing keys");
 }
 
-/// The Tx6 row still calls the CQ it shows, plain or directed, as an FT8 QSO-mode run, in a
-/// contest too: the strip's Call CQ is the only one that follows the contest.
+/// The Remote page's Tx6 row (`start_cq`) still calls the CQ it shows, plain or directed, as an
+/// FT8 QSO-mode run, in a contest too, as the Remote page's Call CQ does. On this computer the row
+/// is the contest's CQ while a contest runs ([`the_tx6_row_shows_the_cq_the_contests_running_sends`]).
 #[test]
-fn the_tx6_row_still_sends_the_cq_it_shows() {
+fn the_remote_pages_tx6_still_sends_the_cq_it_shows() {
     for (dir, want) in [(None, "CQ K1ABC FN42"), (Some("DX"), "CQ DX K1ABC FN42")] {
         let mut e = engine_for("arrlfd", MY_GRID);
         e.set_tier(Tier::Ft8);
@@ -1381,6 +1386,105 @@ fn the_tx6_row_still_sends_the_cq_it_shows() {
         );
         assert_eq!(keyed(&mut e, 0).as_deref(), Some(want), "Tx6 {dir:?}");
     }
+}
+
+/// ⭐ WHILE A CONTEST RUNS, THE TX6 ROW SHOWS THE CQ ITS RUNNING SENDS, as WSJT-X's Tx6 is its
+/// activity's CQ (`genCQMsg`, 9502-9524), and on this computer Tx 6 calls it through the contest's
+/// Running, as the strip's Call CQ does. By value, in every contest on FT8 and FT4, from the
+/// contest's S&P (where the switch leaves the station) and from FT8 QSO mode with the switch on:
+/// `CQ FD` in Field Day and the blank default, `CQ TEST` in the ARRL VHF contests, the standard CQ
+/// where WSJT-X has none; and what the row shows is what a receiving station decodes from the
+/// Running's first over (a contest that cannot start here refuses, and nothing keys). None where the
+/// contest's messages do not apply (a contest that bans the mode, FT1, DX1, FT2, Contest mode off):
+/// the row keeps its own CQ there.
+#[test]
+fn the_tx6_row_shows_the_cq_the_contests_running_sends() {
+    let want = |contest: &str| match contest {
+        "" | "arrlfd" => Some("CQ FD K1ABC FN42"),
+        "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => Some("CQ TEST K1ABC FN42"),
+        "wfd" | "ilqp" | "nyqp" => None,
+        _ => Some("CQ K1ABC FN42"),
+    };
+    // What a receiver decodes from the over Tx 6 starts, and that it matches what the row showed.
+    let pressed = |e: &mut Engine, shown: &str, what: &str| match e.start_running() {
+        Ok(()) => {
+            let text = keyed(e, 0).unwrap_or_else(|| panic!("{what}: the Running keys"));
+            assert_eq!(
+                air_form(&text).1,
+                shown,
+                "{what}: the air carries what the row shows"
+            );
+        }
+        // CQ WW and CQ WPX cannot start without a country file, as the Contest screen's Running.
+        Err(why) => assert_eq!(keyed(e, 0), None, "{what}: refused ({why}), nothing keys"),
+    };
+    let mut started = 0;
+    for contest in CONTESTS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for from_qso in [false, true] {
+                let what = format!("{contest:?} {} from_qso={from_qso}", tier_name(tier));
+                let mut e = engine_for(contest, MY_GRID);
+                e.set_tier(tier);
+                if from_qso {
+                    e.set_mode("qso-monitor").expect("FT8 QSO mode");
+                }
+                let shown = e.contest_running_cq();
+                assert_eq!(shown.as_deref(), want(contest), "{what}");
+                assert_eq!(
+                    e.snapshot().contest_cq,
+                    shown,
+                    "{what}: the snapshot carries it"
+                );
+                if let Some(shown) = shown {
+                    pressed(&mut e, &shown, &what);
+                    started += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        started > 60,
+        "the sweep presses Tx 6 in the contests: {started}"
+    );
+    // Field Day with a six-character locator: the Running hands the encoder the locator as typed,
+    // and the air carries four characters — as the row shows, and as WSJT-X's Tx6 does.
+    let mut e = engine_for("arrlfd", "FN42ab");
+    e.set_tier(Tier::Ft8);
+    assert_eq!(e.contest_running_cq().as_deref(), Some("CQ FD K1ABC FN42"));
+    e.start_running().expect("the run starts");
+    assert_eq!(
+        keyed(&mut e, 0).as_deref(),
+        Some("CQ FD K1ABC FN42ab"),
+        "the encoder's text"
+    );
+    // A locator changed in Settings during the contest: what the row shows is still what goes out.
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    let mut s = e.settings().clone();
+    s.mygrid = "EN52".into();
+    e.apply_settings(s);
+    let shown = e.contest_running_cq().expect("a VHF contest CQ");
+    pressed(&mut e, &shown, "a locator changed mid-contest");
+    // No contest CQ where the contest's messages do not apply.
+    for tier in [Tier::TempoFast, Tier::TempoDeep, Tier::Ft2] {
+        for contest in ["arrlfd", "arrlvhf_jan", "txqp"] {
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            assert_eq!(
+                e.contest_running_cq(),
+                None,
+                "{contest:?} {}",
+                tier_name(tier)
+            );
+            assert_eq!(e.snapshot().contest_cq, None);
+        }
+    }
+    let mut e = engine_for("arrlfd", MY_GRID);
+    let mut s = e.settings().clone();
+    s.fd_active = false;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    assert_eq!(e.contest_running_cq(), None, "Contest mode off");
 }
 
 /// ⛔ The transmit guards hold for the cockpit's gestures exactly as for the Contest screen's

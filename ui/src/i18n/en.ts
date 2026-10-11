@@ -9395,6 +9395,8 @@ export const EN = {
   'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
   // The directed-CQ tokens are what goes on the air; they stay as written.
   'operate.tx.tx6.hint': 'Edit for a directed CQ — CQ DX / CQ NA / CQ POTA / CQ TEST',
+  'operate.tx.tx6.contest.aria': "Tx6 Call CQ (the contest's CQ)",
+  'operate.tx.tx6.contest.hint': "The contest's CQ — Tx 6 calls it as Call CQ does",
   'operate.tx.callCq.title': 'Call CQ (Alt+6)',
   'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
   // #254 — a Tx6 text that is not a CQ in WSJT-X's grammar is refused before anything keys,

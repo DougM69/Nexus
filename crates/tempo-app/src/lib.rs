@@ -1027,6 +1027,8 @@ impl AppState {
             tx_alarms: Vec::new(),
             // Filled by the engine while the contest logger window is open; none here.
             contest_entry: None,
+            // Filled by the engine while a contest runs whose FT8/FT4 messages apply; none here.
+            contest_cq: None,
         }
     }
 

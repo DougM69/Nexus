@@ -1061,8 +1061,9 @@ export async function startCq(dir: string | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_cq', { dir })
 }
 
-/** The Operate strip's Call CQ on this computer (`Engine::start_running`). The Tx6 row and the
- * Remote page call `startCq`, which sends the CQ they show. */
+/** The Operate strip's Call CQ on this computer (`Engine::start_running`), and the Tx6 row's while a
+ * contest runs (`snap.contestCq`). Outside a contest the row, and the Remote page always, call
+ * `startCq`, which sends the CQ they show. */
 export async function startRunning(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_running', {})
 }

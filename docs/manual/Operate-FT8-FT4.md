@@ -98,7 +98,10 @@ The Tx panel is visible only in Classic layout. It contains:
 - **Generate Std Msgs** button — rebuilds all six messages from the current DX fields
 - **Tx1–Tx6** message rows, each with a next-dot indicator showing which slot fires next
 - **Tx5** — editable free text, 13 character maximum; a QSO-macro datalist provides common expansions
-- **Tx6** — editable directed-CQ field (`CQ DX`, `CQ NA`, `CQ POTA`, `CQ TEST`, `CQ 040`, etc.)
+- **Tx6** — editable directed-CQ field (`CQ DX`, `CQ NA`, `CQ POTA`, `CQ TEST`, `CQ 040`, etc.).
+  While an FT8/FT4 contest runs it shows the contest's own CQ instead (`CQ FD`, `CQ TEST` or the
+  plain CQ) and Tx 6 calls it through the contest's Running, as Call CQ does; your own Tx6 text
+  comes back when the contest ends.
 
 In Roster layout the equivalent information appears in the modern QSO strip alongside the Call Roster.
 

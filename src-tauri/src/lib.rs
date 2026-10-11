@@ -19182,8 +19182,8 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
-/// The Operate strip's Call CQ ([`tempo_app::engine::Engine::start_running`]). The Tx6 row keeps
-/// `start_cq`, which sends the CQ it shows.
+/// The Operate strip's Call CQ ([`tempo_app::engine::Engine::start_running`]), and the Tx6 row's
+/// while a contest runs. Outside a contest the row keeps `start_cq`, which sends the CQ it shows.
 #[tauri::command(async)]
 fn start_running(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     start_running_on(&state)

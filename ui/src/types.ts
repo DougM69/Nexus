@@ -4845,6 +4845,11 @@ export interface AppSnapshot {
    *  logger window while that window is open. Absent while it is closed, from the Remote (which
    *  never receives it), and from a station older than the logger window. */
   contestEntry?: ContestEntryShared
+  /** The CQ the contest's Running calls, as it goes on the air ("CQ FD K1ABC FN42"), while a
+   *  contest runs whose own FT8/FT4 messages apply (`Engine::contest_running_cq`): the Tx6 row
+   *  shows it then and calls it through the contest's Running, as Call CQ does. Absent everywhere
+   *  else, from the Remote (which never receives it), and from an older station. */
+  contestCq?: string
 }
 
 /** The contest strip's contact in progress, shared by the main window and the contest logger

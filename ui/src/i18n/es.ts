@@ -3526,6 +3526,8 @@ export const ES: PartialCatalog = {
   "operate.tx.tx5.placeholder": "Texto libre",
   "operate.tx.tx6.aria": "Tx6 Llamar CQ (edítalo para un CQ dirigido)",
   "operate.tx.tx6.hint": "Edítalo para un CQ dirigido — CQ DX / CQ NA / CQ POTA / CQ TEST",
+  "operate.tx.tx6.contest.aria": "Tx6 Llamar CQ (el CQ del concurso)",
+  "operate.tx.tx6.contest.hint": "El CQ del concurso — Tx 6 lo llama como Llamar CQ",
   "operate.tx.tx6.placeholder": "Llamada CQ",
   "operate.waterfall.redock.label": "⧉ Cascada en ventana aparte — pulsa para acoplarla",
   "operate.waterfall.redock.title": "La cascada está en su propia ventana — pulsa para traerla de vuelta aquí",

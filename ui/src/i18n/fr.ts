@@ -3526,6 +3526,8 @@ export const FR: PartialCatalog = {
   "operate.tx.tx5.placeholder": "Texte libre",
   "operate.tx.tx6.aria": "Tx6 Appel CQ (modifier pour un CQ dirigé)",
   "operate.tx.tx6.hint": "Modifier pour un CQ dirigé — CQ DX / CQ NA / CQ POTA / CQ TEST",
+  "operate.tx.tx6.contest.aria": "Tx6 Appel CQ (le CQ du concours)",
+  "operate.tx.tx6.contest.hint": "Le CQ du concours — Tx 6 l'appelle comme Appel CQ",
   "operate.tx.tx6.placeholder": "Appel CQ",
   "operate.waterfall.redock.label": "⧉ Cascade détachée — cliquez pour la ré-ancrer",
   "operate.waterfall.redock.title": "La cascade est dans sa propre fenêtre — cliquez pour la ramener ici",

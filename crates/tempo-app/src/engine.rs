@@ -14791,6 +14791,26 @@ Pick the one you operate from on the Contesting tab in Settings.",
         FtMessages::follows_contest(ruleset, mode).then(|| FtMessages::for_contest(ruleset, mode))
     }
 
+    /// ⭐ **The CQ the contest's Running calls, as it goes on the air** — what the Operate
+    /// cockpit's Tx6 row shows while a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), and on this computer calls through the contest's Running,
+    /// as Call CQ does ([`Self::start_running`]). WSJT-X's Tx6 is its activity's CQ once one is
+    /// set (`genCQMsg`, mainwindow.cpp 9502-9524): `CQ FD`, `CQ TEST`, or the standard CQ where
+    /// it has no activity. `None` everywhere else, where the row keeps its own CQ.
+    ///
+    /// Built as the Running builds its CQ ([`FtMessages::cq`]) from what it would be built from
+    /// now: the Settings call and locator, and inside the contest its session's own GRID (a
+    /// rover's move); a Running entered from outside it starts a session whose GRID is the
+    /// Settings locator's four characters.
+    pub fn contest_running_cq(&self) -> Option<String> {
+        let messages = self.contest_ft_messages()?;
+        let session_grid = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.field("GRID"),
+            _ => "",
+        };
+        Some(messages.cq_on_air(&self.settings.mycall, &self.settings.mygrid, session_grid))
+    }
+
     /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
     /// own FT8/FT4 `messages` apply: the contest's S&P works that station
     /// ([`FieldDayStation::answer_cq`]). The rest is what a double-click does outside a contest
@@ -22419,7 +22439,9 @@ contact yourself."
     /// Contest screen's Running does, and nothing changes. Like any Call CQ it clears a
     /// directed-CQ token left from the Tx6 row.
     ///
-    /// The Tx6 row and the Remote page call `start_cq` directly, with the CQ they show.
+    /// The Remote page calls `start_cq` directly, with the CQ it shows. On this computer the Tx6
+    /// row calls this while a contest runs, the CQ it shows then being the contest's
+    /// ([`Self::contest_running_cq`]), and `start_cq` everywhere else.
     pub fn start_running(&mut self) -> Result<(), String> {
         if self.contest_ft_messages().is_some() {
             // The screen's Running refuses a run without a valid callsign at the command (the
@@ -23564,6 +23586,7 @@ contact yourself."
         s.parsec_presence = self.parsec_presence_dto();
         s.tx_alarms = self.tx_alarms.clone();
         s.contest_entry = self.contest_entry_dto();
+        s.contest_cq = self.contest_running_cq();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;

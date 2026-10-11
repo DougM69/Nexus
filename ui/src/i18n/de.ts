@@ -5499,6 +5499,8 @@ export const DE: PartialCatalog = {
   "operate.tx.tx6.placeholder": "CQ-Ruf",
   "operate.tx.tx6.aria": "Tx6 CQ rufen (für ein gerichtetes CQ bearbeiten)",
   "operate.tx.tx6.hint": "Für ein gerichtetes CQ bearbeiten — CQ DX / CQ NA / CQ POTA / CQ TEST",
+  "operate.tx.tx6.contest.aria": "Tx6 CQ rufen (das CQ des Contests)",
+  "operate.tx.tx6.contest.hint": "Das CQ des Contests — Tx 6 ruft es wie CQ rufen",
   "operate.tx.callCq.title": "CQ rufen (Alt+6)",
   "operate.tx.send.title": "Dies als nächste Aussendung senden (Alt+{{n}})",
   "operate.tx.cq.malformed.try": "Nichts gesendet — das ist kein CQ, das Nexus rufen kann. Versuchen Sie: {{fix}}",

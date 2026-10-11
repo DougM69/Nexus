@@ -2965,6 +2965,45 @@ impl FtMessages {
             Self::Standard => 0,
         }
     }
+
+    /// The CQ a running station with these messages calls from `mycall` (`genCQMsg`,
+    /// mainwindow.cpp 9514-9524): `CQ FD` with `mygrid` as Field Day has always sent it,
+    /// `CQ TEST` in the ARRL VHF contests, and a plain CQ where WSJT-X has no activity, both with
+    /// `sent_grid`: the contest's own `session_grid` where it exchanges one, else `mygrid` cut to
+    /// the four characters WSJT-X sends.
+    pub fn cq(self, mycall: &str, mygrid: &str, session_grid: &str) -> Msg {
+        let (dir, grid) = match self {
+            Self::FieldDay => ("FD", mygrid.to_string()),
+            Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
+            Self::Standard => ("", sent_grid(session_grid, mygrid)),
+        };
+        Msg::Cq {
+            de: mycall.to_string(),
+            grid,
+            dir: dir.to_string(),
+        }
+    }
+
+    /// [`cq`](Self::cq) as it goes on the air: the packer sends four characters of a grid, and
+    /// WSJT-X's Tx6 shows four (`genCQMsg`: `grid.left (4)`). What the Operate cockpit's Tx6 row
+    /// shows while the contest runs.
+    pub fn cq_on_air(self, mycall: &str, mygrid: &str, session_grid: &str) -> String {
+        let mut cq = self.cq(mycall, mygrid, session_grid);
+        if let Msg::Cq { grid, .. } = &mut cq {
+            *grid = crate::qso::air_grid(grid);
+        }
+        cq.to_text()
+    }
+}
+
+/// The grid a contest station sends outside Field Day's messages: the contest's own GRID where it
+/// exchanges one (a rover's "I moved" changes it), else the Settings locator cut to four
+/// characters, as WSJT-X's `my_grid().left(4)` is.
+fn sent_grid(session_grid: &str, mygrid: &str) -> String {
+    match session_grid {
+        "" => crate::qso::air_grid(mygrid),
+        grid => grid.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3154,30 +3193,15 @@ impl FieldDayStation {
         self.messages != FtMessages::FieldDay
     }
 
-    /// The CQ this station calls (`genCQMsg`, mainwindow.cpp 9514-9524): `CQ FD` with the
-    /// grid as it has always gone out, `CQ TEST` in the ARRL VHF contests, and a plain CQ
-    /// where WSJT-X has no activity, both with the four-character grid WSJT-X sends.
+    /// The CQ this station calls ([`FtMessages::cq`]).
     fn cq(&self) -> Msg {
-        let (dir, grid) = match self.messages {
-            FtMessages::FieldDay => ("FD", self.mygrid.clone()),
-            FtMessages::NaVhf => ("TEST", self.air_grid()),
-            FtMessages::Standard => ("", self.air_grid()),
-        };
-        Msg::Cq {
-            de: self.mycall().to_string(),
-            grid,
-            dir: dir.to_string(),
-        }
+        self.messages
+            .cq(self.mycall(), &self.mygrid, self.log.session.field("GRID"))
     }
 
-    /// The grid this station sends outside Field Day: the contest's own GRID where it
-    /// exchanges one (a rover's "I moved" changes it), else the Settings locator cut to four
-    /// characters, as WSJT-X's `my_grid().left(4)` is.
+    /// The grid this station sends outside Field Day (`sent_grid`).
     fn air_grid(&self) -> String {
-        match self.log.session.field("GRID") {
-            "" => crate::qso::air_grid(&self.mygrid),
-            grid => grid.to_string(),
-        }
+        sent_grid(self.log.session.field("GRID"), &self.mygrid)
     }
 
     /// Addressed to this station: base calls, so a portable call matches.
@@ -5443,6 +5467,24 @@ mod tests {
         run.observe(&[dec("K1ABC W9XYZ RR73")], 3);
         assert_eq!(next(&run), "W9XYZ K1ABC 73");
         assert_eq!(run.log.qsos().len(), 1);
+    }
+
+    /// The CQ a running station calls, by value, for each set of messages: Field Day's with the
+    /// locator as typed and never a contest GRID, the others with the contest's own GRID or the
+    /// locator's four characters; and, as the Tx6 row shows it, with four characters on the air.
+    #[test]
+    fn the_running_cq_by_value() {
+        let cq = |m: FtMessages, session: &str| m.cq("K1ABC", "FN42ab", session).to_text();
+        assert_eq!(cq(FtMessages::FieldDay, ""), "CQ FD K1ABC FN42ab");
+        assert_eq!(cq(FtMessages::FieldDay, "EN52"), "CQ FD K1ABC FN42ab");
+        assert_eq!(cq(FtMessages::NaVhf, ""), "CQ TEST K1ABC FN42");
+        assert_eq!(cq(FtMessages::NaVhf, "EN52"), "CQ TEST K1ABC EN52");
+        assert_eq!(cq(FtMessages::Standard, ""), "CQ K1ABC FN42");
+        assert_eq!(cq(FtMessages::Standard, "EN52"), "CQ K1ABC EN52");
+        assert_eq!(
+            FtMessages::FieldDay.cq_on_air("K1ABC", "FN42ab", ""),
+            "CQ FD K1ABC FN42"
+        );
     }
 
     #[test]

@@ -5922,6 +5922,8 @@ export const JA: PartialCatalog = {
   "operate.tx.tx6.placeholder": "CQ メッセージ",
   "operate.tx.tx6.aria": "Tx6 CQ 呼出し（指定 CQ は編集）",
   "operate.tx.tx6.hint": "指定 CQ にするには編集 — CQ DX / CQ NA / CQ POTA / CQ TEST",
+  "operate.tx.tx6.contest.aria": "Tx6 CQ 呼出し（コンテストの CQ）",
+  "operate.tx.tx6.contest.hint": "コンテストの CQ — Tx 6 は CQ 呼出しと同じように送出します",
   "operate.tx.callCq.title": "CQ 呼出し（Alt+6）",
   "operate.tx.send.title": "これを次の送信として送る（Alt+{{n}}）",
   "operate.tx.cq.malformed.try": "送信していません — Nexus が呼べる CQ ではありません。次をお試しください: {{fix}}",

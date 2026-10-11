@@ -984,9 +984,18 @@ export function OperateCockpit({
     }
   }, [snap.qso?.dxcall, snap.qso?.dxgrid])
 
+  // ⭐ WHILE A CONTEST RUNS, THE TX6 ROW IS THE CONTEST'S CQ. WSJT-X's Tx6 is its activity's CQ
+  // once one is set (`genCQMsg`): `CQ FD`, `CQ TEST`, or the standard CQ where it has none. The
+  // engine names the CQ the contest's Running calls (`snap.contestCq`, present only while a contest
+  // whose FT8/FT4 messages apply runs); the row shows it, read-only, and on this computer Tx 6 calls
+  // the contest's Running exactly as the strip's Call CQ does, so what goes on the air is what the
+  // row shows. The operator's own Tx6 text stays underneath and is back when the contest ends. The
+  // Remote page's row keeps its own CQ and `startCq`, as its Call CQ does.
+  const contestCq = control ? (snap.contestCq ?? null) : null
+
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
   // follows qso.txNow when it matches a row, else the operator's local pick.
-  const rowTexts = stdMessageList({ ...msgs, tx5, tx6 })
+  const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
   const txNow = snap.qso?.txNow ?? null
   const liveNext = txNow ? rowTexts.indexOf(txNow) : -1
   const nextIndex = liveNext >= 0 ? liveNext : localNext
@@ -998,6 +1007,13 @@ export function OperateCockpit({
   const doTx = (n: number) => {
     if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
+      // In a contest: the contest's Running, as the strip's Call CQ asks for it — the station
+      // refuses it with its reason when the contest cannot start, and the reason is shown.
+      if (contestCq) {
+        setLocalNext(5)
+        void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
       const dir = cqDirFromText(tx6, snap.mycall)
       // ⭐ #254 — A MALFORMED CQ IS REFUSED, NOT REPLACED.
       //
@@ -1324,6 +1340,7 @@ export function OperateCockpit({
               onTx5={handleTx5}
               tx6={tx6}
               onTx6={handleTx6}
+              tx6Contest={contestCq}
               nextIndex={nextIndex}
               onTx={doTx}
               onGenerate={handleGenerate}
@@ -2199,6 +2216,7 @@ export function OperateCockpit({
                       onTx5={handleTx5}
                       tx6={tx6}
                       onTx6={handleTx6}
+                      tx6Contest={contestCq}
                       nextIndex={nextIndex}
                       onTx={doTx}
                       onGenerate={handleGenerate}
