@@ -33,6 +33,9 @@ pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
 mod contest_removal_tests;
+/// The plain modes never wait on the contest picked in Settings.
+#[cfg(test)]
+mod contest_setup_tests;
 mod field_day_display;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
@@ -13818,8 +13821,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // while there is no "end this session" action — a session that outlived
         // leaving the mode entirely could not be corrected from Settings at all, since
         // `restore_field_day_if_enabled` is a deliberate no-op while the mode is live.
+        //
+        // ⭐ **ONLY THE CONTEST'S OWN MODES BUILD IT.** It was built for every switch, so a
+        // contest picked in Settings whose exchange is not filled in refused FT8 QSO mode's Call
+        // CQ and S&P, and Chat, with that contest's complaint, Contest mode on or off. A plain
+        // mode needs nothing from the contest.
         let session = match &self.mode {
-            Mode::FieldDay { station, .. } => station.log.session.clone(),
+            Mode::FieldDay { station, .. } => Some(station.log.session.clone()),
+            _ if !spec.starts_with("fieldday") => None,
             _ => {
                 // ⭐ THE CONTEST THE OPERATOR PICKED, whichever it is. The picker writes
                 // `fd_event` and this is the one place it is turned into a session, so
@@ -13858,7 +13867,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 ) {
                     s.entry_category = cat;
                 }
-                s
+                Some(s)
             }
         };
         // ⚠️ **FLUSH BEFORE THE REBUILD, and this is a mechanism rather than a rule to
@@ -13882,9 +13891,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .and_then(|_| self.field_day_log_adif());
         self.persist_fd_log();
         let band = self.settings.band.clone();
-        let next_mode = match spec {
-            "chat" => Mode::Chat,
-            "qso-run" => Mode::Qso {
+        let next_mode = match (spec, session) {
+            ("chat", _) => Mode::Chat,
+            ("qso-run", _) => Mode::Qso {
                 station: Box::new({
                     let mut s = QsoStation::calling_cq(&mycall, &mygrid);
                     s.cq_call_cap = self.cq_call_budget();
@@ -13900,11 +13909,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 }),
                 running: true,
             },
-            "qso-monitor" => Mode::Qso {
+            ("qso-monitor", _) => Mode::Qso {
                 station: Box::new(QsoStation::monitoring(&mycall, &mygrid)),
                 running: false,
             },
-            "fieldday-run" => Mode::FieldDay {
+            ("fieldday-run", Some(session)) => Mode::FieldDay {
                 station: Box::new({
                     // `log.event` comes from the SESSION (`FieldDayLog::new`), not from
                     // settings: which sponsor's rules are running is part of what a
@@ -13920,7 +13929,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 }),
                 running: true,
             },
-            "fieldday-sp" => Mode::FieldDay {
+            ("fieldday-sp", Some(session)) => Mode::FieldDay {
                 station: Box::new({
                     let mut st =
                         FieldDayStation::search_and_pounce(&mycall, &mygrid, session, &band);
@@ -13930,7 +13939,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 }),
                 running: false,
             },
-            other => return Err(format!("unknown mode {other:?}")),
+            (other, _) => return Err(format!("unknown mode {other:?}")),
         };
         // A valid local operating-spec gesture owns the newer station context,
         // even when its label and CAT mode are unchanged. Do not let older
