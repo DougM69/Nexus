@@ -1007,7 +1007,8 @@ pub struct ClubLog {
     ords: Vec<u64>,
     next_ord: u64,
     /// One more each time the dupe keys and sections are rebuilt (a take-back or a put-back of a
-    /// row this host holds): every connection is sent a fresh snap (`fdsync::ClubBackend::counts`).
+    /// row this host holds, or a give): every connection is sent a fresh snap
+    /// (`fdsync::ClubBackend::counts`).
     generation: u64,
 }
 
@@ -1229,9 +1230,10 @@ impl ClubLog {
     }
 
     /// [`give`](Self::give)'s change, live and at replay: the pin, every hold on the position
-    /// stale, and the position started afresh. The club's dupe keys and sections stay, as they
-    /// must: every position's mirror holds them by cursor, and a club dupe is a warning, never a
-    /// lock.
+    /// stale, and the position started afresh. The club's dupe keys and sections are rebuilt
+    /// without the contacts it sent ([`rebuild_index`](Self::rebuild_index)), so a key or a
+    /// section only those held leaves every laptop's club view at once: the new generation sends
+    /// every connection a fresh snap, as a take-back's does.
     fn hand_over(&mut self, pos: &str, key_hash: &str) {
         self.pins.insert(pos.to_string(), key_hash.to_string());
         *self.gives.entry(pos.to_string()).or_default() += 1;
@@ -1248,6 +1250,7 @@ impl ClubLog {
         // Its take-backs were the old laptop's: the new one's rows are its own.
         self.gone.retain(|(p, _)| p != pos);
         self.aside.retain(|(p, _), _| p != pos);
+        self.rebuild_index();
     }
 
     /// A served JOIN's hold on position `posid` (`tempo_net::fdsync::JoinAccept::hold`): how
@@ -1820,7 +1823,8 @@ impl ClubLog {
         (self.dkeys_list.len(), self.sections_list.len())
     }
 
-    /// How often the dupe keys and sections were rebuilt ([`take_back`](Self::take_back)).
+    /// How often the dupe keys and sections were rebuilt ([`take_back`](Self::take_back),
+    /// [`give`](Self::give)).
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -2981,6 +2985,68 @@ mod tests {
         assert!(club.taken_back("aaaa").is_empty());
         club.merge(&wq("aaaa", 2, "K9NEW", "20m", "CW", "IL", 1_100), 1_100);
         assert!(club_shape(&club).cabrillo.contains("K9NEW"));
+    }
+
+    /// ⭐ **A give takes the old laptop's dupe keys and sections out of the club's lists at
+    /// once**, with the contacts it sent as that position: the club is then the one that never
+    /// heard from that laptop, keys and sections in their order included, and every connection
+    /// gets a fresh snap. A key another position also worked stays, as that position's. The
+    /// laptop the position went to adds its own as any position does, and a restarted host
+    /// replays to the same lists. CONTROLS, checked first: the rows, both files' bytes, the QSO
+    /// count and the board are that club's too, so the give changes nothing else.
+    #[test]
+    fn a_give_takes_the_old_laptops_keys_and_sections_out_of_the_clubs_lists() {
+        let dir = scratch("give-keys");
+        let path = dir.join("fd_event_give_keys.jsonl");
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.attach_journal_since(&path, 0).unwrap();
+        // bbbb: K1ABC, the club's only 40m CW and only EMA, and W1AW after aaaa's.
+        four_rows(&mut club);
+        club.note_refused(
+            "bbbb",
+            &throwaway_hash("the laptop bbbb is"),
+            "CW tent",
+            "W9XYZ",
+            POSITION_HELD,
+            1_000,
+        );
+        let handle = club.refused(1_000)[0].handle;
+        let gen0 = club.generation();
+        assert_eq!(club.give(handle, 1_000), Ok(()));
+
+        let mut never = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        never.merge(&wq("aaaa", 1, "W1AW", "20m", "DIG", "CT", 100), 900);
+        never.merge(&wq("aaaa", 2, "N0XYZ", "20m", "PH", "MN", 300), 920);
+        let (given, want) = (club_shape(&club), club_shape(&never));
+        assert_eq!(given.rows, want.rows, "CONTROL: aaaa's rows, in order");
+        assert_eq!(given.cabrillo, want.cabrillo, "CONTROL: the Cabrillo bytes");
+        assert_eq!(given.adif, want.adif, "CONTROL: the ADIF bytes");
+        assert_eq!(given.totals.0, want.totals.0, "CONTROL: the QSO count");
+        assert_eq!(given.board, want.board, "CONTROL: the board");
+        assert_eq!(given.dkeys, want.dkeys, "K1ABC on 40m CW was bbbb's alone");
+        assert_eq!(club.dupe_keys(), never.dupe_keys(), "the legacy triple too");
+        assert_eq!(given.sections, ["CT", "MN"], "EMA was bbbb's alone");
+        assert_eq!(given, want);
+        assert!(
+            club.generation() > gen0,
+            "every connection gets a fresh snap"
+        );
+
+        for c in [&mut club, &mut never] {
+            c.merge(&wq("bbbb", 1, "K7GHI", "15m", "CW", "OR", 1_100), 1_100);
+            c.merge(&wq("bbbb", 2, "W1AW", "20m", "DIG", "CT", 1_200), 1_200);
+        }
+        assert_eq!(club_shape(&club), club_shape(&never));
+
+        let mut reborn = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        reborn.attach_journal_since(&path, 0).unwrap();
+        // A replayed row has no arrival on this run, so no rate: the board is left out.
+        let unrated = |c: &ClubLog| ClubShape {
+            board: vec![],
+            ..club_shape(c)
+        };
+        assert_eq!(unrated(&reborn), unrated(&never));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⭐ **Last event's take-back cannot keep this event's contact out.** A host journal can
