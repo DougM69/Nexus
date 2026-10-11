@@ -395,6 +395,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
+  launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
+  every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations
+  showed for their grid alone. Both now follow that setting, as the docked board always has: an HF
+  station with another reason keeps that reason without GRID, and rare squares follow the Rare grid
+  💎 setting. The need-type chips work as before.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

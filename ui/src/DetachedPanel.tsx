@@ -521,8 +521,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     () => visibleNeeds(needAlerts, readEnabledModes(), needScopes),
     [needAlerts, needScopes],
   )
-  // The Spots board's needs (Hide worked's rescue), as App hands its Spots board: band scopes
-  // honoured, mode-feature neutral (`boardNeeds`). For the dashboard window's Spots box.
+  // The BOARD's needs, as App hands its Needed and Spots boards: band scopes honoured, mode-feature
+  // neutral (`boardNeeds`). For this window's Needed board and box, and the dashboard window's Spots box
+  // (Hide worked's rescue).
   const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   // The SHARED chain, same as App.tsx — the hand-rolled loop this replaces was
   // the pre-fix last-tag-wins map (backend orders alerts priority-DESCENDING,
@@ -604,8 +605,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // THIS WINDOW'S NEEDED BOARD, one object for the Needed window below and the dashboard window's
   // Needed box, as App shares its own: a box can never be wired differently from its board.
   const neededBoard = {
-    // Full un-gated list — the board's own mode toggles decide what shows.
-    alerts: needAlerts,
+    // Un-gated by MODE FEATURE — the board's own mode toggles decide what shows — but scoped by band,
+    // as App's is: handed the raw list, this window listed every HF grid the New grid scope keeps off
+    // the docked board.
+    alerts: boardAlerts,
     bandPlan,
     selectedCall: selected,
     myGrid: snap?.mygrid ?? '',
