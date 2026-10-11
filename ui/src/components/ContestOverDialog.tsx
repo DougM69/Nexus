@@ -30,7 +30,7 @@
 // ---------------------------------------------------------------------------
 import { useEffect, useState } from 'react'
 import { Dialog } from './ui/Dialog'
-import { t, type MessageKey } from '../i18n'
+import { t } from '../i18n'
 import type { FdMergeReport, Settings } from '../types'
 import { exportLog, fdMergeToGeneral, saveTextToDownloads, setUnassistedMode } from '../api'
 import { contestFileStem } from '../fdEvent'
@@ -49,15 +49,25 @@ const PUT_BACK = [
 ] as const
 export type PutBackKey = (typeof PUT_BACK)[number]
 
-/** Each one's name, as Settings words it. */
-const LABEL: Record<PutBackKey, MessageKey> = {
-  mycall: 'settings.fdWho.call.label',
-  fdOperator: 'settings.fdWho.operator.label',
-  fdPositionName: 'settings.fdWho.position.label',
-  contestCategoryOperator: 'settings.contestPick.category.label',
-  contestEntryClass: 'settings.contestPick.entryClass.label',
-  contestCategoryPower: 'settings.contestPick.power.label',
-  unassistedMode: 'settings.contestCategory.unassisted.label',
+/** Each one's name, as Settings words it. A literal key per setting rather than a table read through
+ *  `t(table[key])`, so the catalog guard (`i18n/placeholders.test.ts`) can read every call site. */
+function settingLabel(key: PutBackKey): string {
+  switch (key) {
+    case 'mycall':
+      return t('settings.fdWho.call.label')
+    case 'fdOperator':
+      return t('settings.fdWho.operator.label')
+    case 'fdPositionName':
+      return t('settings.fdWho.position.label')
+    case 'contestCategoryOperator':
+      return t('settings.contestPick.category.label')
+    case 'contestEntryClass':
+      return t('settings.contestPick.entryClass.label')
+    case 'contestCategoryPower':
+      return t('settings.contestPick.power.label')
+    case 'unassistedMode':
+      return t('settings.contestCategory.unassisted.label')
+  }
 }
 
 /** An empty entry category IS this declaration (Settings' own rule), and a Cabrillo token. */
@@ -227,12 +237,12 @@ export function ContestOverDialog({
                   onChange={() => tick(row.key)}
                   disabled={busy}
                   aria-label={t('contestOver.putBack.aria', {
-                    setting: t(LABEL[row.key]),
+                    setting: settingLabel(row.key),
                     now: shown(row.key, row.now),
                     before: shown(row.key, row.before),
                   })}
                 />
-                <span className="contest-over-setting">{t(LABEL[row.key])}</span>
+                <span className="contest-over-setting">{settingLabel(row.key)}</span>
                 <span className="contest-over-now" title={shown(row.key, row.now)}>
                   {shown(row.key, row.now)}
                 </span>
