@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
 import {RemoteOperationsContext} from './operations'
 import { AudioListen } from './AudioListen'
@@ -102,7 +102,13 @@ export function BrowserApplication({ connection, disconnect, signOut }: { connec
     void load()
     return () => { live = false; clearTimeout(timer) }
   }, [client, phase])
-  const stale = phase !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS
+  // Read through the store, as `phase` is. The age is the client's clock, not React state, so React
+  // learns that the readings lapsed in whichever render runs next; when that render changes no state,
+  // React keeps its hooks and drops its effects, and every effect keyed on `stale` (the display's hold,
+  // the wheel tune's cancel) took the lapse as seen without ever running. Through the store, a render
+  // that sees `stale` change is a change React commits.
+  const readStale = useCallback(() => client.getPhase() !== 'ready' || client.age('get_snapshot') >= APPLICATION_TIMEOUT_MS, [client])
+  const stale = useSyncExternalStore(client.subscribe, readStale)
   useEffect(() => { if (stale) tuning?.cancel() }, [stale, tuning])
   // Readings older than APPLICATION_TIMEOUT_MS still refuse at once (StationDataContext, wheel tuning).
   // Only the DISPLAY waits: the fade and the unavailable wording follow five seconds of continuous loss
