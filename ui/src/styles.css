@@ -2578,11 +2578,37 @@ button.nb-chip:hover {
 }
 .amp-v {
   font-family: var(--font-mono);
-  font-size: var(--fs-body);
+  font-size: var(--fs-title);
   font-weight: 600;
   line-height: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* THE TWO BIG READINGS, power out and SWR (AmpPane `Big`): SVG text sized by its cell, the way the Clock box
+   sizes its digits, so they follow the box's width wherever it stands. Two to a line where each cell keeps
+   8em, which the stock 300 px dashboard rail gives them with its scrollbar showing; one to a line below that
+   (the rail's 200 px floor, where two would draw them smaller than the readings under them). The height cap
+   rides --text-scale, as the Clock's does, so a wide box does not draw them past what Text size asks for. */
+.amp-big-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(8em, 100%), 1fr));
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.amp-v.amp-big {
+  display: block;
+}
+.amp-big svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(40px * var(--text-scale));
+  overflow: visible;
+}
+.amp-big text {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  fill: currentColor;
 }
 /* Faults wrap rather than clip: an alarm is the one thing on this pane that must be readable
    in full, and the pane body is the scroller when the words run past the box. */
