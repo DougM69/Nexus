@@ -140,8 +140,15 @@ outside the contest, as before, and the UDP special operation is 0.
 Many clubs put two people on one station: the operator on the radio, and a logger on a second
 keyboard and mouse at a second monitor (MouseMux gives each of them their own). Click
 **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box,
-and drag the window to the logger's monitor. It holds the whole Contest screen with a log line
-under it, and it opens on that monitor again next time.
+and drag the window to the logger's monitor. It opens on that monitor again next time.
+
+- **The log line comes first, in large type.** The call and exchange boxes are across the top of
+  the window, with the dupe warning right under them. Under that are the last five contacts,
+  newest first, and the whole Contest screen (operator, sections, score) is below, scrolling on
+  its own.
+- **A− and A+** at the top right make the log line and the last contacts smaller or larger, from
+  80 to 160 %, on top of your Text size setting. That computer remembers the size for the logger
+  window.
 
 - **One contact, two windows.** The logger's line and your own contest log strip are the same
   contact: whatever either of you types shows in both as it is typed, with the same dupe warning,

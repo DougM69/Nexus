@@ -71,6 +71,9 @@ export const PER_SURFACE = [
   // The two rail widths the operator dragged (2026-09-13). A width is a statement about one
   // window's shape: a pop-out inherits it on first open and clamps it against its own box.
   'nexus.connect.railWidths',
+  // The contest logger window's text size (its A− / A+): how large THIS window's entry and last
+  // contacts read, for the person at its monitor. Only that window writes it.
+  'nexus.contestLogger.textScale',
   // The dashboard rail beside the cockpits (features/dashRail): which box is in each slot, whether it
   // shows beside each section, and its width — statements about THIS window, like Connect's.
   'nexus.dashrail.config',

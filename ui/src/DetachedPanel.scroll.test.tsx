@@ -427,11 +427,12 @@ describe('every pop-out the shell can host', () => {
   }, 60_000)
 })
 
-// ── 3. the contest logger window: the screen scrolls, the log line never does ───────────────
+// ── 3. the contest logger window: the log line first and never scrolled, the rest giving way ──
 
-/** The `flex` that actually applies to `el`, by the same cascade as `overflowY` above, over the
- *  shorthand alone: the one rule that sizes the log line writes the shorthand. */
-function flexOf(el: Element): string {
+/** The value of `prop` that actually applies to `el`, by the same cascade as `overflowY` above,
+ *  over that one property: the rules sizing the logger window write `flex` as the shorthand and
+ *  `min-height` as itself. */
+function declOf(el: Element, prop: string): string {
   let win: Cand | null = null
   for (const { rule, order } of FLAT) {
     let hit = false
@@ -440,12 +441,12 @@ function flexOf(el: Element): string {
     } catch {
       continue
     }
-    const value = hit ? rule.style.getPropertyValue('flex').trim() : ''
+    const value = hit ? rule.style.getPropertyValue(prop).trim() : ''
     if (!value) continue
     const cand: Cand = {
-      prop: 'flex',
+      prop,
       value,
-      important: rule.style.getPropertyPriority('flex') === 'important',
+      important: rule.style.getPropertyPriority(prop) === 'important',
       spec: specificity(rule.selectorText),
       order,
     }
@@ -455,21 +456,29 @@ function flexOf(el: Element): string {
 }
 
 describe('the contest logger window', () => {
-  it('pins the log line under the contest screen, outside the screen\'s scroller', async () => {
-    const { app } = await mountPopout('contestlog')
-    const screenBox = app.querySelector(':scope > main.layout.single')
-    const line = app.querySelector(':scope > section.contest-logger-entry')
-    expect(screenBox, 'the contest screen is the window\'s first child').not.toBeNull()
-    expect(line, 'the log line is the window\'s own child, not the screen\'s').not.toBeNull()
-    expect(screenBox!.nextElementSibling, 'the line is UNDER the screen').toBe(line)
-    // The screen's deficit has its valve: its panel scrolls, exactly as it does docked.
-    const panel = screenBox!.querySelector(':scope > section.panel.fieldday')!
-    expect(overflowY(panel)).toBe('auto')
-    // The line is a control strip: content height, never grown, never shrunk away.
-    expect(flexOf(line!)).toBe('0 0 auto')
-    // Nothing between the Log button and the window clips it or scrolls it out of view.
-    const log = line!.querySelector('.le-fd-log-btn')!
+  it('puts the log line first and never scrolls it; the last contacts and the screen give way under it', async () => {
+    const { app, roots } = await mountPopout('contestlog')
+    const [line, recent, screenBox] = roots
+    expect(roots.map(name), 'the log line, the last contacts, then the contest screen').toEqual([
+      'section.contest-logger-entry',
+      'section.contest-logger-recent',
+      'main.layout.single',
+    ])
+    // The line is a control strip: content height, never grown, never shrunk away…
+    expect(declOf(line, 'flex')).toBe('0 0 auto')
+    // …and nothing between the Log button and the window clips it or scrolls it out of view.
+    const log = line.querySelector('.le-fd-log-btn')!
     expect(deficitFate(log, app).fate).toBe('none')
+    // The last contacts give way before the line does, scrolling inside their own box, down to a
+    // floor that yields to a short window rather than leaving a sliver of a scroller.
+    expect(declOf(recent, 'flex')).toBe('0 1 auto')
+    expect(overflowY(recent)).toBe('auto')
+    expect(declOf(recent, 'min-height')).toBe('min(8em, 25%)')
+    // The screen gives way first, down to a floor of its own (over `.layout`'s 0), and its deficit
+    // has its valve: its panel scrolls, exactly as it does docked.
+    expect(declOf(screenBox, 'min-height')).toBe('min(9em, 30%)')
+    const panel = screenBox.querySelector(':scope > section.panel.fieldday')!
+    expect(overflowY(panel)).toBe('auto')
     // Control: the same walk from a row of the screen's log meets the panel's scroller.
     expect(deficitFate(panel.querySelector('.fd-log-head')!, app).fate).toBe('scroll')
   })

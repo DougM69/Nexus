@@ -19040,21 +19040,187 @@ button.cq-skiptx1.on {
   min-height: 0;
   overflow-y: auto;
 }
-/* THE CONTEST LOGGER WINDOW (ContestLogger.tsx): the contest screen above, scrolling inside its
-   own panel exactly as it does docked (`.layout` grows and may shrink to nothing, and
-   `.layout.single > .panel` owns the deficit), and the log line pinned under it at its content
-   height, so the line never scrolls away and the screen takes every pixel the line leaves. The
-   line is a control strip: it cannot use surplus, so it never grows. */
+/* THE CONTEST LOGGER WINDOW (ContestLogger.tsx) — the entry FIRST, and large (the operator's
+   layout, 2026-10-11): the log line across the top of the window, the last contacts under it at the
+   same size, and the contest screen below, scrolling inside its own panel exactly as it does docked
+   (`.layout` grows, and `.layout.single > .panel` owns the deficit). The person at this window reads
+   a call and an exchange from a chair; the screen is reference.
+
+   THE VERTICAL BUDGET, in the order things give way, so nothing is ever out of reach:
+     1. the screen, down to a floor of a few lines that itself yields to a short window
+        (`min(9em, 30%)`), its panel scrolling;
+     2. then the last contacts, down to their newest row, scrolling inside their own box — newest
+        first, so the newest stays in view;
+     3. and past both, below the supported floor, the window: `.app.detached` lets its overflow
+        past it and the document scrolls, as in every pop-out.
+   The entry never shrinks and never scrolls: a control strip is exactly its content's height. */
+.contest-logger {
+  /* The app's Text size, handed down under another name for the two blocks that multiply it
+     (`--text-scale: calc(var(--text-scale) * …)` on one element is a cycle, and a cycle makes the
+     property invalid, not bigger). */
+  --logger-outer-text-scale: var(--text-scale);
+}
 .contest-logger-entry {
   flex: 0 0 auto;
   background: var(--bg-elev);
 }
-/* …and the line keeps the screen's own measure (`.layout.single > .panel.fieldday`, 1600 px from md
-   up), centred under it: across a 3440 px window the Call box measured 2837 px wide, a field for a
+.contest-logger-recent {
+  flex: 0 1 auto;
+  /* Never a sliver: room for its title, its head and the newest contact, yielding only to a
+     window too short for even that. */
+  min-height: min(8em, 25%);
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border-soft);
+}
+.contest-logger > .layout.single {
+  min-height: min(9em, 30%);
+  border-top: 1px solid var(--border-soft);
+}
+/* Each block keeps the screen's own measure (`.layout.single > .panel.fieldday`, 1600 px from md
+   up), centred over it: across a 3440 px window the Call box measured 2837 px wide, a field for a
    callsign. Below md the window is narrower than the cap, so the floor is untouched. */
-.contest-logger-entry > .log-entry-fd {
+.contest-logger-bar,
+.contest-logger-scaled > .log-entry-fd,
+.contest-logger-recent-body {
   max-width: 1600px;
   margin-inline: auto;
+}
+/* THE BAR — the window's name and A− / A+, at the app's own size: it is outside the block it
+   sizes, so a press never moves the button being pressed. */
+.contest-logger-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 0;
+}
+.contest-logger-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.contest-logger-size {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.contest-logger-step {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+.contest-logger-step:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.contest-logger-step:disabled {
+  opacity: 0.4;
+}
+/* THE SIZE. A− / A+ is a factor on the app's Text size, a Connect box's range (80–160 %), written
+   inline as `--logger-text-scale` on the two blocks it sizes. Each multiplies the inherited
+   --text-scale by it and declares the five --fs-* tokens again, because a custom property is
+   computed where it is declared (`.pane-frame[data-slot] > .pane-body` above has the long form);
+   text with no size of its own follows the block's own font size. */
+.contest-logger-scaled,
+.contest-logger-recent {
+  --text-scale: calc(var(--logger-outer-text-scale, 1) * var(--logger-text-scale, 1));
+  --fs-display: calc(clamp(22px, calc(0.024 * var(--vw-eff, 100vw)), 30px) * var(--text-scale));
+  --fs-title: calc(18px * var(--text-scale));
+  --fs-body: calc(14px * var(--text-scale));
+  --fs-label: calc(12px * var(--text-scale));
+  --fs-micro: calc(11px * var(--text-scale));
+  font-size: calc(1em * var(--logger-text-scale, 1));
+}
+/* …and at 100 % the entry is read from a chair: title-size captions over 40 px boxes (the app's
+   input is 14 px), a Log button as tall as the boxes, and the verdicts at title size with an alert
+   — the dupe warning among them — a warning bar rather than a footnote. Written at this window's
+   specificity: the strip's own 30 px box rule never reaches a box in any host, because
+   `.settings-input`, later in this sheet, wins it on source order. */
+.contest-logger-scaled > .log-entry-fd {
+  border-top: 0;
+}
+/* The header row wraps here rather than squeezing: this entry hangs from the top of its window,
+   so a second line moves nothing the fingers are on (the strip's one-line rule is for the docks,
+   which are anchored at the bottom). */
+.contest-logger-scaled .le-fd-header {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+.contest-logger-scaled .le-fd-cap {
+  font-size: var(--fs-title);
+}
+.contest-logger-scaled .le-fd-input {
+  min-height: 1.5em;
+  font-size: calc(40px * var(--text-scale));
+}
+/* The Call box never narrows past a whole callsign: ten characters of its own text, a prefix or a
+   suffix included (VE3/K9ABC, K9ABC/QRP), plus `.settings-input`'s padding and border. */
+.contest-logger-scaled .le-fd-field-call {
+  flex: 3 1 0;
+  min-width: min-content;
+}
+.contest-logger-scaled .le-fd-input-call {
+  min-width: calc(10ch + 2 * var(--space-3) + 2px);
+}
+.contest-logger-scaled .le-fd-input-code {
+  width: calc(6ch + 2 * var(--space-3) + 2px);
+}
+.contest-logger-scaled .le-fd-log-btn {
+  min-height: calc(60px * var(--text-scale));
+  padding: 0 var(--space-6);
+  font-size: calc(26px * var(--text-scale));
+}
+.contest-logger-scaled .le-fd-big .le-qrz {
+  min-height: calc(60px * var(--text-scale));
+  font-size: var(--fs-body);
+}
+.contest-logger-scaled .le-scp {
+  height: calc(28px * var(--text-scale));
+}
+.contest-logger-scaled .le-scp-call {
+  font-size: calc(20px * var(--text-scale));
+}
+.contest-logger-scaled .le-fd-verdicts .le-fd-hint {
+  margin-top: var(--space-2);
+  font-size: var(--fs-title);
+}
+.contest-logger-scaled .le-fd-verdicts [role='alert'] {
+  padding: var(--space-1) var(--space-3);
+  border-left: 4px solid var(--state-warn);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--state-warn) 16%, transparent);
+  color: var(--text);
+  font-weight: 700;
+}
+/* THE LAST CONTACTS — the screen's own table (ContestView's `ContestLogHead` / `ContestLogRow`),
+   at the entry's size. */
+.contest-logger-recent-title {
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.contest-logger-recent .fd-log-head .fd-col {
+  font-size: calc(13px * var(--text-scale));
+}
+.contest-logger-recent .fd-log-row {
+  font-size: calc(20px * var(--text-scale));
+}
+.contest-logger-recent .fd-log-row .fd-col.time {
+  font-size: calc(18px * var(--text-scale));
+}
+.contest-logger-recent .fd-mode-chip {
+  font-size: calc(14px * var(--text-scale));
 }
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor

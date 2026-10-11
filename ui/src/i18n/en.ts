@@ -3886,6 +3886,13 @@ export const EN = {
   'fieldDay.logger.title': 'Open the contest logger: this screen and a log line in a window of their own, for a second person logging at another monitor and keyboard. The log line shares the contact in progress with yours, and nothing in that window transmits.',
   'fieldDay.logger.note': 'Logger window: nothing here transmits. The contest switch, Running / S&P and scoring are set on the main screen. Esc clears the log line.',
   'contestLogger.entry.aria': 'Contest log line',
+  // The logger window's bar over its log line: its name, and A− / A+ (the glyphs stay in the code),
+  // which size the log line and the last contacts together. `{{pct}}` is a whole number.
+  'contestLogger.title': 'Contest logger',
+  'contestLogger.size.label': 'Text size: {{pct}}%',
+  'contestLogger.size.smaller': 'Smaller text',
+  'contestLogger.size.larger': 'Larger text',
+  'contestLogger.recent.title': 'Last contacts',
 
   'fieldDay.score.qsos': 'QSOs',
   'fieldDay.score.sections': 'Sections',

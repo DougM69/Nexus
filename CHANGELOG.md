@@ -23,10 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing, now point at the button. NEEDS-BENCH: Windows, with the firewall on and off.
 - **A contest logger window, for a second person logging at a second monitor and keyboard.** Click
   **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box.
-  It holds the whole Contest screen with a log line under it, and that line shares the contact in
-  progress with your own contest strip: whatever either of you types shows in both windows as it is
-  typed, with the same dupe warning, Super Check Partial line, call-history fill and Ctrl+D take-back
-  line, and Enter in either window logs it once, even when you both press it at the same moment.
+  Its log line is the top of the window, in large type, with the dupe warning right under the boxes,
+  then the last five contacts, newest first, and the whole Contest screen below; **A−** / **A+**
+  makes the line and the contacts smaller or larger, and that computer remembers it. The log line
+  shares the contact in progress with your own contest strip: whatever either of you types shows in
+  both windows as it is typed, with the same dupe warning, Super Check Partial line, call-history
+  fill and Ctrl+D take-back line, and Enter in either window logs it once, even when you both press
+  it at the same moment.
   Nothing in the logger window transmits: no PTT, no F-key messages, no Tune; the F-keys and Space do
   nothing there but type, and its Esc clears the log line without touching your over. Stop TX and
   every transmit control stay on your screen, and the contest switch, Running / S&P and scoring are
