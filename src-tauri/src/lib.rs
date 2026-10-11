@@ -18980,6 +18980,23 @@ fn start_running_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
     )
 }
 
+/// The Operate strip's S&P ([`tempo_app::engine::Engine::start_search_and_pounce`]).
+#[tauri::command(async)]
+fn start_search_and_pounce(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    start_search_and_pounce_on(&state)
+}
+
+/// [`start_search_and_pounce`]'s body, over a plain handle, opening a contest session as the
+/// `set_mode` command does, with its rows.
+fn start_search_and_pounce_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
+    tempo_app::engine::act_opening_session(
+        engine,
+        |eng| eng.start_search_and_pounce_opens_session(),
+        |eng| eng.start_search_and_pounce(),
+        |eng| eng.snapshot(),
+    )
+}
+
 /// Call CQ from Tempo (chat-first): emit ONE structured `CQ <mycall> <mygrid>` frame
 /// and arm TX, staying in Chat mode. Errors if the callsign/grid aren't set (so a CQ
 /// never goes out malformed). `dir` = an optional directed-CQ token (None = plain CQ).
@@ -34861,6 +34878,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             redecode,
             start_cq,
             start_running,
+            start_search_and_pounce,
             call_cq,
             set_chat_cq,
             resume_chat_cq,

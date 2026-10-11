@@ -275,6 +275,10 @@ enum Role {
     CallCq,
     /// The Operate strip's Call CQ from FT8 QSO mode, the contest switch on.
     CallCqFromQso,
+    /// The Operate strip's S&P pressed during the contest's Running, the partner calling CQ.
+    StripSpFromRun,
+    /// The Operate strip's S&P from FT8 QSO mode, the contest switch on.
+    StripSpFromQso,
 }
 
 impl Role {
@@ -291,7 +295,8 @@ impl Role {
         )
     }
 
-    /// The dump's original scenes: they print nothing they did not print then.
+    /// The dump's original scenes: past the TX switch at the end, they print nothing they did
+    /// not print then.
     fn first_dump(self) -> bool {
         matches!(
             self,
@@ -324,11 +329,13 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
     let mut e = engine_for(contest, grid);
     e.set_tier(tier);
     let entered = match role {
-        Role::Running | Role::ClickFromRun => e.set_mode("fieldday-run"),
+        Role::Running | Role::ClickFromRun | Role::StripSpFromRun => e.set_mode("fieldday-run"),
         Role::SearchAndPounce | Role::DoubleClick => e.set_mode("fieldday-sp"),
         // The contest switch has already put the station in S&P.
         Role::ClickFromSp | Role::CallCq => Ok(()),
-        Role::ClickFromQso | Role::CallCqFromQso => e.set_mode("qso-monitor"),
+        Role::ClickFromQso | Role::CallCqFromQso | Role::StripSpFromQso => {
+            e.set_mode("qso-monitor")
+        }
     };
     // S&P is passive and does not arm TX by itself; the operator's Enable TX does.
     if matches!(role, Role::SearchAndPounce | Role::DoubleClick) {
@@ -338,10 +345,21 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
     let (mut lines, mut sent) = (Vec::new(), Vec::new());
     let mut clicked = false;
     for slot in 0..SLOTS {
+        // The radio loop's deferred "Disable Tx after sending 73", once the last over has played.
+        if e.take_pending_tx_disable() {
+            e.set_tx_enabled(false);
+        }
         if slot % 2 == 0 {
             if slot == 0 && matches!(role, Role::CallCq | Role::CallCqFromQso) {
                 let r = e.start_running();
                 lines.push(format!("  s{slot:02} Call CQ: {r:?}"));
+            }
+            if matches!(
+                (slot, role),
+                (2, Role::StripSpFromRun) | (0, Role::StripSpFromQso)
+            ) {
+                let r = e.start_search_and_pounce();
+                lines.push(format!("  s{slot:02} S&P: {r:?}"));
             }
             if let Some(text) = keyed(&mut e, slot) {
                 let (kind, decoded) = air_form(&text);
@@ -398,7 +416,7 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
         }
         Mode::Chat => "Chat".into(),
     };
-    lines.push(format!("  end: {mode}"));
+    lines.push(format!("  end: {mode} tx={}", on_off(e.tx_enabled())));
     for l in &logged {
         lines.push(format!("  LOG {l}"));
     }
@@ -534,6 +552,27 @@ fn dump_contest_ft_messages() {
             }
         }
     }
+    // The strip's S&P during the contest's Running and from FT8 QSO mode.
+    for contest in ["arrlfd", "arrlvhf_jan", "txqp", "wfd"] {
+        for role in [Role::StripSpFromRun, Role::StripSpFromQso] {
+            let s = scene(contest, Tier::Ft8, role, act_of(contest), MY_GRID);
+            block(&mut out, format!("{contest:?} FT8 {role:?}"), s);
+        }
+    }
+    // The contest's S&P with Tx 1st on the CQ station's period.
+    for (contest, tier) in [
+        ("arrlfd", Tier::Ft8),
+        ("arrlvhf_jan", Tier::Ft8),
+        ("txqp", Tier::Ft8),
+        ("txqp", Tier::Ft4),
+        ("arrlfd", Tier::TempoFast),
+    ] {
+        out.push_str(&scene_period(contest, tier));
+    }
+    // A plain gesture with a contest picked and not filled in.
+    for on in [false, true] {
+        out.push_str(&unfilled_contest(on));
+    }
     match std::env::var("CONTEST_FT_DUMP") {
         Ok(path) => std::fs::write(&path, out).expect("the dump writes"),
         Err(_) => print!("{out}"),
@@ -561,6 +600,9 @@ fn no_contest(tier: Tier, running: bool) -> String {
     );
     let mut clicked = false;
     for slot in 0..SLOTS {
+        if e.take_pending_tx_disable() {
+            e.set_tx_enabled(false);
+        }
         if slot % 2 == 0 {
             if let Some(text) = keyed(&mut e, slot) {
                 let (kind, decoded) = air_form(&text);
@@ -587,6 +629,128 @@ fn no_contest(tier: Tier, running: bool) -> String {
                 out.push_str(&format!("  s{slot:02} double-click the CQ: {r:?}\n"));
             }
         }
+    }
+    out.push_str(&format!("  end: tx={}\n", on_off(e.tx_enabled())));
+    out
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+/// The contest's S&P with this station's Tx 1st odd, the period the partner, a WSJT-X runner in
+/// the contest's activity, calls CQ in: the partner hears only what goes out in the even periods,
+/// and nothing is decoded in a period this station transmits in. Every slot is polled for this
+/// station's over.
+fn scene_period(contest: &str, tier: Tier) -> String {
+    let mut e = engine_for(contest, MY_GRID);
+    let mut s = e.settings().clone();
+    s.tx_even = false;
+    e.apply_settings(s);
+    e.set_tier(tier);
+    let entered = e.set_mode("fieldday-sp");
+    e.set_tx_enabled(true);
+    let mut partner = Partner::new(act_of(contest), true);
+    let mut out = format!(
+        "[{contest:?} {} S&P, Tx 1st odd] entered={entered:?}\n",
+        tier_name(tier)
+    );
+    for slot in 0..SLOTS {
+        if e.take_pending_tx_disable() {
+            e.set_tx_enabled(false);
+        }
+        let mine = keyed(&mut e, slot);
+        if let Some(text) = &mine {
+            out.push_str(&format!("  s{slot:02} TX {text:?}\n"));
+            if slot % 2 == 0 {
+                partner.hear(text);
+            }
+        }
+        if slot % 2 == 1 {
+            let Some(text) = partner.transmit() else {
+                e.ingest_decodes_for_test(&[], slot + 1);
+                continue;
+            };
+            if mine.is_some() {
+                out.push_str(&format!("  s{slot:02} RX missed, transmitting: {text:?}\n"));
+                e.ingest_decodes_for_test(&[], slot + 1);
+                continue;
+            }
+            out.push_str(&format!("  s{slot:02} RX {text:?}\n"));
+            e.ingest_decodes_for_test(&[heard(&text)], slot + 1);
+        }
+    }
+    let mode = match &e.mode {
+        Mode::FieldDay { station, running } => {
+            format!("FieldDay running={running} state={:?}", station.state)
+        }
+        Mode::Qso { station, running } => {
+            format!("Qso running={running} state={:?}", station.state)
+        }
+        Mode::Chat => "Chat".into(),
+    };
+    out.push_str(&format!("  end: {mode} tx={}\n", on_off(e.tx_enabled())));
+    if let Mode::FieldDay { station, .. } = &e.mode {
+        for q in station.log.qsos() {
+            out.push_str(&format!(
+                "  LOG {} rx[{}] tx[{}]\n",
+                q.call,
+                fields(&q.rx),
+                fields(&q.tx)
+            ));
+        }
+    }
+    out
+}
+
+/// A plain gesture with a contest picked whose exchange is not filled in (the Texas QSO Party with
+/// no county or state): with Contest mode off the strip's Call CQ, with it on the Tx6 row's plain
+/// CQ; against a WSJT-X partner with no activity answering it.
+fn unfilled_contest(on: bool) -> String {
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    let mut s = e.settings().clone();
+    s.fd_event = "txqp".into();
+    s.fd_active = on;
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    let entered = if on {
+        e.start_cq(None)
+    } else {
+        e.start_running()
+    };
+    e.set_tx_enabled(true);
+    let mut partner = Partner::new(Act::None, false);
+    let mut out = format!(
+        "[txqp not filled in, Contest mode {}, {}] entered={entered:?}\n",
+        on_off(on),
+        if on { "Tx6 CQ" } else { "Call CQ" }
+    );
+    for slot in 0..SLOTS {
+        if e.take_pending_tx_disable() {
+            e.set_tx_enabled(false);
+        }
+        if slot % 2 == 0 {
+            if let Some(text) = keyed(&mut e, slot) {
+                out.push_str(&format!("  s{slot:02} TX {text:?}\n"));
+                partner.hear(&text);
+            }
+        } else {
+            let Some(text) = partner.transmit() else {
+                e.ingest_decodes_for_test(&[], slot + 1);
+                continue;
+            };
+            out.push_str(&format!("  s{slot:02} RX {text:?}\n"));
+            e.ingest_decodes_for_test(&[heard(&text)], slot + 1);
+        }
+    }
+    out.push_str(&format!("  end: tx={}\n", on_off(e.tx_enabled())));
+    for r in e.stored_log() {
+        out.push_str(&format!("  GENERAL {} {}\n", r.call, r.mode));
     }
     out
 }

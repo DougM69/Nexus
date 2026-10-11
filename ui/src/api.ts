@@ -1044,6 +1044,12 @@ export async function startRunning(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_running', {})
 }
 
+/** The Operate strip's S&P on this computer (`Engine::start_search_and_pounce`). The Remote page's
+ * S&P keeps its own path. */
+export async function startSearchAndPounce(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_search_and_pounce', {})
+}
+
 /** Call CQ from Tempo (chat-first): sends one structured `CQ <call> <grid>` frame and
  * arms TX, staying in chat. Rejects if the callsign/grid aren't set. `dir` = optional
  * directed token, or null for a plain CQ. */

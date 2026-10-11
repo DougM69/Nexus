@@ -39,7 +39,9 @@ const resolved: QrzLookup = {
   image: null,
 }
 
+const startSearchAndPounce = vi.fn(async () => null)
 vi.mock('../api', () => ({
+  startSearchAndPounce: () => startSearchAndPounce(),
   qrzLookup: vi.fn(async () => resolved),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),
@@ -241,7 +243,9 @@ describe('#204 — S&P clears the card', () => {
 
     await waitFor(() => expect(cardEl()).toBeNull())
     expect(onClearSelection).toHaveBeenCalledTimes(1)
-    expect(onSetMode).toHaveBeenCalledWith('qso-monitor')
+    // This computer's S&P goes by its own verb (the contest's S&P while a contest runs).
+    expect(startSearchAndPounce).toHaveBeenCalledTimes(1)
+    expect(onSetMode).not.toHaveBeenCalled()
   })
 })
 

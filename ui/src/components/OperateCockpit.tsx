@@ -50,7 +50,7 @@ import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, s
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
-import { pointRotatorAtCall, redecode, startCq, startRunning, startQsoRecording, stopQsoRecording } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
@@ -1196,6 +1196,11 @@ export function OperateCockpit({
     if (mode === 'qso-monitor') {
       setDismissedCall(recallCallRef.current)
       onClearSelection?.()
+      // This computer's S&P asks for it by its own verb; the Remote page's goes on as before.
+      if (control) {
+        void startSearchAndPounce().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
     }
     if (expectedQso === undefined) onSetMode(mode)
     else onSetMode(mode, expectedQso)

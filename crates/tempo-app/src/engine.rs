@@ -22151,6 +22151,18 @@ contact yourself."
         self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-run")
     }
 
+    /// The Operate strip's S&P: FT8 QSO monitoring (`qso-monitor`). The Remote page's S&P keeps
+    /// its own path.
+    pub fn start_search_and_pounce(&mut self) -> Result<(), String> {
+        self.set_mode("qso-monitor")
+    }
+
+    /// Whether [`Self::start_search_and_pounce`] opens a contest session. See
+    /// [`Self::work_station_opens_session`].
+    pub fn start_search_and_pounce_opens_session(&self) -> bool {
+        false
+    }
+
     /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.
     /// Starts (or retargets) the QSO when needed; the auto-sequencer's observe
     /// still advances on the partner's matching reply, so a forced message
