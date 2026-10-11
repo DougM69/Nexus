@@ -23,6 +23,7 @@ let preview: FdRulesetDto | null = null
 vi.mock('../api', () => ({
   // The contest screen's Removed list, read on mount: none removed.
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...station })),
   setSettings: vi.fn(async (s: Record<string, unknown>) => {
     station = { ...s }

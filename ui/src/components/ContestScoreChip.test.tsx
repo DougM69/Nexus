@@ -21,6 +21,7 @@ import type { FieldDayQso, FieldDayStatus } from '../types'
 
 vi.mock('../api', () => ({
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({})),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
