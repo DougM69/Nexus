@@ -94,7 +94,7 @@ export function contestShortName(id: string | undefined): string {
   return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
 }
 
-/** Is this one of the two events Field Day Setup (class + section) describes? */
+/** Is this one of the two Field Day events, whose class + section Settings ▸ Contest mode asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 

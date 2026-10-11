@@ -13,7 +13,7 @@ In **Settings → Contesting ▸ Contest**, choose between:
 | _(empty, default)_ | ARRL Field Day, the 4th full weekend of June | **27 hours**: 1800 UTC Saturday → 2100 UTC Sunday |
 | `wfd` | Winter Field Day, the 4th full weekend of January | **30 hours**: 1600 UTC Saturday → 21:59 UTC Sunday |
 
-A full weekend has both days in the month, so a Saturday whose Sunday falls in February does not count. Winter Field Day 2027 is **23 and 24 January**, the sponsor's own dates. Its rules said "the last full weekend" until 2025, and the two readings differ in a January with five full weekends: 2027 and 2028 are both such years, and in each the last full weekend is a week later than the event. If a sponsor moves a date, a rules update carries it (Settings → Contesting ▸ Field Day Setup ▸ Check for rules updates), and it applies at the next launch.
+A full weekend has both days in the month, so a Saturday whose Sunday falls in February does not count. Winter Field Day 2027 is **23 and 24 January**, the sponsor's own dates. Its rules said "the last full weekend" until 2025, and the two readings differ in a January with five full weekends: 2027 and 2028 are both such years, and in each the last full weekend is a week later than the event. If a sponsor moves a date, a rules update carries it (Settings → Contesting ▸ Contest mode ▸ Check for rules updates), and it applies at the next launch.
 
 ### Countdown
 
@@ -29,7 +29,7 @@ The header reads **active** once the window opens and clears back to countdown a
 
 Run through this before the weekend. Most problems are discovered Saturday at 1759 UTC, not Friday evening.
 
-- [ ] **Set your class and section** in Settings → Contesting ▸ Field Day Setup (e.g. `3A`, `WI`). Both fields start **empty** — the greyed `1D` / `WI` you see are placeholder hints, not values. Field Day mode will not engage until both are filled in (the exchange goes on the air), and an export with blanks is malformed.
+- [ ] **Set your class and section** in Settings → Contesting ▸ Contest mode (e.g. `3A`, `WI`). Both fields start **empty** — the greyed `1D` / `WI` you see are placeholder hints, not values. Contest mode will not engage until both are filled in (the exchange goes on the air), and an export with blanks is malformed.
 - [ ] **Set power multiplier** (ARRL Field Day): x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
 - [ ] **Configure N3FJP** (see [N3FJP Setup](#n3fjp-setup) below) and press **Test** to confirm the handshake before the event.
 - [ ] **Configure N1MM address** if your club runs N1MM dashboards (see [N1MM Broadcast](#n1mm-broadcast)).
@@ -41,8 +41,8 @@ Run through this before the weekend. Most problems are discovered Saturday at 17
 
 The 2027 event is **23 and 24 January**, 1600 UTC Saturday to 21:59 UTC Sunday. Before it, on every laptop:
 
-- [ ] **Get the 2027 rules.** Settings → Contesting ▸ Field Day Setup ▸ **Check for rules updates**, then restart Nexus: a downloaded rules file takes effect at the next launch. Until then a 1.14 to 1.17 copy counts down to 30 January, a week late. **Nexus 1.13 or older cannot read the current rules file at all**: upgrade, or its Winter Field Day starts a week late.
-- [ ] Settings → Contesting ▸ Contest: **Winter Field Day**, then **Field Day mode** on.
+- [ ] **Get the 2027 rules.** Settings → Contesting ▸ Contest mode ▸ **Check for rules updates**, then restart Nexus: a downloaded rules file takes effect at the next launch. Until then a 1.14 to 1.17 copy counts down to 30 January, a week late. **Nexus 1.13 or older cannot read the current rules file at all**: upgrade, or its Winter Field Day starts a week late.
+- [ ] Settings → Contesting ▸ Contest: **Winter Field Day**, then **Contest mode** on.
 - [ ] **Class and category**: the number of transmitters you can run at once, then your category letter, `H` (home), `I` (indoor), `O` (outdoor) or `M` (mobile): `2O` is two transmitters outdoors. Then your ARRL/RAC section, `MX` in Mexico or `DX` anywhere else.
 - [ ] **Power category** `LOW` (100 W PEP, the limit for everyone) or `QRP` (5 W on CW and digital, 10 W on phone, for the whole event). The Cabrillo file takes one of those two; HIGH writes no CATEGORY-POWER line.
 - [ ] **Bands**: every amateur band **except 12, 17, 30 and 60 m**. Nexus does not warn on those four at Winter Field Day, so keep off them yourself.
@@ -191,13 +191,13 @@ When the FD workspace is open and a digital contact is in progress, the TempoFas
 - **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → logs the QSO.
 - **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log.
 
-Opening **Contest** in the left bar with Field Day mode on always starts in **Search-and-Pounce**; with the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
+Opening **Contest** in the left bar with Contest mode on always starts in **Search-and-Pounce**; with the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
 
-The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while FD mode is active. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
+The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while Contest mode is on. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
 ### CW
 
-Navigate to the CW cockpit. The log strip detects that FD mode is active and shows **Class** and **Section** fields alongside the standard call/RST fields. Fill in the exchange and press Log — the entry routes to `fdLogManual()` with mode code `CW` and is dupe-checked against the FD log.
+Navigate to the CW cockpit. The log strip detects that Contest mode is on and shows **Class** and **Section** fields alongside the standard call/RST fields. Fill in the exchange and press Log — the entry routes to `fdLogManual()` with mode code `CW` and is dupe-checked against the FD log.
 
 The CW cockpit pre-fills Class from the most recent FD entry so you do not retype it for every contact.
 
@@ -209,9 +209,9 @@ All three mode classes write into the **same unified FD log**, so the live score
 
 ### Contest Log Persistence
 
-The contest log survives restarts: every logged contact is journaled to `fieldday_backup.adi` (beside `settings.json`), and the journal is restored automatically whenever you re-enter Field Day mode — a mid-event quit, crash, or Run/Search-and-Pounce switch loses nothing. Entries from a previous event (older than 4 days) are not restored, so the journal self-expires between events.
+The contest log survives restarts: every logged contact is journaled to `fieldday_backup.adi` (beside `settings.json`), and the journal is restored automatically whenever Contest mode puts the station back in the contest — a mid-event quit, crash, or Run/Search-and-Pounce switch loses nothing. Entries from a previous event (older than 4 days) are not restored, so the journal self-expires between events.
 
-Only the session's own contacts are restored: the contest you are entering, logged from 24 hours before this running of it starts. A rehearsal on an earlier day, or another contest worked in the last four days, stays in the journal untouched and out of this log, and the Contest screen says how many contacts it kept out and why. A gear test within 24 hours of the start is part of the event's log; to start clean after one, delete `fieldday_backup.adi` (with Nexus closed, or at least outside Field Day mode — the next contact logged in FD mode re-writes the whole journal from memory).
+Only the session's own contacts are restored: the contest you are entering, logged from 24 hours before this running of it starts. A rehearsal on an earlier day, or another contest worked in the last four days, stays in the journal untouched and out of this log, and the Contest screen says how many contacts it kept out and why. A gear test within 24 hours of the start is part of the event's log; to start clean after one, delete `fieldday_backup.adi` (with Nexus closed, or at least with Contest mode off — the next contact logged with it on re-writes the whole journal from memory).
 
 ### Take Back the Last Contact
 
@@ -377,7 +377,7 @@ A plain-text check sheet: every section multiplier with the call and band that f
 
 ## Other Contests, and CQ WW RTTY
 
-The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Field Day mode**, which is the switch for every contest: at the top of the **Contest** screen (the tent in the left bar), or in Field Day Setup. If the contest cannot start yet, the Contest screen says what is missing and leaves the switch off. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
+The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties. Pick one, then turn on **Contest mode**, which is the switch for every contest: at the top of the **Contest** screen (the tent in the left bar), or in Settings → Contesting ▸ Contest mode. If the contest cannot start yet, the Contest screen says what is missing and leaves the switch off. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
 
 **CQ WW RTTY** (last full weekend of September, 0000Z Saturday for 48 hours):
 
@@ -413,7 +413,7 @@ The same workspace runs every contest on the **Settings → Contesting ▸ Conte
 
 Before the party, on every laptop:
 
-- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Field Day mode** on (a contest picked while Field Day mode is already on takes effect only after it is turned off and on again; the Contest screen says so, beside the switch).
+- [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**, then **Contest mode** on (a contest picked while Contest mode is already on takes effect only after it is turned off and on again; the Contest screen says so, beside the switch).
 - [ ] Your station data: State **IL** and the club's **County** code. The **same callsign** on every laptop: the club file is written under the host's. A laptop set up out of state, or on another callsign, is refused when it joins, and both its club block and the host's say why.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs.
 - [ ] A **Position name** for each laptop, and **Operator at the key** for whoever is sitting there.
@@ -439,7 +439,7 @@ Before the party, on every laptop:
 - [ ] Settings → Contesting ▸ Contest: **Illinois QSO Party**.
 - [ ] Your station data: State **IL** and your **County** code.
 - [ ] Contest: Entry category **MULTI-OP**, your **Power category**, **Entry class** (Unlimited if more than one position transmits at once), **Club**, and Email for contest logs. Your operator name is on the Station tab.
-- [ ] Field Day Setup: **Field Day mode** on. Leave **Host a club event** off and **Join event at** empty.
+- [ ] **Contest mode** on (Settings → Contesting ▸ Contest mode, or the top of the Contest screen). Leave **Host a club event** off and **Join event at** empty.
 - [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: its contacts then stay out of the party's log, and the Contest screen says how many it kept out.
 - [ ] Rehearse on each position: log a phone contact and a CW contact, log one of them again and see it refused as a dupe, then export a Cabrillo file and read its header.
 

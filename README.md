@@ -216,7 +216,8 @@ showing their name and your history with them while you operate. CW macros greet
 by name and send your state (`{HISNAME}` / `{MYSTATE}` / `{HISSTATE}`). Your local repeaters and nets
 are a hotkey away, with distance and bearing to each machine.
 
-**The club.** Field Day mode reshapes the app for the event weekend and feeds club infrastructure
+**The club.** Contest mode reshapes the app for the event weekend, Field Day or any contest in the
+picker, and feeds club infrastructure
 natively, with no JTAlert bridge and no end-of-day log merges. Plus a built-in CAT broker so other
 shack software can share the radio *through* Nexus.
 

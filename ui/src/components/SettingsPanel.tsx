@@ -106,7 +106,7 @@ import { pushToast, withErrorToast } from '../toast'
 // Accessibility), the Logging & Connectors sections above Confirmations (Connections,
 // Worked-before (B4) & dupes, Integrations & Feeds, DXKeeper, N3FJP, N1MM+, the LoTW users
 // list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts), the
-// two Contesting sections (Contest Category + Field Day Setup), and the Digital tab — the
+// two Contesting sections (Contest Category + Contest mode), and the Digital tab — the
 // FT8/FT4 section's Logging Behavior, Decoder and Station Housekeeping sub-groups plus JT65,
 // MSK144, Beacons, FST4, Q65 and the quick-reply macros. Every remaining tab's fieldsets are
 // still hardcoded English and are deliberately outside the i18n guard's scope; see its header.
@@ -174,6 +174,7 @@ import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api
 import { getDxccEntityNames } from '../api'
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { continentName } from './CountryExclude'
+import { startBlocker } from './ContestView'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
@@ -3595,10 +3596,13 @@ export function SettingsPanel({
   // Why club sync cannot run the picked contest at all, or null when it can — shown beside
   // the switches before anybody turns one on. The station's preview answers for the SAVED
   // pick, so it is asked only while the form's pick is the saved one.
-  const clubRefusalHere = contestClubRefusal(
-    form.fdEvent,
-    (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null,
-  )
+  // The station's preview answers for the SAVED pick, so it is asked only while the form's pick
+  // is the saved one.
+  const previewHere = (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null
+  const clubRefusalHere = contestClubRefusal(form.fdEvent, previewHere)
+  // The contest Contest mode starts, by its sponsor's name: the switch names it wherever it is
+  // offered. A blank pick is ARRL Field Day, the contest a blank pick runs.
+  const pickedContest = contestName(form.fdEvent?.trim() || 'arrlfd')
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>
@@ -4550,22 +4554,22 @@ export function SettingsPanel({
                             onClick={() => {
                               const next = !form.fdActive
                               updateBool('fdActive', next)
-                              // Turning on with no Class/Section yet → jump to the FD setup
-                              // tab (now visible) so they're filled; the backend won't enter
-                              // Field Day until both are set.
-                              if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('contesting')
+                              // Turning on a contest that cannot start yet → the Contesting tab,
+                              // where what it needs is set: Field Day's class and section, or the
+                              // station data another contest sends. The Contest screen's own test.
+                              if (next && startBlocker(form, previewHere)) setTab('contesting')
                             }}
                             aria-label={
                               form.fdActive
-                                ? t('settings.fieldDay.mode.aria.disable')
-                                : t('settings.fieldDay.mode.aria.enable')
+                                ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
+                                : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
                             }
                           >
                             <span className="toggle-knob" />
                           </button>
                         </label>
                         <span className="settings-hint">
-                          {t('settings.features.fieldDay.hint')}
+                          {t('settings.features.fieldDay.hint', { contest: pickedContest })}
                         </span>
                       </div>
                     )}
@@ -12052,7 +12056,7 @@ export function SettingsPanel({
               {/* ⭐ THE CONTEST PICKER (§9). It is the event chips, one level up: the
                   contest is what decides the exchange, the dupe rule, the multiplier
                   universe and the Cabrillo headers, so it is the first thing on this
-                  tab and Field Day Setup below is shown for the contests it describes.
+                  tab and Contest mode below shows Field Day's fields for the contests they describe.
                   Six shipped contests: the two Field Day events and the four state QSO
                   parties. The list is `CONTESTS` — the rules-file ids, in one place —
                   so adding a contest is a rules-file row plus a line there, and nothing
@@ -12790,8 +12794,8 @@ export function SettingsPanel({
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day">
             <legend>{t('settings.fieldDay.legend')}</legend>
-            {/* The Field Day MASTER lives here now (Contesting is always visible) — turning it on
-                reveals the FD workspace + Class/Section exchange across all modes. */}
+            {/* The Contest mode switch lives here (Contesting is always visible) — turning it on
+                starts the picked contest: its log strip in every cockpit, the Contest screen. */}
             <label className="settings-field">
               <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
               <button disabled={remote}
@@ -12802,25 +12806,25 @@ export function SettingsPanel({
                 onClick={() => updateBool('fdActive', !form.fdActive)}
                 aria-label={
                   form.fdActive
-                    ? t('settings.fieldDay.mode.aria.disable')
-                    : t('settings.fieldDay.mode.aria.enable')
+                    ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
+                    : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
                 }
               >
                 <span className="toggle-knob" />
               </button>
-              <span className="settings-hint">{t('settings.fieldDay.mode.hint')}</span>
+              <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
             </label>
             {/* ⭐ CLASS + SECTION ARE FIELD DAY'S OWN EXCHANGE, so they are shown for the
                 two Field Day events and for nothing else. A QSO party sends a county or
                 a state, from Station data above; prompting for a Field Day class there
-                would be asking for a value nothing transmits. Everything else in this
-                section — the master switch that reveals the contest workspace, the power
-                tier, the bonuses — belongs to whichever contest is picked and stays. */}
+                would be asking for a value nothing transmits. The power multiplier is
+                ARRL Field Day's alone (below). The switch and the rules data belong to
+                whichever contest is picked and stay. */}
             {isFieldDay(form.fdEvent) &&
               form.fdActive &&
               (!form.fdClass.trim() || !form.fdSection.trim()) && (
                 <p className="settings-note">
-                  <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} />
+                  <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} vals={{ contest: pickedContest }} />
                 </p>
               )}
             <div className="settings-grid">
@@ -12884,6 +12888,10 @@ export function SettingsPanel({
               </label>
               )}
 
+              {/* ARRL Field Day's power multiplier, shown for it alone: no other contest's score
+                  reads it (Winter Field Day scores by its objectives), as the Contest screen's
+                  scoring panel already holds. The setting itself is kept as it is. */}
+              {isFieldDay(form.fdEvent) && (form.fdEvent ?? '').trim() !== 'wfd' && (
               <div className="settings-field">
                 <span className="settings-label">{t('settings.fieldDay.power.label')}</span>
                 <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.power.aria')}>
@@ -12909,6 +12917,7 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
+              )}
             </div>
             {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
                 bonuses and sections. No cron — rules change ~yearly, so this pre-event

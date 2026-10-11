@@ -3863,7 +3863,7 @@ export const EN = {
   // abbreviations are date formatting and stay in `fdEvent.ts` with the rest of it.
   'fieldDay.operator.label': 'Operator',
   'fieldDay.operator.placeholder': 'operator (call/initials)',
-  'fieldDay.operator.aria': 'Field Day operator (call or initials)',
+  'fieldDay.operator.aria': 'Operator (call or initials)',
   'fieldDay.popOut.label': '⧉ Pop out',
   'fieldDay.popOut.title': 'Pop the scoreboard out to its own window (second monitor)',
   'fieldDay.logger.label': '⧉ Logger window',
@@ -3941,16 +3941,16 @@ export const EN = {
 
   // Run vs search-and-pounce. Stored as plain text with a real `&` — React escapes text
   // children itself, so an entity here would render as the literal characters.
-  'fieldDay.role.aria': 'Field Day role',
+  'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.
   'fieldDay.export.busy': 'Exporting…',
   'fieldDay.export.cabrillo.label': 'Export Cabrillo',
-  'fieldDay.export.cabrillo.title': 'Export Field Day log as Cabrillo (.cbr) for ARRL submission',
+  'fieldDay.export.cabrillo.title': 'Export the {{contest}} log as Cabrillo (.cbr), for submission to the sponsor',
   'fieldDay.export.adif.label': 'Export ADIF',
-  'fieldDay.export.adif.title': 'Export Field Day log as ADIF (.adi)',
+  'fieldDay.export.adif.title': 'Export the {{contest}} log as ADIF (.adi)',
   'fieldDay.export.summary.label': 'Summary',
   'fieldDay.export.summary.title':
     'Download a one-page score summary (QSOs by band/mode, sections, power, bonuses, total)',
@@ -4045,7 +4045,7 @@ export const EN = {
   // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
   // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
   'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
-  // The lines under the Field Day mode switch at the top of the contest screen. The switch
+  // The lines under the Contest mode switch at the top of the contest screen. The switch
   // itself reads Settings' label and accessible names (settings.fieldDay.mode.*). {{contest}}
   // and {{picked}} are contests' own names and {{modes}} on-air mode tokens, all invariant;
   // {{field}}, {{first}} and {{second}} are Settings' names for the exchange boxes.
@@ -4058,13 +4058,13 @@ export const EN = {
   'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
   'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
   'fieldDay.mode.picked':
-    'Picked in Settings: {{picked}}. Turn Field Day mode off and on again to switch to it.',
+    'Picked in Settings: {{picked}}. Turn Contest mode off and on again to switch to it.',
   'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
   'fieldDay.mode.needs.two':
     'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
   'fieldDay.mode.needs.open': 'Open in Settings',
   'fieldDay.mode.club':
-    'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+    'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.
@@ -4355,14 +4355,17 @@ export const EN = {
     '{{step}} stopped, so it counts as not sent: the next Enter sends it again.',
   'contest.esm.switch.failed': 'Enter Sends Message was not saved, so the switch is as it was.',
 
-  'settings.fieldDay.legend': 'Field Day Setup',
-  'settings.fieldDay.mode.label': 'Field Day mode',
-  'settings.fieldDay.mode.aria.enable': 'Enable Field Day mode',
-  'settings.fieldDay.mode.aria.disable': 'Disable Field Day mode',
+  // CONTEST MODE: one switch for whichever contest is picked, named for that (it was "Field Day
+  // mode" while it already started every contest). The keys keep their `fieldDay` names, as the
+  // stored `fdActive` setting does. {{contest}} is the picked contest's own name, invariant.
+  'settings.fieldDay.legend': 'Contest mode',
+  'settings.fieldDay.mode.label': 'Contest mode',
+  'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
+  'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',
   'settings.fieldDay.mode.hint':
-    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen.',
   'settings.fieldDay.needExchange':
-    "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
+    "<b>Set your Class + Section to start operating.</b> Contest mode is on, but the station won't enter {{contest}} until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
   // the codes an operator sends — a translator leaves every one of them.
   'settings.fieldDay.class.label': 'FD Class',
@@ -4410,7 +4413,7 @@ export const EN = {
   'settings.fdRules.stale': 'Rules data is from {{year}} — check for updates before the event.',
   'settings.fdRules.empty': 'Built-in rules data active.',
   'settings.fdRules.hint':
-    'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
+    'Scoring, dates, exchanges and multipliers for every contest in the Contest list above. Checked on demand; a downloaded update applies at the next launch.',
   // ── Settings ▸ Contesting ▸ Who's who at this event ─────────────────────────────────
   // Three names, three different jobs, and until now nothing said so: the club call lived on
   // Station, the position name under a networking heading on Contesting, the operator on
@@ -8260,7 +8263,7 @@ export const EN = {
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
   'settings.features.fieldDay.hint':
-    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
@@ -10510,10 +10513,10 @@ export const EN = {
   // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
   'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
   'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
-  // `{{exchange}}` is the Field Day class + section, a token; the element around it comes
+  // `{{exchange}}` is the running contest's exchange, a token; the element around it comes
   // from the call site.
   'phone.keyer.fd.hint':
-    'Field Day: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
+    'Contest: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
   'phone.keyer.slot.play.title': 'Play F{{slot}} ({{label}})',
   // ONE sentence, not a stem plus a shared tail: recording the rig's RX audio into a slot puts
   // the WRONG AUDIO on the air the moment the slot is played, so the warning rides both

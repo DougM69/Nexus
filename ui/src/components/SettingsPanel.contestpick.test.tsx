@@ -5,7 +5,7 @@
 // Three things this owes an operator, and each has been wrong in a shipped build:
 //
 //  1. ONE contest picker, FIRST on the tab. The contest decides the exchange, the dupe
-//     rule, the multiplier universe and the Cabrillo headers, so Field Day Setup is the
+//     rule, the multiplier universe and the Cabrillo headers, so Contest mode is the
 //     setup for whichever contest is picked — not the place the contest is chosen.
 //  2. The ROLE is READ-ONLY. A role is derived from where the operator is; one that
 //     could be typed independently of the location would let the two disagree.
@@ -111,14 +111,15 @@ const chip = async (label: string, text: string) =>
 
 
 describe('the contest picker', () => {
-  it('is the first section on the tab, and Field Day Setup comes after it', async () => {
+  it('is the first section on the tab, and Contest mode comes after it', async () => {
     renderPanel()
     await openContesting()
     const legends = [...document.querySelectorAll('fieldset.settings-section legend')].map(
       (n) => n.textContent,
     )
     expect(legends[0]).toBe('Contest')
-    expect(legends.indexOf('Field Day Setup')).toBeGreaterThan(0)
+    expect(legends.indexOf('Contest mode')).toBeGreaterThan(0)
+    expect(legends).not.toContain('Field Day Setup')
   })
 
   it('offers the shipped contests and picks the one the settings name', async () => {
@@ -160,7 +161,7 @@ describe('the contest picker', () => {
     expect((await chip('Contest', 'Winter Field Day')).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('picks a QSO party, and Field Day Setup drops the class and section it does not send', async () => {
+  it('picks a QSO party, and Contest mode drops the class, section and power multiplier it does not use', async () => {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({ ...defaultSettings, fdEvent: 'tnqp' } as never),
     )
@@ -177,6 +178,8 @@ describe('the contest picker', () => {
     // placeholder — Station data's state box carries the same placeholder and is
     // exactly the control a QSO party operator does fill in.
     expect(document.querySelector('#fd-section-list')).toBeNull()
+    // The power multiplier is ARRL Field Day's alone: no other contest's score reads it.
+    expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
     // POSITIVE CONTROL: the same panel on a Field Day event still shows both.
     cleanup()
     api.get('getSettings').mockImplementation(() =>
@@ -186,9 +189,20 @@ describe('the contest picker', () => {
     await openContesting()
     expect(await screen.findByPlaceholderText('1D')).not.toBeNull()
     expect(document.querySelector('#fd-section-list')).not.toBeNull()
+    expect(screen.getByRole('group', { name: 'Field Day power multiplier' })).not.toBeNull()
   })
 
-  it('lives in ONE place — the picker is not also inside Field Day Setup', async () => {
+  it('Winter Field Day scores by its objectives, so it has the class and section and no power multiplier', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, fdEvent: 'wfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(await screen.findByPlaceholderText('2O')).not.toBeNull()
+    expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
+  })
+
+  it('lives in ONE place — the picker is not also inside Contest mode', async () => {
     renderPanel()
     await openContesting()
     // Two controls writing one setting is how they come to disagree. The contest chips

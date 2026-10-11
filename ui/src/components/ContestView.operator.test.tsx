@@ -53,7 +53,7 @@ describe('Field Day operator swap', () => {
     render(<ContestView fieldDay={FD} onSetMode={() => {}} />)
     await settle()
 
-    const input = screen.getByLabelText('Field Day operator (call or initials)')
+    const input = screen.getByLabelText('Operator (call or initials)')
     fireEvent.change(input, { target: { value: 'w1abc' } })
     fireEvent.blur(input)
     await settle()

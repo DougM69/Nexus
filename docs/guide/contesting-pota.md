@@ -4,21 +4,23 @@ Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day)
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
-**Field Day mode is the exception**: it stays off until you switch it on at the
+**Contest mode is the exception**: it stays off until you switch it on at the
 top of the **Contest** screen (the tent in the left bar), in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
-[Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
-reshapes the app for a weekend most operators are not having.
+[Contesting ▸ Contest mode](settings-reference.md#contest-mode), because it
+reshapes the app for a weekend most operators are not having. It is one switch for
+whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
+Field Day or any other, and it names that contest wherever it is shown.
 
 ---
 
 ## Field Day
 
-A settings switch turns the event on and the app reshapes for it: the exchange
+**Contest mode** turns the event on and the app reshapes for it: the exchange
 grammar, a live countdown that knows the real date rules, per-(call, band,
 mode-class) dupe checking, and a scoreboard.
 
-<!-- TODO: capture screenshot — Field Day mode — exchange entry, countdown, live scoreboard -->
+<!-- TODO: capture screenshot — Contest mode on Field Day — exchange entry, countdown, live scoreboard -->
 
 ### Set it up first
 
@@ -28,17 +30,19 @@ mode-class) dupe checking, and a scoreboard.
 off. The class, section and multiplier shown are one station's own entries —
 set yours from the rules for the event you are in.*
 
-In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
+In [Settings ▸ Contesting ▸ Contest mode](settings-reference.md#contest-mode):
 
-1. **Event** — ARRL Field Day or Winter Field Day. This changes scoring labels
-   and export headers.
+1. **Contest** — ARRL Field Day or Winter Field Day, picked in
+   [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest) above this section.
+   This changes scoring labels and export headers.
 2. **Class / Category** and **ARRL Section** — these start **empty on purpose**,
    and Field Day refuses to start until you set yours. (An old default of "WI"
    sent the wrong exchange for everyone outside Wisconsin — now it's a one-time
    deliberate step.) ARRL FD wants a class like `1D`; WFD wants its class number
    and category letter, like `2O` (two transmitters, outdoor).
-3. **Power multiplier** — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W), or ×1 (> 100 W).
-   It multiplies your QSO points; the engine clamps it to the legal values.
+3. **Power multiplier**, ARRL Field Day only — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W),
+   or ×1 (> 100 W). It multiplies your QSO points; the engine clamps it to the legal
+   values. Winter Field Day scores by its objectives instead.
 
 ### Operate the event
 
@@ -318,7 +322,7 @@ reaches the contact.
 - **A contest that is not on the list logs as one with the same exchange.** The
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
-  Field Day mode. Before you send the log, change the Cabrillo file's `CONTEST:`
+  Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
   line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
   Nexus shows is WPX's, and the sponsor works out its own.
 - **The Satellites section's log strip doesn't join Field Day yet** — unlike the
@@ -334,4 +338,4 @@ reaches the contact.
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Logbook & QSL](logbook-qsl.md)
-- [Settings reference — Field Day Setup](settings-reference.md#field-day-setup)
+- [Settings reference — Contest mode](settings-reference.md#contest-mode)
