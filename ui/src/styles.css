@@ -1469,6 +1469,70 @@ button.nb-chip:hover {
   flex: 1 1 6em;
   min-width: 0;
 }
+/* …AND GROWS INTO A TALLER OR WIDER BOX. components/prop/rotorFit.ts measures the box (the stylesheet cannot
+   know its height without a container query) and stamps the pane with `data-fit` only when the box holds a
+   bigger rose than the compact layout above draws; every size below is the measure's, and the compact
+   layout's sizes stay the floors.
+   · CENTRED: the rose and the column beside it stand between two equal spacer columns, and the arrangement is
+     moved down to the middle of the height left above line 2 and the hint (`--rotor-top`). That height is
+     held whether or not a call is in the entry (rotorFit.ts), so STOP does not move when line 2 comes or goes.
+   · 'under': the boxes and STOP leave the rose's side for a line of their own under the rose and the
+     readings, centred, where that draws the bearing bigger (a box about as tall as it is wide: beside the
+     rose the boxes would cap it at the width they leave).
+   · The body holds its scrollbar's gutter while the pane is grown, so nothing centred moves sideways when a
+     slew's "→" line makes the box scroll. */
+.dash-boxes .pane-body:has(> .rotor-pane[data-fit]) {
+  scrollbar-gutter: stable;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-row {
+  grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
+  column-gap: 0;
+  padding-top: var(--rotor-top, 0px);
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-rose {
+  grid-column: 2;
+  min-width: var(--rotor-rose, 0px);
+  margin-right: var(--space-2);
+}
+/* Its lines thicken with it, from the widths the pane draws them at on its own 148 px rose. */
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-ring {
+  stroke-width: max(1.5px, calc(var(--rotor-rose, 0px) * 0.01));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-tick {
+  stroke-width: max(1px, calc(var(--rotor-rose, 0px) * 0.007));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-needle {
+  stroke-width: max(2.5px, calc(var(--rotor-rose, 0px) * 0.017));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-needle.target {
+  stroke-width: max(1px, calc(var(--rotor-rose, 0px) * 0.007));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-az,
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-el,
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-entry {
+  grid-column: 3;
+}
+/* The readings gather at the middle of the rose's height rather than spreading over it. */
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-az {
+  font-size: max(1.25em, var(--rotor-az, 0px));
+  align-self: end;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-el {
+  font-size: max(var(--fs-body), var(--rotor-el, 0px));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-entry {
+  align-self: start;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit='under'] .rotor-rose {
+  grid-row: 1 / span 2;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit='under'] .rotor-el {
+  align-self: start;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit='under'] .rotor-entry {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
 /* TX controls consolidated into the QSO strip (beside CQ/S&P). */
 .cq-txctl {
   margin-left: var(--space-2);

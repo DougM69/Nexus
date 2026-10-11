@@ -32,6 +32,9 @@
 // (the station is not placed, or the operator's own grid is not set), never drawn as a number
 // nobody resolved; no call, no line. A browser has no line 2 at all: the bearing read is the
 // desktop's, and Nexus Remote offers it nothing new.
+//
+// IN THE DASHBOARD RAIL the pane is compact in a short box and grows into a taller or wider one: the
+// rose and the readings as big as the box holds, centred (rotorFit.ts measures the box; styles.css draws).
 import { useEffect, useRef, useState } from 'react'
 import {
   getDeclination,
@@ -55,6 +58,7 @@ import { follow, pending, type Pending } from '../../features/rotorTargets'
 import { fmtDistanceKm, useUnits } from '../../units'
 import { ROTATOR_POLL_MS } from '../../remote-web/rotator'
 import { pointedTo, rotorPointAt } from '../rotorPointAt'
+import { useRotorFit } from './rotorFit'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
@@ -121,6 +125,10 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   // LINE 2's call: the desktop's only (see the header).
   const aimCall = local && entryCall ? entryCall : null
   const [aim, setAim] = useState<EntryAim | null>(null)
+  // The pane, for its box's measure (rotorFit): in the dashboard rail it grows into a taller box.
+  const pane = useRef<HTMLElement>(null)
+  const shown = az != null || configured
+  useRotorFit(pane, shown)
 
   useEffect(() => {
     alive.current = true
@@ -205,7 +213,7 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   // that is configured but not reporting keeps its whole control surface with an honest "—" where
   // the needle would be. A fake needle would be the dishonest half; a missing STOP button is the
   // dangerous one.
-  if (az == null && !configured) return <p className="pane-basic">{t('connect.pane.rotor.basic')}</p>
+  if (!shown) return <p className="pane-basic">{t('connect.pane.rotor.basic')}</p>
 
   const slew = (deg: number) => {
     const d = ((Math.round(deg) % 360) + 360) % 360
@@ -281,7 +289,7 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   }
 
   return (
-    <section className="rotor-pane panel">
+    <section className="rotor-pane panel" ref={pane}>
       <div className="rotor-row">
         {/* The viewBox lets the sheet draw the rose smaller (the dashboard rail's box) without cropping it;
             at its own size it changes nothing. */}
