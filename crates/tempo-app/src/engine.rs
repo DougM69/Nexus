@@ -5387,6 +5387,9 @@ impl Engine {
         for r in &mut settings.radios {
             r.last_band = crate::bandplan::canonical_band(&r.last_band);
         }
+        // A note of the station before the contest, stored with no contest picked and the mode
+        // off, is an earlier build's, taken at an everyday change (`contest_before.rs`).
+        Self::forget_an_everyday_note(&mut settings);
         let mut app = AppState::new(&settings.mycall, &settings.mygrid);
         app.set_radio(settings.dial_mhz, &settings.band, &settings.sideband);
         app.set_implicit_ack(settings.chat_implicit_ack);

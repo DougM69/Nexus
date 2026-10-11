@@ -213,3 +213,167 @@ fn the_note_round_trips_through_settings_json_and_an_older_file_reads_as_none() 
         None
     );
 }
+
+/// A station that has never picked a contest: the picker's blank default, Contest mode off. One save
+/// first, so the engine's own fill-ins (a fresh roster's default radio) are in before what a test
+/// saves.
+fn nothing_picked() -> Engine {
+    let mut e = Engine::new("K9ABC", "EN52", 0);
+    let s = e.settings().clone();
+    e.apply_settings(s);
+    assert_eq!(e.settings().fd_event, "", "premise: no contest picked");
+    e
+}
+
+/// The settings.json keys whose values differ between `a` and `b`.
+fn changed(a: &Settings, b: &Settings) -> Vec<String> {
+    let (a, b) = (
+        serde_json::to_value(a).unwrap(),
+        serde_json::to_value(b).unwrap(),
+    );
+    let (a, b) = (a.as_object().unwrap(), b.as_object().unwrap());
+    let mut keys: Vec<String> = a
+        .keys()
+        .chain(b.keys())
+        .filter(|k| a.get(*k) != b.get(*k))
+        .cloned()
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+#[test]
+fn with_no_contest_picked_a_save_holds_exactly_what_the_form_sent() {
+    let mut e = nothing_picked();
+    let mut form = e.settings().clone();
+    form.mycall = "W9CLB".into();
+    e.apply_settings(form.clone());
+    assert_eq!(changed(&form, e.settings()), Vec::<String>::new());
+    // A pick of nothing but spaces is the same blank.
+    let mut e = nothing_picked();
+    save(&mut e, |s| s.fd_event = "  ".into());
+    save(&mut e, |s| s.mycall = "W9CLB".into());
+    assert_eq!(e.settings().contest_before, None);
+}
+
+#[test]
+fn with_no_contest_picked_the_unassisted_switch_changes_only_unassisted() {
+    let mut e = nothing_picked();
+    let was = e.settings().clone();
+    e.set_unassisted_mode(true);
+    assert_eq!(changed(&was, e.settings()), vec!["unassistedMode"]);
+}
+
+#[test]
+fn with_no_contest_picked_the_operator_box_changes_only_the_operator() {
+    let mut e = nothing_picked();
+    let was = e.settings().clone();
+    e.set_fd_operator("w9op".into());
+    assert_eq!(changed(&was, e.settings()), vec!["fdOperator"]);
+}
+
+#[test]
+fn with_no_contest_picked_the_mode_going_on_still_takes_the_note_and_going_off_lets_it_go() {
+    // The blank pick runs ARRL Field Day when the mode goes on: that is a contest running.
+    let mut e = nothing_picked();
+    save(&mut e, |s| {
+        s.fd_active = true;
+        s.fd_class = "1D".into();
+        s.fd_section = "IL".into();
+    });
+    assert_eq!(e.settings().contest_before, Some(everyday_values()));
+    save(&mut e, |s| s.mycall = "W9CLB".into());
+    e.set_unassisted_mode(true);
+    assert_eq!(
+        e.settings().contest_before,
+        Some(everyday_values()),
+        "the first note stands while the contest runs"
+    );
+    e.set_unassisted_mode(false);
+    save(&mut e, |s| {
+        s.fd_active = false;
+        s.mycall = "K9ABC".into();
+    });
+    assert_eq!(e.settings().contest_before, None);
+}
+
+#[test]
+fn a_club_call_set_with_a_contest_picked_is_offered_back_when_the_contest_ends() {
+    let mut e = nothing_picked();
+    // Picking the contest moves none of the seven.
+    save(&mut e, |s| {
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+    });
+    assert_eq!(e.settings().contest_before, None);
+    // Friday, the mode still off: the club's call.
+    save(&mut e, |s| s.mycall = "W9CLB".into());
+    assert_eq!(e.settings().contest_before, Some(everyday_values()));
+    // The weekend.
+    save(&mut e, |s| s.fd_active = true);
+    e.set_fd_operator("w9op".into());
+    assert_eq!(
+        e.settings().contest_before,
+        Some(everyday_values()),
+        "what the checklist offers as the mode goes off: the station's own call"
+    );
+    // The checklist's save: the call put back, the mode off.
+    save(&mut e, |s| {
+        s.mycall = "K9ABC".into();
+        s.fd_active = false;
+    });
+    assert_eq!(e.settings().contest_before, None);
+    assert_eq!(e.settings().mycall, "K9ABC");
+}
+
+#[test]
+fn picking_the_contest_and_setting_the_club_call_in_one_save_takes_the_note() {
+    let mut e = nothing_picked();
+    save(&mut e, |s| {
+        s.fd_event = "ilqp".into();
+        s.mycall = "W9CLB".into();
+    });
+    assert_eq!(e.settings().contest_before, Some(everyday_values()));
+}
+
+#[test]
+fn at_launch_a_note_with_no_contest_picked_and_the_mode_off_is_let_go_and_any_other_is_kept() {
+    let noted = ContestBefore {
+        mycall: "K9OLD".into(),
+        ..ContestBefore::default()
+    };
+    let launched = |event: &str, active: bool| {
+        let stored = Settings {
+            mycall: "K9ABC".into(),
+            fd_event: event.into(),
+            fd_active: active,
+            fd_class: "1D".into(),
+            fd_section: "IL".into(),
+            contest_before: Some(noted.clone()),
+            ..Settings::default()
+        };
+        Engine::with_settings(stored)
+            .settings()
+            .contest_before
+            .clone()
+    };
+    assert_eq!(
+        launched("", false),
+        None,
+        "an earlier build's everyday note"
+    );
+    assert_eq!(launched("  ", false), None, "spaces are the same blank");
+    assert_eq!(
+        launched("ilqp", false),
+        Some(noted.clone()),
+        "a contest picked"
+    );
+    assert_eq!(
+        launched("", true),
+        Some(noted.clone()),
+        "a restart mid-contest"
+    );
+    assert_eq!(launched("ilqp", true), Some(noted), "both");
+}
