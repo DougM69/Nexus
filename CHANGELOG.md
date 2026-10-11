@@ -410,6 +410,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A contest picked in Settings no longer stops FT8 QSO mode and Chat.** With a contest picked
+  whose exchange was not filled in (the Texas QSO Party with no county or state, say), switching to
+  FT8 QSO mode, to call CQ or to search and pounce, or to Chat was refused with that contest's
+  complaint even with Contest mode off, and the FT cockpit's Call CQ did nothing at all. With
+  Contest mode off they always work now. Only the contest's own Running and S&P need its exchange,
+  and they still say what is missing.
 - **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
   launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
   every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations
