@@ -8,6 +8,8 @@
 //! same contact had a new name, and a second merge wrote it again; a Logbook edit or delete of
 //! an earlier copy no longer reached its contest row either. Every test here goes through the
 //! engine, the real logbook store and the real contest journal, and counts the Logbook's rows.
+//! The last section holds each contact to the exchange it was sent with across the same, and
+//! to a number of its own however long after the first ones it is logged.
 
 use super::*;
 use crate::logstore::tests::{flush, open_fast, Dir};
@@ -536,4 +538,202 @@ fn deleting_a_duplicate_an_earlier_build_wrote_keeps_the_contest_row() {
     assert_eq!(calls(&e), ["K9AAA", "K9AAA"]);
     assert_eq!(contest_calls(&e), ["K9AAA"]);
     assert_eq!(e.contest_removed()[0].rows[0].call, "W9BBB");
+}
+
+// ---- the exchange each contact was sent with, and its number, across the same ----------
+
+/// What each contest contact sent in slot `key` (its county, its section), in log order.
+fn sent(e: &Engine, key: &str) -> Vec<String> {
+    let Mode::FieldDay { station, .. } = &e.mode else {
+        panic!("the contest runs")
+    };
+    station
+        .log
+        .qsos()
+        .iter()
+        .map(|q| q.sent(key).to_string())
+        .collect()
+}
+
+/// The exported Cabrillo file's QSO lines: what the sponsor reads each contact from.
+fn qso_lines(e: &Engine) -> Vec<String> {
+    e.export_log("cabrillo")
+        .expect("one entry")
+        .lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Two party contacts sent from Kane, and the QSO lines they export as.
+fn two_from_kane(d: &Dir) -> (Engine, Vec<String>) {
+    let mut e = launch(d, &ilqp_settings());
+    party(&mut e, "K9AAA", "COOK");
+    party(&mut e, "W9BBB", "LAKE");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"], "PREMISE: sent from Kane");
+    let lines = qso_lines(&e);
+    (e, lines)
+}
+
+/// A Settings save with `edit` applied.
+fn save(e: &mut Engine, edit: impl FnOnce(&mut Settings)) {
+    let mut s = e.settings().clone();
+    edit(&mut s);
+    e.apply_settings(s);
+}
+
+/// ⭐ **A County edited in Settings re-labels no contact already logged**, and the contest
+/// entered again. Settings does not move the session that is running (only I moved does), so
+/// every row matched it and the journal wrote none of them a sent side; the session built
+/// from Settings on the way back in read both contacts back from Will, and the Cabrillo file
+/// said so.
+#[test]
+fn a_county_edited_in_settings_then_the_contest_entered_again_relabels_nothing() {
+    let d = Dir::new("contest-journal-county-in");
+    let (mut e, lines) = two_from_kane(&d);
+    save(&mut e, |s| s.contest_qth_county = "WILL".into());
+    let e = switch(e, "chat");
+    let mut e = switch(e, "fieldday-sp");
+    assert_eq!(
+        contest_calls(&e),
+        ["K9AAA", "W9BBB"],
+        "PREMISE: the rows came back"
+    );
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says Kane");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"]);
+    // A contact logged now is sent from Will, and a restart keeps all three as they were sent.
+    party(&mut e, "N9CCC", "DUPG");
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE", "WILL"]);
+}
+
+/// ⭐ **…edited with no contest running**: out of the contest, County changed, back in. The
+/// journal was last written on the way out, before the edit, which is why flushing it when
+/// Settings change could not cover this.
+#[test]
+fn a_county_edited_out_of_the_contest_relabels_nothing_when_it_is_entered_again() {
+    let d = Dir::new("contest-journal-county-out");
+    let (mut e, lines) = two_from_kane(&d);
+    save(&mut e, |s| s.fd_active = false);
+    assert!(!e.in_field_day(), "PREMISE: out of the contest");
+    save(&mut e, |s| s.contest_qth_county = "WILL".into());
+    save(&mut e, |s| s.fd_active = true);
+    assert!(e.in_field_day(), "PREMISE: back in");
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says Kane");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"]);
+}
+
+/// ⭐ **…and before a restart.**
+#[test]
+fn a_county_edited_in_settings_then_a_restart_relabels_nothing() {
+    let d = Dir::new("contest-journal-county-restart");
+    let (mut e, lines) = two_from_kane(&d);
+    save(&mut e, |s| s.contest_qth_county = "WILL".into());
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says Kane");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"]);
+}
+
+/// ⭐ **Field Day's section, the same way**: changed in Settings, then a restart.
+#[test]
+fn a_section_edited_in_settings_relabels_no_field_day_contact() {
+    let d = Dir::new("contest-journal-section");
+    let mut e = launch(&d, &field_day_settings());
+    for call in ["K1ABC", "W1AW"] {
+        assert!(
+            e.fd_log_manual(call, "2A", "EMA", "CW").unwrap(),
+            "{call} logs"
+        );
+    }
+    let lines = qso_lines(&e);
+    save(&mut e, |s| s.fd_section = "IL".into());
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says WI");
+    assert_eq!(sent(&e, "SECTION"), ["WI", "WI"]);
+}
+
+/// The control: **I moved keeps each contact's county**, across a restart, as it already did.
+#[test]
+fn i_moved_keeps_each_contacts_county_across_a_restart() {
+    let d = Dir::new("contest-journal-i-moved");
+    let mut e = launch(&d, &ilqp_settings());
+    party(&mut e, "K9AAA", "COOK");
+    e.contest_i_moved(vec![("QTH".into(), "WILL".into())])
+        .expect("Will is an Illinois county");
+    party(&mut e, "W9BBB", "LAKE");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "WILL"]);
+    let lines = qso_lines(&e);
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(sent(&e, "QTH"), ["KANE", "WILL"]);
+    assert_eq!(qso_lines(&e), lines);
+}
+
+/// ⭐ **A contact logged five days after the first ones is merged, once.** The journal restore
+/// reaches back four days, and the contact numbers went with the rows it let go: five days on,
+/// the next contact was numbered 1 again, its name was the first contact's, and the merge
+/// counted it already in the Logbook and wrote nothing.
+///
+/// The first two are made five days back by the clock, in the running the contest is in now:
+/// the Illinois QSO Party, or Field Day in the five days after the party's running begins
+/// (five days back is then the party's previous running, whose names this one never shares).
+#[test]
+fn a_contact_logged_five_days_on_is_merged_once() {
+    let now = now_unix_secs();
+    let then = now - 5 * 86_400;
+    let ilqp =
+        tempo_core::fd_rules::ruleset_by_id("ilqp", tempo_core::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+    let (s, rx) = if ilqp.running_of(then) == ilqp.running_of(now + 3_600) {
+        (ilqp_settings(), [("RST", "599"), ("QTH", "COOK")])
+    } else {
+        (field_day_settings(), [("CLASS", "2A"), ("SECTION", "EMA")])
+    };
+    let rx = rx.map(|(k, v)| (k.to_string(), v.to_string()));
+    let d = Dir::new("contest-merge-five-days-on");
+
+    // Five days back: two contacts, merged, and the journal they were written to.
+    let mut e = launch(&d, &s);
+    let mut first = {
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("the contest runs")
+        };
+        tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            station.log.session.clone(),
+            &station.log.band,
+        )
+    };
+    assert!(first.log_fields_at("K9AAA", &rx, "CW", "", 0, then));
+    assert!(first.log_fields_at("W9BBB", &rx, "CW", "", 0, then + 60));
+    assert_eq!(
+        first.ruleset().running_of(then),
+        first.ruleset().running_of(now + 3_600),
+        "PREMISE: one running"
+    );
+    let mut lb = tempo_core::logbook::Logbook::new();
+    tempo_core::contest::merge_into_general(&first, POS, &mut lb);
+    let copies: Vec<QsoRecord> = lb
+        .records()
+        .iter()
+        .map(|r| {
+            let mut r = QsoRecord::clone(r);
+            r.id = None;
+            r
+        })
+        .collect();
+    e.station.append(copies, false);
+    std::fs::write(d.0.join("fieldday.adi"), first.journal_adif()).expect("the journal");
+    let s = quit(e);
+
+    // Today: both are past the journal's four days, and one new contact is merged, once.
+    let mut e = launch(&d, &s);
+    assert!(contest_calls(&e).is_empty(), "PREMISE: none restored");
+    assert!(e.contest_log_manual("N9CCC", &rx, "CW", None).unwrap());
+    assert_eq!(merge(&mut e), (1, 0), "the new contact is merged");
+    assert_eq!(merge(&mut e), (0, 1), "once");
+    assert_eq!(calls(&e), ["K9AAA", "W9BBB", "N9CCC"]);
 }

@@ -488,6 +488,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is no county is still refused, in the same words. Under "Upload merged contacts to:" on
   the Contest screen, the ticks showed the services' internal ids (`qrz`, `clublog`, `eqsl`…);
   they now show their names: QRZ, Club Log, eQSL, HRDLog, N3FJP, Cloudlog and WRL.
+- **Changing your County in Settings no longer changes it on contacts already logged.** In a QSO
+  party, a County changed in Settings (rather than with **I moved**) was put on every contact
+  already in the contest log the next time the contest was opened or Nexus was started, and the
+  Cabrillo file then sent the sponsor the new county for contacts made from the old one. A Field
+  Day class or section, or anything else you send that Settings holds, did the same. Each contact
+  now keeps the exchange it was sent with, whatever Settings say later and in whichever order the
+  change, I moved and a restart come. Contacts logged with an earlier version may not have saved
+  it: they take what Settings say the first time this version opens their contest, and keep it
+  from then on.
+- **A contest contact logged more than four days after the first ones is merged into your
+  logbook.** The contest log keeps its contacts for four days, and the number it gives each
+  contact (not the serial you send) went with them: the next contact got number 1 again,
+  **Merge into my logbook** took it for the first contact and left it out as already in your
+  logbook, and a club host would have taken it for a contact it already had. A contest's contact
+  numbers are no longer given out twice in the same year, however long after the contest a
+  contact is logged.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
