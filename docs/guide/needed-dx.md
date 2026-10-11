@@ -134,7 +134,11 @@ Filters persist across restarts. **Filter** opens one row of chips in three grou
 - **Need type** — All, Watch list, ATNO, New band, New mode, New zone, New grid, New state,
   Needs confirm, then the programme chips DXped, POTA and SOTA. **Watch list** keeps exactly the
   stations on your watch list ([Settings ▸ Spots & Alerts](settings-reference.md#spots--alerts))
-  that are on the air, and follows an edit of the list straight away.
+  that are on the air, and follows an edit of the list straight away. **ATNO** and **New grid**
+  filter within the bands chosen under [Settings ▸ Spots & Alerts ▸ Alerts](settings-reference.md#alerts)
+  (New DXCC, New grid, Rare grid 💎): with New grid and Rare grid 💎 at VHF+, the defaults, no HF
+  grid is listed however the chips are set. The alert switch beside those menus turns the sound and the pop-up
+  on and off and changes nothing on the board.
 - **Band** — 160 m through 2 m, multi-select. Selected means *show only these*.
 - **Mode class** — Digital, CW, Phone.
 

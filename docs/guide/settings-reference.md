@@ -1500,20 +1500,26 @@ a new one is genuinely an event.
   message with a button (an alarm's Stop, an Undo, an update's Download) still pop up.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
-- **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. "Loud alert on a
-  new DXCC entity — a 'new one'. **Does NOT alert on every decode.** The band
-  choice also decides where the NEW ONE icon is shown."
-- **New grid** — same band scopes. "Quiet toast on a grid you haven't worked.
-  Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every
-  decode is an unworked grid. The band choice also decides where the GRID icon is
-  shown, on the roster and the decode rows."
-- **Rare grid 💎** — same band scopes. "The loud 💎 alert for rare/water-only
-  grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing
-  HF chatter keeps the gems. Covers their GRID icon too."
+- **New DXCC and grid alerts** — the sound and the pop-up when you decode a new
+  DXCC, a new grid or a rare grid 💎 on a band its menu allows. On by default. Off
+  silences those alerts and changes nothing else: the three menus keep their
+  choices, and the Needed boards and the NEW ONE and GRID icons keep following them.
+- **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. The bands where a
+  new DXCC entity — a "new one" — counts: the Needed boards, the NEW ONE icon and
+  its loud alert all follow this choice. **Off takes NEW ONE off every board.**
+- **New grid** — same band choices. The bands where a grid you haven't worked
+  counts: the Needed boards, the GRID icon on the roster and the decode rows, and
+  its quiet toast. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF
+  nearly every decode is an unworked grid.
+- **Rare grid 💎** — same band choices. The bands where a rare or water-only grid
+  (rovers, maritime, DXpeditions) counts: the Needed boards, its GRID icon and the
+  loud 💎 alert. Separate from plain grids, so silencing HF chatter keeps the gems.
 
-Each band choice governs both halves of a need: whether it makes a sound and
-whether it paints an icon. Set **New grid** to VHF+ and an HF FT8 roster stops
-showing GRID chips — the icons follow the setting, not just the alerts.
+Each menu always shows the band choice the boards follow, whatever the alert
+switch says, and picking one changes only that one. Set **New grid** to VHF+ and
+an HF FT8 roster stops showing GRID chips and the Needed boards stop listing HF
+grids. The board's own **New grid** chip filters within that; it never brings
+HF grids back.
 - **Watch list** — the calls you want flagged wherever they turn up. Each entry can
   carry a note of your own, such as why it is there and when it can come off
   (`Samoa DXp 9/27-10/3`): type it when you add the entry, or later in the field

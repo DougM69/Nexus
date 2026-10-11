@@ -1964,30 +1964,10 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
-  // Per-alert band-scope selects (new DXCC / new grid / rare grid). The three selects ARE the
-  // truth: the stored `alertNew` master is DERIVED from them (on = any scope not Off), never an
-  // independent hidden toggle — which previously stuck `true` even after every scope was set to
-  // Off (only ever set true, never back to false), silently keeping the alert engine "armed" with
-  // nothing selected. When re-materializing from an old master-off state, show only the scope just
-  // changed so enabling one type can't resurrect the rest.
-  const ALERT_SCOPE_KEYS = ['alertDxccBands', 'alertGridBands', 'alertRareGridBands'] as const
-  const changeAlertScope = (key: (typeof ALERT_SCOPE_KEYS)[number], value: string) => {
-    markDirty()
-    setForm((prev) => {
-      if (!prev) return prev
-      const next = { ...prev, [key]: value }
-      if (!prev.alertNew) {
-        for (const k of ALERT_SCOPE_KEYS) if (k !== key) next[k] = 'off'
-      }
-      next.alertNew = ALERT_SCOPE_KEYS.some((k) => (next[k] ?? 'off') !== 'off')
-      return next
-    })
-  }
-
   // The GEOGRAPHIC alert scope (#174). Both halves are plain add/remove on a list, and both
   // default EMPTY — which is "alert on everywhere", the behaviour before this setting existed.
   // There is deliberately no master toggle: the lists ARE the state, so there is no hidden
-  // "armed with nothing selected" flag of the kind `alertNew` had to be rescued from above.
+  // "armed with nothing selected" flag.
   const toggleAlertContinent = (code: string) => {
     markDirty()
     setForm((prev) => {
@@ -9933,16 +9913,39 @@ export function SettingsPanel({
                 </span>
               </div>
 
-              {/* Per-type band scopes: all decode alerts fire on the CURRENT band, so the
-                  scope is "should this alert on the band I'm on". VHF+ = 6 m and up. */}
+              {/* The decode alert for a new DXCC, a new grid or a rare grid: its sound and its
+                  pop-up (`processDecodes`, alerts.ts), on the band the radio is on. Its own
+                  switch, and `alertNew` is the only key it writes. */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.newAlerts.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.alertNew}
+                    className={`toggle${form.alertNew ? ' on' : ''}`}
+                    onClick={() => updateBool('alertNew', !form.alertNew)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.newAlerts.hint')}</span>
+              </div>
+
+              {/* Per-type band scopes, one stored choice each. The Needed boards and the need
+                  icons follow them, judging each need on its own band (`needScopeOk`,
+                  features/needs.ts); the alert above follows them on the band the radio is on.
+                  VHF+ = 6 m and up. Each menu shows and writes its own key and nothing else:
+                  they once read Off while the alert was off, though the boards went on following
+                  the stored choices, and picking one from there wrote Off into the other two. */}
               <div className="settings-field">
                 <label className="settings-inline-label">
                   <span className="settings-label">{t('settings.alerts.dxcc.label')}</span>
                   <select disabled={remote}
                     className="settings-input"
-                    value={!form.alertNew ? 'off' : (form.alertDxccBands ?? 'all')}
+                    value={form.alertDxccBands ?? 'all'}
                     aria-label={t('settings.alerts.dxcc.aria')}
-                    onChange={(e) => changeAlertScope('alertDxccBands', e.target.value)}
+                    onChange={(e) => update('alertDxccBands', e.target.value)}
                   >
                     <option value="off">{t('settings.alerts.scope.off')}</option>
                     <option value="hf">{t('settings.alerts.scope.hf')}</option>
@@ -9958,9 +9961,9 @@ export function SettingsPanel({
                   <span className="settings-label">{t('settings.alerts.grid.label')}</span>
                   <select disabled={remote}
                     className="settings-input"
-                    value={!form.alertNew ? 'off' : (form.alertGridBands ?? 'vhf')}
+                    value={form.alertGridBands ?? 'vhf'}
                     aria-label={t('settings.alerts.grid.aria')}
-                    onChange={(e) => changeAlertScope('alertGridBands', e.target.value)}
+                    onChange={(e) => update('alertGridBands', e.target.value)}
                   >
                     <option value="off">{t('settings.alerts.scope.off')}</option>
                     <option value="hf">{t('settings.alerts.scope.hf')}</option>
@@ -9976,9 +9979,9 @@ export function SettingsPanel({
                   <span className="settings-label">{t('settings.alerts.rareGrid.label')}</span>
                   <select disabled={remote}
                     className="settings-input"
-                    value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'vhf')}
+                    value={form.alertRareGridBands ?? 'vhf'}
                     aria-label={t('settings.alerts.rareGrid.aria')}
-                    onChange={(e) => changeAlertScope('alertRareGridBands', e.target.value)}
+                    onChange={(e) => update('alertRareGridBands', e.target.value)}
                   >
                     <option value="off">{t('settings.alerts.scope.off')}</option>
                     <option value="hf">{t('settings.alerts.scope.hf')}</option>

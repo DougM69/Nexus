@@ -384,6 +384,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Settings ▸ Spots & Alerts shows the band choices the Needed boards follow, and the new DXCC
+  and grid alert has its own switch.** With that alert off, New DXCC, New grid and Rare grid 💎 all
+  read Off, though the boards and the need icons went on following the choices saved underneath,
+  so rare HF squares could still be listed; and picking any one of the three set the other two to
+  Off, which took NEW ONE off every board. The menus now always show what is saved, picking one
+  changes only that one, and a switch of its own, New DXCC and grid alerts, turns the sound and
+  the pop-up on and off without changing a menu. Settings and profiles saved by earlier versions
+  load unchanged.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
