@@ -125,8 +125,8 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 The contest sets and the Field Day set are laid out the way N1MM lays its keys out, one key per
 step of a contact, and they are what [Enter Sends Message](Field-Day.md#enter-sends-message-esm)
 sends from: `F1` calls CQ, `F2` sends his call and your exchange, `F3` is TU, `F4` your call,
-`F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` asks for a repeat
-and `F8` tells a dupe QSO B4. Your exchange goes once, and your call goes out on `F1`, `F3` and
+`F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` tells a dupe
+QSO B4 and `F8` asks for a repeat, the key N1MM's default message sets put AGN on. Your exchange goes once, and your call goes out on `F1`, `F3` and
 `F4`.
 
 ### The Field Day set
@@ -142,8 +142,8 @@ working K9AAA as 3A WI, `F2` sends `K9AAA 3A WI` and `F6` sends `TU 3A WI`.
 | `F4` | My Call | `{MYCALL}` |
 | `F5` | His Call | `! ` |
 | `F6` | S&P exch | `TU {EXCH}` |
-| `F7` | AGN | `AGN AGN` |
-| `F8` | B4 | `! QSO B4` |
+| `F7` | B4 | `! QSO B4` |
+| `F8` | AGN | `AGN AGN` |
 
 ### The contest set
 
@@ -153,7 +153,7 @@ and keying it in the Illinois QSO Party or CQ WW CW calls for somebody else's ev
 that contest's own exchange without the signal report — your zone in CQ WW CW, your county in a
 QSO party — so the keys that send it send `{RST}` before it. In the Illinois QSO Party from Cook
 County, working K9AAA: `F2` sends `K9AAA 5NN COOK`, `F3` sends `TU <your call>`, `F6` sends
-`TU 5NN COOK` and `F8` sends `K9AAA QSO B4`.
+`TU 5NN COOK` and `F7` sends `K9AAA QSO B4`.
 
 | Key | Label | Content |
 |---|---|---|
@@ -163,8 +163,8 @@ County, working K9AAA: `F2` sends `K9AAA 5NN COOK`, `F3` sends `TU <your call>`,
 | `F4` | My Call | `{MYCALL}` |
 | `F5` | His Call | `! ` |
 | `F6` | S&P exch | `TU {RST} {EXCH}` |
-| `F7` | AGN | `AGN AGN` |
-| `F8` | B4 | `! QSO B4` |
+| `F7` | B4 | `! QSO B4` |
+| `F8` | AGN | `AGN AGN` |
 
 ### The contest set without a report
 
@@ -180,8 +180,8 @@ and the ARRL VHF contests. A 5NN there would be a wrong exchange, so `F2` and `F
 | `F4` | My Call | `{MYCALL}` |
 | `F5` | His Call | `! ` |
 | `F6` | S&P exch | `TU {EXCH}` |
-| `F7` | AGN | `AGN AGN` |
-| `F8` | B4 | `! QSO B4` |
+| `F7` | B4 | `! QSO B4` |
+| `F8` | AGN | `AGN AGN` |
 
 **These sets changed with Enter Sends Message: `F3` is now TU.** Before, `F2` answered with his
 call and yours, `F3` sent the exchange twice with "DE <your call> … K", `F4` the TU, `F5` your

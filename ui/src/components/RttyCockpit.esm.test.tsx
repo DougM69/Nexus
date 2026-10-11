@@ -179,6 +179,26 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the contest set (the operator, 2026-10-10: as in N1MM's
+  // default message sets). Enter's AGN sends the text it sent from F7 before.
+  it('asks AGN from F8 while his exchange is not copied, and sends the AGN it always sent; F7 is B4', async () => {
+    await renderCockpit()
+    fireEvent.keyDown(window, { key: 'F1' }) // CQ, by hand: ESM goes to Run
+    await flush()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange
+    await enter(qthBox()) // his QTH not copied yet
+    expect(sent[sent.length - 1]).toBe('\r\nAGN? AGN? ')
+    expect(loggedCalls()).toEqual([])
+    fireEvent.keyDown(window, { key: 'F7' })
+    await flush()
+    expect(sent[sent.length - 1], 'F7 by hand').toBe('\r\nK9AAA QSO B4 TU KD9TAW ')
+    fireEvent.keyDown(window, { key: 'F8' })
+    await flush()
+    expect(sent[sent.length - 1], 'F8 by hand').toBe('\r\nAGN? AGN? ')
+  })
+
   it('steps aside while the auto sequence runs: Enter logs and sends nothing', async () => {
     state.current = { ...idle(), auto: true, seqState: 'answering' } as RttyState
     await renderCockpit()

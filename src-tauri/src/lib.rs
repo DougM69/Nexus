@@ -32493,6 +32493,19 @@ pub fn run() {
         }
     }
 
+    // One-time migration: AGN moved to F8 in the Phone, CW and RTTY contest keys
+    // (`Settings::move_agn_to_f8`). A file from before gains the voice keyer's F8, an AGN
+    // recording in F5 is copied to F8's own file (never losing or writing over a recording), and
+    // the RTTY contest keys and the step maps that read F7 or F8 stay on their messages. Saved at
+    // once; a save that does not land is finished at the next launch, which takes its own copy.
+    if settings.move_agn_to_f8() {
+        // Launch, before the Engine and any settings writer exist: a bare save, exempt from
+        // the writer's Engine-lock precondition (`tempo_app::settings::writer`).
+        if let Err(e) = settings.save(&settings_path()) {
+            eprintln!("tempo: couldn't re-save settings after moving AGN to F8: {e}");
+        }
+    }
+
     // One-time heal (macOS): the 1.5.0–1.6.1 pickers offered the /dev/tty.* twin of every
     // serial port as an equal row, and a rig configured on one HANGS CAT on carrier detect —
     // the later fix collapsed the twins in the PICKER only, so upgraded configs still hold

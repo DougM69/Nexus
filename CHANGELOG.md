@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message you stop counts as not sent, so the next Enter sends it again; if you stop the TU or the
   exchange whose Enter logged the contact, the contact stays logged and the strip says so, and
   Ctrl+D twice takes it back. In Phone, Enter plays the voice keyer's recordings (F1 CQ, F2 your
-  exchange, F3 TU, F4 your call, F5 AGN), and when you are running you say his call and your
+  exchange, F3 TU, F4 your call, F8 AGN), and when you are running you say his call and your
   exchange yourself. A box filled from call history counts as copied: Enter sends and logs it as
   it stands, so type over it when the station sends something different. ESM steps aside, and
   Enter logs as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the
@@ -292,15 +292,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, because the hunt is how its park reaches the contact.
 - **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
   every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
-  call, F5 his call alone, F6 your exchange in search and pounce, F7 AGN and F8 `<his call> QSO
-  B4`. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
+  call, F5 his call alone, F6 your exchange in search and pounce, F7 `<his call> QSO B4` and F8
+  AGN. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
   `TU 5NN COOK`; at Field Day they send your class and section, such as `K9AAA 3A WI`. Only F1
-  and F7 send what they sent before. Your exchange now goes once, without "DE <your call> … K",
-  and your call goes out on F1, F3 and F4. Habit is the risk: F3 pressed for the exchange now
-  sends TU, F4 pressed to confirm sends only your call, and F5 pressed for your call sends his.
+  sends what it sent before, and AGN, which moved from F7 to F8. Your exchange now goes once,
+  without "DE <your call> … K", and your call goes out on F1, F3 and F4. Habit is the risk: F3
+  pressed for the exchange now sends TU, F4 pressed to confirm sends only your call, F5 pressed
+  for your call sends his, and F7 pressed for a repeat sends QSO B4.
   The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
+- **AGN is now F8 in the Phone, CW and RTTY contest keys, as in N1MM's default message sets.** In
+  the CW contest and Field Day sets and RTTY's Contest set, AGN and B4 trade keys: F8 asks for a
+  repeat and F7 sends `<his call> QSO B4`. No other key moves. Habit is the risk: F7 pressed for a
+  repeat now sends QSO B4. Your own texts go with their messages: an RTTY Contest key you changed
+  on F7 or F8 moves to the other key, and so does a step you mapped there for Enter Sends Message;
+  a CW macro profile of your own keeps its keys. In Phone the voice keyer has a new slot, F8 AGN,
+  which Enter Sends Message plays when you need a repeat, and F5 is yours: on CW F5 sends his
+  call, and a recording cannot say one. If you ran Enter Sends Message in Phone in a test build,
+  where AGN was on F5, the update copies that recording to F8 and leaves F5 empty; a recording in
+  F5 that was for something else, such as a 73, stays in F5.
 
 - **Field Day mode is now Contest mode: one switch for whichever contest is picked.** It always
   started the contest picked in Settings ▸ Contesting ▸ Contest, a QSO party or CQ WW as much as Field

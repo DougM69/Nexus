@@ -52,7 +52,8 @@ const EVERYDAY: BuiltinMacro[] = [
 ]
 
 /** CONTEST — the N1MM-convention run/S&P set: F1 CQ · F2 exchange · F3 TU · F4 my call · F5 his
- *  call. Checked against the published RTTY contest message sets (rttycontesting.com, the N1MM
+ *  call · F7 QSO B4 · F8 AGN (AGN on F8 as in N1MM's default message sets: it traded keys with B4,
+ *  operator, 2026-10-10). Checked against the published RTTY contest message sets (rttycontesting.com, the N1MM
  *  RTTY guides): a CQ starts AND ends with CQ, so a station tuning in mid-message still reads it
  *  as one; the exchange goes twice; the run station's TU ends with CQ to ask for the next caller;
  *  and the S&P exchange leaves out the runner's call. */
@@ -63,8 +64,8 @@ const CONTEST: BuiltinMacro[] = [
   { key: 'F4', labelKey: 'rtty.macro.myCall.label', text: '{MYCALL} {MYCALL}' },
   { key: 'F5', labelKey: 'rtty.macro.hisCall.label', text: '{CALL}' },
   { key: 'F6', labelKey: 'rtty.macro.spExch.label', text: 'TU 599 {EXCH} {EXCH}' },
-  { key: 'F7', label: 'AGN', text: 'AGN? AGN?' },
-  { key: 'F8', label: 'B4', text: '{CALL} QSO B4 TU {MYCALL}' },
+  { key: 'F7', label: 'B4', text: '{CALL} QSO B4 TU {MYCALL}' },
+  { key: 'F8', label: 'AGN', text: 'AGN? AGN?' },
 ]
 
 const RTTY_BUILTINS: Record<RttySetId, BuiltinMacro[]> = { everyday: EVERYDAY, contest: CONTEST }
