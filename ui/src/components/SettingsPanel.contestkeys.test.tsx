@@ -264,4 +264,41 @@ describe('Settings ▸ Contesting ▸ Enter Sends Message', () => {
     ])
     expect(cw.querySelector('.esm-roles-none')).toBeNull()
   })
+
+  // ⭐ RESET TO DEFAULTS TAKES A PROFILE'S STEPS WITH ITS KEYS. A profile on the built-in sets shows
+  // their steps and no control (above), so steps left on it could be neither seen nor cleared here.
+  it('Reset to defaults clears the active profile’s steps with its keys, and keeps another profile’s', async () => {
+    const other = { ...OLD_PROFILE, esmRoles: { cq: ['F1'] } }
+    stored = {
+      ...stored,
+      macros: {
+        ...(stored.macros as object),
+        cwProfiles: [other, { ...MINE, esmRoles: { again: ['F5'] } }],
+        activeCwProfile: 1,
+      },
+    }
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'CW' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset to defaults' }))
+    await save()
+    expect(lastSaved().macros.cwProfiles).toEqual([other, { name: 'Mine', macros: [] }])
+  })
+
+  it('Customize starts with no steps mapped: steps an earlier Reset left on the profile do not come back', async () => {
+    stored = {
+      ...stored,
+      macros: {
+        ...(stored.macros as object),
+        cwProfiles: [{ name: 'Default', macros: [], esmRoles: { again: ['F5'] } }],
+        activeCwProfile: 0,
+      },
+    }
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'CW' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
+    await openContesting()
+    expect(stepSelect('cw', 'again').value, 'AGN has no key of its own').toBe('')
+    await save()
+    expect(lastSaved().macros.cwProfiles).toEqual([{ name: 'Default', macros: expect.any(Array) }])
+  })
 })

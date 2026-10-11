@@ -2223,13 +2223,19 @@ export function SettingsPanel({
       }
     })
   }
-  // Seed / clear the ACTIVE profile's macros (empty list = the built-in defaults).
+  // Seed / clear the ACTIVE profile's macros (empty list = the built-in defaults). Its ESM step
+  // mapping goes with the keys it named: a profile on the built-in sets has no control for one
+  // (Settings ▸ Contesting), so a mapping kept through Reset could be neither seen nor cleared.
   const setCwMacros = (macros: { key: string; label: string; text: string }[]) => {
     markDirty()
     setForm((prev) => {
       if (!prev) return prev
       const idx = prev.macros.activeCwProfile ?? 0
-      const list = (prev.macros.cwProfiles ?? []).map((p, i) => (i === idx ? { ...p, macros } : p))
+      const list = (prev.macros.cwProfiles ?? []).map((p, i) => {
+        if (i !== idx) return p
+        const { esmRoles: _was, ...rest } = p
+        return { ...rest, macros }
+      })
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
     })
   }
