@@ -242,7 +242,7 @@ them is the moment your hands are in a field. Those are called out below.
 | `Esc` | CW — **fires while typing too** | Abort keying: clears the queue and stops the rig. |
 | `PgUp` / `PgDn` | CW — **fire while typing too** | Nudge WPM ±2, with Shift ±4. |
 | `Space` (hold) | Phone | Push-to-talk. The press is ignored in a text field; the release always unkeys, wherever focus has moved. |
-| `F1`–`F6` | Phone, while the Voice keyer pane is on screen | Play that recorded message. Ignored while a recording is in progress. |
+| `F1`–`F6`, `F8` | Phone, while the Voice keyer pane is on screen — **fire while typing too** | Play that recorded message. Ignored while a recording is in progress. `F1`–`F12` are all kept from the window there, so `F5` cannot reload the app; with Alt, Ctrl or Cmd held a key is left to the system (`Alt+F4` still closes the window). |
 | `Esc` | Phone — **fires while typing too** | Halt TX, as the header's **Stop TX** does. With the Voice keyer pane on screen and the cursor outside a text field, it stops playback as well. |
 | `Ctrl+D` | Any cockpit showing the contest log strip — **fires while typing too** | Remove your newest contest contact: the first press names it on the strip, a second within 5 seconds removes it. Held down, it is one press; with Alt, Shift or Cmd it does nothing. It never keys or stops TX. |
 | `Esc` | RTTY / PSK / JS8 | Stop TX: drops the queue, drops the continuous-TX latch and unkeys. |

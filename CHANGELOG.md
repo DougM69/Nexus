@@ -486,6 +486,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Phone's F-keys play the voice keyer from the log line, as CW's do.** With the cursor in the Call
+  box or any other box of the log line, a slot's F-key played nothing until you clicked out of the
+  box. Now it plays from anywhere on the Phone screen, and F1–F12 never reach the window there, so F5
+  cannot reload the app, even while you record; with Alt, Ctrl or Cmd held an F-key is left to the
+  system, so Alt+F4 still closes the window.
+
 - **A dupe is now logged as a dupe for 0 points in every contest, the way N1MM does.** Field Day,
   Winter Field Day and the Tennessee, Ohio, California, Texas and Illinois QSO parties refused a
   station you had already worked: Enter in the CW, Phone or RTTY log strip said it "is a dupe on this
