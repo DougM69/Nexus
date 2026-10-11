@@ -41,6 +41,7 @@
 pub mod aprsis;
 pub mod cluster;
 pub mod dxkeeper;
+pub mod fdfirewall;
 pub mod fdsync;
 pub mod flex;
 pub mod flexcat;

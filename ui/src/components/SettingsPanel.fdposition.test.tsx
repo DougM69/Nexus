@@ -376,7 +376,7 @@ describe('the club section says where the club link stands', () => {
     await openContesting()
     fireEvent.click(await screen.findByRole('button', { name: 'Find club events' }))
     const empty = await screen.findByText(/^Nothing heard in 5 s\./)
-    expect(empty.textContent).toContain('Windows Firewall on this laptop allows Nexus on Private networks')
+    expect(empty.textContent).toContain("on Windows, that this laptop's firewall lets Nexus hear the host: press Allow Nexus through Windows Firewall, above.")
     expect(empty.textContent).toContain('the address the host shows after “Positions join at” into Join event at')
   })
 

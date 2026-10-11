@@ -610,7 +610,7 @@ describe("where this laptop's club link stands", () => {
     const block = screen.getByLabelText('Club sync')
     expect(within(block).getByText('Cannot reach the host at 192.168.1.10:42073. Trying again.')).toBeTruthy()
     expect(
-      within(block).getByText(/Windows Firewall on the host allows Nexus on Private networks/),
+      within(block).getByText(/press Allow Nexus through Windows Firewall in Settings ▸ Contesting on the host\./),
     ).toBeTruthy()
   })
 

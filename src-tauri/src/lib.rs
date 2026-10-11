@@ -17834,6 +17834,93 @@ async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
     }
 }
 
+/// This executable's path as text, for a firewall rule to name: `None` when it is not Unicode,
+/// which no rule could name faithfully.
+fn this_exe() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .into_os_string()
+        .into_string()
+        .ok()
+}
+
+/// What the club section of Settings ▸ Contesting says about Windows Firewall: whether it is on,
+/// and where Nexus's club sync rules stand for the Host and scoreboard ports as set
+/// (`tempo_net::fdfirewall::status`). Read with no administrator rights, on the blocking pool
+/// (the rules take about a tenth of a second). `None` off Windows, and when the firewall cannot
+/// be read. Nexus Remote has no road to it: it is this laptop's own firewall.
+#[tauri::command]
+async fn club_firewall_status(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_net::fdfirewall::Status>, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = this_exe()?;
+        tempo_app::club_firewall::status(&engine, &exe, tempo_net::fdfirewall::read)
+    })
+    .await
+    .map_err(|e| format!("firewall read failed: {e}"))
+}
+
+/// The operator pressed **Allow Nexus through Windows Firewall** (`action` "allow") or its
+/// Remove ("remove") in the club section: one Windows administrator prompt, through the
+/// elevation Repair clock uses, then the firewall read back (`PressOutcome`). Refused with
+/// `onAir` while anything is transmitting, `running` while a press is still waiting on Windows,
+/// `path` or `port` when the command cannot be built, and `unsupported` off Windows. The prompt
+/// waits for an answer, so this runs on the blocking pool. Nexus Remote has no road to it: the
+/// prompt would wait on a screen nobody may be sitting at (`remote_service::application::Command`
+/// has no variant).
+#[tauri::command]
+async fn club_firewall_press(
+    state: State<'_, SharedEngine>,
+    action: String,
+) -> Result<tempo_app::club_firewall::PressOutcome, String> {
+    use tempo_app::club_firewall::{press, status, FirewallAction, PressOutcome, FIREWALL_PRESS};
+    let action = match action.as_str() {
+        "allow" => FirewallAction::Allow,
+        "remove" => FirewallAction::Remove,
+        other => return Err(format!("unknown firewall action {other:?}")),
+    };
+    if !cfg!(windows) {
+        return Err("unsupported".to_string());
+    }
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = this_exe().ok_or_else(|| "path".to_string())?;
+        let ran = press(
+            &engine,
+            &FIREWALL_PRESS,
+            action,
+            &exe,
+            tempo_core::process::run_elevated,
+        )
+        .map_err(|why| why.code().to_string())?;
+        conn_log(
+            "FD sync",
+            if ran { "info" } else { "error" },
+            format!(
+                "Windows Firewall: {} Nexus's club sync rules {}",
+                if action == FirewallAction::Allow {
+                    "adding"
+                } else {
+                    "removing"
+                },
+                if ran {
+                    "done"
+                } else {
+                    "not done (the administrator prompt was declined, or a step failed)"
+                }
+            ),
+        );
+        Ok(PressOutcome {
+            ran,
+            status: status(&engine, &exe, tempo_net::fdfirewall::read),
+        })
+    })
+    .await
+    .map_err(|e| format!("firewall press failed: {e}"))?
+}
+
 /// Curated Hamlib rig models `(model_number, name)` for the Settings dropdown.
 #[tauri::command]
 fn get_rig_models() -> Vec<(u32, String)> {
@@ -33979,6 +34066,10 @@ fn start_on_the_logbook(
                     if let Some((_, _, shutdown)) = client.take() {
                         shutdown.store(true, Ordering::Relaxed);
                         let mut e = engine_lock(&mgr_engine);
+                        // The stopped pump reports its own link down up to a quarter of a
+                        // second from now, perhaps after the next pump is in: nothing it says
+                        // reaches the mirror from here (`Engine::fd_link_take_over`).
+                        e.fd_link_take_over();
                         e.fd_mirror_mut().on_link(false, now_unix() as u64);
                     }
                     if let Some((addr, contest)) = want_addr {
@@ -34066,10 +34157,6 @@ fn start_on_the_logbook(
                                     tempo_app::fd_scoreboard::serve_until(listener, source, sd)
                                 });
                                 running = Some((port, shutdown));
-                        // The stopped pump reports its own link down up to a quarter of a
-                        // second from now, perhaps after the next pump is in: nothing it says
-                        // reaches the mirror from here (`Engine::fd_link_take_over`).
-                        e.fd_link_take_over();
                                 bind_failed = None;
                                 {
                                     let mut st =
@@ -34850,6 +34937,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             dismiss_tx_alarm,
             test_cat,
             repair_clock,
+            club_firewall_status,
+            club_firewall_press,
             set_tx_even,
             set_tx_cycle_auto,
             set_beacon,

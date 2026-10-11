@@ -16,6 +16,7 @@ pub mod alltxt;
 pub mod bandplan;
 pub mod call_history;
 pub mod clocksync;
+pub mod club_firewall;
 pub mod clubclock;
 pub mod connect_web;
 pub mod dto;

@@ -23,6 +23,8 @@ import {
   isTauri,
   fdDiscoverEvents,
   fdScoreboardStatus,
+  clubFirewallStatus,
+  clubFirewallPress,
   connectWebStatus,
   type FdScoreboardStatus,
   type ConnectWebStatus,
@@ -120,6 +122,12 @@ import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, isFieldDay } from '../fdEvent'
 import { ADDR_SEP, clubLinkLines, FIND_CLUB_EVENTS_SECS } from '../features/clubLink'
+import {
+  CLUB_SEARCH_PORT,
+  clubFirewallLines,
+  clubFirewallPressLine,
+  clubFirewallRefusalLine,
+} from '../features/clubFirewall'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -189,7 +197,7 @@ import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, reve
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
-import type { AssistanceEvent, ClubLink, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
+import type { AssistanceEvent, ClubFirewall, ClubLink, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
 import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
@@ -1668,6 +1676,37 @@ export function SettingsPanel({
       window.clearInterval(timer)
     }
   }, [tab, form?.fdScoreboard])
+  // Windows Firewall for club sync (`features/clubFirewall.ts`): read with no administrator rights
+  // when the Contesting tab opens on Windows and again after each save (the rules are for the
+  // ports as saved), and handed back by each press. `undefined` = not read yet.
+  const [clubFw, setClubFw] = useState<ClubFirewall | null | undefined>(undefined)
+  const [clubFwBusy, setClubFwBusy] = useState(false)
+  const [clubFwNote, setClubFwNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (remote || !IS_WINDOWS || tab !== 'contesting') return
+    let live = true
+    clubFirewallStatus()
+      .then((s) => {
+        if (live) setClubFw(s)
+      })
+      .catch(() => {
+        if (live) setClubFw(null)
+      })
+    return () => {
+      live = false
+    }
+  }, [remote, tab, savedTick])
+  const pressClubFirewall = (action: 'allow' | 'remove') => {
+    setClubFwBusy(true)
+    setClubFwNote(null)
+    clubFirewallPress(action)
+      .then((outcome) => {
+        setClubFw(outcome.status)
+        setClubFwNote(clubFirewallPressLine(action, outcome))
+      })
+      .catch((e) => setClubFwNote(clubFirewallRefusalLine(String(e))))
+      .finally(() => setClubFwBusy(false))
+  }
   // Same shape for the Connect LAN page's status row: only while its own tab is open
   // and the toggle is on, so a closed panel polls nothing.
   const [connectWeb, setConnectWeb] = useState<ConnectWebStatus | null>(null)
@@ -13075,10 +13114,61 @@ export function SettingsPanel({
                 <span className="toggle-knob" />
               </button>
               <span className="settings-hint">{t('settings.fdClub.host.hint')}</span>
-              {/* The ports a club event needs through the firewall, said where the event is
-                  switched on: Nexus adds no firewall rule of its own. */}
-              <span className="settings-hint">{t('settings.fdClub.firewall.hint')}</span>
+              {/* The ports a club event needs through a firewall, said where the event is
+                  switched on, on every platform. */}
+              <span className="settings-hint">
+                {t('settings.fdClub.firewall.hint', {
+                  host: form.fdHostPort ?? 42073,
+                  search: CLUB_SEARCH_PORT,
+                  board: form.fdScoreboardPort ?? 7373,
+                })}
+              </span>
             </label>
+            {/* Windows only, and never from afar: Nexus's own three rules, through Windows'
+                administrator prompt (the one Repair clock asks through), and where they stand.
+                With the firewall off there is nothing to allow, and the button says so. */}
+            {!remote && IS_WINDOWS && (
+              <div className="settings-field" data-club-firewall="">
+                {clubFw !== undefined &&
+                  clubFirewallLines(clubFw).map((l) => (
+                    <p
+                      key={l.key}
+                      className={l.alert ? 'settings-note settings-warn' : 'settings-note'}
+                      role={l.alert ? 'alert' : 'status'}
+                      data-club-firewall={l.key}
+                    >
+                      {l.text}
+                    </p>
+                  ))}
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={clubFwBusy || clubFw?.state === 'off'}
+                  onClick={() => pressClubFirewall('allow')}
+                >
+                  {clubFwBusy
+                    ? t('settings.fdClub.firewall.busy')
+                    : clubFw?.state === 'off'
+                      ? t('settings.fdClub.firewall.nothing')
+                      : t('settings.fdClub.firewall.allow')}
+                </button>
+                {clubFw?.ours && (
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    disabled={clubFwBusy}
+                    onClick={() => pressClubFirewall('remove')}
+                  >
+                    {t('settings.fdClub.firewall.remove')}
+                  </button>
+                )}
+                {clubFwNote && (
+                  <p className="settings-note settings-warn" role="alert" data-club-firewall="press">
+                    {clubFwNote}
+                  </p>
+                )}
+              </div>
+            )}
             {form.fdHostEnable && (
               <p className="settings-note">{t('settings.fdClub.host.note')}</p>
             )}

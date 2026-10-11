@@ -1076,6 +1076,10 @@ mod tests {
             // Repair clock raises Windows' administrator prompt on the STATION's screen, for the
             // same reason, and the repair waits on it.
             "repair_clock",
+            // So does the club section's Allow Nexus through Windows Firewall, and what it reads
+            // is the station's own firewall, for the station's own screen.
+            "club_firewall_press",
+            "club_firewall_status",
         ] {
             assert!(serde_json::from_value::<Command>(json!(command)).is_err());
         }

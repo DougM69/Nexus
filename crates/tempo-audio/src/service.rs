@@ -13978,7 +13978,7 @@ fn repair_clock_with(
     // still asking about the first is refused, never queued as a second prompt.
     let _running = repair.claim().ok_or(ClockRepairRefusal::Running)?;
     // A real fault's repair, and nothing else, whatever is on offer: this is the
-    // one place Nexus asks Windows for administrator rights.
+    // one place the clock code asks Windows for administrator rights.
     let diag = repair
         .offered()
         .filter(|d| d.repair.fixes_a_fault())

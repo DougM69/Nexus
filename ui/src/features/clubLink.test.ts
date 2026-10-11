@@ -40,7 +40,7 @@ function said(link: ClubLink, inClubBlock = false): unknown[] {
 }
 
 const NO_ANSWER =
-  'Nothing answered: check that both laptops are on the same network, that Nexus on the host has Host a club event on, and that Windows Firewall on the host allows Nexus on Private networks, with Windows calling the network Private, not Public.'
+  'Nothing answered: check that both laptops are on the same network, that Nexus on the host has Host a club event on, and, if the host runs Windows, that its firewall lets Nexus in: press Allow Nexus through Windows Firewall in Settings ▸ Contesting on the host.'
 const REFUSED =
   'Nothing is listening there: check that Nexus on that laptop has Host a club event on, and that the port is the one its screen shows.'
 

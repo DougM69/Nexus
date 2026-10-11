@@ -2180,7 +2180,12 @@ club events** or by typing the host's address into **Join event at**: the host
 shows it after **Positions join at**, and an address typed without a port joins
 port 42073. Under **Join event at** each laptop says where its join stands, and
 the host says where it is hosting and how many other positions are connected
-(the Contest screen says the same, with Field Day mode on or off). Each
+(the Contest screen says the same, with Field Day mode on or off). On Windows,
+**Allow Nexus through Windows Firewall** adds Nexus's three rules for club sync
+(the Host port, Find club events' UDP 42074 and the scoreboard's port) on
+Private and Public networks through one administrator prompt; the line beside
+it says whether they are in place, and **Remove Nexus's firewall rules** takes
+them out. Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
 powers the while-typing dupe warning. **Event name** is what joining positions

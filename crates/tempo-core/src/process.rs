@@ -51,6 +51,125 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     cmd
 }
 
+/// Run `cmd.exe` with `cmd_args` as its arguments under Windows' administrator prompt, wait for
+/// it, and say whether it exited 0. `false` off Windows (nothing is run), when the prompt is
+/// declined, and when the command fails.
+///
+/// ⭐ **The one way Nexus asks for administrator rights**, used by **Repair clock**
+/// (`tempo_audio::clockdiag`) and by the club section's **Allow Nexus through Windows Firewall**
+/// (`tempo_net::fdfirewall`). Each press is one prompt, because everything a press does goes
+/// into one `cmd.exe` run. Nexus installs per-user (`"installMode": "currentUser"`) on purpose:
+/// a per-machine install would inherit a documented Tauri defect where the two install paths
+/// can leave a machine carrying a duplicate install. So the rights are asked for at the moment
+/// they are needed, by a press, and nothing calls this on a timer. There is no zero-prompt
+/// route: the technique that appears to offer one is a catalogued UAC bypass and is
+/// deliberately not implemented.
+///
+/// ## Why PowerShell rather than `ShellExecuteW`
+///
+/// A `#[cfg(windows)]` FFI body is type-checked by neither a Linux compile nor any test that
+/// can run here, so it would ship on the strength of having been read. `Start-Process -Verb
+/// RunAs` is the same OS mechanism (`runas` is exactly what `ShellExecuteW`'s verb parameter
+/// takes), reached through `std::process::Command`, which compiles and type-checks everywhere,
+/// adds no dependency, and needs no `unsafe`. PowerShell has shipped in every supported Windows.
+/// Its absolute path, because a GUI-launched process gets a minimal `PATH` (the trap
+/// `rigctld_proc.rs` documents).
+///
+/// ⚠️ **NEEDS-BENCH.** What is tested is the text that runs ([`elevated_script`], and each
+/// caller's `cmd_args`), not a run: nothing on the machine this was developed on is changed by
+/// a test.
+pub fn run_elevated(cmd_args: &str) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    command(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &elevated_script(cmd_args),
+        ])
+        .status()
+        .map(|st| st.success())
+        .unwrap_or(false)
+}
+
+/// The PowerShell [`run_elevated`] runs: `cmd.exe` with `cmd_args` under one elevation, exiting
+/// with its status. `-Wait` alone exits 0 whatever the command returned, so a command Windows
+/// refused part-way read as one that took (`the_elevated_script_exits_with_the_commands_own_status`).
+/// `Stop` keeps a `Start-Process` that fails (a declined prompt) from running on to the `exit`,
+/// which would exit 0 with no process to ask.
+///
+/// ⛔ `cmd_args` reaches `cmd.exe` exactly as written: it rides in a PowerShell single-quoted
+/// string, in which nothing is expanded and the only special character is a single quote,
+/// doubled here (PowerShell reads `‘ ’ ‚ ‛` as single quotes too, so each of those is doubled
+/// as well). One string, so `Start-Process` passes it on whole.
+pub fn elevated_script(cmd_args: &str) -> String {
+    let mut quoted = String::with_capacity(cmd_args.len() + 2);
+    for c in cmd_args.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            quoted.push(c);
+        }
+        quoted.push(c);
+    }
+    format!(
+        "$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath cmd.exe -ArgumentList '{quoted}' -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode"
+    )
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    use super::*;
+
+    /// ⭐ **What reaches `cmd.exe` is exactly what its caller wrote.** A folder named for
+    /// O'Brien, or holding a `$` or a backtick, is part of the club firewall's command (the rule
+    /// names Nexus by its path), and PowerShell must hand it on untouched: in a double-quoted
+    /// string the `$b` would be a variable and the `'` would end nothing, in a single-quoted
+    /// one with the quote doubled nothing is read but the quote.
+    #[test]
+    fn the_elevated_script_hands_cmd_exactly_what_it_was_given() {
+        assert_eq!(
+            elevated_script(r#"/c netsh program="C:\Users\O'Brien\A$b`c\Nexus.exe""#),
+            r#"$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath cmd.exe -ArgumentList '/c netsh program="C:\Users\O''Brien\A$b`c\Nexus.exe"' -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode"#
+        );
+        // PowerShell reads all four of these as a single quote too.
+        assert_eq!(
+            elevated_script("\u{2018}\u{2019}\u{201A}\u{201B}"),
+            "$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath cmd.exe -ArgumentList \
+             '\u{2018}\u{2018}\u{2019}\u{2019}\u{201A}\u{201A}\u{201B}\u{201B}' -Verb RunAs -Wait \
+             -PassThru -WindowStyle Hidden; exit $p.ExitCode"
+        );
+    }
+
+    /// ⚠️ A COMMAND WINDOWS REFUSED PART-WAY MUST READ AS ONE. PowerShell's own exit status is all
+    /// [`run_elevated`] sees, and `Start-Process -Wait` exits 0 whatever the command it waited
+    /// for returned. Measured with Windows PowerShell on a Windows 11 machine (2026-10-10,
+    /// unelevated, `cmd /c exit 5` in place of the clock's repair): that shape exited 0, and this
+    /// one (`-PassThru`, then `exit` with the command's own code) exited 5, and 0 for `exit 0`. A
+    /// clock repair that failed said "Clock repaired", came off offer, and was offered again by
+    /// the next pass. With `Start-Process` itself failing (a program that is not there, standing
+    /// in for a declined prompt), `-PassThru` alone exited 0 and with `Stop` first exited 1.
+    #[test]
+    fn the_elevated_script_exits_with_the_commands_own_status() {
+        let s = elevated_script("/c w32tm.exe /resync");
+        assert!(s.contains("-Verb RunAs"), "still one elevation: {s}");
+        assert!(
+            s.starts_with("$ErrorActionPreference = 'Stop'; $p = Start-Process "),
+            "{s}"
+        );
+        assert!(s.contains(" -Wait -PassThru "), "{s}");
+        assert!(s.ends_with("; exit $p.ExitCode"), "{s}");
+    }
+
+    /// Nothing is ever elevated off Windows (and so nothing is spawned by this suite here).
+    #[test]
+    fn nothing_is_elevated_off_windows() {
+        if !cfg!(windows) {
+            assert!(!run_elevated("/c exit 0"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

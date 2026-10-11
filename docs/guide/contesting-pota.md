@@ -232,18 +232,24 @@ manual's Field Day page has the steps for the Illinois QSO Party.
 
 Before any club event:
 
-- **Windows Firewall.** Nexus adds no firewall rule of its own, so the first
-  time Nexus listens on the network Windows asks whether to allow it. Allow it
-  on **Private** networks. If Windows calls the site network Public, change it
-  to Private, because a Public network blocks all of it. If the prompt was
-  cancelled, or the Windows account is not an administrator, Windows blocks
-  Nexus and does not ask again: allow Nexus on Private networks yourself, under
-  Windows Security ▸ Firewall & network protection ▸ Allow an app through
-  firewall. The host listens on TCP port 42073 (the **Host port**) and
-  announces itself on UDP port 42074, which **Find club events** listens for;
-  the spectator scoreboard uses TCP port 7373. When a laptop cannot reach the
-  host, check the host's firewall; when its Find club events hears nothing,
-  check its own.
+- **Windows Firewall.** On each Windows laptop, press **Allow Nexus through
+  Windows Firewall** in the club section of Settings ▸ Contesting. Windows asks
+  for administrator rights once, as it does for **Repair clock**, and Nexus adds
+  three inbound rules for itself on **Private and Public** networks, so a site
+  network Windows calls Public works too: TCP on the **Host port** (42073 unless
+  you change it), UDP 42074, which the host announces itself on and **Find club
+  events** listens for, and TCP on the spectator scoreboard's port (7373 unless
+  you change it). They are named "Nexus club sync - …". The line beside the
+  button says whether they are in place; a second press, or a changed Host
+  port, replaces them, and **Remove Nexus's firewall rules** takes them out.
+  With Windows Firewall off there is nothing to allow, and club sync works as
+  it is. If Windows itself blocks Nexus, which is what a Cancel at its own
+  question leaves (and a block wins over any allow), or blocks every incoming
+  connection, the line says so and where to change it. On a laptop where you
+  have no administrator rights, allow Nexus by hand under Windows Security ▸
+  Firewall & network protection ▸ Allow an app through firewall, on Private and
+  Public networks. When a laptop cannot reach the host, check the host's
+  firewall; when its Find club events hears nothing, check its own.
 - **Set every clock first.** Nexus never changes a PC's clock. Each position
   measures its clock against the host's every 5 seconds over the club link, and
   from 2 seconds off its club line says so ("This PC's clock is 3 s behind the
