@@ -104,7 +104,11 @@ fn state(m: &Mutex<Engine>) -> Contest {
             let s = &station.log.session;
             (
                 Some(*running),
-                Some((s.event_id.clone(), format!("{:?}", s.my_location), s.contest_id.clone())),
+                Some((
+                    s.event_id.clone(),
+                    format!("{:?}", s.my_location),
+                    s.contest_id.clone(),
+                )),
             )
         }
         _ => (None, None),
@@ -197,10 +201,10 @@ fn a_new_pick_saved_while_the_mode_is_on_switches_exactly_as_off_and_on() {
         after.session,
         Some((
             "ilqp".to_string(),
-            "IL QSO Party:COOK".to_string(),
+            "MyLocation { county: Some(\"COOK\"), state: \"IL\", dxcc: false }".to_string(),
             "IL QSO Party".to_string()
         )),
-        "the party's session, under the id off-and-on gives it"
+        "the party's session, from the place off-and-on gives it"
     );
     assert_eq!(
         after.running,
