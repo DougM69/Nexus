@@ -321,6 +321,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a 1366×768 or 1600×900 screen the call's line can still be a short scroll down: drag the divider
   under the box to give it room. The Rotor pane on Conditions and in a cockpit's own columns is
   unchanged.
+- **The Rotor and Amplifier boxes draw their readings bigger.** In the dashboard rail the Rotor box
+  now uses the room it is given: the compass rose, the bearing and the elevation grow with the box and
+  stand in its middle, and in a box about as tall as it is wide the bearing and elevation boxes and
+  ■ STOP move under the rose. A short box keeps the tight layout, with everything in view as before. The
+  Amplifier box shows power out and SWR as large readings that follow the box's width, like the
+  Clock's digits, and PA temperature, volts and current a size larger, wherever the box stands.
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each

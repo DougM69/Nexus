@@ -19,6 +19,12 @@
 // the unit symbols W, V, A, ° and the `:1` of an SWR ratio, and the three named constants
 // below. Every NUMBER is built here and rounded before display: `invariantNumber` is
 // `String(n)`, so a raw f32 SWR of 1.2000000476837158 would interpolate verbatim.
+//
+// POWER OUT AND SWR ARE THE BIG READINGS, drawn the way the Clock box draws its digits
+// (ClockPane.tsx): SVG text in a viewBox that holds BIG_CHARS characters, so a reading follows its
+// cell's width in any box (the dashboard rail at its 200 px floor, a wide Connect strip) and never
+// wraps or runs past its cell, and a height cap in styles.css that rides --text-scale stops it growing
+// past what Text size asks for in a wide one. The other readings are text a step larger than the body.
 import type { AmpStatus } from '../../types'
 import { t } from '../../i18n'
 
@@ -29,6 +35,9 @@ const ATU = 'ATU'
 const VDC = 'Vdc'
 /** Absence. Not prose — the em dash IS the reading here, exactly as it is on the S-meter. */
 const DASH = '—'
+/** A big reading's viewBox holds this many characters, "1500 W" and "99.9:1", and half of one more as
+ *  air before the next reading. A longer one widens its own viewBox rather than run past it. */
+const BIG_CHARS = 6
 
 /** Wire tag → the sentence for it, each as a THUNK.
  *
@@ -108,6 +117,30 @@ function Cell({
   )
 }
 
+/** A big reading: its label, and the value as SVG text sized by the cell. `textLength` holds each
+ *  character to 0.6 of the font size, whatever the platform's monospace face measures, so every
+ *  reading of the same length draws the same width. */
+function Big({ k, v, title }: { k: string; v: string | null; title?: string }) {
+  const text = v ?? DASH
+  return (
+    <div className="amp-cell" title={title}>
+      <span className="amp-k">{k}</span>
+      <span className="amp-v amp-big">
+        <svg
+          viewBox={`0 0 ${Math.max(BIG_CHARS, text.length) * 60 + 30} 80`}
+          preserveAspectRatio="xMinYMid meet"
+          role="img"
+          aria-label={text}
+        >
+          <text x="0" y="76" fontSize="100" textLength={text.length * 60} lengthAdjust="spacingAndGlyphs">
+            {text}
+          </text>
+        </svg>
+      </span>
+    </div>
+  )
+}
+
 export function AmpPane({ amp }: { amp: AmpStatus | null | undefined }) {
   // No amplifier configured on the active radio: the box's one line, and no readout.
   if (amp == null) return <p className="pane-basic">{t('connect.pane.amp.basic')}</p>
@@ -148,9 +181,12 @@ export function AmpPane({ amp }: { amp: AmpStatus | null | undefined }) {
         )}
       </div>
 
+      <div className="amp-big-row">
+        <Big k={t('amp.k.power')} v={watts == null ? null : fmtWatts(watts)} />
+        <Big k={SWR} v={swr == null ? null : fmtSwr(swr)} title={t('amp.swr.title')} />
+      </div>
+
       <div className="amp-grid">
-        <Cell k={t('amp.k.power')} v={watts == null ? null : fmtWatts(watts)} />
-        <Cell k={SWR} v={swr == null ? null : fmtSwr(swr)} title={t('amp.swr.title')} />
         {/* Pre-ATU SWR is SPE-only; the cell is simply absent for a KPA rather than an
             eternal '—' that reads as a broken reading. */}
         {amp.swrAtu != null && (

@@ -159,7 +159,10 @@ Once it's configured and answering, rotator control appears throughout the app:
   the boxes, so the bearing, STOP and the second line show without scrolling in
   the stock rail. In a rail narrowed toward its minimum on a 1366×768 or 1600×900
   screen the second line can still be a short scroll down inside the box: drag
-  the divider under the Rotor box to give it room.
+  the divider under the Rotor box to give it room. A taller or wider box draws
+  the rose, the bearing and the elevation as big as it holds, in the middle of
+  the box; in one about as tall as it is wide, the bearing and elevation boxes
+  and STOP stand on their own line under the rose.
 - **RotorStrip in the Phone, CW, Operate, RTTY, PSK, SSTV and JS8 cockpits** — a compact heading strip.
   It **hides when there's nothing to show**, and displays **"ROTOR —"** when a
   rotator is configured but not answering, so you can tell "no rotator" from
