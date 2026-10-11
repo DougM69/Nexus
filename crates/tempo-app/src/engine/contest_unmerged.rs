@@ -1,12 +1,14 @@
 //! ⭐ **The contest contacts no session loads any more, and the Logbook does not hold — offered for
 //! the merge, never dropped.**
 //!
-//! A contest journal restore loads the last four days' rows, and keeps every older record it
-//! finds ([`FieldDayLog::aged`](tempo_core::fieldday::FieldDayLog::aged)): it used to let them go,
+//! A contest journal restore loads the session's own rows whatever their age, and keeps every
+//! record of another contest, or of another running, older than its four days
+//! ([`FieldDayLog::aged`](tempo_core::fieldday::FieldDayLog::aged)): it used to let them go,
 //! and the next contact rewrote the journal without them, so a contact never merged into the
 //! Logbook was then in no file Nexus keeps. The journal cannot see the Logbook, so this is where
-//! the two meet ([`tempo_core::contest::settle_aged`]): a contact whose copy is on disk is let go,
-//! as a merged contact always aged out; one with no copy at all is answered, for the contest screen
+//! the two meet ([`tempo_core::contest::settle_aged`]): a contact whose copy is on disk is let go
+//! once its contest's running is over, as a merged contact always aged out; one with no copy at
+//! all is answered, for the contest screen
 //! to say how many, from which contest and when, and to offer the merge
 //! ([`tempo_core::contest::plan_aged_merge`]) — the one merge there is, which never writes a
 //! contact twice.
@@ -64,6 +66,7 @@ impl Engine {
             &posid,
             copies,
             on_disk,
+            super::now_unix_secs(),
         )))
     }
 

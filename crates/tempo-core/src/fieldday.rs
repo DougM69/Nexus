@@ -519,8 +519,9 @@ struct AgedRecord {
 /// about it.
 #[derive(Clone, Debug)]
 pub(crate) struct AgedContact {
-    /// The rules-file event id of its contest; `None` for one the loaded rules do not hold.
-    pub(crate) event: Option<&'static str>,
+    /// The rules of its contest (its rules-file event id, its runnings); `None` for one the
+    /// loaded rules do not hold.
+    pub(crate) rules: Option<&'static crate::fd_rules::FdRuleset>,
     pub(crate) when_unix: u64,
     /// Its merge identity at the position asked about: `None` when it can have none — it
     /// carries no number, or names a contest the loaded rules do not hold.
@@ -662,11 +663,13 @@ pub struct FieldDayLog {
     /// when the latest of them was logged. Read from the journal's header and written back
     /// into it ([`journal_adif`](Self::journal_adif)), so it outlives the rows.
     ///
-    /// The rows go after four days, and their numbers went with them: a contact logged in
-    /// the same running five days on was numbered 1 again, so its merge name was the first
-    /// contact's and the merge took it for one already in the Logbook — as a club host
-    /// holding `(position, 1)` would have. A session of the running they were logged in
-    /// numbers on from them ([`restore_journal`](Self::restore_journal)).
+    /// An earlier build's restore let a running's rows go after four days, and their numbers
+    /// went with them: a contact logged in the same running five days on was numbered 1 again,
+    /// so its merge name was the first contact's and the merge took it for one already in the
+    /// Logbook — as a club host holding `(position, 1)` would have. A session of the running
+    /// they were logged in numbers on from them ([`restore_journal`](Self::restore_journal)).
+    /// This build lets go no row of the running it restores: the header keeps those builds'
+    /// numbers, and the numbers of the records it ages ([`aged`](Self::aged)).
     ///
     /// ⚠️ **A number kept beside the rows, where the serial run is re-derived from them**
     /// (`restore_row`), and the difference is which way each may err. A serial must follow
@@ -674,8 +677,9 @@ pub struct FieldDayLog {
     /// needed costs nothing. It holds the numbers of rows no longer in the file alone: every
     /// row still in it numbers itself.
     spent: Spent,
-    /// ⭐ **The contacts the journal keeps past its window**: the records a journal restore found
-    /// older than `min_when_unix` and never taken back ([`restore_journal`](Self::restore_journal)),
+    /// ⭐ **The contacts the journal keeps past its window**: the records of another contest, or of
+    /// another running of this one, that a journal restore found older than `min_when_unix` and
+    /// never taken back ([`restore_journal`](Self::restore_journal)),
     /// kept as the journal held them and written back by every rewrite
     /// ([`journal_adif`](Self::journal_adif)). No session's log loads them.
     ///
@@ -1833,6 +1837,11 @@ impl FieldDayLog {
         let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let mut merged = AdifMerge::default();
         let mut torn = false;
+        // Every record kept past the window, by its text, so a journal read again into this log
+        // keeps each once without a pass over all of them per record: a year of contests is tens
+        // of thousands, and the restore runs under the Engine lock.
+        let already: Vec<String> = self.aged.iter().map(|a| a.adif.clone()).collect();
+        let mut kept: HashSet<&str> = already.iter().map(String::as_str).collect();
         let bytes = body.as_bytes();
         let mut i = 0;
         // Where the record being read began: just past the last `<EOR>`.
@@ -1852,13 +1861,27 @@ impl FieldDayLog {
             let tag = &body[i + 1..end];
             i = end + 1;
             if tag.eq_ignore_ascii_case("EOR") {
-                match running.and_then(|r| self.kept_out(&cur, min_when_unix, r)) {
+                // ⭐ The restore loads this session's records whatever their age. Another
+                // contest's, or another running's, is held while it is inside the window, and
+                // past it is kept until the Logbook holds a copy (`restore_row` ages it).
+                let held = running.and_then(|r| self.kept_out(&cur, r));
+                let window = if running.is_some() && held.is_none() {
+                    0
+                } else {
+                    min_when_unix
+                };
+                match held.filter(|_| record_when(&cur) >= window) {
                     Some(why) => self.hold(why, body[record_start..i].trim_start(), &cur),
-                    None => match self.restore_row(&cur, min_when_unix) {
+                    None => match self.restore_row(&cur, window) {
                         RowFate::Restored => merged.restored += 1,
                         RowFate::NoCall => merged.unreadable += 1,
                         RowFate::Passed => {}
-                        RowFate::Aged => self.keep_aged(body[record_start..i].trim_start(), &cur),
+                        RowFate::Aged => {
+                            let record = body[record_start..i].trim_start();
+                            if kept.insert(record) {
+                                self.keep_aged(record, &cur);
+                            }
+                        }
                     },
                 }
                 cur.clear();
@@ -1898,15 +1921,19 @@ impl FieldDayLog {
     /// ([`held`](Self::held) counts them), and every rewrite of the journal carries them on
     /// ([`journal_adif`](Self::journal_adif)), so they are there for the session they belong
     /// to. Their sequence numbers stay taken: a club host or the general log holding a
-    /// rehearsal's `(position, seq)` would read a re-used one as a contact it already has. The
-    /// records older than `min_when_unix`, of any contest, are not loaded either, and are kept
-    /// the same way until a copy of each is in the Logbook ([`aged`](Self::aged)).
+    /// rehearsal's `(position, seq)` would read a re-used one as a contact it already has.
     ///
-    /// ⭐ **So do the numbers of this running's rows older than `min_when_unix`**, which the
-    /// restore lets go (`spent`): a contact logged days after the running's first ones
-    /// numbers on from them, and is merged. Only this running's: the next one's names never
-    /// meet them, and a club host starting that event empty would count numbers carried on
-    /// as contacts still to come.
+    /// ⭐ **This session's own rows are loaded whatever their age**: a sponsor takes a log for
+    /// weeks, so the Cabrillo file, the score and the dupe check of a session opened days
+    /// after the contest are the whole running's. `min_when_unix` ages only the records kept
+    /// out: one of another contest or running older than it is not held, but kept the same way
+    /// until a copy of it is in the Logbook ([`aged`](Self::aged)), its number spent.
+    ///
+    /// ⭐ **The numbers in the journal's header still count** (`spent`): an earlier build's
+    /// restore let this running's rows past its four days go, and a contact logged now numbers
+    /// on from them. Only this running's: the next one's names never meet them, and a club
+    /// host starting that event empty would count numbers carried on as contacts still to
+    /// come.
     pub fn restore_journal(&mut self, text: &str, min_when_unix: u64, now_unix: u64) -> AdifMerge {
         let running = self.ruleset().running_of(now_unix);
         let merged = self.merge_journal(text, min_when_unix, Some(running));
@@ -1958,25 +1985,21 @@ impl FieldDayLog {
         s
     }
 
-    /// Why the restore keeps `f` out of this log, or `None` to restore it (or to leave it
-    /// to [`restore_row`](Self::restore_row), which reports a record with no call and
-    /// passes one older than `min_when_unix` over, exactly as before).
+    /// Why the restore keeps `f` out of this log: it is another contest's, or another
+    /// running's of this one. `None` for one of this session's own, which the restore loads
+    /// whatever its age (and for a record with no call, which
+    /// [`restore_row`](Self::restore_row) reports).
     fn kept_out(
         &self,
         f: &std::collections::HashMap<String, String>,
-        min_when_unix: u64,
         running: u16,
     ) -> Option<Held> {
         f.get("CALL").filter(|c| !c.trim().is_empty())?;
-        let when = record_when(f);
-        if when < min_when_unix {
-            return None;
-        }
         let contest = f.get("CONTEST_ID").map_or("", |c| c.trim());
         if !contest.is_empty() && !contest.eq_ignore_ascii_case(self.session.contest_id.trim()) {
             return Some(Held::OtherContest);
         }
-        (self.ruleset().running_of(when) != running).then_some(Held::OtherRunning)
+        (self.ruleset().running_of(record_when(f)) != running).then_some(Held::OtherRunning)
     }
 
     /// Keep a journal record out of this log, and keep it.
@@ -1997,11 +2020,8 @@ impl FieldDayLog {
     }
 
     /// Keep a journal record older than the restore's window, as the journal held it
-    /// ([`aged`](Self::aged)).
+    /// ([`aged`](Self::aged)). Once: `merge_journal` passes over one already kept.
     fn keep_aged(&mut self, adif: &str, f: &std::collections::HashMap<String, String>) {
-        if self.aged.iter().any(|a| a.adif == adif) {
-            return;
-        }
         self.aged.push(AgedRecord {
             adif: adif.to_string(),
             contest_id: f.get("CONTEST_ID").map_or("", |c| c.trim()).to_string(),
@@ -2045,7 +2065,7 @@ impl FieldDayLog {
                     .map(|rs| (rs.contest_id, rs))
                 };
                 AgedContact {
-                    event: contest.map(|(_, rs)| rs.event),
+                    rules: contest.map(|(_, rs)| rs),
                     when_unix: a.when_unix,
                     identity: contest.filter(|_| a.seq > 0).map(|(id, rs)| {
                         crate::contest::MergeIdentity::of_contest(id, rs, posid, a.seq, a.when_unix)
@@ -2074,6 +2094,7 @@ impl FieldDayLog {
     /// [`aged_contacts`](Self::aged_contacts): the next rewrite of the journal leaves them out.
     /// Their numbers stay spent.
     pub(crate) fn let_go_aged(&mut self, at: &[usize]) {
+        let at: HashSet<usize> = at.iter().copied().collect();
         let mut i = 0;
         self.aged.retain(|_| {
             i += 1;

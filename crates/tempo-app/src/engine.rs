@@ -14236,9 +14236,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Restore the durable FD journal into the fresh station — entering Field
         // Day used to build an EMPTY log, so a restart (or a run↔S&P toggle)
         // mid-event dropped every contact and the next exit flush overwrote the
-        // backup with just the new session. Rows older than 4 days are a
-        // previous event's journal and self-expire.
+        // backup with just the new session. The session's own contacts come back whatever
+        // their age; another contest's, or another running's, stay out of its log, and past
+        // the journal's four days are kept until the Logbook holds them
+        // (`FieldDayLog::restore_journal`).
         if let Mode::FieldDay { station, .. } = &mut self.mode {
+            let window = now_unix_secs().saturating_sub(4 * 86_400);
             if let Some(path) = &self.station.fd_log_path {
                 // The flush at the top of this call handed the journal to its thread; read it
                 // back once it is on disk. The wait is the one the write used to make here.
@@ -14246,7 +14249,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 restore_fd_journal(
                     &mut station.log,
                     path,
-                    now_unix_secs().saturating_sub(4 * 86_400),
+                    window,
                     carried.as_deref(),
                     now_unix_secs() as i64,
                 );
@@ -14258,12 +14261,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // earliest restored contact as the start when it is earlier, never later:
             // widening the window can only under-report a dupe, which is the safe
             // direction, while narrowing it refuses nothing but hides real ones.
+            // Only a contact inside the journal's four days moves it: the rows read before the
+            // session opened reach no further back (`SESSION_READ_WINDOW`), and an older one of
+            // the session's own is in the contest log's dupe index already (`session_b4`).
             if let Some(first) = station
                 .log
                 .qsos()
                 .iter()
                 .map(|q| q.when_unix)
-                .filter(|&w| w > 0)
+                .filter(|&w| w >= window)
                 .min()
             {
                 station.log.session.start_unix = station.log.session.start_unix.min(first);
@@ -27053,10 +27059,10 @@ fn report_in(msg: Option<Msg>) -> Option<i32> {
 
 /// How far back a contest session's rows are read before the command that opens it
 /// ([`Engine::session_read`]). A new session starts now, or at its oldest contact restored from
-/// the Field Day journal if that is earlier — and the journal gives back only the last four
-/// days ([`Engine::set_mode`] merges it from `now - 4 days`). So four days reach every row a
-/// session can hold, and the hour on top absorbs a clock step between the read and the switch.
-/// A test pins the journal's window to this one.
+/// the Field Day journal's last four days if that is earlier ([`Engine::set_mode`]: the session's
+/// older contacts come back too, and start nothing). So four days reach back to every session's
+/// start, and the hour on top absorbs a clock step between the read and the switch. A test pins
+/// the journal's window to this one.
 pub const SESSION_READ_WINDOW: u64 = 4 * 86_400 + 3_600;
 
 /// What a command that opens a contest session answers when the session's rows could not be read
@@ -27257,11 +27263,12 @@ pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
     engine_lock(engine).station_mut().log_plan()
 }
 
-/// Restore the Field Day journal at `path` into the fresh contest log `log` (rows from before
-/// `min_when_unix` self-expire). A journal this build cannot read in full, whether cut off
-/// mid-record, a record with no call, bytes that are not UTF-8, or a file it cannot open, is
-/// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
-/// rewrites the journal from the log, which would drop the rest for good.
+/// Restore the Field Day journal at `path` into the fresh contest log `log` (the session's own
+/// rows whatever their age; `min_when_unix` ages only the rest). A journal this build cannot
+/// read in full, whether cut off mid-record, a record with no call, bytes that are not UTF-8, or
+/// a file it cannot open, is kept aside ([`tempo_core::keep_aside`]) once the rows it could read
+/// are in: the next contact rewrites the journal from the log, which would drop the rest for
+/// good.
 ///
 /// Only the session's own rows are loaded: its contest's, from the running of it `now_unix`
 /// belongs to ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). The rest — a

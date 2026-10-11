@@ -593,6 +593,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Contest screen says how many, from which contest and when they were logged, with a button that
   merges them. Pressing it twice adds nothing twice. Contacts already merged leave the journal as
   before, and a contact you took back stays taken back.
+- **A contest's log now holds every contact of that contest, however long ago it was logged.** It
+  loaded only its last four days, so a QSO party opened a week later held none of the party's
+  contacts: its Cabrillo and ADIF exports, its score and its dupe check had none of them, and
+  sponsors take logs for weeks. The Contest screen, both exports and the dupe check now see the
+  whole contest, so a log exported a week or a month later is complete. Another contest's
+  contacts, and the same contest's next year, still stay out of it.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

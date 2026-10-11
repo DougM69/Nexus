@@ -209,7 +209,7 @@ All three mode classes write into the **same unified FD log**, so the live score
 
 ### Contest Log Persistence
 
-The contest log survives restarts: every logged contact is journaled to `fieldday_backup.adi` (beside `settings.json`), and the journal is restored automatically whenever Contest mode puts the station back in the contest — a mid-event quit, crash, or Run/Search-and-Pounce switch loses nothing. Entries from a previous event (older than 4 days) are not restored, so the journal self-expires between events.
+The contest log survives restarts: every logged contact is journaled to `fieldday_backup.adi` (beside `settings.json`), and the journal is restored automatically whenever Contest mode puts the station back in the contest — a mid-event quit, crash, or Run/Search-and-Pounce switch loses nothing. Every contact of the running you are in comes back, however long ago it was logged, so a log exported a week or a month after the contest is complete. An earlier event's contacts are not restored.
 
 Only the session's own contacts are restored: the contest you are entering, logged from 24 hours before this running of it starts. A rehearsal on an earlier day, or another contest worked in the last four days, stays in the journal untouched and out of this log, and the Contest screen says how many contacts it kept out and why. A gear test within 24 hours of the start is part of the event's log; to start clean after one, delete `fieldday_backup.adi` (with Nexus closed, or at least with Contest mode off — the next contact logged with it on re-writes the whole journal from memory).
 

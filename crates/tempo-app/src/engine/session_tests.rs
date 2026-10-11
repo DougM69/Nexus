@@ -186,10 +186,11 @@ fn the_tx_gate_answers_alike_after_a_switch_through_the_wrap() {
 
 /// ⛔ The read before a session opens reaches back `SESSION_READ_WINDOW`, and that is enough
 /// only while no session can start earlier. A new session starts no earlier than its oldest
-/// contact restored from the Field Day journal, and `set_mode` restores only the last four days.
-/// This pins the two together: a contact just inside four days is restored and starts the
-/// session, and one past the read's reach is not. Should the journal ever keep more, the older
-/// contact starts the session before the rows read for it reach, and this fails.
+/// contact restored from the Field Day journal's last four days: `set_mode` restores the
+/// session's older contacts too, and they start nothing. This pins the two together: a contact
+/// just inside four days starts the session, and one past the read's reach is in its log (when it
+/// is the session's running) and starts nothing. Should an older contact ever start the session,
+/// it starts before the rows read for it reach, and this fails.
 #[test]
 fn a_session_starts_no_earlier_than_the_rows_read_for_it_reach() {
     let d = Dir::new("session-window");
@@ -214,9 +215,11 @@ fn a_session_starts_no_earlier_than_the_rows_read_for_it_reach() {
         start >= now - SESSION_READ_WINDOW,
         "the session starts inside the rows read for it"
     );
-    assert!(
-        !station.log.qsos().iter().any(|q| q.call == "K2ABC"),
-        "the contact past the read's reach is not restored"
+    let rs = station.log.ruleset();
+    assert_eq!(
+        station.log.qsos().iter().any(|q| q.call == "K2ABC"),
+        rs.running_of(past) == rs.running_of(now),
+        "the contact past the read's reach is in the log when it is the session's running"
     );
 }
 

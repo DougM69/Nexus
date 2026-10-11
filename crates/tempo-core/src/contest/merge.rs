@@ -335,8 +335,11 @@ pub struct Unmerged {
 ///
 /// `copies` is every merged copy the Logbook holds, as [`plan_merge`] takes them, and `on_disk`
 /// those of them already on disk. A contact whose copy is on disk, made at the contact's own
-/// time, is let go ([`FieldDayLog::let_go_aged`]): it ages out of the journal as a merged contact
-/// always did. A contact no copy names is answered, by contest, for the contest screen to offer
+/// time, is let go ([`FieldDayLog::let_go_aged`]) once its contest's running is over at
+/// `now_unix`: it ages out of the journal as a merged contact always did. ⭐ Until then it stays,
+/// copy or no copy: a session of its contest loads it whatever its age, and that contest's log
+/// and the files exported from it hold the whole running. A contact no copy names is answered,
+/// by contest, for the contest screen to offer
 /// its merge ([`plan_aged_merge`]). Any other is kept and not offered: its copy is still on its
 /// way to disk, or names it at another time — the copy's time was changed in the Logbook, or the
 /// copy is another contact's, whose number an earlier build gave this one again.
@@ -349,16 +352,20 @@ pub fn settle_aged(
     posid: &str,
     copies: &[(String, u64)],
     on_disk: &[(String, u64)],
+    now_unix: u64,
 ) -> Vec<Unmerged> {
     let (copies, on_disk) = (by_seq(copies), by_seq(on_disk));
     let mut gone = Vec::new();
     let mut unmerged: Vec<Unmerged> = Vec::new();
     for (at, c) in log.aged_contacts(posid).into_iter().enumerate() {
-        let (Some(id), Some(event)) = (c.identity, c.event) else {
+        let (Some(id), Some(rules)) = (c.identity, c.rules) else {
             continue;
         };
+        let event = rules.event;
         if named(&on_disk, &id, Some(c.when_unix)) {
-            gone.push(at);
+            if rules.running_of(now_unix) != rules.running_of(c.when_unix) {
+                gone.push(at);
+            }
         } else if !named(&copies, &id, None) {
             match unmerged.iter_mut().find(|u| u.event == event) {
                 Some(u) => {
@@ -400,7 +407,7 @@ pub fn plan_aged_merge(
         .into_iter()
         .enumerate()
         .filter(|(_, c)| {
-            c.event == Some(event)
+            c.rules.is_some_and(|rs| rs.event == event)
                 && c.identity
                     .as_ref()
                     .is_some_and(|id| !named(&there, id, None))

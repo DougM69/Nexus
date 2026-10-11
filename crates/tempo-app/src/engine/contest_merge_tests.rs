@@ -730,9 +730,13 @@ fn i_moved_keeps_each_contacts_county_across_a_restart() {
 }
 
 /// ⭐ **A contact logged five days after the first ones is merged, once.** The journal restore
-/// reaches back four days, and the contact numbers went with the rows it let go: five days on,
+/// reached back four days, and the contact numbers went with the rows it let go: five days on,
 /// the next contact was numbered 1 again, its name was the first contact's, and the merge
 /// counted it already in the Logbook and wrote nothing.
+///
+/// Updated to the restore that loads the running's own rows whatever their age: its premise was
+/// that five days on neither of the first two was restored, and now both are in the session's log
+/// (and in the Logbook already), so the new contact numbers on from them.
 ///
 /// The first two are made five days back by the clock, in the running the contest is in now:
 /// the Illinois QSO Party, or Field Day in the five days after the party's running begins
@@ -786,12 +790,17 @@ fn a_contact_logged_five_days_on_is_merged_once() {
     std::fs::write(d.0.join("fieldday.adi"), first.journal_adif()).expect("the journal");
     let s = quit(e);
 
-    // Today: both are past the journal's four days, and one new contact is merged, once.
+    // Today: both are past the journal's four days and in the session's log, and one new
+    // contact is merged, once.
     let mut e = launch(&d, &s);
-    assert!(contest_calls(&e).is_empty(), "PREMISE: none restored");
+    assert_eq!(
+        contest_calls(&e),
+        ["K9AAA", "W9BBB"],
+        "the session's own, five days on"
+    );
     assert!(e.contest_log_manual("N9CCC", &rx, "CW", None).unwrap());
-    assert_eq!(merge(&mut e), (1, 0), "the new contact is merged");
-    assert_eq!(merge(&mut e), (0, 1), "once");
+    assert_eq!(merge(&mut e), (1, 2), "the new contact is merged");
+    assert_eq!(merge(&mut e), (0, 3), "once");
     assert_eq!(calls(&e), ["K9AAA", "W9BBB", "N9CCC"]);
 }
 
@@ -810,11 +819,12 @@ fn journal_calls(d: &Dir) -> Vec<String> {
         .collect()
 }
 
-/// Two contacts of the Illinois QSO Party logged five days back by the clock, journaled and
-/// never merged — the journal on disk as the session that logged them left it. Their log, and
-/// when the first was logged.
-fn never_merged_five_days_back(d: &Dir, e: &Engine) -> (tempo_core::fieldday::FieldDayLog, u64) {
-    let then = now_unix_secs() - 5 * 86_400;
+/// Two contacts of the Illinois QSO Party's previous running, logged 400 days back by the clock
+/// (past the journal's window, and another running's whatever the date), journaled and never
+/// merged — the journal on disk as the session that logged them left it. Their log, and when the
+/// first was logged.
+fn never_merged_last_running(d: &Dir, e: &Engine) -> (tempo_core::fieldday::FieldDayLog, u64) {
+    let then = now_unix_secs() - 400 * 86_400;
     let Mode::FieldDay { station, .. } = &e.mode else {
         panic!("the contest runs")
     };
@@ -826,23 +836,29 @@ fn never_merged_five_days_back(d: &Dir, e: &Engine) -> (tempo_core::fieldday::Fi
     let rx = [("RST", "599"), ("QTH", "COOK")].map(|(k, v)| (k.to_string(), v.to_string()));
     assert!(first.log_fields_at("K9AAA", &rx, "CW", "", 0, then));
     assert!(first.log_fields_at("W9BBB", &rx, "CW", "", 0, then + 60));
+    assert_ne!(
+        first.ruleset().running_of(then),
+        first.ruleset().running_of(now_unix_secs()),
+        "PREMISE: another running"
+    );
     std::fs::write(d.0.join("fieldday.adi"), first.journal_adif()).expect("the journal");
     (first, then)
 }
 
-/// ⭐ **A contact never merged stays in the contest journal five days on, when the next one is
-/// logged.** The restore reaches back four days, and the next contact wrote the journal again
-/// from what the restore had loaded, so a tester who forgot Merge and logged again five days
-/// later lost those contacts from Nexus entirely.
+/// ⭐ **A contact never merged stays in the contest journal when the next one is logged, a running
+/// on.** The restore reached back four days, and the next contact wrote the journal again from
+/// what the restore had loaded, so a tester who forgot Merge and logged again five days later lost
+/// those contacts from Nexus entirely. The running's own are in its log now, whatever their age;
+/// another running's are kept in the journal.
 #[test]
-fn a_contact_never_merged_stays_in_the_journal_when_one_is_logged_five_days_on() {
-    let d = Dir::new("contest-unmerged-five-days-on");
+fn a_contact_never_merged_stays_in_the_journal_when_the_next_running_logs_one() {
+    let d = Dir::new("contest-unmerged-next-running");
     let e = launch(&d, &ilqp_settings());
-    never_merged_five_days_back(&d, &e);
+    never_merged_last_running(&d, &e);
     let s = quit(e);
 
     let mut e = launch(&d, &s);
-    assert!(contest_calls(&e).is_empty(), "PREMISE: none restored");
+    assert!(contest_calls(&e).is_empty(), "PREMISE: another running's");
     party(&mut e, "N9CCC", "DUPG");
     quit(e);
     assert_eq!(journal_calls(&d), ["N9CCC", "K9AAA", "W9BBB"]);
@@ -875,7 +891,7 @@ fn merge_offered(e: Engine, event: &str) -> (Engine, (usize, usize)) {
 fn a_contact_never_merged_is_offered_and_one_press_merges_it_once() {
     let d = Dir::new("contest-unmerged-offered");
     let e = launch(&d, &ilqp_settings());
-    let (_, then) = never_merged_five_days_back(&d, &e);
+    let (_, then) = never_merged_last_running(&d, &e);
     let s = quit(e);
 
     let mut e = launch(&d, &s);
@@ -929,13 +945,13 @@ fn a_contact_never_merged_is_offered_and_one_press_merges_it_once() {
 }
 
 /// The control: **a contact merged before it aged out still leaves the journal**, once the
-/// contest screen has asked the Logbook — as every merged contact past the journal's four days
-/// left it before. Until then it is kept, which loses nothing.
+/// contest screen has asked the Logbook and its running is over — as every merged contact past
+/// the journal's four days left it before. Until then it is kept, which loses nothing.
 #[test]
 fn a_contact_merged_before_it_aged_out_still_leaves_the_journal() {
     let d = Dir::new("contest-unmerged-merged-before");
     let mut e = launch(&d, &ilqp_settings());
-    let (first, _) = never_merged_five_days_back(&d, &e);
+    let (first, _) = never_merged_last_running(&d, &e);
     let mut lb = tempo_core::logbook::Logbook::new();
     tempo_core::contest::merge_into_general(&first, POS, &mut lb);
     let copies: Vec<QsoRecord> = lb
@@ -996,7 +1012,7 @@ fn racing<T>(
 /// The two never merged, then merged from the offer and on disk after a relaunch.
 fn merged_from_the_offer(d: &Dir) -> Engine {
     let e = launch(d, &ilqp_settings());
-    never_merged_five_days_back(d, &e);
+    never_merged_last_running(d, &e);
     let s = quit(e);
     let (e, _) = offered(launch(d, &s));
     let (e, merged) = merge_offered(e, "ilqp");
@@ -1063,7 +1079,7 @@ fn a_copy_whose_delete_is_on_its_way_lets_no_contact_go() {
 fn a_contact_merged_elsewhere_while_the_merge_is_planned_is_written_once() {
     let d = Dir::new("contest-unmerged-race-merge");
     let e = launch(&d, &ilqp_settings());
-    let (first, _) = never_merged_five_days_back(&d, &e);
+    let (first, _) = never_merged_last_running(&d, &e);
     let s = quit(e);
     let (e, offer) = offered(launch(&d, &s));
     assert_eq!(offer.iter().map(|u| u.count).sum::<usize>(), 2, "PREMISE");
@@ -1098,7 +1114,7 @@ fn a_contact_merged_elsewhere_while_the_merge_is_planned_is_written_once() {
 fn a_copy_still_on_its_way_to_disk_lets_no_contact_go() {
     let d = Dir::new("contest-unmerged-on-its-way");
     let e = launch(&d, &ilqp_settings());
-    never_merged_five_days_back(&d, &e);
+    never_merged_last_running(&d, &e);
     let s = quit(e);
     let (mut e, _) = offered(launch(&d, &s));
     party(&mut e, "N9CCC", "DUPG");
@@ -1125,7 +1141,7 @@ fn a_copy_still_on_its_way_to_disk_lets_no_contact_go() {
 fn the_running_contests_contacts_are_merged_whatever_settings_say_since() {
     let d = Dir::new("contest-unmerged-settings-since");
     let e = launch(&d, &ilqp_settings());
-    never_merged_five_days_back(&d, &e);
+    never_merged_last_running(&d, &e);
     let s = quit(e);
     let (mut e, _) = offered(launch(&d, &s));
     save(&mut e, |s| s.contest_qth_county = String::new());
@@ -1133,4 +1149,173 @@ fn the_running_contests_contacts_are_merged_whatever_settings_say_since() {
     let (e, merged) = merge_offered(e, "ilqp");
     assert_eq!(merged, (2, 0));
     assert_eq!(calls(&e), ["K9AAA", "W9BBB"]);
+}
+
+// ---- the contest's log holds the whole contest, whatever its age -------------------------
+
+/// A contest whose running holds the last thirty days and the next hour, by the clock: the
+/// Illinois QSO Party, or Field Day while the party's running is under thirty days old (the two
+/// runnings begin four months apart). Its settings, and what a station of it is received with.
+fn a_running_thirty_days_long() -> (Settings, [(String, String); 2]) {
+    let now = now_unix_secs();
+    let ilqp =
+        tempo_core::fd_rules::ruleset_by_id("ilqp", tempo_core::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+    let (s, rx) = if ilqp.running_of(now - 30 * 86_400) == ilqp.running_of(now + 3_600) {
+        (ilqp_settings(), [("RST", "599"), ("QTH", "COOK")])
+    } else {
+        (field_day_settings(), [("CLASS", "2A"), ("SECTION", "EMA")])
+    };
+    (s, rx.map(|(k, v)| (k.to_string(), v.to_string())))
+}
+
+/// ⭐ **A contest's contacts logged five, ten and thirty days back are all in its log after a
+/// restart**: the Contest screen's rows, count and score, the Cabrillo and ADIF exports, and the
+/// dupe check, as the session that logged them left them. The restore loaded only the journal's
+/// last four days, so the contest's own export a week on held none of them. The restore writes
+/// nothing to the Logbook.
+#[test]
+fn a_contests_contacts_five_ten_and_thirty_days_back_are_all_in_its_log_after_a_restart() {
+    let (s, rx) = a_running_thirty_days_long();
+    let now = now_unix_secs();
+    let d = Dir::new("contest-log-whole-running");
+    let e = launch(&d, &s);
+    assert!(
+        contest_calls(&e).is_empty(),
+        "CONTROL: a fresh contest starts empty"
+    );
+    let mut first = {
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("the contest runs")
+        };
+        tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            station.log.session.clone(),
+            &station.log.band,
+        )
+    };
+    for (call, days) in [("K9AAA", 30), ("W9BBB", 10), ("N9CCC", 5)] {
+        assert!(first.log_fields_at(call, &rx, "CW", "", 0, now - days * 86_400));
+    }
+    assert_eq!(
+        first.ruleset().running_of(now - 30 * 86_400),
+        first.ruleset().running_of(now + 3_600),
+        "PREMISE: one running"
+    );
+    std::fs::write(d.0.join("fieldday.adi"), first.journal_adif()).expect("the journal");
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    assert_eq!(
+        fd.log.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
+        ["K9AAA", "W9BBB", "N9CCC"],
+        "the Contest screen's rows"
+    );
+    assert_eq!(fd.qso_count, 3);
+    let (points, _, mults, scored) = first
+        .ruleset()
+        .scoring
+        .score(first.score_rows(), s.fd_power_mult);
+    assert!(points > 0, "PREMISE: the contacts score");
+    assert_eq!(
+        (fd.points, fd.mult_count, fd.powered_points),
+        (points, mults, scored),
+        "the score"
+    );
+    let dial = (s.dial_mhz * 1000.0).round() as u32;
+    let lines: Vec<String> = first
+        .cabrillo(dial)
+        .expect("one entry")
+        .lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines.len(), 3, "PREMISE: three QSO lines");
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo export");
+    assert_eq!(
+        e.export_log("adif"),
+        Ok(first.submission_adif()),
+        "the ADIF export"
+    );
+    assert!(
+        calls(&e).is_empty(),
+        "the restore wrote nothing to the Logbook"
+    );
+    assert_eq!(
+        e.contest_log_manual("K9AAA", &rx, "CW", None),
+        Ok(false),
+        "the dupe check: K9AAA worked again thirty days on"
+    );
+}
+
+/// The New York QSO Party, worked from Albany County: a contest other than either one
+/// [`a_running_thirty_days_long`] picks.
+fn nyqp_settings() -> Settings {
+    let mut s = ilqp_settings();
+    s.fd_event = "nyqp".into();
+    s.contest_qth_state = "NY".into();
+    s.contest_qth_county = "ALB".into();
+    s
+}
+
+/// ⭐ **Another contest's Contest screen lets none of a contest's contacts go while its running
+/// lasts.** The contest's two contacts five days back, merged; the New York QSO Party opened, its
+/// screen asking the Logbook and a contact logged; then the contest again: its log and its
+/// Cabrillo file hold both. The other contest's screen let the merged ones go, and its journal
+/// was written without them, so the contest's own file exported after that held none of them.
+#[test]
+fn another_contests_screen_lets_none_of_a_contests_contacts_go_while_its_running_lasts() {
+    let (s, rx) = a_running_thirty_days_long();
+    let then = now_unix_secs() - 5 * 86_400;
+    let d = Dir::new("contest-log-another-contest-between");
+    let mut e = launch(&d, &s);
+    let mut first = {
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("the contest runs")
+        };
+        tempo_core::fieldday::FieldDayLog::new(
+            "W9XYZ",
+            station.log.session.clone(),
+            &station.log.band,
+        )
+    };
+    assert!(first.log_fields_at("K9AAA", &rx, "CW", "", 0, then));
+    assert!(first.log_fields_at("W9BBB", &rx, "CW", "", 0, then + 60));
+    let mut lb = tempo_core::logbook::Logbook::new();
+    tempo_core::contest::merge_into_general(&first, POS, &mut lb);
+    let copies: Vec<QsoRecord> = lb
+        .records()
+        .iter()
+        .map(|r| {
+            let mut r = QsoRecord::clone(r);
+            r.id = None;
+            r
+        })
+        .collect();
+    e.station.append(copies, false);
+    std::fs::write(d.0.join("fieldday.adi"), first.journal_adif()).expect("the journal");
+    let s = quit(e);
+
+    let (mut e, offer) = offered(launch(&d, &nyqp_settings()));
+    assert!(offer.is_empty(), "PREMISE: both in the Logbook: {offer:?}");
+    party(&mut e, "K2AAA", "SUF");
+    quit(e);
+    assert_eq!(
+        journal_calls(&d),
+        ["K2AAA", "K9AAA", "W9BBB"],
+        "kept while the contest's running lasts"
+    );
+
+    let e = launch(&d, &s);
+    assert_eq!(contest_calls(&e), ["K9AAA", "W9BBB"], "the contest's log");
+    let dial = (s.dial_mhz * 1000.0).round() as u32;
+    let lines: Vec<String> = first
+        .cabrillo(dial)
+        .expect("one entry")
+        .lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(qso_lines(&e), lines, "its Cabrillo file");
 }
