@@ -1084,6 +1084,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went back to sorting by Need, Band Activity to Time, and the Stations list to All with its search
   cleared. They now stay as you set them, both ways. They still start from those defaults when Nexus
   starts.
+- **Checking the score no longer stops an FT8/FT4 contest run.** Opening the Contest screen put the
+  FT8/FT4 sequencer back in S&P every time, so a station running CQ stopped calling CQ, and a
+  contact being worked in S&P was dropped. A station already in the contest, running or in S&P, now
+  stays as it was; coming from another mode, the screen still starts the contest in S&P and never
+  calls CQ.
 
 ## [1.17.0] — 2026-10-07
 

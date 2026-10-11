@@ -191,7 +191,7 @@ When the FD workspace is open and a digital contact is in progress, the TempoFas
 - **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → logs the QSO.
 - **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log.
 
-Opening **Contest** in the left bar with Contest mode on always starts in **Search-and-Pounce**; with the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
+Opening **Contest** in the left bar with Contest mode on, coming from another mode, starts the contest in **Search-and-Pounce**; it never starts calling CQ. If you are already in the contest, running or in S&P, it opens the screen and leaves you as you were: a run keeps calling CQ while you check the score, and a contact in progress carries on. With the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
 
 The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while Contest mode is on. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
