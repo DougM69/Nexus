@@ -5718,18 +5718,20 @@ impl Settings {
         repaired
     }
 
-    /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW and RTTY contest keys, as
-    /// in N1MM's default message sets. In the CW and RTTY contest sets it traded keys with B4, now
-    /// on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW F5 sends his
-    /// call, and a recording cannot say a callsign. The voice keyer gains an F8 slot for it.
+    /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW, RTTY and PSK contest
+    /// keys, as in N1MM's default message sets. In the CW, RTTY and PSK contest sets it traded keys
+    /// with B4, now on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW
+    /// F5 sends his call, and a recording cannot say a callsign. The voice keyer gains an F8 slot
+    /// for it.
     ///
     /// A settings file from before has no F8 in the voice keyer, which is how this knows it has not
     /// run: the keyer gains F8, empty and labelled AGN, and once the file has an F8 this does
     /// nothing. What moves, moves with its message, so each key the operator set up sends what it
     /// sent before:
     ///
-    /// * RTTY's contest set: the keys the operator changed there trade F7 and F8 with the
-    ///   built-ins, and so does that set's step map. Everyday and PSK do not move.
+    /// * RTTY's and PSK's contest sets: the keys the operator changed there trade F7 and F8 with
+    ///   the built-ins, and so does RTTY's step map for its set (PSK has no ESM). Everyday does not
+    ///   move, in either mode.
     /// * CW: the step map of a profile on the built-in sets trades F7 and F8 with them (a Reset
     ///   keeps the map a profile had, and the cockpit reads it over the built-in sets). A profile
     ///   with macros of its own is its own layout, and does not move.
@@ -5769,7 +5771,12 @@ impl Settings {
                 profile.esm_roles.iter_mut().for_each(Self::trade_f7_f8);
             }
         }
-        for set in &mut self.macros.rtty_profiles {
+        for set in self
+            .macros
+            .rtty_profiles
+            .iter_mut()
+            .chain(&mut self.macros.psk_profiles)
+        {
             if set.name == "contest" {
                 Self::trade_f7_f8_entries(&mut set.macros);
             }
@@ -13603,11 +13610,12 @@ mod agn_f8_tests {
         assert!(!Path::new(&wav(&dir, 8)).exists());
     }
 
-    /// RTTY's contest set: the keys the operator changed there trade F7 and F8 with the built-ins,
-    /// in F-key order, and so does the set's step map, so each text of theirs stays on its message
-    /// and Enter sends what it sent before. Everyday's keys and map, and PSK's, do not move.
+    /// RTTY's and PSK's contest sets: the keys the operator changed there trade F7 and F8 with the
+    /// built-ins, in F-key order, and so does RTTY's step map (PSK has no ESM), so each text of
+    /// theirs stays on its message and Enter sends what it sent before. Everyday's keys and map do
+    /// not move, in either mode.
     #[test]
-    fn rtty_contest_keys_the_operator_changed_stay_on_their_messages() {
+    fn rtty_and_psk_contest_keys_the_operator_changed_stay_on_their_messages() {
         let (dir, mut s) = old_station("rtty", false, None);
         s.macros.rtty_profiles = vec![
             KeyboardMacroProfile {
@@ -13630,12 +13638,20 @@ mod agn_f8_tests {
             ),
             ("everyday".to_string(), roles(&[("again", &["F7"])])),
         ]));
-        s.macros.psk_profiles = vec![KeyboardMacroProfile {
-            name: "contest".into(),
-            macros: vec![key("F7", "AGN", "agn? agn? k")],
-        }];
+        s.macros.psk_profiles = vec![
+            KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![
+                    key("F7", "AGN", "agn? agn? k"),
+                    key("F8", "B4", "{CALL} b4"),
+                ],
+            },
+            KeyboardMacroProfile {
+                name: "everyday".into(),
+                macros: vec![key("F8", "QRZ", "qrz?")],
+            },
+        ];
         let mut s = round_trip(&dir, &s);
-        let psk_before = s.macros.psk_profiles.clone();
         assert!(s.move_agn_to_f8());
         let s = round_trip(&dir, &s);
         assert_eq!(
@@ -13665,7 +13681,22 @@ mod agn_f8_tests {
                 ("everyday".to_string(), roles(&[("again", &["F7"])])),
             ]))
         );
-        assert_eq!(s.macros.psk_profiles, psk_before, "PSK does not move");
+        assert_eq!(
+            s.macros.psk_profiles,
+            vec![
+                KeyboardMacroProfile {
+                    name: "contest".into(),
+                    macros: vec![
+                        key("F7", "B4", "{CALL} b4"),
+                        key("F8", "AGN", "agn? agn? k")
+                    ],
+                },
+                KeyboardMacroProfile {
+                    name: "everyday".into(),
+                    macros: vec![key("F8", "QRZ", "qrz?")],
+                },
+            ]
+        );
     }
 
     /// One key changed on its own takes the other key, so it stays on its message.

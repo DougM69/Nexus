@@ -302,12 +302,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
-- **AGN is now F8 in the Phone, CW and RTTY contest keys, as in N1MM's default message sets.** In
-  the CW contest and Field Day sets and RTTY's Contest set, AGN and B4 trade keys: F8 asks for a
-  repeat and F7 sends `<his call> QSO B4`. No other key moves. Habit is the risk: F7 pressed for a
-  repeat now sends QSO B4. Your own texts go with their messages: an RTTY Contest key you changed
-  on F7 or F8 moves to the other key, and so does a step you mapped there for Enter Sends Message;
-  a CW macro profile of your own keeps its keys. In Phone the voice keyer has a new slot, F8 AGN,
+- **AGN is now F8 in the Phone, CW, RTTY and PSK contest keys, as in N1MM's default message sets.**
+  In the CW contest and Field Day sets and the RTTY and PSK Contest sets, AGN and B4 trade keys: F8
+  asks for a repeat and F7 sends `<his call> QSO B4`. No other key moves. Habit is the risk: F7
+  pressed for a repeat now sends QSO B4. Your own texts go with their messages: an RTTY or PSK
+  Contest key you changed on F7 or F8 moves to the other key, and so does a step you mapped there
+  for Enter Sends Message; a CW macro profile of your own keeps its keys. In Phone the voice keyer has a new slot, F8 AGN,
   which Enter Sends Message plays when you need a repeat, and F5 is yours: on CW F5 sends his
   call, and a recording cannot say one. If you ran Enter Sends Message in Phone in a test build,
   where AGN was on F5, the update copies that recording to F8 and leaves F5 empty; a recording in
