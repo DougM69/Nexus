@@ -175,6 +175,34 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
   })
 })
 
+// The upload ticks read `qrz`, `clublog`, `eqsl`…: the engine's ids, the last raw ids on the
+// screen. Each now shows the service's own name, the one the app uses elsewhere; what is
+// stored is still the id.
+describe('the upload ticks name the services', () => {
+  it('shows each service by its own name, and a tick still stores the id', async () => {
+    const available = ['qrz', 'clublog', 'eqsl', 'hrdlog', 'n3fjp', 'cloudlog', 'wrl']
+    await show(FD({ upload: { enabled: false, destinations: [], available, hint: HINT } }))
+    expect([...document.querySelectorAll('.fd-upload-dest')].map((n) => n.textContent)).toEqual([
+      'QRZ',
+      'Club Log',
+      'eQSL',
+      'HRDLog',
+      'N3FJP',
+      'Cloudlog',
+      'WRL',
+    ])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Club Log' }))
+    })
+    expect(fdSetUpload).toHaveBeenLastCalledWith(false, ['clublog'])
+  })
+
+  it('shows a service this build has no name for by its id', async () => {
+    await show(FD({ upload: { enabled: false, destinations: [], available: ['newlog'], hint: HINT } }))
+    expect(document.querySelector('.fd-upload-dest')!.textContent).toBe('newlog')
+  })
+})
+
 // jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what is
 // under it.
 describe('a press through the Remote stream merges nothing', () => {

@@ -18,12 +18,18 @@ import { t } from '../i18n'
 export const REMOVE_CONFIRM_MS = 5000
 
 /** The services a merged copy can be uploaded to, by the engine's ids — product names, never
- *  translated. */
-const SERVICE_NAMES: Record<string, string> = {
+ *  translated, spelled as the app names each service elsewhere. The removal text names the
+ *  services holding a copy by these, and the contest screen's upload ticks the services one
+ *  can go to. */
+export const SERVICE_NAMES: Record<string, string> = {
   lotw: 'LoTW',
   qrz: 'QRZ',
   clublog: 'Club Log',
   eqsl: 'eQSL',
+  hrdlog: 'HRDLog',
+  n3fjp: 'N3FJP',
+  cloudlog: 'Cloudlog',
+  wrl: 'WRL',
 }
 
 export interface NewestContact {
