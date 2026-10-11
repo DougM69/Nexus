@@ -54,6 +54,10 @@ pub mod remote_selection;
 mod remote_settings;
 pub mod remote_stream;
 pub mod remote_transmit;
+/// A restored backup opens its contest session as a settings save does. Debug builds only, like
+/// `session_tests`: they read the debug build's counters.
+#[cfg(all(test, debug_assertions))]
+mod restore_session_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
@@ -26878,6 +26882,32 @@ pub fn with_session_rows_at_launch<T>(
 ) -> Result<T, String> {
     session_rows_within(engine, opens, then, 3, crate::logstore::SESSION_READ_WAIT)
         .map_err(|()| SESSION_NOT_RESUMED.to_string())
+}
+
+/// ★ A restored backup applied ([`Engine::apply_restored_settings`]) with the contest session it
+/// opens, as a settings save opens one: a bundle that turns Contest mode on, or moves the pick
+/// off the contest running, asks [`Engine::save_opens_session`], and [`with_session_rows`] reads
+/// the session's rows first and builds its dupe sweep from them in the same hold as the restore.
+/// `then` runs in that hold too, after the restore — the shell persists there. When the logbook
+/// is too busy to read the rows, the restore is refused whole with [`SESSION_BUSY`], the Save's
+/// own words: neither it nor `then` runs.
+pub fn restore_with_session_rows<T>(
+    engine: &std::sync::Mutex<Engine>,
+    restored: Settings,
+    then: impl FnOnce(&mut Engine) -> T,
+) -> Result<T, String> {
+    let asked = restored.clone();
+    with_session_rows(
+        engine,
+        |eng| eng.save_opens_session(&asked),
+        |eng, rows| {
+            eng.apply_restored_settings(restored);
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            then(eng)
+        },
+    )
 }
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.

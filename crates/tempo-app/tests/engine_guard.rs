@@ -1006,7 +1006,7 @@ fn the_settings_scan_names_every_bare_save_and_nothing_else() {
 /// Engine's snapshot instead (`persist_settings` in src-tauri).
 const SYNCHRONOUS_SETTINGS_SAVES: [(&str, &str); 10] = [
     // A restore that did not reach the disk says so, and mirrors nothing to the base config.
-    ("src-tauri/src/lib.rs", "import_settings_bundle"),
+    ("src-tauri/src/lib.rs", "restore_settings_bundle"),
     // Remote's save-then-publish: a failed save changes nothing, so the result must come first.
     (
         "crates/tempo-app/src/engine/remote_settings.rs",
