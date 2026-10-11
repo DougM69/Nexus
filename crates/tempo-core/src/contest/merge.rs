@@ -67,11 +67,15 @@ pub fn qid_for(session_id: &str, posid: &str, seq: u64) -> String {
 /// journaled with the row and never change; the running is what tells this year's contacts
 /// from last year's, whose numbers start at 1 too.
 pub fn session_of(log: &FieldDayLog, q: &LoggedQso) -> String {
-    format!(
-        "{}:{}",
-        log.session.contest_id,
-        log.ruleset().running_of(q.when_unix)
+    running_session(
+        &log.session.contest_id,
+        log.ruleset().running_of(q.when_unix),
     )
+}
+
+/// `"<contest id>:<running>"`: [`session_of`], from the two facts it is made of.
+fn running_session(contest_id: &str, running: u16) -> String {
+    format!("{contest_id}:{running}")
 }
 
 /// ⭐ **One contest row's merge identity** — the qid this build mints for it, and the test of
@@ -97,15 +101,34 @@ pub struct MergeIdentity {
 impl MergeIdentity {
     /// Row `q` of `log`, merged at position `posid`.
     pub fn of(log: &FieldDayLog, posid: &str, q: &LoggedQso) -> Self {
-        let session = session_of(log, q);
-        let rules = log.ruleset();
+        Self::of_contest(
+            &log.session.contest_id,
+            log.ruleset(),
+            posid,
+            q.seq,
+            q.when_unix,
+        )
+    }
+
+    /// Row `seq` of contest `contest_id`, logged at `when_unix` under `rules`, merged at position
+    /// `posid`: [`of`](Self::of) for a row no log holds, one the contest journal keeps past its
+    /// window ([`settle_aged`]). One minting for both, so the two cannot come to disagree.
+    pub(crate) fn of_contest(
+        contest_id: &str,
+        rules: &'static FdRuleset,
+        posid: &str,
+        seq: u64,
+        when_unix: u64,
+    ) -> Self {
+        let running = rules.running_of(when_unix);
+        let session = running_session(contest_id, running);
         MergeIdentity {
-            qid: qid_for(&session, posid, q.seq),
+            qid: qid_for(&session, posid, seq),
             session,
-            contest_id: log.session.contest_id.clone(),
+            contest_id: contest_id.to_string(),
             posid: posid.to_string(),
-            seq: q.seq,
-            running: rules.running_of(q.when_unix),
+            seq,
+            running,
             rules,
         }
     }
@@ -294,6 +317,123 @@ pub fn plan_merge(
         report.written.push(record_for(log, q, &id));
     }
     report
+}
+
+/// The contacts of one contest that a contest journal keeps past its window and the Logbook does
+/// not hold ([`settle_aged`]): how many, and when the first and the last of them were logged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unmerged {
+    /// The contest's rules-file event id.
+    pub event: &'static str,
+    pub count: usize,
+    pub first_unix: u64,
+    pub last_unix: u64,
+}
+
+/// ⭐ **The contacts a contest journal keeps past its window, asked of the Logbook** — the ones
+/// it no longer needs let go, the ones the Logbook does not hold answered.
+///
+/// `copies` is every merged copy the Logbook holds, as [`plan_merge`] takes them, and `on_disk`
+/// those of them already on disk. A contact whose copy is on disk, made at the contact's own
+/// time, is let go ([`FieldDayLog::let_go_aged`]): it ages out of the journal as a merged contact
+/// always did. A contact no copy names is answered, by contest, for the contest screen to offer
+/// its merge ([`plan_aged_merge`]). Any other is kept and not offered: its copy is still on its
+/// way to disk, or names it at another time — the copy's time was changed in the Logbook, or the
+/// copy is another contact's, whose number an earlier build gave this one again.
+///
+/// ⚠️ **A contact with no merge identity is kept and never offered**: one that carries no number
+/// (a journal no build since club sync has written), or names a contest the loaded rules do not
+/// hold. Nothing can merge it without giving it a name another contact may hold.
+pub fn settle_aged(
+    log: &mut FieldDayLog,
+    posid: &str,
+    copies: &[(String, u64)],
+    on_disk: &[(String, u64)],
+) -> Vec<Unmerged> {
+    let (copies, on_disk) = (by_seq(copies), by_seq(on_disk));
+    let mut gone = Vec::new();
+    let mut unmerged: Vec<Unmerged> = Vec::new();
+    for (at, c) in log.aged_contacts(posid).into_iter().enumerate() {
+        let (Some(id), Some(event)) = (c.identity, c.event) else {
+            continue;
+        };
+        if named(&on_disk, &id, Some(c.when_unix)) {
+            gone.push(at);
+        } else if !named(&copies, &id, None) {
+            match unmerged.iter_mut().find(|u| u.event == event) {
+                Some(u) => {
+                    u.count += 1;
+                    u.first_unix = u.first_unix.min(c.when_unix);
+                    u.last_unix = u.last_unix.max(c.when_unix);
+                }
+                None => unmerged.push(Unmerged {
+                    event,
+                    count: 1,
+                    first_unix: c.when_unix,
+                    last_unix: c.when_unix,
+                }),
+            }
+        }
+    }
+    log.let_go_aged(&gone);
+    unmerged
+}
+
+/// ⭐ **The merge the contest screen offers for the contacts of contest `event` that a contest
+/// journal keeps past its window and no copy in the Logbook names** ([`settle_aged`]) — through
+/// [`plan_merge`], the one merge there is, so a contact already there is never written again.
+///
+/// Each is read back alone into a log on `session`, a session of that contest
+/// ([`FieldDayLog::aged_log`]), so the identity it is merged under is the one [`settle_aged`]
+/// asked about. `copies` as [`plan_merge`] takes them. Nothing is let go here: a contact goes
+/// once its copy is on disk, the next time the Logbook is asked.
+pub fn plan_aged_merge(
+    log: &FieldDayLog,
+    event: &str,
+    session: &super::ContestSession,
+    posid: &str,
+    copies: Vec<(String, u64)>,
+) -> MergeReport {
+    let there = by_seq(&copies);
+    let at: Vec<usize> = log
+        .aged_contacts(posid)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            c.event == Some(event)
+                && c.identity
+                    .as_ref()
+                    .is_some_and(|id| !named(&there, id, None))
+        })
+        .map(|(at, _)| at)
+        .collect();
+    plan_merge(&log.aged_log(&at, session.clone()), posid, copies)
+}
+
+/// `copies` by the number each names, so that a row is tested against its own number's copies
+/// alone, as [`plan_merge`] tests them.
+fn by_seq(copies: &[(String, u64)]) -> std::collections::HashMap<u64, Vec<(&str, u64)>> {
+    let mut by: std::collections::HashMap<u64, Vec<(&str, u64)>> = Default::default();
+    for (qid, when_unix) in copies {
+        if let Some((_, _, seq)) = split_qid(qid) {
+            by.entry(seq).or_default().push((qid, *when_unix));
+        }
+    }
+    by
+}
+
+/// Whether a copy in `by` is `id`'s ([`MergeIdentity::names`]) — one made at `at` only, when
+/// given.
+fn named(
+    by: &std::collections::HashMap<u64, Vec<(&str, u64)>>,
+    id: &MergeIdentity,
+    at: Option<u64>,
+) -> bool {
+    by.get(&id.seq).is_some_and(|there| {
+        there
+            .iter()
+            .any(|&(qid, when)| at.is_none_or(|t| t == when) && id.names(qid, when))
+    })
 }
 
 /// One contest row as a general-log record.

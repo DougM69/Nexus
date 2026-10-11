@@ -737,3 +737,176 @@ fn a_contact_logged_five_days_on_is_merged_once() {
     assert_eq!(merge(&mut e), (0, 1), "once");
     assert_eq!(calls(&e), ["K9AAA", "W9BBB", "N9CCC"]);
 }
+
+// ---- a contact never merged, past the journal's four days ------------------------------
+
+/// The call of every record in the contest journal on disk, in its order.
+fn journal_calls(d: &Dir) -> Vec<String> {
+    let text = std::fs::read_to_string(d.0.join("fieldday.adi")).expect("the journal");
+    let body = &text[text.find("<EOH>").map_or(0, |i| i + 5)..];
+    body.split("<CALL:")
+        .skip(1)
+        .map(|r| {
+            let (len, rest) = r.split_once('>').expect("a CALL tag");
+            rest[..len.parse::<usize>().expect("its length")].to_string()
+        })
+        .collect()
+}
+
+/// Two contacts of the Illinois QSO Party logged five days back by the clock, journaled and
+/// never merged — the journal on disk as the session that logged them left it. Their log, and
+/// when the first was logged.
+fn never_merged_five_days_back(d: &Dir, e: &Engine) -> (tempo_core::fieldday::FieldDayLog, u64) {
+    let then = now_unix_secs() - 5 * 86_400;
+    let Mode::FieldDay { station, .. } = &e.mode else {
+        panic!("the contest runs")
+    };
+    let mut first = tempo_core::fieldday::FieldDayLog::new(
+        "W9XYZ",
+        station.log.session.clone(),
+        &station.log.band,
+    );
+    let rx = [("RST", "599"), ("QTH", "COOK")].map(|(k, v)| (k.to_string(), v.to_string()));
+    assert!(first.log_fields_at("K9AAA", &rx, "CW", "", 0, then));
+    assert!(first.log_fields_at("W9BBB", &rx, "CW", "", 0, then + 60));
+    std::fs::write(d.0.join("fieldday.adi"), first.journal_adif()).expect("the journal");
+    (first, then)
+}
+
+/// ⭐ **A contact never merged stays in the contest journal five days on, when the next one is
+/// logged.** The restore reaches back four days, and the next contact wrote the journal again
+/// from what the restore had loaded, so a tester who forgot Merge and logged again five days
+/// later lost those contacts from Nexus entirely.
+#[test]
+fn a_contact_never_merged_stays_in_the_journal_when_one_is_logged_five_days_on() {
+    let d = Dir::new("contest-unmerged-five-days-on");
+    let e = launch(&d, &ilqp_settings());
+    never_merged_five_days_back(&d, &e);
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert!(contest_calls(&e).is_empty(), "PREMISE: none restored");
+    party(&mut e, "N9CCC", "DUPG");
+    quit(e);
+    assert_eq!(journal_calls(&d), ["N9CCC", "K9AAA", "W9BBB"]);
+}
+
+/// The contest screen asking what the journal keeps that the Logbook does not hold
+/// ([`super::contest_unmerged::unmerged`]).
+fn offered(e: Engine) -> (Engine, Vec<tempo_core::contest::Unmerged>) {
+    let shared = Mutex::new(e);
+    let offer = super::contest_unmerged::unmerged(&shared).expect("the contest runs");
+    (shared.into_inner().unwrap(), offer)
+}
+
+/// Its Merge for `event`, as `(written, already there)`, waited for to disk as the command waits.
+fn merge_offered(e: Engine, event: &str) -> (Engine, (usize, usize)) {
+    let shared = Mutex::new(e);
+    let (report, _) = super::contest_unmerged::merge_unmerged(&shared, event);
+    let report = report.expect("the contest runs");
+    let e = shared.into_inner().unwrap();
+    flush(&e);
+    (e, (report.added(), report.already))
+}
+
+/// ⭐ **The contest screen offers the contacts never merged — how many, from which contest and
+/// when — and one press merges them, once.** Through the engine, the real logbook store and the
+/// real journal: the merge writes each once, the end-of-contest merge still merges the session's
+/// own contact once, and once their copies are on disk the two leave the journal as merged
+/// contacts always did. Nothing already in the Logbook is changed.
+#[test]
+fn a_contact_never_merged_is_offered_and_one_press_merges_it_once() {
+    let d = Dir::new("contest-unmerged-offered");
+    let e = launch(&d, &ilqp_settings());
+    let (_, then) = never_merged_five_days_back(&d, &e);
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    party(&mut e, "N9CCC", "DUPG");
+    assert_eq!(
+        merge(&mut e),
+        (1, 0),
+        "the session's own contact, merged first"
+    );
+    let before: Vec<QsoRecord> = e.stored_log().iter().map(|r| QsoRecord::clone(r)).collect();
+    let (e, offer) = offered(e);
+    assert_eq!(
+        offer,
+        [tempo_core::contest::Unmerged {
+            event: "ilqp",
+            count: 2,
+            first_unix: then,
+            last_unix: then + 60,
+        }]
+    );
+    let (e, merged) = merge_offered(e, "ilqp");
+    assert_eq!(merged, (2, 0));
+    assert_eq!(calls(&e), ["N9CCC", "K9AAA", "W9BBB"]);
+    let after = e.stored_log();
+    assert_eq!(
+        after[..before.len()]
+            .iter()
+            .map(|r| QsoRecord::clone(r))
+            .collect::<Vec<_>>(),
+        before,
+        "nothing already in the Logbook changed"
+    );
+
+    let (e, offer) = offered(e);
+    assert!(offer.is_empty(), "nothing left to offer: {offer:?}");
+    let (mut e, again) = merge_offered(e, "ilqp");
+    assert_eq!(again, (0, 0), "a second press writes nothing");
+    assert_eq!(merge(&mut e), (0, 1), "nor does the end-of-contest merge");
+    assert_eq!(calls(&e), ["N9CCC", "K9AAA", "W9BBB"]);
+
+    // Once the station has the writer's word that their copies are on disk (the next launch at
+    // the latest), the Logbook asked lets them go, and the next contact writes the journal
+    // without them.
+    party(&mut e, "N9DDD", "WILL");
+    let s = quit(e);
+    let (mut e, offer) = offered(launch(&d, &s));
+    assert!(offer.is_empty(), "{offer:?}");
+    party(&mut e, "N9EEE", "COOK");
+    quit(e);
+    assert_eq!(journal_calls(&d), ["N9CCC", "N9DDD", "N9EEE"]);
+}
+
+/// The control: **a contact merged before it aged out still leaves the journal**, once the
+/// contest screen has asked the Logbook — as every merged contact past the journal's four days
+/// left it before. Until then it is kept, which loses nothing.
+#[test]
+fn a_contact_merged_before_it_aged_out_still_leaves_the_journal() {
+    let d = Dir::new("contest-unmerged-merged-before");
+    let mut e = launch(&d, &ilqp_settings());
+    let (first, _) = never_merged_five_days_back(&d, &e);
+    let mut lb = tempo_core::logbook::Logbook::new();
+    tempo_core::contest::merge_into_general(&first, POS, &mut lb);
+    let copies: Vec<QsoRecord> = lb
+        .records()
+        .iter()
+        .map(|r| {
+            let mut r = QsoRecord::clone(r);
+            r.id = None;
+            r
+        })
+        .collect();
+    e.station.append(copies, false);
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    party(&mut e, "N9CCC", "DUPG");
+    let e = {
+        let s = quit(e);
+        assert_eq!(
+            journal_calls(&d),
+            ["N9CCC", "K9AAA", "W9BBB"],
+            "kept until the Logbook is asked"
+        );
+        launch(&d, &s)
+    };
+    let (mut e, offer) = offered(e);
+    assert!(offer.is_empty(), "both are in the Logbook: {offer:?}");
+    party(&mut e, "N9DDD", "WILL");
+    quit(e);
+    assert_eq!(journal_calls(&d), ["N9CCC", "N9DDD"]);
+}

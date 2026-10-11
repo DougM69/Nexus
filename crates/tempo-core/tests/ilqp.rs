@@ -1033,3 +1033,345 @@ fn the_latest_contact_let_go_decides_wherever_the_journal_holds_it() {
         "every new contact is merged"
     );
 }
+
+// ---- a contact never merged into the Logbook, past the journal's four days -------------
+
+/// The call of every record in a journal, in the journal's order.
+fn journal_calls(journal: &str) -> Vec<String> {
+    records(journal)
+        .iter()
+        .map(|r| {
+            let at = r.find("<CALL:").expect("every record has a call") + "<CALL:".len();
+            let (len, rest) = r[at..].split_once('>').expect("a CALL tag");
+            rest[..len.parse::<usize>().expect("its length")].to_string()
+        })
+        .collect()
+}
+
+/// ⭐ **A contact never merged into the Logbook stays in the journal, however old it is.** The
+/// restore reaches back four days, and the next rewrite of the journal wrote only what the
+/// restore had loaded: a tester who forgot Merge and logged again five days later lost the
+/// party's contacts from Nexus entirely. They stay, byte for byte, and are still not loaded:
+/// no part of this session's log, its score or its files.
+#[test]
+fn a_contact_never_merged_stays_in_the_journal_however_old() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let first = records(&party.journal_adif());
+
+    // Five days on, a new contact: the journal is written again.
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    assert_eq!(
+        calls(&back),
+        Vec::<&str>::new(),
+        "PREMISE: past the four days"
+    );
+    worked(&mut back, "N9CCC", "DUPG", later);
+    let journal = back.journal_adif();
+    assert_eq!(journal_calls(&journal), ["N9CCC", "K9AAA", "W9BBB"]);
+    for record in &first {
+        assert!(
+            journal.contains(record.as_str()),
+            "kept as logged: {record}"
+        );
+    }
+    assert!(
+        !back.adif().contains("K9AAA") && back.qsos().len() == 1,
+        "and in nothing this session submits"
+    );
+
+    // A year on, logging another running, they are still there.
+    let next_year = later + 364 * 86_400;
+    let mut again = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    again.restore_journal(&journal, next_year - FOUR_DAYS, next_year);
+    worked(&mut again, "N9DDD", "WILL", next_year);
+    assert_eq!(
+        journal_calls(&again.journal_adif()),
+        ["N9DDD", "N9CCC", "K9AAA", "W9BBB"],
+        "every contact never merged, a year on"
+    );
+}
+
+/// The merge identities of a merge's written records, with when each was made: what the
+/// Logbook holds of them.
+fn copies_of(written: &[tempo_core::logbook::QsoRecord]) -> Vec<(String, u64)> {
+    written
+        .iter()
+        .map(|r| {
+            let qid = r.contest.as_deref().expect("a contest copy").qid.clone();
+            (qid, r.when_unix)
+        })
+        .collect()
+}
+
+/// What a Logbook holds of merged contacts: each copy's merge identity, and when it was made.
+fn copies_in(lb: &tempo_core::logbook::Logbook) -> Vec<(String, u64)> {
+    lb.records()
+        .iter()
+        .filter_map(|r| r.contest.as_deref().map(|c| (c.qid.clone(), r.when_unix)))
+        .collect()
+}
+
+/// The party, five days on: two contacts logged on its Sunday, never merged, and one logged now.
+fn five_days_on() -> (FieldDayLog, FieldDayLog) {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    worked(&mut back, "N9CCC", "DUPG", later);
+    (party, back)
+}
+
+/// ⭐ **The contacts never merged are offered, and one press merges them once** — under the
+/// names the party's own merge gives them, so neither merge ever writes one twice. They stay in
+/// the journal until their copies are on disk, and then age out as a merged contact always did.
+#[test]
+fn the_contacts_never_merged_are_offered_and_merged_once() {
+    use tempo_core::contest::{plan_aged_merge, settle_aged, Unmerged};
+    let (party, mut back) = five_days_on();
+    assert_eq!(
+        settle_aged(&mut back, POS, &[], &[]),
+        [Unmerged {
+            event: "ilqp",
+            count: 2,
+            first_unix: SUN,
+            last_unix: SUN + 60,
+        }],
+        "how many, from which contest, and when"
+    );
+
+    let session = back.session.clone();
+    let report = plan_aged_merge(&back, "ilqp", &session, POS, Vec::new());
+    let written: Vec<&str> = report.written.iter().map(|r| r.call.as_str()).collect();
+    assert_eq!(written, ["K9AAA", "W9BBB"]);
+    assert_eq!((report.already, report.refused), (0, 0));
+    let mut lb = tempo_core::logbook::Logbook::new();
+    assert_eq!(
+        merged(&party, &mut lb),
+        (2, 0),
+        "PREMISE: the party's own merge"
+    );
+    assert_eq!(
+        copies_of(&report.written),
+        copies_in(&lb),
+        "the same names, at the same times"
+    );
+
+    // Its copies on their way to disk: offered no more, and still kept.
+    let copies = copies_of(&report.written);
+    assert_eq!(settle_aged(&mut back, POS, &copies, &[]), []);
+    assert_eq!(
+        plan_aged_merge(&back, "ilqp", &session, POS, copies.clone()).added(),
+        0,
+        "a second press writes nothing"
+    );
+    assert_eq!(
+        journal_calls(&back.journal_adif()),
+        ["N9CCC", "K9AAA", "W9BBB"]
+    );
+    // On disk: let go.
+    assert_eq!(settle_aged(&mut back, POS, &copies, &copies), []);
+    assert_eq!(journal_calls(&back.journal_adif()), ["N9CCC"]);
+}
+
+/// The control: **a contact merged before it aged out goes as it always did**, once the
+/// Logbook is asked; and this running's numbers are the same either way.
+#[test]
+fn a_contact_merged_before_it_aged_out_still_ages_out() {
+    let (party, mut back) = five_days_on();
+    let mut lb = tempo_core::logbook::Logbook::new();
+    assert_eq!(merged(&party, &mut lb), (2, 0));
+    let copies: Vec<(String, u64)> = copies_in(&lb);
+    assert_eq!(back.qsos()[0].seq, 3, "1 and 2 are the party's");
+    assert_eq!(
+        journal_calls(&back.journal_adif()),
+        ["N9CCC", "K9AAA", "W9BBB"],
+        "kept until the Logbook is asked"
+    );
+    assert_eq!(
+        tempo_core::contest::settle_aged(&mut back, POS, &copies, &copies),
+        []
+    );
+    assert_eq!(journal_calls(&back.journal_adif()), ["N9CCC"]);
+}
+
+/// ⭐ **A copy that names a contact at another time is not its copy**, and the contact stays.
+/// An earlier build numbered a contact logged five days after the party's first ones from 1
+/// again, so the party's first contact's copy carries its name too. Let go on the name alone,
+/// it was gone from the journal and never in the Logbook. It is kept, and not offered: the
+/// merge would take it for the contact already there.
+#[test]
+fn a_copy_naming_a_contact_at_another_time_keeps_it() {
+    use tempo_core::contest::settle_aged;
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    let mut lb = tempo_core::logbook::Logbook::new();
+    assert_eq!(merged(&party, &mut lb), (1, 0));
+    let copies: Vec<(String, u64)> = copies_in(&lb);
+
+    // That build's journal five days on: the party's contact let go, and W9ZZZ numbered 1.
+    let mut reused = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut reused, "W9ZZZ", "WILL", SUN + 5 * 86_400);
+    assert_eq!(
+        reused.qsos()[0].seq,
+        1,
+        "PREMISE: the number the party's first had"
+    );
+
+    let later = SUN + 10 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&reused.journal_adif(), later - FOUR_DAYS, later);
+    assert_eq!(settle_aged(&mut back, POS, &copies, &copies), []);
+    assert_eq!(journal_calls(&back.journal_adif()), ["W9ZZZ"], "kept");
+}
+
+/// The control: **a contact taken back stays taken back.** Past the window it goes with the next
+/// rewrite, as it always did, and it is never offered.
+#[test]
+fn a_contact_taken_back_ages_out_and_is_never_offered() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    party
+        .remove_last("W9BBB", SUN + 60, SUN + 120)
+        .expect("the newest contact");
+    assert!(
+        party.journal_adif().contains("APP_NEXUS_REMOVED"),
+        "PREMISE: journaled as taken back"
+    );
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    worked(&mut back, "N9CCC", "DUPG", later);
+    assert_eq!(journal_calls(&back.journal_adif()), ["N9CCC", "K9AAA"]);
+    let offered = tempo_core::contest::settle_aged(&mut back, POS, &[], &[]);
+    assert_eq!(
+        offered.iter().map(|u| u.count).sum::<usize>(),
+        1,
+        "K9AAA alone"
+    );
+}
+
+/// ⭐ **Another contest's contacts are offered under that contest, and merged under the names
+/// its own merge gives them.** Field Day's, never merged, read by the party's session a week on.
+#[test]
+fn another_contests_contacts_are_offered_and_merged_as_that_contest() {
+    use tempo_core::contest::{plan_aged_merge, settle_aged};
+    let fd = || {
+        tempo_core::contest::ContestSession::field_day(
+            tempo_core::fieldday::FdEvent::ArrlFd,
+            "3A",
+            "IL",
+        )
+    };
+    let mut field_day = FieldDayLog::new("W9AWE", fd(), "40m");
+    assert!(field_day.log_fields_at(
+        "K1ABC",
+        &fields(&[("CLASS", "2A"), ("SECTION", "EMA")]),
+        "CW",
+        "",
+        0,
+        SUN - 7 * 86_400
+    ));
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    party.restore_journal(&field_day.journal_adif(), SUN - FOUR_DAYS, SUN);
+    let offered = settle_aged(&mut party, POS, &[], &[]);
+    assert_eq!(offered.len(), 1);
+    assert_eq!((offered[0].event, offered[0].count), ("arrlfd", 1));
+
+    let report = plan_aged_merge(&party, "arrlfd", &fd(), POS, Vec::new());
+    assert_eq!(
+        plan_aged_merge(&party, "ilqp", &party.session.clone(), POS, Vec::new()).added(),
+        0,
+        "nothing of the party's own"
+    );
+    let mut lb = tempo_core::logbook::Logbook::new();
+    tempo_core::contest::merge_into_general(&field_day, POS, &mut lb);
+    let fd_copy = copies_in(&lb);
+    assert_eq!(
+        copies_of(&report.written),
+        fd_copy,
+        "Field Day's own name for it"
+    );
+    let rec = &report.written[0];
+    assert_eq!(rec.call, "K1ABC");
+    assert_eq!(
+        rec.contest.as_deref().map(|c| c.srx_string.clone()),
+        lb.records()[0]
+            .contest
+            .as_deref()
+            .map(|c| c.srx_string.clone()),
+        "the exchange it was logged with"
+    );
+}
+
+/// ⚠️ **A contact with no number is kept and never offered.** A journal no build since club sync
+/// has written numbers no row; no merge name can be given one without taking a name another
+/// contact of the running may hold.
+#[test]
+fn a_contact_with_no_number_is_kept_and_never_offered() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    let journal = party.journal_adif();
+    let tag = journal
+        .find("<APP_NEXUS_QSEQ:")
+        .expect("PREMISE: a numbered row");
+    let end = tag + journal[tag..].find('>').expect("the tag") + 2;
+    let unnumbered = format!("{}{}", &journal[..tag], &journal[end..]);
+    assert!(!unnumbered.contains("APP_NEXUS_QSEQ"), "PREMISE: no number");
+
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&unnumbered, later - FOUR_DAYS, later);
+    assert_eq!(
+        tempo_core::contest::settle_aged(&mut back, POS, &[], &[]),
+        []
+    );
+    assert_eq!(journal_calls(&back.journal_adif()), ["K9AAA"], "kept");
+}
+
+/// The control: **the contacts kept past the window change nothing a session submits or syncs.**
+/// The same contact, logged in a session restored from the journal that keeps the party's two and
+/// in one restored from the journal the build before wrote (their numbers in its header, and no
+/// rows), writes the same Cabrillo file and the same ADIF, scores the same, and holds the same
+/// rows — the rows a club host is sent.
+#[test]
+fn the_contacts_kept_past_the_window_change_nothing_submitted_or_synced() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let later = SUN + 5 * 86_400;
+    let mut idle = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    idle.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    let keeps = idle.journal_adif();
+    let mut before = keeps.clone();
+    for record in records(&keeps) {
+        before = before.replacen(&format!("{record}\n"), "", 1);
+    }
+    assert!(
+        before.contains("APP_NEXUS_QSEQ_SPENT") && records(&before).is_empty(),
+        "PREMISE: the numbers, and no rows"
+    );
+
+    let session = |journal: &str| {
+        let mut log = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+        log.restore_journal(journal, later - FOUR_DAYS, later);
+        worked(&mut log, "N9CCC", "DUPG", later);
+        log
+    };
+    let (kept, then) = (session(&keeps), session(&before));
+    assert_eq!(kept.qsos(), then.qsos(), "the rows a club host is sent");
+    assert_eq!(kept.adif(), then.adif());
+    assert_eq!(kept.cabrillo(7_000), then.cabrillo(7_000));
+    assert_eq!(score(&kept), score(&then));
+    assert_ne!(
+        kept.journal_adif(),
+        then.journal_adif(),
+        "the journal alone differs"
+    );
+}

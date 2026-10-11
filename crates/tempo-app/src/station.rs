@@ -1489,6 +1489,43 @@ impl LogPlan {
         Ok(seen)
     }
 
+    /// The merge identities [`Self::merge_identities`] reads that are on disk: the store's
+    /// copies that no change of this process's is held for ([`crate::logstore::Pending`]) — a
+    /// copy the store does not hold yet, one this process has changed or deleted since, and one
+    /// it wrote whose landing the station has not yet taken in (it does at its next change to the
+    /// log, and a launch starts with none) are not among them. What a contest contact the
+    /// journal keeps past its window is let go on ([`tempo_core::contest::settle_aged`]): its
+    /// copy must be sure to outlive a crash before the journal's own may not.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn durable_merge_identities(&self) -> Result<Vec<(String, u64)>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+        const QIDS: Narrow = Narrow {
+            columns: &["contest_qid", "when_unix"],
+            uploads: false,
+        };
+        let mut seen = Vec::new();
+        let mut keep = |r: &QsoRecord| {
+            let untouched = r.id.is_some_and(|id| self.pending.row(id).is_none());
+            if let Some(c) = r
+                .contest
+                .as_deref()
+                .filter(|c| untouched && !c.qid.is_empty())
+            {
+                seen.push((c.qid.clone(), r.when_unix));
+            }
+            ControlFlow::Continue(())
+        };
+        let crate::logstore::LogRows::Store(reads) = &self.rows;
+        reads
+            .read(std::time::Duration::ZERO, |db| {
+                db.each_narrow(QIDS, Scope::All, Order::Log, &mut keep)
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(seen)
+    }
+
     /// The upload marks on the log's copies of the contest rows `rows` names, under this build's
     /// name or an earlier build's ([`tempo_core::contest::MergeIdentity::names`]), as this
     /// process knows the log ([`Self::rows`]): what a removal from the contest log reports and

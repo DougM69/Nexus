@@ -40,6 +40,7 @@ pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
 mod contest_removal_tests;
+pub mod contest_unmerged;
 mod field_day_display;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
