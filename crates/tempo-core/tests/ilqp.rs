@@ -1000,3 +1000,36 @@ fn the_party_next_year_numbers_from_its_own_rows() {
     worked(&mut back, "N9CCC", "DUPG", next_year);
     assert_eq!(back.qsos()[0].seq, 1);
 }
+
+/// ⭐ **The latest contact let go decides, wherever the journal holds it.** A rehearsal is
+/// held after the party's own rows (the journal writes what a restore held last), so five days
+/// on the rehearsal's contacts are let go after the party's: the party's numbers are kept
+/// whatever order the rows are let go in, and four new contacts are each merged. Numbered from
+/// 1 again, the fourth was the party's first contact's number.
+#[test]
+fn the_latest_contact_let_go_decides_wherever_the_journal_holds_it() {
+    let mut rehearsal = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    for (i, call) in ["K9AAA", "K9BBB", "K9CCC"].into_iter().enumerate() {
+        worked(&mut rehearsal, call, "COOK", WED + 60 * i as u64);
+    }
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    party.restore_journal(&rehearsal.journal_adif(), SUN - FOUR_DAYS, SUN);
+    worked(&mut party, "N9AAA", "LAKE", SUN);
+    worked(&mut party, "N9BBB", "LAKE", SUN + 60);
+    assert_eq!(party.held(), (0, 3), "PREMISE: the rehearsal is held");
+    let mut lb = tempo_core::logbook::Logbook::new();
+    assert_eq!(merged(&party, &mut lb), (2, 0));
+
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    assert_eq!(back.held(), (0, 0), "PREMISE: all of it let go");
+    for (i, call) in ["W9AAA", "W9BBB", "W9CCC", "W9DDD"].into_iter().enumerate() {
+        worked(&mut back, call, "WILL", later + 60 * i as u64);
+    }
+    assert_eq!(
+        merged(&back, &mut lb),
+        (4, 0),
+        "every new contact is merged"
+    );
+}
