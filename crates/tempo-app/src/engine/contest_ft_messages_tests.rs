@@ -1,0 +1,767 @@
+//! Each contest's own FT8/FT4 messages, by value.
+//!
+//! Every contest the picker offers is run through the Contest screen's two roles — Running
+//! (`fieldday-run`) and S&P (`fieldday-sp`) — against a scripted partner that answers the way
+//! WSJT-X 3.0.2 does in the matching Special Operating Activity (`widgets/mainwindow.cpp`:
+//! `genCQMsg` 9466-9531, `genStdMsgs` 9564-9722, `processMessage` 8918-9453, and the Tx1
+//! switch-off at 8238-8254). What this station puts on the air is read off the planned over —
+//! the same text the modulator encodes — and every over is pushed through the FT8 encoder to
+//! name its 77-bit type and the text a receiving station decodes.
+//!
+//! The partner is a script, not a decoder: it reacts to the message it was addressed and
+//! repeats its last over when it hears anything else, which is what WSJT-X's auto-sequencer
+//! does with a message it has no arm for.
+
+use super::*;
+use crate::dto::Tier;
+
+const ME: &str = "K1ABC";
+const MY_GRID: &str = "FN42";
+const DX: &str = "W9XYZ";
+const DX_GRID: &str = "EN37";
+/// The SNR every one of the partner's overs is decoded at, so the report this station sends
+/// it is `-12`.
+const DX_SNR: i32 = -12;
+/// The report the partner sends this station.
+const DX_RPT: &str = "-07";
+/// Slots per scene: eight overs each way, enough for the longest exchange and a re-arm.
+const SLOTS: u64 = 16;
+
+/// Every contest the picker offers (`ui/src/fdEvent.ts` `CONTESTS`, in its order), after the
+/// blank default a fresh install carries.
+const CONTESTS: [&str; 19] = [
+    "",
+    "arrlfd",
+    "wfd",
+    "arrlss_cw",
+    "arrlss_ssb",
+    "arrlvhf_jan",
+    "arrlvhf_jun",
+    "arrlvhf_sep",
+    "cqww_cw",
+    "cqww_ssb",
+    "cqww_rtty",
+    "cqwpx_cw",
+    "cqwpx_ssb",
+    "cqp",
+    "ilqp",
+    "nyqp",
+    "ohqp",
+    "tnqp",
+    "txqp",
+];
+
+/// The WSJT-X 3.0.2 Special Operating Activity a station in this contest runs
+/// (`Configuration::SpecialOperatingActivity`). ARRL Field Day has FIELD_DAY and the three
+/// ARRL VHF contests have NA_VHF; no other contest on the list has an activity of its own,
+/// so the partner there sends the standard messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Act {
+    FieldDay,
+    NaVhf,
+    None,
+}
+
+fn act_of(contest: &str) -> Act {
+    match contest {
+        "" | "arrlfd" | "wfd" => Act::FieldDay,
+        "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => Act::NaVhf,
+        _ => Act::None,
+    }
+}
+
+/// The partner, as WSJT-X 3.0.2 with auto-sequencing on.
+struct Partner {
+    act: Act,
+    /// What it sends on its next over.
+    next: Option<String>,
+    /// Its next over is its last: a 73, or a runner's RR73.
+    last: bool,
+}
+
+impl Partner {
+    /// A runner calls CQ from its first over; an S&P station waits for a CQ to answer.
+    fn new(act: Act, running: bool) -> Self {
+        let next = running.then(|| match act {
+            Act::FieldDay => format!("CQ FD {DX} {DX_GRID}"),
+            Act::NaVhf => format!("CQ TEST {DX} {DX_GRID}"),
+            Act::None => format!("CQ {DX} {DX_GRID}"),
+        });
+        Self {
+            act,
+            next,
+            last: false,
+        }
+    }
+
+    /// What WSJT-X does on decoding `mine`.
+    fn hear(&mut self, mine: &str) {
+        let w: Vec<&str> = mine.split_whitespace().collect();
+        let to_me = w.len() >= 3 && w[0] == DX && w[1] == ME;
+        let a_cq = w.first() == Some(&"CQ") && w.contains(&ME);
+        let is_grid = |s: &str| {
+            let b = s.as_bytes();
+            s.len() == 4
+                && s != "RR73"
+                && (b'A'..=b'R').contains(&b[0])
+                && (b'A'..=b'R').contains(&b[1])
+                && b[2].is_ascii_digit()
+                && b[3].is_ascii_digit()
+        };
+        let is_report =
+            |s: &str| (s.starts_with('-') || s.starts_with('+')) && s[1..].parse::<i32>().is_ok();
+        let reply = |payload: &str| format!("{ME} {DX} {payload}");
+        // Double-clicking a CQ: Tx2 in the contest activities (Tx1 is switched off,
+        // mainwindow.cpp 8238-8248), Tx1 with no activity.
+        if a_cq && self.next.is_none() && !self.last {
+            self.next = Some(match self.act {
+                Act::FieldDay => reply("1D WI"),
+                Act::NaVhf | Act::None => reply(DX_GRID),
+            });
+            return;
+        }
+        if !to_me {
+            return;
+        }
+        let closing = w[2] == "RR73" || w[2] == "RRR";
+        let (next, last) = match self.act {
+            Act::FieldDay if w.len() == 4 => (reply("R 1D WI"), false),
+            Act::FieldDay if w.len() == 5 && w[2] == "R" => (reply("RR73"), true),
+            Act::NaVhf if w.len() == 3 && is_grid(w[2]) => (reply(&format!("R {DX_GRID}")), false),
+            Act::NaVhf if w.len() == 4 && w[2] == "R" && is_grid(w[3]) => (reply("RR73"), true),
+            Act::FieldDay | Act::NaVhf if closing => (reply("73"), true),
+            Act::None if w.len() == 3 && is_grid(w[2]) => (reply(DX_RPT), false),
+            Act::None if w.len() == 3 && w[2].starts_with('R') && is_report(&w[2][1..]) => {
+                (reply("RR73"), true)
+            }
+            Act::None if w.len() == 3 && is_report(w[2]) => (reply(&format!("R{DX_RPT}")), false),
+            Act::None if closing => (reply("73"), true),
+            // A 73, or anything this script has no arm for: nothing new.
+            _ => return,
+        };
+        self.next = Some(next);
+        self.last = last;
+    }
+
+    /// Its over, if it has one.
+    fn transmit(&mut self) -> Option<String> {
+        let out = self.next.clone();
+        if self.last {
+            self.next = None;
+        }
+        out
+    }
+}
+
+/// A decode of the partner's over, as the engine's decoder would deliver it.
+fn heard(text: &str) -> modes::Decode {
+    modes::Decode {
+        message: text.into(),
+        sync: 1.0,
+        snr: DX_SNR,
+        dt: 0.1,
+        freq: 1500.0,
+        nap: 0,
+        qual: 1.0,
+        rv: None,
+        raw: None,
+        mode: None,
+    }
+}
+
+/// A station in `contest`, with the master switch on and every Settings field a contest on
+/// the list sends filled for an out-of-state entrant in Massachusetts.
+fn engine_for(contest: &str, grid: &str) -> Engine {
+    let mut e = Engine::new(ME, grid, 0);
+    let mut s = e.settings().clone();
+    s.fd_event = contest.into();
+    // Winter Field Day's categories are H, I, O and M; ARRL Field Day's are A to F.
+    s.fd_class = if contest == "wfd" { "1H" } else { "2B" }.into();
+    s.fd_section = "EMA".into();
+    s.contest_qth_state = "MA".into();
+    s.contest_cq_zone = 5;
+    s.contest_itu_zone = 8;
+    s.contest_check = "74".into();
+    s.contest_category_operator = "SINGLE-OP".into();
+    s.contest_category_power = "LOW".into();
+    s.contest_category_assisted = "NON-ASSISTED".into();
+    s.tx_even = true;
+    s.fd_active = true;
+    e.apply_settings(s);
+    e
+}
+
+/// The text of the over `plan_tx` planned, if it keyed one — through `commit_tx`, as the
+/// radio loop does.
+fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
+    let plan = e.plan_tx(slot)?;
+    let text = match &plan.waveform {
+        TxWaveform::Native { text, .. }
+        | TxWaveform::Fast { text, .. }
+        | TxWaveform::Deep { text, .. } => text.clone(),
+        TxWaveform::Js8 { .. } => return None,
+    };
+    let wave = plan.waveform.build();
+    let overs = e.commit_tx(&plan, wave, slot);
+    (!overs.is_empty()).then_some(text)
+}
+
+/// FT8 tones back to the 77 message bits (genft8.f90: Costas at 0-6, 36-42 and 72-78; three
+/// Gray-coded bits a data symbol), `None` for the all-zero frame a message the packer refused
+/// leaves behind.
+fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
+    const COSTAS: [i32; 7] = [3, 1, 4, 0, 6, 5, 2];
+    const INV_GRAY: [i8; 8] = [0, 1, 3, 2, 6, 4, 5, 7];
+    if tones.len() != 79 || tones[..7] != COSTAS {
+        return None;
+    }
+    let mut bits = Vec::with_capacity(174);
+    for (k, &t) in tones.iter().enumerate() {
+        if (7..36).contains(&k) || (43..72).contains(&k) {
+            let v = INV_GRAY[t as usize];
+            bits.extend([(v >> 2) & 1, (v >> 1) & 1, v & 1]);
+        }
+    }
+    bits.truncate(77);
+    Some(bits)
+}
+
+/// The 77-bit type `pack77` chose (`i3`, with `n3` when `i3` is 0) and the text a receiving
+/// station decodes, for `text` as the FT8 encoder packs it.
+pub(super) fn air_form(text: &str) -> (String, String) {
+    let tones = modes::make_mode(modes::ModeKind::Ft8).encode(text);
+    let Some(bits) = bits77(&tones) else {
+        return ("refused".into(), String::new());
+    };
+    let n = |r: std::ops::Range<usize>| bits[r].iter().fold(0u8, |a, &b| a * 2 + b as u8);
+    let (i3, n3) = (n(74..77), n(71..74));
+    let kind = if i3 == 0 {
+        format!("i3=0 n3={n3}")
+    } else {
+        format!("i3={i3}")
+    };
+    let decoded = tempo_fast::unpack77(&bits).unwrap_or_default();
+    (kind, decoded)
+}
+
+/// The tones, as digits, for the byte-for-byte comparison.
+fn tones_of(kind: modes::ModeKind, text: &str) -> String {
+    modes::make_mode(kind)
+        .encode(text)
+        .iter()
+        .map(|t| char::from_digit(*t as u32, 10).unwrap_or('?'))
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    Running,
+    SearchAndPounce,
+    /// S&P the way the Operate cockpit does it: a double-click on the partner's CQ.
+    DoubleClick,
+}
+
+/// One scene's record: every over each side sent, by slot, and what the contest log kept.
+struct Scene {
+    entered: Result<(), String>,
+    lines: Vec<String>,
+    /// This station's overs, in order.
+    sent: Vec<String>,
+    /// The contest log's rows: call, received fields, sent fields, dupe mark.
+    logged: Vec<String>,
+}
+
+fn fields(v: &[tempo_core::contest::FieldValue]) -> String {
+    v.iter()
+        .map(|f| format!("{}={}", f.key, f.raw))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Run `role` in `contest` on `tier` against a WSJT-X partner in `act`.
+fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
+    let mut e = engine_for(contest, grid);
+    e.set_tier(tier);
+    let entered = match role {
+        Role::Running => e.set_mode("fieldday-run"),
+        Role::SearchAndPounce | Role::DoubleClick => e.set_mode("fieldday-sp"),
+    };
+    // S&P is passive and does not arm TX by itself; the operator's Enable TX does.
+    if role != Role::Running {
+        e.set_tx_enabled(true);
+    }
+    let mut partner = Partner::new(act, role != Role::Running);
+    let (mut lines, mut sent) = (Vec::new(), Vec::new());
+    let mut clicked = false;
+    for slot in 0..SLOTS {
+        if slot % 2 == 0 {
+            if let Some(text) = keyed(&mut e, slot) {
+                let (kind, decoded) = air_form(&text);
+                let tones = match tier {
+                    Tier::Ft4 => tones_of(modes::ModeKind::Ft4, &text),
+                    _ => tones_of(modes::ModeKind::Ft8, &text),
+                };
+                lines.push(format!(
+                    "  s{slot:02} TX {text:?} {kind} decodes {decoded:?} tones {tones}"
+                ));
+                partner.hear(&text);
+                sent.push(text);
+            }
+        } else {
+            // The decoder runs on the partner's period whether or not it sent anything.
+            let Some(text) = partner.transmit() else {
+                e.ingest_decodes_for_test(&[], slot + 1);
+                continue;
+            };
+            lines.push(format!("  s{slot:02} RX {text:?}"));
+            e.ingest_decodes_for_test(&[heard(&text)], slot + 1);
+            if role == Role::DoubleClick && !clicked && text.starts_with("CQ ") {
+                clicked = true;
+                let r = e.call_station_ctx(DX, Some(DX_GRID), Some(&text), Some(DX_SNR), None);
+                lines.push(format!("  s{slot:02} double-click the CQ: {r:?}"));
+            }
+        }
+    }
+    let logged = match &e.mode {
+        Mode::FieldDay { station, .. } => station
+            .log
+            .qsos()
+            .iter()
+            .map(|q| {
+                format!(
+                    "{} rx[{}] tx[{}] mode {} {} dupe {}",
+                    q.call,
+                    fields(&q.rx),
+                    fields(&q.tx),
+                    q.mode,
+                    q.submode,
+                    q.dupe
+                )
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mode = match &e.mode {
+        Mode::FieldDay { station, running } => {
+            format!("FieldDay running={running} state={:?}", station.state)
+        }
+        Mode::Qso { station, running } => {
+            format!("Qso running={running} state={:?}", station.state)
+        }
+        Mode::Chat => "Chat".into(),
+    };
+    lines.push(format!("  end: {mode}"));
+    for l in &logged {
+        lines.push(format!("  LOG {l}"));
+    }
+    Scene {
+        entered,
+        lines,
+        sent,
+        logged,
+    }
+}
+
+fn tier_name(t: Tier) -> &'static str {
+    match t {
+        Tier::Ft8 => "FT8",
+        Tier::Ft4 => "FT4",
+        Tier::TempoFast => "FT1",
+        _ => "other",
+    }
+}
+
+/// A stub country file for the contests that score by where the other station is (CQ WW,
+/// CQ WPX), which refuse to start without one: it places this file's two calls and nothing
+/// else.
+fn place(call: &str) -> Option<tempo_core::contest::CallLocation> {
+    let up = call.trim().to_ascii_uppercase();
+    (up.starts_with('K') || up.starts_with('W')).then_some(tempo_core::contest::CallLocation {
+        entity: "United States",
+        continent: "NA",
+        cq_zone: None,
+    })
+}
+
+/// The whole map, one block per contest, tier and role, in a fixed order — written to the
+/// file `CONTEST_FT_DUMP` names (or printed), so a run on the base and a run on this branch can be
+/// compared byte for byte.
+///
+/// ⚠️ Run it alone (`-- --ignored dump_contest_ft_messages`): it installs [`place`] as the
+/// country file, which is process-wide and once-only, and every other test in this binary
+/// runs without one.
+#[test]
+#[ignore = "writes the before/after dump; run by hand"]
+fn dump_contest_ft_messages() {
+    let _ = tempo_core::contest::install_call_resolver(place);
+    let mut out = String::new();
+    let mut block = |title: String, s: Scene| {
+        out.push_str(&format!("[{title}] entered={:?}\n", s.entered));
+        for l in s.lines {
+            out.push_str(&l);
+            out.push('\n');
+        }
+    };
+    for contest in CONTESTS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for role in [Role::Running, Role::SearchAndPounce] {
+                let s = scene(contest, tier, role, act_of(contest), MY_GRID);
+                block(format!("{contest:?} {} {role:?}", tier_name(tier)), s);
+            }
+        }
+    }
+    // Controls: Field Day with a six-character locator in Settings; the grid contests on
+    // FT1, which keeps today's messages; a double-click S&P in Field Day and in a VHF contest.
+    for role in [Role::Running, Role::SearchAndPounce] {
+        let s = scene("arrlfd", Tier::Ft8, role, Act::FieldDay, "FN42ab");
+        block(format!("\"arrlfd\" FT8 {role:?} grid FN42ab"), s);
+        let s = scene("arrlvhf_jan", Tier::TempoFast, role, Act::NaVhf, MY_GRID);
+        block(format!("\"arrlvhf_jan\" FT1 {role:?}"), s);
+    }
+    for contest in ["arrlfd", "arrlvhf_jan", "cqww_cw"] {
+        let s = scene(
+            contest,
+            Tier::Ft8,
+            Role::DoubleClick,
+            act_of(contest),
+            MY_GRID,
+        );
+        block(format!("{contest:?} FT8 DoubleClick"), s);
+    }
+    // Outside any contest: Call CQ and a double-click, on FT8 and FT4.
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        out.push_str(&no_contest(tier, true));
+        out.push_str(&no_contest(tier, false));
+    }
+    match std::env::var("CONTEST_FT_DUMP") {
+        Ok(path) => std::fs::write(&path, out).expect("the dump writes"),
+        Err(_) => print!("{out}"),
+    }
+}
+
+/// Call CQ (`qso-run`) or a double-click on a CQ (`qso-monitor`, then `call_station_ctx`)
+/// with the master switch off, against a WSJT-X partner with no activity.
+fn no_contest(tier: Tier, running: bool) -> String {
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    let mut s = e.settings().clone();
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_tier(tier);
+    let entered = e.set_mode(if running { "qso-run" } else { "qso-monitor" });
+    let mut partner = Partner::new(Act::None, !running);
+    let mut out = format!(
+        "[no contest {} {}] entered={entered:?}\n",
+        tier_name(tier),
+        if running { "CallCq" } else { "DoubleClick" }
+    );
+    let mut clicked = false;
+    for slot in 0..SLOTS {
+        if slot % 2 == 0 {
+            if let Some(text) = keyed(&mut e, slot) {
+                let (kind, decoded) = air_form(&text);
+                let kind_tones = match tier {
+                    Tier::Ft4 => tones_of(modes::ModeKind::Ft4, &text),
+                    _ => tones_of(modes::ModeKind::Ft8, &text),
+                };
+                out.push_str(&format!(
+                    "  s{slot:02} TX {text:?} {kind} decodes {decoded:?} tones {kind_tones}\n"
+                ));
+                partner.hear(&text);
+            }
+        } else {
+            let Some(text) = partner.transmit() else {
+                e.ingest_decodes_for_test(&[], slot + 1);
+                continue;
+            };
+            out.push_str(&format!("  s{slot:02} RX {text:?}\n"));
+            e.ingest_decodes_for_test(&[heard(&text)], slot + 1);
+            if !running && !clicked && text.starts_with("CQ ") {
+                clicked = true;
+                e.set_tx_enabled(true);
+                let r = e.call_station_ctx(DX, Some(DX_GRID), Some(&text), Some(DX_SNR), None);
+                out.push_str(&format!("  s{slot:02} double-click the CQ: {r:?}\n"));
+            }
+        }
+    }
+    out
+}
+
+/// What this station sends in `contest` as `role`, against a WSJT-X partner, up to and
+/// including its first CQ after the contact (Running) or its last over (S&P); and the row the
+/// contest log keeps, `None` where the contact never completes.
+fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<String>) {
+    let row = |rx: &str, tx: &str| {
+        Some(format!(
+            "W9XYZ rx[{rx}] tx[{tx}] mode DIG {tier} dupe false"
+        ))
+    };
+    let v = |s: &[&str]| s.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    match (contest, role) {
+        // Field Day — the control: byte for byte what it sent before this change.
+        ("" | "arrlfd", Role::Running) => (
+            v(&[
+                "CQ FD K1ABC FN42",
+                "W9XYZ K1ABC R 2B EMA",
+                "CQ FD K1ABC FN42",
+            ]),
+            row("CLASS=1D,SECTION=WI", "CLASS=2B,SECTION=EMA"),
+        ),
+        ("" | "arrlfd", _) => (
+            v(&["W9XYZ K1ABC 2B EMA", "W9XYZ K1ABC RR73"]),
+            row("CLASS=1D,SECTION=WI", "CLASS=2B,SECTION=EMA"),
+        ),
+        // Banned FT8/FT4: nothing new. Winter Field Day runs Field Day's exchange…
+        ("wfd", Role::Running) => (
+            v(&[
+                "CQ FD K1ABC FN42",
+                "W9XYZ K1ABC R 1H EMA",
+                "CQ FD K1ABC FN42",
+            ]),
+            row("CLASS=1D,SECTION=WI", "CLASS=1H,SECTION=EMA"),
+        ),
+        ("wfd", _) => (
+            v(&["W9XYZ K1ABC 1H EMA", "W9XYZ K1ABC RR73"]),
+            row("CLASS=1D,SECTION=WI", "CLASS=1H,SECTION=EMA"),
+        ),
+        // …and the two parties keep sending what they sent, which completes nothing.
+        ("ilqp" | "nyqp", Role::Running) => (v(&["CQ FD K1ABC FN42"; 8]), None),
+        ("ilqp" | "nyqp", _) => (v(&["W9XYZ K1ABC  "; 7]), None),
+        // The ARRL VHF contests: WSJT-X's NA VHF Contest messages.
+        ("arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep", Role::Running) => (
+            v(&[
+                "CQ TEST K1ABC FN42",
+                "W9XYZ K1ABC R FN42",
+                "W9XYZ K1ABC 73",
+                "CQ TEST K1ABC FN42",
+            ]),
+            row("GRID=EN37", "GRID=FN42"),
+        ),
+        ("arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep", _) => (
+            v(&["W9XYZ K1ABC FN42", "W9XYZ K1ABC RR73"]),
+            row("GRID=EN37", "GRID=FN42"),
+        ),
+        // Every other contest: WSJT-X has no activity for it, so the standard messages.
+        (_, Role::Running) => (
+            v(&[
+                "CQ K1ABC FN42",
+                "W9XYZ K1ABC -12",
+                "W9XYZ K1ABC RR73",
+                "CQ K1ABC FN42",
+            ]),
+            row("", ""),
+        ),
+        (_, _) => (
+            v(&["W9XYZ K1ABC FN42", "W9XYZ K1ABC R-12", "W9XYZ K1ABC 73"]),
+            row("", ""),
+        ),
+    }
+}
+
+/// ⭐ **Every contest on the list, both roles, FT8 and FT4, by value**: the text of each over,
+/// its 77-bit type and the text a receiving station decodes, and the row the contest log
+/// keeps. CQ WW and CQ WPX need a country file this binary does not install; they are in the
+/// dump, and the table that picks their messages is pinned in tempo-core.
+#[test]
+fn every_contest_sends_its_own_messages_on_ft8_and_ft4() {
+    let resolver_free = CONTESTS
+        .iter()
+        .filter(|c| !c.starts_with("cqww") && !c.starts_with("cqwpx"));
+    for contest in resolver_free {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for role in [Role::Running, Role::SearchAndPounce] {
+                let what = format!("{contest:?} {} {role:?}", tier_name(tier));
+                let s = scene(contest, tier, role, act_of(contest), MY_GRID);
+                assert_eq!(s.entered, Ok(()), "{what}");
+                let (want, row) = expected(contest, role, tier_name(tier));
+                assert!(
+                    s.sent.len() >= want.len() && s.sent[..want.len()] == want[..],
+                    "{what}: sent {:?}",
+                    s.sent
+                );
+                if role == Role::SearchAndPounce {
+                    assert_eq!(s.sent.len(), want.len(), "{what}: S&P sends nothing more");
+                }
+                assert_eq!(s.logged, row.into_iter().collect::<Vec<_>>(), "{what}");
+                // Each over packs as the standard or Field Day message it reads as, and
+                // decodes back to exactly its own text.
+                for text in &s.sent {
+                    let (kind, decoded) = air_form(text);
+                    let want_kind = if text.ends_with(" EMA") {
+                        "i3=0 n3=3"
+                    } else {
+                        "i3=1"
+                    };
+                    assert_eq!(kind, want_kind, "{what}: {text:?}");
+                    assert_eq!(decoded, text.trim(), "{what}: {text:?}");
+                }
+            }
+        }
+    }
+}
+
+/// FT1, DX1 and FT2 have no WSJT-X contest messages: in a grid contest they keep Field
+/// Day's, unchanged. Moving to FT8 changes the messages and re-arms the run onto `CQ TEST`;
+/// FT8↔FT4 keeps the contact in flight.
+#[test]
+fn the_tier_decides_whether_the_contest_messages_apply() {
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::TempoFast);
+    e.set_mode("fieldday-run").expect("the run starts");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ FD K1ABC FN42"));
+    e.set_tier(Tier::Ft8);
+    e.set_tx_enabled(true); // a mode switch that moves the dial turns TX off, as WSJT-X does
+    assert_eq!(keyed(&mut e, 2).as_deref(), Some("CQ TEST K1ABC FN42"));
+    e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ EN37")], 4);
+    assert_eq!(keyed(&mut e, 4).as_deref(), Some("W9XYZ K1ABC R FN42"));
+    e.set_tier(Tier::Ft4);
+    e.set_tx_enabled(true);
+    assert_eq!(
+        keyed(&mut e, 6).as_deref(),
+        Some("W9XYZ K1ABC R FN42"),
+        "FT8 to FT4 keeps the contact"
+    );
+}
+
+/// ⛔ The keying gate: a contest whose FT8/FT4 messages carry the grid does not key without a
+/// valid one in Settings. Field Day's exchange carries none and still keys (the control), and
+/// the same contest keys once the grid is there.
+#[test]
+fn a_contest_whose_messages_carry_the_grid_does_not_key_without_one() {
+    let mut e = engine_for("txqp", "");
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-run").expect("the run starts");
+    for slot in [0, 2, 4] {
+        assert_eq!(keyed(&mut e, slot), None, "no grid, no over (slot {slot})");
+    }
+    let mut fd = engine_for("arrlfd", "");
+    fd.set_tier(Tier::Ft8);
+    fd.set_mode("fieldday-run").expect("the run starts");
+    assert_eq!(keyed(&mut fd, 0).as_deref(), Some("CQ FD K1ABC"));
+    let mut ok = engine_for("txqp", MY_GRID);
+    ok.set_tier(Tier::Ft8);
+    ok.set_mode("fieldday-run").expect("the run starts");
+    assert_eq!(keyed(&mut ok, 0).as_deref(), Some("CQ K1ABC FN42"));
+}
+
+/// The passive-first rule: turning a contest on enters S&P, which calls nobody — with TX
+/// enabled and a quiet band, no contest keys anything.
+#[test]
+fn entering_any_contest_keys_nothing() {
+    for contest in CONTESTS
+        .iter()
+        .filter(|c| !c.starts_with("cqww") && !c.starts_with("cqwpx"))
+    {
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(Tier::Ft8);
+        assert!(
+            matches!(e.mode, Mode::FieldDay { running: false, .. }),
+            "{contest:?}: the switch enters S&P"
+        );
+        e.set_tx_enabled(true);
+        for slot in (0..8).step_by(2) {
+            assert_eq!(keyed(&mut e, slot), None, "{contest:?} slot {slot}");
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+    }
+}
+
+/// ⛔ The wall-clock watchdog still ends a contest run, and Halt still stops a contact in
+/// flight — both checked on the grid contest's messages, with the same run keying first as
+/// the control.
+#[test]
+fn the_watchdog_and_halt_stop_a_contest_run() {
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    let mut s = e.settings().clone();
+    s.tx_watchdog_min = 6;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-run").expect("the run starts");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ TEST K1ABC FN42"));
+    let limit = 6 * 60;
+    e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(limit + 1));
+    assert_eq!(keyed(&mut e, 2), None, "the watchdog trips");
+    assert!(!e.tx_enabled, "and disarms TX");
+
+    let mut e = engine_for("txqp", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-run").expect("the run starts");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ K1ABC FN42"));
+    e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ EN37")], 2);
+    e.halt_tx();
+    for slot in [2, 4, 6] {
+        assert_eq!(
+            keyed(&mut e, slot),
+            None,
+            "nothing after Halt (slot {slot})"
+        );
+    }
+}
+
+/// ⭐ A grid contest's FT8 contact is the row a typed one is: the same received and sent
+/// GRID, so it dupes against a typed entry and a typed entry against it, and a rover in a
+/// new grid is a new contact. S&P does not answer a station it has already worked; a
+/// duplicate the run logs is journaled at once, like a typed one.
+#[test]
+fn an_ft8_grid_contact_dupes_and_journals_like_a_typed_one() {
+    let path = std::env::temp_dir().join(format!("contest-ft-vhf-{}.adi", std::process::id()));
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_fd_log_path(path.clone());
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-sp").expect("S&P starts");
+    e.set_tx_enabled(true);
+    let contact = |e: &mut Engine, from: u64| {
+        e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], from);
+        assert_eq!(keyed(e, from).as_deref(), Some("W9XYZ K1ABC FN42"));
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ R EN37")], from + 2);
+        assert_eq!(keyed(e, from + 2).as_deref(), Some("W9XYZ K1ABC RR73"));
+        e.ingest_decodes_for_test(&[], from + 4);
+    };
+    contact(&mut e, 0);
+    let rows = |e: &Engine| match &e.mode {
+        Mode::FieldDay { station, .. } => station
+            .log
+            .qsos()
+            .iter()
+            .map(|q| (fields(&q.rx), fields(&q.tx), q.dupe))
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let ft8 = rows(&e);
+    assert_eq!(ft8, vec![("GRID=EN37".into(), "GRID=FN42".into(), false)]);
+    // A typed entry for the same station and grid is the duplicate…
+    let typed = vec![("GRID".to_string(), "EN37".to_string())];
+    assert_eq!(
+        e.contest_log_manual("W9XYZ", &typed, "DIG", Some("FT8")),
+        Ok(true)
+    );
+    assert_eq!(rows(&e)[1], ("GRID=EN37".into(), "GRID=FN42".into(), true));
+    // …a rover in a new grid is not…
+    let moved = vec![("GRID".to_string(), "EN38".to_string())];
+    assert_eq!(
+        e.contest_log_manual("W9XYZ", &moved, "DIG", Some("FT8")),
+        Ok(true)
+    );
+    assert!(!rows(&e)[2].2);
+    // …and S&P does not answer that station's CQ again: the log already holds the contact.
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 6);
+    assert_eq!(
+        keyed(&mut e, 6),
+        None,
+        "the same contact is not answered twice"
+    );
+    // A runner works whoever calls, so the same station calling again is worked; that
+    // duplicate is logged, marked, and journaled before anything else is.
+    e.set_mode("fieldday-run").expect("Running starts");
+    assert_eq!(keyed(&mut e, 8).as_deref(), Some("CQ TEST K1ABC FN42"));
+    e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ EN37")], 10);
+    assert_eq!(keyed(&mut e, 10).as_deref(), Some("W9XYZ K1ABC R FN42"));
+    e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 12);
+    assert_eq!(keyed(&mut e, 12).as_deref(), Some("W9XYZ K1ABC 73"));
+    assert_eq!(rows(&e).len(), 4);
+    assert_eq!(rows(&e)[3], ("GRID=EN37".into(), "GRID=FN42".into(), true));
+    e.station.journals.settle();
+    let journal = std::fs::read_to_string(&path).expect("the journal is written");
+    let records = journal.to_ascii_lowercase().matches("<eor>").count();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(records, 4, "every row is in the journal");
+}
