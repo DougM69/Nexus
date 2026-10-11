@@ -353,16 +353,14 @@ describe('Enter Sends Message — what counts as a stop', () => {
     expect(line()).toBe(null)
   })
 
-  it('says why it cannot be taken back while club sync is on', async () => {
+  it('says Ctrl+D takes it back at a club too', async () => {
     const club = { club: { hosting: false } } as unknown as Partial<FieldDayStatus>
     render(<Strip fieldDay={party([], club)} />)
     type(callBox(), 'K9AAA')
     type(qthBox(), 'COOK')
     await enter(qthBox()) // S&P exchange: logged
     await act(async () => harness.host!.noteStop())
-    expect(line()).toBe(
-      'Your S&P exchange stopped. K9AAA is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
-    )
+    expect(line()).toBe('Your S&P exchange stopped. K9AAA is logged. Ctrl+D twice removes it.')
   })
 
   it('a stop after the message’s over has ended changes no note', async () => {
