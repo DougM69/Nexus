@@ -1,8 +1,9 @@
 import type { FdDisplaySettings } from '../fieldDayObservation'
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type {
   ClubLink,
   ContestBoard,
+  ContestFieldSpec,
   FdClubStatus,
   FdMergeReport,
   FieldDayQso,
@@ -317,6 +318,98 @@ function qsoTimeUtc(q: FieldDayQso): string {
   const d = new Date(unix * 1000)
   const p = (n: number) => String(n).padStart(2, '0')
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+}
+
+/** The log table's head row: Time · Call, then Field Day's Class (Category for Winter Field Day) and
+ *  Section or one column per received slot, then Band · Mode. Shared by this screen's table and the
+ *  contest logger window's last contacts (ContestLogger.tsx), so the two read alike. */
+export function ContestLogHead({
+  fieldDayColumns,
+  isWfd,
+  slotColumns,
+}: {
+  fieldDayColumns: boolean
+  isWfd: boolean
+  slotColumns: readonly ContestFieldSpec[]
+}) {
+  return (
+    <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
+      <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
+      <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
+      {fieldDayColumns ? (
+        <>
+          {/* Two words for two events, not one word with a variant: ARRL calls the exchange field
+              Class and WFD calls it Category. H/I/M/O are Winter Field Day's category letters,
+              which travel with the class number in this column (2O: two transmitters, outdoor) —
+              exchange codes, never translated. */}
+          <span className="fd-col cls">
+            {isWfd ? t('fieldDay.log.column.category') : t('fieldDay.log.column.class')}
+            {isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}
+          </span>
+          <span className="fd-col sec">{t('fieldDay.log.column.section')}</span>
+        </>
+      ) : (
+        slotColumns.map((f) => (
+          <span className="fd-col slot" key={f.key}>{slotCaption(f.key)}</span>
+        ))
+      )}
+      <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
+      <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
+    </div>
+  )
+}
+
+/** One row of the log table, under `ContestLogHead`'s columns. `children` follow the mode chip in
+ *  its cell: the screen's Remove on its newest row. */
+export function ContestLogRow({
+  row,
+  fieldDayColumns,
+  slotColumns,
+  children,
+}: {
+  row: LogRowMeta
+  fieldDayColumns: boolean
+  slotColumns: readonly ContestFieldSpec[]
+  children?: ReactNode
+}) {
+  return (
+    <div
+      className={`fd-log-row${fieldDayColumns && row.isNewSection ? ' mult' : ''}${row.isDupe ? ' dupe' : ''}`}
+      {...slotGrid(slotColumns.length)}
+      title={
+        row.isDupe
+          ? t('fieldDay.log.dupe.title')
+          : fieldDayColumns && row.isNewSection
+            ? t('fieldDay.log.mult.title')
+            : undefined
+      }
+    >
+      <span className="fd-col time mono">{qsoTimeUtc(row.qso)}</span>
+      <span className="fd-col call mono">{row.qso.call}</span>
+      {fieldDayColumns ? (
+        <>
+          <span className="fd-col cls mono">{row.qso.class}</span>
+          <span className="fd-col sec mono">
+            {row.qso.section}
+            {row.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
+          </span>
+        </>
+      ) : (
+        slotColumns.map((f, j) => (
+          <span className="fd-col slot mono" key={f.key}>{row.qso.rcvd?.[j] ?? ''}</span>
+        ))
+      )}
+      <span className="fd-col band">{row.qso.band}</span>
+      <span className="fd-col mode">
+        {row.qso.mode && (
+          <span className={`fd-mode-chip sm ${(row.qso.mode ?? '').toLowerCase()}`}>
+            {row.qso.mode}
+          </span>
+        )}
+        {children}
+      </span>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -2371,10 +2464,6 @@ export function ContestView({
     [claimedBonuses, plannedBonuses],
   )
 
-  // Two words for two events, not one word with a variant: ARRL calls the exchange field
-  // Class and WFD calls it Category.
-  const classLabel = isWfd ? t('fieldDay.log.column.category') : t('fieldDay.log.column.class')
-
   // Cabrillo/ADIF come from the backend; Summary/Dupe sheet are derived client-side
   // from the same log the board renders (no backend command). Defined here so it can
   // read the score components computed just above.
@@ -2979,75 +3068,28 @@ export function ContestView({
 
       {/* LOG TABLE */}
       <div className="fd-log">
-        <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
-          <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
-          <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
-          {fdEventIsFieldDay ? (
-            <>
-              {/* H/I/M/O are Winter Field Day's category letters, which travel with the class
-                  number in this column (2O: two transmitters, outdoor) — exchange codes, never
-                  translated. */}
-              <span className="fd-col cls">{classLabel}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
-              <span className="fd-col sec">{t('fieldDay.log.column.section')}</span>
-            </>
-          ) : (
-            slotColumns.map((f) => (
-              <span className="fd-col slot" key={f.key}>{slotCaption(f.key)}</span>
-            ))
-          )}
-          <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
-          <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
-        </div>
+        <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
           {rows.map((r, i) => (
-            <div
-              className={`fd-log-row${fdEventIsFieldDay && r.isNewSection ? ' mult' : ''}${r.isDupe ? ' dupe' : ''}`}
+            <ContestLogRow
               key={`${r.qso.call}-${i}`}
-              {...slotGrid(slotColumns.length)}
-              title={
-                r.isDupe
-                  ? t('fieldDay.log.dupe.title')
-                  : fdEventIsFieldDay && r.isNewSection
-                    ? t('fieldDay.log.mult.title')
-                    : undefined
-              }
+              row={r}
+              fieldDayColumns={fdEventIsFieldDay}
+              slotColumns={slotColumns}
             >
-              <span className="fd-col time mono">{qsoTimeUtc(r.qso)}</span>
-              <span className="fd-col call mono">{r.qso.call}</span>
-              {fdEventIsFieldDay ? (
-                <>
-                  <span className="fd-col cls mono">{r.qso.class}</span>
-                  <span className="fd-col sec mono">
-                    {r.qso.section}
-                    {r.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
-                  </span>
-                </>
-              ) : (
-                slotColumns.map((f, j) => (
-                  <span className="fd-col slot mono" key={f.key}>{r.qso.rcvd?.[j] ?? ''}</span>
-                ))
+              {removable && i === rows.length - 1 && (
+                <button
+                  type="button"
+                  className="fd-remove"
+                  aria-pressed={removeAsk != null}
+                  title={t('fieldDay.log.remove.title')}
+                  onClick={removeNewest}
+                >
+                  {t('fieldDay.log.remove')}
+                </button>
               )}
-              <span className="fd-col band">{r.qso.band}</span>
-              <span className="fd-col mode">
-                {r.qso.mode && (
-                  <span className={`fd-mode-chip sm ${(r.qso.mode ?? '').toLowerCase()}`}>
-                    {r.qso.mode}
-                  </span>
-                )}
-                {removable && i === rows.length - 1 && (
-                  <button
-                    type="button"
-                    className="fd-remove"
-                    aria-pressed={removeAsk != null}
-                    title={t('fieldDay.log.remove.title')}
-                    onClick={removeNewest}
-                  >
-                    {t('fieldDay.log.remove')}
-                  </button>
-                )}
-              </span>
-            </div>
+            </ContestLogRow>
           ))}
         </div>
       </div>
