@@ -4396,7 +4396,8 @@ export interface Settings {
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */
   alertCq: boolean
-  /** Alert when a station not heard before this session appears. */
+  /** The decode alert for a new DXCC, a new grid or a rare grid 💎: its sound and its pop-up
+   *  (`processDecodes`, alerts.ts). Its own switch in Settings; the boards never read it. */
   alertNew: boolean
   /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
    *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
@@ -4411,7 +4412,8 @@ export interface Settings {
    *  confirmations and the alerts out of the corner (`popsUpWhenOff` in toast.ts says what stays).
    *  Optional: a station without the field, or the Remote page, which is never sent it, is ON. */
   popupNotifications?: boolean
-  /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
+  /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
+   *  follow it, and so does the alert while `alertNew` is on. */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */
   alertGridBands: string

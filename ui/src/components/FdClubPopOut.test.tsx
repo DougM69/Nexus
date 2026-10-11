@@ -275,6 +275,11 @@ describe('the club band board pops out', () => {
     })
     render(<DetachedPanel panel="fdclub" />)
     expect(await screen.findByText(/nothing has stopped/i)).toBeTruthy()
+    // In the contest's words: it said "while Field Day is the section you are working in" over
+    // an Illinois QSO Party club.
+    expect(screen.getByText(/nothing has stopped/i).textContent).toBe(
+      'The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.',
+    )
     // The preview was asked for and has answered before the absence below is read.
     await vi.waitFor(() => expect(vi.mocked(getFdRuleset)).toHaveBeenCalled())
     await settle()

@@ -18,7 +18,7 @@ import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
 import { ADDR_SEP, clubLinkLines, type ClubLinkLine } from '../features/clubLink'
-import { clubSyncRefusal, clubSyncRefusalText, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -143,7 +143,7 @@ export function fdBonusTally(earned: string[], planned: string[]) {
 }
 
 /**
- * The power tiers, one for one with Settings ▸ Contesting ▸ Field Day Setup. The SAME
+ * The power tiers, one for one with Settings ▸ Contesting ▸ Contest mode. The SAME
  * `fdPowerMult` field and the SAME catalog keys deliberately: two surfaces that edit one
  * setting cannot drift, and they must not describe it in two different sets of words.
  */
@@ -165,7 +165,7 @@ interface Props {
   onSetMode?: (mode: ModeRequest) => void
   /** A complete ephemeral display capture; native loaders and writes stay disabled. */
   observation?: FdDisplaySettings
-  /** The Field Day master switch (settings.fdActive) — gates the advisories. */
+  /** The Contest mode switch (settings.fdActive) — gates the advisories. */
   fdActive?: boolean
   /** The active event's ruleset facts (App fetches get_fd_ruleset once per
    *  configured event) — the warn-only advisories read these. */
@@ -190,7 +190,8 @@ interface Props {
 
 /**
  * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
- * turn on while there is something, and says what it is.
+ * turn on while there is something, and says what it is. Settings asks the same question
+ * where its copy of the switch is turned on, so the two cannot disagree about a contest.
  *
  * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
  * both events need a class (WFD calls it a category) and a section before the station enters
@@ -198,9 +199,9 @@ interface Props {
  * stops at the first. Every other reason is that constructor's own sentence off the preview
  * (`FdRulesetDto.problem`), which names the slot: "Your COUNTY is empty…".
  */
-type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
+export type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
 
-function startBlocker(
+export function startBlocker(
   s: Pick<Settings, 'fdEvent' | 'fdClass' | 'fdSection'> | null,
   preview: FdRulesetDto | null | undefined,
 ): StartBlocker | null {
@@ -214,7 +215,7 @@ function startBlocker(
   return preview?.problem ? { problem: preview.problem } : null
 }
 
-/** The Settings section that fixes a blocker: Field Day Setup for its class and section, the
+/** The Settings section that fixes a blocker: Contest mode for Field Day's class and section, the
  *  station data for any other contest's slots. Section ids, never tab names. */
 function blockerTarget(b: StartBlocker): string {
   return 'fields' in b ? 'field-day' : 'contest-station'
@@ -2146,7 +2147,7 @@ export function ContestView({
     }
   }
 
-  // ⭐ THE FIELD DAY MODE SWITCH. The same `fdActive` Settings writes, through the same patch
+  // ⭐ THE CONTEST MODE SWITCH. The same `fdActive` Settings writes, through the same patch
   // seam as the scoring panel: the settings the backend holds at save time, this one field
   // changed. What it shows is App's copy (`fdActive`), which App re-reads after the save; the
   // value just written bridges the moment between the two, so the switch does not flick back.
@@ -2189,7 +2190,7 @@ export function ContestView({
   // The contest picked in Settings, as the preview resolved it (an id the rules data does not
   // carry resolves to the ARRL Field Day mode entry would fall back to).
   const pickedEvent = fdRuleset?.event ?? (nativeSettings?.fdEvent?.trim() || undefined)
-  // The running session's contest, and with no session (Field Day mode off, or a station that
+  // The running session's contest, and with no session (Contest mode off, or a station that
   // cannot enter yet) the picked one: no session used to read as ARRL Field Day whatever the
   // picker said.
   const shownEvent = fieldDay ? fieldDay.event : pickedEvent
@@ -2293,12 +2294,14 @@ export function ContestView({
         text = await exportLog(format)
       }
       const stamp = new Date().toISOString().slice(0, 10)
+      // Named for the contest whose log it is, the one the banner and the tooltips name.
+      const stem = contestFileStem(shownEvent)
       const base =
         format === 'cabrillo' || format === 'adif'
-          ? 'fd-log'
+          ? `${stem}-log`
           : format.startsWith('club-')
-            ? 'fd-club-log'
-            : `fd-${format}`
+            ? `${stem}-club-log`
+            : `${stem}-${format}`
       // Real Rust write to Downloads, same as the Logbook exports — a `<a download>` blob is
       // silently CANCELLED by wry on macOS (no download handler is wired), so all four FD
       // export buttons produced no file there while looking successful. The toast fires only
@@ -2375,7 +2378,7 @@ export function ContestView({
 
   return (
     <section className="conversation panel fieldday">
-      {/* EVENT BANNER: the Field Day mode switch, beside the contest and its window. */}
+      {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
         {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
             that offers it reads the same words. Not a transmit control: on enters the contest
@@ -2390,7 +2393,9 @@ export function ContestView({
             disabled={observed || logger || modeBusy}
             onClick={() => void toggleMode()}
             aria-label={
-              modeOn ? t('settings.fieldDay.mode.aria.disable') : t('settings.fieldDay.mode.aria.enable')
+              modeOn
+                ? t('settings.fieldDay.mode.aria.disable', { contest: eventName })
+                : t('settings.fieldDay.mode.aria.enable', { contest: eventName })
             }
           >
             <span className="toggle-knob" />
@@ -2471,7 +2476,7 @@ export function ContestView({
             <span className="fd-class">{fieldDay?.sentExchange || '—'}</span>
           )}
         </div>
-        {/* ⚠️ Not with Field Day mode off and no session: either button ENTERS the contest
+        {/* ⚠️ Not with Contest mode off and no session: either button ENTERS the contest
             (`set_mode`), and an entry the master switch does not know about is one the
             snapshot hides, so a Running started from here would call CQ unseen. */}
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
@@ -2517,7 +2522,7 @@ export function ContestView({
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('cabrillo')}
-            title={t('fieldDay.export.cabrillo.title')}
+            title={t('fieldDay.export.cabrillo.title', { contest: eventName })}
           >
             {busy === 'cabrillo' ? t('fieldDay.export.busy') : t('fieldDay.export.cabrillo.label')}
           </button>
@@ -2526,7 +2531,7 @@ export function ContestView({
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('adif')}
-            title={t('fieldDay.export.adif.title')}
+            title={t('fieldDay.export.adif.title', { contest: eventName })}
           >
             {busy === 'adif' ? t('fieldDay.export.busy') : t('fieldDay.export.adif.label')}
           </button>

@@ -306,10 +306,10 @@ export const EN = {
   "remote.memoriesExpired": "This memory snapshot has expired. Refresh to read it again.",
   "remote.memoriesRefresh": "Refresh memories",
   "remote.memoriesObserver": "Observation only. Tuning, editing, file operations and net alerts remain on the station.",
-  "remote.fieldDaySnapshot": "Station Field Day captured {{seconds}} s ago.",
-  "remote.fieldDayRefresh": "Refresh Field Day",
+  "remote.fieldDaySnapshot": "Station contest captured {{seconds}} s ago.",
+  "remote.fieldDayRefresh": "Refresh contest",
   "remote.fieldDayObserver": "Observation only. Event, operator, scoring changes and exports remain on the station.",
-  "remote.fieldDayInactive": "No Field Day event is active on the station.",
+  "remote.fieldDayInactive": "No contest is running on the station.",
   "remote.fieldDayTooLarge": "This event is too large to show in the browser. View the complete event in Nexus at the shack.",
   "remote.otaSnapshot": "Station POTA/SOTA captured {{seconds}} s ago.",
   "remote.otaRefresh": "Refresh station data",
@@ -1914,7 +1914,7 @@ export const EN = {
   'logEntry.shared.changed': 'The contact changed in the other window before it was logged. Check it and log it again.',
   'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
   'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
-  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
+  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by / or +.',
   'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.hint': 'Did you mean {{codes}}?',
@@ -3609,18 +3609,23 @@ export const EN = {
   'settings.alerts.scope.hf': 'HF only',
   'settings.alerts.scope.vhf': 'VHF+ (6 m and up)',
   'settings.alerts.scope.all': 'All bands',
+  // The decode alert's own switch, beside the three menus. It turns the sound and the pop-up on
+  // and off, and nothing else: the boards and the icons follow the menus whatever it says.
+  'settings.alerts.newAlerts.label': 'New DXCC and grid alerts',
+  'settings.alerts.newAlerts.hint':
+    'The sound and the pop-up when you decode a new DXCC, a new grid or a rare grid 💎 on a band its menu allows. Off silences them and changes nothing else: the Needed boards and the NEW ONE and GRID icons keep following the three menus.',
   'settings.alerts.dxcc.label': 'New DXCC',
-  'settings.alerts.dxcc.aria': 'New DXCC alert bands',
+  'settings.alerts.dxcc.aria': 'New DXCC bands',
   'settings.alerts.dxcc.hint':
-    'Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode. The band choice also decides where the NEW ONE icon is shown.',
+    'The bands where a new DXCC entity — a “new one” — counts: the Needed boards, the NEW ONE icon and its loud alert all follow this choice. Off takes NEW ONE off every board.',
   'settings.alerts.grid.label': 'New grid',
-  'settings.alerts.grid.aria': 'New grid alert bands',
+  'settings.alerts.grid.aria': 'New grid bands',
   'settings.alerts.grid.hint':
-    "Quiet toast on a grid you haven't worked. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid. The band choice also decides where the GRID icon is shown, on the roster and the decode rows.",
+    "The bands where a grid you haven't worked counts: the Needed boards, the GRID icon on the roster and the decode rows, and its quiet toast all follow this choice. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.",
   'settings.alerts.rareGrid.label': 'Rare grid 💎',
-  'settings.alerts.rareGrid.aria': 'Rare grid alert bands',
+  'settings.alerts.rareGrid.aria': 'Rare grid bands',
   'settings.alerts.rareGrid.hint':
-    'The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing HF chatter keeps the gems. Covers their GRID icon too.',
+    'The bands where a rare or water-only grid (rovers, maritime, DXpeditions) counts: the Needed boards, its GRID icon and the loud 💎 alert all follow this choice. Separate from plain grids, so silencing HF chatter keeps the gems.',
   'settings.alerts.geo.label': 'Alert only about these continents',
   'settings.alerts.geo.hint':
     'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
@@ -3863,7 +3868,7 @@ export const EN = {
   // abbreviations are date formatting and stay in `fdEvent.ts` with the rest of it.
   'fieldDay.operator.label': 'Operator',
   'fieldDay.operator.placeholder': 'operator (call/initials)',
-  'fieldDay.operator.aria': 'Field Day operator (call or initials)',
+  'fieldDay.operator.aria': 'Operator (call or initials)',
   'fieldDay.popOut.label': '⧉ Pop out',
   'fieldDay.popOut.title': 'Pop the scoreboard out to its own window (second monitor)',
   'fieldDay.logger.label': '⧉ Logger window',
@@ -3936,21 +3941,21 @@ export const EN = {
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
-  'fieldDay.upload.label': 'Send merged contacts to my logbook',
+  'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
   // Run vs search-and-pounce. Stored as plain text with a real `&` — React escapes text
   // children itself, so an entity here would render as the literal characters.
-  'fieldDay.role.aria': 'Field Day role',
+  'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.
   'fieldDay.export.busy': 'Exporting…',
   'fieldDay.export.cabrillo.label': 'Export Cabrillo',
-  'fieldDay.export.cabrillo.title': 'Export Field Day log as Cabrillo (.cbr) for ARRL submission',
+  'fieldDay.export.cabrillo.title': 'Export the {{contest}} log as Cabrillo (.cbr), for submission to the sponsor',
   'fieldDay.export.adif.label': 'Export ADIF',
-  'fieldDay.export.adif.title': 'Export Field Day log as ADIF (.adi)',
+  'fieldDay.export.adif.title': 'Export the {{contest}} log as ADIF (.adi)',
   'fieldDay.export.summary.label': 'Summary',
   'fieldDay.export.summary.title':
     'Download a one-page score summary (QSOs by band/mode, sections, power, bonuses, total)',
@@ -4045,7 +4050,7 @@ export const EN = {
   // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
   // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
   'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
-  // The lines under the Field Day mode switch at the top of the contest screen. The switch
+  // The lines under the Contest mode switch at the top of the contest screen. The switch
   // itself reads Settings' label and accessible names (settings.fieldDay.mode.*). {{contest}}
   // and {{picked}} are contests' own names and {{modes}} on-air mode tokens, all invariant;
   // {{field}}, {{first}} and {{second}} are Settings' names for the exchange boxes.
@@ -4058,13 +4063,13 @@ export const EN = {
   'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
   'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
   'fieldDay.mode.picked':
-    'Picked in Settings: {{picked}}. Turn Field Day mode off and on again to switch to it.',
+    'Picked in Settings: {{picked}}. Turn Contest mode off and on again to switch to it.',
   'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
   'fieldDay.mode.needs.two':
     'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
   'fieldDay.mode.needs.open': 'Open in Settings',
   'fieldDay.mode.club':
-    'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+    'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.
@@ -4210,8 +4215,12 @@ export const EN = {
   'settings.contestPick.contest.aria': 'Which contest you are entering',
   'settings.contestPick.contest.hint':
     'Which contest you are entering. It decides the exchange, what counts as a duplicate, and how the log is scored — so the setup below belongs to the one you pick.',
+  // Shown beside the picker while a contest session runs. `{{contest}}` is the running contest's
+  // own name, invariant.
+  'settings.contestPick.contest.running':
+    'Contest mode is on for {{contest}}. A new pick takes effect after you save it and turn Contest mode off and on again.',
   'settings.contestPick.role.label': 'Your role',
-  'settings.contestPick.role.value': 'Running as {{role}}. Your location decides this, so moving across the line changes it.',
+  'settings.contestPick.role.value': 'Your station is {{role}}. Your location decides this, so moving across the line changes it.',
   'settings.contestPick.role.symmetric':
     'This contest works the same way for everyone, so there is no role to choose. Contests with an in-state and an out-of-state side will show yours here.',
   'settings.contestPick.category.label': 'Entry category',
@@ -4321,6 +4330,11 @@ export const EN = {
   'settings.contestKeys.phone.steps.label': 'Voice keyer steps',
   'settings.contestKeys.phone.steps.hint':
     'Record a slot for each step you want Enter to play. An empty slot plays nothing.',
+  // The side of a QSO party the operator's location puts them on (the rules data's role ids
+  // in_state / out_of_state), shown in Settings and beside the log strip's exchange. W/VE and DX,
+  // the other two sides, are the sponsors' own words and stay invariant in the code.
+  'contest.role.inState': 'in-state',
+  'contest.role.outOfState': 'out-of-state',
   'contest.esm.step.callExch': 'His call and your exchange',
   'contest.esm.step.myCall': 'Your call',
   'contest.esm.step.exch': 'Your S&P exchange',
@@ -4371,14 +4385,17 @@ export const EN = {
     '{{step}} stopped, so it counts as not sent: the next Enter sends it again.',
   'contest.esm.switch.failed': 'Enter Sends Message was not saved, so the switch is as it was.',
 
-  'settings.fieldDay.legend': 'Field Day Setup',
-  'settings.fieldDay.mode.label': 'Field Day mode',
-  'settings.fieldDay.mode.aria.enable': 'Enable Field Day mode',
-  'settings.fieldDay.mode.aria.disable': 'Disable Field Day mode',
+  // CONTEST MODE: one switch for whichever contest is picked, named for that (it was "Field Day
+  // mode" while it already started every contest). The keys keep their `fieldDay` names, as the
+  // stored `fdActive` setting does. {{contest}} is the picked contest's own name, invariant.
+  'settings.fieldDay.legend': 'Contest mode',
+  'settings.fieldDay.mode.label': 'Contest mode',
+  'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
+  'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',
   'settings.fieldDay.mode.hint':
-    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
   'settings.fieldDay.needExchange':
-    "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
+    "<b>Set your Class + Section to start operating.</b> Contest mode is on, but the station won't enter {{contest}} until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
   // the codes an operator sends — a translator leaves every one of them.
   'settings.fieldDay.class.label': 'FD Class',
@@ -4426,7 +4443,7 @@ export const EN = {
   'settings.fdRules.stale': 'Rules data is from {{year}} — check for updates before the event.',
   'settings.fdRules.empty': 'Built-in rules data active.',
   'settings.fdRules.hint':
-    'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
+    'Scoring, dates, exchanges and multipliers for every contest in the Contest list above. Checked on demand; a downloaded update applies at the next launch.',
   // ── Settings ▸ Contesting ▸ Who's who at this event ─────────────────────────────────
   // Three names, three different jobs, and until now nothing said so: the club call lived on
   // Station, the position name under a networking heading on Contesting, the operator on
@@ -7803,22 +7820,22 @@ export const EN = {
   // written. The host/port EXAMPLES are invariant tokens in the panel.
   'settings.n3fjp.legend': 'N3FJP Integration (club master log)',
   'settings.n3fjp.note':
-    "Each FD contact lands in the club's <b>N3FJP Field Day Contest Log</b> the moment you log it — so the whole club's score updates in real time. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+    "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time; a contest whose exchange is not a class and section reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
   'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
   'settings.n3fjp.host.hint':
     'IP or hostname of the master log computer. Leave blank to disable.',
   'settings.n3fjp.port.label': 'N3FJP port',
   'settings.n3fjp.port.hint': "N3FJP's API TCP port (default 1100).",
-  'settings.n3fjp.useEnter.label': 'Use ENTER for Field Day scoring',
+  'settings.n3fjp.useEnter.label': 'Use ENTER for contest scoring',
   'settings.n3fjp.useEnter.hint':
-    "Log each FD contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
+    "Log each contest contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
   'settings.n3fjp.reportBand.label': 'Report my band to N3FJP',
   'settings.n3fjp.reportBand.hint':
     "Tell N3FJP which band you're on (no CAT needed), so the club's Network Status Display band board shows this position. Off by default.",
   'settings.n3fjp.forwardAll.label': 'Forward every QSO',
   'settings.n3fjp.forwardAll.hint':
-    "Also push <b>every</b> logged QSO (not just Field Day) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the Field-Day push.",
+    "Also push <b>every</b> logged QSO (not just contest contacts) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the contest push.",
   'settings.n3fjp.test.label': 'Connection test',
   'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
   'settings.n3fjp.test.action': 'Test N3FJP',
@@ -7839,10 +7856,10 @@ export const EN = {
   // it: reword the toggle's label and this sentence moves with it.
   'settings.n1mm.addr.sending': 'Sending for every logged QSO.',
   'settings.n1mm.addr.idle':
-    'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
+    'An address alone sends only the contacts you log in Contest mode — turn on Broadcast every QSO below for everyday logging.',
   'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
   'settings.n1mm.broadcastAll.hint':
-    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+    'Send the contact packet for <b>every</b> logged QSO, not just contest contacts — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the contest broadcast, so it is safe to leave on through a contest. Off by default; with it off, packets go out <em>only</em> for the contacts you log in Contest mode.',
 
   // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
   // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
@@ -8300,7 +8317,7 @@ export const EN = {
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
   'settings.features.fieldDay.hint':
-    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
@@ -10550,10 +10567,10 @@ export const EN = {
   // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
   'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
   'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
-  // `{{exchange}}` is the Field Day class + section, a token; the element around it comes
+  // `{{exchange}}` is the running contest's exchange, a token; the element around it comes
   // from the call site.
   'phone.keyer.fd.hint':
-    'Field Day: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
+    'Contest: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
   'phone.keyer.slot.play.title': 'Play F{{slot}} ({{label}})',
   // ONE sentence, not a stem plus a shared tail: recording the rig's RX audio into a slot puts
   // the WRONG AUDIO on the air the moment the slot is played, so the warning rides both
@@ -10872,7 +10889,7 @@ export const EN = {
   'detached.fieldDay.inactive': 'Field Day isn’t active.',
   'detached.fdClub.away.head': 'Club board',
   'detached.fdClub.away.body':
-    "The club board shows here while Field Day is the section you are working in. Step back into Field Day and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
+    "The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
   'detached.fdClub.off.head': 'Club sync is off',
   'detached.fdClub.off.body': 'This station is not hosting a club event and has not joined one, so there are no other positions to show.',
   'detached.fdClub.off.route': 'Turn it on in Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event — or paste the host station’s address into Join event at to join one someone else is running.',

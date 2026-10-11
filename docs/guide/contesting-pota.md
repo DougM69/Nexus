@@ -4,21 +4,23 @@ Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day)
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
-**Field Day mode is the exception**: it stays off until you switch it on at the
+**Contest mode is the exception**: it stays off until you switch it on at the
 top of the **Contest** screen (the tent in the left bar), in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
-[Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
-reshapes the app for a weekend most operators are not having.
+[Contesting ▸ Contest mode](settings-reference.md#contest-mode), because it
+reshapes the app for a weekend most operators are not having. It is one switch for
+whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
+Field Day or any other, and it names that contest wherever it is shown.
 
 ---
 
 ## Field Day
 
-A settings switch turns the event on and the app reshapes for it: the exchange
+**Contest mode** turns the event on and the app reshapes for it: the exchange
 grammar, a live countdown that knows the real date rules, per-(call, band,
 mode-class) dupe checking, and a scoreboard.
 
-<!-- TODO: capture screenshot — Field Day mode — exchange entry, countdown, live scoreboard -->
+<!-- TODO: capture screenshot — Contest mode on Field Day — exchange entry, countdown, live scoreboard -->
 
 ### Set it up first
 
@@ -28,17 +30,19 @@ mode-class) dupe checking, and a scoreboard.
 off. The class, section and multiplier shown are one station's own entries —
 set yours from the rules for the event you are in.*
 
-In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
+In [Settings ▸ Contesting ▸ Contest mode](settings-reference.md#contest-mode):
 
-1. **Event** — ARRL Field Day or Winter Field Day. This changes scoring labels
-   and export headers.
+1. **Contest** — ARRL Field Day or Winter Field Day, picked in
+   [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest) above this section.
+   This changes scoring labels and export headers.
 2. **Class / Category** and **ARRL Section** — these start **empty on purpose**,
    and Field Day refuses to start until you set yours. (An old default of "WI"
    sent the wrong exchange for everyone outside Wisconsin — now it's a one-time
    deliberate step.) ARRL FD wants a class like `1D`; WFD wants its class number
    and category letter, like `2O` (two transmitters, outdoor).
-3. **Power multiplier** — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W), or ×1 (> 100 W).
-   It multiplies your QSO points; the engine clamps it to the legal values.
+3. **Power multiplier**, ARRL Field Day only — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W),
+   or ×1 (> 100 W). It multiplies your QSO points; the engine clamps it to the legal
+   values. Winter Field Day scores by its objectives instead.
 
 ### Operate the event
 
@@ -98,6 +102,24 @@ opened. It carries a floor now and the column scrolls past that floor, so the
 board a club watches all weekend stays a board. The checklist keeps its own cap
 and scrolls inside itself: all fifteen rows are there, in a list of their own,
 rather than 290 px of checkboxes between you and the log.
+
+### FT8 and FT4 in each contest
+
+On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
+answers, and **S&P** answers the first CQ it hears once you turn TX on. What
+they send depends on the contest, and is what WSJT-X sends in it (here K1ABC in
+FN42 works W9XYZ in EN37):
+
+| Contest | Running sends | S&P sends | The contest log keeps |
+|---|---|---|---|
+| ARRL Field Day | `CQ FD K1ABC FN42`, `W9XYZ K1ABC R 2B EMA` | `W9XYZ K1ABC 2B EMA`, `W9XYZ K1ABC RR73` | class and section |
+| ARRL January, June and September VHF (WSJT-X's NA VHF Contest mode) | `CQ TEST K1ABC FN42`, `W9XYZ K1ABC R FN42`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC RR73` | the grid each way |
+| Sweepstakes, CQ WW, CQ WPX, and the California, Ohio, Tennessee and Texas QSO parties (no WSJT-X contest mode) | `CQ K1ABC FN42`, `W9XYZ K1ABC -12`, `W9XYZ K1ABC RR73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC R-12`, `W9XYZ K1ABC 73` | the call only |
+
+Outside Field Day, Running and S&P need your grid in Settings before they
+transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
+FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
+Day's messages, as they always have.
 
 ### An operator and a logger on one radio
 
@@ -161,7 +183,7 @@ types the host's address) and joins.
   cannot host, the line says why: another program using the port, a port that
   would not open, or a contest club sync does not run.
 - **Every other laptop says where its join stands**, under **Join event at**
-  and on the Contest screen, with Field Day mode on or off: looking for the host
+  and on the Contest screen, with Contest mode on or off: looking for the host
   at that address; joined, with the event, the host's call, this laptop's
   position and its club code; turned away, in the host's own words; cannot
   reach the host, because nothing listens there or nothing answers, with what
@@ -345,18 +367,19 @@ reaches the contact.
   a hint from the log, and nothing is ticked for you.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
+- **A double-click on an FT8 or FT4 decode works that station outside the
+  contest**, in any contest: it sends the standard FT8 messages and the contact
+  goes to your log, not the contest log. For a contest contact, use S&P on the
+  Contest screen.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
   position.
 - **A contest that is not on the list logs as one with the same exchange.** The
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
-  Field Day mode. Before you send the log, change the Cabrillo file's `CONTEST:`
+  Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
   line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
   Nexus shows is WPX's, and the sponsor works out its own.
-- **The Satellites section's log strip doesn't join Field Day yet** — unlike the
-  CW and Phone strips it stays on the general log while a session runs. Not a
-  design choice; not wired up yet.
 - **You can't tell the Field Day log which band a contact was on** — it records
   a band per contact, but always the one the radio is on at the moment you type
   the entry; nothing lets you name a different one. Log as you work, not
@@ -367,4 +390,4 @@ reaches the contact.
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Logbook & QSL](logbook-qsl.md)
-- [Settings reference — Field Day Setup](settings-reference.md#field-day-setup)
+- [Settings reference — Contest mode](settings-reference.md#contest-mode)

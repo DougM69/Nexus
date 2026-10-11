@@ -331,21 +331,21 @@ describe('a press through the Remote stream exports no file', () => {
     await act(async () => { fireEvent.click(button()) })
     await settle()
     expect(fdClubExport).toHaveBeenCalledWith(format)
-    expect(saveTextToDownloads).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^fd-club-log-.*\\.${ext}$`)), '')
+    expect(saveTextToDownloads).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^arrlfd-club-log-\\d{4}-\\d{2}-\\d{2}\\.${ext}$`)), '')
     expect(exportAlert(), 'the export clears the refusal').toBeNull()
   })
 
   // The station log's own four, on a station with no club: Cabrillo and ADIF come from the
   // backend, Summary and Dupe sheet are built here, and all four are written to Downloads.
   it.each([
-    ['Export Cabrillo', 'pressed', [['cabrillo']], /^fd-log-.*\.cbr$/],
-    ['Export Cabrillo', 'keyed', [['cabrillo']], /^fd-log-.*\.cbr$/],
-    ['Export ADIF', 'pressed', [['adif']], /^fd-log-.*\.adi$/],
-    ['Export ADIF', 'keyed', [['adif']], /^fd-log-.*\.adi$/],
-    ['Summary', 'pressed', [], /^fd-summary-.*\.txt$/],
-    ['Summary', 'keyed', [], /^fd-summary-.*\.txt$/],
-    ['Dupe sheet', 'pressed', [], /^fd-dupesheet-.*\.txt$/],
-    ['Dupe sheet', 'keyed', [], /^fd-dupesheet-.*\.txt$/],
+    ['Export Cabrillo', 'pressed', [['cabrillo']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.cbr$/],
+    ['Export Cabrillo', 'keyed', [['cabrillo']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.cbr$/],
+    ['Export ADIF', 'pressed', [['adif']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.adi$/],
+    ['Export ADIF', 'keyed', [['adif']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.adi$/],
+    ['Summary', 'pressed', [], /^arrlfd-summary-\d{4}-\d{2}-\d{2}\.txt$/],
+    ['Summary', 'keyed', [], /^arrlfd-summary-\d{4}-\d{2}-\d{2}\.txt$/],
+    ['Dupe sheet', 'pressed', [], /^arrlfd-dupesheet-\d{4}-\d{2}-\d{2}\.txt$/],
+    ['Dupe sheet', 'keyed', [], /^arrlfd-dupesheet-\d{4}-\d{2}-\d{2}\.txt$/],
   ] as const)('refuses the station log’s own %s %s through the stream, and says why; CONTROL: at the station it exports', async (label, way, backend, file) => {
     render(<ContestView fieldDay={fd()} onSetMode={() => {}} />)
     await settle()

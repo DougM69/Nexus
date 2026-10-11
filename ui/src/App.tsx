@@ -2458,9 +2458,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // The contest only while its mode is on. With the mode off this is the screen that turns
       // it on, and a session entered behind the master switch is one the snapshot hides: a
       // Running started from it would call CQ unseen.
-      else if (next === 'fieldDay' && settings?.fdActive === true) handleSetMode('fieldday-sp')
+      // And only from another mode: `set_mode` replaces the mode wholesale, so re-entering S&P
+      // from inside the contest stopped a run's CQs and dropped the contact being worked —
+      // every time the operator looked at the score. A station already in the contest keeps
+      // its role.
+      else if (next === 'fieldDay' && settings?.fdActive === true && snap?.mode !== 'fieldDay')
+        handleSetMode('fieldday-sp')
     },
-    [handleSetMode, !!remote, settings?.fdActive],
+    [handleSetMode, !!remote, settings?.fdActive, snap?.mode],
   )
 
   /**
