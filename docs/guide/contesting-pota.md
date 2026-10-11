@@ -106,12 +106,14 @@ rather than 290 px of checkboxes between you and the log.
 ### FT8 and FT4 in each contest
 
 On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
-answers, and **S&P** answers the first CQ it hears once you turn TX on. On the FT
-cockpit, **Call CQ** is the contest's Running, and a double-click on a CQ works
-that station in the contest's S&P. What they send depends on the contest, and is
-what WSJT-X sends in it (here K1ABC in FN42 works W9XYZ in EN37). The last column
-is the special operation the WSJT-X UDP Status message reports, as WSJT-X reports
-it in that contest:
+answers, and **S&P** answers the first CQ it hears once you turn TX on, in the
+period opposite the CQ's. On the FT cockpit, **Call CQ** is the contest's
+Running and **S&P** the contest's S&P, and a double-click on a CQ, or a reply to
+one from JTAlert or GridTracker, works that station in the contest's S&P; with
+**Disable TX after sending 73** on, TX goes off after that contact. What they
+send depends on the contest, and is what WSJT-X sends in it (here K1ABC in FN42
+works W9XYZ in EN37). The last column is the special operation the WSJT-X UDP
+Status message reports, as WSJT-X reports it in that contest:
 
 | Contest | Running sends | S&P sends | The contest log keeps | UDP special operation |
 |---|---|---|---|---|
@@ -341,12 +343,11 @@ reaches the contact.
   a hint from the log, and nothing is ticked for you.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
-- **Only a double-click on a CQ works the station in the contest.** A
-  double-click on a station that is calling you, a roster or station card click,
-  the Tx1 to Tx6 rows, and a reply from JTAlert or GridTracker still work the
+- **Only a double-click on a CQ, or a reply to one from JTAlert or GridTracker,
+  works the station in the contest.** A double-click on a station that is calling
+  you, a roster or station card click, and the Tx1 to Tx6 rows still work the
   station outside the contest with the standard FT8 messages, and the contact goes
-  to your log, not the contest log. The FT cockpit's S&P button also leaves the
-  contest: use S&P on the Contest screen.
+  to your log, not the contest log.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
   position.

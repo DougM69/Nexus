@@ -286,6 +286,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Running in ARRL Field Day on FT8 and FT4 answers the caller's RR73 with 73**, as WSJT-X does,
   and then calls CQ FD again. FT1 and Winter Field Day close as before, without the 73.
   NEEDS-BENCH: a contact with a station running WSJT-X in Field Day mode.
+- **In an FT8/FT4 contest, TX goes off after a contact you started with a double-click on a CQ**,
+  when Disable TX after sending 73 is on (it is by default), as WSJT-X does after a double-clicked
+  contact: once that contact's last over has gone out. You stay in the contest's S&P, listening,
+  and turn TX on to work the next station. A contact the contest's S&P starts by itself keeps TX
+  on, so it goes on to the next CQ, and Running is unchanged. NEEDS-BENCH: FT8 into a dummy load.
 - **A park clicked on the Needed board fills the log line instead of setting a hunt.** Clicking a
   POTA or SOTA activator that works in Phone or CW, on the board in its own window or wherever it
   shows, puts the station's call and the park in that cockpit's log line, and the contact you log
@@ -457,6 +462,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said Field Day for every contest. It now says Field Day in ARRL Field Day, NA VHF in the ARRL
   VHF contests and none in the others, Winter Field Day included, as WSJT-X does. NEEDS-BENCH:
   JTAlert or GridTracker reading Nexus in Field Day and in a VHF contest.
+- **The contest's S&P answers a CQ in the period opposite it.** It answered in whichever period
+  your Tx 1st setting said, so with that set to the CQ station's own period your answer went out
+  over that station's next CQ, every time, and the contact never happened. It now answers in the
+  period opposite the CQ's, as WSJT-X does when you answer a CQ and as a double-click already did.
+  NEEDS-BENCH: FT8 into a dummy load, Tx 1st set to the CQ station's period.
+- **A reply to a CQ from JTAlert or GridTracker, and S&P on the FT cockpit, work in an FT8/FT4
+  contest.** A reply to a CQ from JTAlert or GridTracker (WSJT-X's UDP Reply) answered with the
+  standard FT8 messages, outside the contest; it now works the station in the contest's S&P, as a
+  double-click on the CQ does and as WSJT-X does. The FT cockpit's S&P button is now the contest's
+  S&P while a contest runs, the same as the Contest screen's: with TX on it answers the next CQ it
+  hears. If the contest's exchange is not filled in, S&P says what is missing and changes nothing,
+  and a reply does nothing. With Contest mode off, on FT1, DX1 and FT2, and in the contests that
+  ban FT8 and FT4, both work as before. NEEDS-BENCH: JTAlert or GridTracker replying to a CQ during
+  ARRL Field Day on FT8 into a dummy load.
 - **Settings ▸ Spots & Alerts shows the band choices the Needed boards follow, and the new DXCC
   and grid alert has its own switch.** With that alert off, New DXCC, New grid and Rare grid 💎 all
   read Off, though the boards and the need icons went on following the choices saved underneath,
