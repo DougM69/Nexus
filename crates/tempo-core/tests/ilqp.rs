@@ -816,7 +816,7 @@ fn a_restart_in_the_same_session_restores_every_contact() {
     assert_eq!(back.held(), (0, 0));
 }
 
-// ---- the journal across a County changed in Settings ---------------------------------
+// ---- the journal across a County changed in Settings, and past its four days ---------
 
 /// The county (or state) each contact was SENT from, in log order.
 fn sent_from(log: &FieldDayLog) -> Vec<&str> {
@@ -868,4 +868,135 @@ fn a_county_changed_in_settings_relabels_no_contact_already_logged() {
             "restored into a session built in {county}"
         );
     }
+}
+
+/// This laptop's position id, in the merge identities below.
+const POS: &str = "a1b2c3d4";
+
+/// `(written, already there)` of one merge of `log` into `lb`.
+fn merged(log: &FieldDayLog, lb: &mut tempo_core::logbook::Logbook) -> (usize, usize) {
+    let r = tempo_core::contest::merge_into_general(log, POS, lb);
+    (r.written.len(), r.already)
+}
+
+/// ⭐ **A contact logged five days after the party's first ones gets a number of its own, and
+/// is merged, once.** The journal restore reaches back four days, and the contact numbers went
+/// with the rows it let go: five days on, the next contact was numbered 1 again, so its merge
+/// name was the first contact's, and the merge counted it already in the Logbook and wrote
+/// nothing. A club host holding `(position, 1)` would have taken it for that contact too.
+#[test]
+fn a_contact_five_days_on_gets_a_number_of_its_own_and_is_merged_once() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let mut lb = tempo_core::logbook::Logbook::new();
+    assert_eq!(merged(&party, &mut lb), (2, 0));
+
+    // Five days on, the same running of the party: the first two are past the restore's reach.
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    assert_eq!(calls(&back), Vec::<&str>::new(), "PREMISE: none restored");
+    worked(&mut back, "N9CCC", "DUPG", later);
+    assert_eq!(merged(&back, &mut lb), (1, 0), "the new contact is merged");
+    assert_eq!(merged(&back, &mut lb), (0, 1), "once");
+    let in_logbook: Vec<&str> = lb.records().iter().map(|r| r.call.as_str()).collect();
+    assert_eq!(in_logbook, ["K9AAA", "W9BBB", "N9CCC"]);
+    assert_eq!(
+        back.qsos()[0].seq,
+        3,
+        "1 and 2 are the first contacts' numbers"
+    );
+
+    // The journal a session writes keeps the numbers of the contacts it let go, though it
+    // holds none of them: a session started from it a day later numbers on from them, with
+    // nothing of the running restored. (Another day: this session logged nothing.)
+    let mut idle = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    idle.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    let next_day = later + 86_400;
+    let mut again = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    again.restore_journal(&idle.journal_adif(), next_day - FOUR_DAYS, next_day);
+    worked(&mut again, "N9DDD", "WILL", next_day);
+    assert_eq!(
+        again.qsos()[0].seq,
+        3,
+        "the first contacts' 1 and 2 stay theirs"
+    );
+}
+
+/// ⭐ **Another contest worked in between keeps the party's numbers too.** A week after the
+/// party, CQ WW: the party's contacts are past the four days and another contest's, so its
+/// session let them go and numbered its own from 1. Back in the party the next day, CQ WW's
+/// contact was all the journal held, and the party's next contact took its first contacts'
+/// number 2.
+#[test]
+fn a_contest_worked_in_between_keeps_the_partys_numbers() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let mut lb = tempo_core::logbook::Logbook::new();
+    assert_eq!(merged(&party, &mut lb), (2, 0));
+
+    let cqww = ruleset_by_id("cqww_ssb", CURRENT_RULES_YEAR).expect("a shipped ruleset");
+    let zone = StationData {
+        mycall: "W9AWE".into(),
+        contest_cq_zone: "4".into(),
+        ..Default::default()
+    };
+    let week = SUN + 7 * 86_400;
+    let mut other = FieldDayLog::new(
+        "W9AWE",
+        ContestSession::for_ruleset(cqww, &zone).expect("CQ WW"),
+        "20m",
+    );
+    other.restore_journal(&party.journal_adif(), week - FOUR_DAYS, week);
+    assert!(other.log_fields_at(
+        "DL9XYZ",
+        &fields(&[("RST", "59"), ("ZN", "14")]),
+        "PH",
+        "USB",
+        0,
+        week
+    ));
+
+    let day = week + 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&other.journal_adif(), day - FOUR_DAYS, day);
+    assert_eq!(
+        back.held(),
+        (1, 0),
+        "PREMISE: CQ WW's contact is held, the party's let go"
+    );
+    worked(&mut back, "N9CCC", "DUPG", day);
+    assert_eq!(
+        merged(&back, &mut lb),
+        (1, 0),
+        "the party's new contact is merged"
+    );
+    assert!(
+        back.qsos()[0].seq > 2,
+        "a party number already given: {}",
+        back.qsos()[0].seq
+    );
+}
+
+/// The control the two above need: **the party's next running numbers from its own rows**, as
+/// it always has. Last year's numbers are another running's names, which this one never
+/// shares, and carrying them on would leave a club host that starts the new event empty
+/// counting them as contacts still to come.
+#[test]
+fn the_party_next_year_numbers_from_its_own_rows() {
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let next_year = SUN + 364 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), next_year - FOUR_DAYS, next_year);
+    assert_ne!(
+        back.ruleset().running_of(SUN),
+        back.ruleset().running_of(next_year),
+        "PREMISE: another running"
+    );
+    worked(&mut back, "N9CCC", "DUPG", next_year);
+    assert_eq!(back.qsos()[0].seq, 1);
 }

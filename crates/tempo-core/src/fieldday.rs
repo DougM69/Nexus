@@ -499,6 +499,60 @@ struct HeldRecord {
     adif: String,
 }
 
+/// The highest [`LoggedQso::seq`] among the rows a journal restore let go, and when the latest
+/// of them was logged ([`FieldDayLog::spent`]).
+///
+/// It rides the journal's header as `<APP_NEXUS_QSEQ_SPENT:n>seq:unix`, where every reader of
+/// the records, an earlier build's included, passes it over — and only once a row has been let
+/// go, so a journal that never let one go is written exactly as before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Spent {
+    seq: u64,
+    when_unix: u64,
+}
+
+impl Spent {
+    const TAG: &'static str = "APP_NEXUS_QSEQ_SPENT";
+
+    /// Each half as high as either's: the two need not come from one row, and a number
+    /// higher than needed costs nothing.
+    fn max(self, other: Spent) -> Spent {
+        Spent {
+            seq: self.seq.max(other.seq),
+            when_unix: self.when_unix.max(other.when_unix),
+        }
+    }
+
+    /// The header field, or nothing when no row was let go.
+    fn header(&self) -> String {
+        if self.seq == 0 {
+            return String::new();
+        }
+        let value = format!("{}:{}", self.seq, self.when_unix);
+        format!("<{}:{}>{}\n", Self::TAG, value.len(), value)
+    }
+
+    /// The field read back from a journal's header. One this build cannot read is nothing
+    /// let go, never an error: the rows still number themselves.
+    fn from_header(header: &str) -> Spent {
+        let open = format!("<{}:", Self::TAG);
+        let Some(at) = header.to_ascii_uppercase().find(&open) else {
+            return Spent::default();
+        };
+        header[at + open.len()..]
+            .split_once('>')
+            .and_then(|(len, tail)| {
+                let value = tail.get(..len.trim().parse::<usize>().ok()?)?;
+                let (seq, when) = value.split_once(':')?;
+                Some(Spent {
+                    seq: seq.trim().parse().ok()?,
+                    when_unix: when.trim().parse().ok()?,
+                })
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// A dupe-checked contest log with scoring — and **the log IS the session**: its
 /// lifetime is the session's, so its rows need no per-row session id.
 #[derive(Debug)]
@@ -569,11 +623,29 @@ pub struct FieldDayLog {
     /// The next [`LoggedQso::seq`] to stamp. Starts at 1; a journal restore
     /// advances it past every restored seq so a fresh session's rows continue
     /// the per-position monotonic sequence instead of colliding with rows the
-    /// club host already merged.
+    /// club host already merged — and past the numbers of this running's rows the
+    /// journal let go ([`spent`](Self::spent)).
     next_seq: u64,
     /// Journal records of another contest, or of another running of this one, that a
     /// restore kept out of this log — and keeps ([`restore_journal`](Self::restore_journal)).
     held: Vec<HeldRecord>,
+    /// ⭐ **The numbers of the contacts the journal let go**: the highest
+    /// [`LoggedQso::seq`] among the rows a restore passed over as older than its window, and
+    /// when the latest of them was logged. Read from the journal's header and written back
+    /// into it ([`journal_adif`](Self::journal_adif)), so it outlives the rows.
+    ///
+    /// The rows go after four days, and their numbers went with them: a contact logged in
+    /// the same running five days on was numbered 1 again, so its merge name was the first
+    /// contact's and the merge took it for one already in the Logbook — as a club host
+    /// holding `(position, 1)` would have. A session of the running they were logged in
+    /// numbers on from them ([`restore_journal`](Self::restore_journal)).
+    ///
+    /// ⚠️ **A number kept beside the rows, where the serial run is re-derived from them**
+    /// (`restore_row`), and the difference is which way each may err. A serial must follow
+    /// the rows the Cabrillo file holds; this must only never repeat, and one higher than
+    /// needed costs nothing. It holds the numbers of rows no longer in the file alone: every
+    /// row still in it numbers itself.
+    spent: Spent,
 }
 
 impl FieldDayLog {
@@ -602,6 +674,7 @@ impl FieldDayLog {
             constant_sent_warning: None,
             next_seq: 1,
             held: Vec::new(),
+            spent: Spent::default(),
         }
     }
 
@@ -686,9 +759,10 @@ impl FieldDayLog {
         &self.worked
     }
 
-    /// The highest [`LoggedQso::seq`] this log has stamped or restored — the
-    /// position's sync high-water mark (`join.max_seq`, and the base the
-    /// outbox "rows past the host's ack" is computed from). 0 = empty log.
+    /// The highest [`LoggedQso::seq`] this log has stamped or restored, or kept from a
+    /// row the journal let go (`spent`) — the position's sync high-water mark
+    /// (`join.max_seq`, and the base the outbox "rows past the host's ack" is computed
+    /// from). 0 = empty log.
     pub fn max_seq(&self) -> u64 {
         self.next_seq - 1
     }
@@ -1494,6 +1568,7 @@ impl FieldDayLog {
             .chain(self.removed.iter().flat_map(|r| &r.rows))
             .any(|q| q.tx != self.session.my_exchange);
         self.adif_of(
+            "",
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             sent_moved,
         )
@@ -1505,9 +1580,11 @@ impl FieldDayLog {
     /// every row.
     pub fn submission_adif(&self) -> String {
         let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
-        self.adif_of(self.submitted().map(|q| (q, None)), sent_moved)
+        self.adif_of("", self.submitted().map(|q| (q, None)), sent_moved)
     }
 
+    /// `header`: the journal's own header fields, before `<EOH>` (an export has none).
+    ///
     /// ⭐ `sent_moved`: EVERY row gets its own `APP_NEXUS_MYEX`, not just the ones that
     /// differ from the session, so a later move cannot re-label the rows that happen to match
     /// it today. The journal always asks for it ([`journal_adif`](Self::journal_adif));
@@ -1515,10 +1592,11 @@ impl FieldDayLog {
     /// they hold.
     fn adif_of<'a>(
         &'a self,
+        header: &str,
         rows: impl Iterator<Item = (&'a LoggedQso, Option<u64>)>,
         sent_moved: bool,
     ) -> String {
-        let mut s = String::from("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n");
+        let mut s = format!("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n{header}<EOH>\n");
         for (q, removed_unix) in rows {
             s.push_str(&adif_field("CALL", &q.call));
             // ⚠️ A MODE OUTSIDE ADIF'S ENUMERATION IS A DROPPED RECORD, NOT A COSMETIC ONE.
@@ -1702,7 +1780,11 @@ impl FieldDayLog {
         // Minimal `<NAME:len>value` tokenizer mirroring logbook.rs `parse_adif`
         // (this journal only needs the handful of FD tags).
         let body = match text.to_ascii_uppercase().find("<EOH>") {
-            Some(i) => &text[i + 5..],
+            Some(i) => {
+                // The numbers of the rows an earlier restore let go (`spent`).
+                self.spent = self.spent.max(Spent::from_header(&text[..i]));
+                &text[i + 5..]
+            }
             None => text,
         };
         let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -1773,9 +1855,20 @@ impl FieldDayLog {
     /// ([`journal_adif`](Self::journal_adif)), so they are there for the session they belong
     /// to. Their sequence numbers stay taken: a club host or the general log holding a
     /// rehearsal's `(position, seq)` would read a re-used one as a contact it already has.
+    ///
+    /// ⭐ **So do the numbers of this running's rows older than `min_when_unix`**, which the
+    /// restore lets go (`spent`): a contact logged days after the running's first ones
+    /// numbers on from them, and is merged. Only this running's: the next one's names never
+    /// meet them, and a club host starting that event empty would count numbers carried on
+    /// as contacts still to come.
     pub fn restore_journal(&mut self, text: &str, min_when_unix: u64, now_unix: u64) -> AdifMerge {
         let running = self.ruleset().running_of(now_unix);
-        self.merge_journal(text, min_when_unix, Some(running))
+        let merged = self.merge_journal(text, min_when_unix, Some(running));
+        // The latest row let go decides. When it is not this running's, none of them is.
+        if self.spent.seq > 0 && self.ruleset().running_of(self.spent.when_unix) == running {
+            self.next_seq = self.next_seq.max(self.spent.seq + 1);
+        }
+        merged
     }
 
     /// How many journal records the restore kept out: `(another contest, another running
@@ -1786,10 +1879,10 @@ impl FieldDayLog {
     }
 
     /// ⭐ **The journal: the rows of [`adif`](Self::adif), each with the exchange it was sent
-    /// with, and the records the restore held**, after them, as the journal held them — what
-    /// the engine writes the journal file from, so a row kept out of this session is never
-    /// dropped by a rewrite. Never an export: those carry this log's rows alone, as
-    /// [`adif`](Self::adif) writes them.
+    /// with; in its header the numbers of the rows a restore let go (`spent`); and the records
+    /// the restore held**, after them, as the journal held them — what the engine writes the
+    /// journal file from, so a row kept out of this session is never dropped by a rewrite.
+    /// Never an export: those carry this log's rows alone, as [`adif`](Self::adif) writes them.
     pub fn journal_adif(&self) -> String {
         let removed = self
             .removed
@@ -1802,7 +1895,11 @@ impl FieldDayLog {
         // and the Cabrillo file said so. This wrote it only once some row differed from the
         // session running now, which a Settings edit never makes true, and nothing here can
         // know what the next session will be built from.
-        let mut s = self.adif_of(self.qsos.iter().map(|q| (q, None)).chain(removed), true);
+        let mut s = self.adif_of(
+            &self.spent.header(),
+            self.qsos.iter().map(|q| (q, None)).chain(removed),
+            true,
+        );
         for h in &self.held {
             s.push_str(&h.adif);
             s.push('\n');
@@ -1845,6 +1942,18 @@ impl FieldDayLog {
                 why,
                 adif: adif.to_string(),
             });
+        }
+    }
+
+    /// A journal record the restore lets go, older than its window: its number stays taken
+    /// ([`spent`](Self::spent)).
+    fn spend(&mut self, f: &std::collections::HashMap<String, String>, when_unix: u64) {
+        if let Some(seq) = f
+            .get("APP_NEXUS_QSEQ")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0)
+        {
+            self.spent = self.spent.max(Spent { seq, when_unix });
         }
     }
 
@@ -1913,6 +2022,8 @@ impl FieldDayLog {
         };
         let when_unix = record_when(f);
         if when_unix < min_when_unix {
+            // Let go: the next rewrite of the journal drops the row, but not its number.
+            self.spend(f, when_unix);
             return RowFate::Passed;
         }
         // The ROW's band, not the log's current one — a restored dupe key must

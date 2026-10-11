@@ -473,6 +473,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change, I moved and a restart come. Contacts logged with an earlier version may not have saved
   it: they take what Settings say the first time this version opens their contest, and keep it
   from then on.
+- **A contest contact logged more than four days after the first ones is merged into your
+  logbook.** The contest log keeps its contacts for four days, and the number it gives each
+  contact (not the serial you send) went with them: the next contact got number 1 again,
+  **Merge into my logbook** took it for the first contact and left it out as already in your
+  logbook, and a club host would have taken it for a contact it already had. A contest's contact
+  numbers are no longer given out twice in the same year, however long after the contest a
+  contact is logged.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
