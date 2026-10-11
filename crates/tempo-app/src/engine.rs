@@ -25541,7 +25541,7 @@ contact yourself."
         // here does: the CQ's audio is from the period before `slot`, so the opposite of its
         // period is `slot`'s.
         if fd_answered_cq {
-            self.apply_cycle_parity(slot % 2 == 0);
+            self.apply_cycle_parity(slot.is_multiple_of(2));
         }
         // The one over still owed to a partner the run has already left (#170, #153). Runs
         // AFTER the sequencer has had this slot's decodes, so it can never take a message the
