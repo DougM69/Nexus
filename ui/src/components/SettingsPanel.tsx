@@ -3599,6 +3599,9 @@ export function SettingsPanel({
     form.fdEvent,
     (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null,
   )
+  // The contest Contest mode starts, by its sponsor's name: the switch names it wherever it is
+  // offered. A blank pick is ARRL Field Day, the contest a blank pick runs.
+  const pickedContest = contestName(form.fdEvent?.trim() || 'arrlfd')
 
   return (
     <SettingsOpenTarget.Provider value={openTarget}>
@@ -4557,15 +4560,15 @@ export function SettingsPanel({
                             }}
                             aria-label={
                               form.fdActive
-                                ? t('settings.fieldDay.mode.aria.disable')
-                                : t('settings.fieldDay.mode.aria.enable')
+                                ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
+                                : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
                             }
                           >
                             <span className="toggle-knob" />
                           </button>
                         </label>
                         <span className="settings-hint">
-                          {t('settings.features.fieldDay.hint')}
+                          {t('settings.features.fieldDay.hint', { contest: pickedContest })}
                         </span>
                       </div>
                     )}
@@ -12790,8 +12793,8 @@ export function SettingsPanel({
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day">
             <legend>{t('settings.fieldDay.legend')}</legend>
-            {/* The Field Day MASTER lives here now (Contesting is always visible) — turning it on
-                reveals the FD workspace + Class/Section exchange across all modes. */}
+            {/* The Contest mode switch lives here (Contesting is always visible) — turning it on
+                starts the picked contest: its log strip in every cockpit, the Contest screen. */}
             <label className="settings-field">
               <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
               <button disabled={remote}
@@ -12802,13 +12805,13 @@ export function SettingsPanel({
                 onClick={() => updateBool('fdActive', !form.fdActive)}
                 aria-label={
                   form.fdActive
-                    ? t('settings.fieldDay.mode.aria.disable')
-                    : t('settings.fieldDay.mode.aria.enable')
+                    ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
+                    : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
                 }
               >
                 <span className="toggle-knob" />
               </button>
-              <span className="settings-hint">{t('settings.fieldDay.mode.hint')}</span>
+              <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
             </label>
             {/* ⭐ CLASS + SECTION ARE FIELD DAY'S OWN EXCHANGE, so they are shown for the
                 two Field Day events and for nothing else. A QSO party sends a county or
@@ -12820,7 +12823,7 @@ export function SettingsPanel({
               form.fdActive &&
               (!form.fdClass.trim() || !form.fdSection.trim()) && (
                 <p className="settings-note">
-                  <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} />
+                  <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} vals={{ contest: pickedContest }} />
                 </p>
               )}
             <div className="settings-grid">

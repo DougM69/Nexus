@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// THE FIELD DAY MODE SWITCH ON THE CONTEST SCREEN — one click on or off, beside the picked
-// contest and its window, writing the SAME `fdActive` Settings writes.
+// THE CONTEST MODE SWITCH ON THE CONTEST SCREEN — one click on or off, beside the picked
+// contest and its window, writing the SAME `fdActive` Settings writes. It is the switch for
+// whichever contest is picked, so it is named for that and names the contest it starts.
 //
 // The backend here is a live one: a read returns what it holds NOW and a save replaces it, so
 // "the same path" is checked by value — the struct saved is the backend's at save time with
@@ -140,7 +141,8 @@ describe('the switch writes the same setting, through the same path', () => {
   it('on: the backend’s settings at save time, with fdActive true and nothing else changed', async () => {
     const { onSettingsSaved } = await openOn(ILQP_STATION)
     expect(theSwitch().getAttribute('aria-checked')).toBe('false')
-    expect(theSwitch().getAttribute('aria-label')).toBe('Enable Field Day mode')
+    expect(theSwitch().getAttribute('aria-label')).toBe('Enable Contest mode: Illinois QSO Party')
+    expect(document.querySelector('.fd-mode-label')!.textContent).toBe('Contest mode')
     // A QSY after the screen opened: a save of the screen's own copy would send it back.
     station = { ...station, dialMhz: 7.04, band: '40m' }
     const before = { ...station }
@@ -149,7 +151,7 @@ describe('the switch writes the same setting, through the same path', () => {
     expect(vi.mocked(setSettings).mock.calls[0][0]).toEqual({ ...before, fdActive: true })
     expect(station.dialMhz).toBe(7.04)
     expect(theSwitch().getAttribute('aria-checked')).toBe('true')
-    expect(theSwitch().getAttribute('aria-label')).toBe('Disable Field Day mode')
+    expect(theSwitch().getAttribute('aria-label')).toBe('Disable Contest mode: Illinois QSO Party')
     // App is told, so the rail, Settings and the cockpits read the change at once.
     expect(onSettingsSaved).toHaveBeenCalledTimes(1)
   })
@@ -309,8 +311,10 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(document.querySelector('.fd-event-name')!.textContent).toBe('Illinois QSO Party')
     expect(lines()).toEqual([
       'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
-      'Picked in Settings: CQ World-Wide DX Contest (CW). Turn Field Day mode off and on again to switch to it.',
+      'Picked in Settings: CQ World-Wide DX Contest (CW). Turn Contest mode off and on again to switch to it.',
     ])
+    // The switch names the contest it would leave: the one running, not the one picked.
+    expect(theSwitch().getAttribute('aria-label')).toBe('Disable Contest mode: Illinois QSO Party')
   })
 
   it('a club: what turning the mode off does to it, said before the click', async () => {
@@ -319,7 +323,7 @@ describe('with the mode on, the screen says which rules apply now', () => {
       { fieldDay: session(), fdActive: true },
     )
     expect(lines()).toContain(
-      'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+      'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
     )
     // CONTROL: no club, no such line.
     cleanup()

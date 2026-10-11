@@ -160,7 +160,7 @@ interface Props {
   onSetMode?: (mode: ModeRequest) => void
   /** A complete ephemeral display capture; native loaders and writes stay disabled. */
   observation?: FdDisplaySettings
-  /** The Field Day master switch (settings.fdActive) — gates the advisories. */
+  /** The Contest mode switch (settings.fdActive) — gates the advisories. */
   fdActive?: boolean
   /** The active event's ruleset facts (App fetches get_fd_ruleset once per
    *  configured event) — the warn-only advisories read these. */
@@ -2089,7 +2089,7 @@ export function ContestView({
     }
   }
 
-  // ⭐ THE FIELD DAY MODE SWITCH. The same `fdActive` Settings writes, through the same patch
+  // ⭐ THE CONTEST MODE SWITCH. The same `fdActive` Settings writes, through the same patch
   // seam as the scoring panel: the settings the backend holds at save time, this one field
   // changed. What it shows is App's copy (`fdActive`), which App re-reads after the save; the
   // value just written bridges the moment between the two, so the switch does not flick back.
@@ -2132,7 +2132,7 @@ export function ContestView({
   // The contest picked in Settings, as the preview resolved it (an id the rules data does not
   // carry resolves to the ARRL Field Day mode entry would fall back to).
   const pickedEvent = fdRuleset?.event ?? (nativeSettings?.fdEvent?.trim() || undefined)
-  // The running session's contest, and with no session (Field Day mode off, or a station that
+  // The running session's contest, and with no session (Contest mode off, or a station that
   // cannot enter yet) the picked one: no session used to read as ARRL Field Day whatever the
   // picker said.
   const shownEvent = fieldDay ? fieldDay.event : pickedEvent
@@ -2318,7 +2318,7 @@ export function ContestView({
 
   return (
     <section className="conversation panel fieldday">
-      {/* EVENT BANNER: the Field Day mode switch, beside the contest and its window. */}
+      {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
         {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
             that offers it reads the same words. Not a transmit control: on enters the contest
@@ -2333,7 +2333,9 @@ export function ContestView({
             disabled={observed || logger || modeBusy}
             onClick={() => void toggleMode()}
             aria-label={
-              modeOn ? t('settings.fieldDay.mode.aria.disable') : t('settings.fieldDay.mode.aria.enable')
+              modeOn
+                ? t('settings.fieldDay.mode.aria.disable', { contest: eventName })
+                : t('settings.fieldDay.mode.aria.enable', { contest: eventName })
             }
           >
             <span className="toggle-knob" />
@@ -2414,7 +2416,7 @@ export function ContestView({
             <span className="fd-class">{fieldDay?.sentExchange || '—'}</span>
           )}
         </div>
-        {/* ⚠️ Not with Field Day mode off and no session: either button ENTERS the contest
+        {/* ⚠️ Not with Contest mode off and no session: either button ENTERS the contest
             (`set_mode`), and an entry the master switch does not know about is one the
             snapshot hides, so a Running started from here would call CQ unseen. */}
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
@@ -2460,7 +2462,7 @@ export function ContestView({
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('cabrillo')}
-            title={t('fieldDay.export.cabrillo.title')}
+            title={t('fieldDay.export.cabrillo.title', { contest: eventName })}
           >
             {busy === 'cabrillo' ? t('fieldDay.export.busy') : t('fieldDay.export.cabrillo.label')}
           </button>
@@ -2469,7 +2471,7 @@ export function ContestView({
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('adif')}
-            title={t('fieldDay.export.adif.title')}
+            title={t('fieldDay.export.adif.title', { contest: eventName })}
           >
             {busy === 'adif' ? t('fieldDay.export.busy') : t('fieldDay.export.adif.label')}
           </button>
