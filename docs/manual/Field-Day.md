@@ -13,7 +13,7 @@ In **Settings → Contesting ▸ Contest**, choose between:
 | _(empty, default)_ | ARRL Field Day, the 4th full weekend of June | **27 hours**: 1800 UTC Saturday → 2100 UTC Sunday |
 | `wfd` | Winter Field Day, the 4th full weekend of January | **30 hours**: 1600 UTC Saturday → 21:59 UTC Sunday |
 
-A full weekend has both days in the month, so a Saturday whose Sunday falls in February does not count. Winter Field Day 2027 is **23 and 24 January**, the sponsor's own dates. Its rules said "the last full weekend" until 2025, and the two readings differ in a January with five full weekends: 2027 and 2028 are both such years, and in each the last full weekend is a week later than the event. If a sponsor moves a date, a rules update carries it (Settings → Contesting ▸ Field Day Setup ▸ Check for rules updates), and it applies at the next launch.
+A full weekend has both days in the month, so a Saturday whose Sunday falls in February does not count. Winter Field Day 2027 is **23 and 24 January**, the sponsor's own dates. Its rules said "the last full weekend" until 2025, and the two readings differ in a January with five full weekends: 2027 and 2028 are both such years, and in each the last full weekend is a week later than the event. If a sponsor moves a date, a rules update carries it (Settings → Contesting ▸ Contest mode ▸ Check for rules updates), and it applies at the next launch.
 
 ### Countdown
 
@@ -29,7 +29,7 @@ The header reads **active** once the window opens and clears back to countdown a
 
 Run through this before the weekend. Most problems are discovered Saturday at 1759 UTC, not Friday evening.
 
-- [ ] **Set your class and section** in Settings → Contesting ▸ Field Day Setup (e.g. `3A`, `WI`). Both fields start **empty** — the greyed `1D` / `WI` you see are placeholder hints, not values. Field Day mode will not engage until both are filled in (the exchange goes on the air), and an export with blanks is malformed.
+- [ ] **Set your class and section** in Settings → Contesting ▸ Contest mode (e.g. `3A`, `WI`). Both fields start **empty** — the greyed `1D` / `WI` you see are placeholder hints, not values. Field Day mode will not engage until both are filled in (the exchange goes on the air), and an export with blanks is malformed.
 - [ ] **Set power multiplier** (ARRL Field Day): x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
 - [ ] **Configure N3FJP** (see [N3FJP Setup](#n3fjp-setup) below) and press **Test** to confirm the handshake before the event.
 - [ ] **Configure N1MM address** if your club runs N1MM dashboards (see [N1MM Broadcast](#n1mm-broadcast)).
@@ -41,7 +41,7 @@ Run through this before the weekend. Most problems are discovered Saturday at 17
 
 The 2027 event is **23 and 24 January**, 1600 UTC Saturday to 21:59 UTC Sunday. Before it, on every laptop:
 
-- [ ] **Get the 2027 rules.** Settings → Contesting ▸ Field Day Setup ▸ **Check for rules updates**, then restart Nexus: a downloaded rules file takes effect at the next launch. Until then a 1.14 to 1.17 copy counts down to 30 January, a week late. **Nexus 1.13 or older cannot read the current rules file at all**: upgrade, or its Winter Field Day starts a week late.
+- [ ] **Get the 2027 rules.** Settings → Contesting ▸ Contest mode ▸ **Check for rules updates**, then restart Nexus: a downloaded rules file takes effect at the next launch. Until then a 1.14 to 1.17 copy counts down to 30 January, a week late. **Nexus 1.13 or older cannot read the current rules file at all**: upgrade, or its Winter Field Day starts a week late.
 - [ ] Settings → Contesting ▸ Contest: **Winter Field Day**, then **Field Day mode** on.
 - [ ] **Class and category**: the number of transmitters you can run at once, then your category letter, `H` (home), `I` (indoor), `O` (outdoor) or `M` (mobile): `2O` is two transmitters outdoors. Then your ARRL/RAC section, `MX` in Mexico or `DX` anywhere else.
 - [ ] **Power category** `LOW` (100 W PEP, the limit for everyone) or `QRP` (5 W on CW and digital, 10 W on phone, for the whole event). The Cabrillo file takes one of those two; HIGH writes no CATEGORY-POWER line.

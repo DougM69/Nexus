@@ -187,7 +187,7 @@ describe('the switch writes the same setting, through the same path', () => {
 })
 
 describe('it refuses to turn on, and names what is missing', () => {
-  it('ARRL Field Day with no class: no save, the class named, and a way to Field Day Setup', async () => {
+  it('ARRL Field Day with no class: no save, the class named, and a way to Settings ▸ Contest mode', async () => {
     preview = rules({ event: 'arrlfd', bannedModes: [], problem: '' })
     const { onOpenSettings } = await openOn({ fdEvent: '', fdClass: '', fdSection: 'WI' })
     await press()

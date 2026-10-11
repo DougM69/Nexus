@@ -316,6 +316,14 @@ describe('resolveTarget — a stale pointer must land, never dead-end', () => {
     expect(resolveTarget('Settings ▸ Rig Control')?.tab).toBe('radio')
   })
 
+  it('lands the Contest mode section by the name it had, Field Day Setup', () => {
+    // Renamed for the switch it holds, which starts whichever contest is picked. Its id did not
+    // change; the old label's slug is declared so a stale pointer to it lands, and so the docs
+    // guard and the manual's generator know the name is dead rather than another program's.
+    expect(resolveTarget('field-day-setup')).toEqual({ tab: 'contesting', section: 'field-day' })
+    expect(resolveTarget('Contest mode')).toEqual({ tab: 'contesting', section: 'field-day' })
+  })
+
   it('every alias resolves to a live tab', () => {
     const tabIds = new Set(SETTINGS_TABS.map((t) => t.id))
     const dead = Object.entries(TAB_ALIASES)

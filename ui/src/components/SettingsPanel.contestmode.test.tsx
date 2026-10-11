@@ -224,3 +224,36 @@ describe('turned on among the features: Contesting opens when the picked contest
     expect(selected('Contesting')).toBe('true')
   })
 })
+
+describe('the section the switch sits in is Contest mode, and holds nothing of Field Day’s for another contest', () => {
+  /** Every word the section shows, and every name and tooltip it gives a control. */
+  const saidIn = (el: Element) => [
+    el.textContent ?? '',
+    ...[...el.querySelectorAll('[aria-label], [title]')].flatMap((c) =>
+      [c.getAttribute('aria-label'), c.getAttribute('title')].filter((v): v is string => !!v),
+    ),
+  ]
+  const section = () => document.querySelector('#settings-field-day')!
+
+  it('a QSO party: its legend, its switch, its rules data, and no Field Day anywhere in it', async () => {
+    holding({ fdEvent: 'ilqp' })
+    renderPanel()
+    await openTab('Contesting')
+    await switchNamed('Enable Contest mode: Illinois QSO Party')
+    expect(section().querySelector('legend')!.textContent).toBe('Contest mode')
+    expect(saidIn(section()).filter((s) => /Field Day/.test(s))).toEqual([])
+    expect(section().textContent).toContain(
+      'Scoring, dates, exchanges and multipliers for every contest in the Contest list above. Checked on demand; a downloaded update applies at the next launch.',
+    )
+  })
+
+  it('CONTROL: on ARRL Field Day the same scan finds Field Day, in the switch’s name and its own power multiplier', async () => {
+    holding({ fdEvent: 'arrlfd' })
+    renderPanel()
+    await openTab('Contesting')
+    await switchNamed('Enable Contest mode: ARRL Field Day')
+    const hits = saidIn(section()).filter((s) => /Field Day/.test(s))
+    expect(hits).toContain('Enable Contest mode: ARRL Field Day')
+    expect(hits).toContain('Field Day power multiplier')
+  })
+})

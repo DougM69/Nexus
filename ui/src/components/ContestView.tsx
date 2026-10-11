@@ -141,7 +141,7 @@ export function fdBonusTally(earned: string[], planned: string[]) {
 }
 
 /**
- * The power tiers, one for one with Settings ▸ Contesting ▸ Field Day Setup. The SAME
+ * The power tiers, one for one with Settings ▸ Contesting ▸ Contest mode. The SAME
  * `fdPowerMult` field and the SAME catalog keys deliberately: two surfaces that edit one
  * setting cannot drift, and they must not describe it in two different sets of words.
  */
@@ -210,7 +210,7 @@ export function startBlocker(
   return preview?.problem ? { problem: preview.problem } : null
 }
 
-/** The Settings section that fixes a blocker: Field Day Setup for its class and section, the
+/** The Settings section that fixes a blocker: Contest mode for Field Day's class and section, the
  *  station data for any other contest's slots. Section ids, never tab names. */
 function blockerTarget(b: StartBlocker): string {
   return 'fields' in b ? 'field-day' : 'contest-station'

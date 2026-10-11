@@ -2109,7 +2109,7 @@ no key mapped, or a key with nothing on it. A set with no step mapped makes ESM
 step aside, and Enter logs as it does with ESM off. On the hosted Remote page
 this section only says that ESM is set at the station.
 
-### Field Day Setup
+### Contest mode
 
 - **Field Day mode** — the master switch. "Turn on for Field Day weekend: the
   Class/Section exchange appears across all modes. Off the rest of the year." It
@@ -2430,7 +2430,7 @@ sections cannot be turned off.*
   a one-line "why you'd want it". Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
 - The **Contesting** group hosts the **Field Day mode** master switch (the same
-  setting as [Contesting ▸ Field Day Setup](#field-day-setup)). Turning it on
+  setting as [Contesting ▸ Contest mode](#contest-mode)). Turning it on
   with no Class or Section set jumps you to the Contesting tab to fill them in.
 
 ### App updates

@@ -7,7 +7,7 @@ contact for upload. The hunter ships enabled — the wizard turns everything on.
 **Field Day mode is the exception**: it stays off until you switch it on at the
 top of the **Contest** screen (the tent in the left bar), in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
-[Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
+[Contesting ▸ Contest mode](settings-reference.md#contest-mode), because it
 reshapes the app for a weekend most operators are not having.
 
 ---
@@ -28,7 +28,7 @@ mode-class) dupe checking, and a scoreboard.
 off. The class, section and multiplier shown are one station's own entries —
 set yours from the rules for the event you are in.*
 
-In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
+In [Settings ▸ Contesting ▸ Contest mode](settings-reference.md#contest-mode):
 
 1. **Event** — ARRL Field Day or Winter Field Day. This changes scoring labels
    and export headers.
@@ -334,4 +334,4 @@ reaches the contact.
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Logbook & QSL](logbook-qsl.md)
-- [Settings reference — Field Day Setup](settings-reference.md#field-day-setup)
+- [Settings reference — Contest mode](settings-reference.md#contest-mode)

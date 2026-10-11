@@ -4358,7 +4358,7 @@ export const EN = {
   // CONTEST MODE: one switch for whichever contest is picked, named for that (it was "Field Day
   // mode" while it already started every contest). The keys keep their `fieldDay` names, as the
   // stored `fdActive` setting does. {{contest}} is the picked contest's own name, invariant.
-  'settings.fieldDay.legend': 'Field Day Setup',
+  'settings.fieldDay.legend': 'Contest mode',
   'settings.fieldDay.mode.label': 'Contest mode',
   'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
   'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',
@@ -4413,7 +4413,7 @@ export const EN = {
   'settings.fdRules.stale': 'Rules data is from {{year}} — check for updates before the event.',
   'settings.fdRules.empty': 'Built-in rules data active.',
   'settings.fdRules.hint':
-    'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
+    'Scoring, dates, exchanges and multipliers for every contest in the Contest list above. Checked on demand; a downloaded update applies at the next launch.',
   // ── Settings ▸ Contesting ▸ Who's who at this event ─────────────────────────────────
   // Three names, three different jobs, and until now nothing said so: the club call lived on
   // Station, the position name under a networking heading on Contesting, the operator on

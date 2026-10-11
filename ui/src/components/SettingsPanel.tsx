@@ -106,7 +106,7 @@ import { pushToast, withErrorToast } from '../toast'
 // Accessibility), the Logging & Connectors sections above Confirmations (Connections,
 // Worked-before (B4) & dupes, Integrations & Feeds, DXKeeper, N3FJP, N1MM+, the LoTW users
 // list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts), the
-// two Contesting sections (Contest Category + Field Day Setup), and the Digital tab — the
+// two Contesting sections (Contest Category + Contest mode), and the Digital tab — the
 // FT8/FT4 section's Logging Behavior, Decoder and Station Housekeeping sub-groups plus JT65,
 // MSK144, Beacons, FST4, Q65 and the quick-reply macros. Every remaining tab's fieldsets are
 // still hardcoded English and are deliberately outside the i18n guard's scope; see its header.
@@ -12056,7 +12056,7 @@ export function SettingsPanel({
               {/* ⭐ THE CONTEST PICKER (§9). It is the event chips, one level up: the
                   contest is what decides the exchange, the dupe rule, the multiplier
                   universe and the Cabrillo headers, so it is the first thing on this
-                  tab and Field Day Setup below is shown for the contests it describes.
+                  tab and Contest mode below shows Field Day's fields for the contests they describe.
                   Six shipped contests: the two Field Day events and the four state QSO
                   parties. The list is `CONTESTS` — the rules-file ids, in one place —
                   so adding a contest is a rules-file row plus a line there, and nothing
@@ -12817,9 +12817,9 @@ export function SettingsPanel({
             {/* ⭐ CLASS + SECTION ARE FIELD DAY'S OWN EXCHANGE, so they are shown for the
                 two Field Day events and for nothing else. A QSO party sends a county or
                 a state, from Station data above; prompting for a Field Day class there
-                would be asking for a value nothing transmits. Everything else in this
-                section — the master switch that reveals the contest workspace, the power
-                tier, the bonuses — belongs to whichever contest is picked and stays. */}
+                would be asking for a value nothing transmits. The power multiplier is
+                ARRL Field Day's alone (below). The switch and the rules data belong to
+                whichever contest is picked and stay. */}
             {isFieldDay(form.fdEvent) &&
               form.fdActive &&
               (!form.fdClass.trim() || !form.fdSection.trim()) && (
@@ -12888,6 +12888,10 @@ export function SettingsPanel({
               </label>
               )}
 
+              {/* ARRL Field Day's power multiplier, shown for it alone: no other contest's score
+                  reads it (Winter Field Day scores by its objectives), as the Contest screen's
+                  scoring panel already holds. The setting itself is kept as it is. */}
+              {isFieldDay(form.fdEvent) && (form.fdEvent ?? '').trim() !== 'wfd' && (
               <div className="settings-field">
                 <span className="settings-label">{t('settings.fieldDay.power.label')}</span>
                 <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.power.aria')}>
@@ -12913,6 +12917,7 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
+              )}
             </div>
             {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
                 bonuses and sections. No cron — rules change ~yearly, so this pre-event
