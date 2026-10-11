@@ -42,8 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back what the contest changed (the callsign a club set, the operator, the position, MULTI-OP, the
   entry class, the power category, Unassisted), each shown as it is now and as it was before. Nothing
   is ticked to begin with and nothing is done that you did not tick; **Not now** leaves everything,
-  the mode included, as it is. Nexus keeps those seven as they were the first time a contest changed
-  one of them, or when the mode went on.
+  the mode included, as it is. Nexus keeps those seven as they were just before the first change
+  made with a contest picked in Settings ▸ Contesting or Contest mode on, or as they were when the
+  mode went on, so a club call typed in the day before can still go back to your own. With no
+  contest picked, changing your callsign or Unassisted leaves nothing for a later checklist to put
+  back.
 - **Every contest log strip shows the running score.** While a contest runs, the Log pane of the CW,
   Phone, RTTY and PSK cockpits reads like `ILQP · 212 pts · 48 Q · 19 mults · 41/hr` (score, contacts,
   multipliers or Field Day's sections, and your rate over the last ten contacts), the same numbers as
