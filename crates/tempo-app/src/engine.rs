@@ -25060,6 +25060,8 @@ contact yourself."
         let mut sequence_advanced = false;
         // Did the Field Day sequencer log a contact this slot (→ journal it)?
         let mut fd_logged = false;
+        // Did the contest's S&P pick a CQ out of this slot's decodes to answer?
+        let mut fd_answered_cq = false;
         // Hound: TX frequency to adopt for the R+report (the Fox's freq).
         let mut hound_move_tx: Option<f32> = None;
         match &mut self.mode {
@@ -25210,6 +25212,10 @@ contact yourself."
                 let rows_before = station.log.qsos().len();
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
+                // S&P (the role that listens) going from listening to awaiting the runner's
+                // exchange has just answered a CQ in these decodes.
+                fd_answered_cq = state_before == tempo_core::fieldday::FdState::Listening
+                    && station.state == tempo_core::fieldday::FdState::AwaitExchange;
                 // The FD sequencer logged a contact this slot → journal it
                 // (after the match — persist_fd_log needs `self` unborrowed).
                 fd_logged = station.log.qsos().len() > rows_before;
@@ -25225,6 +25231,13 @@ contact yourself."
                     sequence_advanced = true;
                 }
             }
+        }
+        // ⭐ The contest's S&P answers the CQ it picked on the period opposite the CQ's, as WSJT-X
+        // takes Tx 1st from the CQ it answers (`processMessage`) and as a double-click on one
+        // here does: the CQ's audio is from the period before `slot`, so the opposite of its
+        // period is `slot`'s.
+        if fd_answered_cq {
+            self.apply_cycle_parity(slot % 2 == 0);
         }
         // The one over still owed to a partner the run has already left (#170, #153). Runs
         // AFTER the sequencer has had this slot's decodes, so it can never take a message the

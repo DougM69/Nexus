@@ -1559,3 +1559,40 @@ fn call_cq_without_a_callsign_is_refused_as_the_screens_running_is() {
     assert!(listening(&e), "still the contest's S&P, listening");
     assert!(!e.tx_enabled, "TX stays off");
 }
+
+/// ⭐ The contest's S&P answers each CQ it picks on the period opposite the CQ's, as WSJT-X takes
+/// Tx 1st from the CQ it answers: with Tx 1st on the runner's own period, the answer goes out
+/// while the runner listens, never over its next CQ. On each tier a contest runs on, for a CQ
+/// heard in either period.
+#[test]
+fn the_contests_sp_answers_each_cq_on_the_period_opposite_it() {
+    for (contest, tier, answer) in [
+        ("arrlfd", Tier::Ft8, "W9XYZ K1ABC 2B EMA"),
+        ("arrlvhf_jan", Tier::Ft8, "W9XYZ K1ABC FN42"),
+        ("txqp", Tier::Ft4, "W9XYZ K1ABC FN42"),
+        ("arrlfd", Tier::TempoFast, "W9XYZ K1ABC 2B EMA"),
+    ] {
+        for cq_slot in [1, 2] {
+            let mut e = engine_for(contest, MY_GRID);
+            let mut s = e.settings().clone();
+            s.tx_even = cq_slot % 2 == 0;
+            e.apply_settings(s);
+            e.set_tier(tier);
+            e.set_mode("fieldday-sp").expect("the contest's S&P");
+            e.set_tx_enabled(true);
+            let cq = Partner::new(act_of(contest), true)
+                .transmit()
+                .expect("the runner's CQ");
+            // Heard in period `cq_slot`, decoded at the boundary after it.
+            e.ingest_decodes_for_test(&[heard(&cq)], cq_slot + 1);
+            let first = keyed(&mut e, cq_slot + 1);
+            let next = keyed(&mut e, cq_slot + 2);
+            assert_eq!(
+                (first.as_deref(), next.as_deref()),
+                (Some(answer), None),
+                "{contest} {}: the answer to a CQ heard in period {cq_slot}",
+                tier_name(tier)
+            );
+        }
+    }
+}
