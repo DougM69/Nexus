@@ -39,6 +39,9 @@ mod field_day_display;
 mod kept_files_tests;
 mod mode_entry;
 pub mod parsec_presence;
+/// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
+#[cfg(test)]
+mod pick_switch_tests;
 pub mod radio_selection;
 pub mod receivers;
 pub mod remote_logging;
@@ -5895,8 +5898,8 @@ impl Engine {
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place.
     ///
     /// The operating mode is touched ONLY to reconcile Field Day with the
-    /// `fd_active` master switch — a contact in flight survives a save and stays
-    /// loggable (#100). Still heavyweight in every other respect: the TX gate
+    /// `fd_active` master switch and the contest pick — a contact in flight survives a
+    /// save and stays loggable (#100). Still heavyweight in every other respect: the TX gate
     /// generation bumps and the TX/broadcast queues are cleared, so a save is
     /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
     /// and the other narrow setters — #54).
@@ -5951,6 +5954,10 @@ impl Engine {
         // submode fields live in `Settings`, so this can change under us. See the
         // decoder rebuild at the end of this function.
         let kind_before = self.tier_mode_kind(self.tier());
+        // Whether this save moves the contest pick off the contest running, read before the new
+        // settings land for the same reason: the reconcile below ends that session and opens the
+        // new one ([`Self::save_switches_contest`]).
+        let switches_contest = self.save_switches_contest(&s);
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6241,6 +6248,15 @@ impl Engine {
         // generation still bumps and the TX/broadcast queues are still cleared
         // below, so no over planned before the save can key after it.
         if self.settings.fd_active {
+            // ⭐ A NEW PICK TAKES EFFECT ON SAVE: a save that moves the pick off the contest
+            // running ends that session here and the restore below opens the new one — the
+            // master's off half, then its on half, so the save switches exactly as turning the
+            // mode off and on does (the journal keeps the two contests' rows apart, and the new
+            // one is entered passive, in S&P). Only the pick moving does this; every other save
+            // with the master on keeps the session, as below.
+            if switches_contest {
+                self.leave_field_day();
+            }
             // Master ON. PRESERVE an already-active FD session in place: the
             // Mode::FieldDay variant carries the whole dupe-checked contest log
             // in memory, and rebuilding it would drop everything logged since
@@ -6270,13 +6286,7 @@ impl Engine {
             // Gated on actually being in FD (#100): a save made in Chat wrote
             // Chat — a no-op — and a save made mid-QSO wrote away the contact.
             // Only the FD exit ever needed this line.
-            self.mode = Mode::Chat;
-            // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
-            // sets it, and leaving it stale-true after the exit suppresses the
-            // smart auto-cycle on the next chat answer. Scoped to the reset for
-            // the same reason: outside an FD exit the flag belongs to the run
-            // that is still going.
-            self.cq_running = false;
+            self.leave_field_day();
         }
         // …and the RTTY auto-sequencer is reconciled with the SAME switch, for the same
         // reason the mode is: it caches the exchange it was armed with, so the master
@@ -6343,7 +6353,8 @@ impl Engine {
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
     /// on. Called by the shell at startup (AFTER [`set_fd_log_path`](Self::set_fd_log_path),
     /// so the durable journal restores the contest log) and by
-    /// [`apply_settings`](Self::apply_settings) when a save turns the master on.
+    /// [`apply_settings`](Self::apply_settings) when a save turns the master on, or moves the
+    /// pick off the contest running.
     /// Enters passive S&P (`fieldday-sp`) so every cockpit goes FD-aware and the
     /// journal is merged in. This is the ONLY code path that auto-enters FD, and
     /// only because the operator left the master on — no date/default logic ever
@@ -6374,6 +6385,47 @@ impl Engine {
             || (!self.settings.fd_class.trim().is_empty()
                 && !self.settings.fd_section.trim().is_empty());
         self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. })
+    }
+
+    /// Whether applying `next` opens a contest session — the question a settings SAVE hands
+    /// [`with_session_rows`] as `opens`, so the session's rows are read before the lock is taken:
+    /// the master on while Field Day is not running, and a save that moves the pick off the
+    /// contest running ([`Self::save_switches_contest`]), which ends that session and opens the
+    /// new one.
+    pub fn save_opens_session(&self, next: &Settings) -> bool {
+        next.fd_active
+            && (self.mode_opens_session("fieldday-sp") || self.save_switches_contest(next))
+    }
+
+    /// ⭐ **Whether saving `next` moves the contest pick off the contest running** — the save that
+    /// switches the session (`apply_settings`): Field Day is running, the pick moved in this
+    /// save, and not to the contest already running.
+    ///
+    /// Bound to the operator's act, the pick moving, and never to a difference between the pick
+    /// and the session: a pick the rules data cannot resolve runs Field Day's session under
+    /// another id, and a save that left that pick where it was would restart the contest, its CQ
+    /// run with it, on every bonus tick. Contests compare as club sync names them
+    /// ([`crate::fdevent::canonical_contest`]: the blank default is ARRL Field Day).
+    fn save_switches_contest(&self, next: &Settings) -> bool {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return false;
+        };
+        let picked = crate::fdevent::canonical_contest(&next.fd_event);
+        picked != crate::fdevent::canonical_contest(&self.settings.fd_event)
+            && picked != crate::fdevent::canonical_contest(&station.log.session.event_id)
+    }
+
+    /// Leave Field Day for Chat: the master switch's off half, and so the first half of a save
+    /// that switches the contest ([`Self::save_switches_contest`]) — one function, so both end
+    /// a session the same way.
+    fn leave_field_day(&mut self) {
+        self.mode = Mode::Chat;
+        // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
+        // sets it, and leaving it stale-true after the exit suppresses the
+        // smart auto-cycle on the next chat answer. Scoped to the reset for
+        // the same reason: outside an FD exit the flag belongs to the run
+        // that is still going.
+        self.cq_running = false;
     }
 
     /// Is the contest the picker names one of the two Field Day events (or the blank
@@ -45356,7 +45408,19 @@ mod tests {
             other.contains("ARRL-FIELD-DAY") && other.contains("IL QSO Party"),
             "{other}"
         );
-        // The picker moves under the running session: the rows are still the party's.
+        // A pick that differs from the running session — set here directly, because a SAVE that
+        // moves the pick switches the session with it (`save_switches_contest`): the rows are
+        // still the party's.
+        e.settings.fd_event = "wfd".into();
+        assert_eq!(
+            e.fd_position_contest(),
+            "ilqp",
+            "the JOIN names what the rows are, not what the picker says now"
+        );
+        // Saved, the pick is the act: the party ends, and Winter Field Day, with no category or
+        // section here, cannot start, so no session runs and the JOIN names the pick. (From the
+        // party's own pick: a save switches only when it MOVES the pick.)
+        e.settings.fd_event = "ilqp".into();
         {
             let mut s = e.settings().clone();
             s.fd_event = "wfd".into();
@@ -45364,8 +45428,8 @@ mod tests {
         }
         assert_eq!(
             e.fd_position_contest(),
-            "ilqp",
-            "the JOIN names what the rows are, not what the picker says now"
+            "wfd",
+            "the saved pick, with no session"
         );
 
         // A Field Day position (the blank default): an older host is served as before.
