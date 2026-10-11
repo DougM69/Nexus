@@ -464,6 +464,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is, and deleting the last copy takes the contact out of the contest log, as any delete does.
   The same contest a year later, from the same county, is merged too; before, its contacts were
   taken for last year's and left out.
+- **Changing your County in Settings no longer changes it on contacts already logged.** In a QSO
+  party, a County changed in Settings (rather than with **I moved**) was put on every contact
+  already in the contest log the next time the contest was opened or Nexus was started, and the
+  Cabrillo file then sent the sponsor the new county for contacts made from the old one. A Field
+  Day class or section, or anything else you send that Settings holds, did the same. Each contact
+  now keeps the exchange it was sent with, whatever Settings say later and in whichever order the
+  change, I moved and a restart come. Contacts logged with an earlier version may not have saved
+  it: they take what Settings say the first time this version opens their contest, and keep it
+  from then on.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

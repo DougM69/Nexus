@@ -8,6 +8,7 @@
 //! same contact had a new name, and a second merge wrote it again; a Logbook edit or delete of
 //! an earlier copy no longer reached its contest row either. Every test here goes through the
 //! engine, the real logbook store and the real contest journal, and counts the Logbook's rows.
+//! The last section holds each contact to the exchange it was sent with across the same.
 
 use super::*;
 use crate::logstore::tests::{flush, open_fast, Dir};
@@ -536,4 +537,136 @@ fn deleting_a_duplicate_an_earlier_build_wrote_keeps_the_contest_row() {
     assert_eq!(calls(&e), ["K9AAA", "K9AAA"]);
     assert_eq!(contest_calls(&e), ["K9AAA"]);
     assert_eq!(e.contest_removed()[0].rows[0].call, "W9BBB");
+}
+
+// ---- the exchange each contact was sent with, across the same -------------------------
+
+/// What each contest contact sent in slot `key` (its county, its section), in log order.
+fn sent(e: &Engine, key: &str) -> Vec<String> {
+    let Mode::FieldDay { station, .. } = &e.mode else {
+        panic!("the contest runs")
+    };
+    station
+        .log
+        .qsos()
+        .iter()
+        .map(|q| q.sent(key).to_string())
+        .collect()
+}
+
+/// The exported Cabrillo file's QSO lines: what the sponsor reads each contact from.
+fn qso_lines(e: &Engine) -> Vec<String> {
+    e.export_log("cabrillo")
+        .expect("one entry")
+        .lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Two party contacts sent from Kane, and the QSO lines they export as.
+fn two_from_kane(d: &Dir) -> (Engine, Vec<String>) {
+    let mut e = launch(d, &ilqp_settings());
+    party(&mut e, "K9AAA", "COOK");
+    party(&mut e, "W9BBB", "LAKE");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"], "PREMISE: sent from Kane");
+    let lines = qso_lines(&e);
+    (e, lines)
+}
+
+/// A Settings save with `edit` applied.
+fn save(e: &mut Engine, edit: impl FnOnce(&mut Settings)) {
+    let mut s = e.settings().clone();
+    edit(&mut s);
+    e.apply_settings(s);
+}
+
+/// ⭐ **A County edited in Settings re-labels no contact already logged**, and the contest
+/// entered again. Settings does not move the session that is running (only I moved does), so
+/// every row matched it and the journal wrote none of them a sent side; the session built
+/// from Settings on the way back in read both contacts back from Will, and the Cabrillo file
+/// said so.
+#[test]
+fn a_county_edited_in_settings_then_the_contest_entered_again_relabels_nothing() {
+    let d = Dir::new("contest-journal-county-in");
+    let (mut e, lines) = two_from_kane(&d);
+    save(&mut e, |s| s.contest_qth_county = "WILL".into());
+    let e = switch(e, "chat");
+    let mut e = switch(e, "fieldday-sp");
+    assert_eq!(
+        contest_calls(&e),
+        ["K9AAA", "W9BBB"],
+        "PREMISE: the rows came back"
+    );
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says Kane");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"]);
+    // A contact logged now is sent from Will, and a restart keeps all three as they were sent.
+    party(&mut e, "N9CCC", "DUPG");
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE", "WILL"]);
+}
+
+/// ⭐ **…edited with no contest running**: out of the contest, County changed, back in. The
+/// journal was last written on the way out, before the edit, which is why flushing it when
+/// Settings change could not cover this.
+#[test]
+fn a_county_edited_out_of_the_contest_relabels_nothing_when_it_is_entered_again() {
+    let d = Dir::new("contest-journal-county-out");
+    let (mut e, lines) = two_from_kane(&d);
+    save(&mut e, |s| s.fd_active = false);
+    assert!(!e.in_field_day(), "PREMISE: out of the contest");
+    save(&mut e, |s| s.contest_qth_county = "WILL".into());
+    save(&mut e, |s| s.fd_active = true);
+    assert!(e.in_field_day(), "PREMISE: back in");
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says Kane");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"]);
+}
+
+/// ⭐ **…and before a restart.**
+#[test]
+fn a_county_edited_in_settings_then_a_restart_relabels_nothing() {
+    let d = Dir::new("contest-journal-county-restart");
+    let (mut e, lines) = two_from_kane(&d);
+    save(&mut e, |s| s.contest_qth_county = "WILL".into());
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says Kane");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "KANE"]);
+}
+
+/// ⭐ **Field Day's section, the same way**: changed in Settings, then a restart.
+#[test]
+fn a_section_edited_in_settings_relabels_no_field_day_contact() {
+    let d = Dir::new("contest-journal-section");
+    let mut e = launch(&d, &field_day_settings());
+    for call in ["K1ABC", "W1AW"] {
+        assert!(
+            e.fd_log_manual(call, "2A", "EMA", "CW").unwrap(),
+            "{call} logs"
+        );
+    }
+    let lines = qso_lines(&e);
+    save(&mut e, |s| s.fd_section = "IL".into());
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(qso_lines(&e), lines, "the Cabrillo file still says WI");
+    assert_eq!(sent(&e, "SECTION"), ["WI", "WI"]);
+}
+
+/// The control: **I moved keeps each contact's county**, across a restart, as it already did.
+#[test]
+fn i_moved_keeps_each_contacts_county_across_a_restart() {
+    let d = Dir::new("contest-journal-i-moved");
+    let mut e = launch(&d, &ilqp_settings());
+    party(&mut e, "K9AAA", "COOK");
+    e.contest_i_moved(vec![("QTH".into(), "WILL".into())])
+        .expect("Will is an Illinois county");
+    party(&mut e, "W9BBB", "LAKE");
+    assert_eq!(sent(&e, "QTH"), ["KANE", "WILL"]);
+    let lines = qso_lines(&e);
+    let s = quit(e);
+    let e = launch(&d, &s);
+    assert_eq!(sent(&e, "QTH"), ["KANE", "WILL"]);
+    assert_eq!(qso_lines(&e), lines);
 }

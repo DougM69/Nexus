@@ -815,3 +815,57 @@ fn a_restart_in_the_same_session_restores_every_contact() {
     );
     assert_eq!(back.held(), (0, 0));
 }
+
+// ---- the journal across a County changed in Settings ---------------------------------
+
+/// The county (or state) each contact was SENT from, in log order.
+fn sent_from(log: &FieldDayLog) -> Vec<&str> {
+    log.qsos().iter().map(|q| q.sent("QTH")).collect()
+}
+
+/// The Cabrillo file's QSO lines: what the sponsor reads each contact from.
+fn qso_lines(log: &FieldDayLog) -> Vec<String> {
+    log.cabrillo(7_000)
+        .expect("one entry")
+        .lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// ⭐ **A County changed in Settings re-labels no contact already logged.** Settings does not
+/// move the session that is running (only I moved does), so every row matched the session and
+/// the journal wrote none of them a sent side. The session the next entry built from Settings,
+/// after a restart or a switch out of the contest and back, then read every earlier contact
+/// back with the NEW county, and the Cabrillo file said so.
+#[test]
+fn a_county_changed_in_settings_relabels_no_contact_already_logged() {
+    let mut kane = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut kane, "K9AAA", "COOK", SUN);
+    worked(&mut kane, "W9BBB", "LAKE", SUN + 60);
+    let sent = qso_lines(&kane);
+
+    // The session the next entry builds, from a County now set to Will.
+    let mut will = FieldDayLog::new("W9AWE", select(&station("IL", "WILL")), "40m");
+    will.restore_journal(&kane.journal_adif(), SUN + 120 - FOUR_DAYS, SUN + 120);
+    assert_eq!(calls(&will), ["K9AAA", "W9BBB"], "PREMISE: both came back");
+    assert_eq!(
+        sent_from(&will),
+        ["KANE", "KANE"],
+        "each contact keeps the county it was sent from"
+    );
+    assert_eq!(qso_lines(&will), sent, "and the Cabrillo file says so");
+
+    // A contact the new session logs is sent from Will, and all three survive the next
+    // restart, whichever County that session is built from.
+    worked(&mut will, "N9CCC", "DUPG", SUN + 180);
+    for county in ["WILL", "KANE", "COOK"] {
+        let mut back = FieldDayLog::new("W9AWE", select(&station("IL", county)), "40m");
+        back.restore_journal(&will.journal_adif(), SUN + 240 - FOUR_DAYS, SUN + 240);
+        assert_eq!(
+            sent_from(&back),
+            ["KANE", "KANE", "WILL"],
+            "restored into a session built in {county}"
+        );
+    }
+}

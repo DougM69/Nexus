@@ -1471,8 +1471,10 @@ impl FieldDayLog {
         self.counting().map(|q| qso_points_for_mode(&q.mode)).sum()
     }
 
-    /// Export the log as ADIF records (one `<EOR>` per QSO) — THE JOURNAL: every live row,
-    /// then every removed one marked `APP_NEXUS_REMOVED` with when it was removed.
+    /// Export the log as ADIF records (one `<EOR>` per QSO): every live row, then every
+    /// removed one marked `APP_NEXUS_REMOVED` with when it was removed — what the club's
+    /// export is built from, and the rows the journal writes
+    /// ([`journal_adif`](Self::journal_adif)), which gives each one its sent exchange as well.
     ///
     /// ⚠️ **Live rows first, and that order is the downgrade's.** A build that predates the
     /// tag reads a removed row as an ordinary contact (the safe direction: nothing is lost),
@@ -1506,12 +1508,11 @@ impl FieldDayLog {
         self.adif_of(self.submitted().map(|q| (q, None)), sent_moved)
     }
 
-    /// ⭐ `sent_moved`: has the sent exchange moved at any point in the rows this file
-    /// describes? If not — and it has not, for either Field Day event, which send one
-    /// exchange all weekend — the session fallback gives every row back exactly and no row
-    /// needs a carrier. The moment ONE row disagrees, EVERY row gets its own
-    /// `APP_NEXUS_MYEX`, not just the ones that differ: a later move must not be able to
-    /// re-label the rows that happen to match the session today.
+    /// ⭐ `sent_moved`: EVERY row gets its own `APP_NEXUS_MYEX`, not just the ones that
+    /// differ from the session, so a later move cannot re-label the rows that happen to match
+    /// it today. The journal always asks for it ([`journal_adif`](Self::journal_adif));
+    /// [`adif`](Self::adif) and the submitted file once the sent exchange has moved in the rows
+    /// they hold.
     fn adif_of<'a>(
         &'a self,
         rows: impl Iterator<Item = (&'a LoggedQso, Option<u64>)>,
@@ -1631,10 +1632,10 @@ impl FieldDayLog {
             // row back — and that condition is not a guess, it is the restore run
             // forward: `rx_from_standard` is the SAME function `restore_row` falls back
             // to, so "the fallback is exact" and "no tag is written" are one fact and
-            // cannot drift. For Field Day both fallbacks are exact (class and section
-            // ARE the received exchange; the sent exchange does not move), so nothing
-            // is written and the §8(a) ADIF golden does not move. `sent_moved` above is
-            // the same test for the other direction, taken over the whole log.
+            // cannot drift. For Field Day it is exact (class and section ARE the received
+            // exchange), so nothing is written here. The sent side has no such test: its
+            // fallback is the restoring session's exchange, which Settings can change under
+            // a row already written, so the journal writes it on every row (`sent_moved`).
             if rx_from_standard(spec, role, |tag| {
                 standard
                     .iter()
@@ -1784,12 +1785,24 @@ impl FieldDayLog {
         (count(Held::OtherContest), count(Held::OtherRunning))
     }
 
-    /// ⭐ **The journal: [`adif`](Self::adif) and the records the restore held**, after
-    /// them, as the journal held them — what the engine writes the journal file from, so a
-    /// row kept out of this session is never dropped by a rewrite. Never an export: those
-    /// carry this log's rows alone.
+    /// ⭐ **The journal: the rows of [`adif`](Self::adif), each with the exchange it was sent
+    /// with, and the records the restore held**, after them, as the journal held them — what
+    /// the engine writes the journal file from, so a row kept out of this session is never
+    /// dropped by a rewrite. Never an export: those carry this log's rows alone, as
+    /// [`adif`](Self::adif) writes them.
     pub fn journal_adif(&self) -> String {
-        let mut s = self.adif();
+        let removed = self
+            .removed
+            .iter()
+            .flat_map(|r| r.rows.iter().map(move |q| (q, Some(r.removed_unix))));
+        // ⭐ EVERY ROW CARRIES THE EXCHANGE IT WAS SENT WITH, moved or not. A row without one
+        // is read back with the sent exchange of the session that restores it, and that
+        // session is built from Settings: a County or section changed there — in the contest,
+        // out of it, or with Nexus closed — put the new one on every row written without one,
+        // and the Cabrillo file said so. This wrote it only once some row differed from the
+        // session running now, which a Settings edit never makes true, and nothing here can
+        // know what the next session will be built from.
+        let mut s = self.adif_of(self.qsos.iter().map(|q| (q, None)).chain(removed), true);
         for h in &self.held {
             s.push_str(&h.adif);
             s.push('\n');
@@ -1909,9 +1922,12 @@ impl FieldDayLog {
         // ⭐ The row's ROLE, then its two exchange sides. A 1.x journal carries none of
         // the three tags, and each falls back to what that build meant by its absence:
         // the session's role, the standard <CLASS>/<ARRL_SECT> columns, and the
-        // session's current sent exchange. For Field Day all three fallbacks are exact
-        // — which is why the writer above emits no tag at all for a Field Day row, and
-        // why a 1.x journal restores to a byte-identical log.
+        // session's current sent exchange. For Field Day all three are exact while Settings
+        // still say what they said when the row was sent — which is why a 1.x journal
+        // restores to a byte-identical log, and why the writer above emits no role and no
+        // received side for a Field Day row. The third stops being exact the moment a class
+        // or section changes in Settings, so the journal now writes every row's own sent
+        // exchange (`journal_adif`) and this fallback reads only journals written before it.
         let role = f
             .get("APP_NEXUS_ROLE")
             .cloned()
@@ -2011,10 +2027,9 @@ impl FieldDayLog {
         // only match to one of them.
         //
         // ⚠️ **RE-DERIVED from the rows, never persisted beside them**, and the reason
-        // is that the issued number is ALREADY on the row (`APP_NEXUS_MYEX`, written
-        // whenever the sent exchange moves — which a serial makes true on the first
-        // contact). A counter stored next to the history it numbers is a second source
-        // of truth for one fact, and the two come apart exactly where it matters: a
+        // is that the issued number is ALREADY on the row (`APP_NEXUS_MYEX`, which every
+        // journal row carries). A counter stored next to the history it numbers is a second
+        // source of truth for one fact, and the two come apart exactly where it matters: a
         // journal that lost rows to `min_when_unix`, a partial restore, an operator who
         // edited the file. Reading the rows cannot drift from the rows.
         if let Some(n) = issued_serial(spec, &tx) {
@@ -5191,6 +5206,42 @@ mod tests {
                 .expect("a single-mode event exports one entry"),
             "APP_NEXUS_MYEX is not what restores the pre-move row"
         );
+    }
+
+    /// ⭐ **A section changed in Settings re-labels no row already logged.** Settings does not
+    /// move the running session (only I moved does), so a log whose rows all matched it wrote
+    /// no sent side, and the session the next entry built from Settings read every row back
+    /// with the new section.
+    #[test]
+    fn a_section_changed_in_settings_relabels_no_row_already_logged() {
+        let mut wi = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        assert!(wi.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_000_000));
+        assert!(wi.log_mode_at("W1AW", "1D", "CT", "CW", 0, 1_782_000_060));
+        let mut il = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "IL"),
+            "20m",
+        );
+        il.merge_adif(&wi.journal_adif(), 0);
+        let sent: Vec<&str> = il.qsos().iter().map(|q| q.sent("SECTION")).collect();
+        assert_eq!(
+            sent,
+            ["WI", "WI"],
+            "each row keeps the section it was sent from"
+        );
+        let lines = |log: &FieldDayLog| -> Vec<String> {
+            log.cabrillo(14_074)
+                .expect("a single-mode event exports one entry")
+                .lines()
+                .filter(|l| l.starts_with("QSO:"))
+                .map(str::to_string)
+                .collect()
+        };
+        assert_eq!(lines(&il), lines(&wi), "and the Cabrillo file says so");
     }
 
     /// §4, direction 2: being the mobile is what `by_sent_fields` is for, and Field
