@@ -2191,6 +2191,17 @@ pub struct FieldDayQso {
     /// is deleted; this is what replaced it.
     #[serde(default)]
     pub mex: String,
+    /// ⭐ **The exchange THIS CONTACT SENT, slot by slot** — `(slot id, value)` in the send
+    /// order of the role it was worked under, from the row by
+    /// [`sent_exchange`](tempo_core::contest::sent_exchange), the function [`mex`](Self::mex) is
+    /// rendered by. The N3FJP push reads it: a contest program there takes the report and the
+    /// serial this contact sent in boxes of their own, and `mex` cannot be split back into
+    /// slots without guessing.
+    ///
+    /// ⛔ **NEVER ON THE WIRE** (`skip`), for [`seq`](Self::seq)'s reason: the hosted Remote
+    /// page refuses a contest row carrying a key it does not know.
+    #[serde(skip)]
+    pub sent: Vec<(String, String)>,
     /// ⭐ **What THIS contact received** — one value per slot of the session's
     /// [`FieldDayStatus::receives`], in that order (blank where the row has none): the
     /// contest log table's columns.

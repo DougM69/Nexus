@@ -159,14 +159,15 @@ describe('the N1MM broadcast can be switched on independently of Field Day', () 
 
   // The service loop pushes every NEW contest contact to N3FJP and to the N1MM address while
   // any contest session runs, not only Field Day's; what it fills in at N3FJP is the Field Day
-  // Contest Log's form (call, band, mode, class, section). The groups said "Each FD contact" and
-  // "packets go out only while a Field Day event is running".
+  // Contest Log's form (call, band, mode, class, section), plus the exchange of the three other
+  // programs whose boxes N3FJP documents (CQ WPX, CQ WW RTTY, VHF). The groups said "Each FD
+  // contact" and "packets go out only while a Field Day event is running".
   it('the N3FJP and N1MM groups say what goes out in every contest', async () => {
     renderPanel()
     await openLogging()
     await screen.findByText('N1MM contact broadcast address')
     expect(document.querySelector('#settings-n3fjp .settings-note')!.textContent).toBe(
-      "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the N3FJP Field Day Contest Log (call, band, mode, class and section), so at Field Day the whole club's score updates in real time; a contest whose exchange is not a class and section reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+      "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the N3FJP Field Day Contest Log (call, band, mode, class and section), so at Field Day the whole club's score updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their exchange too; a QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
     )
     const hintBeside = async (label: string) =>
       (await screen.findByText(label)).closest('.settings-field')?.querySelector('.settings-hint')?.textContent

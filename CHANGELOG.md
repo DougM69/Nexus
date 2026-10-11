@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
+  set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
+  page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial
+  you sent so both logs number the contact the same; in CQ WW RTTY both reports, the zone the
+  station sent and its state or province; in the VHF Contest Log the grid. Field Day's push is byte
+  for byte what it was. A QSO party, Sweepstakes or CQ WW CW/SSB contact still reaches N3FJP without
+  its exchange: N3FJP does not publish which boxes those programs use, so Nexus fills none rather
+  than guess. NEEDS-BENCH: N3FJP's CQ WPX, CQ WW RTTY and VHF programs running on Windows.
 - **Allow Nexus through Windows Firewall, for club sync.** On Windows, the club section of Settings
   ▸ Contesting has a button that asks for administrator rights once, the way Repair clock does, and
   adds three inbound rules for Nexus itself on Private and Public networks: the Host port (TCP 42073

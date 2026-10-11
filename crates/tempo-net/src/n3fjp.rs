@@ -24,6 +24,18 @@
 //! is a silent pre-log dupe hint against the combined club log. Connect-per-push
 //! keeps the loop simple and robust across N3FJP restarts during a chaotic
 //! Field Day.
+//!
+//! **Other contests' exchanges** ([`documented_exchange`]). N3FJP has one program per
+//! contest, and the API page names the entry controls all of them share
+//! ("The following text boxes exist is all our logging programs") and, under
+//! "Contest Programs with Digital Mode", which exchange each program takes. The ENTER
+//! sequence fills a contest's exchange only where that page says which boxes its
+//! program uses: Field Day and Winter Field Day ("Category (use class, just like ARRL
+//! Field Day) / Section"), CQ WPX, CQ WW RTTY and the VHF Contest Log. The page gives
+//! the State QSO Parties as "Varies" and does not list the Sweepstakes or CQ WW CW/SSB
+//! programs, so those contests push the call and nothing of their exchange, as before:
+//! a value in a box the program does not read for it would be a wrong log, not a
+//! missing one.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -89,6 +101,104 @@ pub struct N3fjpQso {
     pub name: Option<String>,
     /// TX power in watts, pre-formatted (ACLog `fldPower`).
     pub power: Option<String>,
+    // ── The rest of a contest's exchange (ENTER sequence only) ─────────────────────────
+    // Filled by [`documented_exchange`] for a program whose entry controls N3FJP
+    // documents, and empty for Field Day (its whole exchange is `class` + `section`)
+    // and every program it does not, which emits nothing: those sequences stay the
+    // ones that have always gone out.
+    /// Entry controls and their values, in the order they are filled.
+    pub exchange: Vec<(&'static str, String)>,
+    /// The serial number this contact SENT, for a program that numbers its own
+    /// contacts: set with SETSERIALNUMBER before ENTER, so N3FJP logs the number that
+    /// went on the air rather than the next one in its own count.
+    pub serial_sent: Option<u32>,
+}
+
+/// Which side of a contact an entry control's value comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// What the other station sent: the exchange this station received.
+    Rcvd,
+    /// What this station sent.
+    Sent,
+}
+
+/// What N3FJP documents for one of its contest programs: the contests it logs (ADIF
+/// `CONTEST_ID`), each entry control with the exchange slot that fills it (the slot
+/// ids of the contest rules), and the sent slot SETSERIALNUMBER takes where the
+/// program numbers its own contacts.
+struct Program {
+    contests: &'static [&'static str],
+    controls: &'static [(&'static str, Side, &'static str)],
+    serial: Option<&'static str>,
+}
+
+/// The programs whose exchange N3FJP's API page documents, other than Field Day's,
+/// each with that page's own line for it ("Contest Programs with Digital Mode").
+///
+/// Every control is in the page's text box list. An RST contest fills BOTH reports:
+/// the page says the contest programs fill them with defaults only "when RSTR receives
+/// focus", which an ENTER sequence never gives it, "so they will not fill" unless the
+/// application does.
+const DOCUMENTED: &[Program] = &[
+    // "CQ WPX:   RST / Serial Received"
+    Program {
+        contests: &["CQ-WPX-CW", "CQ-WPX-SSB"],
+        controls: &[
+            ("TXTENTRYRSTS", Side::Sent, "RST"),
+            ("TXTENTRYRSTR", Side::Rcvd, "RST"),
+            ("TXTENTRYSERIALNOR", Side::Rcvd, "NR"),
+        ],
+        serial: Some("NR"),
+    },
+    // "CQ WW RTTY:  RST / CQ Zone (our software fills from call) / State (or Province)".
+    // The zone the station SENT goes in after the call, replacing the one N3FJP fills
+    // from it: a station sends its own zone, which its prefix need not give.
+    Program {
+        contests: &["CQ-WW-RTTY"],
+        controls: &[
+            ("TXTENTRYRSTS", Side::Sent, "RST"),
+            ("TXTENTRYRSTR", Side::Rcvd, "RST"),
+            ("TXTENTRYCQZONE", Side::Rcvd, "ZN"),
+            ("TXTENTRYSTATE", Side::Rcvd, "QTH"),
+        ],
+        serial: None,
+    },
+    // "VHF:  Grid / RST (optional)": the VHF Contest Log, which logs the ARRL January,
+    // June and September VHF contests. Their exchange is the grid alone.
+    Program {
+        contests: &["ARRL-VHF-JAN", "ARRL-VHF-JUN", "ARRL-VHF-SEP"],
+        controls: &[("TXTENTRYGRID", Side::Rcvd, "GRID")],
+        serial: None,
+    },
+];
+
+/// The exchange N3FJP's own program for `contest` (an ADIF `CONTEST_ID`) takes on its
+/// entry form, filled from one contact: `value(side, slot)` is that contact's value for
+/// the slot the contest rules name (`RST`, `NR`, `ZN`, `QTH`, `GRID`) on that side.
+/// Returns the controls to fill, in order, and the serial for SETSERIALNUMBER.
+///
+/// A slot with no value is left out rather than sent empty, because an UPDATE with no
+/// value CLEARS the box, and N3FJP fills some itself (the CQ zone, from the call).
+/// A contest whose program's boxes the API page does not give gets nothing.
+pub fn documented_exchange(
+    contest: &str,
+    value: impl Fn(Side, &str) -> String,
+) -> (Vec<(&'static str, String)>, Option<u32>) {
+    let Some(program) = DOCUMENTED.iter().find(|p| p.contests.contains(&contest)) else {
+        return (Vec::new(), None);
+    };
+    let controls = program
+        .controls
+        .iter()
+        .map(|&(control, side, slot)| (control, value(side, slot)))
+        .filter(|(_, v)| !v.trim().is_empty())
+        .collect();
+    let serial = program
+        .serial
+        .and_then(|slot| value(Side::Sent, slot).trim().parse::<u32>().ok())
+        .filter(|&n| n > 0);
+    (controls, serial)
 }
 
 /// Unix secs → ("YYYY/MM/DD", "HH:MM") UTC (same civil math as the Cabrillo
@@ -193,6 +303,14 @@ pub fn build_enter_sequence(q: &N3fjpQso) -> String {
         "<CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>{}</VALUE></CMD>\r\n",
         esc(&q.section)
     ));
+    // The rest of another contest's exchange, in the boxes N3FJP documents for its
+    // program. None for Field Day, so its sequence is the one it always was.
+    for (control, value) in &q.exchange {
+        s.push_str(&format!(
+            "<CMD><UPDATE><CONTROL>{control}</CONTROL><VALUE>{}</VALUE></CMD>\r\n",
+            esc(value)
+        ));
+    }
     // Operator initials/call (Field Day rotates ops, so this differs from the
     // station call). `txtEntryOperator` per the N3FJP API docs; only when set,
     // mirroring the ADDDIRECT `fldOperator` field.
@@ -200,6 +318,13 @@ pub fn build_enter_sequence(q: &N3fjpQso) -> String {
         s.push_str(&format!(
             "<CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>{}</VALUE></CMD>\r\n",
             esc(&q.operator)
+        ));
+    }
+    // A program that numbers its contacts logs the one it holds as next; tell it the
+    // number this contact was sent, so the two logs agree on it.
+    if let Some(n) = q.serial_sent {
+        s.push_str(&format!(
+            "<CMD><SETSERIALNUMBER><VALUE>{n}</VALUE></CMD>\r\n"
         ));
     }
     // Fire the log action — this is what SCORES the contact (ADDDIRECT doesn't),
@@ -370,6 +495,8 @@ mod tests {
             rst_rcvd: None,
             name: None,
             power: None,
+            exchange: Vec::new(),
+            serial_sent: None,
         };
         let line = build_adddirect(&q);
         assert!(line.starts_with("<CMD><ADDDIRECT><EXCLUDEDUPES>TRUE</EXCLUDEDUPES>"));
@@ -402,6 +529,8 @@ mod tests {
             rst_rcvd: Some("57".into()),
             name: Some("Scott".into()),
             power: Some("100".into()),
+            exchange: Vec::new(),
+            serial_sent: None,
         };
         let line = build_adddirect(&q);
         assert!(line.contains("<fldRstS>59</fldRstS>"));
@@ -427,6 +556,8 @@ mod tests {
             rst_rcvd: None,
             name: None,
             power: None,
+            exchange: Vec::new(),
+            serial_sent: None,
         };
         let line = build_adddirect(&fd);
         for tag in ["fldRstS", "fldRstR", "fldNameR", "fldPower"] {
@@ -466,6 +597,8 @@ mod tests {
             rst_rcvd: None,
             name: None,
             power: None,
+            exchange: Vec::new(),
+            serial_sent: None,
         };
         let line = build_adddirect(&q);
         assert!(line.contains("<fldCall>A&amp;B&lt;C&gt;</fldCall>"));
@@ -486,6 +619,8 @@ mod tests {
             rst_rcvd: None,
             name: None,
             power: None,
+            exchange: Vec::new(),
+            serial_sent: None,
         };
         let block = build_enter_sequence(&q);
         // Rig polls frozen for the whole sequence, then released.
@@ -531,6 +666,8 @@ mod tests {
             rst_rcvd: None,
             name: None,
             power: None,
+            exchange: Vec::new(),
+            serial_sent: None,
         };
         let block = build_enter_sequence(&q);
         assert!(
@@ -581,5 +718,187 @@ mod tests {
         assert!(!parse_dupe_response(
             "<CMD><DUPERESPONSE><VALUE>FALSE</VALUE></CMD>"
         ));
+    }
+
+    /// One Field Day contact, the one these tests start from.
+    fn fd_qso() -> N3fjpQso {
+        N3fjpQso {
+            call: "W1AW".into(),
+            class: "2A".into(),
+            section: "CT".into(),
+            band_meters: "20".into(),
+            mode: "FT8".into(),
+            freq_mhz: 14.074,
+            when_unix: 1_782_583_500,
+            operator: "W9ABC".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            power: None,
+            exchange: Vec::new(),
+            serial_sent: None,
+        }
+    }
+
+    /// ⭐ Field Day's ENTER sequence, byte for byte as it went out before other contests'
+    /// exchanges were added to it.
+    #[test]
+    fn the_field_day_enter_sequence_is_unchanged() {
+        assert_eq!(
+            build_enter_sequence(&fd_qso()),
+            "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+             <CMD><CHANGEBM><BAND>20</BAND><MODE>FT8</MODE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>W1AW</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2A</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>CT</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+             <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+             <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n"
+        );
+    }
+
+    /// A contact's slot values as `documented_exchange` asks for them. The two sides
+    /// carry different reports, so a box filled from the wrong side cannot pass.
+    fn slots(side: Side, slot: &str) -> String {
+        match (side, slot) {
+            (Side::Sent, "RST") => "599",
+            (Side::Sent, "NR") => "007",
+            (Side::Rcvd, "RST") => "579",
+            (Side::Rcvd, "NR") => "15",
+            (Side::Rcvd, "ZN") => "5",
+            (Side::Rcvd, "QTH") => "MA",
+            (Side::Rcvd, "GRID") => "FN42",
+            _ => "",
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn each_documented_program_gets_its_own_boxes_from_the_right_side() {
+        let wpx = (
+            vec![
+                ("TXTENTRYRSTS", "599".to_string()),
+                ("TXTENTRYRSTR", "579".to_string()),
+                ("TXTENTRYSERIALNOR", "15".to_string()),
+            ],
+            Some(7),
+        );
+        assert_eq!(documented_exchange("CQ-WPX-CW", slots), wpx);
+        assert_eq!(documented_exchange("CQ-WPX-SSB", slots), wpx);
+        assert_eq!(
+            documented_exchange("CQ-WW-RTTY", slots),
+            (
+                vec![
+                    ("TXTENTRYRSTS", "599".to_string()),
+                    ("TXTENTRYRSTR", "579".to_string()),
+                    ("TXTENTRYCQZONE", "5".to_string()),
+                    ("TXTENTRYSTATE", "MA".to_string()),
+                ],
+                None,
+            )
+        );
+        for vhf in ["ARRL-VHF-JAN", "ARRL-VHF-JUN", "ARRL-VHF-SEP"] {
+            assert_eq!(
+                documented_exchange(vhf, slots),
+                (vec![("TXTENTRYGRID", "FN42".to_string())], None),
+                "{vhf}"
+            );
+        }
+    }
+
+    /// ⭐ A contest whose program's boxes N3FJP's API page does not give gets nothing,
+    /// so its push stays the one it was: the State QSO Parties ("Varies"), Sweepstakes and
+    /// CQ WW CW/SSB (not listed), and Field Day and Winter Field Day, whose whole exchange
+    /// is the class and section the sequence already carries.
+    #[test]
+    fn an_undocumented_program_gets_nothing() {
+        for contest in [
+            "ARRL-FIELD-DAY",
+            "WFD",
+            "IL QSO Party",
+            "NY-QSO-PARTY",
+            "OH-QSO-PARTY",
+            "TN-QSO-PARTY",
+            "TX-QSO-PARTY",
+            "CA-QSO-PARTY",
+            "ARRL-SS-CW",
+            "ARRL-SS-SSB",
+            "CQ-WW-CW",
+            "CQ-WW-SSB",
+            "DX",
+            "",
+        ] {
+            assert_eq!(
+                documented_exchange(contest, slots),
+                (Vec::new(), None),
+                "{contest:?}"
+            );
+        }
+    }
+
+    /// A slot with no value is left out (an UPDATE with no value would CLEAR the box,
+    /// and N3FJP fills the zone itself); a serial that is not a number is not sent.
+    #[test]
+    fn an_empty_slot_is_left_out_and_a_bad_serial_is_not_sent() {
+        let dx = |side: Side, slot: &str| match (side, slot) {
+            (Side::Rcvd, "QTH") => " ".to_string(),
+            _ => slots(side, slot),
+        };
+        let (controls, _) = documented_exchange("CQ-WW-RTTY", dx);
+        assert_eq!(
+            controls.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            ["TXTENTRYRSTS", "TXTENTRYRSTR", "TXTENTRYCQZONE"],
+            "a DX station sends no state, and the box is not cleared"
+        );
+        for (nr, want) in [("007", Some(7)), ("", None), ("0", None), ("12A", None)] {
+            let serial = |side: Side, slot: &str| match (side, slot) {
+                (Side::Sent, "NR") => nr.to_string(),
+                _ => slots(side, slot),
+            };
+            assert_eq!(documented_exchange("CQ-WPX-CW", serial).1, want, "{nr:?}");
+        }
+    }
+
+    /// Where the new lines go: the exchange after Field Day's two boxes and before the
+    /// operator, SETSERIALNUMBER right before ENTER, and every value escaped.
+    #[test]
+    fn the_exchange_and_the_serial_ride_the_enter_sequence() {
+        let q = N3fjpQso {
+            call: "K1ABC".into(),
+            class: String::new(),
+            section: String::new(),
+            mode: "CW".into(),
+            exchange: vec![
+                ("TXTENTRYRSTR", "579".into()),
+                ("TXTENTRYSTATE", "A&B".into()),
+            ],
+            serial_sent: Some(7),
+            ..fd_qso()
+        };
+        assert_eq!(
+            build_enter_sequence(&q),
+            "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+             <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYRSTR</CONTROL><VALUE>579</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYSTATE</CONTROL><VALUE>A&amp;B</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+             <CMD><SETSERIALNUMBER><VALUE>7</VALUE></CMD>\r\n\
+             <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+             <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n"
+        );
+        // ADDDIRECT, the fallback, does not take them: its line is the one it was.
+        assert_eq!(
+            build_adddirect(&q),
+            build_adddirect(&N3fjpQso {
+                exchange: Vec::new(),
+                serial_sent: None,
+                ..q.clone()
+            })
+        );
     }
 }

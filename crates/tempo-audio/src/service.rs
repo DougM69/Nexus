@@ -13187,6 +13187,12 @@ impl RadioLoop {
                         // match on the event id, whose `else` branch reported every
                         // contest that was not Winter Field Day as ARRL Field Day.
                         let contest = fd_contest_name(&fd.event, fd.rules_year);
+                        // What the N3FJP push needs to fill another contest's exchange: the
+                        // contest it names the program by, and the slot each of a row's
+                        // received values belongs to (`rcvd` is in this order).
+                        let n3_contest = contest.clone();
+                        let receives: Vec<String> =
+                            fd.receives.iter().map(|f| f.key.clone()).collect();
                         let dial_mhz = cur_dial as f64 / 1e6;
                         let fallback_unix = (now / 1000.0) as u64;
                         let n1_ctx = FdN1mmCtx {
@@ -13208,6 +13214,28 @@ impl RadioLoop {
                                     fallback_unix
                                 };
                                 if !n3_host.is_empty() {
+                                    // The rest of the exchange, in the boxes N3FJP documents
+                                    // for this contest's program; nothing for Field Day or
+                                    // for a program it does not document.
+                                    let (exchange, serial_sent) =
+                                        tempo_net::n3fjp::documented_exchange(
+                                            &n3_contest,
+                                            |side, slot| {
+                                                use tempo_net::n3fjp::Side;
+                                                match side {
+                                                    Side::Sent => q
+                                                        .sent
+                                                        .iter()
+                                                        .find(|(k, _)| k == slot)
+                                                        .map(|(_, v)| v.clone()),
+                                                    Side::Rcvd => receives
+                                                        .iter()
+                                                        .position(|k| k == slot)
+                                                        .and_then(|i| q.rcvd.get(i).cloned()),
+                                                }
+                                                .unwrap_or_default()
+                                            },
+                                        );
                                     let push = tempo_net::n3fjp::N3fjpQso {
                                         call: q.call.clone(),
                                         class: q.class.clone(),
@@ -13224,6 +13252,8 @@ impl RadioLoop {
                                         rst_rcvd: None,
                                         name: None,
                                         power: None,
+                                        exchange,
+                                        serial_sent,
                                     };
                                     let res = if n3_use_enter {
                                         tempo_net::n3fjp::push_qso_enter(&n3_host, n3_port, &push)
@@ -15979,6 +16009,7 @@ mod tests {
             submode: "FT8".into(),
             when_unix,
             mex: mex.into(),
+            sent: Vec::new(),
             rcvd: Vec::new(),
             // Terrestrial: 20m DIG, worked off the dial, not through a bird. Empty IS the
             // "no satellite" value -- `field_day_display` builds this field with
@@ -37826,6 +37857,505 @@ mod tests {
             "a restored contact that went out is not pushed again"
         );
     }
+
+    // ── N3FJP: each contest's exchange through the ENTER sequence ─────────────────────────────
+
+    /// A fake N3FJP on loopback. It records every byte each connection carries and answers
+    /// the ENTER action the way N3FJP documents it (`<ENTERRESPONSE>`, the records added), so
+    /// a push runs to its end exactly as it does against the program. `added` is that number:
+    /// 1 for a contact N3FJP took, 0 for one it refused, `None` for a program that holds the
+    /// connection open and never answers.
+    fn fake_n3fjp(added: Option<u32>) -> (u16, Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { return };
+                // One entry per connection, kept up to date as its bytes arrive, so a program
+                // that never answers is still seen before the push gives up on it.
+                let at = {
+                    let mut seen = record.lock().unwrap();
+                    seen.push(String::new());
+                    seen.len() - 1
+                };
+                let record = Arc::clone(&record);
+                std::thread::spawn(move || {
+                    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(6)));
+                    let (mut got, mut buf, mut answered) = (Vec::new(), [0u8; 4096], false);
+                    loop {
+                        match s.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => got.extend_from_slice(&buf[..n]),
+                        }
+                        let text = String::from_utf8_lossy(&got).into_owned();
+                        let enter = text.contains("<CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n");
+                        record.lock().unwrap()[at] = text;
+                        if let (Some(added), true, false) = (added, enter, answered) {
+                            answered = true;
+                            let reply =
+                                format!("<CMD><ENTERRESPONSE><VALUE>{added}</VALUE></CMD>\r\n");
+                            let _ = s.write_all(reply.as_bytes());
+                        }
+                    }
+                });
+            }
+        });
+        (port, seen)
+    }
+
+    /// A country file that places ONE call, the station these tests run as (`W9ABC`), so
+    /// CQ WPX and CQ WW can open a session here: both are scored by where you are relative
+    /// to the station you work, and a session refuses to open without placing you.
+    ///
+    /// ⚠️ Process-wide and once-only. It places no call any other test in this binary uses,
+    /// so every other `resolve_call` answers exactly as with no resolver installed; the one
+    /// thing it changes is that those two contests can open, which nothing else here does.
+    fn n3fjp_country_file() {
+        fn places_this_station(call: &str) -> Option<tempo_core::contest::CallLocation> {
+            (call == "W9ABC").then_some(tempo_core::contest::CallLocation {
+                entity: "United States",
+                continent: "NA",
+                cq_zone: Some(4),
+            })
+        }
+        let _ = tempo_core::contest::install_call_resolver(places_this_station);
+    }
+
+    /// Every connection `seen` has recorded once bytes have arrived and a quiet half second
+    /// has passed with no more, so a second push would still be caught; bounded at 3 s.
+    fn n3fjp_seen(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let (mut last, mut quiet) = (0, std::time::Instant::now());
+        while std::time::Instant::now() < deadline {
+            let bytes: usize = seen.lock().unwrap().iter().map(String::len).sum();
+            if bytes != last {
+                (last, quiet) = (bytes, std::time::Instant::now());
+            }
+            if bytes > 0 && quiet.elapsed() > std::time::Duration::from_millis(500) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let pushes = seen.lock().unwrap().clone();
+        eprintln!("what the fake N3FJP received: {pushes:?}");
+        pushes
+    }
+
+    /// ONE contest contact through the loop's own forwarder, with the N3FJP push on (`on`:
+    /// the host set) or off (the host blank): what the fake N3FJP received, connection by
+    /// connection. `settings` names the contest; `log` logs the contact once the loop has
+    /// seen the live session (a row already there would read as a restored one).
+    fn n3fjp_pushes(settings: Settings, on: bool, log: impl FnOnce(&mut Engine)) -> Vec<String> {
+        n3fjp_country_file();
+        let (port, seen) = fake_n3fjp(Some(1));
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                fd_active: true,
+                n3fjp_host: if on {
+                    "127.0.0.1".into()
+                } else {
+                    String::new()
+                },
+                n3fjp_port: port,
+                ..settings
+            });
+            eng.set_mode("fieldday-run").unwrap();
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut boundary = |at: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    at,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        boundary(0.0);
+        log(&mut engine.lock().unwrap());
+        boundary(16_000.0);
+        n3fjp_seen(&seen)
+    }
+
+    /// The settings one contest runs from: the contest, and the station data it reads.
+    fn n3fjp_contest(event: &str) -> Settings {
+        Settings {
+            mycall: "W9ABC".into(),
+            mygrid: "EN37".into(),
+            fd_event: event.into(),
+            fd_class: if event == "wfd" { "1H" } else { "1D" }.into(),
+            fd_section: "WI".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "COOK".into(),
+            contest_cq_zone: 4,
+            ..Settings::default()
+        }
+    }
+
+    /// The strip's received slots for one contact.
+    fn rcvd(slots: &[(&str, &str)]) -> Vec<(String, String)> {
+        slots
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// One push's ENTER sequence, from the lines between the call and the operator, which
+    /// are all that differ from contest to contest here: the rest is Field Day's own,
+    /// unchanged, at the dial and band these loop tests run on.
+    fn enter_push(mode: &str, call: &str, exchange: &[&str], serial: Option<u32>) -> String {
+        let mut s = format!(
+            "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+             <CMD><CHANGEBM><BAND>20</BAND><MODE>{mode}</MODE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>{call}</VALUE></CMD>\r\n"
+        );
+        for line in exchange {
+            s.push_str(line);
+        }
+        s.push_str(
+            "<CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n",
+        );
+        if let Some(n) = serial {
+            s.push_str(&format!(
+                "<CMD><SETSERIALNUMBER><VALUE>{n}</VALUE></CMD>\r\n"
+            ));
+        }
+        s.push_str(
+            "<CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+             <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n",
+        );
+        s
+    }
+
+    /// `<CMD><UPDATE>` of one entry control, as the push sends it.
+    fn update(control: &str, value: &str) -> String {
+        format!("<CMD><UPDATE><CONTROL>{control}</CONTROL><VALUE>{value}</VALUE></CMD>\r\n")
+    }
+
+    /// ⭐ **Field Day's push is byte for byte what it was.** Captured off the loop's own
+    /// forwarder against a fake N3FJP that records every command: the ENTER sequence (the
+    /// default) and the `ADDDIRECT` insert an operator can fall back to, whose date and time
+    /// are the contact's own and are left out of the comparison. Winter Field Day's (the same
+    /// class and section, as N3FJP documents for its program) did not move either.
+    #[test]
+    fn the_field_day_n3fjp_push_is_byte_identical() {
+        let fd = |e: &mut Engine| assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("arrlfd"), true, fd),
+            [N3FJP_FD_ENTER],
+            "ARRL Field Day, ENTER"
+        );
+        let pushes = n3fjp_pushes(
+            Settings {
+                n3fjp_use_enter: false,
+                ..n3fjp_contest("arrlfd")
+            },
+            true,
+            fd,
+        );
+        let undated: Vec<String> = pushes
+            .iter()
+            .map(|p| {
+                let (head, rest) = p.split_once("<fldDateStr>").expect("a dated insert");
+                let (_, tail) = rest.split_once("</fldTimeOnStr>").expect("a timed insert");
+                format!("{head}<fldDateStr>…</fldTimeOnStr>{tail}")
+            })
+            .collect();
+        assert_eq!(undated, [N3FJP_FD_ADDDIRECT], "ARRL Field Day, ADDDIRECT");
+        let wfd = |e: &mut Engine| assert!(e.fd_log_manual("K1ABC", "2O", "EMA", "CW").unwrap());
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("wfd"), true, wfd),
+            [N3FJP_WFD_ENTER],
+            "Winter Field Day, ENTER"
+        );
+    }
+
+    /// ⭐ **A contest whose program's controls N3FJP does not publish is left as it was.**
+    /// N3FJP's API page lists the State QSO Parties as "Varies" and does not list its
+    /// Sweepstakes or CQ WW CW/SSB programs at all, so the Illinois QSO Party and CQ WW CW
+    /// still push the call alone, byte for byte as before.
+    #[test]
+    fn a_contest_n3fjp_does_not_document_pushes_as_it_did() {
+        let party = |e: &mut Engine| {
+            let qth = rcvd(&[("RST", "579"), ("QTH", "DUPG")]);
+            assert!(e.contest_log_manual("K9ABC", &qth, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("ilqp"), true, party),
+            [N3FJP_ILQP_ENTER],
+            "Illinois QSO Party"
+        );
+        let cqww = |e: &mut Engine| {
+            let zone = rcvd(&[("RST", "579"), ("ZN", "5")]);
+            assert!(e.contest_log_manual("K1ABC", &zone, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_cw"), true, cqww),
+            [N3FJP_CQWW_CW_ENTER],
+            "CQ WW CW"
+        );
+    }
+
+    /// ⭐ **CQ WPX carries its exchange into N3FJP's CQ WPX program**, in the controls N3FJP
+    /// lists for it ("CQ WPX: RST / Serial Received"): both reports (N3FJP fills them only
+    /// when its own report box takes the focus, so an application fills them), the serial
+    /// received, and SETSERIALNUMBER with the number THIS contact sent, so N3FJP's log holds
+    /// the number that went on the air rather than its own count. The sent and received
+    /// values differ on purpose, so a report filled from the wrong side cannot pass.
+    #[test]
+    fn a_cq_wpx_contact_reaches_n3fjp_with_its_exchange() {
+        let wpx = |e: &mut Engine| {
+            let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+            assert!(e.contest_log_manual("K1ABC", &nr, "CW", None).unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYSERIALNOR", "15"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), true, wpx),
+            [enter_push("CW", "K1ABC", &exchange, Some(1))]
+        );
+    }
+
+    /// ⭐ **CQ WW RTTY carries its exchange into N3FJP's CQ WW RTTY program** ("RST / CQ Zone
+    /// / State (or Province)"). The zone sent on the air goes in after the call, where it
+    /// replaces the one N3FJP fills in from the call; a DX station sends no state, and the
+    /// state box is then left alone rather than cleared.
+    #[test]
+    fn a_cq_ww_rtty_contact_reaches_n3fjp_with_its_exchange() {
+        let w_ve = |e: &mut Engine| {
+            let qth = rcvd(&[("RST", "579"), ("ZN", "5"), ("QTH", "MA")]);
+            assert!(e
+                .contest_log_manual("K1ABC", &qth, "DIG", Some("RTTY"))
+                .unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYCQZONE", "5"),
+            update("TXTENTRYSTATE", "MA"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_rtty"), true, w_ve),
+            [enter_push("RTTY", "K1ABC", &exchange, None)],
+            "a W/VE station"
+        );
+        let dx = |e: &mut Engine| {
+            let zone = rcvd(&[("RST", "579"), ("ZN", "14")]);
+            assert!(e
+                .contest_log_manual("DL1ABC", &zone, "DIG", Some("RTTY"))
+                .unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYCQZONE", "14"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_rtty"), true, dx),
+            [enter_push("RTTY", "DL1ABC", &exchange, None)],
+            "a DX station"
+        );
+    }
+
+    /// ⭐ **An ARRL VHF contact carries its grid into N3FJP's VHF Contest Log** ("VHF: Grid /
+    /// RST (optional)"; the ARRL contests send no report, so none is filled).
+    #[test]
+    fn an_arrl_vhf_contact_reaches_n3fjp_with_its_grid() {
+        let vhf = |e: &mut Engine| {
+            let grid = rcvd(&[("GRID", "FN42")]);
+            assert!(e.contest_log_manual("K1ABC", &grid, "CW", None).unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYGRID", "FN42"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("arrlvhf_jun"), true, vhf),
+            [enter_push("CW", "K1ABC", &exchange, None)]
+        );
+    }
+
+    /// ⭐ **Nothing reaches N3FJP while the push is off** (a blank host), for a contest whose
+    /// exchange now rides the push. CONTROL: the same contact with the host set is one push.
+    #[test]
+    fn nothing_reaches_n3fjp_while_the_push_is_off() {
+        let wpx = |e: &mut Engine| {
+            let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+            assert!(e.contest_log_manual("K1ABC", &nr, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), true, wpx).len(),
+            1,
+            "CONTROL: on, one push"
+        );
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), false, wpx),
+            Vec::<String>::new(),
+            "off, nothing"
+        );
+    }
+
+    /// ⭐ **An N3FJP that refuses, says nothing or is not there never holds up logging.** The
+    /// push runs on its own thread: the slot boundary that starts it returns at once, even
+    /// against a program that holds the connection for its whole 4 s timeout, and the next
+    /// contact logs and is forwarded as usual.
+    #[test]
+    fn a_refused_silent_or_absent_n3fjp_never_holds_up_logging() {
+        let absent = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        n3fjp_country_file();
+        for (what, added) in [("refused", Some(0)), ("silent", None), ("absent", Some(1))] {
+            let (mut port, seen) = fake_n3fjp(added);
+            if what == "absent" {
+                port = absent;
+            }
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut eng = engine.lock().unwrap();
+                eng.apply_settings(Settings {
+                    fd_active: true,
+                    n3fjp_host: "127.0.0.1".into(),
+                    n3fjp_port: port,
+                    ..n3fjp_contest("cqwpx_cw")
+                });
+                eng.set_mode("fieldday-run").unwrap();
+            }
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut boundary = |at: f64, station: &mut StationSinks| {
+                let started = std::time::Instant::now();
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        at,
+                        &mut ra,
+                        &mut rr,
+                        station,
+                    )
+                    .unwrap();
+                started.elapsed()
+            };
+            boundary(0.0, &mut station);
+            for (i, (call, at)) in [("K1ABC", 16_000.0), ("W2DEF", 32_000.0)]
+                .iter()
+                .enumerate()
+            {
+                let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+                assert!(
+                    engine
+                        .lock()
+                        .unwrap()
+                        .contest_log_manual(call, &nr, "CW", None)
+                        .unwrap(),
+                    "{what}: {call} logged"
+                );
+                let took = boundary(*at, &mut station);
+                assert!(
+                    took < std::time::Duration::from_millis(2_500),
+                    "{what}: the boundary that pushed {call} returned in {took:?}"
+                );
+                assert_eq!(
+                    station.last_fd_seq,
+                    i as u64 + 1,
+                    "{what}: {call} went past the forwarder"
+                );
+            }
+            let log = engine.lock().unwrap().snapshot().field_day.unwrap().log;
+            assert_eq!(log.len(), 2, "{what}: both contacts are in the log");
+            if what != "absent" {
+                assert!(
+                    n3fjp_seen(&seen).concat().contains("K1ABC"),
+                    "CONTROL, {what}: the push did reach the program"
+                );
+            }
+        }
+    }
+
+    /// ARRL Field Day's ENTER push, captured from the forwarder before the contest
+    /// exchange work: K1ABC 2A EMA on CW, 20 m, the dial 14.074 MHz, the operator W9ABC.
+    const N3FJP_FD_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2A</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>EMA</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// The same contact by the `ADDDIRECT` fallback, its date and time elided.
+    const N3FJP_FD_ADDDIRECT: &str = "<CMD><ADDDIRECT><EXCLUDEDUPES>TRUE</EXCLUDEDUPES>\
+        <fldCall>K1ABC</fldCall><fldDateStr>…</fldTimeOnStr><fldBand>20</fldBand>\
+        <fldMode>CW</fldMode><fldFrequency>14.0740</fldFrequency><fldClass>2A</fldClass>\
+        <fldSection>EMA</fldSection><fldOperator>W9ABC</fldOperator>\
+        <fldComments>via Nexus</fldComments></CMD>\r\n<CMD><CHECKLOG></CMD>\r\n";
+    /// Winter Field Day's push, captured the same way (K1ABC 2O EMA on CW).
+    const N3FJP_WFD_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2O</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>EMA</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// The Illinois QSO Party's push, captured the same way: the call alone, with Field
+    /// Day's class and section boxes cleared (K9ABC, who sent 579 DUPG).
+    const N3FJP_ILQP_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K9ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// CQ WW CW's push, captured the same way (K1ABC, who sent 579 5).
+    const N3FJP_CQWW_CW_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
 
     // ── The FT4222 open must be RETRIED ────────────────────────────────────────────────────────
     //

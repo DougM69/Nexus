@@ -4973,7 +4973,7 @@ export const JA: PartialCatalog = {
   "settings.dxkeeper.uploads.label": "アップロードをDXKeeperに任せる",
   "settings.dxkeeper.uploads.hint": "デフォルトはオフです。NexusがすでにLoTW / eQSL / ClubLog / QRZへアップロードしているため、オンにするとすべてのQSOが二重にアップロードされます。なおDXKeeperは、自身のQSL Configurationタブで<em>Auto upload</em>にチェックが入っているとClub LogとQRZについてこの設定を無視します — そちらのチェックを外してください。",
   "settings.n3fjp.legend": "N3FJP連携（クラブのマスターログ）",
-  "settings.n3fjp.note": "コンテストモードで記録した各交信は、記録した瞬間にクラブのマスターのN3FJPログに届きます。Nexusは<b>N3FJP Field Day Contest Log</b>の入力欄（コールサイン、バンド、モード、クラス、セクション）を埋めるため、フィールドデーではクラブ全体のスコアがリアルタイムで更新されます。交換がクラスとセクションではないコンテストでは、交換なしでN3FJPに届きます。マスターのコンピューターでN3FJPを起動し、そのIPとポート（デフォルト1100）をNexusに指定してください。",
+  "settings.n3fjp.note": "コンテストモードで記録した各交信は、記録した瞬間にクラブのマスターのN3FJPログに届きます。Nexusは<b>N3FJP Field Day Contest Log</b>の入力欄（コールサイン、バンド、モード、クラス、セクション）を埋めるため、フィールドデーではクラブ全体のスコアがリアルタイムで更新されます。CQ WPX、CQ WW RTTY、ARRL VHFコンテストでは交換も送られます。QSO Party、Sweepstakes、CQ WW CW/SSBの交信は、交換なしでN3FJPに届きます。マスターのコンピューターでN3FJPを起動し、そのIPとポート（デフォルト1100）をNexusに指定してください。",
   "settings.n3fjp.host.label": "N3FJPホスト",
   "settings.n3fjp.host.placeholder": "{{example}}（空欄 = オフ）",
   "settings.n3fjp.host.hint": "マスターログのコンピューターのIPまたはホスト名です。空欄で無効になります。",
