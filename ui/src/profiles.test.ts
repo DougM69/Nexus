@@ -287,3 +287,46 @@ describe('mergeProfile — the local logger pushes never import', () => {
     expect(merged.wsjtxUdp).toBe(true)
   })
 })
+
+// CONTEST MODE KEPT EVERY STORED KEY. The switch was renamed from "Field Day mode" in words only:
+// the setting is still `fdActive`, and the contest's setup keeps its `fd*` and `contest*` keys. So
+// a profile saved before the rename loads with the switch and that setup as they were, by value.
+// The keys are the wire's own, as `components/__fixtures__/defaultSettings.json` holds them.
+describe('a profile saved before Contest mode was named loads unchanged', () => {
+  const SAVED_BEFORE = {
+    fdActive: true,
+    fdEvent: 'ilqp',
+    fdClass: '2A',
+    fdSection: 'IL',
+    fdPowerMult: 5,
+    fdBonuses: ['media'],
+    fdOperator: 'K9ABC',
+    contestQthState: 'IL',
+    contestQthCounty: 'COOK',
+    contestEsmCw: true,
+    contestEsmRtty: true,
+    contestEsmPhone: false,
+    unassistedMode: true,
+  }
+
+  it('the switch and the contest’s setup round-trip through save, load and merge', () => {
+    memStore.clear()
+    saveProfile('ILQP club', settings(SAVED_BEFORE as unknown as Partial<Settings>))
+    const loaded = loadProfiles().find((p) => p.name === 'ILQP club')!
+    const current = settings({
+      fdActive: false,
+      fdEvent: 'arrlfd',
+      fdClass: '',
+      fdSection: '',
+      fdPowerMult: 2,
+    } as unknown as Partial<Settings>)
+    const merged = mergeProfile(current, loaded.settings) as unknown as Record<string, unknown>
+    for (const [key, value] of Object.entries(SAVED_BEFORE)) expect(merged[key], key).toEqual(value)
+  })
+
+  it('CONTROL: a value saved under any other name would not load, which is what keeping the keys prevents', () => {
+    const renamed = { contestMode: true } as unknown as Settings
+    const merged = mergeProfile(settings({ fdActive: false } as unknown as Partial<Settings>), renamed)
+    expect((merged as unknown as Record<string, unknown>).fdActive).toBe(false)
+  })
+})
