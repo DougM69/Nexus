@@ -14408,7 +14408,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// The cockpit's "work this station" — the `call_station` command: a double-click on a
     /// decode, a roster row, a station card, an alert. Each is [`Self::call_station_ctx`],
-    /// WSJT-X's double-click. The WSJT-X UDP Reply and the Remote page call that directly.
+    /// WSJT-X's double-click, but one:
+    ///
+    /// ⭐ **A double-click on a CQ while a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]) hands that station to the contest's S&P**
+    /// ([`Self::answer_cq_in_contest`]): the contest's messages, the contest log. WSJT-X answers
+    /// a double-clicked CQ with its contest activity's messages (`processMessage`); this left the
+    /// contest for FT8 QSO mode and the standard messages, which a WSJT-X station in its Field Day
+    /// or NA VHF activity never answers.
+    ///
+    /// The WSJT-X UDP Reply and the Remote page call `call_station_ctx` directly, unchanged.
     pub fn work_station(
         &mut self,
         dxcall: &str,
@@ -14417,7 +14426,104 @@ Pick the one you operate from on the Contesting tab in Settings.",
         reply_snr: Option<i32>,
         dx_freq: Option<f32>,
     ) -> Result<(), String> {
+        if let (Some(text), Some(messages)) = (reply_msg, self.contest_ft_messages()) {
+            if let Msg::Cq { de, grid, .. } = Msg::parse(text) {
+                if tempo_core::message::same_call(&de, dxcall)
+                    && !tempo_core::message::same_call(&de, &self.settings.mycall)
+                {
+                    return self.answer_cq_in_contest(messages, &de, &grid, text, dx_freq);
+                }
+            }
+        }
         self.call_station_ctx(dxcall, dxgrid, reply_msg, reply_snr, dx_freq)
+    }
+
+    /// The messages a running contest's own FT8/FT4 sequencer sends — what the Operate cockpit's
+    /// Call CQ and a double-click on a CQ follow. `Some` while the contest switch is on, on FT8
+    /// or FT4, in a contest whose rules do not ban the mode ([`FtMessages::follows_contest`]);
+    /// `None` everywhere else, where both behave as outside a contest. The contest is the running
+    /// session's in Field Day mode, else the picker's, as [`Self::set_mode`] opens it.
+    fn contest_ft_messages(&self) -> Option<FtMessages> {
+        if !self.settings.fd_active {
+            return None;
+        }
+        let ruleset = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.ruleset(),
+            _ => {
+                let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+                tempo_core::fd_rules::ruleset_by_id(self.settings.fd_event.trim(), year)
+                    .unwrap_or_else(|| {
+                        tempo_core::fd_rules::ruleset(
+                            tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
+                            year,
+                        )
+                    })
+            }
+        };
+        let mode = self.adif_mode_for_tier();
+        FtMessages::follows_contest(ruleset, mode).then(|| FtMessages::for_contest(ruleset, mode))
+    }
+
+    /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
+    /// own FT8/FT4 `messages` apply: the contest's S&P works that station
+    /// ([`FieldDayStation::answer_cq`]). The rest is what a double-click does outside a contest
+    /// ([`Self::call_station_ctx`]): the answer goes on the period opposite the CQ's, RX moves
+    /// onto the station and TX with it unless Hold is on, TX is enabled where "Double-click on
+    /// call sets Tx enable" is on, and the current period keys if the over still fits.
+    ///
+    /// After the contact the station is the contest's S&P, as the Contest screen's S&P leaves it.
+    ///
+    /// ⚠️ **REFUSED BEFORE ANYTHING CHANGES**, as `call_station_ctx` refuses: with no decode to
+    /// take the period from; for a CQ with no grid where the contest answers with the grid (the
+    /// contest's S&P passes such a CQ by: its call is one the grid message cannot carry); and
+    /// when the contest cannot start (its exchange not filled in), which `set_mode` refuses
+    /// without changing anything.
+    fn answer_cq_in_contest(
+        &mut self,
+        messages: FtMessages,
+        de: &str,
+        grid: &str,
+        text: &str,
+        dx_freq: Option<f32>,
+    ) -> Result<(), String> {
+        let slot = self
+            .decode_history
+            .iter()
+            .rev()
+            .find(|(_, d)| d.message.eq_ignore_ascii_case(text.trim()))
+            .map(|(s, _)| *s)
+            .or_else(|| self.latest_decode_slot_from(de))
+            .or(self.last_decode_slot)
+            .ok_or_else(|| {
+                format!(
+                    "No recent decode from {de} — wait for their next transmission, \
+                     then click again."
+                )
+            })?;
+        if messages != FtMessages::FieldDay && grid.is_empty() {
+            return Err(format!(
+                "{de}'s CQ carries no grid: in this contest Nexus answers a CQ that carries one."
+            ));
+        }
+        self.set_mode("fieldday-sp")?;
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.answer_cq(de, grid);
+        }
+        // WSJT-X sets Tx 1st from the clicked message's time (`processMessage`): the opposite of
+        // the CQ's period, whose decode lands at the boundary after it.
+        self.apply_cycle_parity(slot % 2 == 0);
+        if let Some(hz) = dx_freq.filter(|h| *h > 0.0) {
+            self.set_rx_offset(hz);
+            if !self.hold_tx_freq {
+                self.set_tx_offset(hz);
+            }
+        }
+        if self.settings.double_click_sets_tx {
+            self.set_tx_enabled(true);
+        }
+        self.pending_tx_disable = false;
+        self.immediate_tx = true;
+        Ok(())
     }
 
     /// Drop everything answer-context derives from: the decode history (message

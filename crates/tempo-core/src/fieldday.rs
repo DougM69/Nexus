@@ -2985,6 +2985,29 @@ impl FieldDayStation {
         self.wsjtx_field_day = on;
     }
 
+    /// Answer `de`'s CQ, which carried `grid` (empty if it carried none), as S&P answers a CQ it
+    /// hears: Field Day's exchange, or my grid where the contest answers with it. This is the
+    /// operator's double-click on that CQ, so unlike S&P's own pounce it answers a station
+    /// already in the log: the operator picked it. The engine never hands it a CQ these messages
+    /// cannot answer (one with no grid, outside Field Day's), which S&P passes by.
+    pub fn answer_cq(&mut self, de: &str, grid: &str) {
+        let answer = match self.messages {
+            FtMessages::FieldDay => self.my_exch_msg(de, false),
+            FtMessages::NaVhf | FtMessages::Standard => Msg::Grid {
+                to: de.to_string(),
+                de: self.mycall().to_string(),
+                grid: self.air_grid(),
+            },
+        };
+        self.dxcall = Some(de.to_string());
+        // The standard messages never carry the runner's grid again, so its CQ's is the one
+        // logged; the VHF contests log the grid the runner rogers with, Field Day none.
+        self.peer_grid = (self.messages == FtMessages::Standard).then(|| grid.to_string());
+        self.pending = Some(answer);
+        self.state = FdState::AwaitExchange;
+        self.transcript.push(format!("answer CQ {de}"));
+    }
+
     /// Whether what this station sends carries its grid: every set of messages but Field
     /// Day's, whose exchange is the class and section. The keying gate asks.
     pub fn sends_grid(&self) -> bool {
@@ -4876,6 +4899,72 @@ mod tests {
             }
         }
         assert_eq!(FtMessages::of_contest("wfd"), FtMessages::Standard);
+    }
+
+    /// ⭐ A double-clicked CQ is answered as S&P answers the same CQ it hears, in each contest's
+    /// messages: the same over to the same station, and the contact goes on, finishes and logs
+    /// the same. A station already in the log is answered all the same, where S&P's own pounce
+    /// passes it by: the operator picked it.
+    #[test]
+    fn a_double_clicked_cq_is_answered_as_sp_answers_it() {
+        let sp = |event: &str| {
+            if event == "arrlfd" {
+                FieldDayStation::search_and_pounce(
+                    "K1ABC",
+                    "FN42",
+                    ContestSession::field_day(FdEvent::ArrlFd, "2B", "EMA"),
+                    "20M",
+                )
+            } else {
+                ft8_station(event, "FN42", false)
+            }
+        };
+        for (event, cq, replies) in [
+            ("arrlfd", "CQ FD W9XYZ EN37", &["K1ABC W9XYZ R 1D WI"][..]),
+            (
+                "arrlvhf_jan",
+                "CQ TEST W9XYZ EN37",
+                &["K1ABC W9XYZ R EN37"][..],
+            ),
+            (
+                "txqp",
+                "CQ W9XYZ EN37",
+                &["K1ABC W9XYZ -07", "K1ABC W9XYZ RR73"][..],
+            ),
+        ] {
+            let (mut heard, mut clicked) = (sp(event), sp(event));
+            heard.observe(&[dec(cq)], 0);
+            clicked.answer_cq("W9XYZ", "EN37");
+            assert_eq!(next(&clicked), next(&heard), "{event}: the answer");
+            assert_eq!(clicked.state, heard.state, "{event}");
+            assert_eq!(clicked.dxcall, heard.dxcall, "{event}");
+            for (slot, reply) in replies.iter().enumerate() {
+                heard.after_tx();
+                clicked.after_tx();
+                heard.observe(&[dec(reply)], slot as u64 + 1);
+                clicked.observe(&[dec(reply)], slot as u64 + 1);
+                assert_eq!(next(&clicked), next(&heard), "{event}: after {reply:?}");
+            }
+            assert_eq!(clicked.log.qso_count(), 1, "{event}: logged");
+            assert_eq!(
+                last_row(&clicked),
+                last_row(&heard),
+                "{event}: the same row"
+            );
+        }
+        // Already in the log: S&P passes the CQ by, the double-click answers it.
+        let (mut heard, mut clicked) = (sp("arrlfd"), sp("arrlfd"));
+        for st in [&mut heard, &mut clicked] {
+            assert!(st.log.log("W9XYZ", "1D", "WI", 0));
+        }
+        heard.observe(&[dec("CQ FD W9XYZ EN37")], 1);
+        clicked.answer_cq("W9XYZ", "EN37");
+        assert_eq!(next(&heard), "", "S&P passes a worked station by");
+        assert_eq!(
+            next(&clicked),
+            "W9XYZ K1ABC 2B EMA",
+            "the double-click works it"
+        );
     }
 
     /// Which contests' FT8/FT4 stations follow the contest's own messages, and where the caller

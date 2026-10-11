@@ -920,3 +920,164 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
         assert_eq!(logged, 1, "{what}");
     }
 }
+
+/// Whether the station is in the contest's S&P, listening, with nothing to send.
+fn listening(e: &Engine) -> bool {
+    matches!(&e.mode, Mode::FieldDay { station, running: false }
+        if station.state == tempo_core::fieldday::FdState::Listening && station.pending.is_none())
+}
+
+/// A station with the contest switch on and Field Day's class not filled in, in FT8 QSO mode:
+/// the contest never started. The contest is a fresh install's (blank, ARRL Field Day), the
+/// configuration most stations run.
+fn contest_that_cannot_start() -> Engine {
+    let mut e = engine_for("", MY_GRID);
+    let mut s = e.settings().clone();
+    s.fd_active = false;
+    e.apply_settings(s);
+    let mut s = e.settings().clone();
+    s.fd_class = String::new();
+    s.fd_active = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("qso-monitor").expect("FT8 QSO mode");
+    e
+}
+
+/// The double-click answers on the period opposite the CQ's, as WSJT-X's does (`m_txFirst`
+/// from the clicked message's time, mainwindow.cpp 8963-8964), and moves RX — and TX, unless
+/// Hold is on — onto the station; it enables TX and keys at once.
+#[test]
+fn the_contest_double_click_takes_the_period_and_the_frequency_of_the_cq() {
+    for hold in [false, true] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        let mut s = e.settings().clone();
+        s.tx_even = false;
+        e.apply_settings(s);
+        e.set_tier(Tier::Ft8);
+        e.set_hold_tx_freq(hold);
+        let before_tx = e.tx_offset_hz;
+        // The CQ was heard in an odd period (decoded at the even boundary after it).
+        e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+        e.work_station(
+            DX,
+            Some(DX_GRID),
+            Some("CQ FD W9XYZ EN37"),
+            Some(DX_SNR),
+            Some(1234.0),
+        )
+        .expect("the double-click is taken");
+        assert!(e.tx_enabled, "Double-click on call sets Tx enable");
+        assert!(e.immediate_tx, "and the current period keys if it fits");
+        assert_eq!(e.rx_offset_hz, 1234.0, "RX moves onto the station");
+        if hold {
+            assert_eq!(e.tx_offset_hz, before_tx, "Hold keeps TX where it was");
+        } else {
+            assert_eq!(e.tx_offset_hz, 1234.0, "TX follows RX without Hold");
+        }
+        assert_eq!(keyed(&mut e, 3), None, "never in the CQ's own period");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC 2B EMA"),
+            "the period opposite the CQ's"
+        );
+    }
+}
+
+/// ⛔ A double-click on a CQ that carries no grid, in a contest that answers with the grid, is
+/// refused and changes nothing: the contest's S&P does not answer such a CQ either.
+#[test]
+fn a_double_click_on_a_cq_with_no_grid_changes_nothing() {
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ")], 2);
+    let r = e.work_station(DX, None, Some("CQ TEST W9XYZ"), Some(DX_SNR), None);
+    assert!(r.is_err(), "a CQ with no grid: {r:?}");
+    assert!(listening(&e), "the station is as it was");
+    assert!(!e.tx_enabled, "TX stays off");
+}
+
+/// ⛔ With no decode to take the period from, the double-click is refused, as outside a contest.
+#[test]
+fn a_double_click_with_no_decode_changes_nothing() {
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    let r = e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None);
+    assert!(r.is_err(), "no decode: {r:?}");
+    assert!(listening(&e), "the station is as it was");
+    assert!(!e.tx_enabled, "TX stays off");
+}
+
+/// ⛔ With the contest switch on and its exchange not filled in, the double-click is refused
+/// with the reason the Contest screen gives, and changes nothing.
+#[test]
+fn a_double_click_in_a_contest_that_cannot_start_changes_nothing() {
+    let mut e = contest_that_cannot_start();
+    e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+    let r = e.work_station(DX, None, Some("CQ FD W9XYZ EN37"), Some(DX_SNR), None);
+    assert!(r.is_err(), "no class: {r:?}");
+    assert!(
+        matches!(&e.mode, Mode::Qso { station, running: false } if station.dxcall.is_none()),
+        "still in FT8 QSO mode, working nobody"
+    );
+    assert!(!e.tx_enabled, "TX stays off");
+}
+
+/// The cockpit's other clicks, and every click where the contest's own FT8/FT4 messages do not
+/// apply, work the station as they always have: a double-click on a station calling you, a
+/// roster click, a double-click with the contest switch off, on FT2, and on your own CQ.
+#[test]
+fn every_other_click_works_the_station_as_before() {
+    let qso_with = |e: &Engine| match &e.mode {
+        Mode::Qso { station, .. } => station.dxcall.clone(),
+        _ => None,
+    };
+    // A double-click on a station calling you, in a contest.
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("K1ABC W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("worked");
+    assert_eq!(
+        qso_with(&e).as_deref(),
+        Some(DX),
+        "a call to you: FT8 QSO mode"
+    );
+    // A roster click (no message), in a contest.
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
+    e.work_station(DX, Some(DX_GRID), None, None, None)
+        .expect("worked");
+    assert_eq!(
+        qso_with(&e).as_deref(),
+        Some(DX),
+        "a roster click: FT8 QSO mode"
+    );
+    // A double-click on a CQ on FT2, in a contest.
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft2);
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("worked");
+    assert_eq!(qso_with(&e).as_deref(), Some(DX), "FT2: FT2 QSO mode");
+    // A double-click on a CQ with the contest switch off.
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("qso-monitor").expect("FT8 QSO mode");
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("worked");
+    assert_eq!(
+        qso_with(&e).as_deref(),
+        Some(DX),
+        "no contest: FT8 QSO mode"
+    );
+    // A double-click on your own CQ (its echo in the band activity) starts nothing.
+    let mut e = engine_for("arrlfd", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.work_station(ME, None, Some("CQ FD K1ABC FN42"), Some(DX_SNR), None)
+        .expect("ignored");
+    assert!(listening(&e), "your own CQ: nothing");
+    assert!(!e.tx_enabled, "and TX stays off");
+}
