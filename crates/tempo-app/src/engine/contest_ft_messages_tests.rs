@@ -599,11 +599,13 @@ fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<Strin
     };
     let v = |s: &[&str]| s.iter().map(|t| t.to_string()).collect::<Vec<_>>();
     match (contest, role) {
-        // Field Day — the control: byte for byte what it sent before this change.
+        // Field Day: what it has always sent, and the 73 WSJT-X's runner answers the caller's
+        // RR73 with (Tx5).
         ("" | "arrlfd", Role::Running) => (
             v(&[
                 "CQ FD K1ABC FN42",
                 "W9XYZ K1ABC R 2B EMA",
+                "W9XYZ K1ABC 73",
                 "CQ FD K1ABC FN42",
             ]),
             row("CLASS=1D,SECTION=WI", "CLASS=2B,SECTION=EMA"),
@@ -866,4 +868,55 @@ fn an_ft8_grid_contact_dupes_and_journals_like_a_typed_one() {
     let records = journal.to_ascii_lowercase().matches("<eor>").count();
     let _ = std::fs::remove_file(&path);
     assert_eq!(records, 4, "every row is in the journal");
+}
+
+/// Field Day's runner answers the caller's RR73 or RRR with 73 and then calls CQ, in ARRL Field
+/// Day on FT8 and FT4, as WSJT-X's Field Day activity does (Tx5, mainwindow.cpp 9210-9215). A
+/// bare 73 from the caller, and a confirmation from anyone else, are answered with nothing, as
+/// before; and FT1 and Winter Field Day close as they always have. One row each time.
+#[test]
+fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
+    let rows = |e: &Engine| match &e.mode {
+        Mode::FieldDay { station, .. } => station.log.qsos().len(),
+        _ => 0,
+    };
+    let run = |contest: &str, tier: Tier, closing: &str| {
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        let cq = keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ 1D WI")], 2);
+        let exch = keyed(&mut e, 2).expect("the rogered exchange");
+        assert!(exch.starts_with("W9XYZ K1ABC R "), "{exch}");
+        e.ingest_decodes_for_test(&[heard(closing)], 4);
+        let after = keyed(&mut e, 4);
+        e.ingest_decodes_for_test(&[], 6);
+        let next = keyed(&mut e, 6);
+        (cq, after, next, rows(&e))
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        for closing in ["K1ABC W9XYZ RR73", "K1ABC W9XYZ RRR"] {
+            let (cq, after, next, logged) = run("arrlfd", tier, closing);
+            let what = format!("{} {closing:?}", tier_name(tier));
+            assert_eq!(after.as_deref(), Some("W9XYZ K1ABC 73"), "{what}");
+            assert_eq!(next.as_deref(), Some(cq.as_str()), "{what}: then CQ");
+            assert_eq!(logged, 1, "{what}");
+        }
+    }
+    // Nothing goes back where it never did.
+    for (contest, tier, closing) in [
+        ("arrlfd", Tier::Ft8, "K1ABC W9XYZ 73"),
+        ("arrlfd", Tier::Ft8, "K1ABC K2DEF RR73"),
+        ("arrlfd", Tier::TempoFast, "K1ABC W9XYZ RR73"),
+        ("wfd", Tier::Ft8, "K1ABC W9XYZ RR73"),
+    ] {
+        let (cq, after, _, logged) = run(contest, tier, closing);
+        let what = format!("{contest:?} {} {closing:?}", tier_name(tier));
+        assert_eq!(
+            after.as_deref(),
+            Some(cq.as_str()),
+            "{what}: straight back to CQ"
+        );
+        assert_eq!(logged, 1, "{what}");
+    }
 }

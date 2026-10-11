@@ -2799,11 +2799,7 @@ impl FtMessages {
     /// on FT8 and FT4, and Field Day's, unchanged, on every other tier, wherever the rules ban
     /// the mode, and in Winter Field Day.
     pub fn for_contest(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> Self {
-        let banned = ruleset
-            .banned_modes
-            .iter()
-            .any(|b| b.eq_ignore_ascii_case(mode));
-        if !matches!(mode, "FT8" | "FT4") || banned {
+        if !Self::follows_contest(ruleset, mode) {
             return Self::FieldDay;
         }
         match ruleset.event {
@@ -2812,6 +2808,25 @@ impl FtMessages {
             "wfd" => Self::FieldDay,
             event => Self::of_contest(event),
         }
+    }
+
+    /// Whether FT8/FT4 on a tier whose ADIF mode is `mode` follows `ruleset`'s own messages: FT8
+    /// and FT4, where the rules do not ban the mode. Everywhere else the sequencer sends Field
+    /// Day's messages as it always has ([`for_contest`](Self::for_contest)).
+    pub fn follows_contest(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> bool {
+        let banned = ruleset
+            .banned_modes
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case(mode));
+        matches!(mode, "FT8" | "FT4") && !banned
+    }
+
+    /// Whether the station on the other end of `ruleset`'s FT8/FT4 contacts on a tier whose ADIF
+    /// mode is `mode` runs WSJT-X's Field Day activity: ARRL Field Day on FT8 and FT4. Field
+    /// Day's messages anywhere else (FT1, DX1, FT2, Winter Field Day, a mode the rules ban) are
+    /// Nexus's own sequencer's and close as they always have.
+    pub fn wsjtx_field_day(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> bool {
+        Self::follows_contest(ruleset, mode) && Self::of_contest(ruleset.event) == Self::FieldDay
     }
 
     /// WSJT-X's own number for this activity, the Special Operation Mode its UDP Status carries
@@ -2855,6 +2870,10 @@ pub struct FieldDayStation {
     /// What this station puts on the air. Field Day's until the engine, which knows the
     /// contest and the tier, says otherwise ([`set_messages`](Self::set_messages)).
     messages: FtMessages,
+    /// The caller runs WSJT-X's Field Day activity ([`FtMessages::wsjtx_field_day`]), so Field
+    /// Day's runner answers its RR73 or RRR with 73. Off until the engine says so
+    /// ([`set_wsjtx_field_day`](Self::set_wsjtx_field_day)).
+    wsjtx_field_day: bool,
     pub log: FieldDayLog,
     pub transcript: Vec<String>,
 }
@@ -2886,6 +2905,7 @@ impl FieldDayStation {
             peer_exch: None,
             peer_grid: None,
             messages: FtMessages::FieldDay,
+            wsjtx_field_day: false,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -2906,6 +2926,7 @@ impl FieldDayStation {
             peer_exch: None,
             peer_grid: None,
             messages: FtMessages::FieldDay,
+            wsjtx_field_day: false,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -2955,6 +2976,13 @@ impl FieldDayStation {
     /// What this station puts on the air.
     pub fn messages(&self) -> FtMessages {
         self.messages
+    }
+
+    /// Say whether the caller runs WSJT-X's Field Day activity
+    /// ([`FtMessages::wsjtx_field_day`]). It decides only how Field Day's runner closes the next
+    /// contact it confirms; nothing in flight is re-armed.
+    pub fn set_wsjtx_field_day(&mut self, on: bool) {
+        self.wsjtx_field_day = on;
     }
 
     /// Whether what this station sends carries its grid: every set of messages but Field
@@ -3160,6 +3188,13 @@ impl FieldDayStation {
                 // RR73/RRR the contact must not stall (their exchange is already
                 // in hand from the CallingCq step). Happy-path callers send RR73,
                 // so the added Bye73 alternative never fires on the normal flow.
+                //
+                // ⭐ Where the caller runs WSJT-X's Field Day activity, its RR73 or RRR is
+                // answered with 73, as WSJT-X's runner answers it (Tx5, mainwindow.cpp
+                // 9210-9215); the 73 goes once and the run calls CQ again. Only the caller's,
+                // by its call: a 73 must never answer a confirmation the station being worked
+                // did not send. A bare 73, a confirmation from anyone else, and every other
+                // Field Day station close as they always have, with nothing sent back.
                 (FdState::AwaitConfirm, Msg::Rr73 { to, .. })
                 | (FdState::AwaitConfirm, Msg::Rrr { to, .. })
                 | (FdState::AwaitConfirm, Msg::Bye73 { to, .. })
@@ -3170,7 +3205,17 @@ impl FieldDayStation {
                         self.transcript
                             .push(format!("logged {call} {class} {section}"));
                     }
-                    self.pending = None;
+                    self.pending = match &m {
+                        Msg::Rr73 { de, .. } | Msg::Rrr { de, .. }
+                            if self.wsjtx_field_day && self.from_dx(de) =>
+                        {
+                            Some(Msg::Bye73 {
+                                to: de.clone(),
+                                de: self.mycall().to_string(),
+                            })
+                        }
+                        _ => None,
+                    };
                     self.state = FdState::Done;
                 }
                 _ => {}
@@ -4831,6 +4876,91 @@ mod tests {
             }
         }
         assert_eq!(FtMessages::of_contest("wfd"), FtMessages::Standard);
+    }
+
+    /// Which contests' FT8/FT4 stations follow the contest's own messages, and where the caller
+    /// runs WSJT-X's Field Day activity, over the whole rules file: FT8 and FT4 follow every
+    /// contest whose rules do not ban them (this test's own list of those that do), WSJT-X's
+    /// Field Day is ARRL Field Day's alone, and no other tier follows either.
+    #[test]
+    fn who_follows_the_contest_and_who_runs_wsjtx_field_day() {
+        let year = crate::fd_rules::CURRENT_RULES_YEAR;
+        let seed: serde_json::Value =
+            serde_json::from_str(include_str!("fd_rules.seed.json")).expect("the seed parses");
+        let events: Vec<&str> = seed["rulesets"]
+            .as_array()
+            .expect("rulesets")
+            .iter()
+            .filter_map(|r| r["event"].as_str())
+            .collect();
+        assert_eq!(events.len(), 18);
+        for event in events {
+            let rs = crate::fd_rules::ruleset_by_id(event, year).expect(event);
+            let bans = matches!(event, "wfd" | "ilqp" | "nyqp");
+            for mode in ["FT8", "FT4"] {
+                assert_eq!(
+                    FtMessages::follows_contest(rs, mode),
+                    !bans,
+                    "{event} on {mode}"
+                );
+                assert_eq!(
+                    FtMessages::wsjtx_field_day(rs, mode),
+                    event == "arrlfd",
+                    "{event} on {mode}"
+                );
+            }
+            for mode in ["FT2", "TempoFast", "TempoDeep", "RTTY", ""] {
+                assert!(
+                    !FtMessages::follows_contest(rs, mode),
+                    "{event} on {mode:?}"
+                );
+                assert!(
+                    !FtMessages::wsjtx_field_day(rs, mode),
+                    "{event} on {mode:?}"
+                );
+            }
+        }
+    }
+
+    /// ⭐ Field Day's runner, where the caller runs WSJT-X's Field Day activity: the caller's
+    /// RR73 or RRR is logged and answered with 73 (Tx5), which goes once; then the station is
+    /// done. A bare 73, a confirmation from anyone else, and a runner whose caller does not run
+    /// WSJT-X's Field Day close as they always have: logged, nothing sent back.
+    #[test]
+    fn field_days_runner_answers_its_callers_rr73_with_73_in_wsjtx_field_day() {
+        let runner = |wsjtx: bool| {
+            let mut run = FieldDayStation::running(
+                "W9XYZ",
+                "EN37",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20M",
+            );
+            run.set_wsjtx_field_day(wsjtx);
+            run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0);
+            assert_eq!(next(&run), "K2DEF W9XYZ R 3A WI");
+            run
+        };
+        for closing in ["W9XYZ K2DEF RR73", "W9XYZ K2DEF RRR"] {
+            let mut run = runner(true);
+            run.observe(&[dec(closing)], 1);
+            assert_eq!(run.log.qso_count(), 1, "{closing}: logged");
+            assert_eq!(next(&run), "K2DEF W9XYZ 73", "{closing}: answered with 73");
+            assert!(!run.done(), "{closing}: the 73 is still to go");
+            run.after_tx();
+            assert!(run.done(), "{closing}: it went once");
+            assert_eq!(next(&run), "", "{closing}");
+        }
+        for (wsjtx, closing) in [
+            (true, "W9XYZ K2DEF 73"),
+            (true, "W9XYZ N0ABC RR73"),
+            (false, "W9XYZ K2DEF RR73"),
+            (false, "W9XYZ K2DEF RRR"),
+        ] {
+            let mut run = runner(wsjtx);
+            run.observe(&[dec(closing)], 1);
+            assert_eq!(run.log.qso_count(), 1, "{wsjtx} {closing}: logged");
+            assert!(run.done(), "{wsjtx} {closing}: done, nothing sent back");
+        }
     }
 
     /// The control: a station starts on Field Day's messages, and naming them again moves

@@ -13931,10 +13931,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // ⭐ THE CONTEST'S OWN FT8/FT4 MESSAGES — chosen here and in `set_tier`, the two places
         // the contest and the tier meet. A new station speaks Field Day's, so for Field Day,
         // for a contest that bans the mode and for every tier but FT8/FT4 this changes nothing.
+        // Where the caller runs WSJT-X's Field Day activity (ARRL Field Day on FT8/FT4), Field
+        // Day's runner answers its RR73 with 73, as WSJT-X's does.
         let air_mode = self.adif_mode_for_tier();
         if let Mode::FieldDay { station, running } = &mut self.mode {
-            let messages = FtMessages::for_contest(station.log.ruleset(), air_mode);
-            station.set_messages(messages, *running);
+            let ruleset = station.log.ruleset();
+            station.set_messages(FtMessages::for_contest(ruleset, air_mode), *running);
+            station.set_wsjtx_field_day(FtMessages::wsjtx_field_day(ruleset, air_mode));
         }
         // Restore the durable FD journal into the fresh station — entering Field
         // Day used to build an EMPTY log, so a restart (or a run↔S&P toggle)
@@ -15065,9 +15068,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Mode::FieldDay { station, running } = &mut self.mode {
             station.log.current_submode = fd_submode.to_string();
             // …and so do its messages: FT8 and FT4 speak the contest's own, every other tier
-            // Field Day's. A change re-arms the sequencer; FT8↔FT4 is no change.
-            let messages = FtMessages::for_contest(station.log.ruleset(), fd_submode);
-            station.set_messages(messages, *running);
+            // Field Day's. A change re-arms the sequencer; FT8↔FT4 is no change. Whether the
+            // caller runs WSJT-X's Field Day follows the tier too, and re-arms nothing.
+            let ruleset = station.log.ruleset();
+            station.set_messages(FtMessages::for_contest(ruleset, fd_submode), *running);
+            station.set_wsjtx_field_day(FtMessages::wsjtx_field_day(ruleset, fd_submode));
         }
         // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
         // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
