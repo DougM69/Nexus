@@ -4194,8 +4194,12 @@ export const EN = {
   'settings.contestPick.contest.aria': 'Which contest you are entering',
   'settings.contestPick.contest.hint':
     'Which contest you are entering. It decides the exchange, what counts as a duplicate, and how the log is scored — so the setup below belongs to the one you pick.',
+  // Shown beside the picker while a contest session runs. `{{contest}}` is the running contest's
+  // own name, invariant.
+  'settings.contestPick.contest.running':
+    'Contest mode is on for {{contest}}. A new pick takes effect after you save it and turn Contest mode off and on again.',
   'settings.contestPick.role.label': 'Your role',
-  'settings.contestPick.role.value': 'Running as {{role}}. Your location decides this, so moving across the line changes it.',
+  'settings.contestPick.role.value': 'Your station is {{role}}. Your location decides this, so moving across the line changes it.',
   'settings.contestPick.role.symmetric':
     'This contest works the same way for everyone, so there is no role to choose. Contests with an in-state and an out-of-state side will show yours here.',
   'settings.contestPick.category.label': 'Entry category',
@@ -4305,6 +4309,11 @@ export const EN = {
   'settings.contestKeys.phone.steps.label': 'Voice keyer steps',
   'settings.contestKeys.phone.steps.hint':
     'Record a slot for each step you want Enter to play. An empty slot plays nothing.',
+  // The side of a QSO party the operator's location puts them on (the rules data's role ids
+  // in_state / out_of_state), shown in Settings and beside the log strip's exchange. W/VE and DX,
+  // the other two sides, are the sponsors' own words and stay invariant in the code.
+  'contest.role.inState': 'in-state',
+  'contest.role.outOfState': 'out-of-state',
   'contest.esm.step.callExch': 'His call and your exchange',
   'contest.esm.step.myCall': 'Your call',
   'contest.esm.step.exch': 'Your S&P exchange',
@@ -4363,7 +4372,7 @@ export const EN = {
   'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
   'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',
   'settings.fieldDay.mode.hint':
-    'For {{contest}}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
   'settings.fieldDay.needExchange':
     "<b>Set your Class + Section to start operating.</b> Contest mode is on, but the station won't enter {{contest}} until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
@@ -8263,7 +8272,7 @@ export const EN = {
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
   'settings.features.fieldDay.hint':
-    'For {{contest}}, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the

@@ -95,7 +95,7 @@ const switchNamed = async (name: string) => (await screen.findByRole('switch', {
 const hintOf = (sw: HTMLElement) => sw.closest('.settings-field')!.querySelector('.settings-hint')!.textContent
 
 const ON_CONTESTING = (contest: string) =>
-  `For ${contest}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen.`
+  `For ${contest}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen, where it takes effect at once.`
 
 describe('Settings ▸ Contesting: the switch is Contest mode, and names the picked contest', () => {
   it('a QSO party: its name on the switch and in the hint, and no Field Day anywhere on it', async () => {
@@ -132,7 +132,7 @@ describe('Settings ▸ Appearance ▸ Features: the same switch under the same n
     const sw = await switchNamed('Enable Contest mode: Illinois QSO Party')
     expect(sw.closest('.settings-field')!.querySelector('.settings-label')!.textContent).toBe('Contest mode')
     expect(hintOf(sw)).toBe(
-      'For Illinois QSO Party, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
+      'For Illinois QSO Party, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
     )
   })
 })

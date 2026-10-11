@@ -3,7 +3,7 @@
 // WFD's final six hours). What remains here is pure labeling over a window the
 // backend supplies, so these tests feed explicit windows.
 import { describe, it, expect } from 'vitest'
-import { CONTESTS, clubSyncRefusal, clubSyncRefusalText, contestClubRefusal, contestFileStem, fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
+import { CONTESTS, clubSyncRefusal, clubSyncRefusalText, contestClubRefusal, contestFileStem, contestRoleWords, fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
 
 // The real 2026 windows, as the Rust side computes them (pinned there in
 // crates/tempo-core/src/fd_rules.rs::event_windows_are_algorithmic_and_dodge_the_feb_spill).
@@ -156,5 +156,18 @@ describe('contestFileStem', () => {
     expect(contestFileStem('my contest/2027')).toBe('my-contest-2027')
     expect(contestFileStem('a\\b:c*?d')).toBe('a-b-c-d')
     expect(contestFileStem('../x')).toBe('-x')
+  })
+})
+
+describe('contestRoleWords', () => {
+  it('says each side of a contest in words, never the rules data\'s id', () => {
+    expect(contestRoleWords('in_state')).toBe('in-state')
+    expect(contestRoleWords('out_of_state')).toBe('out-of-state')
+    expect(contestRoleWords('w_ve')).toBe('W/VE')
+    expect(contestRoleWords('dx')).toBe('DX')
+  })
+
+  it('shows a role id it has no words for as itself, a token rather than a guess', () => {
+    expect(contestRoleWords('mobile_rover')).toBe('mobile_rover')
   })
 })
