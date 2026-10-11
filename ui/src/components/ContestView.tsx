@@ -24,7 +24,7 @@ import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
 import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
-import { REMOVE_CONFIRM_MS, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
+import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -2586,7 +2586,8 @@ export function ContestView({
                       )
                     }
                   />
-                  <span className="mono">{id}</span>
+                  {/* The service's own name; the tick stores its id. */}
+                  <span>{SERVICE_NAMES[id] ?? id}</span>
                 </label>
               ))}
             </div>
