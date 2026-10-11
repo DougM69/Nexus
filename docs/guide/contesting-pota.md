@@ -58,6 +58,14 @@ show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), a
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
+**The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK
+cockpits show it in the title bar of their Log pane: `ILQP · 212 pts · 48 Q · 19 mults · 41/hr`, that
+is the score, the contacts, the multipliers (the worked sections at Field Day) and your rate over
+your last ten contacts, the same numbers the Contest screen shows, and the rate falls while you log
+nothing. The Satellites log strip and the contest logger window carry it in the strip's top line
+instead, in whatever room that line has left: it is cut short rather than move anything, and
+hovering it shows the whole reading.
+
 **Super Check Partial and call history**, in every contest. As you type a call in a log
 strip, a line under the boxes lists the calls active in recent contests that contain what
 you have typed; click one to use it. The list is `MASTER.SCP` from supercheckpartial.com
@@ -160,6 +168,31 @@ so JTAlert/GridTracker auto-activate their FD behavior too.
 
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 [N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
+
+### When the contest is over
+
+Turn Contest mode off, on the Contest screen or in Settings › Contesting with Save, and Nexus first
+asks **Contest over?** with a short checklist. Nothing on it is ticked to begin with, and nothing is
+done that you have not ticked:
+
+- **Merge N contacts into my logbook**: the Contest screen's own merge. A contact already in the
+  logbook is skipped, never added twice.
+- **Export the Cabrillo log to Downloads**: the same file the Contest screen's Export Cabrillo
+  writes.
+- **Put back what the contest changed**: each of Callsign on the air, Operator at the key, Position
+  name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
+  shown as it is now and as it was before. Tick the ones you want back.
+
+**Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
+mode stays on. The merge and the export are done before the mode goes off, because they need the
+contest's session; if one of them fails, nothing after it is done, the reason is shown, and the mode
+stays on. With no contacts and nothing changed, the mode goes off at once, as it always did.
+
+"Before" is how each of those settings was the first time one of them changed for this contest, or
+when you turned Contest mode on, whichever came first. So the club call you typed into Settings on
+the Friday is offered back as your own call on the Sunday night. Nexus lets those values go when
+Contest mode goes off, whatever you ticked. A press made through Remote cannot merge or export, as
+on the Contest screen.
 
 ### Run the whole club on Nexus (club sync)
 

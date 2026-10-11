@@ -35,6 +35,8 @@ vi.mock('../api', () => ({
   fdSetUpload: vi.fn(async () => ({})),
   saveTextToDownloads: vi.fn(async () => ''),
   openPanelWindow: vi.fn(async () => {}),
+  fdMergeToGeneral: vi.fn(async () => ({ added: 2, already: 0, refused: 0, queued: false })),
+  setUnassistedMode: vi.fn(async () => ({})),
 }))
 
 /** 1700Z Sunday 18 October 2026 to 0100Z Monday: the Illinois QSO Party's window. */
@@ -375,5 +377,62 @@ describe('what the switch must not do', () => {
     fireEvent.click(theSwitch())
     await settle()
     expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+  })
+})
+
+// ⭐ THE CONTEST-OVER CHECKLIST, from the Contest screen's switch. Turning the mode off with something
+// to offer opens it INSTEAD of saving: the merge and the export need the session the mode holds.
+describe('turning the mode off offers the contest-over checklist first', () => {
+  /** The end of a club weekend: the club's call on the air, and the engine's note of the station's own. */
+  const CLUB: Partial<Settings> = {
+    ...ILQP_STATION,
+    fdActive: true,
+    mycall: 'W9CLB',
+    contestBefore: {
+      mycall: 'K9ABC',
+      fdOperator: '',
+      fdPositionName: '',
+      contestCategoryOperator: '',
+      contestEntryClass: '',
+      contestCategoryPower: '',
+      unassistedMode: false,
+    },
+  }
+  const twoContacts = () =>
+    session({
+      running: true,
+      workedSections: [],
+      log: [
+        { call: 'K9A', band: '20m', mode: 'CW', whenUnix: ILQP_START + 60 },
+        { call: 'K9B', band: '20m', mode: 'CW', whenUnix: ILQP_START + 120 },
+      ] as FieldDayStatus['log'],
+    })
+
+  it('opens it and saves nothing; Not now leaves the mode on', async () => {
+    await openOn(CLUB, { fdActive: true, fieldDay: twoContacts() })
+    await press()
+    expect(screen.getByRole('dialog', { name: 'Contest over?' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: /Merge 2 contacts into my logbook/ })).toBeTruthy()
+    expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
+    await settle()
+    expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(theSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('Turn off is ONE save: the mode off, with the ticked settings put back', async () => {
+    const { onSettingsSaved } = await openOn(CLUB, { fdActive: true, fieldDay: twoContacts() })
+    await press()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Callsign on the air/ }))
+    const before = { ...station }
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+    await settle()
+    expect(vi.mocked(setSettings).mock.calls.map((c) => c[0])).toEqual([
+      { ...before, mycall: 'K9ABC', fdActive: false },
+    ])
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(theSwitch().getAttribute('aria-checked')).toBe('false')
+    expect(onSettingsSaved).toHaveBeenCalledTimes(1)
   })
 })

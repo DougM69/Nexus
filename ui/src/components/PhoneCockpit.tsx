@@ -76,6 +76,7 @@ import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
   armStreamMic,
@@ -2453,7 +2454,12 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   ) : null
 
   const logPane = (
-    <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')} paneId="log">
+    <CockpitPaneFrame
+      title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')}
+      paneId="log"
+      // The contest score chip rides in this head: the strip below has no room left for it.
+      actions={fieldDay ? <ContestScoreChip place="head" fieldDay={fieldDay} /> : undefined}
+    >
       {/* compactRecall died here (2026-07-31). It existed because the pre-overhaul cockpit had
           no interposed scroller: the full recall card's height crushed the operating panes
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
@@ -2477,6 +2483,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         onConsumeWork={onConsumeWork}
         onSnap={onSnap}
         fieldDay={fieldDay}
+        scoreChip={false}
         active={active}
         fdMode="PH"
         esm={esm.host}

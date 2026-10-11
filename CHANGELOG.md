@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operating, so club sync and your exports are unchanged, and it reopens on the monitor where you
   left it. A Remote viewer sees the main window only. NEEDS-BENCH: two monitors, two keyboards and
   mice with MouseMux, logging voice contacts.
+- **Turning Contest mode off offers a contest-over checklist.** Before the mode goes off, Nexus asks
+  **Contest over?**: merge the contest's contacts into your logbook, export the Cabrillo log, and put
+  back what the contest changed (the callsign a club set, the operator, the position, MULTI-OP, the
+  entry class, the power category, Unassisted), each shown as it is now and as it was before. Nothing
+  is ticked to begin with and nothing is done that you did not tick; **Not now** leaves everything,
+  the mode included, as it is. Nexus keeps those seven as they were the first time a contest changed
+  one of them, or when the mode went on.
+- **Every contest log strip shows the running score.** While a contest runs, the Log pane of the CW,
+  Phone, RTTY and PSK cockpits reads like `ILQP · 212 pts · 48 Q · 19 mults · 41/hr` (score, contacts,
+  multipliers or Field Day's sections, and your rate over the last ten contacts), the same numbers as
+  the Contest screen; the Satellites strip and the logger window show it in the strip's top line where
+  there is room. Nothing in the strip moves or grows for it, at any window size or text size.
 - **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
   ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
   and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,

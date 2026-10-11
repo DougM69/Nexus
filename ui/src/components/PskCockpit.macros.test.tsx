@@ -496,3 +496,13 @@ describe('Everyday / Contest', () => {
     expect((screen.getByRole('button', { name: 'Reset set' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit({ snap: contest('IL') })
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('Field Day · 0 Q · 0 sections · —/hr')
+  })
+})

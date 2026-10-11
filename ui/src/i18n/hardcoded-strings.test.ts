@@ -282,6 +282,8 @@ const MIGRATED = [
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',
+  'components/ContestOverDialog.tsx',
+  'components/ContestScoreChip.tsx',
   // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
   // the objective names are the sponsor's own worksheet names, invariant like the bonus names.
   'components/WfdObjectivesSection.tsx',

@@ -1871,6 +1871,16 @@ export const EN = {
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
+  // THE SCORE CHIP in every contest log strip: the Contest screen's own numbers at a glance,
+  // "ILQP · 212 pts · 48 Q · 19 mults · 41/hr". One entry per reading — a list of readings,
+  // not a sentence. `{{rate}}` is a whole number, or the scoreboard's em dash before there is one.
+  'logEntry.score.points': { one: '{{count}} pt', other: '{{count}} pts' },
+  'logEntry.score.qsos': '{{count}} Q',
+  'logEntry.score.mults': { one: '{{count}} mult', other: '{{count}} mults' },
+  'logEntry.score.sections': { one: '{{count}} section', other: '{{count}} sections' },
+  'logEntry.score.rate': '{{rate}}/hr',
+  'logEntry.score.title':
+    'The contest so far, as the Contest screen counts it: your score, contacts, multipliers (sections at Field Day) and contacts per hour over your last ten.',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
   'logEntry.scp.label': 'Super Check Partial',
   'logEntry.scp.title':
@@ -3941,6 +3951,26 @@ export const EN = {
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
+  // THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning Contest mode off offers.
+  // Nothing in it is ticked to begin with, and nothing is done that the operator did not tick.
+  'contestOver.title': 'Contest over?',
+  'contestOver.desc':
+    'Contest mode goes off when you press Turn off. Tick what you want done first: nothing is done that you have not ticked.',
+  'contestOver.export': 'Export the Cabrillo log to Downloads',
+  'contestOver.putBack.legend': 'Put back what the contest changed',
+  'contestOver.putBack.note':
+    'Before is how each one was the first time it changed for this contest, or when Contest mode went on.',
+  'contestOver.putBack.now': 'Now',
+  'contestOver.putBack.before': 'Before',
+  'contestOver.putBack.aria': 'Put back {{setting}}: {{now}} back to {{before}}',
+  'contestOver.value.on': 'On',
+  'contestOver.value.off': 'Off',
+  'contestOver.value.yourCall': 'your callsign',
+  'contestOver.value.none': 'none',
+  'contestOver.value.notDeclared': 'not declared',
+  'contestOver.notNow': 'Not now',
+  'contestOver.turnOff': 'Turn off',
+  'contestOver.busy': 'Working…',
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
