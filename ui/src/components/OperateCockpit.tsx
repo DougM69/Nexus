@@ -50,7 +50,7 @@ import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, s
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
-import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startRunning, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
@@ -1903,7 +1903,8 @@ export function OperateCockpit({
           onCallCq={() => {
             // The labelled "Call CQ" is always a PLAIN run — it also clears a
             // sticky directed token so a leftover "CQ DX" can't surprise.
-            void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
+            // This computer's strip asks for it by its own verb; the Remote page's is `startCq`.
+            void (control ? startRunning() : startCq(null)).then((s) => onSnap?.(s)).catch(() => {})
           }}
           onResend={onResend}
           onFreetext={onFreetext}

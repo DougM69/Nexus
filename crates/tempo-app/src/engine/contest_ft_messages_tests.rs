@@ -11,9 +11,14 @@
 //! The partner is a script, not a decoder: it reacts to the message it was addressed and
 //! repeats its last over when it hears anything else, which is what WSJT-X's auto-sequencer
 //! does with a message it has no arm for.
+//!
+//! The Operate cockpit's own gestures are driven through the verbs its commands call: a
+//! double-click through `work_station` (the `call_station` command), the strip's Call CQ through
+//! `start_running`.
 
 use super::*;
 use crate::dto::Tier;
+use crate::test_util::StoredLog;
 
 const ME: &str = "K1ABC";
 const MY_GRID: &str = "FN42";
@@ -259,6 +264,40 @@ enum Role {
     SearchAndPounce,
     /// S&P the way the Operate cockpit does it: a double-click on the partner's CQ.
     DoubleClick,
+    /// A double-click on the partner's CQ (the cockpit's `call_station`) from the contest's
+    /// S&P as the contest switch leaves it, TX off.
+    ClickFromSp,
+    /// The same double-click from the contest's Running.
+    ClickFromRun,
+    /// The same double-click from FT8 QSO mode, the contest switch on.
+    ClickFromQso,
+    /// The Operate strip's Call CQ, from the contest's S&P as the switch leaves it, TX off.
+    CallCq,
+    /// The Operate strip's Call CQ from FT8 QSO mode, the contest switch on.
+    CallCqFromQso,
+}
+
+impl Role {
+    /// The partner calls CQ, and this station answers it.
+    fn partner_runs(self) -> bool {
+        !matches!(self, Role::Running | Role::CallCq | Role::CallCqFromQso)
+    }
+
+    /// The operator double-clicks the partner's first CQ.
+    fn clicks(self) -> bool {
+        matches!(
+            self,
+            Role::DoubleClick | Role::ClickFromSp | Role::ClickFromRun | Role::ClickFromQso
+        )
+    }
+
+    /// The dump's original scenes: they print nothing they did not print then.
+    fn first_dump(self) -> bool {
+        matches!(
+            self,
+            Role::Running | Role::SearchAndPounce | Role::DoubleClick
+        )
+    }
 }
 
 /// One scene's record: every over each side sent, by slot, and what the contest log kept.
@@ -283,18 +322,25 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
     let mut e = engine_for(contest, grid);
     e.set_tier(tier);
     let entered = match role {
-        Role::Running => e.set_mode("fieldday-run"),
+        Role::Running | Role::ClickFromRun => e.set_mode("fieldday-run"),
         Role::SearchAndPounce | Role::DoubleClick => e.set_mode("fieldday-sp"),
+        // The contest switch has already put the station in S&P.
+        Role::ClickFromSp | Role::CallCq => Ok(()),
+        Role::ClickFromQso | Role::CallCqFromQso => e.set_mode("qso-monitor"),
     };
     // S&P is passive and does not arm TX by itself; the operator's Enable TX does.
-    if role != Role::Running {
+    if matches!(role, Role::SearchAndPounce | Role::DoubleClick) {
         e.set_tx_enabled(true);
     }
-    let mut partner = Partner::new(act, role != Role::Running);
+    let mut partner = Partner::new(act, role.partner_runs());
     let (mut lines, mut sent) = (Vec::new(), Vec::new());
     let mut clicked = false;
     for slot in 0..SLOTS {
         if slot % 2 == 0 {
+            if slot == 0 && matches!(role, Role::CallCq | Role::CallCqFromQso) {
+                let r = e.start_running();
+                lines.push(format!("  s{slot:02} Call CQ: {r:?}"));
+            }
             if let Some(text) = keyed(&mut e, slot) {
                 let (kind, decoded) = air_form(&text);
                 let tones = match tier {
@@ -315,9 +361,9 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
             };
             lines.push(format!("  s{slot:02} RX {text:?}"));
             e.ingest_decodes_for_test(&[heard(&text)], slot + 1);
-            if role == Role::DoubleClick && !clicked && text.starts_with("CQ ") {
+            if role.clicks() && !clicked && text.starts_with("CQ ") {
                 clicked = true;
-                let r = e.call_station_ctx(DX, Some(DX_GRID), Some(&text), Some(DX_SNR), None);
+                let r = e.work_station(DX, Some(DX_GRID), Some(&text), Some(DX_SNR), None);
                 lines.push(format!("  s{slot:02} double-click the CQ: {r:?}"));
             }
         }
@@ -354,6 +400,15 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
     for l in &logged {
         lines.push(format!("  LOG {l}"));
     }
+    // Where a gesture leaves the contest, the contact is in the station's own log.
+    if !role.first_dump() {
+        for r in e.stored_log() {
+            lines.push(format!(
+                "  GENERAL {} {} grid {:?} sent {:?} rcvd {:?}",
+                r.call, r.mode, r.grid, r.rst_sent, r.rst_rcvd
+            ));
+        }
+    }
     Scene {
         entered,
         lines,
@@ -367,6 +422,8 @@ fn tier_name(t: Tier) -> &'static str {
         Tier::Ft8 => "FT8",
         Tier::Ft4 => "FT4",
         Tier::TempoFast => "FT1",
+        Tier::TempoDeep => "DX1",
+        Tier::Ft2 => "FT2",
         _ => "other",
     }
 }
@@ -383,6 +440,15 @@ fn place(call: &str) -> Option<tempo_core::contest::CallLocation> {
     })
 }
 
+/// One scene's block in the dump: its title and what `scene` recorded.
+fn block(out: &mut String, title: String, s: Scene) {
+    out.push_str(&format!("[{title}] entered={:?}\n", s.entered));
+    for l in s.lines {
+        out.push_str(&l);
+        out.push('\n');
+    }
+}
+
 /// The whole map, one block per contest, tier and role, in a fixed order — written to the
 /// file `CONTEST_FT_DUMP` names (or printed), so a run on the base and a run on this branch can be
 /// compared byte for byte.
@@ -395,18 +461,15 @@ fn place(call: &str) -> Option<tempo_core::contest::CallLocation> {
 fn dump_contest_ft_messages() {
     let _ = tempo_core::contest::install_call_resolver(place);
     let mut out = String::new();
-    let mut block = |title: String, s: Scene| {
-        out.push_str(&format!("[{title}] entered={:?}\n", s.entered));
-        for l in s.lines {
-            out.push_str(&l);
-            out.push('\n');
-        }
-    };
     for contest in CONTESTS {
         for tier in [Tier::Ft8, Tier::Ft4] {
             for role in [Role::Running, Role::SearchAndPounce] {
                 let s = scene(contest, tier, role, act_of(contest), MY_GRID);
-                block(format!("{contest:?} {} {role:?}", tier_name(tier)), s);
+                block(
+                    &mut out,
+                    format!("{contest:?} {} {role:?}", tier_name(tier)),
+                    s,
+                );
             }
         }
     }
@@ -414,9 +477,9 @@ fn dump_contest_ft_messages() {
     // FT1, which keeps today's messages; a double-click S&P in Field Day and in a VHF contest.
     for role in [Role::Running, Role::SearchAndPounce] {
         let s = scene("arrlfd", Tier::Ft8, role, Act::FieldDay, "FN42ab");
-        block(format!("\"arrlfd\" FT8 {role:?} grid FN42ab"), s);
+        block(&mut out, format!("\"arrlfd\" FT8 {role:?} grid FN42ab"), s);
         let s = scene("arrlvhf_jan", Tier::TempoFast, role, Act::NaVhf, MY_GRID);
-        block(format!("\"arrlvhf_jan\" FT1 {role:?}"), s);
+        block(&mut out, format!("\"arrlvhf_jan\" FT1 {role:?}"), s);
     }
     for contest in ["arrlfd", "arrlvhf_jan", "cqww_cw"] {
         let s = scene(
@@ -426,12 +489,47 @@ fn dump_contest_ft_messages() {
             act_of(contest),
             MY_GRID,
         );
-        block(format!("{contest:?} FT8 DoubleClick"), s);
+        block(&mut out, format!("{contest:?} FT8 DoubleClick"), s);
     }
     // Outside any contest: Call CQ and a double-click, on FT8 and FT4.
     for tier in [Tier::Ft8, Tier::Ft4] {
         out.push_str(&no_contest(tier, true));
         out.push_str(&no_contest(tier, false));
+    }
+    // The cockpit's own gestures while a contest runs: a double-click on the partner's CQ, and
+    // the Operate strip's Call CQ, from the contest's S&P as the switch leaves it, in every
+    // contest on FT8 and FT4.
+    for contest in CONTESTS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for role in [Role::ClickFromSp, Role::CallCq] {
+                let s = scene(contest, tier, role, act_of(contest), MY_GRID);
+                block(
+                    &mut out,
+                    format!("{contest:?} {} {role:?}", tier_name(tier)),
+                    s,
+                );
+            }
+        }
+    }
+    // …from the contest's Running, and from FT8 QSO mode with the switch on.
+    for contest in ["arrlfd", "arrlvhf_jan", "txqp", "wfd", "ilqp"] {
+        for role in [Role::ClickFromRun, Role::ClickFromQso, Role::CallCqFromQso] {
+            let s = scene(contest, Tier::Ft8, role, act_of(contest), MY_GRID);
+            block(&mut out, format!("{contest:?} FT8 {role:?}"), s);
+        }
+    }
+    // FT1, DX1 and FT2 have no WSJT-X contest messages.
+    for tier in [Tier::TempoFast, Tier::TempoDeep, Tier::Ft2] {
+        for contest in ["arrlfd", "arrlvhf_jan", "txqp"] {
+            for role in [Role::Running, Role::ClickFromSp, Role::CallCq] {
+                let s = scene(contest, tier, role, act_of(contest), MY_GRID);
+                block(
+                    &mut out,
+                    format!("{contest:?} {} {role:?}", tier_name(tier)),
+                    s,
+                );
+            }
+        }
     }
     match std::env::var("CONTEST_FT_DUMP") {
         Ok(path) => std::fs::write(&path, out).expect("the dump writes"),
@@ -447,7 +545,11 @@ fn no_contest(tier: Tier, running: bool) -> String {
     s.tx_even = true;
     e.apply_settings(s);
     e.set_tier(tier);
-    let entered = e.set_mode(if running { "qso-run" } else { "qso-monitor" });
+    let entered = if running {
+        e.start_running()
+    } else {
+        e.set_mode("qso-monitor")
+    };
     let mut partner = Partner::new(Act::None, !running);
     let mut out = format!(
         "[no contest {} {}] entered={entered:?}\n",
@@ -478,7 +580,7 @@ fn no_contest(tier: Tier, running: bool) -> String {
             if !running && !clicked && text.starts_with("CQ ") {
                 clicked = true;
                 e.set_tx_enabled(true);
-                let r = e.call_station_ctx(DX, Some(DX_GRID), Some(&text), Some(DX_SNR), None);
+                let r = e.work_station(DX, Some(DX_GRID), Some(&text), Some(DX_SNR), None);
                 out.push_str(&format!("  s{slot:02} double-click the CQ: {r:?}\n"));
             }
         }

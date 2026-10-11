@@ -18962,6 +18962,15 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
+/// The Operate strip's Call CQ ([`tempo_app::engine::Engine::start_running`]). The Tx6 row keeps
+/// `start_cq`, which sends the CQ it shows.
+#[tauri::command(async)]
+fn start_running(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.start_running()?;
+    Ok(eng.snapshot())
+}
+
 /// Call CQ from Tempo (chat-first): emit ONE structured `CQ <mycall> <mygrid>` frame
 /// and arm TX, staying in Chat mode. Errors if the callsign/grid aren't set (so a CQ
 /// never goes out malformed). `dir` = an optional directed-CQ token (None = plain CQ).
@@ -19543,7 +19552,7 @@ fn call_station_on(
     // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
     // double-click). Ignore non-positive values (no usable frequency).
     let dx_freq = freq.filter(|f| *f > 0.0);
-    eng.call_station_ctx(call, g, msg, snr, dx_freq)?;
+    eng.work_station(call, g, msg, snr, dx_freq)?;
     // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls it
     // does not act on, and a pend armed for one would wait four hours to stamp the park on some
     // later contact. Ambiguous or absent: the pending hunt is left exactly as it was, so a park
@@ -34834,6 +34843,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             override_next_tx,
             redecode,
             start_cq,
+            start_running,
             call_cq,
             set_chat_cq,
             resume_chat_cq,

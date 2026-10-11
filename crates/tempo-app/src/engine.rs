@@ -14403,6 +14403,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
+    /// The cockpit's "work this station" — the `call_station` command: a double-click on a
+    /// decode, a roster row, a station card, an alert. Each is [`Self::call_station_ctx`],
+    /// WSJT-X's double-click. The WSJT-X UDP Reply and the Remote page call that directly.
+    pub fn work_station(
+        &mut self,
+        dxcall: &str,
+        dxgrid: Option<&str>,
+        reply_msg: Option<&str>,
+        reply_snr: Option<i32>,
+        dx_freq: Option<f32>,
+    ) -> Result<(), String> {
+        self.call_station_ctx(dxcall, dxgrid, reply_msg, reply_snr, dx_freq)
+    }
+
     /// Drop everything answer-context derives from: the decode history (message
     /// match + report SNR) and the parity slot. Called on band QSY / tier switch,
     /// where stale rows would answer a station that isn't in this activity.
@@ -21952,6 +21966,12 @@ contact yourself."
             .map(|d| d.trim().to_uppercase())
             .filter(|d| !d.is_empty());
         self.set_mode("qso-run")
+    }
+
+    /// The Operate strip's Call CQ: a plain CQ run ([`Self::start_cq`]). The Tx6 row and the
+    /// Remote page call `start_cq` directly, with the CQ they show.
+    pub fn start_running(&mut self) -> Result<(), String> {
+        self.start_cq(None)
     }
 
     /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.

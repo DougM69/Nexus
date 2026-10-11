@@ -1038,6 +1038,12 @@ export async function startCq(dir: string | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_cq', { dir })
 }
 
+/** The Operate strip's Call CQ on this computer (`Engine::start_running`). The Tx6 row and the
+ * Remote page call `startCq`, which sends the CQ they show. */
+export async function startRunning(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_running', {})
+}
+
 /** Call CQ from Tempo (chat-first): sends one structured `CQ <call> <grid>` frame and
  * arms TX, staying in chat. Rejects if the callsign/grid aren't set. `dir` = optional
  * directed token, or null for a plain CQ. */
