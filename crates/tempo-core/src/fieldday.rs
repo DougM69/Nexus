@@ -836,8 +836,8 @@ impl FieldDayLog {
     ///
     /// **`seq` is the identity, because a contest row has no qid.** The general log
     /// names one of these rows by `APP_NEXUS_QID`, which is MINTED from the seq at
-    /// merge time; [`contest::merge::seq_from_qid`](crate::contest::seq_from_qid)
-    /// turns it back, and refuses a qid belonging to another session. A zero seq is
+    /// merge time; [`contest::merged_row`](crate::contest::merged_row) turns it back,
+    /// and refuses a qid belonging to another session or position. A zero seq is
     /// UNSTAMPED rather than "the first row" — the merge refuses those rows, so the
     /// general log holds nothing that could address one, and it is refused here too.
     ///

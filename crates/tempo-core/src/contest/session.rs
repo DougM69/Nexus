@@ -200,8 +200,6 @@ impl StationData {
 /// One run of one contest: the object BOTH logs carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContestSession {
-    /// Stable across restart; stamped on every row it owns.
-    pub id: String,
     /// ⭐ **The RULES-FILE event id** (`"arrlfd"`, `"wfd"`, `"tnqp"`, …) — how every
     /// reader of this session finds the ruleset that governs it.
     ///
@@ -218,10 +216,10 @@ pub struct ContestSession {
     /// ⚠️ **This is the ADIF `CONTEST_ID` value, NOT the Cabrillo `CONTEST:` token**,
     /// and for three shipped contests those differ; the header runs it through
     /// [`cabrillo_contest_token`](crate::contest::cabrillo_contest_token) first.
-    /// It is also the prefix of [`id`](Self::id) and of every row's `qid`, so it is
-    /// an identity as well as an export value. (The earlier `"CQP"` example here was
-    /// wrong twice over: on the Cabrillo master list `CQP` is the COLLEGIATE QSO
-    /// Party, not California.)
+    /// It is also the prefix of every merged row's `qid`
+    /// ([`session_of`](crate::contest::session_of)), so it is an identity as well as an
+    /// export value. (The earlier `"CQP"` example here was wrong twice over: on the
+    /// Cabrillo master list `CQP` is the COLLEGIATE QSO Party, not California.)
     pub contest_id: String,
     pub rules_year: u16,
     /// The exchange this session runs.
@@ -358,7 +356,6 @@ impl ContestSession {
             .filter_map(|(k, v)| exchange.value(k, &v))
             .collect();
         Self {
-            id: format!("{}:{}", event.contest_id(), section),
             event_id: event.code().to_string(),
             contest_id: event.contest_id().to_string(),
             rules_year: crate::fd_rules::CURRENT_RULES_YEAR,
@@ -457,7 +454,6 @@ impl ContestSession {
         // selector walk beside `role()` — one evaluation, one answer, and an "I moved"
         // that lands in a different role is detected by the same code path.
         let mut s = Self {
-            id: String::new(),
             event_id: rs.event.to_string(),
             contest_id: rs.contest_id.to_string(),
             rules_year: rs.rules_year,
@@ -574,17 +570,6 @@ Fill it in on the Contesting tab in Settings."
         {
             s.my_location.state = loc.raw.clone();
         }
-        // The id names the entry: one contest, from one place. `role()` is stable while
-        // the location is, and a location change that would move it ends the session
-        // (§3.3 ruling 3) rather than renaming this.
-        s.id = format!(
-            "{}:{}",
-            rs.contest_id,
-            s.my_location
-                .county
-                .clone()
-                .unwrap_or_else(|| s.my_location.state.clone())
-        );
         s.location_warning = location_warning(&s);
         Ok(s)
     }

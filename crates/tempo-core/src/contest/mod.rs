@@ -88,7 +88,9 @@ pub use dupe::{DupeRule, SatKey, KEY_SEP};
 
 pub use render::{role_for, sent_exchange, sent_exchange_string};
 
-pub use merge::{merge_into_general, plan_merge, qid_for, seq_from_qid, MergeReport};
+pub use merge::{
+    merge_into_general, merged_row, plan_merge, qid_for, session_of, MergeIdentity, MergeReport,
+};
 
 pub use session::{
     ContestSession, InFlightQso, LocationWarning, MyLocation, StationData, UploadPolicy,

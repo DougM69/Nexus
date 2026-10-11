@@ -1434,25 +1434,28 @@ impl LogPlan {
         }
     }
 
-    /// Every merge identity the log holds (`APP_NEXUS_QID`, a contest row's `qid`) as this process
-    /// knows the log ([`Self::rows`]): what the Field Day merge reads to skip a row already there
-    /// — one narrow pass over the store's `contest_qid`, whatever the log's size.
+    /// Every merge identity the log holds (`APP_NEXUS_QID`, a contest row's `qid`), with when its
+    /// contact was made, as this process knows the log ([`Self::rows`]): what the Field Day merge
+    /// reads to skip a row already there — one narrow pass over the store's `contest_qid` and
+    /// `when_unix`, whatever the log's size. The time is what tells a copy merged under an
+    /// earlier build's name for this running from one of last year's
+    /// ([`tempo_core::contest::MergeIdentity::names`]).
     ///
     /// ⚠️ It reads the store: never under the Engine lock.
-    pub(crate) fn merge_identities(&self) -> Result<HashSet<String>, String> {
+    pub(crate) fn merge_identities(&self) -> Result<Vec<(String, u64)>, String> {
         use std::ops::ControlFlow;
         use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
         const QIDS: Narrow = Narrow {
-            columns: &["contest_qid"],
+            columns: &["contest_qid", "when_unix"],
             uploads: false,
         };
         let qid = |r: &QsoRecord| {
             r.contest
                 .as_deref()
-                .map(|c| c.qid.clone())
-                .filter(|q| !q.is_empty())
+                .filter(|c| !c.qid.is_empty())
+                .map(|c| (c.qid.clone(), r.when_unix))
         };
-        let mut seen = HashSet::new();
+        let mut seen = Vec::new();
         let mut keep = |r: &QsoRecord| {
             // This process's own version of the row, where one is on its way: a row it deleted
             // is not there, and one it changed carries what the change left.
@@ -1479,26 +1482,27 @@ impl LogPlan {
         Ok(seen)
     }
 
-    /// The upload marks on the log's copies of the contest rows `qids` names (a merged contest
-    /// contact's `qid`), as this process knows the log ([`Self::rows`]): what a removal from the
-    /// contest log reports and cannot take back. The same narrow pass as
-    /// [`Self::merge_identities`], with the upload stamps.
+    /// The upload marks on the log's copies of the contest rows `rows` names, under this build's
+    /// name or an earlier build's ([`tempo_core::contest::MergeIdentity::names`]), as this
+    /// process knows the log ([`Self::rows`]): what a removal from the contest log reports and
+    /// cannot take back. The same narrow pass as [`Self::merge_identities`], with the upload
+    /// stamps.
     ///
     /// ⚠️ It reads the store: never under the Engine lock.
     pub(crate) fn merged_uploads(
         &self,
-        qids: &HashSet<String>,
+        rows: &[tempo_core::contest::MergeIdentity],
     ) -> Result<Vec<tempo_core::logbook::UploadState>, String> {
         use std::ops::ControlFlow;
         use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
         const COPIES: Narrow = Narrow {
-            columns: &["contest_qid"],
+            columns: &["contest_qid", "when_unix"],
             uploads: true,
         };
         let named = |r: &QsoRecord| {
-            r.contest
-                .as_deref()
-                .is_some_and(|c| !c.qid.is_empty() && qids.contains(&c.qid))
+            r.contest.as_deref().is_some_and(|c| {
+                !c.qid.is_empty() && rows.iter().any(|id| id.names(&c.qid, r.when_unix))
+            })
         };
         let mut found = Vec::new();
         let mut keep = |r: &QsoRecord| {
