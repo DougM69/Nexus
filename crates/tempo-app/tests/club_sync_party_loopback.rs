@@ -239,8 +239,10 @@ fn an_illinois_qso_party_club_merges_dupes_late_joins_drops_and_a_host_restart()
     });
     let why = engine_lock(&fd).fd_mirror_mut().last_error.clone().unwrap();
     assert!(
-        why.contains("IL QSO Party") && why.contains("ARRL-FIELD-DAY"),
-        "the refusal names both contests: {why}"
+        why.starts_with(
+            "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field Day."
+        ),
+        "the refusal names both contests as the picker does: {why}"
     );
     fd_sd.store(true, Ordering::Relaxed);
     assert_eq!(

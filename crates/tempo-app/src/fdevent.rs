@@ -161,15 +161,54 @@ pub fn contest_name(event_id: &str) -> String {
         .map_or_else(|| shown_id(event_id), |rs| rs.contest_id.to_string())
 }
 
+/// ⭐ **A contest as the Settings contest picker names it**: the words a sentence that tells an
+/// operator to pick a contest must use, so they match the menu. A rules-file id the picker does
+/// not list (one off the network, or a downloaded rules file's) is named as [`contest_name`]
+/// names it.
+pub fn picker_name(event_id: &str) -> String {
+    let id = canonical_contest(event_id);
+    PICKER_NAMES
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or_else(|| contest_name(&id), |(_, name)| (*name).to_string())
+}
+
+/// The picker's names by rules-file id: `CONTESTS` in `ui/src/fdEvent.ts` (with
+/// `FD_EVENT_NAMES` for the two Field Days), which a test holds this table to. The sponsors' own
+/// names, never translated.
+const PICKER_NAMES: &[(&str, &str)] = &[
+    ("arrlfd", "ARRL Field Day"),
+    ("wfd", "Winter Field Day"),
+    ("arrlss_cw", "ARRL November Sweepstakes (CW)"),
+    ("arrlss_ssb", "ARRL November Sweepstakes (Phone)"),
+    ("arrlvhf_jan", "ARRL January VHF Contest"),
+    ("arrlvhf_jun", "ARRL June VHF Contest"),
+    ("arrlvhf_sep", "ARRL September VHF Contest"),
+    ("cqww_cw", "CQ World-Wide DX Contest (CW)"),
+    ("cqww_ssb", "CQ World-Wide DX Contest (SSB)"),
+    ("cqww_rtty", "CQ World-Wide RTTY DX Contest"),
+    ("cqwpx_cw", "CQ World-Wide WPX Contest (CW)"),
+    ("cqwpx_ssb", "CQ World-Wide WPX Contest (SSB)"),
+    ("cqp", "California QSO Party"),
+    ("ilqp", "Illinois QSO Party"),
+    ("nyqp", "New York QSO Party"),
+    ("ohqp", "Ohio QSO Party"),
+    ("tnqp", "Tennessee QSO Party"),
+    ("txqp", "Texas QSO Party"),
+];
+
 /// ⭐ **The sentence for a position logging one contest at a club running another** —
 /// one wording, whichever end finds it (the host at JOIN, or the position on a welcome).
-/// `club` is the club's contest as named; `mine` is the position's rules-file id.
+/// `club` and `mine` are the two rules-file ids, each named as the picker names it
+/// ([`picker_name`]): the sentence says which contest to pick, so it uses the menu's words. It
+/// named the club's contest by its Cabrillo id ("this club is running ARRL-FIELD-DAY").
 pub fn contest_mismatch(club: &str, mine: &str) -> String {
     format!(
         "this club is running {club}, and this Nexus is logging {mine}. Pick {club} as the \
          contest on the Contesting tab in Settings, then rejoin. Contacts you log meanwhile \
          stay in your own log.",
-        mine = contest_name(mine),
+        club = picker_name(club),
+        mine = picker_name(mine),
     )
 }
 
@@ -1266,7 +1305,7 @@ impl ClubLog {
         if canonical_contest(theirs) == self.event_id {
             return None;
         }
-        Some(contest_mismatch(&self.contest_id, theirs))
+        Some(contest_mismatch(&self.event_id, theirs))
     }
 
     /// ⭐ **Why a joining position on another station call cannot be served, or `None` to
@@ -4001,6 +4040,73 @@ mod tests {
         assert_ne!(short, engine);
     }
 
+    /// ⭐ **A refusal names a contest as the picker does.** [`PICKER_NAMES`] must hold what
+    /// `CONTESTS` in ui/src/fdEvent.ts shows for each id, in its order (the two Field Days
+    /// through `FD_EVENT_NAMES`), or a sentence that says "Pick X" names what the menu does not.
+    #[test]
+    fn the_picker_names_are_the_menus() {
+        let ts = include_str!("../../../ui/src/fdEvent.ts");
+        let block = |name: &str, end: &str| -> String {
+            ts.split(name)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{name} is in fdEvent.ts"))
+                .split(end)
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        // `FD_EVENT_NAMES`' lines: `arrlfd: 'ARRL Field Day',`.
+        let fd_names: HashMap<String, String> = block("export const FD_EVENT_NAMES", "\n}")
+            .lines()
+            .filter_map(|l| {
+                let (id, name) = l.trim().split_once(':')?;
+                let name = name.trim().trim_end_matches(',');
+                let name = name.strip_prefix('\'')?.strip_suffix('\'')?;
+                Some((id.trim().to_string(), name.to_string()))
+            })
+            .collect();
+        let quoted = |l: &str, key: &str| -> Option<String> {
+            let rest = l.split(&format!("{key}: '")).nth(1)?;
+            Some(rest.split('\'').next()?.to_string())
+        };
+        let menu: Vec<(String, String)> = block("export const CONTESTS", "\n]")
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("{ id:"))
+            .filter_map(|l| {
+                let id = quoted(l, "id")?;
+                let name = quoted(l, "name").or_else(|| {
+                    let kind = l.split("name: FD_EVENT_NAMES.").nth(1)?.split(',').next()?;
+                    fd_names.get(kind.trim()).cloned()
+                })?;
+                Some((id, name))
+            })
+            .collect();
+        assert!(
+            menu.len() >= 15,
+            "parsed only {} picker entries — the parser is broken, not the menu",
+            menu.len()
+        );
+        let table: Vec<(String, String)> = PICKER_NAMES
+            .iter()
+            .map(|(id, name)| (id.to_string(), name.to_string()))
+            .collect();
+        assert_eq!(
+            table, menu,
+            "PICKER_NAMES against CONTESTS in ui/src/fdEvent.ts"
+        );
+        // POSITIVE CONTROL: one name moved on the menu is seen.
+        let mut moved = menu.clone();
+        if let Some(entry) = moved.iter_mut().find(|(id, _)| id == "ilqp") {
+            entry.1 = "IL QSO Party".into();
+        }
+        assert_ne!(table, moved);
+        assert_eq!(picker_name("ilqp"), "Illinois QSO Party");
+        assert_eq!(picker_name(""), "ARRL Field Day", "the blank default");
+        // An id the picker does not list, off the network: named as a refusal always named it.
+        assert_eq!(picker_name("bogus\nid"), "bogus?id");
+    }
+
     /// ⭐ **The log strip builds the key the engine builds** —
     /// `ui/src/features/__fixtures__/contest-dupe-keys.json` is one table of contacts and
     /// their dupe keys, read here against the engine's own rule (from the rules seed) and its
@@ -4144,9 +4250,10 @@ mod tests {
             .expect("a Field Day position is refused by a party club");
         assert_eq!(
             msg,
-            "this club is running IL QSO Party, and this Nexus is logging ARRL-FIELD-DAY. \
-             Pick IL QSO Party as the contest on the Contesting tab in Settings, then \
-             rejoin. Contacts you log meanwhile stay in your own log."
+            "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field \
+             Day. Pick Illinois QSO Party as the contest on the Contesting tab in Settings, \
+             then rejoin. Contacts you log meanwhile stay in your own log.",
+            "both contests named as the picker names them, never by a Cabrillo id"
         );
         let old = party_club
             .join_refusal(v, "")
@@ -4172,8 +4279,21 @@ mod tests {
             .join_refusal(v, "wfd")
             .expect("Winter Field Day is another contest");
         assert!(
-            wfd.contains("ARRL-FIELD-DAY") && wfd.contains("WFD"),
+            wfd.starts_with(
+                "this club is running ARRL Field Day, and this Nexus is logging Winter Field \
+                 Day. Pick ARRL Field Day as the contest"
+            ),
             "{wfd}"
+        );
+        // The rehearsal's case: a Field Day club, and a position logging the party.
+        assert!(
+            fd.join_refusal(v, "ilqp")
+                .is_some_and(|msg| msg.starts_with(
+                    "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO \
+                 Party."
+                )),
+            "{:?}",
+            fd.join_refusal(v, "ilqp")
         );
         // The version rule still comes first, with its own words.
         assert_eq!(
@@ -5040,7 +5160,7 @@ mod tests {
         assert!(role.contains("the \"dx?Turned?away?HQ??W9XYZ"), "{role}");
         club.note_refused("bbbb0002", "", "Zelt Süd", "K9ABC", "refused", 1);
         assert!(club.refused(1).iter().any(|r| r.label == "Zelt Süd"));
-        assert!(contest_mismatch("ARRL-FIELD-DAY", "ilqp").contains("logging IL QSO Party"));
+        assert!(contest_mismatch("arrlfd", "ilqp").contains("logging Illinois QSO Party"));
     }
 
     /// ⭐ **A position's report reaches the board as the club reads it.** The board goes to

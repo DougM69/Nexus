@@ -389,6 +389,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report, that it had gone down, could arrive after the new link was up: the chip read Offline and
   the line said the host was lost while contacts were syncing. A replaced link's reports are now
   ignored.
+- **A position turned away for logging another contest is told both contests by the names the
+  contest picker uses.** The host's refusal named the club's contest by its Cabrillo id ("this club
+  is running ARRL-FIELD-DAY, and this Nexus is logging IL QSO Party"). It now reads "this club is
+  running ARRL Field Day, and this Nexus is logging Illinois QSO Party. Pick ARRL Field Day as the
+  contest…", the words of the menu it asks you to pick from.
 - **A laptop joining a club event now says whether it is in.** After Find club events or a host
   address typed into Join event at, a joining laptop said nothing about its join unless Field Day
   mode was on and a club block appeared. Settings ▸ Contesting, under Join event at, and the

@@ -2163,7 +2163,9 @@ fn a_joining_laptop_says_where_its_join_stands_with_its_field_day_mode_off() {
     );
     let told = link(&d).told.expect("the host's words");
     assert!(
-        told.starts_with("this club is running ") && told.contains("logging IL QSO Party"),
+        told.starts_with(
+            "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO Party."
+        ),
         "{told}"
     );
     assert_eq!(

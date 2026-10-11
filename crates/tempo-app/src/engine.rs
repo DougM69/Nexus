@@ -12908,10 +12908,7 @@ impl Engine {
         if crate::fdevent::canonical_contest(theirs) == mine {
             return Ok(());
         }
-        Err(crate::fdevent::contest_mismatch(
-            &crate::fdevent::contest_name(theirs),
-            &mine,
-        ))
+        Err(crate::fdevent::contest_mismatch(theirs, &mine))
     }
 
     /// Presence for the club band board — the n3fjp `report_band` idea made
@@ -45209,8 +45206,11 @@ mod tests {
             )
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
-            refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
-            "{refused}"
+            refused.starts_with(
+                "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field \
+                 Day."
+            ),
+            "both contests as the picker names them: {refused}"
         );
         let t = 1_792_342_800; // 1700Z, 18 October 2026
         for row in [
@@ -45345,9 +45345,12 @@ mod tests {
         let other = e
             .fd_accept_host_contest("arrlfd")
             .expect_err("a host running another contest");
-        assert!(
-            other.contains("ARRL-FIELD-DAY") && other.contains("IL QSO Party"),
-            "{other}"
+        assert_eq!(
+            other,
+            "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO \
+             Party. Pick ARRL Field Day as the contest on the Contesting tab in Settings, then \
+             rejoin. Contacts you log meanwhile stay in your own log.",
+            "both contests named as the picker names them"
         );
         // The picker moves under the running session: the rows are still the party's.
         {
