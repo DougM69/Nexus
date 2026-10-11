@@ -384,6 +384,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Map labels read in the light theme.** On the APRS map, Connect's maps and the Globe, each call
+  sign, satellite name and DXpedition mark had a near-black outline under the light theme's dark
+  lettering, which made it a dark blot. The outline now follows the lettering: white under dark
+  letters, dark under light ones. The dark theme looks exactly as before.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
