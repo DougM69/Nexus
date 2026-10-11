@@ -1959,8 +1959,10 @@ the Cabrillo headers.
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
   Illinois, New York, Ohio, Tennessee and Texas QSO Parties. Contest mode below is the
   switch that starts the contest picked here. While it is running a contest, a line under
-  the picker says so: a new pick takes effect after you save it and turn Contest mode off
-  and on again, because the running contest keeps its log across every save. (This is the
+  the picker says which one, and saving a different pick switches at once, exactly as
+  turning Contest mode off and on does: the running contest ends, the new one starts in
+  Search-and-Pounce without calling CQ, each keeps its own contacts, and the Contest screen
+  says "Now running …". Saving anything else keeps the running contest and its log. (This is the
   same setting the Event chips used to carry inside
   what was then Field Day Setup; it moved up one level so there is one contest picker rather than a
   setting buried inside one contest's own section.)
@@ -2115,8 +2117,9 @@ contact runs, step by step, and the rules ESM keeps are in the
   your choice, and a step left on *Built in* sends it. A key you changed in the
   cockpit keeps its place, so its step sends your text.
 - **Voice keyer steps** — which recording each step plays, one slot per step.
-  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F5
-  AGN. An empty slot plays nothing.
+  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F8
+  AGN, the key AGN is on in the CW and RTTY contest sets; F5 and F6 are yours.
+  An empty slot plays nothing.
 
 Every step row shows what Enter would send there, or why it would send nothing:
 no key mapped, or a key with nothing on it. A set with no step mapped makes ESM
@@ -2129,10 +2132,10 @@ this section only says that ESM is set at the station.
   above, named for it: "For Illinois QSO Party, the contest picked above. When it is
   on, the log strips in every mode, the Contest screen and the exports follow its
   rules. Off the rest of the year." It stays on across restarts until you turn it
-  off. It was called Field Day mode; the setting is the same one. The **same switch** also
-  appears in [Appearance ▸ Features](#features) under Contesting, and at the top
-  of the **Contest** screen (the tent in the left bar), which saves it at once and
-  says what is missing when the picked contest cannot start yet.
+  off. It was called Field Day mode; the setting is the same one. The **same switch** is
+  at the top of the **Contest** screen (the tent in the left bar), which saves it at once and
+  says what is missing when the picked contest cannot start yet. Those are its only two
+  places: it is not among the [Features](#features).
 - **Event** — moved up to [Contest](#contest) at the top of this tab, where it is now
   the contest picker. Same setting, one level up.
 - **FD Class** / **WFD Category** (the label follows the Event) — "Number of
@@ -2194,7 +2197,16 @@ Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
 port on the site LAN, and only while the toggle is on — the spectator scoreboard
 below and [Conditions on a TV](#conditions-on-a-tv) are the other two things that
 listen beyond the local computer); every other position joins it with **Find
-club events** or by typing the host's `host:port` into **Join event at**. Each
+club events** or by typing the host's address into **Join event at**: the host
+shows it after **Positions join at**, and an address typed without a port joins
+port 42073. Under **Join event at** each laptop says where its join stands, and
+the host says where it is hosting and how many other positions are connected
+(the Contest screen says the same, with Contest mode on or off). On Windows,
+**Allow Nexus through Windows Firewall** adds Nexus's three rules for club sync
+(the Host port, Find club events' UDP 42074 and the scoreboard's port) on
+Private and Public networks through one administrator prompt; the line beside
+it says whether they are in place, and **Remove Nexus's firewall rules** takes
+them out. Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
 powers the while-typing dupe warning. **Event name** is what joining positions
@@ -2444,13 +2456,11 @@ sections cannot be turned off.*
   Conditions, Needed) shows an "always on" badge instead of a toggle: a locked
   switch beside real ones just reads as broken.
 - **Optional features**, grouped by category in this order: Operate, DX & Awards,
-  Propagation, Contesting, POTA/SOTA, Logging, System. Each row is a toggle with
+  Propagation, POTA/SOTA, Logging, System. Each row is a toggle with
   a one-line "why you'd want it". Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
-- The **Contesting** group hosts the **Contest mode** switch (the same setting as
-  [Contesting ▸ Contest mode](#contest-mode)), named for the picked contest. Turning
-  it on when that contest cannot start yet (Field Day's class or section, or another
-  contest's station data) takes you to the Contesting tab to fill it in.
+- **Contest mode** is not here: it is at the top of the **Contest** screen and in
+  [Contesting ▸ Contest mode](#contest-mode).
 
 ### App updates
 

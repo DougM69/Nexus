@@ -5,6 +5,7 @@
 use super::contest_removal::{ContestRefusal, ContestSentTo};
 use super::*;
 use crate::test_util::StoredLog;
+use tempo_core::contest::qid_for;
 use tempo_core::logbook::{LogOp, UploadOutcome};
 
 fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -255,30 +256,37 @@ fn a_logbook_delete_of_a_merged_contact_removes_it_from_the_contest_log() {
 fn a_logbook_delete_never_reaches_a_row_it_does_not_name() {
     let mut e = ilqp(|_| {});
     party(&mut e, "K9AAA", "COOK");
-    let session = match &e.mode {
-        Mode::FieldDay { station, .. } => station.log.session.id.clone(),
+    let (session, now, last_year) = match &e.mode {
+        Mode::FieldDay { station, .. } => {
+            let q = &station.log.qsos()[0];
+            let rs = station.log.ruleset();
+            (
+                tempo_core::contest::session_of(&station.log, q),
+                q.when_unix,
+                rs.event_window(rs.running_of(q.when_unix) - 1).start_unix + 300,
+            )
+        }
         _ => unreachable!("the party runs"),
     };
-    for qid in [
-        tempo_core::contest::qid_for("ILQP:IL:last-year", "aaaa0001", 1),
-        tempo_core::contest::qid_for(&session, "bbbb0002", 1), // another position, seq 1 too
-    ] {
-        let mut rec = crate::logstore::tests::qso("K9AAA", 1_792_342_800);
+    let copy = |qid: String, when: u64| {
+        let mut rec = crate::logstore::tests::qso("K9AAA", when);
         rec.contest = Some(Box::new(tempo_core::logbook::ContestFields {
             qid,
             ..Default::default()
         }));
-        e.contest_row_deleted(&rec);
+        rec
+    };
+    for rec in [
+        copy(qid_for("ILQP:IL:last-year", "aaaa0001", 1), now),
+        copy(qid_for(&session, "bbbb0002", 1), now), // another position, seq 1 too
+        // Last year's first contact, under the name an earlier build gave it.
+        copy(qid_for("IL QSO Party:KANE", "aaaa0001", 1), last_year),
+    ] {
+        e.contest_row_deleted(&rec, None);
         assert_eq!(logged(&e).len(), 1, "the row it does not name stays");
     }
     // The control: the qid the merge gives this very row reaches it.
-    let qid = tempo_core::contest::qid_for(&session, "aaaa0001", 1);
-    let mut rec = crate::logstore::tests::qso("K9AAA", 1_792_342_800);
-    rec.contest = Some(Box::new(tempo_core::logbook::ContestFields {
-        qid,
-        ..Default::default()
-    }));
-    e.contest_row_deleted(&rec);
+    e.contest_row_deleted(&copy(qid_for(&session, "aaaa0001", 1), now), None);
     assert!(logged(&e).is_empty());
 }
 

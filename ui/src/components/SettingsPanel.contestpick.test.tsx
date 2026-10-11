@@ -215,14 +215,14 @@ describe('the contest picker', () => {
   })
 })
 
-// A pick made while a contest runs waits for Contest mode to go off and on again (the session
-// is kept across every save, which is what protects its log). Only the Contest screen said
-// so; the place the pick is made said nothing.
+// A pick saved while a contest runs switches it at once, as turning Contest mode off and on
+// does: the running contest ends and the new one starts in S&P, each keeping its own contacts.
+// The place the pick is made says so, naming the contest running.
 describe('beside the picker while Contest mode is running a contest', () => {
   const RUNNING = (contest: string) =>
-    `Contest mode is on for ${contest}. A new pick takes effect after you save it and turn Contest mode off and on again.`
+    `Contest mode is on for ${contest}. Saving a different pick ends it and starts the new one at once, without calling CQ. Each contest keeps its own contacts.`
 
-  it('says a new pick waits for Contest mode to go off and on, naming the contest running', async () => {
+  it('says a saved pick switches at once, naming the contest running', async () => {
     renderPanel({ event: 'ilqp', role: 'in_state' })
     await openContesting()
     const line = await screen.findByText(RUNNING('Illinois QSO Party'))
@@ -239,7 +239,7 @@ describe('beside the picker while Contest mode is running a contest', () => {
     renderPanel()
     await openContesting()
     expect((await groupFor('Contest')).textContent).toContain('Which contest you are entering.')
-    expect(screen.queryByText(/A new pick takes effect/)).toBeNull()
+    expect(screen.queryByText(/Saving a different pick/)).toBeNull()
   })
 })
 
@@ -341,13 +341,15 @@ describe('the role / category block', () => {
     expect(await chip('Entry category', 'CHECKLOG')).not.toBeUndefined()
   })
 
-  // A club event needs ports through the firewall, and Nexus adds no rule of its own, so the
-  // ports are named where the event is switched on.
+  // A club event needs ports through a firewall that is on, so the ports are named where the
+  // event is switched on, on every platform (Windows' button is SettingsPanel.clubfirewall).
   it('names the club event\'s firewall ports beside Host a club event', async () => {
     renderPanel()
     await openContesting()
     expect(
-      await screen.findByText(/a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373/),
+      await screen.findByText(
+        'A club event uses TCP 42073 (the Host port), UDP 42074 (Find club events) and TCP 7373 (the club TV scoreboard). A firewall that is on must let Nexus in on them.',
+      ),
     ).toBeTruthy()
   })
 

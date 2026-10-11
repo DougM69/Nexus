@@ -10,7 +10,7 @@ import { ContestView, FdClubSection } from './ContestView'
 import { exportLog, fdClubExport, getSettings, saveTextToDownloads } from '../api'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import defaultSettings from './__fixtures__/defaultSettings.json'
-import type { FdClubStatus, FieldDayStatus } from '../types'
+import type { ClubLink, FdClubStatus, FieldDayStatus } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "POSITIVE CONTROL: the Illinois QSO Party, both Field…", takes
 // 0.26 s and 0.19 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -572,5 +572,103 @@ describe('the host\'s club block names who it turned away and how full its board
     expect(screen.queryByText(/Turned away/)).toBeNull()
     expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
     expect(screen.queryByText(/not in the club's log/)).toBeNull()
+  })
+})
+
+// ⭐ WHERE THIS LAPTOP'S CLUB LINK STANDS (2026-10-10). A laptop that typed the host's address said
+// nothing about whether it was connected, and with the Field Day mode off there is no club block
+// to say it in. So the line is said with the mode off, where the block would be, and beside the
+// block only what the block does not already say.
+describe("where this laptop's club link stands", () => {
+  const LINK: ClubLink = {
+    role: 'position',
+    addr: '192.168.1.10:42073',
+    state: 'unreachable',
+    why: 'noAnswer',
+    downSinceUnix: 0,
+    event: '',
+    hostCall: '',
+    position: 'CW tent',
+    clubCode: 'ABCD-EFGH',
+  }
+  const HOST_LINK: ClubLink = {
+    ...LINK,
+    role: 'host',
+    addr: '127.0.0.1:42073',
+    state: 'joined',
+    why: undefined,
+    hosting: {
+      up: true,
+      port: 42073,
+      addrs: [{ addr: '192.168.1.10:42073', adapter: 'Wi-Fi' }],
+      connected: 1,
+    },
+  }
+
+  it('says it with the Field Day mode off, where the club block would be', () => {
+    render(<ContestView fieldDay={null} clubLink={LINK} onSetMode={() => {}} />)
+    const block = screen.getByLabelText('Club sync')
+    expect(within(block).getByText('Cannot reach the host at 192.168.1.10:42073. Trying again.')).toBeTruthy()
+    expect(
+      within(block).getByText(/press Allow Nexus through Windows Firewall in Settings ▸ Contesting on the host\./),
+    ).toBeTruthy()
+  })
+
+  it('names the event, the host, this laptop’s position and its code once in, with the mode off', () => {
+    render(
+      <ContestView
+        fieldDay={null}
+        clubLink={{ ...LINK, state: 'joined', why: undefined, event: 'ILQP rehearsal', hostCall: 'W9AAA' }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Joined ILQP rehearsal, hosted by W9AAA, as CW tent.')).toBeTruthy()
+    expect(screen.getByText('Club code ABCD-EFGH')).toBeTruthy()
+  })
+
+  it('beside the club block, says only what the block does not', () => {
+    render(
+      <ContestView
+        fieldDay={fd({ ...CLUB, lastError: 'this club is on the air as W9AAA' })}
+        clubLink={{ ...LINK, state: 'turnedAway', why: undefined, told: 'this club is on the air as W9AAA' }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Host: this club is on the air as W9AAA')).toBeTruthy()
+    expect(screen.queryByText(/Turned away by the host/)).toBeNull()
+    cleanup()
+    render(
+      <ContestView
+        fieldDay={fd(CLUB)}
+        clubLink={{ ...LINK, state: 'lost', why: 'refused', event: 'W9ABC Field Day' }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Lost the host at 192.168.1.10:42073. Trying again.')).toBeTruthy()
+  })
+
+  it('gives the host the addresses a joining laptop types, and who is in', () => {
+    render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} clubLink={HOST_LINK} onSetMode={() => {}} />)
+    expect(screen.getByText(/^Hosting on port 42073\. Positions join at:/)).toBeTruthy()
+    expect(screen.getByText('192.168.1.10:42073 (Wi-Fi)')).toBeTruthy()
+    expect(screen.getByText('1 other position connected.')).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: no club link, no line', () => {
+    render(<ContestView fieldDay={null} onSetMode={() => {}} />)
+    expect(screen.queryByLabelText('Club sync')).toBeNull()
+    expect(screen.queryByText(/the host at/)).toBeNull()
+  })
+
+  it('says none of it to a Remote observer', () => {
+    render(
+      <ContestView
+        fieldDay={fd(CLUB)}
+        clubLink={LINK}
+        observation={defaultSettings as never}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/the host at/)).toBeNull()
   })
 })

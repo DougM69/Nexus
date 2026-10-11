@@ -5,8 +5,7 @@ which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
 **Contest mode is the exception**: it stays off until you switch it on at the
-top of the **Contest** screen (the tent in the left bar), in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
+top of the **Contest** screen (the tent in the left bar) or in
 [Contesting ▸ Contest mode](settings-reference.md#contest-mode), because it
 reshapes the app for a weekend most operators are not having. It is one switch for
 whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
@@ -58,6 +57,14 @@ names the event and the rules year it is scoring against; the counters and the a
 show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
+
+**The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK
+cockpits show it in the title bar of their Log pane: `ILQP · 212 pts · 48 Q · 19 mults · 41/hr`, that
+is the score, the contacts, the multipliers (the worked sections at Field Day) and your rate over
+your last ten contacts, the same numbers the Contest screen shows, and the rate falls while you log
+nothing. The Satellites log strip and the contest logger window carry it in the strip's top line
+instead, in whatever room that line has left: it is cut short rather than move anything, and
+hovering it shows the whole reading.
 
 **Super Check Partial and call history**, in every contest. As you type a call in a log
 strip, a line under the boxes lists the calls active in recent contests that contain what
@@ -171,6 +178,31 @@ for it.
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 [N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
 
+### When the contest is over
+
+Turn Contest mode off, on the Contest screen or in Settings › Contesting with Save, and Nexus first
+asks **Contest over?** with a short checklist. Nothing on it is ticked to begin with, and nothing is
+done that you have not ticked:
+
+- **Merge N contacts into my logbook**: the Contest screen's own merge. A contact already in the
+  logbook is skipped, never added twice.
+- **Export the Cabrillo log to Downloads**: the same file the Contest screen's Export Cabrillo
+  writes.
+- **Put back what the contest changed**: each of Callsign on the air, Operator at the key, Position
+  name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
+  shown as it is now and as it was before. Tick the ones you want back.
+
+**Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
+mode stays on. The merge and the export are done before the mode goes off, because they need the
+contest's session; if one of them fails, nothing after it is done, the reason is shown, and the mode
+stays on. With no contacts and nothing changed, the mode goes off at once, as it always did.
+
+"Before" is how each of those settings was the first time one of them changed for this contest, or
+when you turned Contest mode on, whichever came first. So the club call you typed into Settings on
+the Friday is offered back as your own call on the Sunday night. Nexus lets those values go when
+Contest mode goes off, whatever you ticked. A press made through Remote cannot merge or export, as
+on the Contest screen.
+
 ### Run the whole club on Nexus (club sync)
 
 ![The Field Day Club Sync settings block: a "Host a club event" switch turned off, an Event name box reading "N9WH Field Day 2026", a Host port box reading 42073, a "Join event at" box showing a host:port placeholder, and a "Find club events" button.](../img/manual/settings-club-sync.webp)
@@ -181,7 +213,29 @@ here — nothing is listening on the network until you turn it on.*
 If every position runs Nexus, you don't need a third-party master log at all.
 One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
 Host a club event**; every other position presses **Find club events** (or
-types the host's address) and joins. From then on:
+types the host's address) and joins.
+
+- **The host says where to join it.** Its Contest screen, and the club section
+  of Settings, say that it is hosting, on which port, and at which of its
+  network addresses, after **Positions join at**, each with the name of the
+  adapter it is on (Wi-Fi, Ethernet). That address is what the other laptops
+  type into **Join event at**; typed without a port, an address joins port
+  42073. The same line counts the other positions connected. When the host
+  cannot host, the line says why: another program using the port, a port that
+  would not open, or a contest club sync does not run.
+- **Every other laptop says where its join stands**, under **Join event at**
+  and on the Contest screen, with Contest mode on or off: looking for the host
+  at that address; joined, with the event, the host's call, this laptop's
+  position and its club code; turned away, in the host's own words; cannot
+  reach the host, because nothing listens there or nothing answers, with what
+  to check; or the host lost, and Nexus trying again.
+- **Find club events** listens for 5 seconds. The host announces itself once a
+  second on every network it is on, so a laptop with Wi-Fi and a cable, or with
+  the virtual adapters WSL, Hyper-V or a VPN add, is found on each of them.
+  When it hears nothing it says what to check; typing the host's address always
+  works where a Wi-Fi network keeps laptops apart.
+
+From then on:
 
 ![The club board: a synced chip, the host callsign, club totals, and one row per operating position with band, mode, operator, QSO count and rate.](../img/manual/fieldday-club-board.webp)
 
@@ -241,13 +295,24 @@ manual's Field Day page has the steps for the Illinois QSO Party.
 
 Before any club event:
 
-- **Windows asks about the firewall** the first time a PC hosts, and the first
-  time a position looks for club events. Allow Nexus on **Private** networks. If
-  Windows calls the site network Public, change it to Private, because a Public
-  network blocks all of it. The host listens on TCP port 42073 (the **Host
-  port**) and announces itself on UDP port 42074, which **Find club events**
-  listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
-  firewall rule of its own.
+- **Windows Firewall.** On each Windows laptop, press **Allow Nexus through
+  Windows Firewall** in the club section of Settings ▸ Contesting. Windows asks
+  for administrator rights once, as it does for **Repair clock**, and Nexus adds
+  three inbound rules for itself on **Private and Public** networks, so a site
+  network Windows calls Public works too: TCP on the **Host port** (42073 unless
+  you change it), UDP 42074, which the host announces itself on and **Find club
+  events** listens for, and TCP on the spectator scoreboard's port (7373 unless
+  you change it). They are named "Nexus club sync - …". The line beside the
+  button says whether they are in place; a second press, or a changed Host
+  port, replaces them, and **Remove Nexus's firewall rules** takes them out.
+  With Windows Firewall off there is nothing to allow, and club sync works as
+  it is. If Windows itself blocks Nexus, which is what a Cancel at its own
+  question leaves (and a block wins over any allow), or blocks every incoming
+  connection, the line says so and where to change it. On a laptop where you
+  have no administrator rights, allow Nexus by hand under Windows Security ▸
+  Firewall & network protection ▸ Allow an app through firewall, on Private and
+  Public networks. When a laptop cannot reach the host, check the host's
+  firewall; when its Find club events hears nothing, check its own.
 - **Set every clock first.** Nexus never changes a PC's clock. Each position
   measures its clock against the host's every 5 seconds over the club link, and
   from 2 seconds off its club line says so ("This PC's clock is 3 s behind the

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Allow Nexus through Windows Firewall, for club sync.** On Windows, the club section of Settings
+  ▸ Contesting has a button that asks for administrator rights once, the way Repair clock does, and
+  adds three inbound rules for Nexus itself on Private and Public networks: the Host port (TCP 42073
+  unless changed), Find club events (UDP 42074) and the club TV scoreboard's port (TCP 7373 unless
+  changed). They are named "Nexus club sync - …", so a second press, or a changed Host port,
+  replaces them and touches nothing else. A line beside the button says whether they are in place,
+  read without administrator rights, and a second button removes them. With Windows Firewall off
+  there is nothing to allow, and the button says so. Where Windows blocks Nexus with a rule of its
+  own (what Cancel at its question leaves, and a block wins over any allow) or blocks every incoming
+  connection, the line says that too. Not while transmitting: Windows' prompt takes the whole
+  screen. A joining laptop that gets no answer from the host, and a Find club events that hears
+  nothing, now point at the button. NEEDS-BENCH: Windows, with the firewall on and off.
 - **A contest logger window, for a second person logging at a second monitor and keyboard.** Click
   **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box.
   It holds the whole Contest screen with a log line under it, and that line shares the contact in
@@ -22,6 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operating, so club sync and your exports are unchanged, and it reopens on the monitor where you
   left it. A Remote viewer sees the main window only. NEEDS-BENCH: two monitors, two keyboards and
   mice with MouseMux, logging voice contacts.
+- **Turning Contest mode off offers a contest-over checklist.** Before the mode goes off, Nexus asks
+  **Contest over?**: merge the contest's contacts into your logbook, export the Cabrillo log, and put
+  back what the contest changed (the callsign a club set, the operator, the position, MULTI-OP, the
+  entry class, the power category, Unassisted), each shown as it is now and as it was before. Nothing
+  is ticked to begin with and nothing is done that you did not tick; **Not now** leaves everything,
+  the mode included, as it is. Nexus keeps those seven as they were the first time a contest changed
+  one of them, or when the mode went on.
+- **Every contest log strip shows the running score.** While a contest runs, the Log pane of the CW,
+  Phone, RTTY and PSK cockpits reads like `ILQP · 212 pts · 48 Q · 19 mults · 41/hr` (score, contacts,
+  multipliers or Field Day's sections, and your rate over the last ten contacts), the same numbers as
+  the Contest screen; the Satellites strip and the logger window show it in the strip's top line where
+  there is room. Nothing in the strip moves or grows for it, at any window size or text size.
 - **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
   ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
   and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,
@@ -38,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message you stop counts as not sent, so the next Enter sends it again; if you stop the TU or the
   exchange whose Enter logged the contact, the contact stays logged and the strip says so, and
   Ctrl+D twice takes it back. In Phone, Enter plays the voice keyer's recordings (F1 CQ, F2 your
-  exchange, F3 TU, F4 your call, F5 AGN), and when you are running you say his call and your
+  exchange, F3 TU, F4 your call, F8 AGN), and when you are running you say his call and your
   exchange yourself. A box filled from call history counts as copied: Enter sends and logs it as
   it stands, so type over it when the station sends something different. ESM steps aside, and
   Enter logs as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the
@@ -87,8 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contest's rules apply, the modes it does not permit, and during Winter Field Day that no spots
   are posted over the internet. With club sync on it says that turning the mode off keeps this
   station in the club event, sends no contacts until the mode is back on, and loses nothing from
-  the log. A contest picked while another is running says that turning the mode off and on again
-  switches to it. The scoreboard's own window and the main window's title read Contest too. ARRL
+  the log. The scoreboard's own window and the main window's title read Contest too. ARRL
   Field Day and Winter Field Day keep their names.
 - **Move panes by dragging them with the mouse.** In FT8/FT4, Phone, CW and JS8, pick a pane up by
   its title bar and drop it onto another column, between two panes, or (in Phone, on a window wide
@@ -300,33 +323,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, because the hunt is how its park reaches the contact.
 - **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
   every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
-  call, F5 his call alone, F6 your exchange in search and pounce, F7 AGN and F8 `<his call> QSO
-  B4`. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
+  call, F5 his call alone, F6 your exchange in search and pounce, F7 `<his call> QSO B4` and F8
+  AGN. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
   `TU 5NN COOK`; at Field Day they send your class and section, such as `K9AAA 3A WI`. Only F1
-  and F7 send what they sent before. Your exchange now goes once, without "DE <your call> … K",
-  and your call goes out on F1, F3 and F4. Habit is the risk: F3 pressed for the exchange now
-  sends TU, F4 pressed to confirm sends only your call, and F5 pressed for your call sends his.
+  sends what it sent before, and AGN, which moved from F7 to F8. Your exchange now goes once,
+  without "DE <your call> … K", and your call goes out on F1, F3 and F4. Habit is the risk: F3
+  pressed for the exchange now sends TU, F4 pressed to confirm sends only your call, F5 pressed
+  for your call sends his, and F7 pressed for a repeat sends QSO B4.
   The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
+- **AGN is now F8 in the Phone, CW, RTTY and PSK contest keys, as in N1MM's default message sets.**
+  In the CW contest and Field Day sets and the RTTY and PSK Contest sets, AGN and B4 trade keys: F8
+  asks for a repeat and F7 sends `<his call> QSO B4`. No other key moves. Habit is the risk: F7
+  pressed for a repeat now sends QSO B4. Your own texts go with their messages: an RTTY or PSK
+  Contest key you changed on F7 or F8 moves to the other key, and so does a step you mapped there
+  for Enter Sends Message; a CW macro profile of your own keeps its keys. In Phone the voice keyer has a new slot, F8 AGN,
+  which Enter Sends Message plays when you need a repeat, and F5 is yours: on CW F5 sends his
+  call, and a recording cannot say one. If you ran Enter Sends Message in Phone in a test build,
+  where AGN was on F5, the update copies that recording to F8 and leaves F5 empty; a recording in
+  F5 that was for something else, such as a 73, stays in F5.
 
 - **Field Day mode is now Contest mode: one switch for whichever contest is picked.** It always
   started the contest picked in Settings ▸ Contesting ▸ Contest, a QSO party or CQ WW as much as Field
   Day, and the contest log strip (its dupe check, Super Check Partial, call history, Enter Sends
   Message and Ctrl+D), the operator box, the Contest screen and the exports work in every contest it
   starts, as club sync does in every contest it can run. Now its name says so, at the top of the
-  Contest screen, in Settings ▸ Contesting and in Settings ▸ Appearance ▸ Features, and it names the
-  contest: "Enable Contest mode: Illinois QSO Party". Its Settings section is called Contest mode, no
+  Contest screen and in Settings ▸ Contesting, and it names the contest: "Enable Contest mode:
+  Illinois QSO Party". Its Settings section is called Contest mode, no
   line shown for another contest says Field Day, and ARRL Field Day's power multiplier shows only
-  when ARRL Field Day is picked. Turned on from the features list, it now opens the Contesting tab
-  whenever the picked contest is missing something, a QSO party's county included, not only Field
-  Day's class or section. Your saved setting carries over as it is. The exported files are named for
+  when ARRL Field Day is picked. Your saved setting carries over as it is. The exported files are named for
   the contest too (`ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`) rather than `fd-…`; a QSO party
   shows your side in words (in-state, out-of-state, W/VE or DX) in Settings and beside Sending on the
-  log strip, never `in_state`; while a contest runs, Settings says beside the picker that a new pick
-  takes effect after you save it and turn Contest mode off and on again; the upload switch under the
+  log strip, never `in_state`; while a contest runs, Settings says beside the picker which contest it
+  is and that saving a different pick switches at once; the upload switch under the
   merge button reads "Upload merged contacts to:"; and the N3FJP and N1MM settings, the Club Board
   window and the Remote page's contest view describe whichever contest is running.
+- **A contest picked while Contest mode is on starts when you save it.** Saving a different contest
+  in Settings ▸ Contesting ▸ Contest ends the running one and starts the new one at once, exactly as
+  turning Contest mode off and on did: the new contest starts in Search-and-Pounce and never calls
+  CQ, a CQ run in the old one ends, each contest's contacts stay apart, and club sync starts again
+  for the new contest. The Contest screen says "Now running Illinois QSO Party" and names the
+  contest that ended. Saving anything else keeps the running contest as it is. When the new contest
+  cannot start yet (a QSO party's county, say), the old one still ends and the Contest screen says
+  what is missing.
+- **The Contest mode switch is no longer in Settings ▸ Appearance ▸ Features.** It stays at the top
+  of the Contest screen and in Settings ▸ Contesting ▸ Contest mode, and a Settings search for
+  "contest mode" goes there. Your setting is unchanged.
 - **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
   Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
   elevation boxes, with the line for the call in your log entry under them, so the bearing (and
@@ -421,6 +464,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   complaint even with Contest mode off, and the FT cockpit's Call CQ did nothing at all. With
   Contest mode off they always work now. Only the contest's own Running and S&P need its exchange,
   and they still say what is missing.
+- **Restoring a settings backup that turns Contest mode on, or picks another contest while one
+  runs, now checks your logbook for dupes as a save does.** The contest it started did not know
+  the contacts your logbook already held from the contest's start, so a station you had already
+  worked there was not marked worked or dupe. When the logbook is too busy to read at that moment
+  (a big import, another window, a sync), the restore tries again for a few seconds, as a save
+  does, then says the logbook was busy and restores nothing, so trying again in a moment works.
+- **Nexus Remote says "Station data unavailable" after every loss of the station's data.** When the
+  readings stopped at the moment a background read of the decode history also gave up, the workspace
+  stopped trusting the readings and refused its controls, as it should, but it never faded and never
+  showed "Station data unavailable", however long the loss lasted. It now does, five seconds into
+  every loss, as it already did in every other case.
+- **A joined laptop no longer shows Offline and "Lost the host" after the contest changes.**
+  Changing the contest restarts this laptop's link to the club host, and the old link's last
+  report, that it had gone down, could arrive after the new link was up: the chip read Offline and
+  the line said the host was lost while contacts were syncing. A replaced link's reports are now
+  ignored.
+- **A position turned away for logging another contest is told both contests by the names the
+  contest picker uses.** The host's refusal named the club's contest by its Cabrillo id ("this club
+  is running ARRL-FIELD-DAY, and this Nexus is logging IL QSO Party"). It now reads "this club is
+  running ARRL Field Day, and this Nexus is logging Illinois QSO Party. Pick ARRL Field Day as the
+  contest…", the words of the menu it asks you to pick from.
+- **A laptop joining a club event now says whether it is in.** After Find club events or a host
+  address typed into Join event at, a joining laptop said nothing about its join unless Field Day
+  mode was on and a club block appeared. Settings ▸ Contesting, under Join event at, and the
+  Contest screen, with Contest mode on or off, now say which it is: looking for the host at that
+  address; joined, with the event, the host's call, this laptop's position and its club code;
+  turned away, in the host's own words; cannot reach the host, because nothing listens there or
+  nothing answers, with what to check (Nexus hosting there, both laptops on the same network,
+  Windows Firewall on the host letting Nexus in); or the host lost, and Nexus
+  trying again. An address typed without a port, such as 192.168.1.10, now joins port 42073; it
+  used to be retried in silence and never joined.
+- **The host of a club event shows where to join it.** With Host a club event on, the host's
+  Contest screen and Settings ▸ Contesting say that it is hosting, on which port, at which of its
+  network addresses (each with its adapter's name: the address the other laptops type into Join
+  event at), and how many other positions are connected. When it cannot host they say why:
+  another program using the port, a port that would not open, or a contest club sync cannot run.
+  That used to reach the Connections log only.
+- **Find club events finds a host that has more than one network adapter, and says what to check
+  when it hears nothing.** A host announced itself only to 255.255.255.255, which a computer sends
+  out of one network adapter, so a host with Wi-Fi and Ethernet, or with the virtual adapters WSL,
+  Hyper-V or a VPN add, could announce itself on a network the other laptops are not on. It now
+  also announces itself to the broadcast address of each network it is on. Find club events
+  listens for 5 seconds instead of 2, and when it hears nothing it says to check that the host has
+  Host a club event on, that both laptops are on the same network, and that Windows Firewall on
+  this laptop lets Nexus hear the host. NEEDS-BENCH: two Windows laptops on the club's own network.
 - **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
   launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
   every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations
@@ -499,6 +587,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yourself and log each contact once per county), a serial number or a report, a contest whose
   exchange has no county, state or province of yours, and CQ WW RTTY, whose rules have no
   provision for a station that moves.
+- **Merging a contest into your logbook again never adds a contact twice.** After **I moved**,
+  or a County or section changed in Settings, a restart (or leaving the contest and coming back)
+  made a second **Merge into my logbook** add every contact already merged again, as duplicates,
+  and a logbook edit or delete of one of them no longer reached the contest log. Each merged
+  contact is now named by its contest and the year it was made, not by where you were, so the
+  merge can be pressed any number of times. Contacts merged by an earlier version keep their
+  names and are recognised: merging again after this update adds only contacts never merged, and
+  never removes or rewrites one already in your logbook. A contact an earlier version already
+  added twice stays twice until you delete one; deleting one of the two leaves the contest log as
+  it is, and deleting the last copy takes the contact out of the contest log, as any delete does.
+  The same contest a year later, from the same county, is merged too; before, its contacts were
+  taken for last year's and left out.
+- **I moved takes a county by its name, and the upload ticks name the services.** In the Illinois
+  and New York QSO parties, a county typed into **I moved** by its name (`DuPage`, `Monroe`) was
+  refused as not one of the contest's counties; only its code worked. I moved now reads a name
+  the way the QTH box does, so it goes out as its code (DUPG in Illinois, MON in New York), and in
+  Field Day a section's full name goes out as its code too. A county that shares its name with a
+  state or province (Washington, and in New York also Delaware, Ontario and Wyoming) is the
+  county when you are in the state, and the state or province when you are outside it. A name
+  that is no county is still refused, in the same words. Under "Upload merged contacts to:" on
+  the Contest screen, the ticks showed the services' internal ids (`qrz`, `clublog`, `eqsl`…);
+  they now show their names: QRZ, Club Log, eQSL, HRDLog, N3FJP, Cloudlog and WRL.
+- **Changing your County in Settings no longer changes it on contacts already logged.** In a QSO
+  party, a County changed in Settings (rather than with **I moved**) was put on every contact
+  already in the contest log the next time the contest was opened or Nexus was started, and the
+  Cabrillo file then sent the sponsor the new county for contacts made from the old one. A Field
+  Day class or section, or anything else you send that Settings holds, did the same. Each contact
+  now keeps the exchange it was sent with, whatever Settings say later and in whichever order the
+  change, I moved and a restart come. Contacts logged with an earlier version may not have saved
+  it: they take what Settings say the first time this version opens their contest, and keep it
+  from then on.
+- **A contest contact logged more than four days after the first ones is merged into your
+  logbook.** The contest log keeps its contacts for four days, and the number it gives each
+  contact (not the serial you send) went with them: the next contact got number 1 again,
+  **Merge into my logbook** took it for the first contact and left it out as already in your
+  logbook, and a club host would have taken it for a contact it already had. A contest's contact
+  numbers are no longer given out twice in the same year, however long after the contest a
+  contact is logged.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

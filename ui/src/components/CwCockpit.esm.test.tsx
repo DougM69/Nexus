@@ -268,6 +268,24 @@ describe('Enter Sends Message in the CW cockpit', () => {
     expect(engine.calls).toContain('contestLogManual')
   })
 
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the built-in sets (the operator, 2026-10-10: as in N1MM's
+  // default message sets). Enter's AGN keys the text it keyed from F7 before.
+  it('asks AGN on the built-in contest set from F8, and keys the AGN it always keyed; F7 is B4', async () => {
+    settings.macros.cwProfiles = []
+    await renderCockpit()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange
+    expect(lit(), 'his QTH not copied yet: AGN is next').toEqual(['F8'])
+    await enter(qthBox())
+    expect(engine.keyed[engine.keyed.length - 1]).toBe('AGN AGN')
+    expect(engine.calls).not.toContain('contestLogManual')
+    fireEvent.keyDown(window, { key: 'F7' })
+    await flush()
+    expect(engine.keyed[engine.keyed.length - 1], 'F7 by hand').toBe('K9AAA QSO B4')
+  })
+
   it('sends through Enter’s own entry, never the F-keys’ re-arming one, with the strip’s call committed first', async () => {
     engine.peer = 'W1AW' // the station before
     await renderCockpit()
@@ -386,5 +404,17 @@ describe('Enter Sends Message in the CW cockpit', () => {
     await enter(qthBox())
     expect(engine.calls).toContain('contestLogManual')
     expect(api.sendCwArmed).not.toHaveBeenCalled()
+  })
+})
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit()
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
+    expect(document.querySelector('.log-entry-fd')).not.toBeNull()
+    expect(document.querySelector('.le-fd-score')).toBeNull()
   })
 })

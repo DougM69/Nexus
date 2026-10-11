@@ -60,6 +60,7 @@ import {
 import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import { SpotDialog } from './SpotDialog'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
@@ -372,9 +373,10 @@ const DEFAULT_MACROS: CwMacro[] = [
 ]
 
 /** The built-in sets the cockpit's F-keys send in a contest: Field Day's, and the contest sets
- *  with and without a report — the signed contest layout (`features/esmRoles.ts`), N1MM's: F1 CQ
- *  · F2 his call and my exchange · F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 AGN
- *  · F8 QSO B4. It is the layout Enter Sends Message sends from. Field Day's set keeps its own
+ *  with and without a report — the signed contest layout (`features/esmRoles.ts`): F1 CQ · F2 his
+ *  call and my exchange · F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8
+ *  AGN, AGN on F8 as in N1MM's default message sets. It is the layout Enter Sends Message sends
+ *  from. Field Day's set keeps its own
  *  `CQ FD`, which belongs to Field Day; every other contest calls `CQ TEST`. {EXCH} is the running
  *  contest's exchange WITHOUT the signal report, which {RST} keys, so the set for an exchange with
  *  a report sends {RST} before it, and the set for one without (Sweepstakes would copy a 5NN as
@@ -1685,7 +1687,12 @@ export function CwCockpit({
   ) : null
 
   const logPane = (
-    <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('cw.pane.log.title')} paneId="log">
+    <CockpitPaneFrame
+      title={quick && !fieldDay ? t('remote.quick.logbook') : t('cw.pane.log.title')}
+      paneId="log"
+      // The contest score chip rides in this head: the strip below has no room left for it.
+      actions={fieldDay ? <ContestScoreChip place="head" fieldDay={fieldDay} /> : undefined}
+    >
       {/* compactRecall died here (2026-07-31) — same reasoning as PhoneCockpit's log pane: the
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
@@ -1716,6 +1723,7 @@ export function CwCockpit({
         onReset={onStripReset}
         onSnap={onSnap}
         fieldDay={fieldDay}
+        scoreChip={false}
         active={active}
         fdMode="CW"
         esm={esm.host}

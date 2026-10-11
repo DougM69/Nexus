@@ -156,6 +156,11 @@ const MIGRATED = [
   'components/LogEntry.tsx',
   // Removing the newest contest contact: the strip's and the contest screen's sentences.
   'features/contestRemoval.ts',
+  // The club link's words (2026-10-10), which Settings' club section and the Contest screen
+  // share — born migrated.
+  'features/clubLink.ts',
+  // Club sync's Windows Firewall lines (2026-10-10), Settings' club section — born migrated.
+  'features/clubFirewall.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
@@ -282,6 +287,8 @@ const MIGRATED = [
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',
+  'components/ContestOverDialog.tsx',
+  'components/ContestScoreChip.tsx',
   // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
   // the objective names are the sponsor's own worksheet names, invariant like the bonus names.
   'components/WfdObjectivesSection.tsx',

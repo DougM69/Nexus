@@ -1466,19 +1466,21 @@ fn call_cq_outside_the_contests_messages_is_a_plain_run() {
     );
 }
 
-/// The double-click follows the contest that is running, not the picker: a session survives a
-/// change of picker while it runs, and S&P answers in the running session's messages.
+/// The double-click follows the contest that is running: a Save that moves the pick off the
+/// contest running switches to the new one, and a double-click on a CQ then works the station in
+/// that contest's S&P, in its messages.
 #[test]
-fn a_double_click_follows_the_running_session_not_the_picker() {
-    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+fn a_double_click_follows_the_contest_a_save_switched_to() {
+    // From a contest whose rules ban FT8, where the click would work the station outside it.
+    let mut e = engine_for("ilqp", MY_GRID);
     e.set_tier(Tier::Ft8);
     let mut s = e.settings().clone();
-    // A contest whose rules ban FT8: were the picker followed, the click would leave.
-    s.fd_event = "ilqp".into();
+    s.fd_event = "arrlvhf_jan".into();
     e.apply_settings(s);
     assert!(
-        matches!(e.mode, Mode::FieldDay { .. }),
-        "the running session stays"
+        matches!(&e.mode, Mode::FieldDay { station, .. }
+            if station.log.session.event_id == "arrlvhf_jan"),
+        "the Save switched the running contest"
     );
     e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
     e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None)

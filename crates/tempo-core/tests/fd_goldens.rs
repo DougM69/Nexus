@@ -305,16 +305,17 @@ fn the_1x_journal_restore_discriminates() {
     );
 }
 
-/// ⭐ **A Field Day journal carries NO private carrier**, and that is what keeps the
+/// ⭐ **A Field Day log's ADIF carries NO private carrier**, and that is what keeps the
 /// golden above byte-identical rather than a coincidence.
 ///
 /// The writer emits `APP_NEXUS_EX`/`MYEX` exactly when the declared fallback would not
 /// give the row back — for Field Day it always would, because class + section ARE the
 /// received exchange and the sent exchange does not move. Asserted directly, because
 /// "the golden did not move" and "no tag is written" are the same fact and a reader
-/// should not have to infer one from the other.
+/// should not have to infer one from the other. (The journal adds each row's sent side
+/// whether it moved or not: the test after this one.)
 #[test]
-fn field_days_journal_carries_no_private_carrier() {
+fn field_days_adif_carries_no_private_carrier() {
     for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
         let adi = capture::golden_log(event).adif();
         for tag in ["APP_NEXUS_EX", "APP_NEXUS_MYEX", "APP_NEXUS_ROLE"] {
@@ -326,4 +327,53 @@ fn field_days_journal_carries_no_private_carrier() {
         // POSITIVE CONTROL: the matcher can see a tag that IS there.
         assert!(adi.contains("APP_NEXUS_QSEQ"), "{event:?}: no tag at all?");
     }
+}
+
+/// `golden` with each record's own row's sent exchange, `APP_NEXUS_MYEX`, before its
+/// `APP_NEXUS_QSEQ`: what the journal writes for that log. Every other byte is the file's.
+fn with_sent_side(golden: &str, log: &tempo_core::fieldday::FieldDayLog) -> String {
+    let mut rows = log.qsos().iter();
+    golden
+        .split_inclusive('\n')
+        .map(|line| match line.find("<APP_NEXUS_QSEQ:") {
+            Some(at) => {
+                let q = rows.next().expect("a row for every record");
+                let sent = tempo_core::contest::carrier::encode(&q.tx);
+                format!(
+                    "{}<APP_NEXUS_MYEX:{}>{} {}",
+                    &line[..at],
+                    sent.len(),
+                    sent,
+                    &line[at..]
+                )
+            }
+            None => line.to_string(),
+        })
+        .collect()
+}
+
+/// ⭐ **The journal is that ADIF with each row's sent exchange, and nothing else.** It writes
+/// a row's `APP_NEXUS_MYEX` whether the exchange moved or not: the session a row is read back
+/// into is built from Settings, and a class or section changed there put the new one on every
+/// row journaled without it. Compared with the 1.x files, which are the ADIF exactly, so every
+/// other byte of the journal is still theirs.
+#[test]
+fn the_journal_is_the_adif_with_each_rows_sent_exchange() {
+    for (log, adi) in [
+        (capture::golden_log(FdEvent::ArrlFd), ARRLFD_ADI),
+        (capture::golden_log(FdEvent::WinterFd), WFD_ADI),
+        (capture::wfd_class_log(), WFD_CLASSES_ADI),
+    ] {
+        let journal = log.journal_adif();
+        assert_eq!(journal, with_sent_side(adi, &log));
+        assert_eq!(
+            journal.matches("<APP_NEXUS_MYEX:").count(),
+            log.qsos().len(),
+            "a sent side on every row"
+        );
+    }
+    // The value itself, read off the golden's session (3A from WI) rather than the encoder.
+    assert!(capture::golden_log(FdEvent::ArrlFd).journal_adif().contains(
+        "<ARRL_SECT:3>EMA <APP_NEXUS_MYEX:32>CLASS::3A;SECTION:fd_sections:WI <APP_NEXUS_QSEQ:1>1 <EOR>"
+    ));
 }

@@ -336,6 +336,27 @@ describe('the sent side, read-only, with its one action', () => {
     })
     expect(api.contestIMoved).not.toHaveBeenCalled()
   })
+
+  it('"I moved" takes a section by its full name, as the received Section box does', async () => {
+    // `domains` as the engine really sends it for an enum slot.
+    renderStrip(
+      fdStatus({
+        receives: [
+          { key: 'CLASS', kind: 'pattern', required: true },
+          { key: 'SECTION', kind: 'enum', required: true, domain: 'fd_sections', domains: ['fd_sections'] },
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const sec = [...document.querySelectorAll('.le-fd-sent input')].find(
+      (i) => i.getAttribute('aria-label') === 'Section',
+    )!
+    fireEvent.change(sec, { target: { value: 'Illinois' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+    expect(api.contestIMoved).toHaveBeenCalledWith([['SECTION', 'IL']])
+  })
 })
 
 // ⭐ THE SERIAL THE OPERATOR READS OFF THIS STRIP. In a serial contest `composing`'s NR slot

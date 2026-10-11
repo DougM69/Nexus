@@ -17,6 +17,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import type { ClubLink } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "refuses the save that TURNS HOSTING ON with the name…", takes
 // 0.36 s and 0.40 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -100,9 +101,10 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel() {
+function renderPanel(clubLink?: ClubLink) {
   return render(
     <SettingsPanel
+      clubLink={clubLink}
       activeRadioId={0}
       scale={1 as never}
       scaleMode={'auto' as never}
@@ -317,5 +319,74 @@ describe('the Club Sync section says it will not run a contest the club log cann
       expect(screen.queryByText(/Club sync does not run/)).toBeNull()
       cleanup()
     }
+  })
+})
+
+// ⭐ WHERE THE ADDRESS IS TYPED, WHERE THE LINK STANDS (2026-10-10). A laptop that typed the host's
+// address in Join event at said nothing about whether it was connected; the host showed no address
+// to type; and an empty search said "same network?" and nothing else.
+describe('the club section says where the club link stands', () => {
+  async function openContesting() {
+    fireEvent.click(await screen.findByRole('tab', { name: /contesting/i }))
+  }
+  const LINK: ClubLink = {
+    role: 'position',
+    addr: '192.168.1.10:42073',
+    state: 'unreachable',
+    why: 'refused',
+    downSinceUnix: 0,
+    event: '',
+    hostCall: '',
+    position: 'CW tent',
+    clubCode: 'ABCD-EFGH',
+  }
+
+  it("says under the join address why the host is not reached, and what to check", async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(settingsFixture({ fdJoinAddr: '192.168.1.10', fdPositionName: 'CW tent' })),
+    )
+    renderPanel(LINK)
+    await openContesting()
+    expect(await screen.findByText('Cannot reach the host at 192.168.1.10:42073. Trying again.')).toBeTruthy()
+    expect(screen.getByText(/^Nothing is listening there: check that Nexus on that laptop has Host a club event on/)).toBeTruthy()
+  })
+
+  it("gives the host the addresses a joining laptop types", async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(settingsFixture({ fdHostEnable: true, fdPositionName: 'HQ' })),
+    )
+    renderPanel({
+      ...LINK,
+      role: 'host',
+      addr: '127.0.0.1:42073',
+      state: 'joined',
+      why: undefined,
+      hosting: { up: true, port: 42073, addrs: [{ addr: '192.168.1.10:42073', adapter: 'Wi-Fi' }], connected: 0 },
+    })
+    await openContesting()
+    expect(await screen.findByText(/^Hosting on port 42073\. Positions join at:/)).toBeTruthy()
+    expect(screen.getByText('192.168.1.10:42073 (Wi-Fi)')).toBeTruthy()
+    expect(screen.getByText('0 other positions connected.')).toBeTruthy()
+  })
+
+  it('says how long an empty search listened, what to check, and where the address to type is', async () => {
+    api.get('getSettings').mockImplementation(() => Promise.resolve(settingsFixture({ fdPositionName: 'CW tent' })))
+    api.get('fdDiscoverEvents').mockImplementation(() => Promise.resolve([]))
+    renderPanel()
+    await openContesting()
+    fireEvent.click(await screen.findByRole('button', { name: 'Find club events' }))
+    const empty = await screen.findByText(/^Nothing heard in 5 s\./)
+    expect(empty.textContent).toContain("on Windows, that this laptop's firewall lets Nexus hear the host: press Allow Nexus through Windows Firewall, above.")
+    expect(empty.textContent).toContain('the address the host shows after “Positions join at” into Join event at')
+  })
+
+  it('POSITIVE CONTROL: no club link, no line', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(settingsFixture({ fdJoinAddr: '192.168.1.10', fdPositionName: 'CW tent' })),
+    )
+    renderPanel()
+    await openContesting()
+    await screen.findByRole('button', { name: 'Find club events' })
+    expect(screen.queryByText(/the host at/)).toBeNull()
   })
 })

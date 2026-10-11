@@ -88,6 +88,17 @@ pub fn change_row<T>(
             Ok(None) => return (Ok(Err(RowRefusal::Gone)), Durability::default()),
             Err(e) => return (Err(e), Durability::default()),
         };
+        // A merged contest contact's copies in the logbook, for a delete of this one: the contest
+        // row leaves with its last copy ([`Engine::contest_row_deleted`]). Read here, with the
+        // lock released, and only for a contact that is one.
+        let copies = if before.contest.as_deref().is_some_and(|c| !c.qid.is_empty()) {
+            match plan.merge_identities() {
+                Ok(copies) => Some(copies),
+                Err(e) => return (Err(e), Durability::default()),
+            }
+        } else {
+            None
+        };
         #[cfg(test)]
         tests::race();
         let mut e = engine_lock(engine);
@@ -106,7 +117,7 @@ pub fn change_row<T>(
             // browser's: the contest log's own row goes too, as a removal, in the same hold of
             // the lock, as an edit's correction reaches it ([`Engine::contest_row_deleted`]).
             if after.is_none() {
-                e.contest_row_deleted(&before);
+                e.contest_row_deleted(&before, copies.as_deref());
             }
             Some(Ok(Ok(Some(then(e, (Arc::clone(&before), after))))))
         });

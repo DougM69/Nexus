@@ -40,12 +40,19 @@ vi.mock('../api', () => ({
   setSidebandOverride: vi.fn(async () => ({})),
   setFilterWidth: vi.fn(async () => ({})),
   openPanelWindow: vi.fn(async () => {}),
-  // The voice keyer: the five ESM slots recorded, F6 empty.
-  getVoiceMessages: vi.fn(async () =>
-    ['CQ', 'Exch', 'TU', 'My call', 'AGN'].map((label, i) => ({ slot: i + 1, label, file: `/tmp/f${i + 1}.wav` })).concat([
-      { slot: 6, label: '', file: '' },
-    ]),
-  ),
+  // The voice keyer as the update leaves a station that ran ESM on the built-in steps
+  // (`Settings::move_voice_agn_to_f7`): CQ, my exchange, TU and my call on F1–F4 as they were,
+  // under the slots' default labels; the AGN recording copied from F5 to F8's own file; F5 and
+  // F6 empty.
+  getVoiceMessages: vi.fn(async () => [
+    { slot: 1, label: 'CQ', file: '/voice/slot1.wav' },
+    { slot: 2, label: 'My Call', file: '/voice/slot2.wav' },
+    { slot: 3, label: 'Report', file: '/voice/slot3.wav' },
+    { slot: 4, label: 'QRZ?', file: '/voice/slot4.wav' },
+    { slot: 5, label: '73', file: '' },
+    { slot: 6, label: 'Again', file: '' },
+    { slot: 8, label: 'AGN', file: '/voice/slot8.wav' },
+  ]),
   playVoiceMessage,
   stopVoice,
   startVoiceRecording: vi.fn(async () => ({})),
@@ -138,7 +145,7 @@ async function flush() {
     for (let i = 0; i < 6; i++) await Promise.resolve()
   })
 }
-async function renderCockpit({ removed = [] as PhonePanelId[], snap = makeSnap() } = {}) {
+async function renderCockpit({ removed = [] as PhonePanelId[], snap = makeSnap(), callOnce = false } = {}) {
   render(
     <PhoneCockpit
       snap={snap}
@@ -147,7 +154,7 @@ async function renderCockpit({ removed = [] as PhonePanelId[], snap = makeSnap()
       spots={[]}
       panels={fakePanels(removed)}
       fieldDay={ILQP}
-      esmSetting={{ on: true, callOnce: false, onSwitch: () => {} }}
+      esmSetting={{ on: true, callOnce, onSwitch: () => {} }}
     />,
   )
   await flush()
@@ -195,6 +202,43 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     await flush()
     await enter(qthBox())
     expect(played(), 'F3, TU').toEqual([1, 3])
+    expect(loggedCalls()).toEqual(['K9AAA'])
+  })
+
+  // ⭐ AGN IS ON F8, as the CW and RTTY contest sets and N1MM's default message sets send it (the
+  // operator, 2026-10-10); it was F5. Every other step plays the slot it played before (CQ F1, my
+  // exchange F2, TU F3, my call F4), and AGN plays F8, which holds the recording F5 held: the
+  // settings tests prove that copy byte for byte (`agn_f8_tests`). So each Enter sends the message
+  // it sent before.
+  it('runs: Enter with his exchange not yet copied asks AGN, from F8', async () => {
+    await renderCockpit()
+    fireEvent.keyDown(document.body, { key: 'F1' }) // the keyer's F1, by hand: CQ, and Run
+    await flush()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange: said, not played
+    await enter(qthBox()) // his QTH not copied yet
+    expect(played(), 'CQ, then AGN from F8').toEqual([1, 8])
+    expect(loggedCalls()).toEqual([])
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    await enter(qthBox())
+    expect(played(), 'then TU, which logs').toEqual([1, 8, 3])
+    expect(loggedCalls()).toEqual(['K9AAA'])
+  })
+
+  it('searches and pounces with call once: the next Enter asks AGN, from F8', async () => {
+    await renderCockpit({ callOnce: true })
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // my call, once
+    await enter(qthBox()) // his QTH not copied yet
+    expect(played(), 'my call, then AGN from F8').toEqual([4, 8])
+    expect(loggedCalls()).toEqual([])
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    await enter(qthBox())
+    expect(played(), 'then my exchange, which logs').toEqual([4, 8, 2])
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
@@ -258,5 +302,17 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     fireEvent.keyDown(stripCall(), { key: 'Escape' })
     await flush()
     expect(line()).toBe('Your S&P exchange stopped. K9AAA is logged. Ctrl+D twice removes it.')
+  })
+})
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit()
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
+    expect(document.querySelector('.log-entry-fd')).not.toBeNull()
+    expect(document.querySelector('.le-fd-score')).toBeNull()
   })
 })

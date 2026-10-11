@@ -23,6 +23,27 @@ socket2 = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# fdsync's adapter list (`lan_addrs`): the host's club beacon goes to each subnet's broadcast
+# address, and its screen lists the addresses a joiner types. Both crates are already in the
+# tree (libc beside socket2, `windows` through windows-capture in tempo-stream), and every
+# feature named is one the shipped build already turns on, so nothing new is compiled. The same
+# holds for fdfirewall's reading of Windows' firewall policy (Foundation, WindowsFirewall, Com,
+# Ole, Variant), which tempo-stream's Remote reader turns on too.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Networking_WinSock",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+] }
+
 [features]
 # The simulated network Icom (`icom::sim`), for another crate's tests: tempo-audio's Icom network
 # daemon runs its suite against it. Test support only; nothing that ships turns it on.

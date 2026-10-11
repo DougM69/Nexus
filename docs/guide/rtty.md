@@ -172,8 +172,8 @@ the next caller:
 | `F4` | My call | `{MYCALL} {MYCALL}` |
 | `F5` | His call | `{CALL}` |
 | `F6` | S&P exch | `TU 599 {EXCH} {EXCH}` |
-| `F7` | AGN | `AGN? AGN?` |
-| `F8` | B4 | `{CALL} QSO B4 TU {MYCALL}` |
+| `F7` | B4 | `{CALL} QSO B4 TU {MYCALL}` |
+| `F8` | AGN | `AGN? AGN?` |
 
 Click a macro, or press its F-key. The keys work whenever the RTTY cockpit is on
 screen, including while you are typing in Their call…, the compose bar or the

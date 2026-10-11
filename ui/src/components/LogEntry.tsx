@@ -11,6 +11,7 @@ import {
   isOnAir,
   type AppSnapshot,
   type ContestFieldSpec,
+  type ContestFieldValue,
   type FieldDayQso,
   type FieldDayStatus,
   type LoggedQso,
@@ -52,6 +53,7 @@ import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
 import { placeCode, placeName } from '../features/otaStates'
 import { RecallPanel } from './RecallPanel'
+import { ContestScoreChip } from './ContestScoreChip'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
 import { pushToast, withErrorToast } from '../toast'
@@ -455,6 +457,13 @@ interface Props {
    * no over to stop. Absent everywhere else.
    */
   sharedEntry?: 'logger'
+  /**
+   * CONTEST STRIP ONLY — does the strip show the contest score chip in its own header row?
+   * Default true. A cockpit that frames this strip in a Log pane passes false and shows the
+   * chip in that pane's head instead, beside the title: there the strip sits in a 24–44em
+   * column whose header row has no room left (`ContestScoreChip`).
+   */
+  scoreChip?: boolean
 }
 
 /**
@@ -490,6 +499,7 @@ export function LogEntry({
   remote,
   esm,
   sharedEntry,
+  scoreChip = true,
 }: Props) {
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
@@ -1883,12 +1893,29 @@ export function LogEntry({
    *  "that's a separate entry. End this session and start a new one?" — which surfaces
    *  through the error toast verbatim. It is deliberately NOT a catalog string: the
    *  refusal is the engine's, and a second copy here could drift from the one the
-   *  engine actually enforces. */
+   *  engine actually enforces.
+   *
+   *  ⭐ A box is read by the QTH box's own function, `fdSlotValue`, so a county given by NAME
+   *  (`DuPage`) goes as its code (DUPG), and naming the county already being sent moves
+   *  nothing. It reads within the list the value being sent came from — an in-state station's
+   *  counties, an out-of-state station's states and provinces — because a move the engine
+   *  accepts stays on that list (over the state line is a separate entry). Five counties share
+   *  their name with a state or province on the list beside them (`Washington`: WASH in
+   *  Illinois, WA outside it); the QTH box cannot tell which was meant, and I moved can. A value
+   *  sent from no list is read over the slot's lists, as the QTH box reads it. A name that
+   *  resolves to no code goes as typed, for the engine to refuse in its own words. */
   const commitMove = async () => {
     if (movingTo === null) return
+    const meant = (v: ContestFieldValue): string => {
+      const typed = movingTo[v.key] ?? ''
+      const f = fdReceives.find((s) => s.key === v.key)
+      // A slot this role sends and never receives (no shipped role has one) keeps what was typed.
+      if (!f) return typed.trim().toUpperCase()
+      return fdSlotValue(v.domain ? { ...f, domains: [v.domain] } : f, typed)
+    }
     const values = fdComposing
-      .filter((v) => (movingTo[v.key] ?? '').trim().toUpperCase() !== v.raw.toUpperCase())
-      .map((v) => [v.key, (movingTo[v.key] ?? '').trim().toUpperCase()] as [string, string])
+      .filter((v) => meant(v) !== v.raw.toUpperCase())
+      .map((v) => [v.key, meant(v)] as [string, string])
     if (values.length === 0) {
       setMovingTo(null)
       return
@@ -2178,6 +2205,9 @@ export function LogEntry({
                 ? t('logEntry.contest.offBand', { band: snap.radio.band })
                 : t('logEntry.contest.hint', { band: snap.radio.band })}
           </span>
+          {/* ⭐ THE SCORE CHIP — the Contest screen's own numbers at a glance, in the room the
+              row has left: a zero-cost slot, so nothing else in this header moves for it. */}
+          {fieldDay && scoreChip && <ContestScoreChip fieldDay={fieldDay} />}
 
           {/* ⭐ THE SENT SIDE, READ-ONLY (§9) — what is going on the air right now.
               It is the SESSION's composing exchange, never a row's: a row already

@@ -380,7 +380,6 @@ describe('an edit made in any section of Settings is saved', () => {
       },
     },
     { section: 'connect-web', ...field('connectWeb', false, false, true), edit: clickIn('connect-web', 'switch', 'Serve Conditions on the local network') },
-    { section: 'features', ...field('fdActive', false, false, true), edit: clickIn('features', 'switch', 'Enable Contest mode: ARRL Field Day') },
   ]
 
   /** Sections whose controls never save through the form, and what they save through instead. */
@@ -401,6 +400,8 @@ describe('an edit made in any section of Settings is saved', () => {
     'start-at-sign-in': 'setLaunchAtLogin, the login entry’s one writer',
     'data-folder': 'setDataFolder',
     configurations: 'the backup, restore and reset verbs',
+    // Contest mode, the one field it saved through the form, is on the Contesting tab now.
+    features: 'which sections show and the goal profile, kept on this computer (useFeatures)',
   }
 
   it('names every section of the registry exactly once', () => {

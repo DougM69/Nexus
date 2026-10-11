@@ -14,6 +14,7 @@ import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, Settings } from '../types'
 import type { FdRulesetDto } from '../api'
+import type { ContestSwitch } from '../contestSwitch'
 import { setSettings } from '../api'
 
 let station: Record<string, unknown> = {}
@@ -34,6 +35,8 @@ vi.mock('../api', () => ({
   fdSetUpload: vi.fn(async () => ({})),
   saveTextToDownloads: vi.fn(async () => ''),
   openPanelWindow: vi.fn(async () => {}),
+  fdMergeToGeneral: vi.fn(async () => ({ added: 2, already: 0, refused: 0, queued: false })),
+  setUnassistedMode: vi.fn(async () => ({})),
 }))
 
 /** 1700Z Sunday 18 October 2026 to 0100Z Monday: the Illinois QSO Party's window. */
@@ -87,6 +90,7 @@ interface Open {
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
   observed?: boolean
+  contestSwitch?: ContestSwitch | null
 }
 
 /** Open the screen with the backend holding `held`, and App's props as `o` says. */
@@ -106,6 +110,7 @@ async function openOn(held: Partial<Settings>, o: Open = {}) {
       }
       onOpenSettings={onOpenSettings}
       onSettingsSaved={onSettingsSaved}
+      contestSwitch={o.contestSwitch}
     />,
   )
   await settle()
@@ -303,7 +308,26 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(lines()).toContain('Not permitted: FT8, FT4. Contacts in them are logged but do not count.')
   })
 
-  it('a contest picked since it started: the switch is the way over, and no rules from the wrong one', async () => {
+  it('a saved pick switched the contest: said first, naming the contest it ended', async () => {
+    await openOn(
+      { ...ILQP_STATION, fdActive: true },
+      { fieldDay: session(), fdActive: true, contestSwitch: { from: 'arrlfd', to: 'ilqp' } },
+    )
+    expect(lines()).toEqual([
+      "Now running Illinois QSO Party. Saving the new pick ended ARRL Field Day, and its contacts stay apart from this contest's.",
+      'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+    ])
+    // CONTROL: no switch, no such line.
+    cleanup()
+    await openOn({ ...ILQP_STATION, fdActive: true }, { fieldDay: session(), fdActive: true })
+    expect(lines()).toEqual([
+      'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+    ])
+  })
+
+  it('a preview of another pick (a pop-out not yet caught up with a save): no rules from the wrong one, and no off-and-on', async () => {
     await openOn(
       { ...ILQP_STATION, fdEvent: 'cqww_cw', fdActive: true },
       { fieldDay: session(), fdActive: true, fdRuleset: rules({ event: 'cqww_cw', bannedModes: ['RTTY'] }) },
@@ -311,7 +335,6 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(document.querySelector('.fd-event-name')!.textContent).toBe('Illinois QSO Party')
     expect(lines()).toEqual([
       'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
-      'Picked in Settings: CQ World-Wide DX Contest (CW). Turn Contest mode off and on again to switch to it.',
     ])
     // The switch names the contest it would leave: the one running, not the one picked.
     expect(theSwitch().getAttribute('aria-label')).toBe('Disable Contest mode: Illinois QSO Party')
@@ -354,5 +377,62 @@ describe('what the switch must not do', () => {
     fireEvent.click(theSwitch())
     await settle()
     expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+  })
+})
+
+// ⭐ THE CONTEST-OVER CHECKLIST, from the Contest screen's switch. Turning the mode off with something
+// to offer opens it INSTEAD of saving: the merge and the export need the session the mode holds.
+describe('turning the mode off offers the contest-over checklist first', () => {
+  /** The end of a club weekend: the club's call on the air, and the engine's note of the station's own. */
+  const CLUB: Partial<Settings> = {
+    ...ILQP_STATION,
+    fdActive: true,
+    mycall: 'W9CLB',
+    contestBefore: {
+      mycall: 'K9ABC',
+      fdOperator: '',
+      fdPositionName: '',
+      contestCategoryOperator: '',
+      contestEntryClass: '',
+      contestCategoryPower: '',
+      unassistedMode: false,
+    },
+  }
+  const twoContacts = () =>
+    session({
+      running: true,
+      workedSections: [],
+      log: [
+        { call: 'K9A', band: '20m', mode: 'CW', whenUnix: ILQP_START + 60 },
+        { call: 'K9B', band: '20m', mode: 'CW', whenUnix: ILQP_START + 120 },
+      ] as FieldDayStatus['log'],
+    })
+
+  it('opens it and saves nothing; Not now leaves the mode on', async () => {
+    await openOn(CLUB, { fdActive: true, fieldDay: twoContacts() })
+    await press()
+    expect(screen.getByRole('dialog', { name: 'Contest over?' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: /Merge 2 contacts into my logbook/ })).toBeTruthy()
+    expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
+    await settle()
+    expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(theSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('Turn off is ONE save: the mode off, with the ticked settings put back', async () => {
+    const { onSettingsSaved } = await openOn(CLUB, { fdActive: true, fieldDay: twoContacts() })
+    await press()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Callsign on the air/ }))
+    const before = { ...station }
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+    await settle()
+    expect(vi.mocked(setSettings).mock.calls.map((c) => c[0])).toEqual([
+      { ...before, mycall: 'K9ABC', fdActive: false },
+    ])
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(theSwitch().getAttribute('aria-checked')).toBe('false')
+    expect(onSettingsSaved).toHaveBeenCalledTimes(1)
   })
 })

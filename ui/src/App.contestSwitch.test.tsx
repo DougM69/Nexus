@@ -99,7 +99,9 @@ const snapshot = (): AppSnapshot => {
           sections: 0,
           points: 0,
           log: [],
-          event: 'arrlfd',
+          // The picked contest: a save that moves the pick switches the session at once
+          // (`Engine::save_switches_contest`), so the session always runs the pick.
+          event: String(station.current.fdEvent || 'arrlfd'),
           composing: [
             { key: 'CLASS', raw: String(station.current.fdClass) },
             { key: 'SECTION', raw: String(station.current.fdSection), domain: 'fd_sections' },
@@ -408,5 +410,40 @@ describe('Settings and the screen agree, both ways, and across a restart', () =>
     await waitFor(() => expect(station.current.fdActive).toBe(false), WAIT)
     const again = await openSettingsContesting()
     expect(again.getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+describe('a pick saved in Settings while the mode is on switches, and the screen says so', () => {
+  const SWITCHED =
+    "Now running Illinois QSO Party. Saving the new pick ended ARRL Field Day, and its contacts stay apart from this contest's."
+  const modeLines = () =>
+    [...document.querySelectorAll('main.layout.single .fd-mode-status .fd-mode-line')].map((l) => l.textContent)
+
+  it('Settings ▸ Contesting, Illinois QSO Party, Save: the Contest screen names both contests; off and on says nothing', async () => {
+    station.current = { ...station.current, fdActive: true }
+    render(<App />)
+    await openSettingsContesting()
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Which contest you are entering' })).getByRole('button', {
+        name: 'Illinois QSO Party',
+      }),
+    )
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    })
+    await waitFor(() => expect(station.current.fdEvent).toBe('ilqp'), WAIT)
+    fireEvent.click(await screen.findByRole('button', { name: 'Contest — Illinois QSO Party' }, WAIT))
+    await waitFor(() => expect(modeLines()[0]).toBe(SWITCHED), WAIT)
+    // CONTROL: off and on at the screen is no switch, and the line goes.
+    await act(async () => {
+      fireEvent.click(screenSwitch())
+    })
+    await waitFor(() => expect(station.current.fdActive).toBe(false), WAIT)
+    await act(async () => {
+      fireEvent.click(screenSwitch())
+    })
+    await waitFor(() => expect(screenSwitch().getAttribute('aria-checked')).toBe('true'), WAIT)
+    await settle()
+    expect(modeLines()).not.toContain(SWITCHED)
   })
 })

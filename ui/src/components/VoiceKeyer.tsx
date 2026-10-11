@@ -5,8 +5,8 @@
 // control however few sweeps look for it (it is pane-resident, so it is deliberately on no
 // stop-line list), and the second shares its vocabulary; they move together in the
 // transmit-path batch so the pair cannot be reworded apart. Everything else is in the
-// catalog under `phone.keyer.*` — F1–F6 are key names, a slot's own label is the operator's
-// words, and both stay in the code.
+// catalog under `phone.keyer.*` — F-key names, a slot's own label is the operator's words, and
+// both stay in the code.
 import { useEffect, useRef, useState } from 'react'
 import type { VoiceMessage } from '../types'
 import {
@@ -81,8 +81,9 @@ export interface VoiceKeyerForEnter {
 // whole sentence and pass their slot.
 
 /**
- * Phone voice keyer (casual) — F1–F6 message slots, each a recorded 12 kHz mono WAV played
- * to the rig with PTT keyed for the message (the same TX path the soundcard CW keyer uses).
+ * Phone voice keyer (casual) — message slots on F1–F6 and F8 (AGN, the slot Enter Sends Message
+ * plays for AGN in a contest), each a recorded 12 kHz mono WAV played to the rig with PTT keyed
+ * for the message (the same TX path the soundcard CW keyer uses).
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
  * `.wav`; ✕ clears; Esc / ■ Stop aborts.
  *
@@ -288,7 +289,8 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     if (list) setMsgs(list)
   }
 
-  // F1–F6 play their slot; Esc stops. Ignored while typing in a field.
+  // A slot's F-key plays it; a key with no slot (F7 among them) is left alone. Esc stops. Ignored
+  // while typing in a field.
   useEffect(() => {
     const isField = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
@@ -302,10 +304,10 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
       }
       // Don't let an F-key key the rig while a recording is in progress.
       if (recording !== null) return
-      const m = /^F([1-6])$/.exec(e.key)
-      if (m) {
+      const slot = Number(/^F(\d)$/.exec(e.key)?.[1])
+      if (msgs.some((x) => x.slot === slot)) {
         e.preventDefault()
-        play(Number(m[1]))
+        play(slot)
       }
     }
     window.addEventListener('keydown', onKey)

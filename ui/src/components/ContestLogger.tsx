@@ -27,6 +27,7 @@ import { getPskState, type FdRulesetDto } from '../api'
 import { t } from '../i18n'
 import { PSK_MODE_BY_SLUG } from '../pskModes'
 import type { AppSnapshot } from '../types'
+import { useContestSwitch } from '../contestSwitch'
 import { ContestView } from './ContestView'
 import { LogEntry } from './LogEntry'
 
@@ -89,11 +90,21 @@ export function ContestLogger({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const fd = snap.fieldDay ?? null
+  // A contest switched by a pick saved in the main window: this copy of the Contest screen says
+  // so too.
+  const contestSwitch = useContestSwitch(fd)
   const m = loggerMode(section, pskName)
   return (
     <>
       <main className="layout single">
-        <ContestView fieldDay={fd} fdActive={fdActive} fdRuleset={fdRuleset} tier={snap.link.tier} logger />
+        <ContestView
+          fieldDay={fd}
+          fdActive={fdActive}
+          fdRuleset={fdRuleset}
+          tier={snap.link.tier}
+          logger
+          contestSwitch={contestSwitch}
+        />
       </main>
       {fd && (
         <section className="contest-logger-entry" aria-label={t('contestLogger.entry.aria')}>

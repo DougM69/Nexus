@@ -13235,8 +13235,10 @@ fn apply_and_persist(
 /// assistance mirror and its journal, the QTH the spot ranking reads.
 ///
 /// A save that turns the Field Day master on while Field Day is not running re-enters it, opening
-/// a contest session: the session's rows are read from the logbook first, off the lock, and the
-/// session is opened with its dupe sweep in the same hold of the lock as the save (SPEC-2 v3 C19).
+/// a contest session, and so does a save that moves the contest pick off the contest running, which
+/// ends that session first ([`tempo_app::engine::Engine::save_opens_session`]): the session's rows
+/// are read from the logbook first, off the lock, and the session is opened with its dupe sweep in
+/// the same hold of the lock as the save (SPEC-2 v3 C19).
 /// Every other save reads nothing. When the logbook is too busy to read them, the save is refused
 /// whole ([`tempo_app::engine::SESSION_BUSY`]): nothing applied, persisted or published, and the
 /// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
@@ -13248,10 +13250,9 @@ fn save_and_publish(
     authoritative_roster: bool,
 ) -> Result<AppSnapshot, String> {
     let published = settings.clone();
-    let opens_session = settings.fd_active;
     let snap = tempo_app::engine::with_session_rows(
         engine,
-        |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
+        |eng| eng.save_opens_session(&published),
         |eng, rows| {
             // A form save that would put a daemon of Nexus's, or its CAT broker, on a NET rigctl
             // radio's Network Address is refused whole, before anything below touches the engine
@@ -13431,6 +13432,125 @@ mod contest_session_tests {
             "and Field Day was not entered"
         );
         drop(eng);
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SAVE THAT SWITCHES THE CONTEST READS THE NEW SESSION'S ROWS BEFORE ANYTHING ELSE, as the
+    /// turn-on does. The station runs Field Day; another program holds the logbook. A save that
+    /// moves the pick to the Illinois QSO Party is refused for the busy logbook — the party's
+    /// session would open without its dupe sweep — and Field Day runs on, the pick where it was.
+    /// The form also carries a port clash, refused inside the save, so the two refusals tell a
+    /// save that read first from one that did not, and neither persists anything. The CONTROL:
+    /// the same form with the pick left alone reads nothing and meets the clash.
+    #[test]
+    fn a_save_that_switches_the_contest_reads_its_rows_before_anything_else() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("save-switch", 3);
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            tempo_app::settings::RadioProfile {
+                id: 0,
+                name: "IC-9700".into(),
+                rig_model: 2,
+                rig_conn: "network".into(),
+                rig_addr: "127.0.0.1:4533".into(),
+                rigctld_port: 4534,
+                ..Default::default()
+            },
+            tempo_app::settings::RadioProfile {
+                id: 1,
+                name: "FTDX10".into(),
+                rig_model: 1042,
+                serial_port: "COM3".into(),
+                rigctld_port: 4535,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 1;
+        station.cat_broker = true;
+        station.cat_broker_port = 4532;
+        station.sync_flat_from_active();
+        station.fd_active = true;
+        station.fd_class = "1D".into();
+        station.fd_section = "EMA".into();
+        station.contest_qth_state = "IL".into();
+        station.contest_qth_county = "COOK".into();
+        engine_lock(&engine).apply_restored_settings(station);
+        let running = |e: &SharedEngine| engine_lock(e).fd_position_contest();
+        assert_eq!(running(&engine), "arrlfd", "premise: Field Day runs");
+        let hold = held_up(&engine, &dir);
+        let held = engine_lock(&engine).settings().clone();
+        let mut form = held.clone();
+        form.rigctld_port = 4533;
+        let clash = Err(
+            "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's rigctld \
+             TCP Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+             radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+                .to_string(),
+        );
+        assert_eq!(
+            save_and_publish(&engine, form.clone(), false).map(|_| ()),
+            clash,
+            "CONTROL: the pick left alone, the save reads nothing and meets the clash"
+        );
+        form.fd_event = "ilqp".into();
+        assert_eq!(
+            save_and_publish(&engine, form, false).map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "the pick moved, the save reads the party's rows first and is refused for the logbook"
+        );
+        assert_eq!(
+            (
+                running(&engine),
+                engine_lock(&engine).settings().fd_event.clone()
+            ),
+            ("arrlfd".to_string(), held.fd_event),
+            "Field Day runs on, the pick where it was"
+        );
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE REFUSED FOR A BUSY LOGBOOK PUTS NOTHING BACK, as a save refused for one changes
+    /// nothing. A backup that turns Contest mode on opens a contest session, so the restore reads
+    /// the session's rows first, as the save that turns it on does; with the logbook held by
+    /// another program it is refused in the save's own words, and nothing in the backup lands:
+    /// not its settings, not Contest mode, not the UI state it carries.
+    #[test]
+    fn a_restore_refused_for_a_busy_logbook_puts_nothing_back() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-refused", 3);
+        let hold = held_up(&engine, &dir);
+        let held = engine_lock(&engine).settings().clone();
+        let mut bundle = held.clone();
+        bundle.fd_active = true;
+        bundle.fd_class = "1D".into();
+        bundle.fd_section = "EMA".into();
+        bundle.mycall = "W9REST".into();
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": bundle,
+            "uiState": { "nexus.restore.refused": "1" },
+        })
+        .to_string();
+        let mut ui_saved = None;
+        let restored = restore_settings_bundle(&engine, text, |ui| {
+            ui_saved = Some(ui);
+            true
+        });
+        assert_eq!(
+            restored.map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "refused for the logbook, in the save's words"
+        );
+        let eng = engine_lock(&engine);
+        assert_eq!(*eng.settings(), held, "nothing applied");
+        assert!(
+            eng.mode_opens_session("fieldday-sp"),
+            "and Contest mode was not entered"
+        );
+        drop(eng);
+        assert_eq!(ui_saved, None, "nor the UI state the backup carries");
         drop(hold);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -13858,6 +13978,16 @@ fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
 ) -> Result<AppSnapshot, String> {
+    restore_settings_bundle(&state, text, ui_state_save)
+}
+
+/// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
+/// ([`ui_state_save`]) once the restore goes through.
+fn restore_settings_bundle(
+    engine: &SharedEngine,
+    text: String,
+    save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
+) -> Result<AppSnapshot, String> {
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
@@ -13874,19 +14004,21 @@ fn import_settings_bundle(
         None => return Err("That backup is missing its format version.".to_string()),
     }
     let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
-    // UI state is best-effort: a bundle whose settings are good but whose ui-state is not should
-    // still restore the radios. The half that failed is named rather than swallowed.
-    if let Some(ui) = v.get("uiState").cloned() {
-        if let Ok(map) = serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui) {
-            ui_state_save(map);
-        }
-    }
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
-    // which is right for a form and wrong for a restore.
-    {
-        let mut eng = engine_lock(&state);
-        eng.apply_restored_settings(settings);
+    // which is right for a form and wrong for a restore. A bundle that opens a contest session
+    // opens it as a Save does, its rows read first, and a logbook too busy to read them refuses
+    // the restore whole: nothing below runs, the UI state included.
+    tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+        // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
+        // should still restore the radios. The half that failed is named rather than swallowed.
+        if let Some(ui) = v.get("uiState").cloned() {
+            if let Ok(map) =
+                serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui)
+            {
+                save_ui(map);
+            }
+        }
         // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
         // next launch while looking like it had worked. Synchronous, under the lock as it always
         // was: a restore that did not reach the disk says so and mirrors nothing to the base
@@ -13900,8 +14032,9 @@ fn import_settings_bundle(
         // ...and into the base config, or the launch picker keeps offering the OLD roster.
         persist_roster_to_base(&eng.settings().radios);
         persist_routing_to_base(eng.settings());
-    }
-    let snap = { engine_lock(&state).snapshot() };
+        Ok(())
+    })??;
+    let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
 }
 
@@ -17832,6 +17965,93 @@ async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
         let _ = state;
         Err("nothingToRepair".to_string())
     }
+}
+
+/// This executable's path as text, for a firewall rule to name: `None` when it is not Unicode,
+/// which no rule could name faithfully.
+fn this_exe() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .into_os_string()
+        .into_string()
+        .ok()
+}
+
+/// What the club section of Settings ▸ Contesting says about Windows Firewall: whether it is on,
+/// and where Nexus's club sync rules stand for the Host and scoreboard ports as set
+/// (`tempo_net::fdfirewall::status`). Read with no administrator rights, on the blocking pool
+/// (the rules take about a tenth of a second). `None` off Windows, and when the firewall cannot
+/// be read. Nexus Remote has no road to it: it is this laptop's own firewall.
+#[tauri::command]
+async fn club_firewall_status(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_net::fdfirewall::Status>, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = this_exe()?;
+        tempo_app::club_firewall::status(&engine, &exe, tempo_net::fdfirewall::read)
+    })
+    .await
+    .map_err(|e| format!("firewall read failed: {e}"))
+}
+
+/// The operator pressed **Allow Nexus through Windows Firewall** (`action` "allow") or its
+/// Remove ("remove") in the club section: one Windows administrator prompt, through the
+/// elevation Repair clock uses, then the firewall read back (`PressOutcome`). Refused with
+/// `onAir` while anything is transmitting, `running` while a press is still waiting on Windows,
+/// `path` or `port` when the command cannot be built, and `unsupported` off Windows. The prompt
+/// waits for an answer, so this runs on the blocking pool. Nexus Remote has no road to it: the
+/// prompt would wait on a screen nobody may be sitting at (`remote_service::application::Command`
+/// has no variant).
+#[tauri::command]
+async fn club_firewall_press(
+    state: State<'_, SharedEngine>,
+    action: String,
+) -> Result<tempo_app::club_firewall::PressOutcome, String> {
+    use tempo_app::club_firewall::{press, status, FirewallAction, PressOutcome, FIREWALL_PRESS};
+    let action = match action.as_str() {
+        "allow" => FirewallAction::Allow,
+        "remove" => FirewallAction::Remove,
+        other => return Err(format!("unknown firewall action {other:?}")),
+    };
+    if !cfg!(windows) {
+        return Err("unsupported".to_string());
+    }
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = this_exe().ok_or_else(|| "path".to_string())?;
+        let ran = press(
+            &engine,
+            &FIREWALL_PRESS,
+            action,
+            &exe,
+            tempo_core::process::run_elevated,
+        )
+        .map_err(|why| why.code().to_string())?;
+        conn_log(
+            "FD sync",
+            if ran { "info" } else { "error" },
+            format!(
+                "Windows Firewall: {} Nexus's club sync rules {}",
+                if action == FirewallAction::Allow {
+                    "adding"
+                } else {
+                    "removing"
+                },
+                if ran {
+                    "done"
+                } else {
+                    "not done (the administrator prompt was declined, or a step failed)"
+                }
+            ),
+        );
+        Ok(PressOutcome {
+            ran,
+            status: status(&engine, &exe, tempo_net::fdfirewall::read),
+        })
+    })
+    .await
+    .map_err(|e| format!("firewall press failed: {e}"))?
 }
 
 /// Curated Hamlib rig models `(model_number, name)` for the Settings dropdown.
@@ -28897,12 +29117,12 @@ struct FdEventBeacon {
     host: String,
 }
 
-/// Listen ~2 s for club-sync host beacons — the "Find club events" button.
-/// Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast;
-/// the manual host:port field always remains).
+/// Listen for club-sync host beacons ([`tempo_net::fdsync::DISCOVER_SECS`]) — the "Find club
+/// events" button. Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast, or
+/// this laptop's firewall drops it; the manual host:port field always remains).
 #[tauri::command(async)]
 fn fd_discover_events() -> Result<Vec<FdEventBeacon>, String> {
-    tempo_net::fdsync::discover(2)
+    tempo_net::fdsync::discover(tempo_net::fdsync::DISCOVER_SECS)
         .map(|found| {
             found
                 .into_iter()
@@ -32536,6 +32756,19 @@ pub fn run() {
         }
     }
 
+    // One-time migration: AGN moved to F8 in the Phone, CW and RTTY contest keys
+    // (`Settings::move_agn_to_f8`). A file from before gains the voice keyer's F8, an AGN
+    // recording in F5 is copied to F8's own file (never losing or writing over a recording), and
+    // the RTTY contest keys and the step maps that read F7 or F8 stay on their messages. Saved at
+    // once; a save that does not land is finished at the next launch, which takes its own copy.
+    if settings.move_agn_to_f8() {
+        // Launch, before the Engine and any settings writer exist: a bare save, exempt from
+        // the writer's Engine-lock precondition (`tempo_app::settings::writer`).
+        if let Err(e) = settings.save(&settings_path()) {
+            eprintln!("tempo: couldn't re-save settings after moving AGN to F8: {e}");
+        }
+    }
+
     // One-time heal (macOS): the 1.5.0–1.6.1 pickers offered the /dev/tty.* twin of every
     // serial port as an equal row, and a rig configured on one HANGS CAT on carrier detect —
     // the later fix collapsed the twins in the PICKER only, so upgraded configs still hold
@@ -33932,13 +34165,21 @@ fn start_on_the_logbook(
                         // A club the engine will not host is not a port problem: it says
                         // its own reason, and nothing about the port.
                         let bound = started
-                            .map_err(|e| format!("couldn't host the club event: {e}."))
+                            .map_err(|e| {
+                                (
+                                    tempo_app::fdevent::HostFailure::Start(e.to_string()),
+                                    format!("couldn't host the club event: {e}."),
+                                )
+                            })
                             .and_then(|()| {
                                 std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
-                                    format!(
-                                        "couldn't host on port {port}: {e} — change the Host \
-                                         port in Settings ▸ Contesting or stop the program \
-                                         using it."
+                                    (
+                                        tempo_app::fdevent::HostFailure::of_bind(&e),
+                                        format!(
+                                            "couldn't host on port {port}: {e} — change the \
+                                             Host port in Settings ▸ Contesting or stop the \
+                                             program using it."
+                                        ),
                                     )
                                 })
                             });
@@ -33954,27 +34195,34 @@ fn start_on_the_logbook(
                                 });
                                 // The discovery beacon, once a second while
                                 // hosting (best-effort: AP-isolated Wi-Fi eats
-                                // broadcast, which is why manual entry stays).
+                                // broadcast, which is why manual entry stays), to
+                                // 255.255.255.255 and to each subnet this laptop is
+                                // on: the first leaves by one adapter only. The same
+                                // address list is the host's line on screen.
                                 let sd = shutdown.clone();
                                 let beacon_engine = mgr_engine.clone();
                                 std::thread::spawn(move || {
                                     let sock = tempo_net::fdsync::beacon_socket();
                                     while !sd.load(Ordering::Relaxed) {
+                                        let lan = tempo_net::fdsync::lan_addrs();
+                                        let targets = tempo_net::fdsync::beacon_targets(&lan);
+                                        let (event, call) = {
+                                            let mut e = engine_lock(&beacon_engine);
+                                            e.fd_note_host_lan(lan);
+                                            (
+                                                e.fd_event_label().unwrap_or_default(),
+                                                e.settings().mycall.clone(),
+                                            )
+                                        };
                                         if let Ok(sock) = &sock {
-                                            let (event, call) = {
-                                                let e = engine_lock(&beacon_engine);
-                                                (
-                                                    e.fd_event_label().unwrap_or_default(),
-                                                    e.settings().mycall.clone(),
-                                                )
-                                            };
                                             tempo_net::fdsync::send_beacon(
-                                                sock, &event, &call, port,
+                                                sock, &event, &call, port, &targets,
                                             );
                                         }
                                         std::thread::sleep(std::time::Duration::from_secs(1));
                                     }
                                 });
+                                engine_lock(&mgr_engine).fd_host_result(None);
                                 hosting = Some((port, contest, shutdown));
                                 bind_failed = None;
                                 conn_log(
@@ -33986,8 +34234,13 @@ fn start_on_the_logbook(
                                     ),
                                 );
                             }
-                            Err(e) => {
-                                engine_lock(&mgr_engine).fd_host_stop();
+                            Err((failure, e)) => {
+                                {
+                                    let mut eng = engine_lock(&mgr_engine);
+                                    eng.fd_host_stop();
+                                    // The host's own line says why, not the log alone.
+                                    eng.fd_host_result(Some(failure));
+                                }
                                 if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
                                     conn_log("FD sync", "error", format!("{e} Retrying quietly."));
                                 }
@@ -34002,6 +34255,10 @@ fn start_on_the_logbook(
                     if let Some((_, _, shutdown)) = client.take() {
                         shutdown.store(true, Ordering::Relaxed);
                         let mut e = engine_lock(&mgr_engine);
+                        // The stopped pump reports its own link down up to a quarter of a
+                        // second from now, perhaps after the next pump is in: nothing it says
+                        // reaches the mirror from here (`Engine::fd_link_take_over`).
+                        e.fd_link_take_over();
                         e.fd_mirror_mut().on_link(false, now_unix() as u64);
                     }
                     if let Some((addr, contest)) = want_addr {
@@ -34011,7 +34268,7 @@ fn start_on_the_logbook(
                         if ready {
                             let shutdown = Arc::new(AtomicBool::new(false));
                             let backend: Arc<dyn tempo_net::fdsync::PositionSync> = Arc::new(
-                                tempo_app::fdbridge::EnginePositionSync(mgr_engine.clone()),
+                                tempo_app::fdbridge::EnginePositionSync::new(mgr_engine.clone()),
                             );
                             let (a2, sd) = (addr.clone(), shutdown.clone());
                             std::thread::spawn(move || {
@@ -34869,6 +35126,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             dismiss_tx_alarm,
             test_cat,
             repair_clock,
+            club_firewall_status,
+            club_firewall_press,
             set_tx_even,
             set_tx_cycle_auto,
             set_beacon,

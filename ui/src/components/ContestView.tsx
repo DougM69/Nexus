@@ -1,6 +1,7 @@
 import type { FdDisplaySettings } from '../fieldDayObservation'
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type {
+  ClubLink,
   ContestBoard,
   FdClubStatus,
   FdMergeReport,
@@ -13,10 +14,13 @@ import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExp
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
+import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
+import { ADDR_SEP, clubLinkLines, type ClubLinkLine } from '../features/clubLink'
 import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -24,7 +28,7 @@ import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
 import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
-import { REMOVE_CONFIRM_MS, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
+import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -157,6 +161,9 @@ const FD_POWER_TIERS = [
 
 interface Props {
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link (`AppSnapshot.clubLink`), said here whatever the Field Day mode
+   *  switch says. Not passed on Remote or in the logger window. */
+  clubLink?: ClubLink | null
   onSetMode?: (mode: ModeRequest) => void
   /** A complete ephemeral display capture; native loaders and writes stay disabled. */
   observation?: FdDisplaySettings
@@ -181,12 +188,14 @@ interface Props {
    *  path that keeps an over already planned from keying. Everything else works as it does here:
    *  the operator box, the exports, the merge, the club, Remove and Restore. */
   logger?: boolean
+  /** The switch a saved pick just made, for the session shown here (`useContestSwitch`, kept by
+   *  App and the logger window): the screen says the station switched, and from what. */
+  contestSwitch?: ContestSwitch | null
 }
 
 /**
  * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
- * turn on while there is something, and says what it is. Settings asks the same question
- * where its copy of the switch is turned on, so the two cannot disagree about a contest.
+ * turn on while there is something, and says what it is.
  *
  * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
  * both events need a class (WFD calls it a category) and a section before the station enters
@@ -918,6 +927,34 @@ function clockCell(ms: number | null | undefined): string {
     : t('fieldDay.club.board.clock.behind', { secs: -secs })
 }
 
+/** The club link's lines (`features/clubLink.ts`) in the club block's two styles: the addresses
+ *  and the club code each in a box a reader can copy from. */
+function ClubLinkRows({ lines }: { lines: ClubLinkLine[] }) {
+  return (
+    <>
+      {lines.map((l) => (
+        <div key={l.key} style={l.alert ? CLUB_WARN : CLUB_NOTE} role={l.alert ? 'alert' : 'status'} data-club-link={l.key}>
+          {l.text}
+          {l.addrs?.map((a, i) => (
+            <Fragment key={a}>
+              {i > 0 ? ADDR_SEP : ' '}
+              <span className="mono">{a}</span>
+            </Fragment>
+          ))}
+          {l.code && (
+            <>
+              {' '}
+              <span className="mono" style={{ ...CLUB_CODE, fontSize: textPx(12) }}>
+                {t('fieldDay.club.code', { code: l.code })}
+              </span>
+            </>
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
 /** The chip's text for each derived state (honesty rule: the queue is IN the
  * label, so "connected but behind" can never masquerade as synced). */
 function clubChipText(club: FdClubStatus): string {
@@ -1138,6 +1175,7 @@ export function FdClubSection({
   readOnly = false,
   fieldDay = true,
   keepsDupes = false,
+  link = null,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
@@ -1154,6 +1192,9 @@ export function FdClubSection({
   /** The contest reports its duplicates (`DupeRule::log_dupes`), so the club file keeps a
    *  repeat as a zero-point line instead of keeping only the earliest. */
   keepsDupes?: boolean
+  /** This laptop's club link: the lines the block does not already say. The contest screen's
+   *  own block only, never the pop-out or Remote. */
+  link?: ClubLink | null
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
@@ -1286,6 +1327,7 @@ export function FdClubSection({
           </button>
         )}
       </div>
+      {link && <ClubLinkRows lines={clubLinkLines(link, true)} />}
       {/* This PC's clock against the host's: said from 2 s, a warning past 30 s. Shown
           only — Nexus never changes a clock. */}
       {Math.abs(club.skewSecs) > CLOCK_WARN_SECS ? (
@@ -1516,6 +1558,24 @@ export function FdClubRefused({ contest, why }: { contest: string; why: ClubSync
       <div style={CLUB_WARN} role="status">
         {clubSyncRefusalText(why, contest)}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Where this laptop's club link stands, said where the club block would be while the Field Day
+ * mode is off: there is no club block then, and a laptop told to join a host said nothing at
+ * all about whether it had.
+ */
+export function FdClubLink({ link }: { link: ClubLink }) {
+  return (
+    <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
+      <div style={CLUB_HEADER}>
+        <span style={{ fontSize: textPx(13), fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.club.head')}
+        </span>
+      </div>
+      <ClubLinkRows lines={clubLinkLines(link)} />
     </div>
   )
 }
@@ -1859,6 +1919,7 @@ export function FieldDayScoreboard({
 
 export function ContestView({
   fieldDay,
+  clubLink,
   onSetMode,
   fdActive = false,
   fdRuleset = null,
@@ -1867,6 +1928,7 @@ export function ContestView({
   onOpenSettings,
   onSettingsSaved,
   logger = false,
+  contestSwitch = null,
 }: Props) {
   const observed = observation !== undefined
   // The clock the spot advisory judges the event window by.
@@ -2100,6 +2162,9 @@ export function ContestView({
   const [modeBusy, setModeBusy] = useState(false)
   // A refused turn-on: what was missing at the moment the operator asked, read fresh then.
   const [refusal, setRefusal] = useState<StartBlocker | null>(null)
+  // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning the mode off offers, while
+  // it is open. The save that turns the mode off waits for its answer.
+  const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
   const toggleMode = async () => {
     if (observed || logger || modeBusy) return
     const next = !modeOn
@@ -2114,6 +2179,15 @@ export function ContestView({
           setRefusal(blocked)
           return
         }
+      } else {
+        // OFF: offer the checklist BEFORE the mode goes, because the merge and the export need the
+        // session it holds. Read against what is saved NOW, the engine's note of "before" included.
+        // With nothing to offer, the switch goes off as it always did.
+        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event)
+        if (hasOffer(offer)) {
+          setOverOffer(offer)
+          return
+        }
       }
       await patchSettings(() => ({ fdActive: next }))
       setRefusal(null)
@@ -2124,6 +2198,17 @@ export function ContestView({
     } finally {
       setModeBusy(false)
     }
+  }
+
+  // The checklist's "Turn off": ONE save, the mode off with the ticked settings put back (the merge,
+  // the export and Unassisted are done by then). A refusal rejects back into the checklist, which
+  // shows it and stays open with the mode still on.
+  const turnOffWithChecklist = async (putBack: Partial<Settings>) => {
+    await patchSettings(() => ({ ...putBack, fdActive: false }))
+    setOverOffer(null)
+    setRefusal(null)
+    setModeWritten(false)
+    onSettingsSaved?.()
   }
 
   // Event header: the window arrives Rust-computed on the DTO (fd_rules data —
@@ -2267,6 +2352,14 @@ export function ContestView({
     : (refusal ?? (fieldDay ? null : startBlocker(nativeSettings, fdRuleset)))
   const modeLines: { key: string; text: string }[] = []
   if (fieldDay) {
+    // ⭐ A SAVED PICK SWITCHED THE CONTEST: said first, naming the one it ended. Its contacts
+    // are the journal's, kept out of this session (the kept-out note counts them).
+    if (contestSwitch) {
+      modeLines.push({
+        key: 'switched',
+        text: t('fieldDay.mode.switched', { contest: eventName, previous: contestName(contestSwitch.from) }),
+      })
+    }
     // Which rules apply now, plainly. The ruleset facts are the PICKED contest's, so they are
     // read only while that is the contest running; the line below says when it is not.
     modeLines.push({ key: 'on', text: t('fieldDay.mode.on', { contest: eventName }) })
@@ -2295,12 +2388,6 @@ export function ContestView({
     ) {
       modeLines.push({ key: 'spotsRfOnly', text: t('fieldDay.mode.rule.spotsRfOnly') })
     }
-    // A contest picked while this one runs takes effect when the mode goes off and on again
-    // (the session is kept across every save, which is what protects its log). Say so here,
-    // beside the switch that does it.
-    if (pickedEvent && pickedEvent !== (fieldDay.event || 'arrlfd')) {
-      modeLines.push({ key: 'picked', text: t('fieldDay.mode.picked', { picked: contestName(pickedEvent) }) })
-    }
   } else if (!observed && !blocker && !modeOn) {
     modeLines.push({ key: 'off', text: t('fieldDay.mode.off', { contest: eventName }) })
   }
@@ -2321,6 +2408,7 @@ export function ContestView({
 
   return (
     <section className="conversation panel fieldday">
+      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
       {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
         {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
@@ -2586,7 +2674,8 @@ export function ContestView({
                       )
                     }
                   />
-                  <span className="mono">{id}</span>
+                  {/* The service's own name; the tick stores its id. */}
+                  <span>{SERVICE_NAMES[id] ?? id}</span>
                 </label>
               ))}
             </div>
@@ -2607,8 +2696,12 @@ export function ContestView({
           readOnly={observed}
           fieldDay={fdEventIsFieldDay}
           keepsDupes={fieldDay.dupeRule?.logDupes === true}
+          link={observed ? null : clubLink}
         />
       )}
+      {/* …or, with the Field Day mode off, where this laptop's club link stands: club sync
+          follows its own settings, not that switch. */}
+      {!fieldDay?.club && !clubRefusal && !observed && clubLink && <FdClubLink link={clubLink} />}
       {/* …or why it is not syncing: switched on for a contest club sync cannot run. The
           station's own settings, which a Remote observation does not carry. */}
       {!fieldDay?.club && clubRefusal && (

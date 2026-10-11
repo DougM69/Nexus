@@ -62,7 +62,7 @@ use tempo_core::contest::{
 };
 use tempo_core::fd_rules::FdRuleset;
 use tempo_core::fieldday::{FdEvent, FieldDayLog};
-use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireField, WireQso};
+use tempo_net::fdsync::{ClubState, PosReport, Unreachable, WireBoardRow, WireField, WireQso};
 
 /// Why a club cannot run a contest's ruleset — a reason the screen names, never a
 /// silent wrong log.
@@ -161,15 +161,54 @@ pub fn contest_name(event_id: &str) -> String {
         .map_or_else(|| shown_id(event_id), |rs| rs.contest_id.to_string())
 }
 
+/// ⭐ **A contest as the Settings contest picker names it**: the words a sentence that tells an
+/// operator to pick a contest must use, so they match the menu. A rules-file id the picker does
+/// not list (one off the network, or a downloaded rules file's) is named as [`contest_name`]
+/// names it.
+pub fn picker_name(event_id: &str) -> String {
+    let id = canonical_contest(event_id);
+    PICKER_NAMES
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or_else(|| contest_name(&id), |(_, name)| (*name).to_string())
+}
+
+/// The picker's names by rules-file id: `CONTESTS` in `ui/src/fdEvent.ts` (with
+/// `FD_EVENT_NAMES` for the two Field Days), which a test holds this table to. The sponsors' own
+/// names, never translated.
+const PICKER_NAMES: &[(&str, &str)] = &[
+    ("arrlfd", "ARRL Field Day"),
+    ("wfd", "Winter Field Day"),
+    ("arrlss_cw", "ARRL November Sweepstakes (CW)"),
+    ("arrlss_ssb", "ARRL November Sweepstakes (Phone)"),
+    ("arrlvhf_jan", "ARRL January VHF Contest"),
+    ("arrlvhf_jun", "ARRL June VHF Contest"),
+    ("arrlvhf_sep", "ARRL September VHF Contest"),
+    ("cqww_cw", "CQ World-Wide DX Contest (CW)"),
+    ("cqww_ssb", "CQ World-Wide DX Contest (SSB)"),
+    ("cqww_rtty", "CQ World-Wide RTTY DX Contest"),
+    ("cqwpx_cw", "CQ World-Wide WPX Contest (CW)"),
+    ("cqwpx_ssb", "CQ World-Wide WPX Contest (SSB)"),
+    ("cqp", "California QSO Party"),
+    ("ilqp", "Illinois QSO Party"),
+    ("nyqp", "New York QSO Party"),
+    ("ohqp", "Ohio QSO Party"),
+    ("tnqp", "Tennessee QSO Party"),
+    ("txqp", "Texas QSO Party"),
+];
+
 /// ⭐ **The sentence for a position logging one contest at a club running another** —
 /// one wording, whichever end finds it (the host at JOIN, or the position on a welcome).
-/// `club` is the club's contest as named; `mine` is the position's rules-file id.
+/// `club` and `mine` are the two rules-file ids, each named as the picker names it
+/// ([`picker_name`]): the sentence says which contest to pick, so it uses the menu's words. It
+/// named the club's contest by its Cabrillo id ("this club is running ARRL-FIELD-DAY").
 pub fn contest_mismatch(club: &str, mine: &str) -> String {
     format!(
         "this club is running {club}, and this Nexus is logging {mine}. Pick {club} as the \
          contest on the Contesting tab in Settings, then rejoin. Contacts you log meanwhile \
          stay in your own log.",
-        mine = contest_name(mine),
+        club = picker_name(club),
+        mine = picker_name(mine),
     )
 }
 
@@ -1266,7 +1305,7 @@ impl ClubLog {
         if canonical_contest(theirs) == self.event_id {
             return None;
         }
-        Some(contest_mismatch(&self.contest_id, theirs))
+        Some(contest_mismatch(&self.event_id, theirs))
     }
 
     /// ⭐ **Why a joining position on another station call cannot be served, or `None` to
@@ -2141,6 +2180,14 @@ pub struct ClubMirror {
     pub clock: crate::clubclock::ClubClock,
     /// The last host `error` line, verbatim (version refusal etc.).
     pub last_error: Option<String>,
+    /// Why the last attempt to reach the host did not connect: `None` once one does, and after
+    /// the join address changes ([`Self::forget_host`]).
+    pub unreachable: Option<Unreachable>,
+    /// The link up now has had its welcome: this laptop is in the event.
+    pub welcomed: bool,
+    /// A welcome has come since the join address was set: a link down now is a host lost, not
+    /// one never found.
+    pub joined_before: bool,
 }
 
 impl ClubMirror {
@@ -2177,6 +2224,8 @@ impl ClubMirror {
         // its first round trip the welcome's whole seconds stand.
         self.clock = Default::default();
         self.last_error = None;
+        self.welcomed = true;
+        self.joined_before = true;
     }
 
     /// One answered round trip of the timed ping (`fdsync::ClockSample`). Updates what the
@@ -2193,6 +2242,129 @@ impl ClubMirror {
             self.down_since_unix = now;
         }
         self.connected = connected;
+        if connected {
+            self.unreachable = None;
+        } else {
+            self.welcomed = false;
+        }
+    }
+
+    /// An attempt to reach the host did not connect ([`tempo_net::fdsync::PositionSync::on_unreachable`]).
+    pub fn on_unreachable(&mut self, why: Unreachable) {
+        self.unreachable = Some(why);
+    }
+
+    /// The join address changed: what the link line knew is about another host. The club state
+    /// the host pushed stays until the next host's snapshot replaces it, as it always has.
+    pub fn forget_host(&mut self) {
+        self.event.clear();
+        self.host_call.clear();
+        self.last_error = None;
+        self.unreachable = None;
+        self.welcomed = false;
+        self.joined_before = false;
+    }
+
+    /// ⭐ **Where this laptop's link to its host stands** ([`LinkState`]). The newest fact
+    /// wins: a connection that failed after a refusal is the host gone, not the refusal again.
+    pub fn link_state(&self) -> LinkState {
+        if self.connected && self.welcomed {
+            LinkState::Joined
+        } else if self.last_error.is_some() && self.unreachable.is_none() {
+            LinkState::TurnedAway
+        } else if let Some(why) = self.unreachable {
+            if self.joined_before {
+                LinkState::Lost(Some(why))
+            } else {
+                LinkState::Unreachable(why)
+            }
+        } else if self.joined_before && !self.connected {
+            LinkState::Lost(None)
+        } else {
+            LinkState::Looking
+        }
+    }
+}
+
+/// ⭐ **Where a laptop's link to its club host stands** — what the club section of Settings and
+/// the Contest screen say, whatever the Field Day mode switch says. Derived from the mirror
+/// alone, as [`SyncState`] is, so the line and the chip cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkState {
+    /// Trying the address, and nothing has come back from it yet.
+    Looking,
+    /// In the event: the host's welcome came on the link that is up now.
+    Joined,
+    /// The host answered with a refusal (the mirror's `last_error`), and nothing since has
+    /// changed that.
+    TurnedAway,
+    /// This laptop has not reached the host at this address: why its last attempt failed.
+    Unreachable(Unreachable),
+    /// It was in the event and the link is down, so the pump is trying again: why the last
+    /// attempt since failed, once one has.
+    Lost(Option<Unreachable>),
+}
+
+impl LinkState {
+    /// The DTO string the screens switch on.
+    pub fn code(self) -> &'static str {
+        match self {
+            LinkState::Looking => "looking",
+            LinkState::Joined => "joined",
+            LinkState::TurnedAway => "turnedAway",
+            LinkState::Unreachable(_) => "unreachable",
+            LinkState::Lost(_) => "lost",
+        }
+    }
+
+    /// Why the last attempt did not reach the host, where the state carries one.
+    pub fn why(self) -> Option<Unreachable> {
+        match self {
+            LinkState::Unreachable(why) => Some(why),
+            LinkState::Lost(why) => why,
+            _ => None,
+        }
+    }
+}
+
+/// Why this laptop is not hosting the club event it was switched on to host. The host's own
+/// screen says so; the Connections log used to be the only place that did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostFailure {
+    /// The engine would not start the club log: its own sentence.
+    Start(String),
+    /// Another program holds the port.
+    PortInUse,
+    /// The port could not be opened for another reason: the system's words.
+    Port(String),
+}
+
+impl HostFailure {
+    /// A failed bind of the host's port.
+    pub fn of_bind(e: &std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            HostFailure::PortInUse
+        } else {
+            HostFailure::Port(e.to_string())
+        }
+    }
+
+    /// The DTO string the screens switch on.
+    pub fn code(&self) -> &'static str {
+        match self {
+            HostFailure::Start(_) => "start",
+            HostFailure::PortInUse => "portInUse",
+            HostFailure::Port(_) => "port",
+        }
+    }
+
+    /// The words that came with it: the engine's sentence or the system's, empty for a port in
+    /// use.
+    pub fn detail(&self) -> &str {
+        match self {
+            HostFailure::Start(why) | HostFailure::Port(why) => why,
+            HostFailure::PortInUse => "",
+        }
     }
 }
 
@@ -2750,6 +2922,97 @@ mod tests {
         assert_eq!(SyncState::derive(true, true, 0, 0), Synced);
         assert_eq!(SyncState::Synced.code(), "synced");
         assert_eq!(SyncState::derive(true, false, 0, 7).code(), "offline");
+    }
+
+    #[test]
+    fn the_link_line_says_where_the_join_stands() {
+        use tempo_net::fdsync::Unreachable::*;
+        let mut m = ClubMirror::default();
+        assert_eq!(m.link_state(), LinkState::Looking, "nothing back yet");
+        // Nothing listens there: never reached.
+        m.on_unreachable(Refused);
+        assert_eq!(m.link_state(), LinkState::Unreachable(Refused));
+        m.on_unreachable(NoAnswer);
+        assert_eq!(
+            m.link_state(),
+            LinkState::Unreachable(NoAnswer),
+            "the latest attempt's"
+        );
+        // A connection opens: looking again until the host answers it.
+        m.on_link(true, 100);
+        assert_eq!(m.link_state(), LinkState::Looking);
+        // Turned away, by the host's own words, through the retries after it.
+        m.last_error = Some("this club is on the air as W9AAA".into());
+        m.on_link(false, 101);
+        assert_eq!(m.link_state(), LinkState::TurnedAway);
+        m.on_link(true, 115);
+        assert_eq!(m.link_state(), LinkState::TurnedAway, "a retry's handshake");
+        m.on_link(false, 115);
+        // Let in.
+        m.on_link(true, 130);
+        m.on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        assert_eq!(m.link_state(), LinkState::Joined);
+        // The host goes quiet: lost, and trying again.
+        m.on_link(false, 200);
+        assert_eq!(m.link_state(), LinkState::Lost(None));
+        m.on_unreachable(NoAnswer);
+        assert_eq!(m.link_state(), LinkState::Lost(Some(NoAnswer)));
+        assert_eq!(m.down_since_unix, 200, "since when");
+        // Back.
+        m.on_link(true, 230);
+        assert_eq!(m.link_state(), LinkState::Looking, "until the welcome");
+        m.on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        assert_eq!(m.link_state(), LinkState::Joined);
+        // Turned away after being in (the host gave the position to another laptop).
+        m.last_error = Some("another laptop holds this position".into());
+        m.on_link(false, 300);
+        assert_eq!(m.link_state(), LinkState::TurnedAway);
+        // A refusal, then the host itself gone: the newest fact wins.
+        m.on_unreachable(NoAnswer);
+        assert_eq!(m.link_state(), LinkState::Lost(Some(NoAnswer)));
+        // Another address: nothing known about it.
+        m.forget_host();
+        assert_eq!(m.link_state(), LinkState::Looking);
+        assert_eq!((m.event.as_str(), m.host_call.as_str()), ("", ""));
+        assert_eq!(m.last_error, None);
+        m.on_unreachable(BadAddress);
+        assert_eq!(
+            m.link_state(),
+            LinkState::Unreachable(BadAddress),
+            "never reached at the new address"
+        );
+    }
+
+    #[test]
+    fn link_states_and_host_failures_have_the_codes_the_screens_switch_on() {
+        use tempo_net::fdsync::Unreachable::*;
+        let codes: Vec<_> = [
+            LinkState::Looking,
+            LinkState::Joined,
+            LinkState::TurnedAway,
+            LinkState::Unreachable(Refused),
+            LinkState::Lost(None),
+        ]
+        .map(LinkState::code)
+        .to_vec();
+        assert_eq!(
+            codes,
+            ["looking", "joined", "turnedAway", "unreachable", "lost"]
+        );
+        assert_eq!(LinkState::Unreachable(Refused).why(), Some(Refused));
+        assert_eq!(LinkState::Lost(Some(NoAnswer)).why(), Some(NoAnswer));
+        assert_eq!(LinkState::Lost(None).why(), None);
+        assert_eq!(LinkState::TurnedAway.why(), None);
+        use std::io::{Error, ErrorKind};
+        let in_use = HostFailure::of_bind(&Error::from(ErrorKind::AddrInUse));
+        assert_eq!((in_use.code(), in_use.detail()), ("portInUse", ""));
+        let denied = HostFailure::of_bind(&Error::new(ErrorKind::PermissionDenied, "forbidden"));
+        assert_eq!((denied.code(), denied.detail()), ("port", "forbidden"));
+        let start = HostFailure::Start("club sync cannot run CQ WW".into());
+        assert_eq!(
+            (start.code(), start.detail()),
+            ("start", "club sync cannot run CQ WW")
+        );
     }
 
     // ---- v2: the wire, the journal, and both compatibility directions -----
@@ -3777,6 +4040,73 @@ mod tests {
         assert_ne!(short, engine);
     }
 
+    /// ⭐ **A refusal names a contest as the picker does.** [`PICKER_NAMES`] must hold what
+    /// `CONTESTS` in ui/src/fdEvent.ts shows for each id, in its order (the two Field Days
+    /// through `FD_EVENT_NAMES`), or a sentence that says "Pick X" names what the menu does not.
+    #[test]
+    fn the_picker_names_are_the_menus() {
+        let ts = include_str!("../../../ui/src/fdEvent.ts");
+        let block = |name: &str, end: &str| -> String {
+            ts.split(name)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{name} is in fdEvent.ts"))
+                .split(end)
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        // `FD_EVENT_NAMES`' lines: `arrlfd: 'ARRL Field Day',`.
+        let fd_names: HashMap<String, String> = block("export const FD_EVENT_NAMES", "\n}")
+            .lines()
+            .filter_map(|l| {
+                let (id, name) = l.trim().split_once(':')?;
+                let name = name.trim().trim_end_matches(',');
+                let name = name.strip_prefix('\'')?.strip_suffix('\'')?;
+                Some((id.trim().to_string(), name.to_string()))
+            })
+            .collect();
+        let quoted = |l: &str, key: &str| -> Option<String> {
+            let rest = l.split(&format!("{key}: '")).nth(1)?;
+            Some(rest.split('\'').next()?.to_string())
+        };
+        let menu: Vec<(String, String)> = block("export const CONTESTS", "\n]")
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("{ id:"))
+            .filter_map(|l| {
+                let id = quoted(l, "id")?;
+                let name = quoted(l, "name").or_else(|| {
+                    let kind = l.split("name: FD_EVENT_NAMES.").nth(1)?.split(',').next()?;
+                    fd_names.get(kind.trim()).cloned()
+                })?;
+                Some((id, name))
+            })
+            .collect();
+        assert!(
+            menu.len() >= 15,
+            "parsed only {} picker entries — the parser is broken, not the menu",
+            menu.len()
+        );
+        let table: Vec<(String, String)> = PICKER_NAMES
+            .iter()
+            .map(|(id, name)| (id.to_string(), name.to_string()))
+            .collect();
+        assert_eq!(
+            table, menu,
+            "PICKER_NAMES against CONTESTS in ui/src/fdEvent.ts"
+        );
+        // POSITIVE CONTROL: one name moved on the menu is seen.
+        let mut moved = menu.clone();
+        if let Some(entry) = moved.iter_mut().find(|(id, _)| id == "ilqp") {
+            entry.1 = "IL QSO Party".into();
+        }
+        assert_ne!(table, moved);
+        assert_eq!(picker_name("ilqp"), "Illinois QSO Party");
+        assert_eq!(picker_name(""), "ARRL Field Day", "the blank default");
+        // An id the picker does not list, off the network: named as a refusal always named it.
+        assert_eq!(picker_name("bogus\nid"), "bogus?id");
+    }
+
     /// ⭐ **The log strip builds the key the engine builds** —
     /// `ui/src/features/__fixtures__/contest-dupe-keys.json` is one table of contacts and
     /// their dupe keys, read here against the engine's own rule (from the rules seed) and its
@@ -3920,9 +4250,10 @@ mod tests {
             .expect("a Field Day position is refused by a party club");
         assert_eq!(
             msg,
-            "this club is running IL QSO Party, and this Nexus is logging ARRL-FIELD-DAY. \
-             Pick IL QSO Party as the contest on the Contesting tab in Settings, then \
-             rejoin. Contacts you log meanwhile stay in your own log."
+            "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field \
+             Day. Pick Illinois QSO Party as the contest on the Contesting tab in Settings, \
+             then rejoin. Contacts you log meanwhile stay in your own log.",
+            "both contests named as the picker names them, never by a Cabrillo id"
         );
         let old = party_club
             .join_refusal(v, "")
@@ -3948,8 +4279,21 @@ mod tests {
             .join_refusal(v, "wfd")
             .expect("Winter Field Day is another contest");
         assert!(
-            wfd.contains("ARRL-FIELD-DAY") && wfd.contains("WFD"),
+            wfd.starts_with(
+                "this club is running ARRL Field Day, and this Nexus is logging Winter Field \
+                 Day. Pick ARRL Field Day as the contest"
+            ),
             "{wfd}"
+        );
+        // The rehearsal's case: a Field Day club, and a position logging the party.
+        assert!(
+            fd.join_refusal(v, "ilqp")
+                .is_some_and(|msg| msg.starts_with(
+                    "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO \
+                 Party."
+                )),
+            "{:?}",
+            fd.join_refusal(v, "ilqp")
         );
         // The version rule still comes first, with its own words.
         assert_eq!(
@@ -4816,7 +5160,7 @@ mod tests {
         assert!(role.contains("the \"dx?Turned?away?HQ??W9XYZ"), "{role}");
         club.note_refused("bbbb0002", "", "Zelt Süd", "K9ABC", "refused", 1);
         assert!(club.refused(1).iter().any(|r| r.label == "Zelt Süd"));
-        assert!(contest_mismatch("ARRL-FIELD-DAY", "ilqp").contains("logging IL QSO Party"));
+        assert!(contest_mismatch("arrlfd", "ilqp").contains("logging Illinois QSO Party"));
     }
 
     /// ⭐ **A position's report reaches the board as the club reads it.** The board goes to

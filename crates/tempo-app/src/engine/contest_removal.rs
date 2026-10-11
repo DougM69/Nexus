@@ -16,7 +16,6 @@
 //! logbook and the services the logbook uploaded it to. Every answer says which, and nothing is
 //! changed there.
 
-use std::collections::HashSet;
 use std::sync::Mutex;
 
 use super::{engine_lock, now_unix_secs, Engine, Mode};
@@ -85,7 +84,7 @@ pub struct ContestRemoval {
     /// Where it had already gone (a removal only; empty for a restore and for the list).
     pub sent: ContestSentTo,
     /// Each row's merge identity — what the logbook names its copy by, if it was merged.
-    pub qids: Vec<String>,
+    pub qids: Vec<tempo_core::contest::MergeIdentity>,
 }
 
 /// A removal or restore, as a command answers it: the engine's answer, plus — for a removal —
@@ -187,12 +186,23 @@ impl Engine {
     /// contest log too, as a removal (kept, restorable), so the Cabrillo no longer carries a
     /// contact the operator deleted.
     ///
-    /// ⛔ Only a row this session and this position minted: the deleted record's `qid` must be
-    /// exactly the one the merge gave the live row ([`tempo_core::contest::qid_for`]), so last
-    /// weekend's contact, or another position's, never reaches this log's row with the same
-    /// seq. While club sync runs the row stays, as a removal is refused — the logbook delete
-    /// itself is the operator's and stands.
-    pub(crate) fn contest_row_deleted(&mut self, row: &QsoRecord) {
+    /// ⛔ Only a row this session and this position minted: the deleted record's `qid` must name
+    /// the live row ([`tempo_core::contest::merged_row`] — the merge's identity for it, or the
+    /// name an earlier build gave it), so last weekend's contact, or another position's, never
+    /// reaches this log's row with the same seq. While club sync runs the row stays, as a
+    /// removal is refused — the logbook delete itself is the operator's and stands.
+    ///
+    /// ⛔ **And only the LAST copy.** An earlier build's second merge after a move wrote some
+    /// contacts into the logbook twice, and deleting one of the two tidies the logbook; it does
+    /// not say the contact was not made, so the contest row stays while another copy of it does.
+    /// `copies` is every merged copy the logbook held before this delete, each once and this one
+    /// among them, read with the lock released ([`crate::logwrite::change_row`], which every
+    /// command's delete goes through); `None` when nothing read them.
+    pub(crate) fn contest_row_deleted(
+        &mut self,
+        row: &QsoRecord,
+        copies: Option<&[(String, u64)]>,
+    ) {
         let Some(qid) = row.contest.as_deref().map(|c| c.qid.as_str()) else {
             return;
         };
@@ -201,12 +211,30 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return;
         };
-        let Some(seq) = tempo_core::contest::seq_from_qid(qid, &station.log.session.id) else {
+        let Some(seq) = tempo_core::contest::merged_row(&station.log, &posid, qid, row.when_unix)
+        else {
             return;
         };
-        if qid != tempo_core::contest::qid_for(&station.log.session.id, &posid, seq)
-            || !station.log.qsos().iter().any(|q| q.seq == seq)
-        {
+        let another = copies.is_some_and(|copies| {
+            station
+                .log
+                .qsos()
+                .iter()
+                .find(|q| q.seq == seq)
+                .is_some_and(|q| {
+                    let id = tempo_core::contest::MergeIdentity::of(&station.log, &posid, q);
+                    copies.iter().filter(|(c, w)| id.names(c, *w)).count() > 1
+                })
+        });
+        if another {
+            tempo_core::applog::info(
+                "contest",
+                &format!(
+                    "a copy of {} was deleted from the logbook; another copy is still there, so \
+                     the contest log keeps the contact",
+                    row.call
+                ),
+            );
             return;
         }
         if club_sync {
@@ -255,11 +283,7 @@ impl Engine {
                 .rows
                 .iter()
                 .map(|q| {
-                    tempo_core::contest::qid_for(
-                        &log.session.id,
-                        &self.settings.fd_position_id,
-                        q.seq,
-                    )
+                    tempo_core::contest::MergeIdentity::of(log, &self.settings.fd_position_id, q)
                 })
                 .collect(),
             sent: ContestSentTo::default(),
@@ -322,8 +346,7 @@ fn with_logbook(
         Ok(removal) => removal,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    let qids: HashSet<String> = removal.qids.iter().cloned().collect();
-    let marks = crate::engine::log_plan(engine).merged_uploads(&qids)?;
+    let marks = crate::engine::log_plan(engine).merged_uploads(&removal.qids)?;
     let logbook = (!marks.is_empty()).then(|| holders(&marks));
     Ok(Ok(ContestRemoved { removal, logbook }))
 }

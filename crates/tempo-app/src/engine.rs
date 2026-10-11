@@ -22,6 +22,10 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+mod contest_before;
+/// The station as it was before the contest changed it: taken, kept, let go, round-tripped.
+#[cfg(test)]
+mod contest_before_tests;
 pub mod contest_entry;
 /// The contest strip's contact in progress, shared with the logger window, through the engine.
 #[cfg(test)]
@@ -29,6 +33,9 @@ mod contest_entry_tests;
 /// Each contest's own FT8/FT4 messages, Running and S&P, against a WSJT-X partner.
 #[cfg(test)]
 mod contest_ft_messages_tests;
+/// A contest log merged into the Logbook twice, across a move and a restart, through the engine.
+#[cfg(test)]
+mod contest_merge_tests;
 pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
@@ -42,6 +49,9 @@ mod field_day_display;
 mod kept_files_tests;
 mod mode_entry;
 pub mod parsec_presence;
+/// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
+#[cfg(test)]
+mod pick_switch_tests;
 pub mod radio_selection;
 pub mod receivers;
 pub mod remote_logging;
@@ -51,6 +61,10 @@ pub mod remote_selection;
 mod remote_settings;
 pub mod remote_stream;
 pub mod remote_transmit;
+/// A restored backup opens its contest session as a settings save does. Debug builds only, like
+/// `session_tests`: they read the debug build's counters.
+#[cfg(all(test, debug_assertions))]
+mod restore_session_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
@@ -2757,6 +2771,19 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// ⭐ **Which position pump owns the club link** ([`Self::fd_link_take_over`]): the
+    /// generation the newest pump's bridge carries. The shell's supervisor stops a pump and
+    /// starts the next for the same address when the contest changes; the stopped one notices
+    /// within a quarter of a second and then reports its link down, and on a LAN the next one is
+    /// often in by then. That late report took the chip Offline and the line to "Lost the host"
+    /// while the new link was up. Every call a pump makes into the mirror is checked against
+    /// this, so a stopped pump's last calls land on nothing.
+    fd_link_gen: u64,
+    /// The host's network addresses as its beacon last listed them (`fdsync::lan_addrs`): where
+    /// its hosting line tells a joiner to join. Empty while not hosting.
+    fd_host_lan: Vec<tempo_net::fdsync::LanAddr>,
+    /// Why hosting is not up, as the shell's supervisor last found ([`Self::fd_host_result`]).
+    fd_host_failure: Option<crate::fdevent::HostFailure>,
     /// ⛔ **This position's club key** — what its JOIN proves the position with, which the shell
     /// reads (or makes) once at startup and hands here ([`Self::set_fd_position_key`]). Held
     /// apart from Settings on purpose: Settings reach the screen, Remote and settings.json, and
@@ -5439,6 +5466,9 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_link_gen: 0,
+            fd_host_lan: Vec::new(),
+            fd_host_failure: None,
             fd_position_key: Default::default(),
             fd_position_key_hash: String::new(),
             fd_forwarded_seq: 0,
@@ -5898,8 +5928,8 @@ impl Engine {
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place.
     ///
     /// The operating mode is touched ONLY to reconcile Field Day with the
-    /// `fd_active` master switch — a contact in flight survives a save and stays
-    /// loggable (#100). Still heavyweight in every other respect: the TX gate
+    /// `fd_active` master switch and the contest pick — a contact in flight survives a
+    /// save and stays loggable (#100). Still heavyweight in every other respect: the TX gate
     /// generation bumps and the TX/broadcast queues are cleared, so a save is
     /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
     /// and the other narrow setters — #54).
@@ -5929,6 +5959,9 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // The address the club link line is about, before the save: a save that moves it
+        // starts the line afresh at the end of this function.
+        let club_target_was = self.fd_sync_targets().1;
         // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
         // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
         // new settings land, because after the assignment the old answer is gone and the edge is
@@ -5954,6 +5987,10 @@ impl Engine {
         // submode fields live in `Settings`, so this can change under us. See the
         // decoder rebuild at the end of this function.
         let kind_before = self.tier_mode_kind(self.tier());
+        // Whether this save moves the contest pick off the contest running, read before the new
+        // settings land for the same reason: the reconcile below ends that session and opens the
+        // new one ([`Self::save_switches_contest`]).
+        let switches_contest = self.save_switches_contest(&s);
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6083,6 +6120,11 @@ impl Engine {
         } else {
             s.active_radio
         };
+        // THE NOTE OF THE STATION BEFORE THE CONTEST is the engine's (`contest_before.rs`): read
+        // what it covers before the save lands, and hold the engine's own note over the payload's.
+        let contest_was = crate::settings::ContestBefore::of(&self.settings);
+        let contest_was_active = self.settings.fd_active;
+        let live_contest_before = self.settings.contest_before.take();
         self.settings = s;
         // A settings save can carry a new position id.
         self.sync_log_posid();
@@ -6134,6 +6176,9 @@ impl Engine {
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
             self.settings.macros.psk_profiles = live_psk_profiles;
             self.settings.macros.active_psk_profile = live_active_psk_profile;
+            // A form never writes or wipes the note; the save itself may take it or end it.
+            self.settings.contest_before = live_contest_before;
+            self.note_contest_before(contest_was, contest_was_active);
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -6244,6 +6289,15 @@ impl Engine {
         // generation still bumps and the TX/broadcast queues are still cleared
         // below, so no over planned before the save can key after it.
         if self.settings.fd_active {
+            // ⭐ A NEW PICK TAKES EFFECT ON SAVE: a save that moves the pick off the contest
+            // running ends that session here and the restore below opens the new one — the
+            // master's off half, then its on half, so the save switches exactly as turning the
+            // mode off and on does (the journal keeps the two contests' rows apart, and the new
+            // one is entered passive, in S&P). Only the pick moving does this; every other save
+            // with the master on keeps the session, as below.
+            if switches_contest {
+                self.leave_field_day();
+            }
             // Master ON. PRESERVE an already-active FD session in place: the
             // Mode::FieldDay variant carries the whole dupe-checked contest log
             // in memory, and rebuilding it would drop everything logged since
@@ -6273,13 +6327,7 @@ impl Engine {
             // Gated on actually being in FD (#100): a save made in Chat wrote
             // Chat — a no-op — and a save made mid-QSO wrote away the contact.
             // Only the FD exit ever needed this line.
-            self.mode = Mode::Chat;
-            // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
-            // sets it, and leaving it stale-true after the exit suppresses the
-            // smart auto-cycle on the next chat answer. Scoped to the reset for
-            // the same reason: outside an FD exit the flag belongs to the run
-            // that is still going.
-            self.cq_running = false;
+            self.leave_field_day();
         }
         // …and the RTTY auto-sequencer is reconciled with the SAME switch, for the same
         // reason the mode is: it caches the exchange it was armed with, so the master
@@ -6341,12 +6389,18 @@ impl Engine {
         if scope_was_on && !scope_now {
             self.clear_scope_state();
         }
+        // Another join address (or hosting switched on or off): what the link line knew was
+        // about another host.
+        if self.fd_sync_targets().1 != club_target_was {
+            self.fd_mirror.forget_host();
+        }
     }
 
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
     /// on. Called by the shell at startup (AFTER [`set_fd_log_path`](Self::set_fd_log_path),
     /// so the durable journal restores the contest log) and by
-    /// [`apply_settings`](Self::apply_settings) when a save turns the master on.
+    /// [`apply_settings`](Self::apply_settings) when a save turns the master on, or moves the
+    /// pick off the contest running.
     /// Enters passive S&P (`fieldday-sp`) so every cockpit goes FD-aware and the
     /// journal is merged in. This is the ONLY code path that auto-enters FD, and
     /// only because the operator left the master on — no date/default logic ever
@@ -6377,6 +6431,47 @@ impl Engine {
             || (!self.settings.fd_class.trim().is_empty()
                 && !self.settings.fd_section.trim().is_empty());
         self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. })
+    }
+
+    /// Whether applying `next` opens a contest session — the question a settings SAVE hands
+    /// [`with_session_rows`] as `opens`, so the session's rows are read before the lock is taken:
+    /// the master on while Field Day is not running, and a save that moves the pick off the
+    /// contest running ([`Self::save_switches_contest`]), which ends that session and opens the
+    /// new one.
+    pub fn save_opens_session(&self, next: &Settings) -> bool {
+        next.fd_active
+            && (self.mode_opens_session("fieldday-sp") || self.save_switches_contest(next))
+    }
+
+    /// ⭐ **Whether saving `next` moves the contest pick off the contest running** — the save that
+    /// switches the session (`apply_settings`): Field Day is running, the pick moved in this
+    /// save, and not to the contest already running.
+    ///
+    /// Bound to the operator's act, the pick moving, and never to a difference between the pick
+    /// and the session: a pick the rules data cannot resolve runs Field Day's session under
+    /// another id, and a save that left that pick where it was would restart the contest, its CQ
+    /// run with it, on every bonus tick. Contests compare as club sync names them
+    /// ([`crate::fdevent::canonical_contest`]: the blank default is ARRL Field Day).
+    fn save_switches_contest(&self, next: &Settings) -> bool {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return false;
+        };
+        let picked = crate::fdevent::canonical_contest(&next.fd_event);
+        picked != crate::fdevent::canonical_contest(&self.settings.fd_event)
+            && picked != crate::fdevent::canonical_contest(&station.log.session.event_id)
+    }
+
+    /// Leave Field Day for Chat: the master switch's off half, and so the first half of a save
+    /// that switches the contest ([`Self::save_switches_contest`]) — one function, so both end
+    /// a session the same way.
+    fn leave_field_day(&mut self) {
+        self.mode = Mode::Chat;
+        // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
+        // sets it, and leaving it stale-true after the exit suppresses the
+        // smart auto-cycle on the next chat answer. Scoped to the reset for
+        // the same reason: outside an FD exit the flag belongs to the run
+        // that is still going.
+        self.cq_running = false;
     }
 
     /// Is the contest the picker names one of the two Field Day events (or the blank
@@ -6490,7 +6585,9 @@ impl Engine {
     /// the three callers cannot disagree about the stored shape; returns the updated
     /// [`Settings`] for the caller to persist.
     pub fn set_fd_operator(&mut self, call: String) -> Settings {
+        let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.fd_operator = call.trim().to_ascii_uppercase();
+        self.note_contest_before(was, self.settings.fd_active);
         // The next contact is theirs, whichever path logs it (the digital sequencer's
         // included), so the running log learns the name now rather than at the next QSY.
         let operator = self.fd_row_operator();
@@ -11935,8 +12032,10 @@ impl Engine {
     /// `QsoRecord`.**
     ///
     /// Safe to run twice, and safe to run again after a restart: every row carries
-    /// `APP_NEXUS_QID`, and a row whose qid is already in the general log is skipped.
-    /// An operator who is not sure whether they already merged can simply merge again.
+    /// `APP_NEXUS_QID`, and a row whose copy is already in the general log is skipped
+    /// ([`MergeIdentity::names`](tempo_core::contest::MergeIdentity::names)) — after "I moved"
+    /// or a County edited in Settings too, and whichever build merged it. An operator who is
+    /// not sure whether they already merged can simply merge again.
     ///
     /// ⚠️ **It does NOT go through [`log_qso`](Self::log_qso), and that is the whole of
     /// §12(A).** `log_qso` enqueues every record it writes with `legs: ALL`, which is
@@ -11970,15 +12069,16 @@ impl Engine {
         matches!(self.mode, Mode::FieldDay { .. })
     }
 
-    /// [`Self::fd_merge_to_general`], planned: `seen` is every merge identity the general log held
-    /// when `plan` was taken ([`crate::station::LogPlan::merge_identities`], read with the lock
-    /// released). Made under the lock only if the log has not changed since — a row it did not
-    /// read could carry an identity it would merge again — and `Ok(None)` otherwise, changing
-    /// nothing: the caller plans again.
+    /// [`Self::fd_merge_to_general`], planned: `seen` is every merged copy the general log held
+    /// when `plan` was taken, as its merge identity and when it was made
+    /// ([`crate::station::LogPlan::merge_identities`], read with the lock released). Made under
+    /// the lock only if the log has not changed since — a row it did not read could carry an
+    /// identity it would merge again — and `Ok(None)` otherwise, changing nothing: the caller
+    /// plans again.
     pub(crate) fn fd_merge_planned(
         &mut self,
         plan: &crate::station::LogPlan,
-        seen: std::collections::HashSet<String>,
+        seen: Vec<(String, u64)>,
     ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Contest mode is not active".into());
@@ -12290,6 +12390,83 @@ impl Engine {
     /// re-porting). The journal file stays — a restart replays it.
     pub fn fd_host_stop(&mut self) {
         self.fd_club = None;
+        self.fd_host_lan.clear();
+        self.fd_host_failure = None;
+    }
+
+    /// What the shell's supervisor found when it last tried to host: `None` = the port is open
+    /// and the club is up, `Some` = why not. The host's hosting line says which.
+    pub fn fd_host_result(&mut self, failure: Option<crate::fdevent::HostFailure>) {
+        self.fd_host_failure = failure;
+    }
+
+    /// The host's network addresses, as its beacon lists them each second. Ignored while not
+    /// hosting: a beacon thread's last second after a stop describes no club.
+    pub fn fd_note_host_lan(&mut self, lan: Vec<tempo_net::fdsync::LanAddr>) {
+        if self.fd_club.is_some() {
+            self.fd_host_lan = lan;
+        }
+    }
+
+    /// ⭐ **This laptop's club link** ([`crate::dto::ClubLinkDto`]), for the screens that show it
+    /// whatever the Field Day mode switch says. `None` while club sync does not run.
+    pub fn fd_club_link(&self) -> Option<crate::dto::ClubLinkDto> {
+        let addr = self.fd_sync_targets().1?;
+        let m = &self.fd_mirror;
+        let state = m.link_state();
+        let port = self.settings.fd_host_port;
+        let hosting = self
+            .settings
+            .fd_host_enable
+            .then(|| crate::dto::ClubHostingDto {
+                up: self.fd_club.is_some() && self.fd_host_failure.is_none(),
+                port,
+                addrs: self
+                    .fd_host_lan
+                    .iter()
+                    .map(|a| crate::dto::ClubLanAddrDto {
+                        addr: format!("{}:{port}", a.ip),
+                        adapter: a.adapter.clone(),
+                    })
+                    .collect(),
+                connected: self.fd_club.as_ref().map_or(0, |club| {
+                    let own = self.settings.fd_position_id.as_str();
+                    club.positions()
+                        .keys()
+                        .filter(|pos| pos.as_str() != own && club.connected(pos))
+                        .count() as u32
+                }),
+                failed: self.fd_host_failure.as_ref().map(|f| f.code().to_string()),
+                detail: self
+                    .fd_host_failure
+                    .as_ref()
+                    .map(|f| f.detail().to_string())
+                    .unwrap_or_default(),
+            });
+        Some(crate::dto::ClubLinkDto {
+            role: if hosting.is_some() {
+                "host"
+            } else {
+                "position"
+            }
+            .to_string(),
+            addr: tempo_net::fdsync::join_target(&addr),
+            state: state.code().to_string(),
+            why: state.why().map(|why| why.code().to_string()),
+            told: (state == crate::fdevent::LinkState::TurnedAway)
+                .then(|| m.last_error.clone())
+                .flatten(),
+            down_since_unix: if matches!(state, crate::fdevent::LinkState::Lost(_)) {
+                m.down_since_unix
+            } else {
+                0
+            },
+            event: m.event.clone(),
+            host_call: m.host_call.clone(),
+            position: self.fd_position_label(),
+            club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
+            hosting,
+        })
     }
 
     pub fn fd_hosting(&self) -> bool {
@@ -12753,6 +12930,19 @@ impl Engine {
         &mut self.fd_mirror
     }
 
+    /// ⭐ **A new position pump takes the club link over** (`fdbridge::EnginePositionSync::new`,
+    /// and the shell's supervisor as it stops one): from now on every older pump's calls into
+    /// the mirror are ignored ([`Self::fd_link_owned_by`]). Returns the new owner's generation.
+    pub fn fd_link_take_over(&mut self) -> u64 {
+        self.fd_link_gen = self.fd_link_gen.wrapping_add(1);
+        self.fd_link_gen
+    }
+
+    /// Is the pump with this generation the one that owns the club link now?
+    pub fn fd_link_owned_by(&self, gen: u64) -> bool {
+        self.fd_link_gen == gen
+    }
+
     /// ⭐ **The contest this position's ROWS belong to** — the JOIN's `contest`.
     ///
     /// The live session's when Field Day is running, because that is what the rows were
@@ -12813,10 +13003,7 @@ impl Engine {
         if crate::fdevent::canonical_contest(theirs) == mine {
             return Ok(());
         }
-        Err(crate::fdevent::contest_mismatch(
-            &crate::fdevent::contest_name(theirs),
-            &mine,
-        ))
+        Err(crate::fdevent::contest_mismatch(theirs, &mine))
     }
 
     /// Presence for the club band board — the n3fjp `report_band` idea made
@@ -18127,7 +18314,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// model's copy visible after the model has been switched off would be stale text
     /// presented as live decode.
     pub fn set_unassisted_mode(&mut self, on: bool) {
+        let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.unassisted_mode = on;
+        self.note_contest_before(was, self.settings.fd_active);
         if on {
             self.ai_cw_text.clear();
             self.ai_cw_status.clear();
@@ -22959,6 +23148,8 @@ contact yourself."
                 s.field_day = self.field_day_status();
             }
         }
+        // Outside the Field Day block, which exists only while the mode is on.
+        s.club_link = self.fd_club_link();
 
         // #64, display side only: a DXpedition Fox packs two messages into one frame —
         // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
@@ -26470,10 +26661,13 @@ contact yourself."
     /// ⛔ **Three things stop this reaching a row it does not name**, and an edit that
     /// trips any of them is an ordinary general-log edit with no contest effect:
     /// a record with no contest block has an empty `qid`, which parses as nothing;
-    /// [`seq_from_qid`](tempo_core::contest::seq_from_qid) compares the WHOLE session id,
-    /// because seqs are per position and restart at 1 — so `1` names a row in every log
-    /// the operator has ever run, and last weekend's correction must not rewrite this
-    /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    /// [`merged_row`](tempo_core::contest::merged_row) holds the copy to the WHOLE identity
+    /// of the row its seq finds — this contest, this position, and the running the row was
+    /// logged in — because seqs are per position and restart at 1, so `1` names a row in
+    /// every log the operator has ever run, and last weekend's correction must not rewrite
+    /// this weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    /// A copy merged under the name an earlier build gave the row (built from where the
+    /// operator was) still reaches it, after a move and a restart too.
     pub fn update_qso(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
         let Some(after) = self.station.update_row(id, rec) else {
             return false;
@@ -26491,8 +26685,11 @@ contact yourself."
             .as_deref()
             .map_or(String::new(), |c| c.qid.clone());
         let (call, band) = (row.call.clone(), row.band.clone());
+        let posid = self.settings.fd_position_id.clone();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
-            if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
+            if let Some(seq) =
+                tempo_core::contest::merged_row(&station.log, &posid, &qid, row.when_unix)
+            {
                 // Unconditional for a row this session owns: the band is a dupe-key
                 // component too, so an edit that left the call alone still has to be
                 // propagated, and a rebuild over a log that did not move is a no-op by
@@ -26597,7 +26794,7 @@ contact yourself."
         let Some(gone) = self.station.delete_row(id) else {
             return false;
         };
-        self.contest_row_deleted(&gone);
+        self.contest_row_deleted(&gone, None);
         true
     }
 
@@ -27082,6 +27279,32 @@ pub fn act_opening_session<T>(
         }
         Ok(finish(eng))
     })?
+}
+
+/// ★ A restored backup applied ([`Engine::apply_restored_settings`]) with the contest session it
+/// opens, as a settings save opens one: a bundle that turns Contest mode on, or moves the pick
+/// off the contest running, asks [`Engine::save_opens_session`], and [`with_session_rows`] reads
+/// the session's rows first and builds its dupe sweep from them in the same hold as the restore.
+/// `then` runs in that hold too, after the restore — the shell persists there. When the logbook
+/// is too busy to read the rows, the restore is refused whole with [`SESSION_BUSY`], the Save's
+/// own words: neither it nor `then` runs.
+pub fn restore_with_session_rows<T>(
+    engine: &std::sync::Mutex<Engine>,
+    restored: Settings,
+    then: impl FnOnce(&mut Engine) -> T,
+) -> Result<T, String> {
+    let asked = restored.clone();
+    with_session_rows(
+        engine,
+        |eng| eng.save_opens_session(&asked),
+        |eng, rows| {
+            eng.apply_restored_settings(restored);
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            then(eng)
+        },
+    )
 }
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.
@@ -42919,7 +43142,7 @@ mod tests {
     /// ⛔ An edit to an ORDINARY contact must not reach the contest log at all, and an
     /// edit to a contest row from a DIFFERENT session must not either.
     ///
-    /// `seq_from_qid` compares the whole session id for exactly this reason: seqs are per
+    /// `merged_row` holds a copy to the whole identity for exactly this reason: seqs are per
     /// position and restart at 1, so `1` alone names a row in every log ever run. Without
     /// the check, correcting a call in last weekend's contest would silently rewrite this
     /// weekend's row 1 — a contact that was made, replaced by one that was not.
@@ -44992,6 +45215,208 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **A joining laptop says where its join stands, whatever the Field Day mode switch
+    /// says.** At the rehearsal the joiner typed the host's address and saw nothing: the club
+    /// block lives inside the Field Day block, which is not there while the mode is off, and
+    /// nothing anywhere said whether the address was tried, refused, unanswered or let in.
+    #[test]
+    fn the_club_link_says_where_a_join_stands_with_the_field_day_mode_off() {
+        use tempo_net::fdsync::Unreachable;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_event = "ilqp".into();
+        s.fd_position_name = "CW tent".into();
+        s.fd_join_addr = " 192.168.1.10 ".into();
+        e.apply_settings(s);
+        e.set_fd_position_key(tempo_net::fdsync::PositionKey::new(club_key_hash(
+            "this laptop",
+        )));
+        assert!(!e.settings().fd_active, "premise: the mode is off");
+        let link = |e: &Engine| e.snapshot().club_link.expect("a join address is set");
+        assert_eq!(
+            e.snapshot().field_day,
+            None,
+            "no Field Day block to carry it"
+        );
+        let l = link(&e);
+        assert_eq!(
+            (l.role.as_str(), l.addr.as_str(), l.state.as_str()),
+            ("position", "192.168.1.10:42073", "looking"),
+            "the address as it is joined, the club's port added"
+        );
+        assert_eq!(l.position, "CW tent");
+        assert_eq!(
+            l.club_code,
+            crate::fdevent::club_code(&e.fd_position_key_hash)
+        );
+        assert!(!l.club_code.is_empty());
+        assert_eq!(l.hosting, None, "a position hosts nothing");
+        // No answer there.
+        e.fd_mirror_mut().on_unreachable(Unreachable::NoAnswer);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.why.as_deref()),
+            ("unreachable", Some("noAnswer"))
+        );
+        // Turned away, in the host's own words.
+        e.fd_mirror_mut().on_link(true, 100);
+        e.fd_mirror_mut().last_error = Some("this club is on the air as W9AAA".into());
+        e.fd_mirror_mut().on_link(false, 101);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.told.as_deref()),
+            ("turnedAway", Some("this club is on the air as W9AAA"))
+        );
+        // The host gone after it: the refusal is no longer what the line quotes.
+        e.fd_mirror_mut().on_unreachable(Unreachable::NoAnswer);
+        let l = link(&e);
+        assert_eq!((l.state.as_str(), l.told.as_deref()), ("unreachable", None));
+        // In: the event, the host, this laptop's position and its code.
+        e.fd_mirror_mut().on_link(true, 120);
+        e.fd_mirror_mut()
+            .on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        let l = link(&e);
+        assert_eq!(
+            (
+                l.state.as_str(),
+                l.event.as_str(),
+                l.host_call.as_str(),
+                l.told.as_deref()
+            ),
+            ("joined", "ILQP rehearsal", "W9AAA", None)
+        );
+        // Lost, since when, and why the attempt since failed.
+        e.fd_mirror_mut().on_link(false, 200);
+        e.fd_mirror_mut().on_unreachable(Unreachable::Refused);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.why.as_deref(), l.down_since_unix),
+            ("lost", Some("refused"), 200)
+        );
+        // The JSON key the screens read.
+        assert_eq!(
+            serde_json::to_value(e.snapshot()).unwrap()["clubLink"]["state"],
+            "lost"
+        );
+        // A connection again: no longer down, so no time it went down.
+        e.fd_mirror_mut().on_link(true, 230);
+        let l = link(&e);
+        assert_eq!((l.state.as_str(), l.down_since_unix), ("looking", 0));
+        // Club sync off: no line. The control for every assertion above.
+        let mut s = e.settings().clone();
+        s.fd_join_addr.clear();
+        e.apply_settings(s);
+        assert_eq!(e.snapshot().club_link, None);
+        assert!(serde_json::to_value(e.snapshot())
+            .unwrap()
+            .get("clubLink")
+            .is_none());
+    }
+
+    /// A new join address starts the link line afresh: what it knew was about another host. The
+    /// same address saved again changes nothing.
+    #[test]
+    fn a_new_join_address_starts_the_link_line_afresh() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        e.apply_settings(s.clone());
+        e.fd_mirror_mut().on_link(true, 100);
+        e.fd_mirror_mut().last_error = Some("this club is on the air as W9AAA".into());
+        e.fd_mirror_mut().on_link(false, 101);
+        let state = |e: &Engine| e.snapshot().club_link.map(|l| l.state);
+        e.apply_settings(s.clone());
+        assert_eq!(state(&e).as_deref(), Some("turnedAway"), "the same address");
+        s.fd_join_addr = "192.168.1.11:42073".into();
+        e.apply_settings(s);
+        assert_eq!(state(&e).as_deref(), Some("looking"), "another address");
+    }
+
+    /// ⭐ **The host says that it is hosting, where a position joins it, and who is in** — or why
+    /// it is not hosting. A failed bind used to reach the Connections log only.
+    #[test]
+    fn the_host_line_says_where_to_join_and_who_is_in() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-host-line-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_fd_position_key(tempo_net::fdsync::PositionKey::new(club_key_hash(
+            "the host",
+        )));
+        let hosting = |e: &Engine| {
+            let l = e.snapshot().club_link.expect("hosting is on");
+            assert_eq!(l.role, "host");
+            assert_eq!(l.addr, "127.0.0.1:42073", "it joins itself");
+            l.hosting.expect("the host's line")
+        };
+        // Not up yet: the supervisor has not opened the port.
+        assert!(!hosting(&e).up);
+        e.fd_host_start(dir.join("club.ndjson")).unwrap();
+        // The club log is up, and the last try at the port failed: not up.
+        e.fd_host_result(Some(crate::fdevent::HostFailure::PortInUse));
+        assert!(!hosting(&e).up);
+        e.fd_host_result(None);
+        let lan = |adapter: &str, ip: [u8; 4]| tempo_net::fdsync::LanAddr {
+            adapter: adapter.into(),
+            ip: ip.into(),
+            prefix: 24,
+        };
+        e.fd_note_host_lan(vec![
+            lan("Wi-Fi", [192, 168, 1, 10]),
+            lan("Ethernet", [10, 0, 0, 5]),
+        ]);
+        let h = hosting(&e);
+        assert!(h.up);
+        assert_eq!(
+            (h.port, h.failed.as_deref(), h.detail.as_str()),
+            (42073, None, "")
+        );
+        assert_eq!(
+            h.addrs
+                .iter()
+                .map(|a| (a.addr.as_str(), a.adapter.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("192.168.1.10:42073", "Wi-Fi"),
+                ("10.0.0.5:42073", "Ethernet")
+            ]
+        );
+        assert_eq!(h.connected, 0, "nobody in yet");
+        // This laptop's own position and one more in: one other. Each leaves.
+        let own_hash = e.fd_position_key_hash.clone();
+        let other_hash = crate::fdevent::sha256_hex(&club_key_hash("the CW tent"));
+        let own = e
+            .fd_club_join(3, "eeee0001", "", "W9XYZ", "arrlfd", "", &own_hash)
+            .expect("the host's own position");
+        let other = e
+            .fd_club_join(3, "aaaa0002", "CW tent", "W9XYZ", "arrlfd", "", &other_hash)
+            .expect("a position");
+        assert_eq!(hosting(&e).connected, 1, "the other position");
+        e.fd_club_disconnect("aaaa0002", other.link);
+        assert_eq!(hosting(&e).connected, 0);
+        e.fd_club_disconnect("eeee0001", own.link);
+        assert_eq!(hosting(&e).connected, 0);
+        // The port taken by another program: not up, and why.
+        e.fd_host_stop();
+        e.fd_host_result(Some(crate::fdevent::HostFailure::PortInUse));
+        let h = hosting(&e);
+        assert!(!h.up);
+        assert_eq!(h.failed.as_deref(), Some("portInUse"));
+        assert_eq!(h.addrs, vec![], "no addresses for a club that is not open");
+        // A beacon's last second after a stop lists nothing.
+        e.fd_note_host_lan(vec![lan("Wi-Fi", [192, 168, 1, 10])]);
+        assert_eq!(hosting(&e).addrs, vec![]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -45484,8 +45909,11 @@ mod tests {
             )
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
-            refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
-            "{refused}"
+            refused.starts_with(
+                "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field \
+                 Day."
+            ),
+            "both contests as the picker names them: {refused}"
         );
         let t = 1_792_342_800; // 1700Z, 18 October 2026
         for row in [
@@ -45620,11 +46048,26 @@ mod tests {
         let other = e
             .fd_accept_host_contest("arrlfd")
             .expect_err("a host running another contest");
-        assert!(
-            other.contains("ARRL-FIELD-DAY") && other.contains("IL QSO Party"),
-            "{other}"
+        assert_eq!(
+            other,
+            "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO \
+             Party. Pick ARRL Field Day as the contest on the Contesting tab in Settings, then \
+             rejoin. Contacts you log meanwhile stay in your own log.",
+            "both contests named as the picker names them"
         );
-        // The picker moves under the running session: the rows are still the party's.
+        // A pick that differs from the running session — set here directly, because a SAVE that
+        // moves the pick switches the session with it (`save_switches_contest`): the rows are
+        // still the party's.
+        e.settings.fd_event = "wfd".into();
+        assert_eq!(
+            e.fd_position_contest(),
+            "ilqp",
+            "the JOIN names what the rows are, not what the picker says now"
+        );
+        // Saved, the pick is the act: the party ends, and Winter Field Day, with no category or
+        // section here, cannot start, so no session runs and the JOIN names the pick. (From the
+        // party's own pick: a save switches only when it MOVES the pick.)
+        e.settings.fd_event = "ilqp".into();
         {
             let mut s = e.settings().clone();
             s.fd_event = "wfd".into();
@@ -45632,8 +46075,8 @@ mod tests {
         }
         assert_eq!(
             e.fd_position_contest(),
-            "ilqp",
-            "the JOIN names what the rows are, not what the picker says now"
+            "wfd",
+            "the saved pick, with no session"
         );
 
         // A Field Day position (the blank default): an older host is served as before.

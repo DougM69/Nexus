@@ -1871,6 +1871,16 @@ export const EN = {
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
+  // THE SCORE CHIP in every contest log strip: the Contest screen's own numbers at a glance,
+  // "ILQP · 212 pts · 48 Q · 19 mults · 41/hr". One entry per reading — a list of readings,
+  // not a sentence. `{{rate}}` is a whole number, or the scoreboard's em dash before there is one.
+  'logEntry.score.points': { one: '{{count}} pt', other: '{{count}} pts' },
+  'logEntry.score.qsos': '{{count}} Q',
+  'logEntry.score.mults': { one: '{{count}} mult', other: '{{count}} mults' },
+  'logEntry.score.sections': { one: '{{count}} section', other: '{{count}} sections' },
+  'logEntry.score.rate': '{{rate}}/hr',
+  'logEntry.score.title':
+    'The contest so far, as the Contest screen counts it: your score, contacts, multipliers (sections at Field Day) and contacts per hour over your last ten.',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
   'logEntry.scp.label': 'Super Check Partial',
   'logEntry.scp.title':
@@ -3941,6 +3951,26 @@ export const EN = {
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
+  // THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning Contest mode off offers.
+  // Nothing in it is ticked to begin with, and nothing is done that the operator did not tick.
+  'contestOver.title': 'Contest over?',
+  'contestOver.desc':
+    'Contest mode goes off when you press Turn off. Tick what you want done first: nothing is done that you have not ticked.',
+  'contestOver.export': 'Export the Cabrillo log to Downloads',
+  'contestOver.putBack.legend': 'Put back what the contest changed',
+  'contestOver.putBack.note':
+    'Before is how each one was the first time it changed for this contest, or when Contest mode went on.',
+  'contestOver.putBack.now': 'Now',
+  'contestOver.putBack.before': 'Before',
+  'contestOver.putBack.aria': 'Put back {{setting}}: {{now}} back to {{before}}',
+  'contestOver.value.on': 'On',
+  'contestOver.value.off': 'Off',
+  'contestOver.value.yourCall': 'your callsign',
+  'contestOver.value.none': 'none',
+  'contestOver.value.notDeclared': 'not declared',
+  'contestOver.notNow': 'Not now',
+  'contestOver.turnOff': 'Turn off',
+  'contestOver.busy': 'Working…',
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -4062,8 +4092,10 @@ export const EN = {
   'fieldDay.mode.rule.cluster': 'DX cluster assistance is not permitted.',
   'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
   'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
-  'fieldDay.mode.picked':
-    'Picked in Settings: {{picked}}. Turn Contest mode off and on again to switch to it.',
+  // After a save of a new pick switched the running contest. `{{contest}}` and `{{previous}}` are
+  // the contests' own names, invariant.
+  'fieldDay.mode.switched':
+    'Now running {{contest}}. Saving the new pick ended {{previous}}, and its contacts stay apart from this contest\'s.',
   'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
   'fieldDay.mode.needs.two':
     'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
@@ -4116,6 +4148,22 @@ export const EN = {
   'fieldDay.club.give.refused.remote': 'Only at the host: a press through Remote gives no position.',
   'fieldDay.club.give.failed': 'Nothing changed: Nexus could not give the position. Press it again.',
   'fieldDay.club.code': 'Club code {{code}}',
+  'fieldDay.club.link.looking': 'Looking for the host at {{addr}}…',
+  'fieldDay.club.link.joined': 'Joined {{event}}, hosted by {{call}}, as {{position}}.',
+  'fieldDay.club.link.youAre': 'This laptop is {{position}} in this event.',
+  'fieldDay.club.link.turnedAway': 'Turned away by the host at {{addr}}: {{told}}',
+  'fieldDay.club.link.unreachable': 'Cannot reach the host at {{addr}}. Trying again.',
+  'fieldDay.club.link.lost': 'Lost the host at {{addr}}. Trying again.',
+  'fieldDay.club.link.why.refused': 'Nothing is listening there: check that Nexus on that laptop has Host a club event on, and that the port is the one its screen shows.',
+  'fieldDay.club.link.why.noAnswer': 'Nothing answered: check that both laptops are on the same network, that Nexus on the host has Host a club event on, and, if the host runs Windows, that its firewall lets Nexus in: press Allow Nexus through Windows Firewall in Settings ▸ Contesting on the host.',
+  'fieldDay.club.link.badAddress': '{{addr}} is not an address to join. Type the one the host shows after “Positions join at”, such as {{example}}.',
+  'fieldDay.club.link.hosting': 'Hosting on port {{port}}. Positions join at:',
+  'fieldDay.club.link.hostingNoAddress': 'Hosting on port {{port}}.',
+  'fieldDay.club.link.connected': { one: '{{count}} other position connected.', other: '{{count}} other positions connected.' },
+  'fieldDay.club.link.opening': 'Opening port {{port}} for the club event…',
+  'fieldDay.club.link.notHosting.portInUse': 'Not hosting: another program on this laptop is using port {{port}}. Close it, or set another Host port under Field Day Club Sync in Settings ▸ Contesting, and positions join at that port.',
+  'fieldDay.club.link.notHosting.port': 'Not hosting: port {{port}} could not be opened ({{detail}}). Set another Host port under Field Day Club Sync in Settings ▸ Contesting.',
+  'fieldDay.club.link.notHosting.start': 'Not hosting: {{detail}}',
   'fieldDay.club.code.title': "This laptop's club code. Before the host gives a laptop a club position, it checks the code on its own screen against the one on that laptop's.",
   'fieldDay.club.give.confirm.aria': 'Give this laptop its position?',
   'fieldDay.club.give.confirm.head': 'Give the position to the laptop whose club code is:',
@@ -4202,7 +4250,7 @@ export const EN = {
   // Shown beside the picker while a contest session runs. `{{contest}}` is the running contest's
   // own name, invariant.
   'settings.contestPick.contest.running':
-    'Contest mode is on for {{contest}}. A new pick takes effect after you save it and turn Contest mode off and on again.',
+    'Contest mode is on for {{contest}}. Saving a different pick ends it and starts the new one at once, without calling CQ. Each contest keeps its own contacts.',
   'settings.contestPick.role.label': 'Your role',
   'settings.contestPick.role.value': 'Your station is {{role}}. Your location decides this, so moving across the line changes it.',
   'settings.contestPick.role.symmetric':
@@ -4457,7 +4505,31 @@ export const EN = {
   'settings.fdClub.legend': 'Field Day Club Sync',
   'settings.fdClub.host.label': 'Host a club event',
   'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
-  'settings.fdClub.firewall.hint': 'Allow Nexus through your computer\'s firewall (on Windows, on Private networks): a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373. Nexus adds no firewall rule of its own.',
+  'settings.fdClub.firewall.hint': 'A club event uses TCP {{host}} (the Host port), UDP {{search}} (Find club events) and TCP {{board}} (the club TV scoreboard). A firewall that is on must let Nexus in on them.',
+  // Windows only: the button that adds Nexus's own three rules through one administrator prompt,
+  // and the lines that say where they stand (`features/clubFirewall.ts`).
+  'settings.fdClub.firewall.allow': 'Allow Nexus through Windows Firewall',
+  'settings.fdClub.firewall.nothing': 'Nothing to allow',
+  'settings.fdClub.firewall.remove': 'Remove Nexus\'s firewall rules',
+  'settings.fdClub.firewall.busy': 'Waiting for Windows…',
+  'settings.fdClub.firewall.unread': 'Nexus could not read Windows Firewall on this laptop.',
+  'settings.fdClub.firewall.off': 'Windows Firewall is off on this laptop for Private and Public networks, so there is nothing to allow.',
+  'settings.fdClub.firewall.missing': 'Nexus has no club sync rule in Windows Firewall on this laptop yet.',
+  'settings.fdClub.firewall.stale': 'Nexus\'s club sync rules in Windows Firewall are out of date (made for another port, or another copy of Nexus). Press Allow Nexus through Windows Firewall again.',
+  'settings.fdClub.firewall.inPlace': 'Nexus\'s club sync rules are in Windows Firewall for Private and Public networks: TCP {{host}}, UDP {{search}} and TCP {{board}}.',
+  'settings.fdClub.firewall.blocked.private': 'Windows also blocks Nexus on Private networks with a rule of its own (what Cancel at its question leaves), and a block wins over every allow. Delete it in Windows Defender Firewall ▸ Advanced settings ▸ Inbound Rules: the Nexus rules with a block sign.',
+  'settings.fdClub.firewall.blocked.public': 'Windows also blocks Nexus on Public networks with a rule of its own (what Cancel at its question leaves), and a block wins over every allow. Delete it in Windows Defender Firewall ▸ Advanced settings ▸ Inbound Rules: the Nexus rules with a block sign.',
+  'settings.fdClub.firewall.blocked.both': 'Windows also blocks Nexus on Private and Public networks with rules of its own (what Cancel at its question leaves), and a block wins over every allow. Delete them in Windows Defender Firewall ▸ Advanced settings ▸ Inbound Rules: the Nexus rules with a block sign.',
+  'settings.fdClub.firewall.blocksAll.private': 'Windows Firewall blocks every incoming connection on Private networks, whatever is allowed. Turn that off under Windows Security ▸ Firewall & network protection ▸ Private network.',
+  'settings.fdClub.firewall.blocksAll.public': 'Windows Firewall blocks every incoming connection on Public networks, whatever is allowed. Turn that off under Windows Security ▸ Firewall & network protection ▸ Public network.',
+  'settings.fdClub.firewall.blocksAll.both': 'Windows Firewall blocks every incoming connection on Private and Public networks, whatever is allowed. Turn that off for each under Windows Security ▸ Firewall & network protection.',
+  'settings.fdClub.firewall.press.allowFailed': 'Windows did not add Nexus\'s rules: its administrator prompt was declined, or a step failed.',
+  'settings.fdClub.firewall.press.removeFailed': 'Windows did not remove Nexus\'s rules: its administrator prompt was declined, or a step failed.',
+  'settings.fdClub.firewall.press.onAir': 'Not while transmitting: Windows\' administrator prompt takes the whole screen, Stop with it. Press again when the over ends.',
+  'settings.fdClub.firewall.press.running': 'Windows is still asking about the last press.',
+  'settings.fdClub.firewall.press.path': 'Nexus cannot name its own program in a rule from the folder it runs from (a % in its name, or a character Windows\' command line would misread). Allow Nexus by hand under Windows Security ▸ Firewall & network protection ▸ Allow an app through firewall, on Private and Public networks.',
+  'settings.fdClub.firewall.press.port': 'A rule cannot name port 0: set the Host port and the scoreboard\'s port first.',
+  'settings.fdClub.firewall.press.failed': 'Nexus could not ask Windows: {{detail}}',
   'settings.fdClub.host.note': 'Positions on this network can now find and join this event. There is no join password — a club site LAN is trusted, and anyone on it could add rows to the club log, which you will see. If this PC dies, enable hosting on any other position: everyone re-joins and nothing is lost.',
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
@@ -4471,7 +4543,7 @@ export const EN = {
   'settings.fdClub.join.hostingHint': 'Hosting — this position joins its own event automatically.',
   'settings.fdClub.discover.action': 'Find club events',
   'settings.fdClub.discover.busy': 'Listening…',
-  'settings.fdClub.discover.empty': 'Nothing heard in 2 s — same network? Some Wi-Fi blocks discovery; type the host address instead.',
+  'settings.fdClub.discover.empty': 'Nothing heard in {{secs}} s. Check that the host has Host a club event on, that both laptops are on the same network (some Wi-Fi keeps laptops apart), and, on Windows, that this laptop\'s firewall lets Nexus hear the host: press Allow Nexus through Windows Firewall, above. Or type the address the host shows after “Positions join at” into Join event at.',
   'settings.fdClub.discover.pick.label': '{{event}} — {{host}}',
   'settings.fdClub.discover.pick.title': 'Use {{host}} as the join address',
   // ---- Connect on the TV (the read-only LAN page). The toggle IS the LAN opt-in,
@@ -8276,8 +8348,6 @@ export const EN = {
     'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.',
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
-  'settings.features.fieldDay.hint':
-    'For {{contest}}, the contest picked on the Contesting tab. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
@@ -10522,11 +10592,11 @@ export const EN = {
   'phone.rxDsp.agc.off': 'Off',
 
   // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
-  // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
+  // F-key names stay as they are, and `{{slot}}` is the number one of them carries; `{{label}}` is the
   // operator's own name for a slot and is never translated. `{{hint}}` is the Mac Fn-key note
   // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
-  'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
-  'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
+  'phone.keyer.hint': 'click a slot or press its F-key to send · Esc stops',
+  'phone.keyer.hint.mac': 'click a slot or press Fn with its F-key to send · Esc stops',
   // `{{exchange}}` is the running contest's exchange, a token; the element around it comes
   // from the call site.
   'phone.keyer.fd.hint':

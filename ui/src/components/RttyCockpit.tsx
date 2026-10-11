@@ -16,6 +16,7 @@ import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
@@ -1251,6 +1252,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <CockpitPaneFrame
           title={t('rtty.pane.log.title')}
           paneId="log"
+          // The contest score chip rides in this head: the strip below has no room left for it.
+          actions={snap.fieldDay ? <ContestScoreChip place="head" fieldDay={snap.fieldDay} /> : undefined}
           weight={1.5}
           split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
@@ -1277,6 +1280,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             fillExchange={fillExchange}
             onSnap={onSnap}
             fieldDay={snap.fieldDay ?? null}
+            scoreChip={false}
             active={active}
             fdMode="DIG"
             fdSubmode={RTTY}
