@@ -102,20 +102,25 @@ rather than 290 px of checkboxes between you and the log.
 ### FT8 and FT4 in each contest
 
 On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
-answers, and **S&P** answers the first CQ it hears once you turn TX on. What
-they send depends on the contest, and is what WSJT-X sends in it (here K1ABC in
-FN42 works W9XYZ in EN37):
+answers, and **S&P** answers the first CQ it hears once you turn TX on. On the FT
+cockpit, **Call CQ** is the contest's Running, and a double-click on a CQ works
+that station in the contest's S&P. What they send depends on the contest, and is
+what WSJT-X sends in it (here K1ABC in FN42 works W9XYZ in EN37). The last column
+is the special operation the WSJT-X UDP Status message reports, as WSJT-X reports
+it in that contest:
 
-| Contest | Running sends | S&P sends | The contest log keeps |
-|---|---|---|---|
-| ARRL Field Day | `CQ FD K1ABC FN42`, `W9XYZ K1ABC R 2B EMA` | `W9XYZ K1ABC 2B EMA`, `W9XYZ K1ABC RR73` | class and section |
-| ARRL January, June and September VHF (WSJT-X's NA VHF Contest mode) | `CQ TEST K1ABC FN42`, `W9XYZ K1ABC R FN42`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC RR73` | the grid each way |
-| Sweepstakes, CQ WW, CQ WPX, and the California, Ohio, Tennessee and Texas QSO parties (no WSJT-X contest mode) | `CQ K1ABC FN42`, `W9XYZ K1ABC -12`, `W9XYZ K1ABC RR73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC R-12`, `W9XYZ K1ABC 73` | the call only |
+| Contest | Running sends | S&P sends | The contest log keeps | UDP special operation |
+|---|---|---|---|---|
+| ARRL Field Day | `CQ FD K1ABC FN42`, `W9XYZ K1ABC R 2B EMA`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC 2B EMA`, `W9XYZ K1ABC RR73` | class and section | 3, Field Day |
+| ARRL January, June and September VHF (WSJT-X's NA VHF Contest mode) | `CQ TEST K1ABC FN42`, `W9XYZ K1ABC R FN42`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC RR73` | the grid each way | 1, NA VHF |
+| Sweepstakes, CQ WW, CQ WPX, and the California, Ohio, Tennessee and Texas QSO parties (no WSJT-X contest mode) | `CQ K1ABC FN42`, `W9XYZ K1ABC -12`, `W9XYZ K1ABC RR73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC R-12`, `W9XYZ K1ABC 73` | the call only | 0, none |
 
 Outside Field Day, Running and S&P need your grid in Settings before they
 transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
 FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
-Day's messages, as they always have.
+Day's messages, as they always have, and Field Day's runner closes without the
+73. In those three contests the FT cockpit's Call CQ and double-click work
+outside the contest, as before, and the UDP special operation is 0.
 
 ### An operator and a logger on one radio
 
@@ -152,8 +157,10 @@ The club story is native:
   N1MM-networked dashboards.
 
 Both are fire-and-forget on background threads, so a hung logging PC can never
-stall your TX slot. The WSJT-X UDP Status message sets `special_op = Field Day`,
-so JTAlert/GridTracker auto-activate their FD behavior too.
+stall your TX slot. During ARRL Field Day the WSJT-X UDP Status message reports
+`special_op = Field Day`, as WSJT-X does, so JTAlert/GridTracker auto-activate
+their FD behavior too. Winter Field Day reports none, since WSJT-X has no mode
+for it.
 
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 [N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
@@ -330,10 +337,12 @@ reaches the contact.
   a hint from the log, and nothing is ticked for you.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
-- **A double-click on an FT8 or FT4 decode works that station outside the
-  contest**, in any contest: it sends the standard FT8 messages and the contact
-  goes to your log, not the contest log. For a contest contact, use S&P on the
-  Contest screen.
+- **Only a double-click on a CQ works the station in the contest.** A
+  double-click on a station that is calling you, a roster or station card click,
+  the Tx1 to Tx6 rows, and a reply from JTAlert or GridTracker still work the
+  station outside the contest with the standard FT8 messages, and the contact goes
+  to your log, not the contest log. The FT cockpit's S&P button also leaves the
+  contest: use S&P on the Contest screen.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
   position.

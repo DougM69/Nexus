@@ -570,7 +570,8 @@ HaltTx / FreeText control datagrams. The service loop wires these to the engine:
 `HaltTx` → `engine.halt_tx()` + drop PTT; `FreeText { send: true }` →
 `engine.broadcast(text)`. Each RX slot's decodes are sent as Decode datagrams; a
 Status datagram reflects dial/mode/TX state (with `tr_period` = 4 for TempoFast, 15 for
-the robust tiers, and `special_op = 3` in Field Day); newly-logged Field Day
+the robust tiers, and `special_op` the running contest's WSJT-X activity: 3 in ARRL
+Field Day, 1 in the ARRL VHF contests, 0 in the others); newly-logged Field Day
 contacts emit QSOLogged.
 
 **PSK Reporter** (`pskreporter.rs`): the IPFIX-like UDP spot upload to

@@ -184,16 +184,17 @@ The bonus checklist is ARRL Field Day's. Winter Field Day has no bonus list: it 
 
 ## All-Mode Logging
 
-### Digital (TempoFast auto-sequencer)
+### Digital (FT8, FT4 and TempoFast auto-sequencer)
 
-When the FD workspace is open and a digital contact is in progress, the TempoFast auto-sequencer handles the 4-step exchange autonomously once you initiate:
+When the FD workspace is open and a digital contact is in progress, the auto-sequencer handles the exchange once you start it:
 
-- **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → logs the QSO.
-- **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log.
+- **S&P** (Search-and-Pounce): double-click a CQ decode → sequencer sends your exchange → accepts their roger → sends RR73 and logs the QSO. On FT8 and FT4 this works from the FT cockpit too: your exchange goes out in the period opposite theirs, and afterwards you are in the contest's S&P, which with TX on answers the next CQ it hears from a station you have not worked. A double-click on a station that is calling you, and a click on a roster row, still work the station outside the contest.
+- **Running**: answer an incoming exchange → roger with your exchange → accept their RR73 → log. On FT8 and FT4 the run then sends 73, as WSJT-X does, and calls CQ FD again. On TempoFast it goes straight back to CQ FD.
+- **Call CQ** on the FT cockpit, with Field Day mode on, is the contest's Running (`CQ FD`), the same as the Running button on the Contest screen. If your class or section is not filled in, it tells you so and calls nothing. The Tx6 row still sends exactly the CQ it shows, outside the contest.
 
 Opening **Contest** in the left bar with Field Day mode on, coming from another mode, starts the contest in **Search-and-Pounce**; it never starts calling CQ. If you are already in the contest, running or in S&P, it opens the screen and leaves you as you were: a run keeps calling CQ while you check the score, and a contact in progress carries on. With the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
 
-The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while FD mode is active. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
+The WSJT-X UDP `Status` message carries the special operation WSJT-X reports for the contest that is running: `special_op = 3` (Field Day) in ARRL Field Day, 1 (NA VHF) in the ARRL VHF contests, and 0 in the others. Winter Field Day is 0, because WSJT-X has no Winter Field Day mode. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker activate their FD-specific behavior during ARRL Field Day without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
 ### CW
 

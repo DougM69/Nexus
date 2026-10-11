@@ -283,6 +283,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Running in ARRL Field Day on FT8 and FT4 answers the caller's RR73 with 73**, as WSJT-X does,
+  and then calls CQ FD again. FT1 and Winter Field Day close as before, without the 73.
+  NEEDS-BENCH: a contact with a station running WSJT-X in Field Day mode.
 - **A park clicked on the Needed board fills the log line instead of setting a hunt.** Clicking a
   POTA or SOTA activator that works in Phone or CW, on the board in its own window or wherever it
   shows, puts the station's call and the park in that cockpit's log line, and the contact you log
@@ -396,6 +399,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmit. Field Day, FT1, and the contests that ban FT8 and FT4 (Winter Field Day, Illinois and
   New York) are unchanged. NEEDS-BENCH: each contest on FT8 into a dummy load, and a contact with a
   station running WSJT-X in NA VHF Contest mode.
+- **A double-click on a CQ during an FT8/FT4 contest works the station in the contest.** It used to
+  leave the contest and answer with the standard FT8 messages, which a station in WSJT-X's Field Day
+  or NA VHF Contest mode never answers, and the contact went to your own log. It now sends the
+  contest's exchange (your grid in the ARRL VHF contests and in the contests WSJT-X has no mode
+  for), logs to the contest log and leaves you in the contest's S&P, as the Field Day manual says;
+  with TX on, that S&P answers the next CQ it hears. A double-click on a station calling you, a
+  roster click, FT1 and FT2, and the contests that ban FT8 and FT4 are unchanged. NEEDS-BENCH: FT8
+  into a dummy load, and a contact with a station running WSJT-X in Field Day mode.
+- **Call CQ on the FT cockpit calls the contest's CQ while a contest runs.** It used to start a
+  plain FT8 CQ outside the contest, and opening the Contest screen then put you back in S&P. It is
+  now the contest's Running, the same as the Contest screen's button: `CQ FD`, `CQ TEST` in the
+  ARRL VHF contests, or the plain CQ where WSJT-X has no contest mode, and the run keeps going
+  while you check the score. If the contest's exchange is not filled in, Call CQ says what is
+  missing and calls nothing. The Tx6 row still sends the CQ it shows. NEEDS-BENCH: FT8 into a
+  dummy load.
+- **JTAlert and GridTracker see the contest WSJT-X would report.** The WSJT-X UDP Status message
+  said Field Day for every contest. It now says Field Day in ARRL Field Day, NA VHF in the ARRL
+  VHF contests and none in the others, Winter Field Day included, as WSJT-X does. NEEDS-BENCH:
+  JTAlert or GridTracker reading Nexus in Field Day and in a VHF contest.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
