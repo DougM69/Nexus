@@ -384,6 +384,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Illinois QSO Party: a county line typed with `+` (`COOK+WILL`, the way N3FJP takes it) logs
+  one contact per county, exactly as `COOK/WILL` does.** It was logged as a single contact whose
+  county was the text `COOK+WILL`, and a stray `+` was dropped (`COOK+` logged as Cook) where a
+  stray `/` is refused; the two marks now give the same counties, dupes, score and Cabrillo lines.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

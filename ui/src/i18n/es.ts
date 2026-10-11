@@ -2235,7 +2235,7 @@ export const ES: PartialCatalog = {
   "logEntry.shared.changed": "The contact changed in the other window before it was logged. Check it and log it again.",
   "logEntry.countyLine.repeated": "{{value}} está dos veces en esta línea de condados.",
   "logEntry.countyLine.tooMany": "Una línea de condados cuenta como máximo {{max}} condados.",
-  "logEntry.countyLine.incomplete": "Completa la línea de condados: de 2 a {{max}} condados separados por /.",
+  "logEntry.countyLine.incomplete": "Completa la línea de condados: de 2 a {{max}} condados separados por / o +.",
   "logEntry.contest.location.blank": "Tu indicativo es de EE. UU. o Canadá, pero no hay estado o provincia de concurso configurado, así que Nexus enviará el intercambio DX sin QTH. Configúralo en Ajustes › Concursos, o ignora esto si operas fuera de EE. UU. y Canadá.",
   "logEntry.contest.location.unlisted": "{{typed}} no es un estado o provincia que liste este concurso, así que Nexus enviará el intercambio DX sin QTH. Configura el tuyo en Ajustes › Concursos, o ignora esto si operas fuera de EE. UU. y Canadá.",
   "logEntry.contest.location.hint": "¿Querías decir {{codes}}?",

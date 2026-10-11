@@ -2634,7 +2634,7 @@ export const DE: PartialCatalog = {
   "logEntry.shared.changed": "The contact changed in the other window before it was logged. Check it and log it again.",
   "logEntry.countyLine.repeated": "{{value}} steht zweimal in dieser County-Linie.",
   "logEntry.countyLine.tooMany": "Eine County-Linie zählt höchstens {{max}} Countys.",
-  "logEntry.countyLine.incomplete": "County-Linie vervollständigen: 2 bis {{max}} Countys, durch / getrennt.",
+  "logEntry.countyLine.incomplete": "County-Linie vervollständigen: 2 bis {{max}} Countys, durch / oder + getrennt.",
   "logEntry.contest.location.blank": "Dein Rufzeichen liegt in den USA oder Kanada, aber es ist kein Contest-Bundesstaat und keine Provinz gesetzt, also sendet Nexus den DX-Austausch ohne QTH. Trag ihn unter Einstellungen › Contest ein, oder ignoriere das, wenn du außerhalb der USA und Kanadas funkst.",
   "logEntry.contest.location.unlisted": "{{typed}} ist kein Bundesstaat und keine Provinz, die dieser Contest kennt, also sendet Nexus den DX-Austausch ohne QTH. Trag deinen unter Einstellungen › Contest ein, oder ignoriere das, wenn du außerhalb der USA und Kanadas funkst.",
   "logEntry.contest.location.hint": "Meintest du {{codes}}?",
