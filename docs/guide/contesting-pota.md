@@ -347,9 +347,6 @@ reaches the contact.
   Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
   line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
   Nexus shows is WPX's, and the sponsor works out its own.
-- **The Satellites section's log strip doesn't join Field Day yet** — unlike the
-  CW and Phone strips it stays on the general log while a session runs. Not a
-  design choice; not wired up yet.
 - **You can't tell the Field Day log which band a contact was on** — it records
   a band per contact, but always the one the radio is on at the moment you type
   the entry; nothing lets you name a different one. Log as you work, not

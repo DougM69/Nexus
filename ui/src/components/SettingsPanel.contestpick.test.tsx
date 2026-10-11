@@ -215,6 +215,34 @@ describe('the contest picker', () => {
   })
 })
 
+// A pick made while a contest runs waits for Contest mode to go off and on again (the session
+// is kept across every save, which is what protects its log). Only the Contest screen said
+// so; the place the pick is made said nothing.
+describe('beside the picker while Contest mode is running a contest', () => {
+  const RUNNING = (contest: string) =>
+    `Contest mode is on for ${contest}. A new pick takes effect after you save it and turn Contest mode off and on again.`
+
+  it('says a new pick waits for Contest mode to go off and on, naming the contest running', async () => {
+    renderPanel({ event: 'ilqp', role: 'in_state' })
+    await openContesting()
+    const line = await screen.findByText(RUNNING('Illinois QSO Party'))
+    expect(line.closest('.settings-field')).toBe(await groupFor('Contest'))
+  })
+
+  it('a session with no contest id is ARRL Field Day', async () => {
+    renderPanel({ event: '', role: '' })
+    await openContesting()
+    expect(await screen.findByText(RUNNING('ARRL Field Day'))).not.toBeNull()
+  })
+
+  it('CONTROL: with no contest running, a pick starts with the next session, and it says nothing', async () => {
+    renderPanel()
+    await openContesting()
+    expect((await groupFor('Contest')).textContent).toContain('Which contest you are entering.')
+    expect(screen.queryByText(/A new pick takes effect/)).toBeNull()
+  })
+})
+
 describe('the role / category block', () => {
   it('says there is no role to choose when the contest is symmetric', async () => {
     renderPanel({ role: '' })
@@ -224,12 +252,55 @@ describe('the role / category block', () => {
     ).not.toBeNull()
   })
 
-  it('names the live role, read-only, when the session has one', async () => {
+  it('names the live role in words, read-only, when the session has one', async () => {
     renderPanel({ role: 'in_state' })
     await openContesting()
-    expect(await screen.findByText(/Running as in_state/)).not.toBeNull()
+    expect(
+      await screen.findByText(
+        'Your station is in-state. Your location decides this, so moving across the line changes it.',
+      ),
+    ).not.toBeNull()
+    // Never the rules data's id: it read "Running as in_state".
+    expect((await groupFor('Your role')).textContent).not.toContain('in_state')
     // READ-ONLY: nothing in the role field is a control.
     expect((await groupFor('Your role')).querySelector('button, input, select')).toBeNull()
+  })
+
+  it.each([
+    ['out_of_state', 'out-of-state'],
+    ['w_ve', 'W/VE'],
+    ['dx', 'DX'],
+  ])('names the %s role as %s', async (role, words) => {
+    renderPanel({ role })
+    await openContesting()
+    expect(
+      await screen.findByText(
+        `Your station is ${words}. Your location decides this, so moving across the line changes it.`,
+      ),
+    ).not.toBeNull()
+  })
+
+  it('names the role the saved settings would start in, in words, before the contest runs', async () => {
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({
+        event: 'cqww_rtty',
+        rulesYear: 2026,
+        bannedModes: [],
+        spottingAllowed: true,
+        clusterAllowed: true,
+        enforcement: 'warn',
+        role: 'w_ve',
+        exchange: ['599', '4', 'IL'],
+        problem: '',
+      } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(
+      await screen.findByText(
+        'Your station is W/VE. Your location decides this, so moving across the line changes it.',
+      ),
+    ).not.toBeNull()
   })
 
   it('shows the W/VE warning the saved settings would start the contest with', async () => {

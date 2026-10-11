@@ -118,7 +118,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, isFieldDay } from '../fdEvent'
+import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -12087,6 +12087,14 @@ export function SettingsPanel({
                   ))}
                 </div>
                 <span className="settings-hint">{t('settings.contestPick.contest.hint')}</span>
+                {/* While a contest runs, a pick waits for Contest mode to go off and on again:
+                    the session is kept across every save, which is what protects its log. The
+                    Contest screen says so beside its switch; this is where the pick is made. */}
+                {fieldDay && (
+                  <span className="settings-hint">
+                    {t('settings.contestPick.contest.running', { contest: contestName(fieldDay.event || 'arrlfd') })}
+                  </span>
+                )}
               </div>
 
               {/* ⭐ THE ROLE / CATEGORY BLOCK.
@@ -12107,12 +12115,12 @@ export function SettingsPanel({
                 <span className="settings-label">{t('settings.contestPick.role.label')}</span>
                 {/* THE LIVE SESSION'S role wins when there is one — it is the role
                     contacts are actually going out under. Otherwise the preview, which
-                    is what starting the contest right now would produce. A role id is
-                    an invariant token, as is the exchange it sends. */}
+                    is what starting the contest right now would produce. The role is
+                    shown in words, never its id; the exchange it sends is invariant. */}
                 <span className="settings-hint">
                   {(fieldDay?.role ?? rulesetPreview?.role)
                     ? t('settings.contestPick.role.value', {
-                        role: fieldDay?.role || rulesetPreview?.role || '',
+                        role: contestRoleWords(fieldDay?.role || rulesetPreview?.role || ''),
                       })
                     : t('settings.contestPick.role.symmetric')}
                 </span>

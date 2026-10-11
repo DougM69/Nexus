@@ -47,7 +47,7 @@ import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../feature
 import { ENTRY_CHANGED, ENTRY_LOGGED, useSharedEntry, type StripContent } from '../features/contestEntryShare'
 import type { EsmHost } from '../features/esmHost'
 import { esmRefusalText, esmStepName } from '../features/esmWords'
-import { isFieldDay } from '../fdEvent'
+import { contestRoleWords, isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
 import { placeCode, placeName } from '../features/otaStates'
@@ -2204,8 +2204,8 @@ export function LogEntry({
                 {/* The ROLE, beside the exchange, so an operator can see which one
                     they are in before they cross a line that ends the session. Blank
                     for a symmetric contest — both Field Day events — and shown only
-                    when it names something. A role id is an invariant token. */}
-                {fieldDay?.role ? <span className="le-fd-role"> {fieldDay.role}</span> : null}
+                    when it names something. In words (in-state, W/VE…), never its id. */}
+                {fieldDay?.role ? <span className="le-fd-role"> {contestRoleWords(fieldDay.role)}</span> : null}
               </span>
               {movingTo === null ? (
                 <>
