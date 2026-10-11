@@ -1617,6 +1617,18 @@ fn the_next_running_and_another_contest_hold_none_of_the_partys_contacts() {
     other.restore_journal(&journal, week - FOUR_DAYS, week);
     assert_eq!(calls(&other), Vec::<&str>::new(), "CQ WW a week on");
     assert_eq!(journal_calls(&other.journal_adif()), ["K9AAA", "W9BBB"]);
+
+    // At the window's very edge (the party's first contact four days back to the second), CQ WW
+    // holds them both, and reads neither into its log.
+    let edge = SUN + FOUR_DAYS;
+    let mut at_edge = FieldDayLog::new(
+        "W9AWE",
+        ContestSession::for_ruleset(cqww, &zone).expect("CQ WW"),
+        "20m",
+    );
+    at_edge.restore_journal(&journal, edge - FOUR_DAYS, edge);
+    assert_eq!(calls(&at_edge), Vec::<&str>::new(), "at the window's edge");
+    assert_eq!(at_edge.held(), (2, 0), "at the window's edge");
 }
 
 /// ⭐ **Another contest's session lets none of the party's contacts go while the party's running
