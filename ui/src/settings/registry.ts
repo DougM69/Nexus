@@ -494,8 +494,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   // ---- Contesting --------------------------------------------------------------
   // The contest itself comes FIRST on this tab: it decides the exchange, the dupe rule,
   // the multiplier universe and the Cabrillo headers, so every section under it belongs
-  // to whichever contest is picked. `Field Day Setup` is the setup for the two Field Day
-  // events, and the families in later batches land in this picker rather than beside it.
+  // to whichever contest is picked. `Contest mode` holds the switch that starts it, and the
+  // families in later batches land in this picker rather than beside it.
   {
     id: 'contest-pick',
     label: 'Contest',
@@ -510,8 +510,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —
   // a QSO party sends the county or the state, Sweepstakes sends the check — and
-  // above Field Day Setup, which is the setup for one pair of contests rather than
-  // for the station.
+  // above Contest mode, which starts the contest rather than describing the station.
   {
     id: 'contest-station',
     label: 'Your station data',
@@ -529,7 +528,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
   // The contest strip's two aids: the Super Check Partial list Nexus downloads and the
   // call-history file the operator imports. Under Contest Category because its Unassisted
-  // switch turns both off, and above Field Day Setup because both serve every contest.
+  // switch turns both off. Both serve every contest.
   {
     id: 'scp-call-history',
     label: 'Super Check Partial and call history',
@@ -539,8 +538,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'exchange fill', 'partial match'],
   },
   // Enter Sends Message: a switch per cockpit (CW, RTTY, Phone), off until the operator turns it
-  // on, and the steps each cockpit's macro set sends. With the contest's own sections, above
-  // Field Day's: it works in every contest the picker runs.
+  // on, and the steps each cockpit's macro set sends. With the contest's own sections: it works
+  // in every contest the picker runs.
   {
     id: 'contest-keys',
     label: 'Enter Sends Message',
@@ -548,12 +547,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['esm', 'n1mm esm', 'enter key', 'run', 's&p', 'search and pounce', 'call once',
       'role picker', 'steps', 'next message', 'his call', 'tu'],
   },
+  // CONTEST MODE: the switch that starts the picked contest, what it needs when the pick is
+  // Field Day (the class, the section, ARRL Field Day's power multiplier), and the rules data
+  // every contest reads. It was "Field Day Setup" while its switch already started every
+  // contest; the id stays `field-day` (a public name), and the old label is in SECTION_ALIASES.
   {
     id: 'field-day',
-    label: 'Field Day Setup',
+    label: 'Contest mode',
     tab: 'contesting',
-    keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
-      'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
+    keywords: ['contest mode', 'field day mode', 'start the contest', 'field day', 'arrl', 'class',
+      'section', 'exchange', 'power multiplier', 'winter field day', 'rules', 'rules year',
+      'rules update', 'wfd'],
   },
   // A club site answers "who are you?" three different ways — the call that goes on the air,
   // the tent you are sitting in, and the person at the key — and all three already existed as
@@ -670,7 +674,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Features',
     tab: 'appearance',
     keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
-      'pota', 'setup wizard', 'field day mode'],
+      'pota', 'setup wizard', 'field day mode', 'contest mode'],
   },
   {
     id: 'app-updates',
@@ -767,6 +771,9 @@ export const SECTION_ALIASES: Record<string, string> = {
   'logbook-qsl': 'confirmations',
   'qsl-services': 'confirmations',
   'setup-health': 'radios',
+  // The Contest mode section's old LABEL (its id never changed): a pointer to "Field Day Setup"
+  // lands on it, and the docs guard and the manual's generator read the name as dead.
+  'field-day-setup': 'field-day',
 }
 
 /** Where a deep link should land: a tab, and optionally a section to scroll to. */

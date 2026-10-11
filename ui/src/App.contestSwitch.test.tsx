@@ -226,7 +226,7 @@ async function openSettingsContesting() {
   return waitFor(() => {
     const section = document.querySelector('#settings-field-day') as HTMLElement | null
     expect(section).not.toBeNull()
-    return within(section!).getByRole('switch', { name: /Field Day mode/ })
+    return within(section!).getByRole('switch', { name: /^(Enable|Disable) Contest mode: ARRL Field Day$/ })
   }, WAIT)
 }
 

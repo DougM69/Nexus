@@ -302,6 +302,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
 
+- **Field Day mode is now Contest mode: one switch for whichever contest is picked.** It always
+  started the contest picked in Settings ▸ Contesting ▸ Contest, a QSO party or CQ WW as much as Field
+  Day, and the contest log strip (its dupe check, Super Check Partial, call history, Enter Sends
+  Message and Ctrl+D), the operator box, the Contest screen and the exports work in every contest it
+  starts, as club sync does in every contest it can run. Now its name says so, at the top of the
+  Contest screen, in Settings ▸ Contesting and in Settings ▸ Appearance ▸ Features, and it names the
+  contest: "Enable Contest mode: Illinois QSO Party". Its Settings section is called Contest mode, no
+  line shown for another contest says Field Day, and ARRL Field Day's power multiplier shows only
+  when ARRL Field Day is picked. Turned on from the features list, it now opens the Contesting tab
+  whenever the picked contest is missing something, a QSO party's county included, not only Field
+  Day's class or section. Your saved setting carries over as it is. The exported files are named for
+  the contest too (`ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`) rather than `fd-…`; a QSO party
+  shows your side in words (in-state, out-of-state, W/VE or DX) in Settings and beside Sending on the
+  log strip, never `in_state`; while a contest runs, Settings says beside the picker that a new pick
+  takes effect after you save it and turn Contest mode off and on again; the upload switch under the
+  merge button reads "Upload merged contacts to:"; and the N3FJP and N1MM settings, the Club Board
+  window and the Remote page's contest view describe whichever contest is running.
 - **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
   Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
   elevation boxes, with the line for the call in your log entry under them, so the bearing (and

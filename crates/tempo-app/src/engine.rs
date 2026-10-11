@@ -11604,7 +11604,7 @@ impl Engine {
         // here, which is exactly why the row used to leave without it.
         let submode = submode.or(self.contest_phone_submode(mode, submode));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         let logged = match submode {
             Some(sub) => station
@@ -11948,7 +11948,7 @@ impl Engine {
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
         for _ in 0..crate::station::PLANS {
             if !self.in_field_day() {
-                return Err("Field Day mode is not active".into());
+                return Err("Contest mode is not active".into());
             }
             let plan = self.station.plan_in_breath();
             let seen = plan.merge_identities()?;
@@ -11975,7 +11975,7 @@ impl Engine {
         seen: std::collections::HashSet<String>,
     ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         if !self.station.unchanged_at_all_since(plan) {
             return Ok(None);
@@ -12032,7 +12032,7 @@ impl Engine {
         destinations: Vec<String>,
     ) -> Result<(), String> {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         station.log.session.upload.enabled = enabled;
         station.log.session.upload.destinations = destinations;
@@ -12069,7 +12069,7 @@ impl Engine {
     /// ([`ContestSession::check_move`](tempo_core::contest::ContestSession::check_move)).
     pub fn contest_i_moved(&mut self, values: Vec<(String, String)>) -> Result<Settings, String> {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         let pairs: Vec<(&str, &str)> = values
             .iter()
@@ -25642,7 +25642,7 @@ contact yourself."
                     _ => station.log.cabrillo_with(freq_khz, &self.contest_entrant()),
                 }
             }
-            _ => Err("nothing to export (enter Field Day mode first)".to_string()),
+            _ => Err("nothing to export (turn Contest mode on first)".to_string()),
         }
     }
 
@@ -42040,6 +42040,42 @@ mod tests {
         assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
         e.take_pending_uploads(); // the FD contacts queued nothing; start from empty
         e
+    }
+
+    /// ⭐ **With no contest running, the contest commands say so by the switch's own name.**
+    /// The switch is Contest mode, whichever contest is picked, so its refusals name it that
+    /// way: "Field Day mode is not active" is what an Illinois QSO Party operator was told for
+    /// a manual contact, a merge, the upload control, "I moved" or an export with it off.
+    #[test]
+    fn with_no_contest_running_the_contest_commands_name_contest_mode() {
+        const OFF: &str = "Contest mode is not active";
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.settings().fd_active, "a fresh engine has the switch off");
+        assert_eq!(
+            e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap_err(),
+            OFF
+        );
+        assert_eq!(e.fd_merge_to_general().unwrap_err(), OFF);
+        assert_eq!(e.fd_set_upload(true, vec!["wrl".into()]).unwrap_err(), OFF);
+        assert_eq!(
+            e.contest_i_moved(vec![("SECTION".to_string(), "IL".to_string())])
+                .unwrap_err(),
+            OFF
+        );
+        assert_eq!(
+            e.export_log("cabrillo").unwrap_err(),
+            "nothing to export (turn Contest mode on first)"
+        );
+        // The logbook's merge, which plans with the Engine lock released, says the same.
+        let shared = std::sync::Mutex::new(e);
+        assert_eq!(
+            crate::logwrite::fd_merge_to_general(&shared).0.unwrap_err(),
+            OFF
+        );
+        // CONTROL: in a session the same commands go through.
+        let mut on = fd_session("W9XYZ");
+        assert!(on.fd_set_upload(true, vec!["wrl".into()]).is_ok());
+        assert!(on.export_log("cabrillo").is_ok());
     }
 
     /// ⭐ **The ruling, both directions.** The merge writes the contacts into the

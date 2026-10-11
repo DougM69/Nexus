@@ -380,7 +380,7 @@ describe('an edit made in any section of Settings is saved', () => {
       },
     },
     { section: 'connect-web', ...field('connectWeb', false, false, true), edit: clickIn('connect-web', 'switch', 'Serve Conditions on the local network') },
-    { section: 'features', ...field('fdActive', false, false, true), edit: clickIn('features', 'switch', 'Enable Field Day mode') },
+    { section: 'features', ...field('fdActive', false, false, true), edit: clickIn('features', 'switch', 'Enable Contest mode: ARRL Field Day') },
   ]
 
   /** Sections whose controls never save through the form, and what they save through instead. */

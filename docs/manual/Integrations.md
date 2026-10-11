@@ -34,7 +34,7 @@ Nexus implements the full WSJT-X UDP datagram protocol on port `2237`. It is bot
 
 Type numbers are pinned to the canonical WSJT-X 0–15 range. A prior +1 offset in an earlier build was corrupting JTAlert FreeText as HaltTx; that bug is resolved.
 
-When Field Day mode is active, the Status datagram sets `special_op = 3` so JTAlert and GridTracker automatically activate their Field Day operating behavior without any extra configuration.
+When Contest mode is on, the Status datagram sets `special_op = 3` so JTAlert and GridTracker automatically activate their Field Day operating behavior without any extra configuration.
 
 ### Inbound datagrams (logger / overlay → Nexus)
 
