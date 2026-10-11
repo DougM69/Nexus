@@ -223,6 +223,95 @@ fn a_session_starts_no_earlier_than_the_rows_read_for_it_reach() {
     );
 }
 
+/// ⛔ The FT cockpit's gestures that enter a running contest from FT8 QSO mode (Call CQ, a
+/// double-click on a CQ, the strip's S&P) open its session as the `set_mode` command does
+/// ([`act_opening_session`]), so the pin above holds for each of them: the contact just inside
+/// four days starts the session, the one past the read's reach is in its log when it is the
+/// session's running and starts nothing, and the session opens with its sweep, which holds a
+/// contact worked outside the contest since it began. Should a gesture ever open the session from
+/// rows that do not reach back to its start, or without the running's older contacts, this fails.
+#[test]
+fn the_ft_cockpits_gestures_open_the_session_no_earlier_than_its_rows_reach() {
+    type Opens = fn(&Engine) -> bool;
+    type Act = fn(&mut Engine) -> Result<(), String>;
+    const CQ: &str = "CQ FD W9XYZ EN37";
+    let gestures: [(&str, Opens, Act); 3] = [
+        (
+            "Call CQ",
+            |e| e.start_running_opens_session(),
+            |e| e.start_running(),
+        ),
+        (
+            "a double-click on a CQ",
+            |e| e.work_station_opens_session("W9XYZ", Some(CQ)),
+            |e| e.work_station("W9XYZ", None, Some(CQ), Some(-12), None),
+        ),
+        (
+            "the strip's S&P",
+            |e| e.start_search_and_pounce_opens_session(),
+            |e| e.start_search_and_pounce(),
+        ),
+    ];
+    for (gesture, opens, act) in gestures {
+        let d = Dir::new("session-window-gesture");
+        let mut e = ready(&d);
+        e.set_fd_log_path(d.0.join("fd.adi"));
+        let now = now_unix_secs();
+        let inside = now - 4 * 86_400 + 600;
+        let past = now - SESSION_READ_WINDOW - 600;
+        journal(&d, &[("K1ABC", inside), ("K2ABC", past)]);
+        // Worked outside the contest after the session starts, whichever contact starts it: the
+        // sweep holds it.
+        e.log_qso(qso("W1AW", now + 60));
+        master_on(&mut e);
+        e.set_tier(crate::dto::Tier::Ft8);
+        e.set_mode("qso-monitor")
+            .expect("out of the contest, in FT8 QSO mode");
+        e.hear_for_test(CQ, -12, 2);
+        let m = Mutex::new(e);
+        let (start, past_in_log, its_running, sweep) = act_opening_session(&m, opens, act, |e| {
+            let Mode::FieldDay { station, .. } = &e.mode else {
+                panic!("{gesture}: in the contest");
+            };
+            let rs = station.log.ruleset();
+            let its = |when: u64| rs.running_of(when) == rs.running_of(now);
+            let start = station.log.session.start_unix;
+            (
+                start,
+                station.log.qsos().iter().any(|q| q.call == "K2ABC"),
+                (its(inside), its(past)),
+                e.station.worked_since(start, &station.log.dupe_rule()),
+            )
+        })
+        .unwrap_or_else(|why| panic!("{gesture}: {why}"));
+        // Days after the contest's running day begins, the contact four days back is the running
+        // before's: kept out of the log, it starts nothing.
+        if its_running.0 {
+            assert_eq!(
+                start, inside,
+                "{gesture}: the contact four days back starts the session"
+            );
+        } else {
+            assert!(start >= now, "{gesture}: the session starts now");
+        }
+        assert!(
+            start >= now - SESSION_READ_WINDOW,
+            "{gesture}: the session starts inside the rows read for it"
+        );
+        assert_eq!(
+            past_in_log, its_running.1,
+            "{gesture}: the contact past the read's reach is in the log when it is the session's \
+             running"
+        );
+        let sweep =
+            sweep.unwrap_or_else(|| panic!("{gesture}: the session opened without its sweep"));
+        assert!(
+            sweep.worked_this_session.contains("W1AW"),
+            "{gesture}: the sweep holds W1AW, worked outside the contest since the session began"
+        );
+    }
+}
+
 /// Rows read before the log changed are not its rows after: a contact logged between the read
 /// and the switch makes them stale, and a stale read is not installed — the wrap reads again
 /// (below), and never opens a session from rows that are not the log's.
