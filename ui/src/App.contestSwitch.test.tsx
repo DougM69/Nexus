@@ -12,6 +12,12 @@
 // The backend is a live fake: settings are read and replaced whole, as `set_settings` does, and
 // the snapshot follows the engine's rule (a session while the master is on and the class and
 // section are set — `Engine::restore_opens_session`).
+//
+// OPENING THE SCREEN KEEPS A STATION ALREADY IN THE CONTEST IN ITS ROLE. With the mode on, the
+// screen enters the contest's S&P only from another mode. `set_mode` replaces the mode wholesale,
+// so re-entering would stop a run's CQs and drop the contact an S&P station is working. The fake
+// engine holds the spec `set_mode` last entered and what the sequencer will send next, so the
+// tests read the role by value.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor, fireEvent, screen, within, act } from '@testing-library/react'
 import type { AppSnapshot } from './types'
@@ -19,11 +25,25 @@ import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
 const SFD_START = Date.UTC(2027, 5, 26, 18) / 1000
 
-const { station, setMode, setSettings } = vi.hoisted(() => ({
+type Role = { spec: string; queue: string[]; dxcall: string | null }
+
+const { station, engine, setMode, setSettings } = vi.hoisted(() => ({
   station: { current: {} as Record<string, unknown> },
+  /** The spec `set_mode` last entered, what the sequencer will send next, and the station being
+   *  worked. `null` is what a launch restores: the contest's S&P while the master is on, Chat
+   *  otherwise (`Engine::restore_field_day_if_enabled`). */
+  engine: { current: null as Role | null },
   setMode: vi.fn(),
   setSettings: vi.fn(),
 }))
+
+/** What `set_mode` leaves (`Engine::set_mode`): the run flag is the spec's own, a run calls CQ, and
+ *  the queues and the contact in progress go with the mode it replaced. */
+const entered = (spec: string): Role => ({
+  spec,
+  queue: spec === 'fieldday-run' ? ['CQ FD W9XYZ EN52'] : spec === 'qso-run' ? ['CQ W9XYZ EN52'] : [],
+  dxcall: null,
+})
 
 /** The engine's half: in the contest while the master is on and the exchange is set. */
 const snapshot = (): AppSnapshot => {
@@ -31,10 +51,13 @@ const snapshot = (): AppSnapshot => {
     station.current.fdActive === true &&
     String(station.current.fdClass ?? '').trim() !== '' &&
     String(station.current.fdSection ?? '').trim() !== ''
+  const spec = engine.current?.spec ?? (on ? 'fieldday-sp' : 'chat')
+  const contest = on && spec.startsWith('fieldday')
+  const qso = spec.startsWith('qso')
   return {
     mycall: 'W9XYZ',
     mygrid: 'EN52',
-    mode: on ? 'fieldDay' : 'chat',
+    mode: contest ? 'fieldDay' : qso ? 'qso' : 'chat',
     radio: {
       dialMhz: 14.074,
       band: '20m',
@@ -53,11 +76,21 @@ const snapshot = (): AppSnapshot => {
     stations: [],
     conversations: [],
     activePeer: null,
-    qso: null,
-    fieldDay: on
+    qso: qso
       ? {
-          running: false,
+          state: spec === 'qso-run' ? 'CallingCq' : 'Listening',
+          dxcall: null,
+          rxReport: null,
+          running: spec === 'qso-run',
+          cqRunning: spec === 'qso-run',
+          txNow: engine.current?.queue[0] ?? null,
+        }
+      : null,
+    fieldDay: contest
+      ? {
+          running: spec === 'fieldday-run',
           state: 'Idle',
+          dxcall: engine.current?.dxcall ?? null,
           qsoCount: 0,
           sections: 0,
           points: 0,
@@ -87,7 +120,10 @@ vi.mock('./api', async (importOriginal) => {
     station.current = { ...s }
     return snapshot()
   })
-  setMode.mockImplementation(async () => snapshot())
+  setMode.mockImplementation(async (spec: string) => {
+    engine.current = entered(spec)
+    return snapshot()
+  })
   return {
     ...auto,
     askLog: vi.fn(async () => {
@@ -133,6 +169,7 @@ vi.mock('./api', async (importOriginal) => {
     setOperatingMode: vi.fn(async () => snapshot()),
     haltTx: vi.fn(async () => snapshot()),
     setArea: vi.fn(async () => snapshot()),
+    setTier: vi.fn(async () => snapshot()),
     appVersion: vi.fn(async () => '0.0.0-test'),
     openPanelWindow: vi.fn(async () => {}),
     // What Settings reads on mount, in real shapes (App.guideUdpLink.test.tsx's list).
@@ -197,6 +234,7 @@ beforeEach(() => {
     fdSection: 'WI',
     fdActive: false,
   }
+  engine.current = null
   setMode.mockClear()
   setSettings.mockClear()
 })
@@ -209,6 +247,10 @@ const railContest = () => screen.findByRole('button', { name: 'Contest — ARRL 
 const screenSwitch = () =>
   within(document.querySelector('main.layout.single .fd-event-banner') as HTMLElement).getByRole('switch')
 const clubBoard = () => screen.queryByRole('button', { name: /club band board/i })
+const roleButton = (name: 'Running' | 'S&P') =>
+  within(screen.getByRole('group', { name: 'Field Day role' })).getByRole('button', { name })
+/** Lets a mode change the last click set off land, so "it did not happen" is not just "not yet". */
+const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
 
 async function openContest() {
   fireEvent.click(await railContest())
@@ -241,12 +283,56 @@ describe('the switch is one click away, with the mode off', () => {
     expect(clubBoard()).toBeNull()
   })
 
-  it('CONTROL: with the mode on, opening it enters the contest as it always has, and the Club Board shows', async () => {
+  it('CONTROL: with the mode on, opening it from FT8 enters the contest in S&P as it always has, never calling CQ, and the Club Board shows', async () => {
     station.current = { ...station.current, fdActive: true }
+    engine.current = entered('qso-run')
     render(<App />)
     await openContest()
-    await waitFor(() => expect(setMode.mock.calls.some((c) => c[0] === 'fieldday-sp')).toBe(true), WAIT)
+    await waitFor(() => expect(engine.current).toEqual({ spec: 'fieldday-sp', queue: [], dxcall: null }), WAIT)
+    expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp'])
+    await waitFor(() => expect(roleButton('S&P').getAttribute('aria-pressed')).toBe('true'), WAIT)
     expect(clubBoard()).not.toBeNull()
+  })
+})
+
+describe('opening the screen keeps a station already in the contest in its role', () => {
+  it('a station running CQ keeps its run: still Running, its CQ still queued, and no set_mode', async () => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('fieldday-run')
+    render(<App />)
+    await openContest()
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
+    expect(roleButton('Running').getAttribute('aria-pressed')).toBe('true')
+    expect(setMode).not.toHaveBeenCalled()
+  })
+
+  it('a station in S&P keeps the contact it is working, and no set_mode', async () => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = { spec: 'fieldday-sp', queue: ['K1ABC W9XYZ 1D WI'], dxcall: 'K1ABC' }
+    render(<App />)
+    await openContest()
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-sp', queue: ['K1ABC W9XYZ 1D WI'], dxcall: 'K1ABC' })
+    expect(roleButton('S&P').getAttribute('aria-pressed')).toBe('true')
+    expect(setMode).not.toHaveBeenCalled()
+  })
+
+  it('a run started at the screen survives a trip to the FT cockpit and back', async () => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('qso-monitor')
+    render(<App />)
+    await openContest()
+    await waitFor(() => expect(engine.current?.spec).toBe('fieldday-sp'), WAIT)
+    fireEvent.click(roleButton('Running'))
+    await waitFor(() => expect(roleButton('Running').getAttribute('aria-pressed')).toBe('true'), WAIT)
+    fireEvent.click(screen.getByRole('button', { name: /^FT weak-signal cockpit/ }))
+    await waitFor(() => expect(document.querySelector('main.layout.single .fd-event-banner')).toBeNull(), WAIT)
+    await openContest()
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
+    expect(roleButton('Running').getAttribute('aria-pressed')).toBe('true')
+    expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp', 'fieldday-run'])
   })
 })
 
