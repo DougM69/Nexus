@@ -436,7 +436,7 @@ export async function fetchCty(): Promise<CtyStatus> {
 }
 
 /** Field Day rules-data currency — the "check for rules updates" row in
- * Settings ▸ Contesting ▸ Field Day Setup. Same set-once discipline as the
+ * Settings ▸ Contesting ▸ Contest mode. Same set-once discipline as the
  * country file: `activeGenerated` is the data scoring THIS session (the
  * bundled seed, or a previously downloaded file), `installedGenerated` what is
  * staged on disk (empty until a download happens; newer than active ⇒

@@ -9443,9 +9443,10 @@ impl Engine {
     /// `ContestSession::move_to` writes that number into `my_exchange` — after which
     /// `serial_now`'s no-in-flight branch parses it and returns it instead of
     /// `next_serial`, and **the run freezes at that number for the rest of the
-    /// contest**. Unreachable today only because `contest_i_moved` refuses any exchange
-    /// not named `"fieldday"`, which arms the moment the `contest_qth_*` mirror lands.
-    /// So the rendered string and the editable vector are deliberately two things.
+    /// contest**. Unreachable because `contest_i_moved` lets a move change only where the
+    /// operator is — Field Day's class and section, a QSO party's QTH — and refuses a
+    /// serial by name (`ContestSession::check_move`). So the rendered string and the
+    /// editable vector are deliberately two things.
     pub fn contest_composing_text(&self) -> Option<String> {
         use tempo_core::contest::FieldKind;
         let Mode::FieldDay { station, .. } = &self.mode else {
@@ -11606,7 +11607,7 @@ impl Engine {
         // here, which is exactly why the row used to leave without it.
         let submode = submode.or(self.contest_phone_submode(mode, submode));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         let logged = match submode {
             Some(sub) => station
@@ -11950,7 +11951,7 @@ impl Engine {
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
         for _ in 0..crate::station::PLANS {
             if !self.in_field_day() {
-                return Err("Field Day mode is not active".into());
+                return Err("Contest mode is not active".into());
             }
             let plan = self.station.plan_in_breath();
             let seen = plan.merge_identities()?;
@@ -11977,7 +11978,7 @@ impl Engine {
         seen: std::collections::HashSet<String>,
     ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         if !self.station.unchanged_at_all_since(plan) {
             return Ok(None);
@@ -12034,7 +12035,7 @@ impl Engine {
         destinations: Vec<String>,
     ) -> Result<(), String> {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         station.log.session.upload.enabled = enabled;
         station.log.session.upload.destinations = destinations;
@@ -12062,25 +12063,37 @@ impl Engine {
     /// when the new location resolves to a different role (§3.3 ruling 3). Nothing is
     /// written in that case, in either place.
     ///
-    /// ⚠️ **The settings mirror is Field Day's, because that is the only one that
-    /// exists.** The general `contest_qth_*` block lands in batch 8 with the QSO
-    /// parties that need it (§11 item 8); until then a session running any other
-    /// exchange has no setting to write, and this refuses rather than stamping a
-    /// Field Day setting from a slot that is not a Field Day slot.
+    /// **The setting written is the one the moved slot is read from.** Field Day's class
+    /// and section are `fd_class` and `fd_section`. A QSO party's QTH is the location
+    /// itself: the in-state role's county is `contest_qth_county`, and every other role's
+    /// state, province or country is `contest_qth_state` — the settings the session was
+    /// built from. Any other slot, and any contest whose exchange carries no county, state
+    /// or province of the operator's, is refused with a sentence saying why
+    /// ([`ContestSession::check_move`](tempo_core::contest::ContestSession::check_move)).
     pub fn contest_i_moved(&mut self, values: Vec<(String, String)>) -> Result<Settings, String> {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
-        if station.log.session.exchange.name != "fieldday" {
-            return Err(
-                "this session's exchange has no settings mirror yet (contest_qth_* is batch 8)"
-                    .into(),
-            );
-        }
         let pairs: Vec<(&str, &str)> = values
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
+        if station.log.session.exchange.name != "fieldday" {
+            // Only where I am moves, and only where the sponsor's mobile rule — the dupe
+            // key's sent slots — makes a station that moves a new station.
+            let moves = station.log.dupe_rule().by_sent_fields;
+            let session = &mut station.log.session;
+            session.check_move(&pairs, moves)?;
+            // Both halves or neither, as below.
+            session.move_to(&pairs)?;
+            if session.role().id == "in_state" {
+                self.settings.contest_qth_county =
+                    session.my_location.county.clone().unwrap_or_default();
+            } else {
+                self.settings.contest_qth_state = session.my_location.state.clone();
+            }
+            return Ok(self.settings.clone());
+        }
         // Both halves or neither: a refused move returns before either write.
         station.log.session.move_to(&pairs)?;
         let (class, section) = (
@@ -25797,7 +25810,7 @@ contact yourself."
                     _ => station.log.cabrillo_with(freq_khz, &self.contest_entrant()),
                 }
             }
-            _ => Err("nothing to export (enter Field Day mode first)".to_string()),
+            _ => Err("nothing to export (turn Contest mode on first)".to_string()),
         }
     }
 
@@ -42197,6 +42210,42 @@ mod tests {
         e
     }
 
+    /// ⭐ **With no contest running, the contest commands say so by the switch's own name.**
+    /// The switch is Contest mode, whichever contest is picked, so its refusals name it that
+    /// way: "Field Day mode is not active" is what an Illinois QSO Party operator was told for
+    /// a manual contact, a merge, the upload control, "I moved" or an export with it off.
+    #[test]
+    fn with_no_contest_running_the_contest_commands_name_contest_mode() {
+        const OFF: &str = "Contest mode is not active";
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.settings().fd_active, "a fresh engine has the switch off");
+        assert_eq!(
+            e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap_err(),
+            OFF
+        );
+        assert_eq!(e.fd_merge_to_general().unwrap_err(), OFF);
+        assert_eq!(e.fd_set_upload(true, vec!["wrl".into()]).unwrap_err(), OFF);
+        assert_eq!(
+            e.contest_i_moved(vec![("SECTION".to_string(), "IL".to_string())])
+                .unwrap_err(),
+            OFF
+        );
+        assert_eq!(
+            e.export_log("cabrillo").unwrap_err(),
+            "nothing to export (turn Contest mode on first)"
+        );
+        // The logbook's merge, which plans with the Engine lock released, says the same.
+        let shared = std::sync::Mutex::new(e);
+        assert_eq!(
+            crate::logwrite::fd_merge_to_general(&shared).0.unwrap_err(),
+            OFF
+        );
+        // CONTROL: in a session the same commands go through.
+        let mut on = fd_session("W9XYZ");
+        assert!(on.fd_set_upload(true, vec!["wrl".into()]).is_ok());
+        assert!(on.export_log("cabrillo").is_ok());
+    }
+
     /// ⭐ **The ruling, both directions.** The merge writes the contacts into the
     /// general logbook whatever the control says; it QUEUES them only when the
     /// operator turned this session's control on, and only then.
@@ -42370,6 +42419,260 @@ mod tests {
             panic!("still in Field Day")
         };
         assert_eq!(station.log.session.field("SECTION"), "WI");
+    }
+
+    /// A QSO party engine in the contest, from `state` and, inside the state, `county`.
+    fn party_engine(event: &str, state: &str, county: &str) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.contest_qth_state = state.into();
+            s.contest_qth_county = county.into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        e
+    }
+
+    /// The strip's received vector for one contact of `event`: California's is a serial and
+    /// a QTH, every other party's a report and a QTH.
+    fn party_rcvd(event: &str, qth: &str) -> Vec<(String, String)> {
+        let (key, value) = if event == "cqp" {
+            ("NR", "5")
+        } else {
+            ("RST", "599")
+        };
+        vec![
+            (key.to_string(), value.to_string()),
+            ("QTH".to_string(), qth.to_string()),
+        ]
+    }
+
+    /// ⭐ **"I moved" in the Illinois QSO Party — the mobile the button is for.** An Illinois
+    /// mobile drives from Kane into Will and presses I moved. The move is accepted; the next
+    /// contact SENDS and LOGS Will; a station worked from Kane is a new contact again,
+    /// because the dupe key carries the county sent; the score counts it; the file carries
+    /// each contact's own county; and the setting a restart starts from is Will. Every party
+    /// refused the move before, so the mobile kept sending the county it had left.
+    #[test]
+    fn an_illinois_mobile_moves_county_and_every_surface_follows() {
+        let (mut e, ex) = ilqp_from_kane();
+        assert!(e
+            .contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+            .unwrap());
+        // CONTROL: from the same county, the same station on the same band is a dupe.
+        assert!(
+            !e.contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+                .unwrap(),
+            "a dupe from Kane"
+        );
+
+        let moved = e.contest_i_moved(vec![("QTH".to_string(), "WILL".to_string())]);
+        assert_eq!(
+            moved
+                .as_ref()
+                .map(|s| (s.contest_qth_county.as_str(), s.contest_qth_state.as_str())),
+            Ok(("WILL", "IL")),
+            "accepted, and a new session starts in Will"
+        );
+        assert_eq!(e.settings().contest_qth_county, "WILL");
+        // SENDS: what {EXCH} keys, and the strip's Sending line.
+        assert_eq!(e.contest_sent_exchange().as_deref(), Some("WILL"));
+        assert_eq!(e.contest_composing_text().as_deref(), Some("599 WILL"));
+
+        assert!(
+            e.contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+                .unwrap(),
+            "a new contact from Will"
+        );
+        let fd = e.snapshot().field_day.expect("still in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            ["599 KANE", "599 WILL"]
+        );
+        assert_eq!(
+            (fd.qso_count, fd.points, fd.mult_count),
+            (2, 4, Some(1)),
+            "two CW contacts at 2 points; Cook is one multiplier"
+        );
+
+        let cab = e.export_log("cabrillo").expect("one entry");
+        for line in [
+            " W9XYZ 599 KANE K9NR 599 COOK\n",
+            " W9XYZ 599 WILL K9NR 599 COOK\n",
+        ] {
+            assert_eq!(cab.matches(line).count(), 1, "{line:?} in\n{cab}");
+        }
+        // The header still names the county by name after the move: the one being sent
+        // when the file is written. (First county or last is the sponsor's to say; this is
+        // what the header reads today.)
+        assert!(cab.contains("IL-COUNTY: Will\n"), "{cab}");
+
+        // A RESTART builds the session from Settings, and starts in Will.
+        let mut r = Engine::new("W9XYZ", "EN61", 0);
+        r.apply_settings(moved.expect("checked above"));
+        r.set_mode("fieldday-run").unwrap();
+        assert_eq!(r.contest_composing_text().as_deref(), Some("599 WILL"));
+    }
+
+    /// ⭐ **The same in every party whose exchange carries the sender's QTH** — New York,
+    /// California, Ohio, Tennessee and Texas, each sponsor's mobile rule making a station that
+    /// changes county a new station: from one of its counties to another the move is
+    /// accepted, the setting follows, and the next contact sends and logs the new county, as
+    /// a new contact with the station worked before the move. California's serial runs on.
+    #[test]
+    fn every_partys_mobile_moves_county() {
+        for (event, state, from, to, rcvd, rows) in [
+            ("nyqp", "NY", "ALB", "SUF", "MON", ["599 ALB", "599 SUF"]),
+            ("cqp", "CA", "ALAM", "SFRA", "SDIE", ["1 ALAM", "2 SFRA"]),
+            (
+                "ohqp",
+                "OH",
+                "FRAN",
+                "DELA",
+                "CUYA",
+                ["599 FRAN", "599 DELA"],
+            ),
+            (
+                "tnqp",
+                "TN",
+                "WILL",
+                "DAVI",
+                "KNOX",
+                ["599 WILL", "599 DAVI"],
+            ),
+            (
+                "txqp",
+                "TX",
+                "TRAV",
+                "HARR",
+                "BEXA",
+                ["599 TRAV", "599 HARR"],
+            ),
+        ] {
+            let mut e = party_engine(event, state, from);
+            assert!(
+                e.contest_log_manual("K1AAA", &party_rcvd(event, rcvd), "CW", None)
+                    .unwrap(),
+                "{event}"
+            );
+            let moved = e.contest_i_moved(vec![("QTH".to_string(), to.to_string())]);
+            assert_eq!(
+                moved
+                    .as_ref()
+                    .map(|s| (s.contest_qth_county.as_str(), s.contest_qth_state.as_str())),
+                Ok((to, state)),
+                "{event}"
+            );
+            assert!(
+                e.contest_log_manual("K1AAA", &party_rcvd(event, rcvd), "CW", None)
+                    .unwrap(),
+                "{event}"
+            );
+            let fd = e.snapshot().field_day.expect("still in the party");
+            assert_eq!(
+                fd.log
+                    .iter()
+                    .map(|q| (q.mex.as_str(), q.dupe))
+                    .collect::<Vec<_>>(),
+                [(rows[0], false), (rows[1], false)],
+                "{event}: the new county is sent, logged, and a new contact"
+            );
+        }
+    }
+
+    /// ⭐ **A station outside the state moves its STATE**, where the sponsor provides for a
+    /// mobile outside the state: Ohio's rules (*"Mobile stations that change geographic area
+    /// (counties for Ohio stations, state or province for others)"*) and Illinois's, whose
+    /// Outside Illinois classes are *"Any fixed, portable or mobile station operating from
+    /// outside the state of Illinois"*. Crossing INTO the state is another entry, refused
+    /// with nothing written.
+    #[test]
+    fn a_mobile_outside_the_state_moves_state_and_cannot_cross_in() {
+        for (event, from, to, inside) in
+            [("ohqp", "MI", "IN", "FRAN"), ("ilqp", "IN", "WI", "COOK")]
+        {
+            let mut e = party_engine(event, from, "");
+            let moved = e.contest_i_moved(vec![("QTH".to_string(), to.to_string())]);
+            assert_eq!(
+                moved
+                    .as_ref()
+                    .map(|s| (s.contest_qth_state.as_str(), s.contest_qth_county.as_str())),
+                Ok((to, "")),
+                "{event}"
+            );
+            assert_eq!(
+                e.contest_composing_text(),
+                Some(format!("599 {to}")),
+                "{event}"
+            );
+            assert_eq!(
+                e.contest_i_moved(vec![("QTH".to_string(), inside.to_string())])
+                    .err()
+                    .as_deref(),
+                Some(tempo_core::contest::MOVE_CHANGES_ROLE),
+                "{event}: a county inside the state is another entry"
+            );
+            assert_eq!(
+                e.settings().contest_qth_state,
+                to,
+                "{event}: a refused move writes nothing"
+            );
+            assert_eq!(
+                e.contest_composing_text(),
+                Some(format!("599 {to}")),
+                "{event}"
+            );
+        }
+    }
+
+    /// CONTROLS, by value. A contest whose exchange carries no county, state or province of
+    /// mine still refuses, and says why. In a party only the QTH moves: California's serial
+    /// typed here would freeze the run at that number — refused, and the run goes on.
+    #[test]
+    fn i_moved_refuses_what_is_not_where_you_are_in_words() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "arrlvhf_sep".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert_eq!(
+            e.contest_i_moved(vec![("GRID".to_string(), "EN52".to_string())])
+                .err()
+                .as_deref(),
+            Some(
+                "ARRL-VHF-SEP does not send your county, state or province, so there is \
+                 nothing for I moved to change."
+            )
+        );
+        assert_eq!(e.settings().mygrid, "EN61", "nothing written");
+
+        let mut e = party_engine("cqp", "CA", "ALAM");
+        assert_eq!(
+            e.contest_i_moved(vec![("NR".to_string(), "45".to_string())])
+                .err()
+                .as_deref(),
+            Some("I moved changes only your QTH; NR is not part of where you are.")
+        );
+        // The number shown and keyed is still the run's own, and it runs on.
+        assert_eq!(e.contest_composing_text().as_deref(), Some("1 ALAM"));
+        for call in ["K1AAA", "K2AAA"] {
+            assert!(e
+                .contest_log_manual(call, &party_rcvd("cqp", "SDIE"), "CW", None)
+                .unwrap());
+        }
+        let fd = e.snapshot().field_day.expect("still in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            ["1 ALAM", "2 ALAM"],
+            "the run goes on"
+        );
+        assert_eq!(e.contest_composing_text().as_deref(), Some("3 ALAM"));
     }
 
     /// ⭐ **The `CATEGORY-OPERATOR` declaration reaches the entry, both ways.**

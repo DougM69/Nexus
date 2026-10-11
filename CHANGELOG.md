@@ -305,6 +305,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
   unchanged, and a macro profile of your own keeps the texts it has.
 
+- **Field Day mode is now Contest mode: one switch for whichever contest is picked.** It always
+  started the contest picked in Settings ▸ Contesting ▸ Contest, a QSO party or CQ WW as much as Field
+  Day, and the contest log strip (its dupe check, Super Check Partial, call history, Enter Sends
+  Message and Ctrl+D), the operator box, the Contest screen and the exports work in every contest it
+  starts, as club sync does in every contest it can run. Now its name says so, at the top of the
+  Contest screen, in Settings ▸ Contesting and in Settings ▸ Appearance ▸ Features, and it names the
+  contest: "Enable Contest mode: Illinois QSO Party". Its Settings section is called Contest mode, no
+  line shown for another contest says Field Day, and ARRL Field Day's power multiplier shows only
+  when ARRL Field Day is picked. Turned on from the features list, it now opens the Contesting tab
+  whenever the picked contest is missing something, a QSO party's county included, not only Field
+  Day's class or section. Your saved setting carries over as it is. The exported files are named for
+  the contest too (`ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`) rather than `fd-…`; a QSO party
+  shows your side in words (in-state, out-of-state, W/VE or DX) in Settings and beside Sending on the
+  log strip, never `in_state`; while a contest runs, Settings says beside the picker that a new pick
+  takes effect after you save it and turn Contest mode off and on again; the upload switch under the
+  merge button reads "Upload merged contacts to:"; and the N3FJP and N1MM settings, the Club Board
+  window and the Remote page's contest view describe whichever contest is running.
 - **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
   Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
   elevation boxes, with the line for the call in your log entry under them, so the bearing (and
@@ -313,6 +330,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a 1366×768 or 1600×900 screen the call's line can still be a short scroll down: drag the divider
   under the box to give it room. The Rotor pane on Conditions and in a cockpit's own columns is
   unchanged.
+- **The Rotor and Amplifier boxes draw their readings bigger.** In the dashboard rail the Rotor box
+  now uses the room it is given: the compass rose, the bearing and the elevation grow with the box and
+  stand in its middle, and in a box about as tall as it is wide the bearing and elevation boxes and
+  ■ STOP move under the rose. A short box keeps the tight layout, with everything in view as before. The
+  Amplifier box shows power out and SWR as large readings that follow the box's width, like the
+  Clock's digits, and PA temperature, volts and current a size larger, wherever the box stands.
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each
@@ -387,6 +410,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
+  launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
+  every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations
+  showed for their grid alone. Both now follow that setting, as the docked board always has: an HF
+  station with another reason keeps that reason without GRID, and rare squares follow the Rare grid
+  💎 setting. The need-type chips work as before.
+- **Illinois QSO Party: a county line typed with `+` (`COOK+WILL`, the way N3FJP takes it) logs
+  one contact per county, exactly as `COOK/WILL` does.** It was logged as a single contact whose
+  county was the text `COOK+WILL`, and a stray `+` was dropped (`COOK+` logged as Cook) where a
+  stray `/` is refused; the two marks now give the same counties, dupes, score and Cabrillo lines.
 - **FT8 and FT4 in a contest send that contest's own messages, as WSJT-X does.** Running and S&P
   on the Contest screen sent Field Day's messages whatever contest was picked: `CQ FD` and a class
   and section, so in any other contest no FT8 contact could finish. In the ARRL January, June and
@@ -418,6 +451,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said Field Day for every contest. It now says Field Day in ARRL Field Day, NA VHF in the ARRL
   VHF contests and none in the others, Winter Field Day included, as WSJT-X does. NEEDS-BENCH:
   JTAlert or GridTracker reading Nexus in Field Day and in a VHF contest.
+- **Settings ▸ Spots & Alerts shows the band choices the Needed boards follow, and the new DXCC
+  and grid alert has its own switch.** With that alert off, New DXCC, New grid and Rare grid 💎 all
+  read Off, though the boards and the need icons went on following the choices saved underneath,
+  so rare HF squares could still be listed; and picking any one of the three set the other two to
+  Off, which took NEW ONE off every board. The menus now always show what is saved, picking one
+  changes only that one, and a switch of its own, New DXCC and grid alerts, turns the sound and
+  the pop-up on and off without changing a menu. Settings and profiles saved by earlier versions
+  load unchanged.
+- **Map labels read in the light theme.** On the APRS map, Connect's maps and the Globe, each call
+  sign, satellite name and DXpedition mark had a near-black outline under the light theme's dark
+  lettering, which made it a dark blot. The outline now follows the lettering: white under dark
+  letters, dark under light ones. The dark theme looks exactly as before.
+- **I moved works in the QSO parties.** In the Illinois, New York, California, Ohio, Tennessee
+  and Texas QSO parties, saving a new county with **I moved** on the log strip failed with an
+  error, so a mobile or rover went on sending the county it had left. The move is now accepted:
+  the next contact sends and logs the new county, a station you worked from the old county is a
+  new contact again, the score counts it, the Cabrillo file carries each contact's own county,
+  and the new county becomes your County in Settings, so a restart keeps it. A station outside
+  the state moves to another state or province the same way. I moved still says no, and why, to
+  a county across the state line (that is a separate entry), a county line (send both counties
+  yourself and log each contact once per county), a serial number or a report, a contest whose
+  exchange has no county, state or province of yours, and CQ WW RTTY, whose rules have no
+  provision for a station that moves.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

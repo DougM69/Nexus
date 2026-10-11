@@ -273,7 +273,19 @@ describe('the sent side, read-only, with its one action', () => {
     expect(document.querySelector('.le-fd-role')).toBeNull()
     cleanup()
     renderStrip(fdStatus({ role: 'in_state' }))
-    expect(document.querySelector('.le-fd-role')!.textContent).toBe(' in_state')
+    expect(document.querySelector('.le-fd-role')!.textContent).toBe(' in-state')
+  })
+
+  // The role in the contest's words, never the rules data's id: the strip read "Sending
+  // in_state 599 COOK" in an Illinois QSO Party. W/VE and DX are the sponsors' own words
+  // for those sides of a QSO party and of CQ WW RTTY.
+  it.each([
+    ['out_of_state', ' out-of-state'],
+    ['w_ve', ' W/VE'],
+    ['dx', ' DX'],
+  ])('shows the %s role as%s', (role, shown) => {
+    renderStrip(fdStatus({ role }))
+    expect(document.querySelector('.le-fd-role')!.textContent).toBe(shown)
   })
 
   it('"I moved" sends only the slots that changed, and takes effect on the next contact', async () => {

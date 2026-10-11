@@ -195,7 +195,7 @@ pub fn role_mismatch(contest: &str, club: &str, mine: &str) -> String {
     format!(
         "this club sends the {club_side} {contest} exchange ({club_sends}), and this Nexus is \
          set up to send the {my_side} one ({my_sends}). Set State or province and County under \
-         Your station data on the Contesting tab in Settings to the club's, then turn Field Day \
+         Your station data on the Contesting tab in Settings to the club's, then turn Contest \
          mode off and on again: this Nexus rejoins by itself. Contacts you log meanwhile stay \
          in your own log."
     )
@@ -209,7 +209,7 @@ pub fn call_mismatch(contest: &str, club: &str, mine: &str) -> String {
     format!(
         "this club is on the air as {club} and this Nexus as {mine}, and in {contest} every \
          position of a club entry sends the club's call. Set Callsign on the air under Who's \
-         who at this event on the Contesting tab in Settings to {club}, then turn Field Day \
+         who at this event on the Contesting tab in Settings to {club}, then turn Contest \
          mode off and on again: this Nexus rejoins by itself. Contacts you log meanwhile stay \
          in your own log."
     )
@@ -222,7 +222,7 @@ pub fn call_mismatch(contest: &str, club: &str, mine: &str) -> String {
 pub const NOT_A_CALL_SIGN: &str = "this Nexus joined with a Callsign on the air that is not a \
      call sign (3 to 15 letters, digits and /, with at least one letter and one digit), and the \
      club writes every contact under the call it was made on. Set Callsign on the air under \
-     Who's who at this event on the Contesting tab in Settings, then turn Field Day mode off and \
+     Who's who at this event on the Contesting tab in Settings, then turn Contest mode off and \
      on again: this Nexus rejoins by itself. Contacts you log meanwhile stay in your own log.";
 
 /// ⭐ **The sentence for a JOIN under a position another laptop holds** ([`ClubLog::key_refusal`]):
@@ -3971,7 +3971,7 @@ mod tests {
                 "this club is on the air as W9XYZ and this Nexus as K9ABC, and in IL QSO Party \
                  every position of a club entry sends the club's call. Set Callsign on the air \
                  under Who's who at this event on the Contesting tab in Settings to W9XYZ, then \
-                 turn Field Day mode off and on again: this Nexus rejoins by itself. Contacts \
+                 turn Contest mode off and on again: this Nexus rejoins by itself. Contacts \
                  you log meanwhile stay in your own log."
                     .to_string()
             )
