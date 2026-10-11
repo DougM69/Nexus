@@ -777,7 +777,12 @@ export interface RemovedContest {
 }
 
 /** Why a removal or a restore changed nothing. */
-export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain' | 'clubSync'
+export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain'
+
+/** At a club, where a removal or restore goes: `linked` — this laptop is with the host now, so
+ *  every laptop drops it (or gets it back) as soon as the host has it; `away` — when the link is
+ *  back. Absent without club sync. */
+export type ContestClubRoute = 'linked' | 'away'
 
 /** Where a removed contact had already gone — places Nexus cannot take it back from. */
 export interface ContestSentTo {
@@ -794,20 +799,20 @@ export interface ContestSentTo {
 }
 
 export type ContestRemovalAnswer =
-  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo }
-  | { outcome: 'restored'; entry: RemovedContest }
+  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo; club?: ContestClubRoute }
+  | { outcome: 'restored'; entry: RemovedContest; club?: ContestClubRoute }
   | { outcome: 'refused'; refusal: ContestRemovalRefusal }
 
 /** ⭐ **Remove the newest contest contact** — when it is still the one named (`call` and
  *  `whenUnix`, as the strip showed it), else `refused: changed`. It is kept, never deleted: its
- *  serial and club seq stay spent, and `contestRestore` puts it back. Refused while club sync
- *  runs. Answers once the contest journal holds the change. Never keys or stops TX. */
+ *  serial and club seq stay spent, and `contestRestore` puts it back. At a club the club takes it
+ *  back too (`club`). Answers once the contest journal holds the change. Never keys or stops TX. */
 export async function contestRemoveLast(call: string, whenUnix: number): Promise<ContestRemovalAnswer> {
   return invoke<ContestRemovalAnswer>('contest_remove_last', { call, whenUnix })
 }
 
 /** Put a removed contact back exactly as it was — refused when the station was worked again
- *  since on that band and mode, and while club sync runs. */
+ *  since on that band and mode. At a club the club puts it back too (`club`). */
 export async function contestRestore(id: number): Promise<ContestRemovalAnswer> {
   return invoke<ContestRemovalAnswer>('contest_restore', { id })
 }

@@ -207,6 +207,17 @@ a club sync worked.*
   the rules score it (earliest contact wins). A contest that wants repeats
   reported, such as the New York QSO Party, keeps them in the file, scoring
   zero.
+- **Ctrl+D works at a club.** Pressed twice (or **Remove last**), it takes your
+  newest contact back from the club too: the host keeps it, marked taken back
+  and never deleted, every position's club dupe check and the board drop it,
+  and the club Cabrillo and the club's counts leave it out. **Restore** under
+  **Removed** puts it back everywhere. A laptop away from the host when it
+  takes one back catches the club up when the link is back; its chip counts
+  the take-back until then. Each laptop takes back only contacts it logged
+  itself, the host included: a contact another position logged is taken back
+  on that laptop, or, if that laptop is gone for good, in the club Cabrillo
+  before you send it in. Every laptop in the club must run the same Nexus
+  release: an older one is turned away when it joins, and told to update.
 
 Hosting is the one time Nexus listens beyond the local computer, and only
 while the toggle is on. There is no join password — a club site LAN is

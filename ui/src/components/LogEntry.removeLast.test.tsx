@@ -218,15 +218,29 @@ describe('Ctrl+D pressed twice removes the newest contest contact', () => {
     expect(line()).toBe('Remove K9NR · 20m CW · 17:01 · 599 COOK/DUPG? Press Ctrl+D again.')
   })
 
-  it('says why, when club sync refuses it', async () => {
-    api.contestRemoveLast.mockResolvedValueOnce({ outcome: 'refused', refusal: 'clubSync' })
+  it('takes it back at a club too, and says when every laptop drops it', async () => {
+    api.contestRemoveLast.mockResolvedValueOnce(removed({ club: 'linked' } as never))
     render(strip(party(LOG)))
     ctrlD()
     await act(async () => {
       ctrlD()
     })
     expect(line()).toBe(
-      "Club sync is on, so this contact is already in the club log. Nothing was removed. Edit the club's Cabrillo file before you send it in.",
+      'Removed W9BBB · 20m CW · 17:01 · 599 LAKE from the contest log. Restore it on the contest screen. ' +
+        'The club log drops it too, on every laptop, as soon as the host has it.',
+    )
+  })
+
+  it('says the club catches up later when this laptop is away from the host', async () => {
+    api.contestRemoveLast.mockResolvedValueOnce(removed({ club: 'away' } as never))
+    render(strip(party(LOG)))
+    ctrlD()
+    await act(async () => {
+      ctrlD()
+    })
+    expect(line()).toBe(
+      'Removed W9BBB · 20m CW · 17:01 · 599 LAKE from the contest log. Restore it on the contest screen. ' +
+        'This laptop is not with the club host right now: the club log drops it when the link is back.',
     )
   })
 

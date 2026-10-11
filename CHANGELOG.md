@@ -54,8 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and mode. Its serial number and its club-sync number are never given to another contact, even
   after a restart. The strip also says where the contact had already gone (N3FJP, the N1MM
   broadcast, WSJT-X listeners, and your logbook with the services it was uploaded to), because
-  Nexus cannot take it back from there. Removal is refused while club sync is on, since the club
-  log cannot take a contact back yet. Ctrl+D never keys or stops the transmitter, and Esc still
+  Nexus cannot take it back from there. At a club, the club takes it back too (see "Ctrl+D works
+  at a club" below). Ctrl+D never keys or stops the transmitter, and Esc still
   stops TX. It is not offered on the Remote page or in the Remote client. The newest row on the
   contest screen has its own **Remove**, which asks the same way. Deleting a contact in the
   Logbook that you merged from the contest still running now removes it from the contest log too
@@ -280,6 +280,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tag and the line at the top of the list go together, and the park the hunt filled in goes with
   them. A park you typed, or one a Needed click filled in, stays. The ✕ is not offered on the
   Remote page.
+- **Ctrl+D works at a club.** With club sync on, Ctrl+D twice (or Remove last) takes your newest
+  contact back from the club too: the host keeps it, marked taken back and never deleted, every
+  laptop's club dupe check and the club board drop it, and the club Cabrillo and the club's counts
+  leave it out. Restore on the contest screen puts it back everywhere, and the club file is then
+  exactly what it was. A laptop away from the host catches the club up when the link is back, and
+  its club chip counts the take-back until then. Each laptop takes back only contacts it logged
+  itself. Club sync moves to a new version for this, so every laptop in the club needs this
+  release: an older Nexus is turned away when it joins, and told to update.
 
 ### Changed
 

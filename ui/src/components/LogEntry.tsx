@@ -2081,9 +2081,7 @@ export function LogEntry({
     const step = esmStepName(sent.role)
     if (sent.logged) {
       setEsmLine({
-        text: fieldDay?.club
-          ? t('contest.esm.stopped.loggedClubSync', { step, call: sent.call })
-          : t('contest.esm.stopped.logged', { step, call: sent.call }),
+        text: t('contest.esm.stopped.logged', { step, call: sent.call }),
         alert: true,
         about: sent.call,
       })
