@@ -29129,6 +29129,71 @@ async fn fd_merge_to_general(
     .await
 }
 
+/// One contest's contacts that the contest journal keeps past its four days and the logbook does
+/// not hold: what the contest screen offers to merge.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContestUnmergedDto {
+    /// The contest's rules-file event id, which the screen names it by.
+    event: String,
+    count: usize,
+    /// When the first and the last of them were logged, Unix seconds.
+    first_unix: u64,
+    last_unix: u64,
+}
+
+/// ⭐ The contest contacts no session loads any more and the logbook does not hold, by contest —
+/// what the contest screen offers to merge. Asking lets go of every one whose copy the logbook
+/// holds on disk, as such a contact always aged out of the journal. The logbook is read with the
+/// engine lock released, on the blocking pool.
+#[tauri::command]
+async fn contest_unmerged(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<ContestUnmergedDto>, String> {
+    let engine = Arc::clone(&state);
+    let offer =
+        tokio::task::spawn_blocking(move || tempo_app::engine::contest_unmerged::unmerged(&engine))
+            .await
+            .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(offer
+        .into_iter()
+        .map(|u| ContestUnmergedDto {
+            event: u.event.to_string(),
+            count: u.count,
+            first_unix: u.first_unix,
+            last_unix: u.last_unix,
+        })
+        .collect())
+}
+
+/// ⭐ Merge the contacts of contest `event` that the contest journal keeps past its four days and
+/// the logbook does not hold into the general logbook — the contest screen's offer. Safe to press
+/// twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.
+#[tauri::command]
+async fn contest_merge_unmerged(
+    state: State<'_, SharedEngine>,
+    event: String,
+) -> Result<(FdMergeReportDto, AppSnapshot), String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let (report, durability) =
+            tempo_app::engine::contest_unmerged::merge_unmerged(&engine, &event);
+        let answer = report.map(|report| {
+            (
+                FdMergeReportDto {
+                    added: report.added(),
+                    already: report.already,
+                    refused: report.refused,
+                    queued: false,
+                },
+                engine_lock(&engine).snapshot(),
+            )
+        });
+        (answer, durability)
+    })
+    .await
+}
+
 /// Set this session's upload destination (§18.1) — per session, default OFF.
 #[tauri::command(async)]
 fn fd_set_upload(
@@ -35212,6 +35277,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_restore,
             contest_removed,
             fd_merge_to_general,
+            contest_unmerged,
+            contest_merge_unmerged,
             fd_set_upload,
             contest_i_moved,
             fd_discover_events,
@@ -37243,6 +37310,61 @@ mod tests {
         for name in ["contest_removal", "contest_remove_last", "contest_restore"] {
             assert!(!remote.contains(name), "Remote must not reach {name}");
         }
+    }
+
+    /// ⭐ The contest screen's offer of the journal's contacts the logbook does not hold reaches
+    /// the app only if its two commands are REGISTERED; the merge answers once the logbook holds
+    /// what it wrote (`durable_command`), as the end-of-contest merge does; and neither is one of
+    /// Remote's operations, so a merge into the logbook is never made from afar.
+    #[test]
+    fn the_unmerged_contest_commands_are_registered_durable_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for (command, through) in [
+            ("contest_unmerged", "contest_unmerged::unmerged("),
+            (
+                "contest_merge_unmerged",
+                "contest_unmerged::merge_unmerged(",
+            ),
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{command},")),
+                "{command} is not registered — the contest screen would fail at runtime"
+            );
+            let body = src
+                .split_once(&format!("\nasync fn {command}("))
+                .expect("the command exists")
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            assert!(
+                body.contains(through),
+                "{command} must go through {through}"
+            );
+            if command == "contest_merge_unmerged" {
+                assert!(
+                    body.contains("durable_command("),
+                    "{command} waits for the logbook"
+                );
+            }
+        }
+        // POSITIVE CONTROL: Remote's change table carries the Logbook's delete.
+        let remote = include_str!("remote_service/operations/logging.rs");
+        assert!(
+            remote.contains("LogOp::Delete"),
+            "the control: Remote's own delete is there"
+        );
+        assert!(
+            !remote.contains("contest_unmerged"),
+            "Remote must not reach the contest journal's merge"
+        );
     }
 
     /// ⭐ The host's Give button reaches the engine only if its command is REGISTERED and goes

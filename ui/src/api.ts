@@ -824,6 +824,31 @@ export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
 }
 
+/** One contest's contacts that the contest journal keeps past its four days and the logbook does
+ *  not hold: what the contest screen offers to merge. `event` is the contest's rules-file id;
+ *  the times are Unix seconds. */
+export interface ContestUnmerged {
+  event: string
+  count: number
+  firstUnix: number
+  lastUnix: number
+}
+
+/** ⭐ The contest contacts no session loads any more and the logbook does not hold, by contest.
+ *  Asking also lets go of every one whose copy the logbook holds on disk, as such a contact
+ *  always aged out of the journal. */
+export async function contestUnmerged(): Promise<ContestUnmerged[]> {
+  return invoke<ContestUnmerged[]>('contest_unmerged')
+}
+
+/** ⭐ Merge one contest's contacts that the contest journal keeps past its four days into the
+ *  general logbook: the offer above. The end-of-contest merge's own rule, so a contact already
+ *  there is skipped, never duplicated. Nothing is queued for upload. */
+export async function contestMergeUnmerged(event: string): Promise<FdMergeReport> {
+  const [report] = await invoke<[FdMergeReport, AppSnapshot]>('contest_merge_unmerged', { event })
+  return report
+}
+
 /** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
  * section's strip, and the only caller.
  *

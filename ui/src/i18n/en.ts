@@ -4197,6 +4197,21 @@ export const EN = {
     other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
   },
   'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
+  // The contest contacts the journal keeps past its four days that the logbook does not hold,
+  // offered for the merge (ContestView's FdUnmergedNote). The dates are UTC days, YYYY-MM-DD;
+  // `days` is only ever said of two contacts or more.
+  'fieldDay.unmerged.day': {
+    one: "{{count}} contact from {{contest}}, logged {{date}} (UTC), is not in your logbook. This computer's contest journal keeps it until it is.",
+    other: "{{count}} contacts from {{contest}}, logged {{date}} (UTC), are not in your logbook. This computer's contest journal keeps them until they are.",
+  },
+  'fieldDay.unmerged.days':
+    "{{count}} contacts from {{contest}}, logged {{first}} to {{last}} (UTC), are not in your logbook. This computer's contest journal keeps them until they are.",
+  'fieldDay.unmerged.merge': {
+    one: 'Merge it into my logbook',
+    other: 'Merge these {{count}} into my logbook',
+  },
+  'fieldDay.unmerged.title':
+    'Add these contacts to your general logbook as they were logged. Safe to press twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',

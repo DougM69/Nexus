@@ -17,6 +17,7 @@ import { t } from '../i18n'
 
 vi.mock('../api', () => ({
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdActive: true, fdEvent: 'arrlfd' })),
   setSettings: vi.fn(async () => ({})),
   getFdRuleset: vi.fn(async () => null),

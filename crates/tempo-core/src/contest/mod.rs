@@ -89,7 +89,8 @@ pub use dupe::{DupeRule, SatKey, KEY_SEP};
 pub use render::{role_for, sent_exchange, sent_exchange_string};
 
 pub use merge::{
-    merge_into_general, merged_row, plan_merge, qid_for, session_of, MergeIdentity, MergeReport,
+    merge_into_general, merged_row, plan_aged_merge, plan_merge, qid_for, session_of, settle_aged,
+    MergeIdentity, MergeReport, Unmerged,
 };
 
 pub use session::{

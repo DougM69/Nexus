@@ -53,6 +53,8 @@ const ALLOWED = new Set([
   // the contest screen: its log, the removed list, the operator box, exports, merge, upload, club
   'contest_removed', 'contest_remove_last', 'contest_restore', 'set_fd_operator', 'export_log',
   'save_text_to_downloads', 'fd_merge_to_general', 'fd_set_upload', 'fd_club_export', 'fd_club_give_position',
+  // the journal's contacts the logbook does not hold: the read, and their merge into the logbook
+  'contest_unmerged', 'contest_merge_unmerged',
   'open_panel_window',
   // the log line: the contact, its serial binding, its hints, its sent exchange, its log
   'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
@@ -118,7 +120,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'get_snapshot') return snapshot
   if (cmd === 'get_settings') return { ...defaultSettings, fdActive: true, fdEvent: 'ilqp' }
   if (cmd === 'contest_entry_put') return ++rev
-  if (cmd === 'contest_removed') return []
+  if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (cmd === 'contest_log_manual' || cmd === 'contest_working' || cmd === 'contest_entry_reset') return snapshot
   if (cmd === 'contest_log_manual_rows') return [true]
   if (cmd === 'export_log' || cmd === 'fd_club_export') return 'QSO: …'

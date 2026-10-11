@@ -10,7 +10,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExport, fdClubGivePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdGiveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubExport, fdClubGivePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
@@ -1538,6 +1538,72 @@ function FdKeptOutNote({
 }
 
 /**
+ * ⭐ The contacts in this computer's contest journal that no session loads any more (logged more
+ * than four days ago) and the logbook does not hold — how many, from which contest and when —
+ * with the merge for each contest. The journal keeps them until they are merged; the merge is the
+ * end-of-contest one's rule, so a press never writes a contact twice. The report stays when the
+ * offer it answered goes.
+ */
+function FdUnmergedNote({
+  unmerged,
+  busy,
+  report,
+  error,
+  onMerge,
+}: {
+  unmerged: ContestUnmerged[]
+  busy: string | null
+  report: FdMergeReport | null
+  error: string | null
+  onMerge: (event: string) => void
+}) {
+  return (
+    <>
+      {unmerged.map((u) => {
+        const contest = contestName(u.event)
+        const [first, last] = [utcDay(u.firstUnix), utcDay(u.lastUnix)]
+        return (
+          <div className="fd-merge" key={u.event}>
+            <p className="fd-score-note" role="note">
+              {first === last
+                ? t('fieldDay.unmerged.day', { count: u.count, contest, date: first })
+                : t('fieldDay.unmerged.days', { count: u.count, contest, first, last })}
+            </p>
+            <button
+              type="button"
+              className="export-btn fd-merge-btn"
+              disabled={busy !== null}
+              onClick={() => onMerge(u.event)}
+              title={t('fieldDay.unmerged.title')}
+            >
+              {busy === u.event ? t('fieldDay.merge.busy') : t('fieldDay.unmerged.merge', { count: u.count })}
+            </button>
+          </div>
+        )
+      })}
+      {(report || error) && (
+        <div className="fd-merge">
+          {report && (
+            <span className="fd-merge-report" role="status">
+              {t('fieldDay.merge.added', { count: report.added })}
+              {' · '}
+              {t('fieldDay.merge.already', { count: report.already })}
+              {report.refused > 0 && <> {' · '}{t('fieldDay.merge.refused', { count: report.refused })}</>}
+            </span>
+          )}
+          {error && <span className="log-export-error" role="alert">{error}</span>}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** A Unix time's UTC day, YYYY-MM-DD: the date a contest log gives a contact. */
+function utcDay(unix: number): string {
+  return new Date(unix * 1000).toISOString().slice(0, 10)
+}
+
+/**
  * Club sync switched on for a contest it cannot run, said where the club block would be.
  *
  * The engine refuses it (`clubSyncRefusal`, `Engine::club_sync_refusal`): the club log runs
@@ -2098,6 +2164,48 @@ export function ContestView({
     } finally {
       setMerging(false)
     }
+  }
+
+  // ⭐ The contest contacts no session loads any more that the logbook does not hold: the journal
+  // keeps each until it is merged. Asked of the station when the view opens and when the contest
+  // changes (asking also lets go of the ones already merged), never by a Remote observer, and
+  // merged only at the station, as the end-of-contest merge is.
+  const [unmerged, setUnmerged] = useState<ContestUnmerged[]>([])
+  const [unmergedBusy, setUnmergedBusy] = useState<string | null>(null)
+  const [unmergedReport, setUnmergedReport] = useState<FdMergeReport | null>(null)
+  const [unmergedError, setUnmergedError] = useState<string | null>(null)
+  const contestOn = fieldDay != null
+  const shownContest = fieldDay?.event
+  useEffect(() => {
+    if (observed || !contestOn) {
+      setUnmerged([])
+      return
+    }
+    let live = true
+    contestUnmerged().then((u) => live && setUnmerged(u)).catch(() => {})
+    return () => { live = false }
+  }, [observed, contestOn, shownContest])
+  const mergeUnmerged = async (event: string) => {
+    if (isStreamInput()) {
+      setUnmergedReport(null)
+      setUnmergedError(t('fieldDay.merge.remote'))
+      return
+    }
+    setUnmergedBusy(event)
+    setUnmergedError(null)
+    try {
+      setUnmergedReport(await contestMergeUnmerged(event))
+    } catch (e) {
+      // The engine's own sentence: outside the contest, or a contest whose session Settings
+      // cannot build, in the words entering that contest would use.
+      setUnmergedReport(null)
+      setUnmergedError(String(e))
+      return
+    } finally {
+      setUnmergedBusy(null)
+    }
+    // Asked again, so that what the merge wrote is no longer offered.
+    contestUnmerged().then(setUnmerged).catch(() => {})
   }
 
   // One optimistic writer for every scoring field on this panel (earned list, plan list,
@@ -2709,6 +2817,17 @@ export function ContestView({
       )}
       {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
       {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
+      {/* …and the ones past its four days that the logbook does not hold, with their merge: never
+          asked for by a Remote observer, so never shown there, and never pressed from afar. */}
+      {(unmerged.length > 0 || unmergedReport || unmergedError) && (
+        <FdUnmergedNote
+          unmerged={unmerged}
+          busy={unmergedBusy}
+          report={unmergedReport}
+          error={unmergedError}
+          onMerge={(event) => void mergeUnmerged(event)}
+        />
+      )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />

@@ -19,6 +19,7 @@ vi.mock('../api', () => ({
   exportLog: vi.fn(async () => ''),
   openPanelWindow: vi.fn(async () => {}),
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   contestRemoveLast: vi.fn(),
   contestRestore: vi.fn(),
 }))

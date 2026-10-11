@@ -1020,8 +1020,8 @@ struct Aside {
     arrived: Option<u64>,
 }
 
-/// How far back a host journal replay reaches. Matches the position ADIF journal's own
-/// four-day expiry — see `ClubLog::attach_journal_since` for why they must agree.
+/// How far back a host journal replay reaches: four days, the position ADIF journal's window —
+/// see `ClubLog::attach_journal_since` for why.
 const STALE_EVENT_SECS: u64 = 4 * 86_400;
 
 fn now_unix() -> u64 {
@@ -1433,9 +1433,11 @@ impl ClubLog {
     /// A position worked a full event into a host that kept none of it, with nothing on
     /// screen wrong, discovered at submission.
     ///
-    /// Four days is the position journal's own expiry (see `restore_field_day_if_enabled`),
+    /// Four days was the position journal's own expiry (see `restore_field_day_if_enabled`),
     /// deliberately: the two halves of the same event must age out together or the watermark
-    /// outlives the log it describes, which is exactly this bug.
+    /// outlives the log it describes, which is exactly this bug. The position's journal now keeps
+    /// its running's rows whatever their age and numbers on from them, so inside a running the
+    /// watermark cannot outlive them; the cutoff still keeps an earlier event's out.
     pub fn attach_journal_since(
         &mut self,
         path: &PathBuf,

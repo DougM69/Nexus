@@ -477,6 +477,9 @@ enum RowFate {
     NoCall,
     /// Passed over on purpose: from a previous event, or already in the log.
     Passed,
+    /// Older than the restore's window, and never taken back: no session's log holds it, and
+    /// the journal restore keeps it ([`FieldDayLog::aged`]).
+    Aged,
 }
 
 /// Why a journal record was kept out of the log it was restored into
@@ -497,6 +500,32 @@ struct HeldRecord {
     why: Held,
     /// Its tags through its `<EOR>`, byte for byte.
     adif: String,
+}
+
+/// A journal record older than the restore's window — no session's log holds its contact — kept
+/// as the journal held it until a copy of it is in the Logbook ([`FieldDayLog::aged`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgedRecord {
+    /// Its tags through its `<EOR>`, byte for byte.
+    adif: String,
+    /// Its `CONTEST_ID`, trimmed: `""` names this log's contest, as it does to the restore.
+    contest_id: String,
+    when_unix: u64,
+    /// Its `APP_NEXUS_QSEQ`, `0` when it carries none.
+    seq: u64,
+}
+
+/// A contact the journal keeps past its window ([`FieldDayLog::aged`]), as the Logbook is asked
+/// about it.
+#[derive(Clone, Debug)]
+pub(crate) struct AgedContact {
+    /// The rules of its contest (its rules-file event id, its runnings); `None` for one the
+    /// loaded rules do not hold.
+    pub(crate) rules: Option<&'static crate::fd_rules::FdRuleset>,
+    pub(crate) when_unix: u64,
+    /// Its merge identity at the position asked about: `None` when it can have none — it
+    /// carries no number, or names a contest the loaded rules do not hold.
+    pub(crate) identity: Option<crate::contest::MergeIdentity>,
 }
 
 /// The highest [`LoggedQso::seq`] among the rows a journal restore let go, and when the latest
@@ -634,11 +663,13 @@ pub struct FieldDayLog {
     /// when the latest of them was logged. Read from the journal's header and written back
     /// into it ([`journal_adif`](Self::journal_adif)), so it outlives the rows.
     ///
-    /// The rows go after four days, and their numbers went with them: a contact logged in
-    /// the same running five days on was numbered 1 again, so its merge name was the first
-    /// contact's and the merge took it for one already in the Logbook — as a club host
-    /// holding `(position, 1)` would have. A session of the running they were logged in
-    /// numbers on from them ([`restore_journal`](Self::restore_journal)).
+    /// An earlier build's restore let a running's rows go after four days, and their numbers
+    /// went with them: a contact logged in the same running five days on was numbered 1 again,
+    /// so its merge name was the first contact's and the merge took it for one already in the
+    /// Logbook — as a club host holding `(position, 1)` would have. A session of the running
+    /// they were logged in numbers on from them ([`restore_journal`](Self::restore_journal)).
+    /// This build lets go no row of the running it restores: the header keeps those builds'
+    /// numbers, and the numbers of the records it ages ([`aged`](Self::aged)).
     ///
     /// ⚠️ **A number kept beside the rows, where the serial run is re-derived from them**
     /// (`restore_row`), and the difference is which way each may err. A serial must follow
@@ -646,6 +677,20 @@ pub struct FieldDayLog {
     /// needed costs nothing. It holds the numbers of rows no longer in the file alone: every
     /// row still in it numbers itself.
     spent: Spent,
+    /// ⭐ **The contacts the journal keeps past its window**: the records of another contest, or of
+    /// another running of this one, that a journal restore found older than `min_when_unix` and
+    /// never taken back ([`restore_journal`](Self::restore_journal)),
+    /// kept as the journal held them and written back by every rewrite
+    /// ([`journal_adif`](Self::journal_adif)). No session's log loads them.
+    ///
+    /// The restore let them go with the rest of the rows past its four days, and the next
+    /// contact rewrote the journal without them, so a contact never merged into the Logbook was
+    /// then in no file Nexus keeps. This log cannot see the Logbook, so it keeps every one; one
+    /// goes only once a copy of it is on disk there, made at its own time
+    /// ([`settle_aged`](crate::contest::settle_aged)), which is how a merged contact still ages
+    /// out. Their numbers are [`spent`](Self::spent), as before. A record taken back
+    /// (`APP_NEXUS_REMOVED`) is not kept: it ages out as it always did, and stays taken back.
+    aged: Vec<AgedRecord>,
 }
 
 impl FieldDayLog {
@@ -675,6 +720,7 @@ impl FieldDayLog {
             next_seq: 1,
             held: Vec::new(),
             spent: Spent::default(),
+            aged: Vec::new(),
         }
     }
 
@@ -1761,7 +1807,8 @@ impl FieldDayLog {
     /// into this log — the restore half of the durable Field Day backup, so a
     /// restart mid-event doesn't reset the contest log. Rows missing a CALL or
     /// stamped before `min_when_unix` are skipped (a previous event's journal
-    /// self-expires), rows already in the dupe index are skipped, and garbage
+    /// stays out of the log; the second are kept for the journal, [`aged`](Self::aged)),
+    /// rows already in the dupe index are skipped, and garbage
     /// input merges nothing — never an error. Restored dupe keys keep the ROW's
     /// band, so they survive a mid-event QSY. A row the journal marks removed
     /// (`APP_NEXUS_REMOVED`) comes back REMOVED ([`removed`](Self::removed)), outside the
@@ -1790,6 +1837,11 @@ impl FieldDayLog {
         let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let mut merged = AdifMerge::default();
         let mut torn = false;
+        // Every record kept past the window, by its text, so a journal read again into this log
+        // keeps each once without a pass over all of them per record: a year of contests is tens
+        // of thousands, and the restore runs under the Engine lock.
+        let already: Vec<String> = self.aged.iter().map(|a| a.adif.clone()).collect();
+        let mut kept: HashSet<&str> = already.iter().map(String::as_str).collect();
         let bytes = body.as_bytes();
         let mut i = 0;
         // Where the record being read began: just past the last `<EOR>`.
@@ -1809,12 +1861,27 @@ impl FieldDayLog {
             let tag = &body[i + 1..end];
             i = end + 1;
             if tag.eq_ignore_ascii_case("EOR") {
-                match running.and_then(|r| self.kept_out(&cur, min_when_unix, r)) {
+                // ⭐ The restore loads this session's records whatever their age. Another
+                // contest's, or another running's, is held while it is inside the window, and
+                // past it is kept until the Logbook holds a copy (`restore_row` ages it).
+                let held = running.and_then(|r| self.kept_out(&cur, r));
+                let window = if running.is_some() && held.is_none() {
+                    0
+                } else {
+                    min_when_unix
+                };
+                match held.filter(|_| record_when(&cur) >= window) {
                     Some(why) => self.hold(why, body[record_start..i].trim_start(), &cur),
-                    None => match self.restore_row(&cur, min_when_unix) {
+                    None => match self.restore_row(&cur, window) {
                         RowFate::Restored => merged.restored += 1,
                         RowFate::NoCall => merged.unreadable += 1,
                         RowFate::Passed => {}
+                        RowFate::Aged => {
+                            let record = body[record_start..i].trim_start();
+                            if kept.insert(record) {
+                                self.keep_aged(record, &cur);
+                            }
+                        }
                     },
                 }
                 cur.clear();
@@ -1856,11 +1923,17 @@ impl FieldDayLog {
     /// to. Their sequence numbers stay taken: a club host or the general log holding a
     /// rehearsal's `(position, seq)` would read a re-used one as a contact it already has.
     ///
-    /// ⭐ **So do the numbers of this running's rows older than `min_when_unix`**, which the
-    /// restore lets go (`spent`): a contact logged days after the running's first ones
-    /// numbers on from them, and is merged. Only this running's: the next one's names never
-    /// meet them, and a club host starting that event empty would count numbers carried on
-    /// as contacts still to come.
+    /// ⭐ **This session's own rows are loaded whatever their age**: a sponsor takes a log for
+    /// weeks, so the Cabrillo file, the score and the dupe check of a session opened days
+    /// after the contest are the whole running's. `min_when_unix` ages only the records kept
+    /// out: one of another contest or running older than it is not held, but kept the same way
+    /// until a copy of it is in the Logbook ([`aged`](Self::aged)), its number spent.
+    ///
+    /// ⭐ **The numbers in the journal's header still count** (`spent`): an earlier build's
+    /// restore let this running's rows past its four days go, and a contact logged now numbers
+    /// on from them. Only this running's: the next one's names never meet them, and a club
+    /// host starting that event empty would count numbers carried on as contacts still to
+    /// come.
     pub fn restore_journal(&mut self, text: &str, min_when_unix: u64, now_unix: u64) -> AdifMerge {
         let running = self.ruleset().running_of(now_unix);
         let merged = self.merge_journal(text, min_when_unix, Some(running));
@@ -1880,9 +1953,10 @@ impl FieldDayLog {
 
     /// ⭐ **The journal: the rows of [`adif`](Self::adif), each with the exchange it was sent
     /// with; in its header the numbers of the rows a restore let go (`spent`); and the records
-    /// the restore held**, after them, as the journal held them — what the engine writes the
-    /// journal file from, so a row kept out of this session is never dropped by a rewrite.
-    /// Never an export: those carry this log's rows alone, as [`adif`](Self::adif) writes them.
+    /// the restore held, then the ones it kept past its window** ([`aged`](Self::aged)), after
+    /// them, as the journal held them — what the engine writes the journal file from, so a row
+    /// kept out of this session is never dropped by a rewrite. Never an export: those carry this
+    /// log's rows alone, as [`adif`](Self::adif) writes them.
     pub fn journal_adif(&self) -> String {
         let removed = self
             .removed
@@ -1904,28 +1978,28 @@ impl FieldDayLog {
             s.push_str(&h.adif);
             s.push('\n');
         }
+        for a in &self.aged {
+            s.push_str(&a.adif);
+            s.push('\n');
+        }
         s
     }
 
-    /// Why the restore keeps `f` out of this log, or `None` to restore it (or to leave it
-    /// to [`restore_row`](Self::restore_row), which reports a record with no call and
-    /// passes one older than `min_when_unix` over, exactly as before).
+    /// Why the restore keeps `f` out of this log: it is another contest's, or another
+    /// running's of this one. `None` for one of this session's own, which the restore loads
+    /// whatever its age (and for a record with no call, which
+    /// [`restore_row`](Self::restore_row) reports).
     fn kept_out(
         &self,
         f: &std::collections::HashMap<String, String>,
-        min_when_unix: u64,
         running: u16,
     ) -> Option<Held> {
         f.get("CALL").filter(|c| !c.trim().is_empty())?;
-        let when = record_when(f);
-        if when < min_when_unix {
-            return None;
-        }
         let contest = f.get("CONTEST_ID").map_or("", |c| c.trim());
         if !contest.is_empty() && !contest.eq_ignore_ascii_case(self.session.contest_id.trim()) {
             return Some(Held::OtherContest);
         }
-        (self.ruleset().running_of(when) != running).then_some(Held::OtherRunning)
+        (self.ruleset().running_of(record_when(f)) != running).then_some(Held::OtherRunning)
     }
 
     /// Keep a journal record out of this log, and keep it.
@@ -1943,6 +2017,89 @@ impl FieldDayLog {
                 adif: adif.to_string(),
             });
         }
+    }
+
+    /// Keep a journal record older than the restore's window, as the journal held it
+    /// ([`aged`](Self::aged)). Once: `merge_journal` passes over one already kept.
+    fn keep_aged(&mut self, adif: &str, f: &std::collections::HashMap<String, String>) {
+        self.aged.push(AgedRecord {
+            adif: adif.to_string(),
+            contest_id: f.get("CONTEST_ID").map_or("", |c| c.trim()).to_string(),
+            when_unix: record_when(f),
+            seq: f
+                .get("APP_NEXUS_QSEQ")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(0),
+        });
+    }
+
+    /// How many contacts the journal keeps past its window ([`aged`](Self::aged)): the ones a
+    /// Logbook has not yet been asked about ([`settle_aged`](crate::contest::settle_aged)), and
+    /// the ones it holds no copy of.
+    pub fn aged(&self) -> usize {
+        self.aged.len()
+    }
+
+    /// ⭐ **The contacts the journal keeps past its window** ([`aged`](Self::aged)), in the
+    /// journal's order, each with its contest and its merge identity at position `posid`.
+    ///
+    /// The identity is the one the merge would mint for the row in a session of its contest:
+    /// this log's own contest and rules for a record of it (its `CONTEST_ID`, or none, as the
+    /// restore reads one), the loaded ruleset of that id otherwise
+    /// ([`ruleset_by_contest_id`](crate::fd_rules::ruleset_by_contest_id)) — the contest id and
+    /// the rules a session built for that ruleset carries ([`aged_log`](Self::aged_log)).
+    pub(crate) fn aged_contacts(&self, posid: &str) -> Vec<AgedContact> {
+        self.aged
+            .iter()
+            .map(|a| {
+                let ours = a.contest_id.is_empty()
+                    || a.contest_id
+                        .eq_ignore_ascii_case(self.session.contest_id.trim());
+                let contest = if ours {
+                    Some((self.session.contest_id.as_str(), self.ruleset()))
+                } else {
+                    crate::fd_rules::ruleset_by_contest_id(
+                        &a.contest_id,
+                        crate::fd_rules::CURRENT_RULES_YEAR,
+                    )
+                    .map(|rs| (rs.contest_id, rs))
+                };
+                AgedContact {
+                    rules: contest.map(|(_, rs)| rs),
+                    when_unix: a.when_unix,
+                    identity: contest.filter(|_| a.seq > 0).map(|(id, rs)| {
+                        crate::contest::MergeIdentity::of_contest(id, rs, posid, a.seq, a.when_unix)
+                    }),
+                }
+            })
+            .collect()
+    }
+
+    /// The contacts the journal keeps past its window at `at` in
+    /// [`aged_contacts`](Self::aged_contacts), read back into one log on `session` — a session of
+    /// their contest — as its live rows: what the merge offered for them writes from. Each is
+    /// read alone, so that no other one's dupe key can turn it away: the sessions they were
+    /// logged in never held them together.
+    pub(crate) fn aged_log(&self, at: &[usize], session: crate::contest::ContestSession) -> Self {
+        let mut log = Self::new(&self.mycall, session, &self.band);
+        for a in at.iter().filter_map(|&i| self.aged.get(i)) {
+            let mut one = Self::new(&self.mycall, log.session.clone(), &self.band);
+            one.merge_adif(&a.adif, 0);
+            log.qsos.append(&mut one.qsos);
+        }
+        log
+    }
+
+    /// Let go of the contacts the journal keeps past its window at `at` in
+    /// [`aged_contacts`](Self::aged_contacts): the next rewrite of the journal leaves them out.
+    /// Their numbers stay spent.
+    pub(crate) fn let_go_aged(&mut self, at: &[usize]) {
+        let at: HashSet<usize> = at.iter().copied().collect();
+        let mut i = 0;
+        self.aged.retain(|_| {
+            i += 1;
+            !at.contains(&(i - 1))
+        });
     }
 
     /// A journal record the restore lets go, older than its window: its number stays taken
@@ -2021,10 +2178,17 @@ impl FieldDayLog {
             None => ("DIG", String::new()),
         };
         let when_unix = record_when(f);
+        let removed_unix = f
+            .get("APP_NEXUS_REMOVED")
+            .and_then(|v| v.trim().parse::<u64>().ok());
         if when_unix < min_when_unix {
-            // Let go: the next rewrite of the journal drops the row, but not its number.
+            // Out of this log, and its number stays taken. A contact taken back goes with the
+            // next rewrite of the journal, as every row past the window went; any other is kept.
             self.spend(f, when_unix);
-            return RowFate::Passed;
+            return match removed_unix {
+                Some(_) => RowFate::Passed,
+                None => RowFate::Aged,
+            };
         }
         // The ROW's band, not the log's current one — a restored dupe key must
         // keep its original band across a mid-event QSY.
@@ -2112,9 +2276,6 @@ impl FieldDayLog {
         // it is never offered to the index. Offered, a station worked again since would refuse
         // it out of the journal right here, and the next save would drop it for good. Its
         // numbers are still read below, which is what stops a restart reissuing them.
-        let removed_unix = f
-            .get("APP_NEXUS_REMOVED")
-            .and_then(|v| v.trim().parse::<u64>().ok());
         let dupe = match removed_unix {
             Some(_) => false,
             None => match self.admit_row(key, sat.is_some()) {

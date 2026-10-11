@@ -579,6 +579,24 @@ pub fn ruleset_by_id(event_id: &str, year: u16) -> Option<&'static FdRuleset> {
         .or_else(|| mine().max_by_key(|r| r.rules_year))
 }
 
+/// The active ruleset whose ADIF `CONTEST_ID` is `contest_id` (trimmed, in any case) — the one
+/// name a contest journal's record carries for its contest. Chosen by year as
+/// [`ruleset_by_id`] chooses; `None` for an id no ruleset in the loaded table declares.
+pub fn ruleset_by_contest_id(contest_id: &str, year: u16) -> Option<&'static FdRuleset> {
+    let id = contest_id.trim();
+    let mine = || {
+        table()
+            .rulesets
+            .iter()
+            .copied()
+            .filter(|r| r.contest_id.eq_ignore_ascii_case(id))
+    };
+    mine()
+        .filter(|r| r.rules_year <= year)
+        .max_by_key(|r| r.rules_year)
+        .or_else(|| mine().max_by_key(|r| r.rules_year))
+}
+
 /// The ARRL/RAC section master list — the section universe the worked-sections
 /// board (spec §5) and setup validation read from. Ordered and grouped by ARRL
 /// division so the board renders one tidy block per division; the ordering is

@@ -122,8 +122,10 @@ vi.mock('./api', async () => {
     return () => {}
   })
   out.getBandPlan = vi.fn().mockResolvedValue([])
-  // The contest logger window draws the whole contest screen, whose Removed list is a list.
+  // The contest logger window draws the whole contest screen, whose Removed list is a list, and
+  // so is its offer of the journal's contacts the logbook does not hold.
   out.contestRemoved = vi.fn().mockResolvedValue([])
+  out.contestUnmerged = vi.fn().mockResolvedValue([])
   out.getNeedAlerts = vi.fn().mockResolvedValue([])
   out.getAllSpots = vi.fn().mockResolvedValue([])
   out.parksCount = vi.fn().mockResolvedValue(0)
