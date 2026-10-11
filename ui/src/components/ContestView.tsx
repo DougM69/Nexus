@@ -13,6 +13,7 @@ import { contestRemoveLast, contestRemoved, contestRestore, exportLog, fdClubExp
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
+import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
@@ -2100,6 +2101,9 @@ export function ContestView({
   const [modeBusy, setModeBusy] = useState(false)
   // A refused turn-on: what was missing at the moment the operator asked, read fresh then.
   const [refusal, setRefusal] = useState<StartBlocker | null>(null)
+  // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning the mode off offers, while
+  // it is open. The save that turns the mode off waits for its answer.
+  const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
   const toggleMode = async () => {
     if (observed || logger || modeBusy) return
     const next = !modeOn
@@ -2114,6 +2118,15 @@ export function ContestView({
           setRefusal(blocked)
           return
         }
+      } else {
+        // OFF: offer the checklist BEFORE the mode goes, because the merge and the export need the
+        // session it holds. Read against what is saved NOW, the engine's note of "before" included.
+        // With nothing to offer, the switch goes off as it always did.
+        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event)
+        if (hasOffer(offer)) {
+          setOverOffer(offer)
+          return
+        }
       }
       await patchSettings(() => ({ fdActive: next }))
       setRefusal(null)
@@ -2124,6 +2137,17 @@ export function ContestView({
     } finally {
       setModeBusy(false)
     }
+  }
+
+  // The checklist's "Turn off": ONE save, the mode off with the ticked settings put back (the merge,
+  // the export and Unassisted are done by then). A refusal rejects back into the checklist, which
+  // shows it and stays open with the mode still on.
+  const turnOffWithChecklist = async (putBack: Partial<Settings>) => {
+    await patchSettings(() => ({ ...putBack, fdActive: false }))
+    setOverOffer(null)
+    setRefusal(null)
+    setModeWritten(false)
+    onSettingsSaved?.()
   }
 
   // Event header: the window arrives Rust-computed on the DTO (fd_rules data —
@@ -2321,6 +2345,7 @@ export function ContestView({
 
   return (
     <section className="conversation panel fieldday">
+      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
       {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
         {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place

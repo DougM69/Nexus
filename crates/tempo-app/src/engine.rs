@@ -22,6 +22,10 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+mod contest_before;
+/// The station as it was before the contest changed it: taken, kept, let go, round-tripped.
+#[cfg(test)]
+mod contest_before_tests;
 pub mod contest_entry;
 /// The contest strip's contact in progress, shared with the logger window, through the engine.
 #[cfg(test)]
@@ -6080,6 +6084,11 @@ impl Engine {
         } else {
             s.active_radio
         };
+        // THE NOTE OF THE STATION BEFORE THE CONTEST is the engine's (`contest_before.rs`): read
+        // what it covers before the save lands, and hold the engine's own note over the payload's.
+        let contest_was = crate::settings::ContestBefore::of(&self.settings);
+        let contest_was_active = self.settings.fd_active;
+        let live_contest_before = self.settings.contest_before.take();
         self.settings = s;
         // A settings save can carry a new position id.
         self.sync_log_posid();
@@ -6131,6 +6140,9 @@ impl Engine {
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
             self.settings.macros.psk_profiles = live_psk_profiles;
             self.settings.macros.active_psk_profile = live_active_psk_profile;
+            // A form never writes or wipes the note; the save itself may take it or end it.
+            self.settings.contest_before = live_contest_before;
+            self.note_contest_before(contest_was, contest_was_active);
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -6487,7 +6499,9 @@ impl Engine {
     /// the three callers cannot disagree about the stored shape; returns the updated
     /// [`Settings`] for the caller to persist.
     pub fn set_fd_operator(&mut self, call: String) -> Settings {
+        let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.fd_operator = call.trim().to_ascii_uppercase();
+        self.note_contest_before(was, self.settings.fd_active);
         // The next contact is theirs, whichever path logs it (the digital sequencer's
         // included), so the running log learns the name now rather than at the next QSY.
         let operator = self.fd_row_operator();
@@ -17972,7 +17986,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// model's copy visible after the model has been switched off would be stale text
     /// presented as live decode.
     pub fn set_unassisted_mode(&mut self, on: bool) {
+        let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.unassisted_mode = on;
+        self.note_contest_before(was, self.settings.fd_active);
         if on {
             self.ai_cw_text.clear();
             self.ai_cw_status.clear();

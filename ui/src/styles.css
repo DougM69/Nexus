@@ -29525,6 +29525,78 @@ tr.sel .aprs-sym {
   gap: var(--space-2);
   margin-top: var(--space-4);
 }
+/* THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx), in the portaled dialog. Every put-back row
+   and its header share one fixed track template, so "Now" and "Before" line up down the list
+   whatever the values hold; a long value clips rather than push a column (its title has it all).
+   The narrow tracks are `rem`, not `em`: the header's type is smaller than a row's, and an `em`
+   track put its "Before" about 3 px off the values under it (measured in headless Chrome). */
+.contest-over {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.contest-over-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+}
+.contest-over-putback {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.contest-over-putback legend {
+  padding: 0 var(--space-1);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.contest-over-note {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-faint);
+}
+.contest-over-head,
+.contest-over-row {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 2fr) minmax(0, 1.5fr) 1.5rem minmax(0, 1.5fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+.contest-over-head {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.contest-over-row {
+  padding: 2px 0;
+  font-size: var(--fs-body);
+}
+.contest-over-now,
+.contest-over-before {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.contest-over-now {
+  color: var(--text-dim);
+}
+.contest-over-before {
+  font-weight: 700;
+  color: var(--text);
+}
+.contest-over-arrow {
+  text-align: center;
+  color: var(--text-faint);
+}
+.contest-over-error {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--state-weak);
+}
 /* The affirmative button of a DESTRUCTIVE confirm (`danger: true`). Without this the class was
    inert — there is no `.settings-save.danger` or bare `.danger` rule — so all eleven destructive
    confirms painted as an ordinary accent save button, and the one visual cue that this button

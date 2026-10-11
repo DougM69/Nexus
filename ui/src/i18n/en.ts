@@ -3951,6 +3951,26 @@ export const EN = {
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
+  // THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning Contest mode off offers.
+  // Nothing in it is ticked to begin with, and nothing is done that the operator did not tick.
+  'contestOver.title': 'Contest over?',
+  'contestOver.desc':
+    'Contest mode goes off when you press Turn off. Tick what you want done first: nothing is done that you have not ticked.',
+  'contestOver.export': 'Export the Cabrillo log to Downloads',
+  'contestOver.putBack.legend': 'Put back what the contest changed',
+  'contestOver.putBack.note':
+    'Before is how each one was the first time it changed for this contest, or when Contest mode went on.',
+  'contestOver.putBack.now': 'Now',
+  'contestOver.putBack.before': 'Before',
+  'contestOver.putBack.aria': 'Put back {{setting}}: {{now}} back to {{before}}',
+  'contestOver.value.on': 'On',
+  'contestOver.value.off': 'Off',
+  'contestOver.value.yourCall': 'your callsign',
+  'contestOver.value.none': 'none',
+  'contestOver.value.notDeclared': 'not declared',
+  'contestOver.notNow': 'Not now',
+  'contestOver.turnOff': 'Turn off',
+  'contestOver.busy': 'Working…',
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 

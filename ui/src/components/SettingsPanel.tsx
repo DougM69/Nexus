@@ -210,6 +210,7 @@ import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
+import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { resolveTarget } from '../settings/registry'
 import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -1938,6 +1939,8 @@ export function SettingsPanel({
    * already marks precisely the moments the form equals what is stored.
    */
   const savedRef = useRef<Settings | null>(null)
+  // The contest-over checklist, while a Save that turns Contest mode off waits for its answer.
+  const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
   /** Marks the position-name box when a save is refused for it — the callsign refusal has
    *  always marked ITS field, and a refusal that routes you to a tab without saying which box
    *  is the problem is only half an answer. Cleared as soon as the operator types. */
@@ -2747,9 +2750,13 @@ export function SettingsPanel({
   // radio, and the backend folds a payload's flat fields into the radio its `activeRadio` names, so
   // a mix would stamp one radio's ports onto the other. That form goes whole, as it always did, and
   // the backend's own rule for a form that is not about the active radio applies.
-  const saveForm = (payload: NonNullable<typeof form>) => {
+  //
+  // `forced` reaches the backend whatever the form held when it loaded: the contest-over checklist's
+  // put-backs, which "what changed since" would drop when a value was changed elsewhere after Settings
+  // opened (a seat swap in the pop-out scoreboard) and is being put back to what the form still holds.
+  const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     const changes = changedSince(savedRef.current, payload)
-    return patchSettings((live) => (live.activeRadio === payload.activeRadio ? changes : payload))
+    return patchSettings((live) => ({ ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }))
   }
 
   // Persist the rig form to the radio it actually describes.
@@ -2777,7 +2784,7 @@ export function SettingsPanel({
   //
   // Takes the form explicitly: setForm is async, so a caller that just built a new form must
   // hand it over rather than let this read a stale closure.
-  const persistRadioForm = async (next: NonNullable<typeof form>) => {
+  const persistRadioForm = async (next: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     // Every save moves whatever the backend derives from the saved settings — today the
     // contest role preview, which is why it reads this rather than the form.
     setSavedTick((n) => n + 1)
@@ -2786,10 +2793,13 @@ export function SettingsPanel({
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
       // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
       // cannot be stamped onto the one being operated (the 2026-07-25 report).
-      await saveForm({
-        ...withActiveRadioConfig(next),
-        mycall: next.mycall.trim().toUpperCase(),
-      })
+      await saveForm(
+        {
+          ...withActiveRadioConfig(next),
+          mycall: next.mycall.trim().toUpperCase(),
+        },
+        forced,
+      )
       await updateRadioProfile(
         editingRadioId,
         radioPatch({
@@ -2799,7 +2809,7 @@ export function SettingsPanel({
         }),
       )
     } else {
-      await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() })
+      await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
   }
 
@@ -3398,15 +3408,38 @@ export function SettingsPanel({
       )
       return
     }
+    // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
+    // offers it FIRST and saves nothing until it is answered — the merge and the export need the
+    // session the mode holds. "Now" is what this Save would leave: the live settings, with this
+    // form's own changes. With nothing to offer, the Save goes ahead as it always did.
+    if (savedRef.current?.fdActive === true && !form.fdActive) {
+      const live = await getSettings()
+      const offer = contestOverOffer(
+        { ...live, ...changedSince(savedRef.current, form) },
+        fieldDay?.log?.length ?? 0,
+        fieldDay?.event,
+      )
+      if (hasOffer(offer)) {
+        setOverOffer(offer)
+        return
+      }
+    }
+    await commitSave(form).catch(() => {})
+  }
+
+  // THE SAVE ITSELF, once every check above has passed (and the checklist, when it was offered, has
+  // been answered). `forced` goes to the backend whatever the form held when it loaded (`saveForm`).
+  // Shows the backend's words on a refusal, and rejects with them for a caller that shows them too.
+  const commitSave = async (next: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     setStatus('saving')
     setError(null)
     try {
       // Editing a NON-active radio writes ONLY that radio's CAT/audio/PTT/rotator/native config;
       // the active radio, its flat mirror and station-wide settings are untouched (the backend
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
-      await persistRadioForm(form)
+      await persistRadioForm(next, forced)
       dirtyRef.current = false
-      savedRef.current = form
+      savedRef.current = next
       setStatus('saved')
       onSaved?.()
     } catch (err) {
@@ -3415,7 +3448,18 @@ export function SettingsPanel({
       // dual-radio port-collision rejection tells the operator exactly which ports clash.
       const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
       setError(msg || t('settings.save.failed'))
+      throw msg || t('settings.save.failed')
     }
+  }
+
+  // The checklist's "Turn off": the Save the operator pressed, with the ticked settings put back
+  // (the merge, the export and Unassisted are done by then). The form shows what was put back.
+  const turnOffWithChecklist = async (putBack: Partial<Settings>) => {
+    if (!form) return
+    const next = { ...form, ...putBack }
+    await commitSave(next, putBack)
+    setForm(next)
+    setOverOffer(null)
   }
 
   if (!form || (remote&&!configuration.value)) {
@@ -3618,6 +3662,7 @@ export function SettingsPanel({
         {!remote && <SettingsLicenses />}
       </div>
 
+      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
       <form className="settings-form" onSubmit={handleSubmit}>
         <div className="settings-tabs" role="tablist" aria-label={t('settings.panel.tabs.aria')}>
           {/* Contesting is always visible now (0.17.0 decision) — capability, not config, gates

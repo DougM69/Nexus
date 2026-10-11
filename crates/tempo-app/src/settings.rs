@@ -756,6 +756,38 @@ fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
 }
 
+/// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
+/// the note the contest-over checklist offers back when Contest mode goes off: the station
+/// callsign a club set, the operator at the key, the position, the entry category (MULTI-OP),
+/// the entry class, the power category and Unassisted. Each field is the [`Settings`] field of
+/// the same name. Who takes the note, when, and when it is let go: `engine/contest_before.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ContestBefore {
+    pub mycall: String,
+    pub fd_operator: String,
+    pub fd_position_name: String,
+    pub contest_category_operator: String,
+    pub contest_entry_class: String,
+    pub contest_category_power: String,
+    pub unassisted_mode: bool,
+}
+
+impl ContestBefore {
+    /// The seven, as `s` holds them now.
+    pub fn of(s: &Settings) -> Self {
+        Self {
+            mycall: s.mycall.clone(),
+            fd_operator: s.fd_operator.clone(),
+            fd_position_name: s.fd_position_name.clone(),
+            contest_category_operator: s.contest_category_operator.clone(),
+            contest_entry_class: s.contest_entry_class.clone(),
+            contest_category_power: s.contest_category_power.clone(),
+            unassisted_mode: s.unassisted_mode,
+        }
+    }
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1209,6 +1241,12 @@ pub struct Settings {
     /// instances sharing a settings dir from clobbering each other's backup.
     #[serde(default)]
     pub fd_position_id: String,
+    /// ⭐ The station as it was before the contest changed it ([`ContestBefore`]), or `None` when
+    /// no contest has changed it since the last one ended. **The engine's alone**: a Settings save
+    /// never writes or clears it (a payload's copy is a snapshot from whenever its surface
+    /// loaded); a restore takes the backup's. Persisted, so a restart mid-weekend keeps it.
+    #[serde(default)]
+    pub contest_before: Option<ContestBefore>,
     /// Serve the read-only spectator scoreboard — a self-contained web page of
     /// the club score for a TV/projector on the site LAN. **This toggle IS the
     /// LAN opt-in**: while on, `tempo_app::fd_scoreboard`'s GET/HEAD-only
@@ -4686,6 +4724,7 @@ impl Default for Settings {
             fd_join_addr: String::new(),
             fd_position_name: String::new(),
             fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
+            contest_before: None,          // no contest has changed anything yet
             fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
             fd_scoreboard_port: default_fd_scoreboard_port(),
             connect_web: false, // same rule: exposing the station on the LAN is opt-in

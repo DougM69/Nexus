@@ -3618,6 +3618,18 @@ export interface KeyboardMacroProfile {
 }
 
 /** Persistent operator + radio settings. */
+/** The seven settings a contest weekend changes, as they were before it changed them (Rust
+ *  `ContestBefore`). Each field is the Settings field of the same name. */
+export interface ContestBefore {
+  mycall: string
+  fdOperator: string
+  fdPositionName: string
+  contestCategoryOperator: string
+  contestEntryClass: string
+  contestCategoryPower: string
+  unassistedMode: boolean
+}
+
 export interface Settings {
   mycall: string
   mygrid: string
@@ -4220,6 +4232,10 @@ export interface Settings {
   /** Persistent 8-hex club-sync position id (generated at startup; no UI edit —
    * QSO ids are (posid, seq), so a changed id re-pushes everything as new). */
   fdPositionId?: string
+  /** ⭐ The station as it was before the contest changed it, or null when no contest has changed it
+   *  since the last one ended — what the contest-over checklist offers back. The ENGINE's
+   *  (`engine/contest_before.rs`): a Settings save never writes or clears it. */
+  contestBefore?: ContestBefore | null
   /** Serve the read-only spectator scoreboard page on the LAN (this toggle IS
    * the opt-in; real data only in the host role). Default off. */
   fdScoreboard?: boolean
