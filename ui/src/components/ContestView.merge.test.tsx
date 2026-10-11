@@ -167,6 +167,10 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
     expect(screen.getByRole('button', { name: /Merge 3 contacts/ })).toBeTruthy()
     // By name: the Contest mode switch shares the screen with it.
     expect(screen.getByRole('switch', { name: "Upload this session's merged contacts" })).toBeTruthy()
+    // It uploads to the logbooks ticked beside it (`fd_set_upload`'s destinations); it never
+    // was the merge into my logbook, which is the button above. It read "Send merged contacts
+    // to my logbook".
+    expect(document.querySelector('.fd-upload-label')!.textContent).toBe('Upload merged contacts to:')
     expect(screen.getByRole('note').textContent).toContain('catch-up sweep')
   })
 })

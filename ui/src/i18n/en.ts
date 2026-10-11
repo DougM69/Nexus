@@ -306,10 +306,10 @@ export const EN = {
   "remote.memoriesExpired": "This memory snapshot has expired. Refresh to read it again.",
   "remote.memoriesRefresh": "Refresh memories",
   "remote.memoriesObserver": "Observation only. Tuning, editing, file operations and net alerts remain on the station.",
-  "remote.fieldDaySnapshot": "Station Field Day captured {{seconds}} s ago.",
-  "remote.fieldDayRefresh": "Refresh Field Day",
+  "remote.fieldDaySnapshot": "Station contest captured {{seconds}} s ago.",
+  "remote.fieldDayRefresh": "Refresh contest",
   "remote.fieldDayObserver": "Observation only. Event, operator, scoring changes and exports remain on the station.",
-  "remote.fieldDayInactive": "No Field Day event is active on the station.",
+  "remote.fieldDayInactive": "No contest is running on the station.",
   "remote.fieldDayTooLarge": "This event is too large to show in the browser. View the complete event in Nexus at the shack.",
   "remote.otaSnapshot": "Station POTA/SOTA captured {{seconds}} s ago.",
   "remote.otaRefresh": "Refresh station data",
@@ -3936,7 +3936,7 @@ export const EN = {
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
-  'fieldDay.upload.label': 'Send merged contacts to my logbook',
+  'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
   // Run vs search-and-pounce. Stored as plain text with a real `&` — React escapes text
@@ -7775,22 +7775,22 @@ export const EN = {
   // written. The host/port EXAMPLES are invariant tokens in the panel.
   'settings.n3fjp.legend': 'N3FJP Integration (club master log)',
   'settings.n3fjp.note':
-    "Each FD contact lands in the club's <b>N3FJP Field Day Contest Log</b> the moment you log it — so the whole club's score updates in real time. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+    "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time; a contest whose exchange is not a class and section reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
   'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
   'settings.n3fjp.host.hint':
     'IP or hostname of the master log computer. Leave blank to disable.',
   'settings.n3fjp.port.label': 'N3FJP port',
   'settings.n3fjp.port.hint': "N3FJP's API TCP port (default 1100).",
-  'settings.n3fjp.useEnter.label': 'Use ENTER for Field Day scoring',
+  'settings.n3fjp.useEnter.label': 'Use ENTER for contest scoring',
   'settings.n3fjp.useEnter.hint':
-    "Log each FD contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
+    "Log each contest contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
   'settings.n3fjp.reportBand.label': 'Report my band to N3FJP',
   'settings.n3fjp.reportBand.hint':
     "Tell N3FJP which band you're on (no CAT needed), so the club's Network Status Display band board shows this position. Off by default.",
   'settings.n3fjp.forwardAll.label': 'Forward every QSO',
   'settings.n3fjp.forwardAll.hint':
-    "Also push <b>every</b> logged QSO (not just Field Day) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the Field-Day push.",
+    "Also push <b>every</b> logged QSO (not just contest contacts) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the contest push.",
   'settings.n3fjp.test.label': 'Connection test',
   'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
   'settings.n3fjp.test.action': 'Test N3FJP',
@@ -7811,10 +7811,10 @@ export const EN = {
   // it: reword the toggle's label and this sentence moves with it.
   'settings.n1mm.addr.sending': 'Sending for every logged QSO.',
   'settings.n1mm.addr.idle':
-    'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
+    'An address alone sends only the contacts you log in Contest mode — turn on Broadcast every QSO below for everyday logging.',
   'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
   'settings.n1mm.broadcastAll.hint':
-    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+    'Send the contact packet for <b>every</b> logged QSO, not just contest contacts — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the contest broadcast, so it is safe to leave on through a contest. Off by default; with it off, packets go out <em>only</em> for the contacts you log in Contest mode.',
 
   // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
   // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
@@ -10844,7 +10844,7 @@ export const EN = {
   'detached.fieldDay.inactive': 'Field Day isn’t active.',
   'detached.fdClub.away.head': 'Club board',
   'detached.fdClub.away.body':
-    "The club board shows here while Field Day is the section you are working in. Step back into Field Day and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
+    "The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
   'detached.fdClub.off.head': 'Club sync is off',
   'detached.fdClub.off.body': 'This station is not hosting a club event and has not joined one, so there are no other positions to show.',
   'detached.fdClub.off.route': 'Turn it on in Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event — or paste the host station’s address into Join event at to join one someone else is running.',

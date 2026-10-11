@@ -4046,7 +4046,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(`document.querySelector('.fieldday input:not([type=checkbox])')?.readOnly`),true)
       fieldDay.fieldDay.log.push(...Array.from({length:48},(_,i)=>({...fieldDay.fieldDay.log[0],call:`K1FD${i}`})))
       Object.assign(fieldDay.fieldDay,{qsoCount:50,points:99,poweredPoints:198,totalScore:298})
-      await click(button('Refresh Field Day'))
+      await click(button('Refresh contest'))
       await until(`document.querySelectorAll('.fd-log-row').length===50`)
       assert.notEqual(await evaluate(`getComputedStyle(document.querySelector('.remote-field-day-bank')).display`), 'none', 'the event is visible with current data')
       for (const [width,height,zoom] of [[360,740,1],[390,844,1],[844,390,1],[1024,768,1],[1280,800,1],
@@ -4076,16 +4076,16 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       fieldDay.settings.fdOperator='K9TEST'
       fieldDay.fieldDay.event='wfd';fieldDay.ruleset.event='wfd'
       Object.assign(fieldDay.fieldDay,{poweredPoints:99,totalScore:199,eventEndUnix:fieldDay.fieldDay.eventStartUnix+30*3600})
-      await click(button('Refresh Field Day'))
+      await click(button('Refresh contest'))
       await until(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
       assert.equal(await evaluate(`!!document.querySelector('.fd-bonuses-list')`),false,'refresh preserves the collapsed disclosure')
       assert.equal(await evaluate(`document.querySelector('.fd-score-math')?.textContent.toLowerCase().includes('power')`),false,'WFD does not display ARRL multiplier math')
-      unavailableCollections.add('fieldDay');await click(button('Refresh Field Day'))
-      await until(`!document.querySelector('.remote-field-day-bank:not([hidden])')&&!${button('Refresh Field Day')}?.disabled`)
+      unavailableCollections.add('fieldDay');await click(button('Refresh contest'))
+      await until(`!document.querySelector('.remote-field-day-bank:not([hidden])')&&!${button('Refresh contest')}?.disabled`)
       const hiddenDisplay = await evaluate(`getComputedStyle(document.querySelector('.remote-field-day-bank')).display`)
       if(hiddenDisplay!=='none'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-field-day-unavailable-failure.png'),Buffer.from(shot.data,'base64'))}
       assert.equal(hiddenDisplay, 'none', 'a failed refresh removes the visible score, not only the hidden attribute')
-      unavailableCollections.delete('fieldDay');await click(button('Refresh Field Day'))
+      unavailableCollections.delete('fieldDay');await click(button('Refresh contest'))
       await untilThroughLapse(`document.querySelector('.fieldday input:not([type=checkbox])')?.value==='K9TEST'`)
     }
     await click(button('JS8'))
