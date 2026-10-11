@@ -1334,8 +1334,15 @@ fn the_double_click_works_only_the_cqs_own_station_and_keeps_tx() {
         matches!(&e.mode, Mode::Qso { station, .. } if station.dxcall.as_deref() == Some("K2DEF")),
         "the named station, outside the contest"
     );
+    // With "Double-click on call sets Tx enable" off, the click arms nothing itself (arming TX
+    // would cancel the disable on its own): the operator armed TX, and the earlier contact's
+    // disable is still to be carried out.
     let mut e = engine_for("arrlfd", MY_GRID);
+    let mut s = e.settings().clone();
+    s.double_click_sets_tx = false;
+    e.apply_settings(s);
     e.set_tier(Tier::Ft8);
+    e.set_tx_enabled(true);
     e.pending_tx_disable = true;
     e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
     e.work_station(DX, None, Some("CQ FD W9XYZ EN37"), Some(DX_SNR), None)
@@ -1344,6 +1351,7 @@ fn the_double_click_works_only_the_cqs_own_station_and_keeps_tx() {
         !e.pending_tx_disable,
         "the earlier contact's disable is cancelled"
     );
+    assert!(e.tx_enabled, "TX stays armed for the station being worked");
 }
 
 /// Whether the runner sends the 73 follows the tier it is on now: a run started on FT1 and
