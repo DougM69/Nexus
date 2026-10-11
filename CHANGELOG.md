@@ -493,6 +493,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report, that it had gone down, could arrive after the new link was up: the chip read Offline and
   the line said the host was lost while contacts were syncing. A replaced link's reports are now
   ignored.
+- **Giving a club position to another laptop takes the old laptop's contacts out of every
+  laptop's club dupe warning at once.** Those contacts left the club's file at the Give, but every
+  laptop, the one given the position included, kept showing them as club dupes, and a Field Day
+  club line kept counting their sections, until a contact was next taken back or restored
+  somewhere in the club; restarting the host did not clear them.
 - **A position turned away for logging another contest is told both contests by the names the
   contest picker uses.** The host's refusal named the club's contest by its Cabrillo id ("this club
   is running ARRL-FIELD-DAY, and this Nexus is logging IL QSO Party"). It now reads "this club is

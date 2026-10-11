@@ -604,8 +604,9 @@ pub trait ClubBackend: Send + Sync {
     fn position_status(&self, pos: &str, report: &PosReport);
     /// Cheap change detector: (dupe keys total, sections total, generation), read together.
     /// Within one generation both lists are append-only, so "count grew" == "there is a delta
-    /// to send". A new generation means they were rebuilt (a contact taken back or put back),
-    /// and every connection is sent a fresh snap: a position's mirror only unions a delta.
+    /// to send". A new generation means they were rebuilt (a contact taken back or put back, or
+    /// a position given to another laptop), and every connection is sent a fresh snap: a
+    /// position's mirror only unions a delta.
     fn counts(&self) -> (usize, usize, u64);
     /// Club state past the given cursors (`0, 0` = the full join snapshot),
     /// with the current board. `mark_seen` names the asking position so the
@@ -1106,8 +1107,9 @@ fn serve_club_connection(
             let (d, s, g) = backend.counts();
             let beat = last_beat.elapsed().as_secs() >= PING_SECS;
             if g != sent_generation {
-                // The lists were rebuilt (a contact taken back or put back): the cursors name
-                // nothing now, and a delta cannot take a key away, so the whole state again.
+                // The lists were rebuilt (a contact taken back or put back, or a position given
+                // to another laptop): the cursors name nothing now, and a delta cannot take a
+                // key away, so the whole state again.
                 let st = backend.club_state(0, 0, &j.pos);
                 if write_club_state(&mut writer, st, true).is_err() {
                     break;
