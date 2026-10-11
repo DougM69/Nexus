@@ -60,6 +60,16 @@ it('clears loss, refresh failures and inactive events without a fake zero score'
  await screen.findByText(t('remote.fieldDayInactive'))
  expect(test.container.querySelector('.remote-field-day-bank:not([hidden])')).toBeNull()
 })
+// The page's own words are the contest's, whichever contest the station runs: it offered "Refresh Field Day" over an
+// Illinois QSO Party, and said "No Field Day event is active" when no contest was running at all.
+it('names the contest, not Field Day, on its refresh button and status lines',async()=>{
+ const test=setup();await screen.findByText('K1ABC')
+ expect(test.container.querySelector('.remote-insights-status span')?.textContent).toMatch(/^Station contest captured \d+ s ago\.$/)
+ const off=fieldDayPage();Object.assign((off.meta as {source:object}).source,{active:false,fieldDay:null})
+ test.invoke.mockResolvedValueOnce(off)
+ fireEvent.click(screen.getByRole('button',{name:'Refresh contest'}))
+ expect(await screen.findByText('No contest is running on the station.')).toBeTruthy()
+})
 it('ages club presence evidence and expires the whole captured event',async()=>{
  vi.useFakeTimers({toFake:['setInterval','clearInterval','performance']})
  const test=setup();await act(async()=>{await Promise.resolve()})

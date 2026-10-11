@@ -128,7 +128,7 @@ const BLOCK = [
 ] as const
 
 describe('the station-data block', () => {
-  it('renders under the contest picker and above Field Day Setup', async () => {
+  it('renders under the contest picker and above Contest mode', async () => {
     renderPanel()
     await openContesting()
     const legends = [...document.querySelectorAll('fieldset.settings-section legend')].map(
@@ -137,7 +137,7 @@ describe('the station-data block', () => {
     expect(legends).toContain('Your station data')
     expect(legends.indexOf('Your station data')).toBeGreaterThan(legends.indexOf('Contest'))
     expect(legends.indexOf('Your station data')).toBeLessThan(
-      legends.indexOf('Field Day Setup'),
+      legends.indexOf('Contest mode'),
     )
   })
 

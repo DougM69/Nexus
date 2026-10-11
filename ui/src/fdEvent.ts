@@ -94,9 +94,32 @@ export function contestShortName(id: string | undefined): string {
   return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
 }
 
-/** Is this one of the two events Field Day Setup (class + section) describes? */
+/** Is this one of the two Field Day events, whose class + section Settings ▸ Contest mode asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
+
+/** The contest's part of an export's file name — `ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`:
+ *  its rules-file id, blank meaning ARRL Field Day as it does everywhere else. Every exported file
+ *  was named `fd-…` whatever the contest. An id a downloaded rules file added may carry characters
+ *  no file name can (a `/` turns the name into a path, and Downloads keeps only its last part), so
+ *  each run of them becomes one `-`; every shipped id passes through unchanged. */
+export function contestFileStem(id: string | undefined): string {
+  return (id?.trim() || 'arrlfd').replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
+/** ⭐ The side of a contest the operator's location puts them on, in words — never the rules
+ *  data's role id, which Settings and the log strip printed ("Running as in_state", "Sending
+ *  in_state 599 COOK"). In-state and out-of-state are words, and translated; `W/VE` and `DX` are
+ *  the sponsors' own names for those sides ("W/VE stations", "DX stations") and invariant tokens,
+ *  like the contest names above. A role id this build has no words for is shown as itself, a
+ *  token rather than a guess, as `contestName` does for a contest it does not list. */
+export function contestRoleWords(role: string): string {
+  if (role === 'in_state') return t('contest.role.inState')
+  if (role === 'out_of_state') return t('contest.role.outOfState')
+  if (role === 'w_ve') return 'W/VE'
+  if (role === 'dx') return 'DX'
+  return role
+}
 
 /** Why club sync cannot run a contest — the three reasons the engine refuses one for. */
 export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown'

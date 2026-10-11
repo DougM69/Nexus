@@ -680,7 +680,7 @@ pub fn fd_merge_to_general(
             let mut e = engine_lock(engine);
             if !e.in_field_day() {
                 return (
-                    Err("Field Day mode is not active".into()),
+                    Err("Contest mode is not active".into()),
                     Durability::default(),
                 );
             }
