@@ -1886,17 +1886,23 @@ export function LogEntry({
    *  refusal is the engine's, and a second copy here could drift from the one the
    *  engine actually enforces.
    *
-   *  ⭐ A box means what the received box for the same slot would mean by it — `fdSlotValue`,
-   *  the QTH box's own reading — so a county given by NAME (`DuPage`) goes as its code (DUPG),
-   *  and naming the county already being sent moves nothing. A name that resolves to no code
-   *  goes as typed, for the engine to refuse in its own words. */
+   *  ⭐ A box is read by the QTH box's own function, `fdSlotValue`, so a county given by NAME
+   *  (`DuPage`) goes as its code (DUPG), and naming the county already being sent moves
+   *  nothing. It reads within the list the value being sent came from — an in-state station's
+   *  counties, an out-of-state station's states and provinces — because a move the engine
+   *  accepts stays on that list (over the state line is a separate entry). Five counties share
+   *  their name with a state or province on the list beside them (`Washington`: WASH in
+   *  Illinois, WA outside it); the QTH box cannot tell which was meant, and I moved can. A value
+   *  sent from no list is read over the slot's lists, as the QTH box reads it. A name that
+   *  resolves to no code goes as typed, for the engine to refuse in its own words. */
   const commitMove = async () => {
     if (movingTo === null) return
     const meant = (v: ContestFieldValue): string => {
       const typed = movingTo[v.key] ?? ''
       const f = fdReceives.find((s) => s.key === v.key)
       // A slot this role sends and never receives (no shipped role has one) keeps what was typed.
-      return f ? fdSlotValue(f, typed) : typed.trim().toUpperCase()
+      if (!f) return typed.trim().toUpperCase()
+      return fdSlotValue(v.domain ? { ...f, domains: [v.domain] } : f, typed)
     }
     const values = fdComposing
       .filter((v) => meant(v) !== v.raw.toUpperCase())

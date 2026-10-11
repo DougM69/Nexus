@@ -414,12 +414,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provision for a station that moves.
 - **I moved takes a county by its name, and the upload ticks name the services.** In the Illinois
   and New York QSO parties, a county typed into **I moved** by its name (`DuPage`, `Monroe`) was
-  refused as not one of the contest's counties; only its code worked. I moved now reads what you
-  type the way the QTH box does, so the name goes out as its code (DUPG in Illinois, MON in New
-  York), and in Field Day a section's full name goes out as its code too. A name that is no
-  county is still refused, in the same words. Under "Upload merged contacts to:" on the Contest
-  screen, the ticks showed the services' internal ids (`qrz`, `clublog`, `eqsl`…); they now show
-  their names: QRZ, Club Log, eQSL, HRDLog, N3FJP, Cloudlog and WRL.
+  refused as not one of the contest's counties; only its code worked. I moved now reads a name
+  the way the QTH box does, so it goes out as its code (DUPG in Illinois, MON in New York), and in
+  Field Day a section's full name goes out as its code too. A county that shares its name with a
+  state or province (Washington, and in New York also Delaware, Ontario and Wyoming) is the
+  county when you are in the state, and the state or province when you are outside it. A name
+  that is no county is still refused, in the same words. Under "Upload merged contacts to:" on
+  the Contest screen, the ticks showed the services' internal ids (`qrz`, `clublog`, `eqsl`…);
+  they now show their names: QRZ, Club Log, eQSL, HRDLog, N3FJP, Cloudlog and WRL.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

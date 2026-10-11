@@ -310,6 +310,61 @@ describe('"I moved" reads a county the way the QTH box does', () => {
     expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'MON']])
   })
 
+  /** A QSO party as the engine serialises it for a `role` station sending `raw`, from the list
+   *  `domain` names (none for a value typed free, as a DX station's is). */
+  const party = (st: 'il' | 'ny', role: string, raw: string, domain?: string): FieldDayStatus =>
+    ({
+      ...ilqp(),
+      event: `${st}qp`,
+      role,
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        {
+          key: 'QTH',
+          kind: 'oneOf',
+          required: true,
+          domains: st === 'il' ? ['il_counties', 'il_mults'] : ['ny_counties', 'ny_mults', 'dx_literal'],
+        },
+      ],
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw, ...(domain ? { domain } : {}) },
+      ],
+    }) as unknown as FieldDayStatus
+
+  // Five counties share their name with a state or province on the same contest's list. The
+  // QTH box cannot tell which was meant; I moved can, from the list the station sends from.
+  it.each([
+    ['il', 'COOK', 'il_counties', 'Washington', 'WASH'],
+    ['ny', 'ALB', 'ny_counties', 'Delaware', 'DEL'],
+    ['ny', 'ALB', 'ny_counties', 'Ontario', 'ONT'],
+    ['ny', 'ALB', 'ny_counties', 'Washington', 'WAS'],
+    ['ny', 'ALB', 'ny_counties', 'Wyoming', 'WYO'],
+  ])('%sqp in-state, sending %s (%s): %s is the county %s', async (st, sent, list, typed, code) => {
+    renderStrip(party(st as 'il' | 'ny', 'in_state', sent, list))
+    await moveTo(typed)
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', code]])
+  })
+
+  it('outside the state, the same name is the state the station sends', async () => {
+    renderStrip(party('il', 'w_ve', 'IN', 'il_mults'))
+    await moveTo('Washington')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'WA']])
+  })
+
+  it('a value sent from no list (a DX station types its own) is read as the QTH box reads it', async () => {
+    renderStrip(party('il', 'dx', 'GERMANY'))
+    await moveTo('DuPage')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'DUPG']])
+  })
+
+  it("leaves the QTH box's own reading alone: a name two lists hold stays as typed there", () => {
+    renderStrip()
+    fireEvent.change(qthBox(), { target: { value: 'Washington' } })
+    fireEvent.keyDown(qthBox(), { key: ' ', code: 'Space' })
+    expect(qthBox().value.toUpperCase()).toBe('WASHINGTON')
+  })
+
   it('a name that is no county goes as typed, and the engine refuses it in its own words', async () => {
     const refusal = '"NARNIA" is not one of this contest\'s counties.'
     api.contestIMoved.mockRejectedValueOnce(refusal)
