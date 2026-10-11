@@ -1051,11 +1051,16 @@ export function CwCockpit({
   // the guards are read at the press; and the send is the F-keys' own path but for the re-arm:
   // His Call becomes the strip's call before the send that may expand `!` to it, and
   // `sendCwArmed` refuses while TX is off where `sendCw` would turn it on (rule 5).
+  // A profile on the built-in sets sends their steps, as Settings shows them: a mapping is the
+  // profile's only while it has keys of its own, and the one an earlier Reset left is not read.
   const esm = useEsmHost({
     cockpit: 'cw',
     on: !!esmSetting?.on && !!fieldDay && control,
     callOnce: !!esmSetting?.callOnce,
-    roles: esmRoles(cwBuiltInRoles(macros), profiles[activeProfile]?.esmRoles),
+    roles: esmRoles(
+      cwBuiltInRoles(macros),
+      profileMacros && profileMacros.length ? profiles[activeProfile]?.esmRoles : undefined,
+    ),
     slots: macros,
     guards: () => ({
       cockpit: 'cw',

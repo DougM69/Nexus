@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
+import { CW_CONTEST_LAYOUT } from '../features/esmRoles'
 import { EN } from '../i18n'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
@@ -284,6 +285,34 @@ describe('Enter Sends Message in the CW cockpit', () => {
     fireEvent.keyDown(window, { key: 'F7' })
     await flush()
     expect(engine.keyed[engine.keyed.length - 1], 'F7 by hand').toBe('K9AAA QSO B4')
+  })
+
+  // ⭐ A PROFILE ON THE BUILT-IN SETS SENDS THEIR STEPS, the ones Settings shows for it. Reset to
+  // defaults used to empty a profile's keys and keep the steps mapped to them, where Settings can
+  // neither show nor clear them, and Enter then sent those keys of the built-in set: AGN on F7
+  // sent QSO B4.
+  it('a profile reset to the built-in sets sends their steps, not the keys its steps were mapped to', async () => {
+    settings.macros.cwProfiles = [{ name: 'Mine', macros: [], esmRoles: { callExch: ['F5'], again: ['F7'] } }]
+    await renderCockpit()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange
+    await enter(qthBox()) // his QTH not copied yet: AGN
+    expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K', 'K9AAA 5NN COOK', 'AGN AGN'])
+  })
+
+  // The control: the same steps over the same texts, on keys of the operator's own, are theirs.
+  it('the same steps mapped over keys of the operator’s own send the keys they were mapped to', async () => {
+    const own = CW_CONTEST_LAYOUT.map(({ key, label, text }) => ({ key, label: label ?? key, text }))
+    settings.macros.cwProfiles = [{ name: 'Mine', macros: own, esmRoles: { callExch: ['F5'], again: ['F7'] } }]
+    await renderCockpit()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall())
+    await enter(qthBox())
+    expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K', 'K9AAA', 'K9AAA QSO B4'])
   })
 
   it('sends through Enter’s own entry, never the F-keys’ re-arming one, with the strip’s call committed first', async () => {

@@ -472,6 +472,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   complaint even with Contest mode off, and the FT cockpit's Call CQ did nothing at all. With
   Contest mode off they always work now. Only the contest's own Running and S&P need its exchange,
   and they still say what is missing.
+- **Reset to defaults on a CW macro profile now clears the keys you mapped to Enter Sends Message's
+  steps, with the profile's own keys.** It kept them where Settings could neither show nor clear
+  them, and in a contest Enter went on sending those keys of the built-in sets: AGN mapped to F7
+  sent QSO B4. A profile on the built-in sets now sends their steps, as Settings ▸ Contesting
+  shows them, even one reset in a test build, and Customize starts with no steps mapped.
 - **Restoring a settings backup that turns Contest mode on, or picks another contest while one
   runs, now checks your logbook for dupes as a save does.** The contest it started did not know
   the contacts your logbook already held from the contest's start, so a station you had already

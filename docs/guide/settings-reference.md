@@ -2110,7 +2110,8 @@ contact runs, step by step, and the rules ESM keeps are in the
 - **CW steps** — which keys of the active CW profile send each step: CQ, his
   call and your exchange, TU, your call, your S&P exchange and AGN. A step can
   send two keys as one message, such as F5 then F2. The mapping is saved with
-  the profile. A profile still on the built-in sets shows their steps and has
+  the profile, and **Reset to defaults** under [CW](#cw) clears it with the
+  profile's keys. A profile still on the built-in sets shows their steps and has
   nothing to map until you **Customize** it under [CW](#cw).
 - **RTTY steps** — the same for each RTTY set, Everyday and Contest, each with
   its own mapping. The Contest set's built-in key for each step is shown beside
