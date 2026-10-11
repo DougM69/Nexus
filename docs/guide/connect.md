@@ -323,7 +323,8 @@ If you run a linear — an **SPE Expert** (1.3K-FA / 1.5K-FA / 2K-FA) or an **El
 KPA500/KPA1500** — put it on its own serial port, set it under
 [Settings ▸ Radio ▸ Amplifier](settings-reference.md#radio), and assign this pane to a
 slot. It shows power out, SWR at the antenna and before the tuner, supply volts and
-current, PA temperature, and the amplifier's own alarms and warnings.
+current, PA temperature, and the amplifier's own alarms and warnings. Power out and SWR are
+its large readings: like the Clock's digits, they grow with the width of the box.
 
 ![The Amplifier pane showing link state, power out, SWR before and after the tuner, PA temperature, volts and current.](../img/manual/connect-amplifier-pane.webp)
 
