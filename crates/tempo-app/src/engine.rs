@@ -12428,6 +12428,48 @@ impl Engine {
         Ok(club.merge(row, now))
     }
 
+    /// ⭐ **A position takes back its own row `seq`** — `pos` is the position the connection
+    /// JOINed as (the socket loop refuses any other), so no laptop can take back another's
+    /// contact; the host's own laptop takes back its own the same way, over its loopback. A
+    /// tombstone the club log keeps and journals ([`crate::fdevent::ClubLog::take_back`]).
+    /// `Err` with the sentence its connection is sent when the JOIN (`hold`) no longer holds the
+    /// position, as for a row.
+    pub fn fd_club_retract(&mut self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Ok(());
+        };
+        club.held(pos, hold)?;
+        club.take_back(pos, seq, now);
+        Ok(())
+    }
+
+    /// …and puts it back ([`crate::fdevent::ClubLog::put_back`]); as [`Self::fd_club_retract`].
+    pub fn fd_club_restore(&mut self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Ok(());
+        };
+        club.held(pos, hold)?;
+        club.put_back(pos, seq, now);
+        Ok(())
+    }
+
+    /// The seqs of `pos`'s rows the club holds taken back, ascending — what its connection is
+    /// told after every welcome.
+    pub fn fd_club_retracted(&self, pos: &str) -> Vec<u64> {
+        self.fd_club
+            .as_ref()
+            .map(|club| club.taken_back(pos))
+            .unwrap_or_default()
+    }
+
+    /// How often the club rebuilt its dupe keys and sections: a new one sends every connection
+    /// a fresh snap.
+    pub fn fd_club_generation(&self) -> u64 {
+        self.fd_club.as_ref().map_or(0, |club| club.generation())
+    }
+
     /// Does the JOIN served with `hold` still hold `pos`? Asked by its connection at every tick,
     /// which is how the laptop a position was given away from is closed though it sends nothing.
     pub fn fd_club_held(&self, pos: &str, hold: u64) -> Result<(), String> {
@@ -12695,6 +12737,12 @@ impl Engine {
     /// that names nobody falls back to what the wire has always carried: the
     /// `fd_operator` setting, else the station call.
     pub fn fd_sync_outbox(&self, after: u64) -> Vec<tempo_net::fdsync::WireQso> {
+        self.fd_sync_rows(|seq| seq > after)
+    }
+
+    /// Own live FD rows whose seq `keep` takes, as wire rows, ascending — the outbox's rows and a
+    /// restore's ([`Self::fd_sync_marks`]).
+    fn fd_sync_rows(&self, keep: impl Fn(u64) -> bool) -> Vec<tempo_net::fdsync::WireQso> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Vec::new();
         };
@@ -12711,7 +12759,7 @@ impl Engine {
             .log
             .qsos()
             .iter()
-            .filter(|q| q.seq > after)
+            .filter(|q| keep(q.seq))
             .map(|q| tempo_net::fdsync::WireQso {
                 pos: posid.clone(),
                 seq: q.seq,
@@ -12743,6 +12791,46 @@ impl Engine {
             .collect();
         rows.sort_by_key(|r| r.seq);
         rows
+    }
+
+    /// ⭐ **This position's take-backs the host does not hold yet** — derived, like the outbox,
+    /// from the journal-backed log and the host's own view
+    /// ([`crate::fdevent::ClubMirror::retracted`]), so there is no queue to lose: every removed
+    /// row the host does not hold taken back, and every live row it does (put back here, at
+    /// once or while away), as the row itself. Ascending by seq.
+    pub fn fd_sync_marks(&self) -> Vec<tempo_net::fdsync::Mark> {
+        use tempo_net::fdsync::Mark;
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let posid = &self.settings.fd_position_id;
+        if posid.is_empty() {
+            return Vec::new();
+        }
+        let host = &self.fd_mirror.retracted;
+        let mut marks: Vec<Mark> = station
+            .log
+            .removed()
+            .iter()
+            .flat_map(|entry| &entry.rows)
+            .filter(|q| q.seq > 0 && !host.contains(&q.seq))
+            .map(|q| Mark::Retract {
+                pos: posid.clone(),
+                seq: q.seq,
+            })
+            .collect();
+        if !host.is_empty() {
+            marks.extend(
+                self.fd_sync_rows(|seq| host.contains(&seq))
+                    .into_iter()
+                    .map(|row| Mark::Restore(Box::new(row))),
+            );
+        }
+        marks.sort_by_key(|m| match m {
+            Mark::Retract { seq, .. } => *seq,
+            Mark::Restore(row) => row.seq,
+        });
+        marks
     }
 
     /// The mirror, for the pump's welcome/ack/club/link callbacks.
@@ -12842,14 +12930,22 @@ impl Engine {
     /// The sync chip — DERIVED from (enabled, link, queued = own max seq −
     /// host ack), so it can never disagree with the queue.
     pub fn fd_sync_state(&self) -> crate::fdevent::SyncState {
-        let own_max = match &self.mode {
-            Mode::FieldDay { station, .. } => station.log.max_seq(),
+        // What the host lacks: own live rows past its ack, and the take-backs it does not hold.
+        // Never a seq past the ack that was taken back before it went up: the host is never
+        // sent that row, so counting it read "Behind 1" for good.
+        let rows = match &self.mode {
+            Mode::FieldDay { station, .. } => station
+                .log
+                .qsos()
+                .iter()
+                .filter(|q| q.seq > self.fd_mirror.acked)
+                .count() as u64,
             _ => 0,
         };
         crate::fdevent::SyncState::derive(
             self.fd_sync_enabled(),
             self.fd_mirror.connected,
-            own_max.saturating_sub(self.fd_mirror.acked),
+            rows + self.fd_sync_marks().len() as u64,
             self.fd_mirror.down_since_unix,
         )
     }
@@ -44900,13 +44996,14 @@ mod tests {
                 .unwrap()
         };
 
-        // A Field Day club turns away a v1 tent and a v2 one (every release up to 1.17).
-        for v in [1, 2] {
+        // A Field Day club turns away a v1 tent, a v2 one (every release up to 1.17) and a v3
+        // one (the test builds before a club could take a contact back).
+        for v in 1..PROTO_VERSION {
             let msg = backend
                 .join(v, "aaaa0001", "CW tent", "W9ABC", 0, "", "", &none)
-                .expect_err("an older tent cannot prove its position");
+                .expect_err("an older tent is turned away");
             assert!(
-                msg.contains(&format!("v{v}")) && msg.contains("v3"),
+                msg.contains(&format!("v{v}")) && msg.contains(&format!("v{PROTO_VERSION}")),
                 "the refusal that reaches the wire names both versions: {msg}"
             );
             assert!(msg.contains("Update Nexus on this laptop"), "{msg}");

@@ -66,8 +66,11 @@ impl ClubBackend for EngineClubBackend {
         engine_lock(&self.0).fd_club_pos_status(pos, report);
     }
 
-    fn counts(&self) -> (usize, usize) {
-        engine_lock(&self.0).fd_club_counts()
+    fn counts(&self) -> (usize, usize, u64) {
+        // One lock, so the cursors and the generation they belong to are read together.
+        let e = engine_lock(&self.0);
+        let (dupes, sections) = e.fd_club_counts();
+        (dupes, sections, e.fd_club_generation())
     }
 
     fn club_state(&self, dupes_from: usize, sections_from: usize, mark_seen: &str) -> ClubState {
@@ -76,6 +79,18 @@ impl ClubBackend for EngineClubBackend {
 
     fn disconnect(&self, pos: &str, link: u64) {
         engine_lock(&self.0).fd_club_disconnect(pos, link);
+    }
+
+    fn retract(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        engine_lock(&self.0).fd_club_retract(hold, pos, seq)
+    }
+
+    fn restore(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        engine_lock(&self.0).fd_club_restore(hold, pos, seq)
+    }
+
+    fn retracted(&self, pos: &str) -> Vec<u64> {
+        engine_lock(&self.0).fd_club_retracted(pos)
     }
 }
 
@@ -105,8 +120,14 @@ impl PositionSync for EnginePositionSync {
         engine_lock(&self.0).fd_accept_host_contest(contest)
     }
 
-    fn outbox_after(&self, after: u64) -> Vec<WireQso> {
-        engine_lock(&self.0).fd_sync_outbox(after)
+    fn outbox_after(&self, after: u64) -> tempo_net::fdsync::Outbox {
+        // One lock: a contact taken back or put back between the two reads would otherwise
+        // leave one of them wrong for a tick.
+        let e = engine_lock(&self.0);
+        tempo_net::fdsync::Outbox {
+            marks: e.fd_sync_marks(),
+            rows: e.fd_sync_outbox(after),
+        }
     }
 
     fn on_welcome(&self, acked: u64, event: &str, host_call: &str, host_now_unix: u64) {
@@ -124,6 +145,10 @@ impl PositionSync for EnginePositionSync {
         let mut eng = engine_lock(&self.0);
         let m = eng.fd_mirror_mut();
         m.acked = m.acked.max(seq);
+    }
+
+    fn on_retracted(&self, seq: u64, gone: bool) {
+        engine_lock(&self.0).fd_mirror_mut().on_retracted(seq, gone);
     }
 
     fn on_club(&self, _snap: bool, st: &ClubState) {

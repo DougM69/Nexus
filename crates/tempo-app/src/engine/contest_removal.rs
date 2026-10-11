@@ -6,10 +6,12 @@
 //! contest screen can restore it exactly. **Nothing here keys, unkeys or stops a
 //! transmission.**
 //!
-//! ⛔ **Refused while club sync runs**, at a position or at the host. The club log cannot take a
-//! contact back: its rows, dupe keys and sections are append-only, and each position's copy is
-//! fed everything past its cursor, so removing it here would leave the club's Cabrillo and every
-//! position's dupe check holding a contact this station's own files no longer carry.
+//! ⭐ **At a club the club takes it back too**, at a position or at the host (a host is just
+//! another position): the removed rows' seqs, and a restore's rows, are what this position owes
+//! its host ([`Engine::fd_sync_marks`]), sent by the club sync pump as soon as this laptop is
+//! with the host and kept as a tombstone there, never a deleted row. A laptop takes back only
+//! its own contacts: its log holds no other position's, and the host takes a take-back only on
+//! the connection of the position that logged the contact.
 //!
 //! **What a removal cannot reach, it names.** The contact may already have gone to N3FJP (whose
 //! API has no delete), the N1MM broadcast, WSJT-X listeners, and — if it was merged — the
@@ -36,8 +38,6 @@ pub enum ContestRefusal {
     NotRemoved,
     /// The same station was worked again since, on that band and mode.
     WorkedAgain,
-    /// Club sync runs, and the club log cannot take a contact back.
-    ClubSync,
 }
 
 impl ContestRefusal {
@@ -48,7 +48,6 @@ impl ContestRefusal {
             ContestRefusal::Changed => "changed",
             ContestRefusal::NotRemoved => "notRemoved",
             ContestRefusal::WorkedAgain => "workedAgain",
-            ContestRefusal::ClubSync => "clubSync",
         }
     }
 }
@@ -86,6 +85,10 @@ pub struct ContestRemoval {
     pub sent: ContestSentTo,
     /// Each row's merge identity — what the logbook names its copy by, if it was merged.
     pub qids: Vec<String>,
+    /// While club sync runs, a removal or restore goes to the club too: `Some(true)` when this
+    /// laptop is with the club's host now (it goes at once), `Some(false)` when it is not (it goes
+    /// when the link is back). `None` without club sync, and for the list.
+    pub club: Option<bool>,
 }
 
 /// A removal or restore, as a command answers it: the engine's answer, plus — for a removal —
@@ -105,19 +108,16 @@ impl Engine {
     ///
     /// Kept, never deleted ([`FieldDayLog::remove_last`](tempo_core::fieldday::FieldDayLog::remove_last)):
     /// the journal keeps it marked, its serial and seq stay spent, and
-    /// [`Self::contest_restore`] puts it back. `Err` only when no contest runs.
+    /// [`Self::contest_restore`] puts it back. At a club the club takes it back too, now or when
+    /// this laptop is with the host again (the answer's `club`). `Err` only when no contest runs.
     pub fn contest_remove_last(
         &mut self,
         call: &str,
         when_unix: u64,
     ) -> Result<Result<ContestRemoval, ContestRefusal>, String> {
-        let club_sync = self.fd_sync_enabled();
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
-        if club_sync {
-            return Ok(Err(ContestRefusal::ClubSync));
-        }
         let entry = match station.log.remove_last(call, when_unix, now_unix_secs()) {
             Ok(entry) => entry,
             Err(refusal) => return Ok(Err(refusal.into())),
@@ -125,30 +125,35 @@ impl Engine {
         self.persist_fd_log(); // journal it — the removal must survive a crash too
         let mut removal = self.contest_removal_of(entry);
         removal.sent = self.contest_sent_to(&removal.entry);
+        removal.club = self.contest_club_route();
         Ok(Ok(removal))
     }
 
     /// ⭐ **Put a removed contact back exactly as it was** — same time, serial and seq — by its
-    /// id ([`RemovedQso::id`]). Refused while club sync runs, as a removal is, and when the
-    /// same station was worked again since on that band and mode. `Err` only when no contest
-    /// runs.
+    /// id ([`RemovedQso::id`]). At a club the club puts it back too, as a removal goes. Refused
+    /// when the same station was worked again since on that band and mode. `Err` only when no
+    /// contest runs.
     pub fn contest_restore(
         &mut self,
         id: u64,
     ) -> Result<Result<ContestRemoval, ContestRefusal>, String> {
-        let club_sync = self.fd_sync_enabled();
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
-        if club_sync {
-            return Ok(Err(ContestRefusal::ClubSync));
-        }
         let entry = match station.log.restore(id) {
             Ok(entry) => entry,
             Err(refusal) => return Ok(Err(refusal.into())),
         };
         self.persist_fd_log();
-        Ok(Ok(self.contest_removal_of(entry)))
+        let mut restored = self.contest_removal_of(entry);
+        restored.club = self.contest_club_route();
+        Ok(Ok(restored))
+    }
+
+    /// Where a removal or restore made now goes at a club: `Some(true)` with the host now,
+    /// `Some(false)` when the link is back, `None` without club sync.
+    fn contest_club_route(&self) -> Option<bool> {
+        self.fd_sync_enabled().then_some(self.fd_mirror.connected)
     }
 
     /// The removed contacts, oldest removal first — the contest screen's Removed list. Empty
@@ -190,13 +195,11 @@ impl Engine {
     /// ⛔ Only a row this session and this position minted: the deleted record's `qid` must be
     /// exactly the one the merge gave the live row ([`tempo_core::contest::qid_for`]), so last
     /// weekend's contact, or another position's, never reaches this log's row with the same
-    /// seq. While club sync runs the row stays, as a removal is refused — the logbook delete
-    /// itself is the operator's and stands.
+    /// seq. At a club the club takes it back too, as a removal goes.
     pub(crate) fn contest_row_deleted(&mut self, row: &QsoRecord) {
         let Some(qid) = row.contest.as_deref().map(|c| c.qid.as_str()) else {
             return;
         };
-        let club_sync = self.fd_sync_enabled();
         let posid = self.settings.fd_position_id.clone();
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return;
@@ -207,17 +210,6 @@ impl Engine {
         if qid != tempo_core::contest::qid_for(&station.log.session.id, &posid, seq)
             || !station.log.qsos().iter().any(|q| q.seq == seq)
         {
-            return;
-        }
-        if club_sync {
-            tempo_core::applog::warn(
-                "contest",
-                &format!(
-                    "{} was deleted from the logbook and stays in the contest log: club sync \
-                     is on, and the club log cannot take a contact back",
-                    row.call
-                ),
-            );
             return;
         }
         if station.log.remove_row(seq, now_unix_secs()).is_some() {
@@ -241,6 +233,7 @@ impl Engine {
                 rows: Vec::new(),
                 sent: ContestSentTo::default(),
                 qids: Vec::new(),
+                club: None,
             };
         };
         let log = &station.log;
@@ -263,6 +256,7 @@ impl Engine {
                 })
                 .collect(),
             sent: ContestSentTo::default(),
+            club: None,
             entry,
         }
     }

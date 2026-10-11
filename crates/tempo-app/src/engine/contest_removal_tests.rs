@@ -1,8 +1,8 @@
-//! Removing the newest contest contact, through the engine: refused while club sync runs, kept
+//! Removing the newest contest contact, through the engine: taken back at a club too, kept
 //! across a mode change and a restart, carried from a Logbook delete, never in the club outbox,
 //! and never a change to the transmitter. Each answer says where the contact already went.
 
-use super::contest_removal::{ContestRefusal, ContestSentTo};
+use super::contest_removal::ContestSentTo;
 use super::*;
 use crate::test_util::StoredLog;
 use tempo_core::logbook::{LogOp, UploadOutcome};
@@ -78,11 +78,22 @@ fn transmit_state(e: &Engine) -> (bool, Option<TxOwner>, bool, bool, bool) {
     )
 }
 
-/// ⭐ **Refused while club sync runs — at the host and at a position — and nothing
-/// changes.** With sync off, the same removal is made: the control that says the refusal is
-/// club sync's and not some other gate's.
+/// The wire row the club outbox makes of live row `seq` — what a restore sends up first.
+fn wire_row(e: &Engine, seq: u64) -> tempo_net::fdsync::WireQso {
+    e.fd_sync_outbox(0)
+        .into_iter()
+        .find(|w| w.seq == seq)
+        .expect("a live row")
+}
+
+/// ⭐ **At a club, Ctrl+D takes the newest contact back and Restore brings it back — at the host
+/// and at a position — and each owes the host one mark until the host says it holds it so.**
+/// The chip counts the mark, and the answer says whether this laptop is with the host now.
+/// CONTROL: without club sync the answer names no club.
 #[test]
-fn removal_is_refused_while_club_sync_runs_and_changes_nothing() {
+fn at_a_club_a_removal_and_a_restore_each_owe_the_host_one_mark() {
+    use crate::fdevent::SyncState;
+    use tempo_net::fdsync::Mark;
     for (role, on) in [
         (
             "host",
@@ -95,36 +106,149 @@ fn removal_is_refused_while_club_sync_runs_and_changes_nothing() {
         let mut e = ilqp(on);
         assert!(e.fd_sync_enabled(), "premise: club sync runs at the {role}");
         party(&mut e, "K9AAA", "COOK");
-        let before = logged(&e);
-        let journal = e.field_day_log_adif();
+        party(&mut e, "W9BBB", "LAKE");
+        // The host holds both, and this laptop is with it.
+        e.fd_mirror_mut().on_link(true, 1);
+        e.fd_mirror_mut().acked = 2;
+        assert_eq!(e.fd_sync_state(), SyncState::Synced, "{role}: premise");
+
         let (call, when) = newest(&e);
+        let gone = e
+            .contest_remove_last(&call, when)
+            .unwrap()
+            .unwrap_or_else(|r| panic!("{role}: refused at a club: {r:?}"));
+        assert_eq!(gone.club, Some(true), "{role}: with the host now");
         assert_eq!(
-            e.contest_remove_last(&call, when),
-            Ok(Err(ContestRefusal::ClubSync)),
+            logged(&e),
+            [("K9AAA".to_string(), "COOK".to_string())],
             "{role}"
         );
-        assert_eq!(logged(&e), before, "{role}: nothing was removed");
         assert_eq!(
-            e.field_day_log_adif(),
-            journal,
-            "{role}: the journal did not move"
+            e.fd_sync_marks(),
+            [Mark::Retract {
+                pos: "aaaa0001".into(),
+                seq: 2
+            }],
+            "{role}: the take-back is owed"
         );
-        assert!(e.contest_removed().is_empty());
+        assert_eq!(
+            e.fd_sync_state(),
+            SyncState::Behind { queued: 1 },
+            "{role}: and the chip counts it"
+        );
+        e.fd_mirror_mut().on_retracted(2, true);
+        assert!(e.fd_sync_marks().is_empty(), "{role}: the host holds it so");
+        assert_eq!(e.fd_sync_state(), SyncState::Synced, "{role}");
+
+        let back = e
+            .contest_restore(gone.entry.id())
+            .unwrap()
+            .unwrap_or_else(|r| panic!("{role}: restore refused at a club: {r:?}"));
+        assert_eq!(back.club, Some(true), "{role}");
+        assert_eq!(logged(&e).len(), 2, "{role}");
+        assert_eq!(
+            e.fd_sync_marks(),
+            [Mark::Restore(Box::new(wire_row(&e, 2)))],
+            "{role}: the row itself goes up with the restore"
+        );
+        assert_eq!(e.fd_sync_state(), SyncState::Behind { queued: 1 }, "{role}");
+        e.fd_mirror_mut().on_retracted(2, false);
+        assert!(e.fd_sync_marks().is_empty(), "{role}");
+        assert_eq!(e.fd_sync_state(), SyncState::Synced, "{role}");
+
+        // Away from the host: taken back here, owed, and said so.
+        e.fd_mirror_mut().on_link(false, 2);
+        let (call, when) = newest(&e);
+        let away = e.contest_remove_last(&call, when).unwrap().unwrap();
+        assert_eq!(away.club, Some(false), "{role}: not with the host now");
+        assert_eq!(
+            e.fd_sync_state(),
+            SyncState::Offline {
+                queued: 1,
+                since: 2
+            },
+            "{role}"
+        );
     }
-    // The control: sync off, the same contact goes.
+    // CONTROL: no club sync, no club in the answer.
     let mut e = ilqp(|_| {});
     assert!(!e.fd_sync_enabled());
     party(&mut e, "K9AAA", "COOK");
     let (call, when) = newest(&e);
-    assert!(matches!(e.contest_remove_last(&call, when), Ok(Ok(_))));
-    assert!(logged(&e).is_empty());
-    // …and a restore is refused once sync is on, as the removal is.
-    let id = e.contest_removed()[0].entry.id();
-    let mut s = e.settings().clone();
-    s.fd_host_enable = true;
-    e.apply_settings(s);
-    assert_eq!(e.contest_restore(id), Ok(Err(ContestRefusal::ClubSync)));
-    assert!(logged(&e).is_empty(), "nothing was restored");
+    assert_eq!(
+        e.contest_remove_last(&call, when).unwrap().unwrap().club,
+        None
+    );
+}
+
+/// ⭐ **The chip counts what the host lacks — own live rows past its ack and owed take-backs —
+/// never a contact taken back before it was ever sent.** It used to count the seqs past the
+/// ack, a taken-back one included, which the host is never sent: "Behind 1" for good.
+#[test]
+fn the_chip_never_counts_a_contact_taken_back_before_it_was_sent() {
+    use crate::fdevent::SyncState;
+    let mut e = ilqp(|s| s.fd_join_addr = "192.168.1.20:42073".into());
+    party(&mut e, "K9AAA", "COOK");
+    e.fd_mirror_mut().on_link(true, 1);
+    e.fd_mirror_mut().acked = 1;
+    party(&mut e, "W9BBB", "LAKE");
+    assert_eq!(
+        e.fd_sync_state(),
+        SyncState::Behind { queued: 1 },
+        "premise"
+    );
+    let (call, when) = newest(&e);
+    e.contest_remove_last(&call, when).unwrap().unwrap();
+    // The host never had W9BBB: what it lacks is the take-back alone.
+    assert_eq!(e.fd_sync_state(), SyncState::Behind { queued: 1 });
+    e.fd_mirror_mut().on_retracted(2, true);
+    assert_eq!(e.fd_sync_state(), SyncState::Synced);
+}
+
+/// ⭐ **At a club, the merge never writes a contact taken back before it, and a contact merged
+/// before it was taken back stays in the logbook and the answer names it** — the club drops
+/// it either way. Nothing marks the logbook's copy: it is the operator's to delete.
+#[test]
+fn at_a_club_the_merge_never_writes_a_taken_back_contact_and_one_merged_before_is_named() {
+    use tempo_net::fdsync::Mark;
+    let mut e = ilqp(|s| s.fd_join_addr = "192.168.1.20:42073".into());
+    party(&mut e, "K9AAA", "COOK");
+    party(&mut e, "W9BBB", "LAKE");
+    assert_eq!(e.fd_merge_to_general().unwrap().added(), 2);
+    let (call, when) = newest(&e);
+    let shared = std::sync::Mutex::new(e);
+    let answer = super::contest_removal::remove_last(&shared, &call, when)
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer.logbook, Some(vec![]), "the merged copy is named");
+    let mut e = shared.into_inner().unwrap();
+    assert!(
+        e.stored_log().iter().any(|r| r.call == "W9BBB"),
+        "…and stays in the logbook"
+    );
+    party(&mut e, "N9CCC", "WILL");
+    let (call, when) = newest(&e);
+    e.contest_remove_last(&call, when).unwrap().unwrap();
+    assert_eq!(
+        e.fd_merge_to_general().unwrap().added(),
+        0,
+        "the merge writes neither the taken-back contact nor the merged ones again"
+    );
+    assert!(!e.stored_log().iter().any(|r| r.call == "N9CCC"));
+    assert_eq!(
+        e.fd_sync_marks(),
+        [
+            Mark::Retract {
+                pos: "aaaa0001".into(),
+                seq: 2
+            },
+            Mark::Retract {
+                pos: "aaaa0001".into(),
+                seq: 3
+            }
+        ],
+        "the club drops both"
+    );
 }
 
 /// ⭐ **A log whose every contact was removed still journals them.** The journal on disk held
@@ -190,7 +314,7 @@ fn removing_the_only_contact_survives_a_mode_change_and_a_restart() {
 
 /// ⭐ **A Logbook delete of a contact merged from the RUNNING contest removes it from the
 /// contest log too** — as a removal, restorable — through the command path every delete takes
-/// and the engine's own twin. While club sync runs the contest row stays.
+/// and the engine's own twin. While club sync runs the club takes it back too.
 #[test]
 fn a_logbook_delete_of_a_merged_contact_removes_it_from_the_contest_log() {
     let d = crate::logstore::tests::Dir::new("contest-removal-delete");
@@ -232,7 +356,7 @@ fn a_logbook_delete_of_a_merged_contact_removes_it_from_the_contest_log() {
     assert!(logged(&e).is_empty());
     assert_eq!(e.contest_removed().len(), 2);
 
-    // While club sync runs, the logbook delete stands and the contest row stays.
+    // While club sync runs, the contest row leaves too, and the club is owed the take-back.
     let mut e = ilqp(|s| s.fd_host_enable = true);
     party(&mut e, "K9AAA", "COOK");
     assert_eq!(e.fd_merge_to_general().unwrap().added(), 1);
@@ -241,12 +365,18 @@ fn a_logbook_delete_of_a_merged_contact_removes_it_from_the_contest_log() {
         e.delete_qso(id),
         "the logbook delete is the operator's and stands"
     );
-    assert_eq!(
-        logged(&e).len(),
-        1,
-        "the contest row stays: the club log has it"
+    assert!(
+        logged(&e).is_empty(),
+        "the contest row left: the club takes it back"
     );
-    assert!(e.contest_removed().is_empty());
+    assert_eq!(e.contest_removed().len(), 1);
+    assert_eq!(
+        e.fd_sync_marks(),
+        [tempo_net::fdsync::Mark::Retract {
+            pos: "aaaa0001".into(),
+            seq: 1
+        }]
+    );
 }
 
 /// A deleted record whose merge identity names another session's or another position's row is

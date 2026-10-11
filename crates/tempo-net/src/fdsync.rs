@@ -51,8 +51,14 @@
 //! Wire format: one JSON object per `\n`-terminated line, tagged by `"t"`.
 //! `v` (protocol version) travels only in `join`/`welcome`/`beacon`; the host
 //! refuses a higher version with an `error` line the position shows verbatim.
-//! Lines are capped at [`MAX_LINE_BYTES`]; `retract` is reserved (defined,
-//! parsed, never acted on) so shipping edits later needs no version bump.
+//! Lines are capped at [`MAX_LINE_BYTES`].
+//!
+//! ⭐ **A position takes back its OWN contacts** (v4): `retract` and `restore` name one of its
+//! rows by seq, only on the connection that JOINED as it, and the host answers each with
+//! `retracted`/`restored` and, after every welcome, one `retracted` line per row of that
+//! position it holds taken back, before the snap. The host keeps a taken-back row (a
+//! tombstone, never a deleted row) and every connection gets a fresh snap
+//! ([`ClubBackend::counts`]'s generation), so every position's club view drops it.
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -64,6 +70,13 @@ use std::time::{Duration, Instant};
 /// Protocol version, carried in `join`/`welcome`/`beacon`. A host refuses a
 /// JOIN with a higher version (the joiner is newer — it knows things we
 /// don't); same-or-lower joins reach the policy layer, with unknown fields ignored.
+///
+/// **v4 takes a contact back** ([`Msg::Retract`], [`Msg::Restore`]). It went to 4 because the
+/// addition is not harmless either way: a v3 host reads a `retract` and ignores it, so a v4
+/// position's take-back would stay in that club's Cabrillo with nothing on any screen. So a v4
+/// position joining a v3 (or v2) host is refused there by that host's own version check,
+/// verbatim, and an older position is refused by name at a v4 host (the policy layer's, which
+/// says to update Nexus on that laptop): one build on every laptop.
 ///
 /// **v3 proves the position** ([`PositionKey`] on the JOIN). It went to 3 so that neither
 /// direction is quiet: a v3 position joining a v2 host is refused there by that host's own
@@ -78,7 +91,7 @@ use std::time::{Duration, Instant};
 /// legacy `class`/`sect` pair is still read — EXCEPT when the host was running a
 /// contest a v1 position cannot enter, show or send (`ClubBackend::join` takes the
 /// joiner's `v` for that decision, and for v3's).
-pub const PROTO_VERSION: u32 = 3;
+pub const PROTO_VERSION: u32 = 4;
 /// Default host TCP port. Arbitrary but conflict-checked against the ham
 /// ecosystem's squatters: 2237 (WSJT-X UDP), 2242 (JS8Call), 1100 (N3FJP),
 /// 12060 (N1MM) are all avoided. A setting, not a constant, at the caller.
@@ -449,10 +462,22 @@ pub enum Msg {
         #[serde(default, skip_serializing_if = "is_zero")]
         t2: u64,
     },
-    /// RESERVED (defined so a future ship needs no version bump; ignored on
-    /// receive today, and never sent: a position can remove its newest contest
-    /// contact only while club sync is off, because no host takes one back yet).
+    /// pos→host (v4): take back this position's own row `seq` — a tombstone at the host, never
+    /// a deleted row, kept whether or not the row has reached it yet. Only on the connection
+    /// that JOINED as `pos`; the host answers [`Msg::Retracted`]. (Reserved and ignored by v1 to
+    /// v3, which is why sending it needed v4.)
     Retract { pos: String, seq: u64 },
+    /// pos→host (v4): put this position's own row `seq` back, lifting the tombstone. The position
+    /// sends the row itself first, so a host that never had it merges it. Answered with
+    /// [`Msg::Restored`].
+    Restore { pos: String, seq: u64 },
+    /// host→pos (v4): the club log holds this position's row `seq` taken back — the answer to a
+    /// `retract`, and, after every welcome and before the snap, one line per row of the
+    /// position the host holds taken back.
+    Retracted { seq: u64 },
+    /// host→pos (v4): the club log holds this position's row `seq` back — the answer to a
+    /// `restore`.
+    Restored { seq: u64 },
     /// host→pos refusal (version mismatch etc.) — shown to the operator
     /// verbatim.
     Error { msg: String },
@@ -577,9 +602,11 @@ pub trait ClubBackend: Send + Sync {
     /// position's current friendly name — EMPTY MEANS "no news" (an older
     /// peer sends none), never "clear the label".
     fn position_status(&self, pos: &str, report: &PosReport);
-    /// Cheap change detector: (dupe keys total, sections total). Both are
-    /// append-only, so "count grew" == "there is a delta to send".
-    fn counts(&self) -> (usize, usize);
+    /// Cheap change detector: (dupe keys total, sections total, generation), read together.
+    /// Within one generation both lists are append-only, so "count grew" == "there is a delta
+    /// to send". A new generation means they were rebuilt (a contact taken back or put back),
+    /// and every connection is sent a fresh snap: a position's mirror only unions a delta.
+    fn counts(&self) -> (usize, usize, u64);
     /// Club state past the given cursors (`0, 0` = the full join snapshot),
     /// with the current board. `mark_seen` names the asking position so the
     /// host can stamp its last-seen (stale board rows are marked, not hidden).
@@ -588,6 +615,17 @@ pub trait ClubBackend: Send + Sync {
     /// or JOINed again. Called once per served JOIN, on every way out of the socket loop, so a
     /// backend that counts the laptops connected as a position never counts one that has gone.
     fn disconnect(&self, pos: &str, link: u64);
+    /// ⭐ **Take back `pos`'s own row `seq`** — a tombstone the club log keeps (the row stays,
+    /// out of every count, key and file), whether or not the row has arrived. `pos` is always
+    /// the position this connection JOINED as: the socket loop refuses a take-back naming any
+    /// other ([`ANOTHER_POSITIONS_ROW`]), so a position can take back only its own. `hold` and
+    /// `Err` as for [`merge`](Self::merge). Idempotent: a second take-back changes nothing.
+    fn retract(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String>;
+    /// Put `pos`'s own row `seq` back, lifting its tombstone; as [`retract`](Self::retract).
+    fn restore(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String>;
+    /// The seqs of `pos`'s rows the club log holds taken back, ascending — sent to it after
+    /// every welcome, so a position that put one back while away knows to say so.
+    fn retracted(&self, pos: &str) -> Vec<u64>;
 }
 
 fn now_unix() -> u64 {
@@ -795,6 +833,41 @@ impl Drop for Joined {
     }
 }
 
+/// A position's take-back (`gone`) or its undo of row `seq`, answered on its connection
+/// (`retracted`/`restored`). Before a JOIN it reaches nothing; naming another position than the
+/// one JOINed as, or once the host gave the position away, it is refused and `false` closes the
+/// connection, as for a row.
+fn answer_mark(
+    w: &mut impl Write,
+    backend: &Arc<dyn ClubBackend>,
+    joined: Option<&Joined>,
+    gone: bool,
+    pos: &str,
+    seq: u64,
+) -> bool {
+    let Some(j) = joined else {
+        return true;
+    };
+    let answer = if j.pos != pos {
+        Err(ANOTHER_POSITIONS_ROW.to_string())
+    } else if gone {
+        backend
+            .retract(j.hold, pos, seq)
+            .map(|()| Msg::Retracted { seq })
+    } else {
+        backend
+            .restore(j.hold, pos, seq)
+            .map(|()| Msg::Restored { seq })
+    };
+    match answer {
+        Ok(line) => w.write_all(encode_line(&line).as_bytes()).is_ok(),
+        Err(msg) => {
+            let _ = w.write_all(encode_line(&Msg::Error { msg }).as_bytes());
+            false
+        }
+    }
+}
+
 /// One host-side connection: JOIN handshake, then the duplex pump — rows and
 /// presence up, acks and club state down, pings both ways. Read timeout
 /// doubles as the duty tick (club deltas, the 5 s heartbeat, the dead-man).
@@ -814,6 +887,8 @@ fn serve_club_connection(
     let mut joined: Option<Joined> = None;
     let mut sent_dupes = 0usize;
     let mut sent_sections = 0usize;
+    // The generation the cursors above belong to: a new one is a fresh snap.
+    let mut sent_generation = 0u64;
     let mut garbage_run = 0u32;
     let mut last_rx = Instant::now();
     let mut last_beat = Instant::now();
@@ -893,16 +968,27 @@ fn serve_club_connection(
                         if writer.write_all(encode_line(&welcome).as_bytes()).is_err() {
                             break;
                         }
+                        // Which of this position's rows the club holds taken back, before the
+                        // snap, so the position has the host's whole view before it sends a mark.
+                        let gone: String = backend
+                            .retracted(&pos)
+                            .into_iter()
+                            .map(|seq| encode_line(&Msg::Retracted { seq }))
+                            .collect();
+                        if writer.write_all(gone.as_bytes()).is_err() {
+                            break;
+                        }
                         // Full snapshot: read the cursors BEFORE the state so a
                         // merge racing in between is re-sent, never skipped
                         // (the mirror dedups; a skipped key would stay lost).
-                        let (d, s) = backend.counts();
+                        let (d, s, g) = backend.counts();
                         let st = backend.club_state(0, 0, &pos);
                         if write_club_state(&mut writer, st, true).is_err() {
                             break;
                         }
                         sent_dupes = d;
                         sent_sections = s;
+                        sent_generation = g;
                     }
                     // ⭐ Merged only as the position this connection JOINED as: every gate
                     // above decided on that JOIN, so a row naming another position is refused,
@@ -935,6 +1021,19 @@ fn serve_club_connection(
                         }
                         None => {}
                     },
+                    // ⭐ A take-back and its undo: only as the position this connection JOINED
+                    // as, as a row is, and only while that JOIN holds it — so a laptop takes
+                    // back its own contacts and nobody else's.
+                    Msg::Retract { pos, seq } => {
+                        if !answer_mark(&mut writer, &backend, joined.as_ref(), true, &pos, seq) {
+                            break;
+                        }
+                    }
+                    Msg::Restore { pos, seq } => {
+                        if !answer_mark(&mut writer, &backend, joined.as_ref(), false, &pos, seq) {
+                            break;
+                        }
+                    }
                     Msg::Pos {
                         band,
                         mode,
@@ -981,9 +1080,9 @@ fn serve_club_connection(
                             break;
                         }
                     }
-                    // Pong: freshness already noted via last_rx. Retract is
-                    // reserved; Unknown is a newer peer's message; the rest
-                    // are host→pos vocabulary a position should never send.
+                    // Pong: freshness already noted via last_rx. Unknown is a newer
+                    // peer's message; the rest are host→pos vocabulary a position
+                    // should never send.
                     // All ignored — nothing here may reach beyond ClubBackend.
                     _ => {}
                 }
@@ -1004,9 +1103,17 @@ fn serve_club_connection(
                 let _ = writer.write_all(encode_line(&Msg::Error { msg }).as_bytes());
                 break;
             }
-            let (d, s) = backend.counts();
+            let (d, s, g) = backend.counts();
             let beat = last_beat.elapsed().as_secs() >= PING_SECS;
-            if d > sent_dupes || s > sent_sections || beat {
+            if g != sent_generation {
+                // The lists were rebuilt (a contact taken back or put back): the cursors name
+                // nothing now, and a delta cannot take a key away, so the whole state again.
+                let st = backend.club_state(0, 0, &j.pos);
+                if write_club_state(&mut writer, st, true).is_err() {
+                    break;
+                }
+                (sent_dupes, sent_sections, sent_generation) = (d, s, g);
+            } else if d > sent_dupes || s > sent_sections || beat {
                 let st = backend.club_state(sent_dupes, sent_sections, &j.pos);
                 if write_club_state(&mut writer, st, false).is_err() {
                     break;
@@ -1108,6 +1215,28 @@ pub struct ClockSample {
     pub t3: u64,
 }
 
+/// One take-back fact a position owes its host ([`Outbox::marks`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// This position took back its own row `seq`, and the host does not hold it so.
+    Retract { pos: String, seq: u64 },
+    /// This position put its row back, and the host holds it taken back: the row itself, which
+    /// the pump sends before the `restore` so a host that never had it merges it.
+    Restore(Box<WireQso>),
+}
+
+/// ⭐ **What a position owes its host, read in one go**
+/// ([`PositionSync::outbox_after`]): its take-back marks, then its rows. One read, so the two
+/// cannot disagree about a contact taken back or put back between them, and the pump sends
+/// the marks first: a host never acks a row past one this position took back before it
+/// heard of the take-back, which is what keeps "every own live row past the ack" the whole
+/// of what a host lacks.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Outbox {
+    pub marks: Vec<Mark>,
+    pub rows: Vec<WireQso>,
+}
+
 /// The position pump's view of the application. Mirrors [`ClubBackend`]'s
 /// discipline: the pump can read the outbox and deliver club state, nothing
 /// more.
@@ -1130,13 +1259,17 @@ pub trait PositionSync: Send + Sync {
     /// sent, the reason is shown exactly as a host's refusal is, and the session ends
     /// (the pump retries on its backoff, as after any refusal).
     fn host_contest(&self, contest: &str) -> Result<(), String>;
-    /// Own rows with `seq > after` (ascending) — THE outbox definition; no
+    /// Own live rows with `seq > after` (ascending), and every take-back the host's view
+    /// ([`on_retracted`](Self::on_retracted)) differs from — THE outbox definition; no
     /// separate queue exists to corrupt.
-    fn outbox_after(&self, after: u64) -> Vec<WireQso>;
+    fn outbox_after(&self, after: u64) -> Outbox;
     /// The accepted welcome (host's ack high-water, event, host call, host
     /// clock — the caller warns on >30 s skew; nothing is ever adjusted).
     fn on_welcome(&self, acked: u64, event: &str, host_call: &str, now_unix: u64);
     fn on_ack(&self, seq: u64);
+    /// The host holds own row `seq` taken back (`gone`) or back (`!gone`): a `retracted` or
+    /// `restored` line. The view starts empty at each welcome.
+    fn on_retracted(&self, seq: u64, gone: bool);
     /// A `snap` (full, `snap=true`) or `club` (delta) line: union the lists,
     /// overwrite the scalars.
     fn on_club(&self, snap: bool, st: &ClubState);
@@ -1209,6 +1342,14 @@ fn run_position_session(
     // The timed ping awaiting its pong: its `t0` and the instant it left. One at a time —
     // a newer ping replaces it, and a pong that does not echo it is no sample.
     let mut ping_out: Option<(u64, Instant)> = None;
+    // ⭐ The host's view of this position's take-backs is in once its first snap has come (it
+    // lists them between the welcome and the snap): until then nothing of the log is sent, so
+    // no mark is made against half a view and no row is acked past a take-back the host has
+    // not heard of.
+    let mut have_view = false;
+    // Each mark sent this session, by seq (`true` = a take-back): sent again only when what
+    // is owed changes, and every session starts afresh.
+    let mut marked: std::collections::HashMap<u64, bool> = std::collections::HashMap::new();
     let result = loop {
         if shutdown.load(Ordering::Relaxed) {
             break Ok(welcomed);
@@ -1260,8 +1401,13 @@ fn run_position_session(
                         acked = acked.max(seq);
                         backend.on_ack(seq);
                     }
-                    Some(Msg::Snap(st)) => backend.on_club(true, &st),
+                    Some(Msg::Snap(st)) => {
+                        backend.on_club(true, &st);
+                        have_view = welcomed;
+                    }
                     Some(Msg::Club(st)) => backend.on_club(false, &st),
+                    Some(Msg::Retracted { seq }) => backend.on_retracted(seq, true),
+                    Some(Msg::Restored { seq }) => backend.on_retracted(seq, false),
                     Some(Msg::Ping { .. }) => {
                         let pong = Msg::Pong {
                             t0: 0,
@@ -1292,14 +1438,36 @@ fn run_position_session(
         if last_rx.elapsed().as_secs() >= DEAD_SECS {
             break Ok(welcomed); // host silent → reconnect
         }
-        if welcomed {
-            // Stream the outbox: everything past what is both acked and
-            // already written this session (a fresh QSO extends it live).
+        if welcomed && have_view {
+            // Stream the outbox: the take-backs the host lacks first, then everything past
+            // what is both acked and already written this session (a fresh QSO extends it
+            // live).
             let from = sent_to.max(acked);
-            for row in backend.outbox_after(from) {
+            let Outbox { marks, rows } = backend.outbox_after(from);
+            for mark in marks {
+                match mark {
+                    Mark::Retract { pos, seq } => {
+                        if marked.insert(seq, true) != Some(true) {
+                            writer.write_all(encode_line(&Msg::Retract { pos, seq }).as_bytes())?;
+                        }
+                    }
+                    // The row first: a host that never had it merges it, kept out until the
+                    // restore lifts its tombstone.
+                    Mark::Restore(row) => {
+                        if marked.insert(row.seq, false) != Some(false) {
+                            let (pos, seq) = (row.pos.clone(), row.seq);
+                            writer.write_all(encode_line(&Msg::Qso(*row)).as_bytes())?;
+                            writer.write_all(encode_line(&Msg::Restore { pos, seq }).as_bytes())?;
+                        }
+                    }
+                }
+            }
+            for row in rows {
                 sent_to = sent_to.max(row.seq);
                 writer.write_all(encode_line(&Msg::Qso(row)).as_bytes())?;
             }
+        }
+        if welcomed {
             let beat = last_beat.elapsed().as_secs() >= PING_SECS;
             let report = backend.position_report();
             if report.is_some() && (beat || report != last_report) {
@@ -1552,6 +1720,12 @@ mod tests {
                 pos: "a1b2c3d4".into(),
                 seq: 7,
             },
+            Msg::Restore {
+                pos: "a1b2c3d4".into(),
+                seq: 7,
+            },
+            Msg::Retracted { seq: 7 },
+            Msg::Restored { seq: 7 },
             Msg::Error { msg: "nope".into() },
         ];
         for m in msgs {
@@ -1589,6 +1763,29 @@ mod tests {
             contest: String::new(),
         });
         assert!(w.contains("\"t\":\"welcome\"") && w.contains("\"host_call\""));
+        // The take-back vocabulary, as the bytes go out.
+        assert_eq!(
+            encode_line(&Msg::Retract {
+                pos: "a1b2c3d4".into(),
+                seq: 7
+            }),
+            "{\"t\":\"retract\",\"pos\":\"a1b2c3d4\",\"seq\":7}\n"
+        );
+        assert_eq!(
+            encode_line(&Msg::Restore {
+                pos: "a1b2c3d4".into(),
+                seq: 7
+            }),
+            "{\"t\":\"restore\",\"pos\":\"a1b2c3d4\",\"seq\":7}\n"
+        );
+        assert_eq!(
+            encode_line(&Msg::Retracted { seq: 7 }),
+            "{\"t\":\"retracted\",\"seq\":7}\n"
+        );
+        assert_eq!(
+            encode_line(&Msg::Restored { seq: 7 }),
+            "{\"t\":\"restored\",\"seq\":7}\n"
+        );
     }
 
     #[test]
@@ -1598,7 +1795,7 @@ mod tests {
             decode_line(r#"{"t":"hologram","x":1}"#),
             Some(Msg::Unknown)
         ));
-        // …reserved retract parses (and is then ignored by both loops)…
+        // …a take-back parses (a host acts on it only from the position that sent it)…
         assert!(matches!(
             decode_line(r#"{"t":"retract","pos":"a","seq":3}"#),
             Some(Msg::Retract { .. })
@@ -1757,6 +1954,10 @@ mod tests {
         hold: Mutex<u64>,
         /// The last link a served JOIN was given; each is one more.
         links: Mutex<u64>,
+        /// The rows taken back, by `(pos, seq)`.
+        gone: Mutex<std::collections::HashSet<(String, u64)>>,
+        /// What `counts` says the generation is: moving it is the club rebuilding its lists.
+        generation: Mutex<u64>,
     }
     impl FakeClub {
         fn log(&self, s: impl Into<String>) {
@@ -1829,8 +2030,12 @@ mod tests {
                 .unwrap()
                 .push((pos.to_string(), r.clock_ms));
         }
-        fn counts(&self) -> (usize, usize) {
-            (self.merged.lock().unwrap().len(), 0)
+        fn counts(&self) -> (usize, usize, u64) {
+            (
+                self.merged.lock().unwrap().len(),
+                0,
+                *self.generation.lock().unwrap(),
+            )
         }
         fn club_state(&self, dupes_from: usize, _sections_from: usize, _seen: &str) -> ClubState {
             let m = self.merged.lock().unwrap();
@@ -1855,6 +2060,28 @@ mod tests {
         }
         fn disconnect(&self, pos: &str, link: u64) {
             self.log(format!("disconnect {pos} {link}"));
+        }
+        fn retract(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+            self.held(pos, hold)?;
+            self.log(format!("retract {pos} {seq}"));
+            self.gone.lock().unwrap().insert((pos.to_string(), seq));
+            Ok(())
+        }
+        fn restore(&self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+            self.held(pos, hold)?;
+            self.log(format!("restore {pos} {seq}"));
+            self.gone.lock().unwrap().remove(&(pos.to_string(), seq));
+            Ok(())
+        }
+        fn retracted(&self, pos: &str) -> Vec<u64> {
+            let gone = self.gone.lock().unwrap();
+            let mut seqs: Vec<u64> = gone
+                .iter()
+                .filter(|(p, _)| p == pos)
+                .map(|(_, s)| *s)
+                .collect();
+            seqs.sort_unstable();
+            seqs
         }
     }
 
@@ -2413,63 +2640,66 @@ mod tests {
         );
     }
 
-    /// ⭐ THE new→old direction, and why `PROTO_VERSION` moves at all: a v3 position
-    /// joining a SHIPPED v2 host (1.12 to 1.17) is refused there, loudly, at hour zero —
-    /// and shows the operator that host's own words.
+    /// ⭐ THE new→old direction, and why `PROTO_VERSION` moves at all: a v4 position joining
+    /// an older host — v2 (1.12 to 1.17.0) or v3 (the test builds before take-back) — is
+    /// refused there, loudly, at hour zero, and shows the operator that host's own words.
     ///
-    /// The v2 host is a socket speaking v2's rule, because the shipped build
-    /// cannot be linked in here; the bytes it answers with are `fdsync.rs`'s
-    /// error text with v2 in it, which is what a 1.17 host actually writes.
+    /// Each old host is a socket speaking its build's rule, because a shipped build cannot be
+    /// linked in here; the bytes it answers with are its `fdsync.rs`'s own format string with
+    /// its version in it (`"this host speaks Field Day sync v{PROTO_VERSION}, you sent v{v} —
+    /// update the host's Nexus"`, the same in 1.17.0 and in the v3 builds), which is what that
+    /// build writes.
     #[test]
-    fn a_v3_position_joining_a_v2_host_gets_that_hosts_refusal_verbatim() {
-        const V2_ERROR: &str =
-            "this host speaks Field Day sync v2, you sent v3 — update the host's Nexus";
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let seen_v = Arc::new(Mutex::new(0u32));
-        let seen_v2 = seen_v.clone();
-        std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut w = stream.try_clone().unwrap();
-            let mut r = BufReader::new(stream);
-            let line = read_capped_line(&mut r).unwrap().unwrap();
-            if let Some(Msg::Join { v, .. }) = decode_line(&line) {
-                *seen_v2.lock().unwrap() = v;
-                // v2's rule, verbatim: refuse a higher version and close.
-                if v > 2 {
-                    let _ = w.write_all(
-                        encode_line(&Msg::Error {
-                            msg: V2_ERROR.into(),
-                        })
-                        .as_bytes(),
-                    );
+    fn a_v4_position_joining_an_older_host_gets_that_hosts_refusal_verbatim() {
+        for old in [2u32, 3] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let seen_v = Arc::new(Mutex::new(0u32));
+            let seen_v2 = seen_v.clone();
+            std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut w = stream.try_clone().unwrap();
+                let mut r = BufReader::new(stream);
+                let line = read_capped_line(&mut r).unwrap().unwrap();
+                if let Some(Msg::Join { v, .. }) = decode_line(&line) {
+                    *seen_v2.lock().unwrap() = v;
+                    // The old build's rule, verbatim: refuse a higher version and close.
+                    if v > old {
+                        let msg = format!(
+                            "this host speaks Field Day sync v{old}, you sent v{v} — update the \
+                             host's Nexus"
+                        );
+                        let _ = w.write_all(encode_line(&Msg::Error { msg }).as_bytes());
+                    }
                 }
+            });
+
+            let pos = Arc::new(FakePosition::default());
+            let sd = Arc::new(AtomicBool::new(false));
+            let p: Arc<dyn PositionSync> = pos.clone();
+            let sd2 = sd.clone();
+            let a = addr.to_string();
+            let h = std::thread::spawn(move || run_position_until(&a, p, sd2));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline && pos.errors.lock().unwrap().is_empty() {
+                std::thread::sleep(Duration::from_millis(20));
             }
-        });
+            sd.store(true, Ordering::Relaxed);
+            let _ = h.join();
 
-        let pos = Arc::new(FakePosition::default());
-        let sd = Arc::new(AtomicBool::new(false));
-        let p: Arc<dyn PositionSync> = pos.clone();
-        let sd2 = sd.clone();
-        let a = addr.to_string();
-        let h = std::thread::spawn(move || run_position_until(&a, p, sd2));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline && pos.errors.lock().unwrap().is_empty() {
-            std::thread::sleep(Duration::from_millis(20));
+            assert_eq!(
+                *seen_v.lock().unwrap(),
+                4,
+                "this build's position announces v4, which is what makes the v{old} host refuse it"
+            );
+            assert_eq!(
+                pos.errors.lock().unwrap().as_slice(),
+                [format!(
+                    "this host speaks Field Day sync v{old}, you sent v4 — update the host's Nexus"
+                )],
+                "the v{old} host's own words reach the operator unaltered"
+            );
         }
-        sd.store(true, Ordering::Relaxed);
-        let _ = h.join();
-
-        assert_eq!(
-            *seen_v.lock().unwrap(),
-            3,
-            "this build's position announces v3, which is what makes the old host refuse it"
-        );
-        assert_eq!(
-            pos.errors.lock().unwrap().as_slice(),
-            [V2_ERROR.to_string()],
-            "the old host's own words reach the operator unaltered"
-        );
     }
 
     /// ⭐ The two key lists survive CHUNKING index-parallel — asserted across a real
@@ -2604,7 +2834,7 @@ mod tests {
         // moved when PROTO_VERSION did.
         assert!(
             matches!(got.first(), Some(Msg::Error { msg })
-                if msg == "this host speaks Field Day sync v3, you sent v4 — update the host's Nexus"),
+                if msg == "this host speaks Field Day sync v4, you sent v5 — update the host's Nexus"),
             "the refusal names both versions: {got:?}"
         );
         // Control: the backend never even saw the join.
@@ -2616,8 +2846,8 @@ mod tests {
         // THE PIN for the module-header safety claim. Feed the host loop a
         // hostile stream: control-plane-SHAPED messages (a "settings" write,
         // a "tx" command, a CAT poke — none of which exist in the vocabulary,
-        // so they parse as Unknown), the reserved retract, host-side
-        // vocabulary echoed back, and a legitimate row. The instrumented
+        // so they parse as Unknown), a take-back of its own row (data, like a
+        // row), host-side vocabulary echoed back, and a legitimate row. The instrumented
         // backend records every trait call: the ONLY effects that may exist
         // are the ClubBackend data-plane calls, because the trait object is
         // the only thing the socket loop can reach — it has no TX, CAT, or
@@ -2677,11 +2907,355 @@ mod tests {
             assert!(
                 c.starts_with("join ")
                     || c.starts_with("merge ")
+                    || c.starts_with("retract ")
+                    || c.starts_with("restore ")
                     || c.starts_with("pos ")
                     || c.starts_with("disconnect "),
                 "a non-data-plane effect escaped the socket loop: {c}"
             );
         }
+    }
+
+    /// Read lines off `r` for `ms`, decoded, in arrival order.
+    fn read_for(r: &mut BufReader<TcpStream>, ms: u64) -> Vec<Msg> {
+        let mut got = Vec::new();
+        let deadline = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < deadline {
+            match read_capped_line(r) {
+                Ok(Some(line)) => got.extend(decode_line(&line)),
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        got
+    }
+
+    fn connected(addr: std::net::SocketAddr) -> (TcpStream, BufReader<TcpStream>) {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        (s.try_clone().unwrap(), BufReader::new(s))
+    }
+
+    fn send(w: &mut TcpStream, m: &Msg) {
+        w.write_all(encode_line(m).as_bytes()).unwrap();
+    }
+
+    /// ⭐ **A position takes back and puts back its OWN rows, on its own connection, and is
+    /// answered by value**: `retract` reaches the backend as the JOINed position and is answered
+    /// `retracted`, `restore` likewise `restored`. A take-back naming ANOTHER position is refused
+    /// with the sentence a row naming one gets and the connection closes, reaching nothing; one
+    /// sent before any JOIN reaches nothing either; and one on a connection whose position the
+    /// host gave away is refused with the backend's own sentence.
+    #[test]
+    fn a_position_takes_back_only_its_own_rows_on_its_own_connection() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let retracts = || -> Vec<String> {
+            club.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.starts_with("retract ") || c.starts_with("restore "))
+                .cloned()
+                .collect()
+        };
+
+        // Before any JOIN: nothing reaches the backend.
+        let (mut w, mut r) = connected(addr);
+        send(
+            &mut w,
+            &Msg::Retract {
+                pos: "aaaa0001".into(),
+                seq: 1,
+            },
+        );
+        let early = read_for(&mut r, 300);
+        assert!(early.is_empty(), "no answer before a JOIN: {early:?}");
+        assert!(retracts().is_empty(), "nothing before a JOIN");
+
+        // Its own row, on its own connection.
+        send(&mut w, &join_msg("aaaa0001", 0));
+        send(&mut w, &qso("aaaa0001", 1, "W1AW"));
+        send(
+            &mut w,
+            &Msg::Retract {
+                pos: "aaaa0001".into(),
+                seq: 1,
+            },
+        );
+        send(
+            &mut w,
+            &Msg::Restore {
+                pos: "aaaa0001".into(),
+                seq: 1,
+            },
+        );
+        let got = read_for(&mut r, 600);
+        assert!(
+            got.iter().any(|m| matches!(m, Msg::Retracted { seq: 1 })),
+            "the take-back is answered: {got:?}"
+        );
+        assert!(
+            got.iter().any(|m| matches!(m, Msg::Restored { seq: 1 })),
+            "the restore is answered: {got:?}"
+        );
+        assert_eq!(retracts(), ["retract aaaa0001 1", "restore aaaa0001 1"]);
+        drop((w, r));
+
+        // Another position's row, from a connection JOINed as this one: refused and closed.
+        let theirs = talk(
+            addr,
+            &[
+                join_msg("bbbb0002", 0),
+                Msg::Retract {
+                    pos: "aaaa0001".into(),
+                    seq: 1,
+                },
+                qso("bbbb0002", 1, "K1ABC"),
+            ],
+            600,
+        );
+        assert!(
+            theirs
+                .iter()
+                .any(|m| matches!(m, Msg::Error { msg } if msg == ANOTHER_POSITIONS_ROW)),
+            "another position's take-back is refused by name: {theirs:?}"
+        );
+        assert!(
+            !theirs.iter().any(|m| matches!(m, Msg::Ack { .. })),
+            "…and the connection closed on it: the row after it was never read: {theirs:?}"
+        );
+        assert_eq!(
+            retracts(),
+            ["retract aaaa0001 1", "restore aaaa0001 1"],
+            "nothing reached the backend for another position"
+        );
+
+        // A position given away since its JOIN: the backend's refusal, verbatim.
+        let (mut w, mut r) = connected(addr);
+        send(&mut w, &join_msg("cccc0003", 0));
+        let _ = read_for(&mut r, 300);
+        *club.hold.lock().unwrap() = 7;
+        send(
+            &mut w,
+            &Msg::Retract {
+                pos: "cccc0003".into(),
+                seq: 2,
+            },
+        );
+        let given = read_for(&mut r, 600);
+        sd.store(true, Ordering::Relaxed);
+        assert!(
+            given
+                .iter()
+                .any(|m| matches!(m, Msg::Error { msg } if msg.starts_with("given away"))),
+            "{given:?}"
+        );
+        assert!(
+            !retracts().iter().any(|c| c.contains("cccc0003")),
+            "nothing was taken back for a position given away"
+        );
+    }
+
+    /// ⭐ **After the welcome, the host says which of this position's rows it holds taken back,
+    /// one line each, BEFORE the snap** — so a position that put one back while away sees it
+    /// before it sends anything, and nobody else's are listed.
+    #[test]
+    fn the_hosts_take_backs_for_a_position_come_after_its_welcome_and_before_its_snap() {
+        let club = Arc::new(FakeClub::default());
+        for (pos, seq) in [("aaaa0001", 7), ("bbbb0002", 5), ("aaaa0001", 3)] {
+            club.gone.lock().unwrap().insert((pos.to_string(), seq));
+        }
+        let (addr, sd) = start_host(club.clone());
+        let got = talk(addr, &[join_msg("aaaa0001", 0)], 500);
+        sd.store(true, Ordering::Relaxed);
+        let shape: Vec<String> = got
+            .iter()
+            .take(4)
+            .map(|m| match m {
+                Msg::Welcome { .. } => "welcome".into(),
+                Msg::Retracted { seq } => format!("retracted {seq}"),
+                Msg::Snap(st) if st.reset => "snap".into(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(shape, ["welcome", "retracted 3", "retracted 7", "snap"]);
+    }
+
+    /// ⭐ **A new generation sends every connection a fresh snap** (`reset` set), so a position's
+    /// mirror — which only unions a delta — drops a key the club's rebuilt lists no longer
+    /// hold. CONTROL: the same wait with the generation unchanged brings no second snap.
+    #[test]
+    fn a_new_generation_sends_every_connection_a_fresh_snap() {
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let snaps = |got: &[Msg]| {
+            got.iter()
+                .filter(|m| matches!(m, Msg::Snap(st) if st.reset))
+                .count()
+        };
+        let (mut w, mut r) = connected(addr);
+        send(&mut w, &join_msg("aaaa0001", 0));
+        let first = read_for(&mut r, 500);
+        assert_eq!(snaps(&first), 1, "the join's own snap: {first:?}");
+        let still = read_for(&mut r, 700);
+        assert_eq!(
+            snaps(&still),
+            0,
+            "CONTROL: no new generation, no snap: {still:?}"
+        );
+        *club.generation.lock().unwrap() += 1;
+        let after = read_for(&mut r, 700);
+        sd.store(true, Ordering::Relaxed);
+        assert_eq!(
+            snaps(&after),
+            1,
+            "one fresh snap for the new generation: {after:?}"
+        );
+    }
+
+    /// A position with rows 1 and 3 live, row 4 taken back here, and row 2 put back here — the
+    /// outbox computed as the engine computes it, from its own rows and the host's view.
+    #[derive(Default)]
+    struct TakingBack {
+        /// The host's view: own rows it holds taken back.
+        host_gone: Mutex<std::collections::BTreeSet<u64>>,
+    }
+    impl TakingBack {
+        fn row(seq: u64) -> WireQso {
+            match qso("eeee0005", seq, &format!("W{seq}AW")) {
+                Msg::Qso(q) => q,
+                _ => unreachable!(),
+            }
+        }
+    }
+    impl PositionSync for TakingBack {
+        fn identity(&self) -> (String, String, String, u64) {
+            ("eeee0005".into(), "Phone tent".into(), "KD9TAW".into(), 4)
+        }
+        fn key(&self) -> PositionKey {
+            throwaway_key()
+        }
+        fn contest(&self) -> String {
+            "arrlfd".into()
+        }
+        fn host_contest(&self, _contest: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn outbox_after(&self, after: u64) -> Outbox {
+            let gone = self.host_gone.lock().unwrap();
+            let mut marks = Vec::new();
+            if !gone.contains(&4) {
+                marks.push(Mark::Retract {
+                    pos: "eeee0005".into(),
+                    seq: 4,
+                });
+            }
+            if gone.contains(&2) {
+                marks.push(Mark::Restore(Box::new(Self::row(2))));
+            }
+            Outbox {
+                marks,
+                rows: [1, 2, 3]
+                    .into_iter()
+                    .filter(|&s| s > after)
+                    .map(Self::row)
+                    .collect(),
+            }
+        }
+        fn on_welcome(&self, _a: u64, _e: &str, _h: &str, _n: u64) {
+            self.host_gone.lock().unwrap().clear();
+        }
+        fn on_ack(&self, _seq: u64) {}
+        fn on_retracted(&self, seq: u64, gone: bool) {
+            let mut g = self.host_gone.lock().unwrap();
+            if gone {
+                g.insert(seq);
+            } else {
+                g.remove(&seq);
+            }
+        }
+        fn on_club(&self, _snap: bool, _st: &ClubState) {}
+        fn on_error(&self, _msg: &str) {}
+        fn position_report(&self) -> Option<PosReport> {
+            None
+        }
+        fn on_link(&self, _connected: bool) {}
+        fn on_clock(&self, _sample: ClockSample) {}
+    }
+
+    /// ⭐ **The pump sends nothing of its log until it has the host's view, then its take-backs
+    /// before its rows, and each once.** A scripted host welcomes it (acked 2), says it holds row
+    /// 2 taken back, and holds its snap back 400 ms: no row and no mark may come before the snap.
+    /// Then, in order: the take-back of row 4, row 2 and its restore, then row 3 — and once the
+    /// host has answered both, neither is sent again.
+    #[test]
+    fn a_position_sends_its_take_backs_before_its_rows_once_it_has_the_hosts_view() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let host = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+            let mut w = s.try_clone().unwrap();
+            let mut r = BufReader::new(s);
+            let mut log: Vec<(bool, String)> = Vec::new(); // (after the snap, line)
+            let heard = |r: &mut BufReader<TcpStream>, log: &mut Vec<(bool, String)>, after, ms| {
+                for m in read_for(r, ms) {
+                    let line = match m {
+                        Msg::Qso(q) => format!("qso {}", q.seq),
+                        Msg::Retract { seq, .. } => format!("retract {seq}"),
+                        Msg::Restore { seq, .. } => format!("restore {seq}"),
+                        _ => continue,
+                    };
+                    log.push((after, line));
+                }
+            };
+            heard(&mut r, &mut log, false, 300); // the JOIN
+            for m in [
+                Msg::Welcome {
+                    v: PROTO_VERSION,
+                    event: "TEST FD".into(),
+                    host_call: "W9ABC".into(),
+                    acked: 2,
+                    now_unix: now_unix(),
+                    contest: "arrlfd".into(),
+                },
+                Msg::Retracted { seq: 2 },
+            ] {
+                send(&mut w, &m);
+            }
+            heard(&mut r, &mut log, false, 400);
+            send(
+                &mut w,
+                &Msg::Snap(ClubState {
+                    reset: true,
+                    ..Default::default()
+                }),
+            );
+            heard(&mut r, &mut log, true, 500);
+            for m in [Msg::Retracted { seq: 4 }, Msg::Restored { seq: 2 }] {
+                send(&mut w, &m);
+            }
+            heard(&mut r, &mut log, true, 800);
+            log
+        });
+        let pos: Arc<dyn PositionSync> = Arc::new(TakingBack::default());
+        let sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos, sd2));
+        let log = host.join().unwrap();
+        sd.store(true, Ordering::Relaxed);
+        let _ = pump.join();
+        assert!(
+            log.iter().all(|(after, _)| *after),
+            "nothing of the log before the host's view is in: {log:?}"
+        );
+        let lines: Vec<&str> = log.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(
+            lines,
+            ["retract 4", "qso 2", "restore 2", "qso 3"],
+            "take-backs first, each once, then the rows past the ack"
+        );
     }
 
     /// A listener on a free port BELOW the kernel's ephemeral range, for a test that lets the
@@ -2783,8 +3357,8 @@ mod tests {
                 None => Ok(()),
             }
         }
-        fn outbox_after(&self, after: u64) -> Vec<WireQso> {
-            (after + 1..=3)
+        fn outbox_after(&self, after: u64) -> Outbox {
+            let rows = (after + 1..=3)
                 .map(|seq| WireQso {
                     pos: "dddd0001".into(),
                     seq,
@@ -2801,7 +3375,11 @@ mod tests {
                     sat: String::new(),
                     sat_fm: false,
                 })
-                .collect()
+                .collect();
+            Outbox {
+                marks: Vec::new(),
+                rows,
+            }
         }
         fn on_welcome(&self, _acked: u64, _event: &str, _host: &str, now_unix: u64) {
             *self.welcome_now.lock().unwrap() = now_unix;
@@ -2810,6 +3388,7 @@ mod tests {
             let mut a = self.acked.lock().unwrap();
             *a = (*a).max(seq);
         }
+        fn on_retracted(&self, _seq: u64, _gone: bool) {}
         fn on_club(&self, _snap: bool, st: &ClubState) {
             *self.club_qsos.lock().unwrap() = st.qsos;
         }

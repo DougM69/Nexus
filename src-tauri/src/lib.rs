@@ -28668,9 +28668,15 @@ enum ContestRemovalDto {
     Removed {
         entry: RemovedContestDto,
         sent_to: ContestSentToDto,
+        /// At a club: `"linked"` when this laptop is with the host now, `"away"` when it goes up
+        /// once the link is back. Absent without club sync.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
     },
     Restored {
         entry: RemovedContestDto,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
     },
     Refused {
         refusal: &'static str,
@@ -28681,9 +28687,9 @@ enum ContestRemovalDto {
 /// and the contest screen's Remove on the newest row — when it is still the contact named.
 ///
 /// Kept, never deleted ([`tempo_app::engine::contest_removal`]): the contest journal keeps it
-/// marked, its serial and club seq stay spent, and [`contest_restore`] puts it back. Refused
-/// while club sync runs. The answer names where it had already gone, which nothing here takes
-/// it back from. Answers once the contest journal holds the change; the logbook's copies are
+/// marked, its serial and club seq stay spent, and [`contest_restore`] puts it back. At a club the
+/// club takes it back too (`club`). The answer names where it had already gone, which nothing
+/// here takes it back from. Answers once the contest journal holds the change; the logbook's copies are
 /// read with the engine lock released, on the blocking pool, as [`journaled_command`] waits.
 ///
 /// ⛔ Not one of Remote's operations: removal is refused from afar.
@@ -28711,6 +28717,7 @@ async fn contest_remove_last(
                     logbook: removed.logbook.is_some(),
                     uploaded: removed.logbook.clone().unwrap_or_default(),
                 },
+                club: club_route(removed.removal.club),
             }
         }
         Err(refusal) => ContestRemovalDto::Refused {
@@ -28720,8 +28727,8 @@ async fn contest_remove_last(
 }
 
 /// Put a removed contest contact back exactly as it was, by the id the Removed list gave it —
-/// refused when the station was worked again since on that band and mode, and while club sync
-/// runs. Answers once the contest journal holds the change.
+/// refused when the station was worked again since on that band and mode. At a club the club
+/// puts it back too (`club`). Answers once the contest journal holds the change.
 #[tauri::command]
 async fn contest_restore(
     state: State<'_, SharedEngine>,
@@ -28736,11 +28743,60 @@ async fn contest_restore(
     Ok(match answer {
         Ok(restored) => ContestRemovalDto::Restored {
             entry: RemovedContestDto::from(&restored),
+            club: club_route(restored.club),
         },
         Err(refusal) => ContestRemovalDto::Refused {
             refusal: refusal.code(),
         },
     })
+}
+
+/// A removal's or restore's way to the club, as the screen words it.
+fn club_route(linked: Option<bool>) -> Option<&'static str> {
+    linked.map(|now| if now { "linked" } else { "away" })
+}
+
+#[cfg(test)]
+mod contest_club_route_tests {
+    use super::*;
+
+    /// The answer the screen words a club take-back from: `linked` with the host now, `away`
+    /// when the link is back, and no `club` key at all without club sync.
+    #[test]
+    fn a_removal_answer_says_how_it_reaches_the_club() {
+        let entry = || RemovedContestDto {
+            id: 2,
+            removed_unix: 1_792_000_000,
+            rows: Vec::new(),
+        };
+        let restored = |linked| {
+            serde_json::to_value(ContestRemovalDto::Restored {
+                entry: entry(),
+                club: club_route(linked),
+            })
+            .unwrap()
+        };
+        assert_eq!(restored(Some(true))["club"], "linked");
+        assert_eq!(restored(Some(false))["club"], "away");
+        assert!(
+            restored(None).get("club").is_none(),
+            "no club sync, no club"
+        );
+        let removed = serde_json::to_value(ContestRemovalDto::Removed {
+            entry: entry(),
+            sent_to: ContestSentToDto {
+                n3fjp: None,
+                n1mm: None,
+                wsjtx: false,
+                logbook: false,
+                uploaded: Vec::new(),
+            },
+            club: club_route(Some(false)),
+        })
+        .unwrap();
+        assert_eq!(removed["club"], "away");
+        assert_eq!(removed["outcome"], "removed");
+    }
 }
 
 /// The contest screen's Removed list: the removed contacts, oldest removal first.
