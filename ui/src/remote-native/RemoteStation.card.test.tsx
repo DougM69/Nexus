@@ -87,6 +87,16 @@ it('the approve in the card honours the transmit tick under Advanced, exactly as
   await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: waiting, approve: true, transmit: true, key: fingerprint('d'), kind: 'browser' }]))
 })
 
+// A status with no device list (a stand-in backend's answer) is a station with no devices: the card renders, and
+// Settings, which this card sits inside, is never taken down with it. It crashed on reading the missing list, and
+// Settings' own boundary then hid every section (App.contestSwitch.test.tsx's Field Day switch among them).
+it('a status with no device list still renders the card and never takes Settings down', async () => {
+  mount({ phase: 'unpaired', origin: 'https://remote-staging.hamradiotools.io', stationId: null, accountId: null, pairingId: null,
+    pairingCode: null, expiresAt: null, error: null } as RemoteStationStatus)
+  expect((await screen.findByRole('status')).textContent).toBe('No Remote account paired')
+  expect(within(main()).getByRole('button', { name: 'Pair a station' })).toBeTruthy()
+})
+
 it('not linked yet, the card says so and holds the pairing steps; Remote off, the card says so with Turn on Remote beside it', async () => {
   mount({ phase: 'unpaired', origin: 'https://remote-staging.hamradiotools.io', stationId: null, accountId: null, pairingId: null,
     pairingCode: null, expiresAt: null, devices: [], error: null })

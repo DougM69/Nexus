@@ -76,8 +76,10 @@ export function RemoteStation() {
   // The browsers, and the computers running Nexus (the native client) apart from them: a computer's
   // approval pins its key and grants nothing on the relay's lanes, so it has no transmit tick and no
   // switches, here or under Advanced.
-  const browsers = status?.devices.filter(device => !isNative(device)) ?? []
-  const computers = status?.devices.filter(isNative) ?? []
+  // Read on every render, so a status with no list at all is a station with no devices, never a crash
+  // that takes the whole of Settings down with this card.
+  const browsers = status?.devices?.filter(device => !isNative(device)) ?? []
+  const computers = status?.devices?.filter(isNative) ?? []
   // One card (the operator, 2026-10-02: "Settings ▸ Remote access becomes one card"): where this
   // station stands with the Remote service and the one thing to do next, then the browsers with their
   // keys. Everything else the panel had folds under Advanced, unchanged: the same state, the same
