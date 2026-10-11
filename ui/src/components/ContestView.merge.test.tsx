@@ -151,11 +151,11 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
   })
 
   it("surfaces the engine's own refusal rather than a second copy of it", async () => {
-    fdMergeToGeneral.mockRejectedValueOnce('Field Day mode is not active')
+    fdMergeToGeneral.mockRejectedValueOnce('Contest mode is not active')
     await show()
     fireEvent.click(screen.getByRole('button', { name: /Merge 3 contacts/ }))
     await settle()
-    expect(screen.getByRole('alert').textContent).toContain('Field Day mode is not active')
+    expect(screen.getByRole('alert').textContent).toContain('Contest mode is not active')
     expect(screen.queryByRole('status')).toBeNull()
   })
 
@@ -165,7 +165,7 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
     // "upload: off" plus a ClubLog upload anyway is us misleading them, not ClubLog
     // surprising them.
     expect(screen.getByRole('button', { name: /Merge 3 contacts/ })).toBeTruthy()
-    // By name: the Field Day mode switch shares the screen with it.
+    // By name: the Contest mode switch shares the screen with it.
     expect(screen.getByRole('switch', { name: "Upload this session's merged contacts" })).toBeTruthy()
     expect(screen.getByRole('note').textContent).toContain('catch-up sweep')
   })
