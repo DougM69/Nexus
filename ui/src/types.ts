@@ -4846,10 +4846,16 @@ export interface AppSnapshot {
    *  never receives it), and from a station older than the logger window. */
   contestEntry?: ContestEntryShared
   /** The CQ the contest's Running calls, as it goes on the air ("CQ FD K1ABC FN42"), while a
-   *  contest runs whose own FT8/FT4 messages apply (`Engine::contest_running_cq`): the Tx6 row
-   *  shows it then and calls it through the contest's Running, as Call CQ does. Absent everywhere
-   *  else, from the Remote (which never receives it), and from an older station. */
+   *  contest runs whose own FT8/FT4 messages apply and that WSJT-X has an activity for, for a
+   *  standard call (`Engine::contest_running_cq`): the Tx6 row shows it then and calls it through
+   *  the contest's Running, as Call CQ does. Absent everywhere else, from the Remote (which never
+   *  receives it), and from an older station. */
   contestCq?: string
+  /** A contest runs whose Running calls the CQ typed in the Tx6 row, where WSJT-X has no activity
+   *  for it (`Engine::contest_cq_typed`): the row stays the operator's, and Tx 6 and Call CQ hand
+   *  its direction to that Running. Absent everywhere else, from the Remote, and from an older
+   *  station. */
+  contestCqTyped?: boolean
 }
 
 /** The contest strip's contact in progress, shared by the main window and the contest logger

@@ -23,7 +23,7 @@ import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/pan
 import { StationControlContext } from '../stationAccess'
 
 const startCq = vi.fn(async () => null)
-const startRunning = vi.fn(async (): Promise<null> => null)
+const startRunning = vi.fn(async (_dir?: string | null): Promise<null> => null)
 const pushToast = vi.fn()
 
 vi.mock('../api', () => ({
@@ -36,7 +36,7 @@ vi.mock('../api', () => ({
   pointRotatorAtCall: vi.fn(async () => null),
   redecode: vi.fn(async () => null),
   startCq: (...a: unknown[]) => startCq(...(a as [])),
-  startRunning: () => startRunning(),
+  startRunning: (...a: unknown[]) => startRunning(...(a as [string | null])),
   startQsoRecording: vi.fn(async () => null),
   stopQsoRecording: vi.fn(async () => null),
   setSkipTx1: vi.fn(async () => null),
@@ -338,5 +338,60 @@ describe('the Tx6 row while a contest runs', () => {
     expect(tx6Box().value).toBe(`CQ ${MYCALL} EN61`)
     expect(tx6Box().readOnly).toBe(false)
     expect(tx6Box().getAttribute('aria-label')).toBe('Tx6 Call CQ (edit for a directed CQ)')
+  })
+})
+
+// WHERE WSJT-X HAS NO ACTIVITY FOR THE RUNNING CONTEST, TX6 IS THE OPERATOR'S OWN, as in WSJT-X's
+// normal mode ("What I typed, like WSJT-X"): the row stays editable, and on this computer Tx 6 and
+// Call CQ hand the direction typed there to the contest's Running (`contestCqTyped`), so the contact
+// stays the contest's. A Tx6 that is no CQ is refused by both, as #254 refuses it.
+describe('the Tx6 row in a contest WSJT-X has no activity for', () => {
+  const tx6Box = () => document.querySelector('.txp-cq-field input') as HTMLInputElement
+  const typedContest = () => ({ ...makeSnap(), contestCqTyped: true }) as AppSnapshot
+  const callCqButton = () => {
+    const roles = screen.getByRole('group', { name: 'Sequencer role' })
+    const found = [...roles.querySelectorAll('button')].find((b) => b.textContent === 'Call CQ')
+    if (!found) throw new Error('no Call CQ in the strip')
+    return found
+  }
+
+  it("keeps the row editable and sends what was typed through the contest's Running", async () => {
+    renderCockpit(typedContest())
+    expect(tx6Box().readOnly).toBe(false)
+    expect(tx6Box().value, 'the generated CQ, until edited').toBe(`CQ ${MYCALL} EN61`)
+    callCq(`CQ QP ${MYCALL} EN61`)
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith('QP'))
+    expect(startCq, 'the contact stays the contest’s').not.toHaveBeenCalled()
+  })
+
+  it('a plain Tx6 calls the Running with no direction', async () => {
+    renderCockpit(typedContest())
+    callCq(`CQ ${MYCALL} EN61`)
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null))
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it('Call CQ calls the CQ typed in Tx6', async () => {
+    renderCockpit(typedContest())
+    fireEvent.change(tx6Box(), { target: { value: `CQ TEST ${MYCALL} EN61` } })
+    fireEvent.click(callCqButton())
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith('TEST'))
+  })
+
+  it('a Tx6 that is no CQ is refused, by Tx 6 and by Call CQ alike', async () => {
+    renderCockpit(typedContest())
+    callCq(`CQ ${MYCALL} POTA`)
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(1))
+    fireEvent.click(callCqButton())
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(2))
+    expect(startRunning, 'nothing different from the row goes on the air').not.toHaveBeenCalled()
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it('outside such a contest Call CQ stays plain, whatever Tx6 says', async () => {
+    renderCockpit()
+    fireEvent.change(tx6Box(), { target: { value: `CQ QP ${MYCALL} EN61` } })
+    fireEvent.click(callCqButton())
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null))
   })
 })

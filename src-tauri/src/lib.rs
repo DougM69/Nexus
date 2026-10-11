@@ -19182,20 +19182,26 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
     Ok(eng.snapshot())
 }
 
-/// The Operate strip's Call CQ ([`tempo_app::engine::Engine::start_running`]), and the Tx6 row's
-/// while a contest runs. Outside a contest the row keeps `start_cq`, which sends the CQ it shows.
+/// The Operate strip's Call CQ ([`tempo_app::engine::Engine::start_running_with_cq`]), and the Tx6
+/// row's while a contest runs. `dir` is the direction of the CQ typed in the Tx6 row, which the
+/// contest's Running calls where WSJT-X has no activity for the contest; `None` for a plain CQ,
+/// and from a caller that sends none. Outside a contest the row keeps `start_cq`, which sends the
+/// CQ it shows.
 #[tauri::command(async)]
-fn start_running(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    start_running_on(&state)
+fn start_running(
+    state: State<'_, SharedEngine>,
+    dir: Option<String>,
+) -> Result<AppSnapshot, String> {
+    start_running_on(&state, dir)
 }
 
 /// [`start_running`]'s body, over a plain handle. Call CQ can enter the contest's Running from
 /// another mode, so it opens the session as the `set_mode` command does, with its rows.
-fn start_running_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
+fn start_running_on(engine: &SharedEngine, dir: Option<String>) -> Result<AppSnapshot, String> {
     tempo_app::engine::act_opening_session(
         engine,
         |eng| eng.start_running_opens_session(),
-        |eng| eng.start_running(),
+        |eng| eng.start_running_with_cq(dir.as_deref()),
         |eng| eng.snapshot(),
     )
 }
@@ -47594,7 +47600,7 @@ mod contest_entry_command_tests {
     #[test]
     fn call_cq_enters_the_contest_with_its_rows() {
         let (dir, engine) = back_in_ft8_qso_mode("contest-entry-cq");
-        let snap = crate::start_running_on(&engine).expect("the run starts");
+        let snap = crate::start_running_on(&engine, None).expect("the run starts");
         let fd = snap.field_day.as_ref().expect("in the contest");
         assert!(fd.running, "the contest's Running");
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");

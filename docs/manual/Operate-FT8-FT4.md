@@ -99,9 +99,11 @@ The Tx panel is visible only in Classic layout. It contains:
 - **Tx1–Tx6** message rows, each with a next-dot indicator showing which slot fires next
 - **Tx5** — editable free text, 13 character maximum; a QSO-macro datalist provides common expansions
 - **Tx6** — editable directed-CQ field (`CQ DX`, `CQ NA`, `CQ POTA`, `CQ TEST`, `CQ 040`, etc.).
-  While an FT8/FT4 contest runs it shows the contest's own CQ instead (`CQ FD`, `CQ TEST` or the
-  plain CQ) and Tx 6 calls it through the contest's Running, as Call CQ does; your own Tx6 text
-  comes back when the contest ends.
+  In ARRL Field Day and the ARRL VHF contests it shows the contest's own CQ instead (`CQ FD`,
+  `CQ TEST`) and Tx 6 calls it through the contest's Running, as Call CQ does; your own Tx6 text
+  comes back when the contest ends. In the other FT8/FT4 contests Tx6 stays yours, and Tx 6 and
+  Call CQ send what you typed (`CQ QP …` included) through the contest's Running, as WSJT-X does
+  with no special activity set.
 
 In Roster layout the equivalent information appears in the modern QSO strip alongside the Call Roster.
 

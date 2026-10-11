@@ -14242,6 +14242,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let air_mode = self.adif_mode_for_tier();
         if let Mode::FieldDay { station, running } = &mut self.mode {
             let ruleset = station.log.ruleset();
+            // The direction typed in the Tx6 row, which a Running calls where WSJT-X has no
+            // activity ([`Self::start_running_with_cq`]); the other messages pass it by.
+            station.set_cq_dir(self.cq_dir.as_deref().unwrap_or(""));
             station.set_messages(FtMessages::for_contest(ruleset, air_mode), *running);
             station.set_wsjtx_field_day(FtMessages::wsjtx_field_day(ruleset, air_mode));
         }
@@ -14795,8 +14798,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// cockpit's Tx6 row shows while a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]), and on this computer calls through the contest's Running,
     /// as Call CQ does ([`Self::start_running`]). WSJT-X's Tx6 is its activity's CQ once one is
-    /// set (`genCQMsg`, mainwindow.cpp 9502-9524): `CQ FD`, `CQ TEST`, or the standard CQ where
-    /// it has no activity. `None` everywhere else, where the row keeps its own CQ.
+    /// set (`genCQMsg`, mainwindow.cpp 9502-9524): `CQ FD` or `CQ TEST`. `None` everywhere else,
+    /// where the row keeps its own CQ: outside those contests, where WSJT-X has no activity (the
+    /// Running calls the row's CQ there, [`Self::contest_cq_typed`]), and for a nonstandard call.
     ///
     /// Built as the Running builds its CQ ([`FtMessages::cq`]) from what it would be built from
     /// now: the Settings call and locator, and inside the contest its session's own GRID (a
@@ -14804,11 +14808,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Settings locator's four characters.
     pub fn contest_running_cq(&self) -> Option<String> {
         let messages = self.contest_ft_messages()?;
+        // Where WSJT-X has no activity the row is the operator's own ([`Self::contest_cq_typed`]),
+        // and it gives the row an activity's CQ only for a standard call (`genCQMsg`:
+        // `stdCall(my_callsign)`): a nonstandard call's row keeps its own CQ, `CQ <call>`.
+        if messages == FtMessages::Standard
+            || !tempo_core::message::is_std_call(&self.settings.mycall)
+        {
+            return None;
+        }
         let session_grid = match &self.mode {
             Mode::FieldDay { station, .. } => station.log.session.field("GRID"),
             _ => "",
         };
         Some(messages.cq_on_air(&self.settings.mycall, &self.settings.mygrid, session_grid))
+    }
+
+    /// ⭐ **A contest runs whose Running calls the CQ typed in the Tx6 row**: one whose own FT8/FT4
+    /// messages apply ([`Self::contest_ft_messages`]) and which WSJT-X has no activity for, where
+    /// its Tx6 is the operator's own, directed or plain, as in its normal mode. The row stays the
+    /// operator's, and on this computer Tx 6 and Call CQ hand its direction to the contest's
+    /// Running ([`Self::start_running_with_cq`]). A standard call only, as WSJT-X's
+    /// (`genCQMsg`: `stdCall(my_callsign)`): the packer has no form for a nonstandard call's
+    /// directed CQ, and its row keeps its own CQ.
+    pub fn contest_cq_typed(&self) -> bool {
+        self.contest_ft_messages() == Some(FtMessages::Standard)
+            && tempo_core::message::is_std_call(&self.settings.mycall)
     }
 
     /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
@@ -22432,23 +22456,41 @@ contact yourself."
     ///
     /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]), Call CQ is the contest's Running** — `CQ FD`, `CQ TEST`,
-    /// or the standard CQ where WSJT-X has no activity — as WSJT-X's CQ is the activity's once
-    /// one is set (`genCQMsg`, mainwindow.cpp 9466-9531). Before, it left the contest for FT8
-    /// QSO mode, so a station that started its run here lost it to S&P on opening the Contest
-    /// screen. A contest that cannot start (its exchange not filled in) refuses it, as the
-    /// Contest screen's Running does, and nothing changes. Like any Call CQ it clears a
-    /// directed-CQ token left from the Tx6 row.
+    /// or where WSJT-X has no activity the CQ typed in the Tx6 row — as WSJT-X's CQ is the
+    /// activity's once one is set, and its Tx6 where none is (`genCQMsg`, mainwindow.cpp
+    /// 9466-9531). Before, it left the contest for FT8 QSO mode, so a station that started its run
+    /// here lost it to S&P on opening the Contest screen. A contest that cannot start (its exchange
+    /// not filled in) refuses it, as the Contest screen's Running does, and nothing changes. Like
+    /// any Call CQ it clears a directed-CQ token left from the Tx6 row, except where the Running
+    /// calls the row's CQ ([`Self::start_running_with_cq`]).
     ///
     /// The Remote page calls `start_cq` directly, with the CQ it shows. On this computer the Tx6
     /// row calls this while a contest runs, the CQ it shows then being the contest's
-    /// ([`Self::contest_running_cq`]), and `start_cq` everywhere else.
+    /// ([`Self::contest_running_cq`]) or its own ([`Self::contest_cq_typed`]), and `start_cq`
+    /// everywhere else.
     pub fn start_running(&mut self) -> Result<(), String> {
+        self.start_running_with_cq(None)
+    }
+
+    /// [`Self::start_running`] with the direction of the CQ typed in the Tx6 row (`None` for a
+    /// plain one), which the contest's Running calls where WSJT-X has no activity for the contest
+    /// ([`Self::contest_cq_typed`]), on its first CQ and after every contact; the Contest screen's
+    /// Running keeps it. Everywhere else it is set aside: the contests WSJT-X has an activity for
+    /// call their own CQ, and outside a contest Call CQ is a plain run.
+    pub fn start_running_with_cq(&mut self, dir: Option<&str>) -> Result<(), String> {
         if self.contest_ft_messages().is_some() {
             // The screen's Running refuses a run without a valid callsign at the command (the
             // `set_mode` command's identity check), and so does this one.
             self.structured_tx_ready(false)?;
-            self.set_mode("fieldday-run")?;
-            self.cq_dir = None;
+            let typed = dir
+                .map(|d| d.trim().to_uppercase())
+                .filter(|d| !d.is_empty() && self.contest_cq_typed());
+            // In place before the Running is built, which reads it; a refusal puts it back.
+            let before = std::mem::replace(&mut self.cq_dir, typed);
+            if let Err(why) = self.set_mode("fieldday-run") {
+                self.cq_dir = before;
+                return Err(why);
+            }
             return Ok(());
         }
         self.start_cq(None)
@@ -23587,6 +23629,7 @@ contact yourself."
         s.tx_alarms = self.tx_alarms.clone();
         s.contest_entry = self.contest_entry_dto();
         s.contest_cq = self.contest_running_cq();
+        s.contest_cq_typed = self.contest_cq_typed();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;

@@ -336,6 +336,7 @@ impl Publisher {
                             // The Tx6 row's contest CQ is this computer's cockpit's: on the
                             // Remote page the row keeps `start_cq`, which sends the CQ it shows.
                             fields.remove("contestCq");
+                            fields.remove("contestCqTyped");
                         }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
@@ -791,6 +792,26 @@ mod tests {
         assert!(
             reply["data"].get("contestCq").is_none(),
             "the Remote's snapshot carries no Tx6 contest CQ"
+        );
+        // …nor the flag that the Running calls the Tx6 row's own CQ, where WSJT-X has no activity.
+        let mut s = shared.lock().unwrap().settings().clone();
+        s.fd_event = "txqp".into();
+        shared.lock().unwrap().apply_settings(s);
+        assert!(
+            shared.lock().unwrap().snapshot().contest_cq_typed,
+            "control: the station's own snapshot carries it"
+        );
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("contestCqTyped").is_none(),
+            "the Remote's snapshot carries no typed-CQ flag"
         );
     }
     #[test]

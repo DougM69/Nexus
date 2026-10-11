@@ -1061,11 +1061,13 @@ export async function startCq(dir: string | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_cq', { dir })
 }
 
-/** The Operate strip's Call CQ on this computer (`Engine::start_running`), and the Tx6 row's while a
- * contest runs (`snap.contestCq`). Outside a contest the row, and the Remote page always, call
- * `startCq`, which sends the CQ they show. */
-export async function startRunning(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('start_running', {})
+/** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's
+ * while a contest runs (`snap.contestCq`, `snap.contestCqTyped`). `dir` is the direction of the CQ
+ * typed in Tx6, which the contest's Running calls where WSJT-X has no activity for the contest
+ * (`snap.contestCqTyped`); null for a plain CQ. Outside a contest the row, and the Remote page
+ * always, call `startCq`, which sends the CQ they show. */
+export async function startRunning(dir: string | null = null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_running', { dir })
 }
 
 /** The Operate strip's S&P on this computer (`Engine::start_search_and_pounce`). The Remote page's

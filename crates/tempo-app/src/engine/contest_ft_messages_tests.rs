@@ -727,8 +727,8 @@ fn scene_period(contest: &str, tier: Tier) -> String {
 
 /// A gesture with a contest picked whose exchange is not filled in (the Texas QSO Party with no
 /// county or state): with Contest mode off the strip's Call CQ, a plain run; with it on the Tx6
-/// row, which shows the contest's CQ there and calls the contest's Running, refused for the
-/// exchange it lacks as Call CQ is; against a WSJT-X partner with no activity answering it.
+/// row, whose own CQ the contest's Running calls there, refused for the exchange it lacks as Call
+/// CQ is; against a WSJT-X partner with no activity answering it.
 fn unfilled_contest(on: bool) -> String {
     let mut e = Engine::new(ME, MY_GRID, 0);
     let mut s = e.settings().clone();
@@ -737,8 +737,9 @@ fn unfilled_contest(on: bool) -> String {
     s.tx_even = true;
     e.apply_settings(s);
     e.set_tier(Tier::Ft8);
-    // The Tx6 row on this computer: the contest's Running while it reports a contest CQ.
-    let entered = if on && e.contest_running_cq().is_some() {
+    // The Tx6 row on this computer: the contest's Running while it shows the contest's CQ or the
+    // Running calls the row's own (here a plain one).
+    let entered = if on && (e.contest_running_cq().is_some() || e.contest_cq_typed()) {
         e.start_running()
     } else if on {
         e.start_cq(None)
@@ -1395,15 +1396,17 @@ fn the_remote_pages_tx6_still_sends_the_cq_it_shows() {
 /// `CQ FD` in Field Day and the blank default, `CQ TEST` in the ARRL VHF contests, the standard CQ
 /// where WSJT-X has none; and what the row shows is what a receiving station decodes from the
 /// Running's first over (a contest that cannot start here refuses, and nothing keys). None where the
-/// contest's messages do not apply (a contest that bans the mode, FT1, DX1, FT2, Contest mode off):
-/// the row keeps its own CQ there.
+/// contest's messages do not apply (a contest that bans the mode, FT1, DX1, FT2, Contest mode off),
+/// where WSJT-X has no activity (its Tx6 is the operator's own there:
+/// [`where_wsjtx_has_no_activity_the_running_calls_the_cq_typed_in_tx6`]), and for a nonstandard
+/// call, whose Tx6 WSJT-X never gives an activity's CQ (`genCQMsg`: `stdCall(my_callsign)`): the
+/// row keeps its own CQ there.
 #[test]
 fn the_tx6_row_shows_the_cq_the_contests_running_sends() {
     let want = |contest: &str| match contest {
         "" | "arrlfd" => Some("CQ FD K1ABC FN42"),
         "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => Some("CQ TEST K1ABC FN42"),
-        "wfd" | "ilqp" | "nyqp" => None,
-        _ => Some("CQ K1ABC FN42"),
+        _ => None,
     };
     // What a receiver decodes from the over Tx 6 starts, and that it matches what the row showed.
     let pressed = |e: &mut Engine, shown: &str, what: &str| match e.start_running() {
@@ -1442,9 +1445,9 @@ fn the_tx6_row_shows_the_cq_the_contests_running_sends() {
             }
         }
     }
-    assert!(
-        started > 60,
-        "the sweep presses Tx 6 in the contests: {started}"
+    assert_eq!(
+        started, 20,
+        "Tx 6 pressed in the contests WSJT-X has an activity for"
     );
     // Field Day with a six-character locator: the Running hands the encoder the locator as typed,
     // and the air carries four characters — as the row shows, and as WSJT-X's Tx6 does.
@@ -1485,6 +1488,173 @@ fn the_tx6_row_shows_the_cq_the_contests_running_sends() {
     e.apply_settings(s);
     e.set_tier(Tier::Ft8);
     assert_eq!(e.contest_running_cq(), None, "Contest mode off");
+    for contest in ["arrlfd", "arrlvhf_jan"] {
+        let mut e = engine_for(contest, MY_GRID);
+        let mut s = e.settings().clone();
+        s.mycall = "PJ4/K1ABC".into();
+        e.apply_settings(s);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.contest_running_cq(),
+            None,
+            "{contest}: a nonstandard call"
+        );
+    }
+}
+
+/// ⭐ WHERE WSJT-X HAS NO ACTIVITY FOR THE CONTEST, ITS RUNNING CALLS THE CQ TYPED IN TX6, as WSJT-X's
+/// normal mode sends its Tx6 (`on_tx6_editingFinished`, mainwindow.cpp 10075-10086; `genCQMsg`): a
+/// direction of one to four letters or three digits, `CQ QP K1ABC FN42`, on the Running's first CQ
+/// and on every CQ after a contact, the contact in the contest's log. On this computer Tx 6 and Call
+/// CQ hand the direction to the Running, and the Contest screen's Running keeps it. The contests
+/// WSJT-X has an activity for keep their own CQ; outside a contest Call CQ is the plain run it always
+/// was; a refused start changes nothing; and a nonstandard call's CQ never carries a direction, which
+/// the packer has no form for.
+#[test]
+fn where_wsjtx_has_no_activity_the_running_calls_the_cq_typed_in_tx6() {
+    let typed = "CQ QP K1ABC FN42";
+    // Every CQ the Running keys over a contact with a WSJT-X partner with no activity, and how many
+    // contacts the contest's log holds afterwards.
+    let run = |e: &mut Engine| -> (Vec<String>, usize) {
+        let mut partner = Partner::new(Act::None, false);
+        let mut cqs = Vec::new();
+        for slot in 0..SLOTS {
+            if slot % 2 == 0 {
+                if let Some(text) = keyed(e, slot) {
+                    if text.starts_with("CQ ") {
+                        cqs.push(text.clone());
+                    }
+                    partner.hear(&text);
+                }
+            } else {
+                match partner.transmit() {
+                    Some(text) => e.ingest_decodes_for_test(&[heard(&text)], slot + 1),
+                    None => e.ingest_decodes_for_test(&[], slot + 1),
+                }
+            }
+        }
+        let logged = match &e.mode {
+            Mode::FieldDay { station, .. } => station.log.qsos().len(),
+            _ => 0,
+        };
+        (cqs, logged)
+    };
+    let mut ran = 0;
+    let no_activity = CONTESTS
+        .iter()
+        .filter(|c| act_of(c) == Act::None && !matches!(**c, "ilqp" | "nyqp"));
+    for contest in no_activity {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let what = format!("{contest:?} {}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            match e.start_running_with_cq(Some("QP")) {
+                Ok(()) => {
+                    let (cqs, logged) = run(&mut e);
+                    assert_eq!(
+                        cqs.first().map(String::as_str),
+                        Some(typed),
+                        "{what}: the first CQ"
+                    );
+                    assert!(
+                        cqs.len() >= 2 && cqs.iter().all(|c| c == typed),
+                        "{what}: every CQ, after the contact too: {cqs:?}"
+                    );
+                    assert_eq!(logged, 1, "{what}: the contact is the contest's");
+                    ran += 1;
+                }
+                // CQ WW and CQ WPX cannot start without a country file, as the Contest screen's Running.
+                Err(why) => assert_eq!(keyed(&mut e, 0), None, "{what}: refused ({why})"),
+            }
+            assert!(e.contest_cq_typed(), "{what}: the row stays the operator's");
+            assert_eq!(
+                e.contest_running_cq(),
+                None,
+                "{what}: no contest CQ replaces it"
+            );
+        }
+    }
+    assert!(
+        ran >= 12,
+        "the sweep ran the contests that can start here: {ran}"
+    );
+    // The contests WSJT-X has an activity for keep their own CQ.
+    for (contest, want) in [
+        ("arrlfd", "CQ FD K1ABC FN42"),
+        ("arrlvhf_jan", "CQ TEST K1ABC FN42"),
+    ] {
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(Tier::Ft8);
+        assert!(!e.contest_cq_typed(), "{contest}");
+        e.start_running_with_cq(Some("QP")).expect("the run starts");
+        assert_eq!(
+            keyed(&mut e, 0).as_deref(),
+            Some(want),
+            "{contest}: its own CQ"
+        );
+        assert_eq!(
+            e.cq_dir, None,
+            "{contest}: set aside, so no later Running inherits it"
+        );
+    }
+    // Outside a contest, Call CQ is the plain run it always was.
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    let mut s = e.settings().clone();
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    assert!(!e.contest_cq_typed());
+    e.start_running_with_cq(Some("QP")).expect("a plain run");
+    assert_eq!(
+        keyed(&mut e, 0).as_deref(),
+        Some("CQ K1ABC FN42"),
+        "no contest: plain"
+    );
+    // The Contest screen's Running keeps the direction the cockpit handed over; a plain Call CQ
+    // takes it away again.
+    let mut e = engine_for("txqp", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.start_running_with_cq(Some("QP")).expect("the run starts");
+    e.set_mode("fieldday-sp").expect("the screen's S&P");
+    e.set_mode("fieldday-run").expect("the screen's Running");
+    assert_eq!(
+        keyed(&mut e, 0).as_deref(),
+        Some(typed),
+        "the Contest screen's Running"
+    );
+    e.start_running_with_cq(None).expect("a plain Call CQ");
+    assert_eq!(
+        keyed(&mut e, 2).as_deref(),
+        Some("CQ K1ABC FN42"),
+        "plain again"
+    );
+    // A refused start changes nothing: the direction a Tx6 press left is still there.
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    let mut s = e.settings().clone();
+    s.fd_event = "txqp".into();
+    s.fd_active = true;
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.start_cq(Some("DX")).expect("a directed run");
+    assert!(
+        e.start_running_with_cq(Some("QP")).is_err(),
+        "txqp not filled in"
+    );
+    assert_eq!(e.cq_dir.as_deref(), Some("DX"), "untouched by the refusal");
+    // A nonstandard call's CQ never carries a direction.
+    let mut e = engine_for("txqp", MY_GRID);
+    let mut s = e.settings().clone();
+    s.mycall = "PJ4/K1ABC".into();
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    assert!(!e.contest_cq_typed(), "a nonstandard call");
+    e.start_running_with_cq(Some("QP")).expect("the run starts");
+    let cq = keyed(&mut e, 0).expect("the Running keys");
+    assert!(
+        !cq.contains(" QP "),
+        "no direction for a nonstandard call: {cq:?}"
+    );
 }
 
 /// ⛔ The transmit guards hold for the cockpit's gestures exactly as for the Contest screen's
