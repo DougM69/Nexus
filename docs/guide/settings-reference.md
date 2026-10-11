@@ -1675,9 +1675,12 @@ DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 
 ### N3FJP Integration (club master log)
 
-"Each FD contact lands in the club's **N3FJP Field Day Contest Log** the moment
-you log it — so the whole club's score updates in real time." Run N3FJP on the
-master computer and point Nexus at its IP and port.
+"Each contact you log in Contest mode reaches the club's master N3FJP log the
+moment you log it." Nexus fills in the form of the **N3FJP Field Day Contest Log**
+(call, band, mode, class and section), so at Field Day the whole club's score
+updates in real time; a contest whose exchange is not a class and section reaches
+N3FJP without its exchange. Run N3FJP on the master computer and point Nexus at its
+IP and port.
 
 ![The N3FJP group: an empty N3FJP host box showing the placeholder "192.168.1.10 (empty = off)", N3FJP port 1100, "Use ENTER for Field Day scoring" on, and "Report my band to N3FJP" off.](../img/manual/settings-n3fjp.webp)
 
@@ -1686,14 +1689,14 @@ Test N3FJP button continue to the right.*
 
 - **N3FJP host** — IP or hostname of the master log computer. Blank = off.
 - **N3FJP port** — N3FJP's API TCP port (default 1100).
-- **Use ENTER for Field Day scoring** — on by default. Logs each FD contact with
+- **Use ENTER for contest scoring** — on by default. Logs each contest contact with
   N3FJP's ENTER sequence, "which scores the contest — the correct path." Off
   falls back to a plain `ADDDIRECT` insert, which may not score.
 - **Report my band to N3FJP** — "Tell N3FJP which band you're on (no CAT needed),
   so the club's Network Status Display band board shows this position." Off by
   default.
-- **Forward every QSO** — also push **every** logged QSO, not just Field Day, to
-  N3FJP ACLog. "N3FJP dedupes, so it's safe to run alongside the Field-Day push."
+- **Forward every QSO** — also push **every** logged QSO, not just contest contacts,
+  to N3FJP ACLog. "N3FJP dedupes, so it's safe to run alongside the contest push."
 - **Connection test** — **Test N3FJP** saves, then tests the TCP link. "Run this
   at the club site before the event starts."
 
@@ -1701,11 +1704,11 @@ Test N3FJP button continue to the right.*
 
 - **N1MM contact broadcast address** — host:port, UDP. "Name the port — consumers
   stack on one host, and 12060 is often already taken by another logger." Blank
-  = off. An address alone sends nothing outside a Field Day event.
+  = off. An address alone sends only the contacts you log in Contest mode.
 - **Broadcast every QSO** — send the contact packet for **every** logged QSO, not
-  just Field Day: point a map app such as GridTracker at the address and each
+  just contest contacts: point a map app such as GridTracker at the address and each
   contact plots as you log it. "One packet per QSO: this never doubles up with
-  the Field Day broadcast." Off by default; turning it on with a blank address
+  the contest broadcast." Off by default; turning it on with a blank address
   fills in `127.0.0.1:12060` visibly, rather than as a hidden default.
 
 ### LoTW users list
@@ -1948,14 +1951,19 @@ the Cabrillo headers.
 - **Contest** — ARRL Field Day, Winter Field Day, ARRL November Sweepstakes (CW or
   Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
-  Ohio, Tennessee and Texas QSO Parties. Contest mode below is the switch that starts
-  the contest picked here. (This is the same setting the Event chips used to carry inside
+  Illinois, New York, Ohio, Tennessee and Texas QSO Parties. Contest mode below is the
+  switch that starts the contest picked here. While it is running a contest, a line under
+  the picker says so: a new pick takes effect after you save it and turn Contest mode off
+  and on again, because the running contest keeps its log across every save. (This is the
+  same setting the Event chips used to carry inside
   what was then Field Day Setup; it moved up one level so there is one contest picker rather than a
   setting buried inside one contest's own section.)
 - **Your role** — read-only, and derived rather than chosen. A role is decided by where
   you are: in a QSO party the in-state and out-of-state stations send different things,
-  and crossing the line changes which one you are. Both Field Day events work the same
-  way for everyone, so there is no role to show yet.
+  and crossing the line changes which one you are. It reads in words: in-state,
+  out-of-state, W/VE or DX, and the same word sits beside **Sending** on the contest log
+  strip. Both Field Day events work the same way for everyone, so there is no role to
+  show yet.
 - **Entry category** — what your Cabrillo log declares about the station:
   `SINGLE-OP`, `MULTI-OP` or `CHECKLOG`. It is a claim, so you make it rather than
   Nexus guessing: pick `CHECKLOG` when you are sending the log to help the sponsor
