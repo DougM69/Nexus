@@ -384,6 +384,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FT8 and FT4 in a contest send that contest's own messages, as WSJT-X does.** Running and S&P
+  on the Contest screen sent Field Day's messages whatever contest was picked: `CQ FD` and a class
+  and section, so in any other contest no FT8 contact could finish. In the ARRL January, June and
+  September VHF contests they now send what WSJT-X sends in its NA VHF Contest mode: `CQ TEST`,
+  your grid, `R` and your grid, RR73, and 73 from the station running. The other station's grid is
+  logged as its grid, so the contact scores and dupes like one you type. In Sweepstakes, CQ WW,
+  CQ WPX and the California, Ohio, Tennessee and Texas QSO parties, where WSJT-X has no contest
+  mode, they send the standard FT8 messages, and the contact is logged with the call alone, since
+  those messages carry nothing of the exchange. Both need your grid in Settings before they
+  transmit. Field Day, FT1, and the contests that ban FT8 and FT4 (Winter Field Day, Illinois and
+  New York) are unchanged. NEEDS-BENCH: each contest on FT8 into a dummy load, and a contact with a
+  station running WSJT-X in NA VHF Contest mode.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

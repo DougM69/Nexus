@@ -99,6 +99,24 @@ board a club watches all weekend stays a board. The checklist keeps its own cap
 and scrolls inside itself: all fifteen rows are there, in a list of their own,
 rather than 290 px of checkboxes between you and the log.
 
+### FT8 and FT4 in each contest
+
+On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
+answers, and **S&P** answers the first CQ it hears once you turn TX on. What
+they send depends on the contest, and is what WSJT-X sends in it (here K1ABC in
+FN42 works W9XYZ in EN37):
+
+| Contest | Running sends | S&P sends | The contest log keeps |
+|---|---|---|---|
+| ARRL Field Day | `CQ FD K1ABC FN42`, `W9XYZ K1ABC R 2B EMA` | `W9XYZ K1ABC 2B EMA`, `W9XYZ K1ABC RR73` | class and section |
+| ARRL January, June and September VHF (WSJT-X's NA VHF Contest mode) | `CQ TEST K1ABC FN42`, `W9XYZ K1ABC R FN42`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC RR73` | the grid each way |
+| Sweepstakes, CQ WW, CQ WPX, and the California, Ohio, Tennessee and Texas QSO parties (no WSJT-X contest mode) | `CQ K1ABC FN42`, `W9XYZ K1ABC -12`, `W9XYZ K1ABC RR73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC R-12`, `W9XYZ K1ABC 73` | the call only |
+
+Outside Field Day, Running and S&P need your grid in Settings before they
+transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
+FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
+Day's messages, as they always have.
+
 ### An operator and a logger on one radio
 
 Many clubs put two people on one station: the operator on the radio, and a logger on a second
@@ -312,6 +330,10 @@ reaches the contact.
   a hint from the log, and nothing is ticked for you.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
+- **A double-click on an FT8 or FT4 decode works that station outside the
+  contest**, in any contest: it sends the standard FT8 messages and the contact
+  goes to your log, not the contest log. For a contest contact, use S&P on the
+  Contest screen.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
   position.
