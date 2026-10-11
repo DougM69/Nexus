@@ -17,6 +17,7 @@ import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
@@ -921,6 +922,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         <CockpitPaneFrame
           title={t('psk.pane.log.title')}
           paneId="log"
+          // The contest score chip rides in this head: the strip below has no room left for it.
+          actions={snap.fieldDay ? <ContestScoreChip place="head" fieldDay={snap.fieldDay} /> : undefined}
           weight={1.5}
           split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
@@ -959,6 +962,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             // PSK Field Day contact was worked on the air and scored nothing. The prop rides
             // the snapshot this cockpit already has rather than a new App-level prop.
             fieldDay={snap.fieldDay ?? null}
+            scoreChip={false}
             active={active}
             // The SCORING CLASS is DIG (2 points, dupes against the other digital modes);
             // the SUBMODE is the waveform that was actually keyed, so the export says PSK31

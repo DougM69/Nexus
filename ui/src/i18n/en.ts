@@ -1871,6 +1871,16 @@ export const EN = {
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
+  // THE SCORE CHIP in every contest log strip: the Contest screen's own numbers at a glance,
+  // "ILQP · 212 pts · 48 Q · 19 mults · 41/hr". One entry per reading — a list of readings,
+  // not a sentence. `{{rate}}` is a whole number, or the scoreboard's em dash before there is one.
+  'logEntry.score.points': { one: '{{count}} pt', other: '{{count}} pts' },
+  'logEntry.score.qsos': '{{count}} Q',
+  'logEntry.score.mults': { one: '{{count}} mult', other: '{{count}} mults' },
+  'logEntry.score.sections': { one: '{{count}} section', other: '{{count}} sections' },
+  'logEntry.score.rate': '{{rate}}/hr',
+  'logEntry.score.title':
+    'The contest so far, as the Contest screen counts it: your score, contacts, multipliers (sections at Field Day) and contacts per hour over your last ten.',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
   'logEntry.scp.label': 'Super Check Partial',
   'logEntry.scp.title':

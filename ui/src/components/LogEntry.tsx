@@ -52,6 +52,7 @@ import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { baseCall, sameCall } from '../callsign'
 import { placeCode, placeName } from '../features/otaStates'
 import { RecallPanel } from './RecallPanel'
+import { ContestScoreChip } from './ContestScoreChip'
 import { RemoteCollectionsContext } from '../remote-web/collections'
 import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
 import { pushToast, withErrorToast } from '../toast'
@@ -455,6 +456,13 @@ interface Props {
    * no over to stop. Absent everywhere else.
    */
   sharedEntry?: 'logger'
+  /**
+   * CONTEST STRIP ONLY — does the strip show the contest score chip in its own header row?
+   * Default true. A cockpit that frames this strip in a Log pane passes false and shows the
+   * chip in that pane's head instead, beside the title: there the strip sits in a 24–44em
+   * column whose header row has no room left (`ContestScoreChip`).
+   */
+  scoreChip?: boolean
 }
 
 /**
@@ -490,6 +498,7 @@ export function LogEntry({
   remote,
   esm,
   sharedEntry,
+  scoreChip = true,
 }: Props) {
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
@@ -2178,6 +2187,9 @@ export function LogEntry({
                 ? t('logEntry.contest.offBand', { band: snap.radio.band })
                 : t('logEntry.contest.hint', { band: snap.radio.band })}
           </span>
+          {/* ⭐ THE SCORE CHIP — the Contest screen's own numbers at a glance, in the room the
+              row has left: a zero-cost slot, so nothing else in this header moves for it. */}
+          {fieldDay && scoreChip && <ContestScoreChip fieldDay={fieldDay} />}
 
           {/* ⭐ THE SENT SIDE, READ-ONLY (§9) — what is going on the air right now.
               It is the SESSION's composing exchange, never a row's: a row already

@@ -12893,6 +12893,62 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-faint);
 }
+/* ⭐ THE SCORE CHIP (ContestScoreChip.tsx) — a ZERO-COST SLOT in this one-line row. Its basis
+   is 0, so its shrink weight is 0 and it only ever GROWS into room nobody else wants;
+   `min-width: 0` lets it be nothing at all; the negative margin cancels the one `gap` its
+   presence adds. So every other item in the header lays out exactly as it did without it, at
+   every width and text size, and the strip's height cannot move. What does not fit is clipped
+   with an ellipsis (the whole reading is the slot's title). The face is `.le-fd-mode`'s, so the
+   chip is never the tallest thing in the row. Tokens only, both themes. */
+.le-fd-score {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: calc(-1 * var(--space-2));
+  overflow: hidden;
+}
+.le-fd-score-val {
+  min-width: 0;
+  margin-left: var(--space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+}
+/* THE SCORE CHIP IN A PANE HEAD — the same reading where a cockpit frames its contest strip in a
+   "Log" pane (CW, Phone, RTTY, PSK). There the strip sits in a column of 24–44em, and its own
+   header row has no room left at all; the pane's head beside its one-word title does. The face
+   is the title's — its size, and no vertical padding or border (the edge is an inset shadow,
+   which takes no room) — so the chip is never taller than the title and the head never grows.
+   A head too narrow for it CLIPS it: the one `minmax(0, max-content)` track gives the chip no
+   minimum width, so the actions cluster it sits in can shrink past it (measured: a plain
+   `min-width: 0` span overflowed the head instead, below 24em at Larger text). Both themes. */
+.contest-score-chip {
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content);
+  min-width: 0;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+}
+.contest-score-chip-val {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Remove last while its first press waits (the verdict line names the contact), and the
    contest screen's Remove on the newest row and Restore in its Removed list. The label never
    changes, so neither button changes width while it asks. */

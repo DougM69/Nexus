@@ -59,6 +59,14 @@ show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), a
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
+**The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK
+cockpits show it in the title bar of their Log pane: `ILQP · 212 pts · 48 Q · 19 mults · 41/hr`, that
+is the score, the contacts, the multipliers (the worked sections at Field Day) and your rate over
+your last ten contacts, the same numbers the Contest screen shows, and the rate falls while you log
+nothing. The Satellites log strip and the contest logger window carry it in the strip's top line
+instead, in whatever room that line has left: it is cut short rather than move anything, and
+hovering it shows the whole reading.
+
 **Super Check Partial and call history**, in every contest. As you type a call in a log
 strip, a line under the boxes lists the calls active in recent contests that contain what
 you have typed; click one to use it. The list is `MASTER.SCP` from supercheckpartial.com
