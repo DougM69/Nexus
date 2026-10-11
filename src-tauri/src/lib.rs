@@ -13511,6 +13511,50 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ A RESTORE REFUSED FOR A BUSY LOGBOOK PUTS NOTHING BACK, as a save refused for one changes
+    /// nothing. A backup that turns Contest mode on opens a contest session, so the restore reads
+    /// the session's rows first, as the save that turns it on does; with the logbook held by
+    /// another program it is refused in the save's own words, and nothing in the backup lands:
+    /// not its settings, not Contest mode, not the UI state it carries.
+    #[test]
+    fn a_restore_refused_for_a_busy_logbook_puts_nothing_back() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-refused", 3);
+        let hold = held_up(&engine, &dir);
+        let held = engine_lock(&engine).settings().clone();
+        let mut bundle = held.clone();
+        bundle.fd_active = true;
+        bundle.fd_class = "1D".into();
+        bundle.fd_section = "EMA".into();
+        bundle.mycall = "W9REST".into();
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": bundle,
+            "uiState": { "nexus.restore.refused": "1" },
+        })
+        .to_string();
+        let mut ui_saved = None;
+        let restored = restore_settings_bundle(&engine, text, |ui| {
+            ui_saved = Some(ui);
+            true
+        });
+        assert_eq!(
+            restored.map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "refused for the logbook, in the save's words"
+        );
+        let eng = engine_lock(&engine);
+        assert_eq!(*eng.settings(), held, "nothing applied");
+        assert!(
+            eng.mode_opens_session("fieldday-sp"),
+            "and Contest mode was not entered"
+        );
+        drop(eng);
+        assert_eq!(ui_saved, None, "nor the UI state the backup carries");
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ A SETTINGS SAVE THAT WOULD PUT A DAEMON ON A NET RIGCTL RADIO'S NETWORK ADDRESS IS
     /// REFUSED, BY NAME, AND CHANGES NOTHING. The station operates an FTDX10 (its rigctld on 4535)
     /// beside an IC-9700 on wfview's rigctld at `127.0.0.1:4533`, and the form types the FTDX10's
@@ -13934,6 +13978,16 @@ fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
 ) -> Result<AppSnapshot, String> {
+    restore_settings_bundle(&state, text, ui_state_save)
+}
+
+/// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
+/// ([`ui_state_save`]) once the restore goes through.
+fn restore_settings_bundle(
+    engine: &SharedEngine,
+    text: String,
+    save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
+) -> Result<AppSnapshot, String> {
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
@@ -13950,19 +14004,21 @@ fn import_settings_bundle(
         None => return Err("That backup is missing its format version.".to_string()),
     }
     let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
-    // UI state is best-effort: a bundle whose settings are good but whose ui-state is not should
-    // still restore the radios. The half that failed is named rather than swallowed.
-    if let Some(ui) = v.get("uiState").cloned() {
-        if let Ok(map) = serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui) {
-            ui_state_save(map);
-        }
-    }
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
-    // which is right for a form and wrong for a restore.
-    {
-        let mut eng = engine_lock(&state);
-        eng.apply_restored_settings(settings);
+    // which is right for a form and wrong for a restore. A bundle that opens a contest session
+    // opens it as a Save does, its rows read first, and a logbook too busy to read them refuses
+    // the restore whole: nothing below runs, the UI state included.
+    tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+        // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
+        // should still restore the radios. The half that failed is named rather than swallowed.
+        if let Some(ui) = v.get("uiState").cloned() {
+            if let Ok(map) =
+                serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui)
+            {
+                save_ui(map);
+            }
+        }
         // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
         // next launch while looking like it had worked. Synchronous, under the lock as it always
         // was: a restore that did not reach the disk says so and mirrors nothing to the base
@@ -13976,8 +14032,9 @@ fn import_settings_bundle(
         // ...and into the base config, or the launch picker keeps offering the OLD roster.
         persist_roster_to_base(&eng.settings().radios);
         persist_routing_to_base(eng.settings());
-    }
-    let snap = { engine_lock(&state).snapshot() };
+        Ok(())
+    })??;
+    let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
 }
 

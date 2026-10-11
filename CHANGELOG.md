@@ -415,6 +415,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Restoring a settings backup that turns Contest mode on, or picks another contest while one
+  runs, now checks your logbook for dupes as a save does.** The contest it started did not know
+  the contacts your logbook already held from the contest's start, so a station you had already
+  worked there was not marked worked or dupe. When the logbook is too busy to read at that moment
+  (a big import, another window, a sync), the restore tries again for a few seconds, as a save
+  does, then says the logbook was busy and restores nothing, so trying again in a moment works.
 - **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
   launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
   every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations
