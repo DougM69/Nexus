@@ -248,7 +248,7 @@ const screenSwitch = () =>
   within(document.querySelector('main.layout.single .fd-event-banner') as HTMLElement).getByRole('switch')
 const clubBoard = () => screen.queryByRole('button', { name: /club band board/i })
 const roleButton = (name: 'Running' | 'S&P') =>
-  within(screen.getByRole('group', { name: 'Field Day role' })).getByRole('button', { name })
+  within(screen.getByRole('group', { name: 'Running or S&P' })).getByRole('button', { name })
 /** Lets a mode change the last click set off land, so "it did not happen" is not just "not yet". */
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
 
