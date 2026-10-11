@@ -899,6 +899,11 @@ enum JournalNote {
         key_hash: String,
         at: u64,
     },
+    /// ⭐ A position took back its row `seq` ([`ClubLog::take_back`]): a tombstone, replayed in
+    /// journal order. An older Nexus replaying this journal skips the line and counts the row.
+    TakeBack { pos: String, seq: u64, at: u64 },
+    /// …and put it back ([`ClubLog::put_back`]).
+    PutBack { pos: String, seq: u64, at: u64 },
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -955,10 +960,10 @@ pub struct ClubLog {
     sections_list: Vec<String>,
     sections_set: HashSet<String>,
     positions: HashMap<String, ClubPosition>,
-    /// Merge ARRIVAL times (host clock), pruned to the trailing hour — the
-    /// per-position rate meter. In-memory only: after a host restart the rate
+    /// Merge ARRIVAL times (host clock) with the row's `(posid, seq)`, pruned to the trailing
+    /// hour — the per-position rate meter. In-memory only: after a host restart the rate
     /// honestly reads 0 until fresh merges arrive.
-    arrivals: VecDeque<(u64, String)>,
+    arrivals: VecDeque<(u64, String, u64)>,
     /// The append-only event journal. `None` = not journaling (tests).
     journal: Option<std::fs::File>,
     /// Laptops this host turned away, by the position id their JOIN named and the hash of its
@@ -988,6 +993,31 @@ pub struct ClubLog {
     /// The host's warning reads it ([`board_full`](Self::board_full)), so the screen never
     /// builds a board of its own to measure.
     board_full: Option<(usize, usize)>,
+    /// ⭐ **The rows each position took back** ([`take_back`](Self::take_back)): tombstones by
+    /// `(posid, seq)`, kept whether or not the row has reached this host yet, and journaled. A row
+    /// a tombstone names is out of every count, key, board and file, and is never deleted.
+    gone: HashSet<(String, u64)>,
+    /// The taken-back rows themselves, with the merge order they keep and their arrival on this
+    /// run ([`Aside`]): [`put_back`](Self::put_back) returns each to its place in
+    /// [`rows`](Self::rows).
+    aside: HashMap<(String, u64), Aside>,
+    /// Each row's merge order, index-parallel to [`rows`](Self::rows): a row put back goes back
+    /// between the rows merged before and after it, so a take-back and its undo leave the club's
+    /// files the bytes they were, and a journal replay lands on the same order.
+    ords: Vec<u64>,
+    next_ord: u64,
+    /// One more each time the dupe keys and sections are rebuilt (a take-back or a put-back of a
+    /// row this host holds): every connection is sent a fresh snap (`fdsync::ClubBackend::counts`).
+    generation: u64,
+}
+
+/// A taken-back row as the club log keeps it ([`ClubLog::take_back`]).
+#[derive(Debug, Clone)]
+struct Aside {
+    ord: u64,
+    row: MergedRow,
+    /// When it arrived on this run, for the rate meter it rejoins when put back.
+    arrived: Option<u64>,
 }
 
 /// How far back a host journal replay reaches. Matches the position ADIF journal's own
@@ -1103,12 +1133,20 @@ impl ClubLog {
     /// that succeeds.
     pub fn version_refusal(&self, v: u32) -> Option<String> {
         let need = tempo_net::fdsync::PROTO_VERSION;
+        // What the joiner's build cannot do that this club needs from every laptop: a v2 one
+        // proves no position (v3), and neither takes a contact back nor drops one another
+        // laptop took back (v4).
+        let lacks = if v < 3 {
+            "each laptop proves which club position it is and a contact taken back on one \
+             laptop leaves the club log on every laptop"
+        } else {
+            "a contact taken back on one laptop leaves the club log on every laptop"
+        };
         (v < need).then(|| {
             format!(
-                "this club's host needs club sync v{need} on every laptop, so that each laptop \
-                 proves which club position it is, and this Nexus speaks v{v}. Update Nexus on \
-                 this laptop, then rejoin: contacts you log meanwhile stay in your own log and \
-                 go up when you do."
+                "this club's host needs club sync v{need} on every laptop, so that {lacks}, and \
+                 this Nexus speaks v{v}. Update Nexus on this laptop, then rejoin: contacts you \
+                 log meanwhile stay in your own log and go up when you do."
             )
         })
     }
@@ -1197,11 +1235,19 @@ impl ClubLog {
     fn hand_over(&mut self, pos: &str, key_hash: &str) {
         self.pins.insert(pos.to_string(), key_hash.to_string());
         *self.gives.entry(pos.to_string()).or_default() += 1;
-        self.rows.retain(|r| r.posid != pos);
+        let (rows, ords) = std::mem::take(&mut self.rows)
+            .into_iter()
+            .zip(std::mem::take(&mut self.ords))
+            .filter(|(r, _)| r.posid != pos)
+            .unzip();
+        (self.rows, self.ords) = (rows, ords);
         self.ids.retain(|(p, _)| p != pos);
         self.kept_out.retain(|k| k.pos != pos);
-        self.arrivals.retain(|(_, p)| p != pos);
+        self.arrivals.retain(|(_, p, _)| p != pos);
         self.positions.remove(pos);
+        // Its take-backs were the old laptop's: the new one's rows are its own.
+        self.gone.retain(|(p, _)| p != pos);
+        self.aside.retain(|(p, _), _| p != pos);
     }
 
     /// A served JOIN's hold on position `posid` (`tempo_net::fdsync::JoinAccept::hold`): how
@@ -1420,6 +1466,15 @@ impl ClubLog {
                             self.hand_over(&pos, &key_hash);
                         }
                         JournalNote::Give { .. } => {}
+                        // In journal order, as they were made; a previous event's are as stale
+                        // as its rows, and must not keep this event's same seq out.
+                        JournalNote::TakeBack { pos, seq, at } if at >= oldest_unix => {
+                            self.take_back(&pos, seq, at);
+                        }
+                        JournalNote::PutBack { pos, seq, at } if at >= oldest_unix => {
+                            self.put_back(&pos, seq, at);
+                        }
+                        JournalNote::TakeBack { .. } | JournalNote::PutBack { .. } => {}
                     }
                     continue;
                 }
@@ -1503,13 +1558,55 @@ impl ClubLog {
     /// replay (no arrival stamped, nothing re-journaled).
     fn merge_row(&mut self, mut row: MergedRow, now: u64) -> bool {
         let id = (row.posid.clone(), row.seq);
-        if row.seq == 0 || !self.ids.insert(id) {
+        if row.seq == 0 || !self.ids.insert(id.clone()) {
             return false; // seq 0 is "never assigned" — refuse, don't guess
         }
         // THE synthesis point, and the only one: both producers of a MergedRow —
         // the wire decoder and the journal replay — reach the club log through
         // here, so a legacy row's exchange is reconstructed once or never.
         row.synthesize_legacy_ex(self.exchange());
+        let ord = self.next_ord;
+        self.next_ord += 1;
+        // A contact once kept out and now merged (a later build's rules let it in) is in the
+        // club's log, so the host's list no longer says it is not.
+        self.kept_out
+            .retain(|k| (k.pos.as_str(), k.seq) != (row.posid.as_str(), row.seq));
+        let pos = self.position(&row.posid);
+        pos.acked = pos.acked.max(row.seq);
+        if now > 0 {
+            pos.last_seen_unix = now;
+        }
+        self.journal_row(&row);
+        // ⭐ A row its position took back before it came: merged, acked and journaled like any,
+        // and kept aside, in no count, key, board or file until the position puts it back.
+        if self.gone.contains(&id) {
+            let arrived = (now > 0).then_some(now);
+            self.aside.insert(id, Aside { ord, row, arrived });
+            return true;
+        }
+        self.index_row(&row);
+        if now > 0 {
+            self.arrivals.push_back((now, row.posid.clone(), row.seq));
+            self.prune_arrivals(now);
+        }
+        self.ords.push(ord);
+        self.rows.push(row);
+        true
+    }
+
+    /// One merged row onto the journal, flushed per merge: append-only, so a crash can cost at
+    /// most the final line — and the position that sent it re-pushes it on reconnect anyway.
+    fn journal_row(&mut self, row: &MergedRow) {
+        if let (Some(j), Ok(line)) = (&mut self.journal, serde_json::to_string(row)) {
+            let _ = j.write_all(line.as_bytes());
+            let _ = j.write_all(b"\n");
+            let _ = j.flush();
+        }
+    }
+
+    /// One live row into the club's dupe keys, sections and its position's counts — the part
+    /// of a merge [`rebuild_index`](Self::rebuild_index) repeats for every live row.
+    fn index_row(&mut self, row: &MergedRow) {
         // ⭐ A satellite contact the contest gives no credit (Winter Field Day) is kept in
         // the club's rows and journal, and acked and counted on its position's board like
         // any row, but it counts for nothing in the club: no dupe key and no section, so it
@@ -1525,38 +1622,38 @@ impl ClubLog {
         if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
-        // A contact once kept out and now merged (a later build's rules let it in) is in the
-        // club's log, so the host's list no longer says it is not.
-        self.kept_out
-            .retain(|k| (k.pos.as_str(), k.seq) != (row.posid.as_str(), row.seq));
         let pos = self.position(&row.posid);
         pos.qsos_raw += 1;
         pos.last_qso_unix = pos.last_qso_unix.max(row.when_unix);
-        pos.acked = pos.acked.max(row.seq);
-        if now > 0 {
-            pos.last_seen_unix = now;
-            self.arrivals.push_back((now, row.posid.clone()));
-            self.prune_arrivals(now);
+    }
+
+    /// ⭐ **The dupe keys, sections and per-position counts, rebuilt from the live rows in merge
+    /// order** — exactly what merging them one by one builds, so after a take-back the club is
+    /// as if the contact had never come, and after its undo as if it had never gone. One more
+    /// generation: a delta cannot take a key away, so every connection gets a fresh snap.
+    fn rebuild_index(&mut self) {
+        self.dkeys_list.clear();
+        self.dkeys_set.clear();
+        self.dupes_list.clear();
+        self.sections_list.clear();
+        self.sections_set.clear();
+        for p in self.positions.values_mut() {
+            p.qsos_raw = 0;
+            p.last_qso_unix = 0;
         }
-        if let Some(j) = &mut self.journal {
-            // One line per merged row, flushed per merge: append-only, so a
-            // crash can cost at most the final line — and the position that
-            // sent it re-pushes it on reconnect anyway.
-            if let Ok(line) = serde_json::to_string(&row) {
-                let _ = j.write_all(line.as_bytes());
-                let _ = j.write_all(b"\n");
-                let _ = j.flush();
-            }
+        let rows = std::mem::take(&mut self.rows);
+        for row in &rows {
+            self.index_row(row);
         }
-        self.rows.push(row);
-        true
+        self.rows = rows;
+        self.generation += 1;
     }
 
     fn prune_arrivals(&mut self, now: u64) {
         while self
             .arrivals
             .front()
-            .is_some_and(|(t, _)| now.saturating_sub(*t) > 3600)
+            .is_some_and(|(t, _, _)| now.saturating_sub(*t) > 3600)
         {
             self.arrivals.pop_front();
         }
@@ -1721,6 +1818,81 @@ impl ClubLog {
     /// addresses both key lists — they are index-parallel by construction.
     pub fn counts(&self) -> (usize, usize) {
         (self.dkeys_list.len(), self.sections_list.len())
+    }
+
+    /// How often the dupe keys and sections were rebuilt ([`take_back`](Self::take_back)).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// ⭐ **Take back `posid`'s row `seq`** — the tombstone its own laptop asked for. The row
+    /// leaves every count, key, board and file and is kept, never deleted; one not here yet is
+    /// kept out when it comes. Journaled. `false`, changing nothing, for seq 0 and for a row
+    /// already taken back.
+    pub fn take_back(&mut self, posid: &str, seq: u64, now: u64) -> bool {
+        let id = (posid.to_string(), seq);
+        if seq == 0 || !self.gone.insert(id.clone()) {
+            return false;
+        }
+        self.journal_note(&JournalNote::TakeBack {
+            pos: id.0.clone(),
+            seq,
+            at: now,
+        });
+        if let Some(i) = self
+            .rows
+            .iter()
+            .position(|r| (r.posid.as_str(), r.seq) == (posid, seq))
+        {
+            let row = self.rows.remove(i);
+            let ord = self.ords.remove(i);
+            let arrived = self
+                .arrivals
+                .iter()
+                .position(|(_, p, s)| (p.as_str(), *s) == (posid, seq))
+                .and_then(|k| self.arrivals.remove(k))
+                .map(|(t, _, _)| t);
+            self.aside.insert(id, Aside { ord, row, arrived });
+            self.rebuild_index();
+        }
+        true
+    }
+
+    /// ⭐ **Put `posid`'s row `seq` back** where it was merged, lifting its tombstone. Journaled.
+    /// `false`, changing nothing, for a row not taken back.
+    pub fn put_back(&mut self, posid: &str, seq: u64, now: u64) -> bool {
+        let id = (posid.to_string(), seq);
+        if !self.gone.remove(&id) {
+            return false;
+        }
+        self.journal_note(&JournalNote::PutBack {
+            pos: id.0.clone(),
+            seq,
+            at: now,
+        });
+        if let Some(Aside { ord, row, arrived }) = self.aside.remove(&id) {
+            let at = self.ords.partition_point(|&o| o < ord);
+            self.rows.insert(at, row);
+            self.ords.insert(at, ord);
+            if let Some(t) = arrived {
+                let k = self.arrivals.partition_point(|(a, _, _)| *a <= t);
+                self.arrivals.insert(k, (t, id.0, seq));
+            }
+            self.rebuild_index();
+        }
+        true
+    }
+
+    /// The seqs of `posid`'s rows this club holds taken back, ascending.
+    pub fn taken_back(&self, posid: &str) -> Vec<u64> {
+        let mut seqs: Vec<u64> = self
+            .gone
+            .iter()
+            .filter(|(p, _)| p == posid)
+            .map(|(_, seq)| *seq)
+            .collect();
+        seqs.sort_unstable();
+        seqs
     }
 
     pub fn rows(&self) -> &[MergedRow] {
@@ -2009,7 +2181,7 @@ impl ClubLog {
             *uniq.entry(self.rows[i].posid.as_str()).or_insert(0) += 1;
         }
         let mut rate: HashMap<&str, u64> = HashMap::new();
-        for (t, p) in &self.arrivals {
+        for (t, p, _) in &self.arrivals {
             if now.saturating_sub(*t) <= 3600 {
                 *rate.entry(p.as_str()).or_insert(0) += 1;
             }
@@ -2167,8 +2339,12 @@ pub struct ClubMirror {
     pub score: u32,
     pub qsos: u64,
     pub board: Vec<WireBoardRow>,
-    /// Host's high-water ack for OUR rows (queued = own max seq − this).
+    /// Host's high-water ack for OUR rows (queued = own live rows past this).
     pub acked: u64,
+    /// ⭐ Own rows the host holds taken back, by seq, as its `retracted`/`restored` lines said this
+    /// session ([`Self::on_retracted`]; empty again at each welcome): what this position's
+    /// take-backs are measured against (`Engine::fd_sync_marks`).
+    pub retracted: std::collections::BTreeSet<u64>,
     /// Link liveness + when it went down (the Offline chip's `since`).
     pub connected: bool,
     pub down_since_unix: u64,
@@ -2215,8 +2391,19 @@ impl ClubMirror {
         }
     }
 
+    /// A `retracted` (`gone`) or `restored` line: the host holds own row `seq` so.
+    pub fn on_retracted(&mut self, seq: u64, gone: bool) {
+        if gone {
+            self.retracted.insert(seq);
+        } else {
+            self.retracted.remove(&seq);
+        }
+    }
+
     pub fn on_welcome(&mut self, acked: u64, event: &str, host_call: &str, skew_secs: i64) {
         self.acked = acked;
+        // The host lists what it holds taken back after every welcome, before its snap.
+        self.retracted.clear();
         self.event = event.to_string();
         self.host_call = host_call.to_string();
         self.skew_secs = skew_secs;
@@ -2603,6 +2790,255 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Everything a take-back must move and its undo must put back, by value: the rows in merge
+    /// order, both files' bytes, the counts, the keys and sections in their order, the totals,
+    /// and each position's board numbers.
+    #[derive(Debug, PartialEq)]
+    struct ClubShape {
+        rows: Vec<(String, u64)>,
+        cabrillo: String,
+        adif: String,
+        counts: (usize, usize),
+        dkeys: Vec<Vec<String>>,
+        sections: Vec<String>,
+        totals: (u64, u64),
+        board: Vec<(String, u64, u64, u64)>,
+    }
+
+    fn club_shape(club: &ClubLog) -> ClubShape {
+        ClubShape {
+            rows: club
+                .rows()
+                .iter()
+                .map(|r| (r.posid.clone(), r.seq))
+                .collect(),
+            cabrillo: club.export_cabrillo("W9ABC", "3A", "WI").unwrap(),
+            adif: club.export_adif("W9ABC", "3A", "WI"),
+            counts: club.counts(),
+            dkeys: club.dkeys().to_vec(),
+            sections: club.sections().to_vec(),
+            totals: (club.qsos_raw(), club.qsos_unique()),
+            board: club
+                .board_rows(1_000)
+                .into_iter()
+                .map(|b| (b.pos, b.qsos, b.uniq, b.rate))
+                .collect(),
+        }
+    }
+
+    /// Four rows: two positions, and one cross-position dupe (bbbb's W1AW after aaaa's).
+    fn four_rows(club: &mut ClubLog) {
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "DIG", "CT", 100), 900);
+        club.merge(&wq("bbbb", 1, "K1ABC", "40m", "CW", "EMA", 200), 910);
+        club.merge(&wq("aaaa", 2, "N0XYZ", "20m", "PH", "MN", 300), 920);
+        club.merge(&wq("bbbb", 2, "W1AW", "20m", "DIG", "CT", 400), 930);
+    }
+
+    /// ⭐ **A take-back takes the contact out of everything the club counts, shows and files,
+    /// and its undo puts back the very bytes** — rows in their merge order, both files, the
+    /// keys and sections in their order, the totals and the board. Nothing is deleted.
+    #[test]
+    fn a_take_back_leaves_every_count_key_and_file_and_its_undo_restores_the_bytes() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        four_rows(&mut club);
+        let before = club_shape(&club);
+        let gen0 = club.generation();
+        assert_eq!(before.totals, (4, 3), "premise: four rows, three contacts");
+
+        // N0XYZ, the club's only MN.
+        assert!(club.take_back("aaaa", 2, 1_000));
+        let gone = club_shape(&club);
+        assert_eq!(gone.totals, (3, 2));
+        assert!(!gone.rows.contains(&("aaaa".into(), 2)));
+        assert!(!gone.cabrillo.contains("N0XYZ") && !gone.adif.contains("N0XYZ"));
+        assert_eq!(gone.sections, ["CT", "EMA"], "MN was only that contact's");
+        assert!(!gone.dkeys.iter().any(|k| k[0] == "N0XYZ"));
+        assert_eq!(
+            gone.board,
+            [("aaaa".to_string(), 1, 1, 1), ("bbbb".to_string(), 2, 1, 2)],
+            "the board drops it from aaaa's QSOs, uniques and rate"
+        );
+        assert_eq!(club.taken_back("aaaa"), [2]);
+        assert!(club.taken_back("bbbb").is_empty());
+        assert!(
+            club.generation() > gen0,
+            "every connection gets a fresh snap"
+        );
+
+        // W1AW at aaaa: bbbb worked it later, so the key stays and is bbbb's now.
+        assert!(club.take_back("aaaa", 1, 1_001));
+        let both = club_shape(&club);
+        assert_eq!(both.totals, (2, 2));
+        assert!(both.cabrillo.contains("W1AW"), "bbbb's W1AW is in the file");
+        assert_eq!(
+            both.board,
+            [("aaaa".to_string(), 0, 0, 0), ("bbbb".to_string(), 2, 2, 2)]
+        );
+        // Twice is once; seq 0 names nothing.
+        let gen = club.generation();
+        assert!(!club.take_back("aaaa", 1, 1_002));
+        assert!(!club.take_back("aaaa", 0, 1_002));
+        assert_eq!(club_shape(&club), both);
+        assert_eq!(club.generation(), gen, "nothing changed, no new snap");
+
+        // Undone, in the other order: the club is what it was, byte for byte.
+        assert!(club.put_back("aaaa", 1, 1_003));
+        assert!(club.put_back("aaaa", 2, 1_004));
+        assert_eq!(club_shape(&club), before);
+        assert!(club.taken_back("aaaa").is_empty());
+        assert!(!club.put_back("aaaa", 2, 1_005), "a row not taken back");
+    }
+
+    /// ⭐ **A take-back that reaches the host BEFORE the contact it removes** keeps the contact
+    /// out when it comes: merged (acked, never asked for again) but in no count, key or file;
+    /// and putting it back brings it in. A take-back of a row not here changes nothing the
+    /// positions are sent, so no snap.
+    #[test]
+    fn a_take_back_before_its_contact_keeps_the_contact_out_when_it_comes() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "DIG", "CT", 100), 900);
+        let before = club_shape(&club);
+        let gen0 = club.generation();
+        assert!(club.take_back("aaaa", 2, 950));
+        assert_eq!(club_shape(&club), before);
+        assert_eq!(club.generation(), gen0, "no row, nothing rebuilt");
+        assert_eq!(club.taken_back("aaaa"), [2]);
+        assert_eq!(
+            club.merge(&wq("aaaa", 2, "N0XYZ", "20m", "PH", "MN", 300), 960),
+            2,
+            "acked: the host has accounted for it"
+        );
+        assert_eq!(club_shape(&club), before, "…and it counts for nothing");
+        assert_eq!(
+            club.merge(&wq("aaaa", 2, "N0XYZ", "20m", "PH", "MN", 300), 970),
+            2
+        );
+        assert_eq!(club_shape(&club), before, "a re-push brings it in neither");
+        assert!(club.put_back("aaaa", 2, 980));
+        let back = club_shape(&club);
+        assert_eq!(back.totals, (2, 2));
+        assert!(back.cabrillo.contains("N0XYZ"));
+        assert_eq!(back.sections, ["CT", "MN"]);
+    }
+
+    /// ⭐ **The journal replays every take-back and undo to the same state**, a take-back of a
+    /// contact not yet here included, and journals each change once: a second take-back of the
+    /// same row writes nothing.
+    #[test]
+    fn the_journal_replays_take_backs_to_the_same_state() {
+        let dir = std::env::temp_dir().join(format!("fdevent-tb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("fd_event_test.jsonl");
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.attach_journal_since(&path, 0).expect("journal opens");
+        four_rows(&mut club);
+        assert!(club.take_back("aaaa", 2, 1_000));
+        assert!(!club.take_back("aaaa", 2, 1_001), "twice is once");
+        assert!(club.take_back("bbbb", 3, 1_002), "before its contact");
+        club.merge(&wq("bbbb", 3, "W9ZZZ", "15m", "CW", "IL", 500), 1_003);
+        assert!(club.take_back("aaaa", 1, 1_004));
+        assert!(club.put_back("aaaa", 1, 1_005));
+        let lines = std::fs::read_to_string(&path).unwrap().lines().count();
+        assert_eq!(
+            lines,
+            4 + 1 + 1 + 1 + 1 + 1,
+            "five rows and four changes, once each"
+        );
+
+        let mut reborn = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        reborn
+            .attach_journal_since(&path, 0)
+            .expect("journal replays");
+        assert_eq!(club_shape(&reborn).rows, club_shape(&club).rows);
+        assert_eq!(club_shape(&reborn).cabrillo, club_shape(&club).cabrillo);
+        assert_eq!(club_shape(&reborn).dkeys, club_shape(&club).dkeys);
+        assert_eq!(club_shape(&reborn).sections, club_shape(&club).sections);
+        assert_eq!(club_shape(&reborn).totals, club_shape(&club).totals);
+        assert_eq!(reborn.taken_back("aaaa"), [2]);
+        assert_eq!(reborn.taken_back("bbbb"), [3]);
+        assert_eq!(
+            reborn.join("bbbb", "", "", 2_000),
+            3,
+            "the ack survives too"
+        );
+        // The undo replays as well: put back after the restart, the state is the live one's.
+        assert!(club.put_back("aaaa", 2, 1_006));
+        assert!(reborn.put_back("aaaa", 2, 1_006));
+        assert_eq!(club_shape(&reborn).cabrillo, club_shape(&club).cabrillo);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A position the host gives to another laptop starts afresh, its take-backs included: the
+    /// new laptop's own row 2 is not the old laptop's.
+    #[test]
+    fn a_position_given_to_another_laptop_starts_without_the_old_take_backs() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        four_rows(&mut club);
+        assert!(club.take_back("aaaa", 2, 1_000));
+        club.hand_over("aaaa", "f".repeat(64).as_str());
+        assert!(club.taken_back("aaaa").is_empty());
+        club.merge(&wq("aaaa", 2, "K9NEW", "20m", "CW", "IL", 1_100), 1_100);
+        assert!(club_shape(&club).cabrillo.contains("K9NEW"));
+    }
+
+    /// ⭐ **Last event's take-back cannot keep this event's contact out.** A host journal can
+    /// outlive its event (an unnamed event shares one file), and a position's seqs start again
+    /// at 1: replayed, last year's tombstone for row 1 would keep this year's row 1 out of the
+    /// club's log in silence. It ages out with last year's rows. CONTROL: this year's own
+    /// take-back, in the same file, still replays.
+    #[test]
+    fn last_years_take_back_cannot_keep_this_years_contact_out() {
+        let dir = std::env::temp_dir().join(format!("fdevent-tb-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("fd_event_event.jsonl");
+        let now = now_unix();
+        let last_year = now - 365 * 86_400;
+        {
+            let mut old = ClubLog::new(FdEvent::ArrlFd, "event");
+            old.attach_journal_since(&path, 0).unwrap();
+            old.merge(
+                &wq("aaaa", 1, "W1OLD", "20m", "PH", "CT", last_year),
+                last_year,
+            );
+            assert!(old.take_back("aaaa", 1, last_year + 60));
+        }
+        {
+            // This year's host, from the same file: last year's row and tombstone age out.
+            let mut host = ClubLog::new(FdEvent::ArrlFd, "event");
+            host.attach_journal(&path).unwrap();
+            assert!(
+                host.taken_back("aaaa").is_empty(),
+                "last year's tombstone aged out"
+            );
+            host.merge(&wq("aaaa", 1, "K9NEW", "20m", "CW", "IL", now), now);
+            host.merge(&wq("aaaa", 2, "N9TWO", "40m", "CW", "WI", now), now);
+            assert!(host.take_back("aaaa", 2, now));
+        }
+        let mut reborn = ClubLog::new(FdEvent::ArrlFd, "event");
+        reborn.attach_journal(&path).unwrap();
+        let calls: Vec<&str> = reborn.rows().iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(calls, ["K9NEW"], "this year's row 1 is in the club's log");
+        assert_eq!(
+            reborn.taken_back("aaaa"),
+            [2],
+            "CONTROL: this year's take-back replays"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mirror holds the host's view of this position's take-backs, line by line, until the
+    /// next welcome starts it again.
+    #[test]
+    fn the_mirror_holds_the_hosts_view_of_own_take_backs_until_the_next_welcome() {
+        let mut m = ClubMirror::default();
+        m.on_retracted(3, true);
+        m.on_retracted(5, true);
+        m.on_retracted(3, false);
+        assert_eq!(m.retracted.iter().copied().collect::<Vec<_>>(), [5]);
+        m.on_welcome(0, "TEST FD", "W9ABC", 0);
+        assert!(m.retracted.is_empty());
     }
 
     #[test]
@@ -3409,9 +3845,10 @@ mod tests {
     }
 
     /// ⭐ §18.2 — since v3, **every older position is refused at JOIN, at every club**, and
-    /// the message names both versions and says what to do: an older Nexus has no club key
-    /// to prove its position with, and a host that served one would let any peer take another
-    /// laptop's position by claiming to be older.
+    /// the message names both versions, what the older one lacks, and what to do: a v2 Nexus
+    /// has no club key to prove its position with (a host that served one would let any peer
+    /// take another laptop's position by claiming to be older), and a v3 Nexus cannot take a
+    /// contact back, nor drop one another laptop took back.
     #[test]
     fn every_older_position_is_refused_by_name_at_every_club() {
         let need = tempo_net::fdsync::PROTO_VERSION;
@@ -3426,13 +3863,19 @@ mod tests {
         for club in &clubs {
             for v in 1..need {
                 let msg = club.version_refusal(v).expect("an older tent is refused");
+                let lacks = if v < 3 {
+                    "each laptop proves which club position it is and a contact taken back on \
+                     one laptop leaves the club log on every laptop"
+                } else {
+                    "a contact taken back on one laptop leaves the club log on every laptop"
+                };
                 assert_eq!(
                     msg,
                     format!(
-                        "this club's host needs club sync v{need} on every laptop, so that each \
-                         laptop proves which club position it is, and this Nexus speaks v{v}. \
-                         Update Nexus on this laptop, then rejoin: contacts you log meanwhile \
-                         stay in your own log and go up when you do."
+                        "this club's host needs club sync v{need} on every laptop, so that \
+                         {lacks}, and this Nexus speaks v{v}. Update Nexus on this laptop, then \
+                         rejoin: contacts you log meanwhile stay in your own log and go up when \
+                         you do."
                     ),
                     "{}",
                     club.contest_id
@@ -3443,7 +3886,7 @@ mod tests {
             // the version is fine would lock every tent out.
             assert_eq!(club.version_refusal(need), None, "{}", club.contest_id);
         }
-        assert_eq!(need, 3, "the version this rule was written for");
+        assert_eq!(need, 4, "the version this rule was written for");
     }
 
     /// The legacy triple ships only for Field Day; the generalised key always
