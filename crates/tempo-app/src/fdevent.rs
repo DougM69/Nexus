@@ -4148,8 +4148,8 @@ mod tests {
         let qths: Vec<&str> = log.qsos().iter().map(|q| q.rcvd("QTH")).collect();
         assert_eq!(
             qths,
-            ["COOK", "WILL"],
-            "each contact keeps the county it sent"
+            ["COOK", "COOK", "WILL"],
+            "each row keeps the county it sent, the RTTY repeat kept beside its contact"
         );
         let cab = club
             .export_cabrillo_with("W9XYZ", session.clone(), &CabrilloEntrant::default())
@@ -4165,11 +4165,10 @@ mod tests {
             cab.contains("QSO: 7000 CW 2026-10-18 1705 W9XYZ 599 MCLN K9AAA 599 WILL\n"),
             "the mobile's new county is its own line: {cab}"
         );
-        assert_eq!(
-            cab.matches("QSO:").count(),
-            2,
-            "the RTTY repeat is not a second contact: {cab}"
-        );
+        // The RTTY repeat is not a second contact: a dupe, logged like every contest's and
+        // in the file, worth nothing (the claimed score below is the two contacts').
+        assert_eq!(cab.matches("QSO:").count(), 3, "{cab}");
+        assert!(log.qsos()[1].dupe, "the RTTY repeat is marked");
         // 2 CW contacts × 2 points, × 2 counties (Cook, Will).
         let s = club.score_with("W9XYZ", session, 1, &[], &[]);
         assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
@@ -4177,7 +4176,9 @@ mod tests {
     }
 
     /// ⭐ **Two positions logging the same station: the second is the CLUB dupe** — kept
-    /// as a row (a warning at the position, never a lock), scored once, exported once —
+    /// as a row (a warning at the position, never a lock), scored once, and in the file twice,
+    /// the later a zero-point dupe as every contest logs one since the operator's ruling of
+    /// 2026-10-11 —
     /// and the key the club ships for it is the very key the position's own log builds,
     /// which is what the position's while-typing check compares against.
     #[test]
@@ -4244,8 +4245,13 @@ mod tests {
                 &CabrilloEntrant::default(),
             )
             .unwrap();
-        assert_eq!(cab.matches("QSO:").count(), 1, "earliest wins: {cab}");
+        assert_eq!(
+            cab.matches("QSO:").count(),
+            2,
+            "both rows in the file: {cab}"
+        );
         assert!(cab.contains(" 1701 W9XYZ 59 MCLN K9BBB 59 KANE\n"), "{cab}");
+        assert!(cab.contains(" 1702 W9XYZ 59 MCLN K9BBB 59 KANE\n"), "{cab}");
         // The board credits the earlier position with the contact.
         let board = club.board_rows(10);
         let uniq = |p: &str| board.iter().find(|r| r.pos == p).map(|r| r.uniq);
@@ -4387,23 +4393,12 @@ mod tests {
             .export_cabrillo_with("W2XYZ", session, &CabrilloEntrant::default())
             .unwrap();
         assert_eq!(cab.matches("QSO:").count(), 2, "both in the file: {cab}");
-        // CONTROL: the Illinois QSO Party does not report dupes — its club file keeps one.
-        let mut il = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
-        il.merge(
-            &ilqp_row("bbbb", 1, "K9AAA", "20m", "CW", "", "COOK", "MCLN", 2_000),
-            1,
-        );
-        il.merge(
-            &ilqp_row("aaaa", 1, "K9AAA", "20m", "CW", "", "COOK", "MCLN", 1_000),
-            2,
-        );
-        let cab = il
-            .export_cabrillo_with(
-                "W9XYZ",
-                party_session("ilqp", "IL", "MCLN"),
-                &CabrilloEntrant::default(),
-            )
-            .unwrap();
+        // CONTROL: a Field Day club keeps one. Every contest logs its dupes now, but a Field
+        // Day club writes its earliest-wins unique rows, the file 1.x wrote (`export_indices`).
+        let mut fd = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        fd.merge(&wq("bbbb", 1, "K1ABC", "20m", "CW", "CT", 2_000), 1);
+        fd.merge(&wq("aaaa", 1, "K1ABC", "20m", "CW", "CT", 1_000), 2);
+        let cab = fd.export_cabrillo("W9XYZ", "2A", "WI").unwrap();
         assert_eq!(cab.matches("QSO:").count(), 1, "{cab}");
     }
 

@@ -271,10 +271,9 @@ pub struct LoggedQso {
     /// 0 = never assigned (rows built by paths that predate sync).
     pub seq: u64,
     /// ⭐ **This contact duplicates one already in the log** — it is REPORTED to the
-    /// sponsor and worth nothing. Only ever `true` under a ruleset whose
-    /// [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes) says the sponsor
-    /// cross-checks; Field Day refuses the contact instead, so no Field Day row ever
-    /// carries it.
+    /// sponsor and worth nothing. Every contest logs its dupes
+    /// ([`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes), the operator's ruling
+    /// of 2026-10-11), so a row of any contest, Field Day's included, can carry it.
     ///
     /// ⚠️ **It is a fact about the LOG, not about the contact**, which is why it is
     /// RE-DERIVED by [`merge_adif`](FieldDayLog::merge_adif) from the dupe index rather
@@ -890,8 +889,10 @@ impl FieldDayLog {
     /// and which one is the SPONSOR's answer — it rides on the ruleset's own
     /// [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes), where both
     /// sponsors' sentences are quoted. A contest that cross-checks wants the row
-    /// (removing it hands the other operator a NIL); Field Day, which checks no logs at
-    /// all, keeps refusing it.
+    /// (removing it hands the other operator a NIL). Since the operator's ruling of
+    /// 2026-10-11 every shipped contest logs its dupes, Field Day included, so no shipped
+    /// contest reaches `None`; the refusal stays for a sponsor whose rules say to remove
+    /// dupes, which would be refused where rulesets are built (`fd_rules::build`).
     ///
     /// Both write paths — [`log_exchange_at`](Self::log_exchange_at) and the journal's
     /// `restore_row` — come through here, because two copies of this decision is how
@@ -1138,8 +1139,8 @@ impl FieldDayLog {
     /// ([`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes)) a dupe is written,
     /// marked and returns `true` — and it must, because every caller uses this bool to
     /// decide whether to JOURNAL the log, and a row that is not journaled is lost on a
-    /// restart. `false` means nothing was written, which for Field Day is still exactly
-    /// what a dupe means. A caller that wants the other question has
+    /// restart. `false` means nothing was written, which no shipped contest does with a
+    /// dupe any more: each logs its dupes. A caller that wants the other question has
     /// [`is_dupe_row`](Self::is_dupe_row) before the fact and
     /// [`LoggedQso::dupe`] after it.
     pub fn log(&mut self, call: &str, class: &str, section: &str, slot: u64) -> bool {
@@ -1431,9 +1432,9 @@ impl FieldDayLog {
     ///
     /// ⚠️ **Every number the operator CLAIMS is derived through here**, and that is the
     /// whole safety property of logging dupes at all: the row goes in the file, and no
-    /// count, point, multiplier or board cell moves. Rows are only ever marked under a
-    /// ruleset that reports them, so for Field Day this yields the whole log and every
-    /// number below is bit-identical to what it always was.
+    /// count, point, multiplier or board cell moves. For a log that holds no dupe this
+    /// yields the whole log, and every number below is bit-identical to what it always
+    /// was.
     ///
     /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
     /// is sent**, by the marks a row carries (its `dupe`, and its `sat` when the status says
@@ -1808,7 +1809,7 @@ impl FieldDayLog {
     /// restart mid-event doesn't reset the contest log. Rows missing a CALL or
     /// stamped before `min_when_unix` are skipped (a previous event's journal
     /// stays out of the log; the second are kept for the journal, [`aged`](Self::aged)),
-    /// rows already in the dupe index are skipped, and garbage
+    /// a row already in this log by its sequence number is skipped, and garbage
     /// input merges nothing — never an error. Restored dupe keys keep the ROW's
     /// band, so they survive a mid-event QSY. A row the journal marks removed
     /// (`APP_NEXUS_REMOVED`) comes back REMOVED ([`removed`](Self::removed)), outside the
@@ -2272,25 +2273,33 @@ impl FieldDayLog {
                 })
                 .unwrap_or_default(),
         );
+        // The journaled sync seq round-trips; a legacy row without the tag
+        // backfills the next free seq in row order (1..n on a whole legacy
+        // journal), so pre-sync journals join the sequence deterministically.
+        let journaled_seq = f
+            .get("APP_NEXUS_QSEQ")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0);
         // ⭐ A REMOVED contact is outside the dupe check — that is what removing it means — so
         // it is never offered to the index. Offered, a station worked again since would refuse
         // it out of the journal right here, and the next save would drop it for good. Its
         // numbers are still read below, which is what stops a restart reissuing them.
+        //
+        // ⭐ **A live row already in this log by its number is this row, read again.** Every
+        // contest logs its dupes, so the index admits a second reading of the same journal as
+        // a second contact, marked; the row's sequence number is what tells the two apart (a
+        // legacy row without one cannot be told apart, and is admitted as before).
         let dupe = match removed_unix {
             Some(_) => false,
+            None if journaled_seq.is_some_and(|s| self.qsos.iter().any(|q| q.seq == s)) => {
+                return RowFate::Passed;
+            }
             None => match self.admit_row(key, sat.is_some()) {
                 Some(dupe) => dupe,
                 None => return RowFate::Passed,
             },
         };
-        // The journaled sync seq round-trips; a legacy row without the tag
-        // backfills the next free seq in row order (1..n on a whole legacy
-        // journal), so pre-sync journals join the sequence deterministically.
-        let seq = f
-            .get("APP_NEXUS_QSEQ")
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .filter(|&v| v > 0)
-            .unwrap_or(self.next_seq);
+        let seq = journaled_seq.unwrap_or(self.next_seq);
         self.next_seq = self.next_seq.max(seq + 1);
         // ⭐ **THE SERIAL RUN, advanced past this row exactly as `next_seq` is above —
         // and this is the half that goes ON THE AIR.** A re-used `seq` collides with a
@@ -4013,8 +4022,11 @@ mod tests {
         // dupe it always was. Without this the test above would pass on a rule that had
         // simply stopped checking.
         assert!(
-            !log.log_satellite_at("W1AW", &fd_ex("1D", "IL"), "PH", "USB", &rs44(), 300),
-            "a second contact through the same bird on the same mode was admitted"
+            logged_dupe(
+                log.log_satellite_at("W1AW", &fd_ex("1D", "IL"), "PH", "USB", &rs44(), 300),
+                &log
+            ),
+            "a second contact through the same bird on the same mode is not a dupe"
         );
         // A DIFFERENT bird is a different contact, which the sponsor allows: "the
         // additional QSOs may be counted for QSO credit".
@@ -4047,8 +4059,11 @@ mod tests {
         // … then the same station again on the same channel in a digital mode. One
         // channel, one QSO.
         assert!(
-            !log.log_satellite_at("W1AW", &fd_ex("1D", "IL"), "DIG", "FT8", &so50(), 200),
-            "a second QSO with the same station on a single-channel FM bird was admitted"
+            logged_dupe(
+                log.log_satellite_at("W1AW", &fd_ex("1D", "IL"), "DIG", "FT8", &so50(), 200),
+                &log
+            ),
+            "a second QSO with the same station on a single-channel FM bird is not a dupe"
         );
         assert_eq!(log.qso_count(), 1);
 
@@ -4129,11 +4144,11 @@ mod tests {
         );
         assert!(log.log_mode_at("K1ABC", "2A", "CT", "PH", 0, 120));
         assert!(
-            !log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 130),
+            logged_dupe(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 130), &log),
             "band+mode dupe"
         );
         assert!(
-            !log.log_mode_at("k1abc", "2A", "CT", "dig", 0, 140),
+            logged_dupe(log.log_mode_at("k1abc", "2A", "CT", "dig", 0, 140), &log),
             "case-insensitive dupe"
         );
         assert_eq!(log.qso_count(), 3);
@@ -4362,7 +4377,10 @@ mod tests {
         // FD/WFD digital is ONE mode class: an RTTY try after the same-band
         // FT8 contact is a dupe, and both rows score the digital 2 points.
         assert!(
-            !log.log_submode_at("K2DEF", "1O", "EMA", "DIG", "RTTY", 0, 1_782_583_620),
+            logged_dupe(
+                log.log_submode_at("K2DEF", "1O", "EMA", "DIG", "RTTY", 0, 1_782_583_620),
+                &log
+            ),
             "RTTY dupes the same-band digital contact"
         );
         assert_eq!(log.qso_points(), 4);
@@ -4897,6 +4915,12 @@ mod tests {
         }
     }
 
+    /// The write `logged` answered for entered the log and is marked a dupe: what every
+    /// contest does with one since the operator's ruling of 2026-10-11.
+    fn logged_dupe(logged: bool, log: &FieldDayLog) -> bool {
+        logged && log.qsos().last().is_some_and(|q| q.dupe)
+    }
+
     #[test]
     fn dupe_check_and_scoring() {
         let mut log = FieldDayLog::new(
@@ -4906,7 +4930,7 @@ mod tests {
         );
         assert!(log.log("K2DEF", "3A", "IL", 1));
         assert!(log.log("N0ABC", "1D", "MN", 2));
-        assert!(!log.log("K2DEF", "3A", "IL", 3)); // dupe on same band
+        assert!(logged_dupe(log.log("K2DEF", "3A", "IL", 3), &log)); // dupe on same band
         assert_eq!(log.qso_count(), 2);
         assert_eq!(log.sections(), 2); // IL, MN
         assert_eq!(log.qso_points(), 4); // 2 pts each
@@ -4914,7 +4938,8 @@ mod tests {
         let cab = log
             .cabrillo(14_074)
             .expect("a single-mode event exports one entry");
-        assert_eq!(cab.matches("QSO:").count(), 2);
+        // The dupe is a plain QSO line too, worth nothing.
+        assert_eq!(cab.matches("QSO:").count(), 3);
         assert!(cab.contains("W9XYZ 3A WI K2DEF 3A IL"));
     }
 
@@ -5960,7 +5985,10 @@ mod tests {
         assert_eq!(rule.by_fields, &[] as &[&str]);
         assert_eq!(rule.by_sent_fields, &[] as &[&str]);
         assert!(
-            !log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_000_120),
+            logged_dupe(
+                log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_000_120),
+                &log
+            ),
             "a move must not un-dupe a station under a rule that names no sent slot"
         );
     }

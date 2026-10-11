@@ -673,3 +673,23 @@ describe("where this laptop's club link stands", () => {
     expect(screen.queryByText(/the host at/)).toBeNull()
   })
 })
+
+// ⭐ THE CLUB FILE'S TOOLTIP SAYS WHAT THE CLUB FILE DOES. Every contest logs its dupes now
+// (`DupeRule::log_dupes` is true for all of them), but a Field Day club still writes its
+// earliest-wins unique rows, the file 1.x wrote (`fdevent.rs` `export_indices`), so its export
+// buttons go on saying so. A party club keeps every contact and says that.
+describe('the club export buttons say what the club file keeps', () => {
+  const HOST: FdClubStatus = { ...CLUB, hosting: true }
+  const titles = () =>
+    ['Club Cabrillo', 'Club ADIF'].map((label) => screen.getByText(label).getAttribute('title') ?? '')
+
+  it('a Field Day club keeps the earliest contact, though the contest logs its dupes', () => {
+    render(<FdClubSection club={HOST} onExport={() => {}} fieldDay keepsDupes />)
+    for (const title of titles()) expect(title).toMatch(/deduped — the earliest contact wins/)
+  })
+
+  it('CONTROL — a party club keeps every contact, and says so', () => {
+    render(<FdClubSection club={HOST} onExport={() => {}} fieldDay={false} keepsDupes />)
+    for (const title of titles()) expect(title).toMatch(/every contact stays in/)
+  })
+})

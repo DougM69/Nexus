@@ -560,9 +560,9 @@ mod tests {
         assert_eq!(wire["dupeRule"]["byFields"], serde_json::json!([]));
         assert_eq!(wire["dupeRule"]["bySentFields"], serde_json::json!([]));
         assert_eq!(wire["log"][0]["dkey"].as_array().unwrap().len(), 3);
-        // …and Field Day REFUSES a dupe rather than logging one, which is what the card's
-        // wording turns on: telling this operator the contact would be refused is true here.
-        assert_eq!(wire["dupeRule"]["logDupes"], false);
+        // …and Field Day LOGS a dupe, marked, as every contest does since the operator's ruling
+        // of 2026-10-11, which is what the card's wording turns on.
+        assert_eq!(wire["dupeRule"]["logDupes"], true);
 
         // CONTROL 2 — Sweepstakes, the other direction: the band and the mode class are
         // NOT in the key, so a station worked on 40m CW is a dupe on 20m SSB.
@@ -638,7 +638,7 @@ mod tests {
     /// The UI must not re-derive this. It had been doing exactly that, over a fourth copy of
     /// the key, which is what the row flag replaces.
     #[test]
-    fn a_logged_dupe_says_so_on_the_row_and_field_day_still_has_none_to_say_it_about() {
+    fn a_logged_dupe_says_so_on_the_row_in_every_contest() {
         let mut e = Engine::with_settings(crate::settings::Settings {
             mycall: "W1ABC".into(),
             fd_active: true,
@@ -679,17 +679,17 @@ mod tests {
             wire["log"][0]
         );
 
-        // CONTROL — Field Day REFUSES a dupe rather than logging one, so there is no marked
-        // row to find and the flag stays false. This is the half that must never move: if it
-        // ever reports a dupe row, Field Day has started logging them.
+        // …and Field Day, which logs its dupes too since the operator's ruling of 2026-10-11:
+        // the repeat is a row, and the row says so.
         let mut e = engine("arrlfd", 1);
         let Mode::FieldDay { station, .. } = &mut e.mode else {
             panic!("active")
         };
-        let before = station.log.qso_count();
-        assert!(!station.log.log_mode_at("K1T0", "2A", "WI", "PH", 99, 1000));
+        let before = station.log.qsos().len();
+        assert!(station.log.log_mode_at("K1T0", "2A", "WI", "PH", 99, 1000));
         let wire = serde_json::to_value(e.snapshot().field_day.unwrap()).unwrap();
-        assert_eq!(wire["log"].as_array().unwrap().len(), before);
+        assert_eq!(wire["log"].as_array().unwrap().len(), before + 1);
+        assert_eq!(wire["log"][before]["dupe"], true, "{}", wire["log"][before]);
         assert!(wire["log"][0].get("dupe").is_none(), "{}", wire["log"][0]);
     }
 

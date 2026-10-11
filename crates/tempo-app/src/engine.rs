@@ -26,6 +26,9 @@ mod contest_before;
 /// The station as it was before the contest changed it: taken, kept, let go, round-tripped.
 #[cfg(test)]
 mod contest_before_tests;
+/// A dupe typed into the contest strip: logged, marked, worth nothing, in every contest.
+#[cfg(test)]
+mod contest_dupe_tests;
 pub mod contest_entry;
 /// The contest strip's contact in progress, shared with the logger window, through the engine.
 #[cfg(test)]
@@ -11581,7 +11584,8 @@ impl Engine {
 
     /// Manually log a Field Day contact from the CW/Phone cockpits (the
     /// digital sequencer logs its own). `mode` = scoring class "CW" | "PH".
-    /// Returns false on a band+mode dupe (nothing logged).
+    /// A band+mode dupe is logged too, marked and worth nothing (`DupeRule::log_dupes`);
+    /// false means nothing was written.
     pub fn fd_log_manual(
         &mut self,
         call: &str,
@@ -20953,9 +20957,9 @@ contact yourself."
                 ) {
                     // "DIG" is the scoring class (2 points); "RTTY" is what was
                     // actually on the air, so the export says RY and not FT8.
-                    // Ok(false) = already worked this band+class, the NORMAL
-                    // outcome for a repeat and nothing to report — the contact
-                    // is in the log already. Err is unreachable: FD is the mode.
+                    // A repeat of a station already worked on this band+class is
+                    // logged too, marked a dupe and worth nothing: the contact was
+                    // made (`DupeRule::log_dupes`). Err is unreachable: FD is the mode.
                     let _ = self.fd_log_manual_submode(&call, &class, &section, "DIG", "RTTY");
                     return;
                 }
@@ -43077,12 +43081,22 @@ mod tests {
         assert!(e
             .contest_log_manual("K9NR", &ex("COOK"), "CW", None)
             .unwrap());
-        // CONTROL: from the same county, the same station on the same band is a dupe.
+        // CONTROL: from the same county, the same station on the same band is a dupe, logged
+        // and marked as every contest logs one since the operator's ruling of 2026-10-11.
         assert!(
-            !e.contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+            e.contest_log_manual("K9NR", &ex("COOK"), "CW", None)
                 .unwrap(),
-            "a dupe from Kane"
+            "a dupe from Kane is logged"
         );
+        let marks: Vec<bool> = e
+            .snapshot()
+            .field_day
+            .expect("in the party")
+            .log
+            .iter()
+            .map(|q| q.dupe)
+            .collect();
+        assert_eq!(marks, [false, true], "a dupe from Kane");
 
         let moved = e.contest_i_moved(vec![("QTH".to_string(), "WILL".to_string())]);
         assert_eq!(
@@ -43105,20 +43119,20 @@ mod tests {
         let fd = e.snapshot().field_day.expect("still in the party");
         assert_eq!(
             fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
-            ["599 KANE", "599 WILL"]
+            ["599 KANE", "599 KANE", "599 WILL"]
         );
         assert_eq!(
             (fd.qso_count, fd.points, fd.mult_count),
             (2, 4, Some(1)),
-            "two CW contacts at 2 points; Cook is one multiplier"
+            "two CW contacts at 2 points, the dupe worth nothing; Cook is one multiplier"
         );
 
         let cab = e.export_log("cabrillo").expect("one entry");
-        for line in [
-            " W9XYZ 599 KANE K9NR 599 COOK\n",
-            " W9XYZ 599 WILL K9NR 599 COOK\n",
+        for (line, n) in [
+            (" W9XYZ 599 KANE K9NR 599 COOK\n", 2),
+            (" W9XYZ 599 WILL K9NR 599 COOK\n", 1),
         ] {
-            assert_eq!(cab.matches(line).count(), 1, "{line:?} in\n{cab}");
+            assert_eq!(cab.matches(line).count(), n, "{line:?} in\n{cab}");
         }
         // The header still names the county by name after the move: the one being sent
         // when the file is written. (First county or last is the sponsor's to say; this is
@@ -46262,11 +46276,10 @@ mod tests {
         ] {
             assert!(cab.contains(line), "missing {line:?} in:\n{cab}");
         }
-        assert_eq!(
-            cab.matches("QSO:").count(),
-            3,
-            "the RTTY repeat and the second tent's repeat are club dupes: {cab}"
-        );
+        // The RTTY repeat and the second tent's repeat are club dupes: in the file as zero-point
+        // lines (every contest logs its dupes since the operator's ruling of 2026-10-11), and
+        // out of the claimed score below, which is the three contacts'.
+        assert_eq!(cab.matches("QSO:").count(), 5, "{cab}");
         // CW 2 + CW 2 + phone 1 = 5 points, × 3 counties, + W9AWE's 100 once.
         assert!(cab.contains("CLAIMED-SCORE: 115\n"), "{cab}");
         assert_eq!(
@@ -46490,14 +46503,24 @@ mod tests {
         assert!(e
             .contest_log_manual("W4XYZ", &ex("DAVI"), "CW", None)
             .unwrap());
-        // THE DUPE VERDICT is this ruleset's own key…
-        assert!(!e
+        // THE DUPE VERDICT is this ruleset's own key: the repeat is logged, marked (every
+        // contest logs its dupes since the operator's ruling of 2026-10-11)…
+        assert!(e
             .contest_log_manual("K1ABC", &ex("CT"), "CW", None)
             .unwrap());
         // …and the positive control: another mode class is a legal second contact.
         assert!(e
             .contest_log_manual("K1ABC", &ex("CT"), "PH", None)
             .unwrap());
+        let marks: Vec<bool> = e
+            .snapshot()
+            .field_day
+            .expect("still in the contest")
+            .log
+            .iter()
+            .map(|q| q.dupe)
+            .collect();
+        assert_eq!(marks, [false, false, true, false]);
 
         // THE SCORE on screen: 3 points per QSO regardless of mode, times the
         // multipliers this role counts per band.
@@ -46736,28 +46759,39 @@ mod tests {
         assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
     }
 
-    /// ⭐ **Each county of a line is dupe-checked on its own, and the others still log.**
+    /// ⭐ **Each county of a line is dupe-checked on its own, and the others still count.**
     ///
     /// ILQP keys a contact on call, band, mode (CW and digital one) AND county, so a station
-    /// already worked in DuPage is a dupe there and nowhere else on the line. The refusal is
-    /// exactly the one a single contact gets: `false`, nothing written for that county.
+    /// already worked in DuPage is a dupe there and nowhere else on the line. That county's row
+    /// is exactly what a single dupe gets: logged, marked, worth nothing (every contest logs
+    /// its dupes since the operator's ruling of 2026-10-11).
     #[test]
-    fn a_county_line_refuses_only_the_county_already_worked() {
+    fn a_county_line_marks_only_the_county_already_worked() {
         let (mut e, ex) = ilqp_from_kane();
         let rows = |qs: &[&str]| qs.iter().map(|q| ex(q)).collect::<Vec<_>>();
+        // The dupe marks of the newest `n` rows, oldest first.
+        let newest = |e: &Engine, n: usize| -> Vec<bool> {
+            let log = e.snapshot().field_day.expect("up").log;
+            log[log.len() - n..].iter().map(|q| q.dupe).collect()
+        };
         assert!(e
             .contest_log_manual("K9NR", &ex("DUPG"), "CW", None)
             .unwrap());
         assert_eq!(
             e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "CW", None)
                 .unwrap(),
-            vec![true, false, true],
+            vec![true; 3],
+            "every county enters the log"
+        );
+        assert_eq!(
+            newest(&e, 3),
+            [false, true, false],
             "DUPG is the dupe, COOK and KANE are new"
         );
         let fd = e.snapshot().field_day.expect("the contest workspace is up");
         assert_eq!(fd.qso_count, 3, "DUPG once, then COOK and KANE");
         let counties: Vec<String> = fd.log.iter().map(|q| q.rcvd.join(" ")).collect();
-        assert_eq!(counties, ["599 DUPG", "599 COOK", "599 KANE"]);
+        assert_eq!(counties, ["599 DUPG", "599 COOK", "599 DUPG", "599 KANE"]);
         // The same line on DIGITAL is three dupes — CW and digital are one mode here…
         assert_eq!(
             e.contest_log_manual_rows(
@@ -46767,15 +46801,17 @@ mod tests {
                 Some("RTTY")
             )
             .unwrap(),
-            vec![false; 3]
+            vec![true; 3]
         );
-        // …and on PHONE three new contacts, the positive control that the refusals above are
-        // the dupe key and not a line that refuses everything after its first dupe.
+        assert_eq!(newest(&e, 3), [true; 3]);
+        // …and on PHONE three new contacts, the positive control that the marks above are the
+        // dupe key and not a line that marks everything after its first dupe.
         assert_eq!(
             e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "PH", None)
                 .unwrap(),
             vec![true; 3]
         );
+        assert_eq!(newest(&e, 3), [false; 3]);
         assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
     }
 
@@ -47816,11 +47852,19 @@ mod tests {
             Transponder::channel(145_850_000, 436_795_000),
         )));
         e.set_sat_single_channel_fm(true);
+        // A repeat is logged, marked a dupe: every contest logs its dupes since the operator's
+        // ruling of 2026-10-11.
+        let last_dupe = |e: &Engine| match &e.mode {
+            Mode::FieldDay { station, .. } => station.log.qsos().last().is_some_and(|q| q.dupe),
+            _ => false,
+        };
         assert!(e.contest_log_satellite("K1ABC", &ex, "PH", None).unwrap());
+        assert!(!last_dupe(&e));
         assert!(
-            !e.contest_log_satellite("K1ABC", &ex, "DIG", Some("FT8"))
-                .unwrap(),
-            "a second QSO with the same station on a single-channel FM bird was admitted"
+            e.contest_log_satellite("K1ABC", &ex, "DIG", Some("FT8"))
+                .unwrap()
+                && last_dupe(&e),
+            "a second QSO with the same station on a single-channel FM bird is not a dupe"
         );
 
         // …and the classification survives the LOS handback, which is the whole reason
@@ -47828,12 +47872,13 @@ mod tests {
         // after the bird sets must be judged by the same rule as one written during it.
         e.set_sat_transponder(None);
         assert!(
-            !e.contest_log_satellite("K1ABC", &ex, "CW", None).unwrap(),
+            e.contest_log_satellite("K1ABC", &ex, "CW", None).unwrap() && last_dupe(&e),
             "after LOS the bird stopped being a single-channel FM one"
         );
-        // The control: a station NOT yet worked through it still logs after LOS, so the
-        // refusals above are the limit and not a path that stopped logging at all.
+        // The control: a station NOT yet worked through it still logs after LOS as a contact,
+        // so the marks above are the limit and not a path that marks everything.
         assert!(e.contest_log_satellite("W4XYZ", &ex, "PH", None).unwrap());
+        assert!(!last_dupe(&e));
     }
 
     /// ⭐ **A CONTEST PHONE CONTACT RECORDS THE MODE THAT WAS ACTUALLY ON THE AIR**
@@ -48226,12 +48271,16 @@ mod tests {
         assert!(a.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
         drop(a);
 
-        // Session B (a relaunch) restores both, still dupe-checks them, adds a third.
+        // Session B (a relaunch) restores both, still dupe-checks them (a repeat is logged,
+        // marked, as every contest logs one since the operator's ruling of 2026-10-11), adds a
+        // third.
         let mut b = fd_engine();
         let snap = b.snapshot().field_day.expect("in Field Day mode");
         assert_eq!(snap.qso_count, 2, "a restart restores the contest log");
+        assert!(b.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        let snap = b.snapshot().field_day.expect("in Field Day mode");
         assert!(
-            !b.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap(),
+            snap.log.last().is_some_and(|q| q.dupe),
             "restored contacts still dupe-check"
         );
         assert!(b.fd_log_manual("N0XYZ", "4A", "MN", "CW").unwrap());
@@ -48240,10 +48289,15 @@ mod tests {
         // Session C: B's quit must not have overwritten the journal with only
         // B's session — all three contacts survive the second relaunch.
         let c = fd_engine();
+        let snap = c.snapshot().field_day.expect("in Field Day mode");
         assert_eq!(
-            c.snapshot().field_day.expect("in Field Day mode").qso_count,
-            3,
+            snap.qso_count, 3,
             "the second quit keeps A's AND B's contacts"
+        );
+        assert_eq!(
+            snap.log.iter().filter(|q| q.dupe).count(),
+            1,
+            "and B's dupe, still marked"
         );
 
         let _ = std::fs::remove_file(&path);

@@ -20,6 +20,9 @@ use super::*;
 use crate::dto::Tier;
 use crate::test_util::StoredLog;
 
+/// A station already in the contest's log, worked again on FT8: logged a dupe, worth nothing.
+mod picked_dupe;
+
 const ME: &str = "K1ABC";
 const MY_GRID: &str = "FN42";
 const DX: &str = "W9XYZ";

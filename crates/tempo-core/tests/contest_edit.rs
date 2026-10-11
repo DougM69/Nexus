@@ -361,10 +361,11 @@ fn a_correction_keeps_the_rows_sequence_and_its_timestamp() {
 // Field Day — the refusing ruleset corrects exactly the same way
 // ---------------------------------------------------------------------------
 
-/// Correcting is not a contest-policy question: Field Day refuses DUPLICATES, and a
-/// correction is not a duplicate. The row is corrected and the refusal is untouched.
+/// Correcting is not a contest-policy question: a correction is not a duplicate. The row is
+/// corrected, and the dupe check follows it: Field Day logs a duplicate marked (every contest
+/// does since the operator's ruling of 2026-10-11).
 #[test]
-fn field_day_corrects_a_row_and_still_refuses_a_dupe() {
+fn field_day_corrects_a_row_and_the_dupe_check_follows_it() {
     resolver();
     let mut log = FieldDayLog::new(
         "W9XYZ",
@@ -379,11 +380,11 @@ fn field_day_corrects_a_row_and_still_refuses_a_dupe() {
 
     // …and the corrected call is now the one that dupes.
     assert!(
-        !log.log_mode_at("K1ABD", "2A", "CT", "CW", 0, START + 60),
-        "Field Day still refuses, and the key followed the correction"
+        log.log_mode_at("K1ABD", "2A", "CT", "CW", 0, START + 60) && log.qsos()[1].dupe,
+        "a dupe, logged and marked: the key followed the correction"
     );
     assert!(
-        log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, START + 120),
+        log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, START + 120) && !log.qsos()[2].dupe,
         "the busted call is free again — nothing in this log holds it"
     );
 }

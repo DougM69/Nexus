@@ -1415,7 +1415,12 @@ struct DupeSpec {
     /// not make, which is what §8(c) is protecting against. The direction matters too:
     /// a rules file that omits the key can only ever REFUSE a dupe, never inflate a
     /// score by admitting one.
+    ///
+    /// ⚠️ **Read by builds before the operator's ruling of 2026-10-11 only.** This build
+    /// logs every contest's dupes whatever the file says (see `build`) and never reads it;
+    /// it stays declared here because the file still carries it for those builds.
     #[serde(default)]
+    #[allow(dead_code)]
     log_dupes: bool,
     /// ⭐ **A BIRD IS ITS OWN BAND** — ARRL Field Day 7.3.8: *"Satellite QSOs also count
     /// for regular QSO credit. Show them listed separately on the summary sheet as a
@@ -3008,7 +3013,19 @@ fn build(spec: FileSpec) -> RulesTable {
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
                     ),
-                    log_dupes: r.dupe.log_dupes,
+                    // ⭐ EVERY CONTEST LOGS ITS DUPES, whatever the file says (the operator's
+                    // ruling, 2026-10-11: a dupe typed, answered or called is "logged marked as a
+                    // dupe for 0 points, as N1MM does"). No shipped sponsor's rules say to remove
+                    // dupes; one that did would be refused here, by its event id.
+                    //
+                    // ⚠️ Decided in code, not in the file, for two reasons. A downloaded file
+                    // replaces the seed whole, and one written before the ruling would turn
+                    // refusal back on. And builds before this one read the same published file
+                    // and refuse on its `false`: a `true` there would change their behaviour
+                    // with no code to go with it, starting with a Field Day club board that
+                    // counts every row it replays as unique. So the file keeps what older builds
+                    // need, and this build does not read it (`DupeSpec::log_dupes`).
+                    log_dupes: true,
                     satellite_is_a_band: r.dupe.satellite_is_a_band,
                     fm_satellite_once: r.dupe.fm_satellite_once,
                 },
@@ -4407,6 +4424,34 @@ mod tests {
         assert!(parse_spec(&v.to_string())
             .unwrap_err()
             .contains("power_tiers"));
+    }
+
+    /// ⭐ **Every contest logs its dupes, whatever the rules file says** (the operator's ruling,
+    /// 2026-10-11). A downloaded file replaces the seed whole, and a file written before the
+    /// ruling says `false`, or nothing, for the contests that used to refuse a dupe: neither may
+    /// turn refusal back on.
+    #[test]
+    fn a_rules_file_cannot_turn_dupe_refusal_back_on() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        for r in v["rulesets"].as_array_mut().unwrap() {
+            r["dupe"]["log_dupes"] = false.into();
+        }
+        v["rulesets"][0]["dupe"]
+            .as_object_mut()
+            .unwrap()
+            .remove("log_dupes");
+        let table = build(parse_spec(&v.to_string()).expect("the file loads"));
+        let refusing: Vec<&str> = table
+            .rulesets
+            .iter()
+            .filter(|r| !r.dupe_rule.log_dupes)
+            .map(|r| r.event)
+            .collect();
+        assert_eq!(refusing, Vec::<&str>::new(), "these refuse a dupe");
+        assert_eq!(
+            table.rulesets.len(),
+            parse_spec(SEED).unwrap().rulesets.len()
+        );
     }
 
     /// The entry headers never share a name with the list an older build checks. A header
