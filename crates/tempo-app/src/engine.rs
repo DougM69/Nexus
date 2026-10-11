@@ -29,6 +29,9 @@ mod contest_entry_tests;
 /// Each contest's own FT8/FT4 messages, Running and S&P, against a WSJT-X partner.
 #[cfg(test)]
 mod contest_ft_messages_tests;
+/// A contest log merged into the Logbook twice, across a move and a restart, through the engine.
+#[cfg(test)]
+mod contest_merge_tests;
 pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
@@ -11932,8 +11935,10 @@ impl Engine {
     /// `QsoRecord`.**
     ///
     /// Safe to run twice, and safe to run again after a restart: every row carries
-    /// `APP_NEXUS_QID`, and a row whose qid is already in the general log is skipped.
-    /// An operator who is not sure whether they already merged can simply merge again.
+    /// `APP_NEXUS_QID`, and a row whose copy is already in the general log is skipped
+    /// ([`MergeIdentity::names`](tempo_core::contest::MergeIdentity::names)) — after "I moved"
+    /// or a County edited in Settings too, and whichever build merged it. An operator who is
+    /// not sure whether they already merged can simply merge again.
     ///
     /// ⚠️ **It does NOT go through [`log_qso`](Self::log_qso), and that is the whole of
     /// §12(A).** `log_qso` enqueues every record it writes with `legs: ALL`, which is
@@ -11967,15 +11972,16 @@ impl Engine {
         matches!(self.mode, Mode::FieldDay { .. })
     }
 
-    /// [`Self::fd_merge_to_general`], planned: `seen` is every merge identity the general log held
-    /// when `plan` was taken ([`crate::station::LogPlan::merge_identities`], read with the lock
-    /// released). Made under the lock only if the log has not changed since — a row it did not
-    /// read could carry an identity it would merge again — and `Ok(None)` otherwise, changing
-    /// nothing: the caller plans again.
+    /// [`Self::fd_merge_to_general`], planned: `seen` is every merged copy the general log held
+    /// when `plan` was taken, as its merge identity and when it was made
+    /// ([`crate::station::LogPlan::merge_identities`], read with the lock released). Made under
+    /// the lock only if the log has not changed since — a row it did not read could carry an
+    /// identity it would merge again — and `Ok(None)` otherwise, changing nothing: the caller
+    /// plans again.
     pub(crate) fn fd_merge_planned(
         &mut self,
         plan: &crate::station::LogPlan,
-        seen: std::collections::HashSet<String>,
+        seen: Vec<(String, u64)>,
     ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Contest mode is not active".into());
@@ -26224,10 +26230,13 @@ contact yourself."
     /// ⛔ **Three things stop this reaching a row it does not name**, and an edit that
     /// trips any of them is an ordinary general-log edit with no contest effect:
     /// a record with no contest block has an empty `qid`, which parses as nothing;
-    /// [`seq_from_qid`](tempo_core::contest::seq_from_qid) compares the WHOLE session id,
-    /// because seqs are per position and restart at 1 — so `1` names a row in every log
-    /// the operator has ever run, and last weekend's correction must not rewrite this
-    /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    /// [`merged_row`](tempo_core::contest::merged_row) holds the copy to the WHOLE identity
+    /// of the row its seq finds — this contest, this position, and the running the row was
+    /// logged in — because seqs are per position and restart at 1, so `1` names a row in
+    /// every log the operator has ever run, and last weekend's correction must not rewrite
+    /// this weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    /// A copy merged under the name an earlier build gave the row (built from where the
+    /// operator was) still reaches it, after a move and a restart too.
     pub fn update_qso(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
         let Some(after) = self.station.update_row(id, rec) else {
             return false;
@@ -26245,8 +26254,11 @@ contact yourself."
             .as_deref()
             .map_or(String::new(), |c| c.qid.clone());
         let (call, band) = (row.call.clone(), row.band.clone());
+        let posid = self.settings.fd_position_id.clone();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
-            if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
+            if let Some(seq) =
+                tempo_core::contest::merged_row(&station.log, &posid, &qid, row.when_unix)
+            {
                 // Unconditional for a row this session owns: the band is a dupe-key
                 // component too, so an edit that left the call alone still has to be
                 // propagated, and a rebuild over a log that did not move is a no-op by
@@ -26351,7 +26363,7 @@ contact yourself."
         let Some(gone) = self.station.delete_row(id) else {
             return false;
         };
-        self.contest_row_deleted(&gone);
+        self.contest_row_deleted(&gone, None);
         true
     }
 
@@ -42651,7 +42663,7 @@ mod tests {
     /// ⛔ An edit to an ORDINARY contact must not reach the contest log at all, and an
     /// edit to a contest row from a DIFFERENT session must not either.
     ///
-    /// `seq_from_qid` compares the whole session id for exactly this reason: seqs are per
+    /// `merged_row` holds a copy to the whole identity for exactly this reason: seqs are per
     /// position and restart at 1, so `1` alone names a row in every log ever run. Without
     /// the check, correcting a call in last weekend's contest would silently rewrite this
     /// weekend's row 1 — a contact that was made, replaced by one that was not.
