@@ -11,6 +11,12 @@
 //! the exchange is **Class + ARRL/RAC Section** (e.g. `3A WI`). FT1 carries this
 //! natively in one frame: `<to> <de> <class> <section>` (and the rogered
 //! `<to> <de> R <class> <section>`).
+//!
+//! **Every other contest's FT8/FT4 messages are WSJT-X's for that contest, not Field
+//! Day's** ([`FtMessages`]): the ARRL VHF contests call `CQ TEST` and exchange the grid, as
+//! WSJT-X's NA VHF Contest mode does, and a contest WSJT-X has no mode for runs the standard
+//! messages. Field Day's own messages, and whatever any tier but FT8 and FT4 sends, are
+//! unchanged.
 
 use crate::message::Msg;
 use modes::Decode;
@@ -2747,6 +2753,52 @@ fn adif_field(name: &str, value: &str) -> String {
 
 // ---- Auto-sequencer -------------------------------------------------------
 
+/// Which messages the FT8/FT4 sequencer puts on the air, named after the WSJT-X 3.0.2 Special
+/// Operating Activity a station in the same contest runs (`Configuration.hpp`,
+/// `SpecialOperatingActivity`) — that program is what the station on the other end of the
+/// contact is sequencing with.
+///
+/// ⚠️ **Only FT8 and FT4 follow the contest.** FT1, DX1 and FT2 have no WSJT-X contest
+/// messages to follow, and keep [`FieldDay`](Self::FieldDay)'s; so does every contest whose
+/// rules ban the tier's mode. Neither is changed by anything below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FtMessages {
+    /// ARRL Field Day (`FIELD_DAY`): `CQ FD`, then the class and section, which the 77-bit
+    /// Field Day message carries (i3=0, n3=3).
+    #[default]
+    FieldDay,
+    /// The ARRL VHF contests (`NA_VHF`, "NA VHF Contest"): `CQ TEST`, then the
+    /// four-character grid, rogered as `R <grid>`, all standard (i3=1) messages; the runner
+    /// closes with 73.
+    NaVhf,
+    /// A contest WSJT-X has no activity for: the standard messages every FT8/FT4 contact
+    /// outside a contest uses — a plain CQ, the grid, a report, `R` and a report, RR73, 73.
+    Standard,
+}
+
+impl FtMessages {
+    /// The messages `ruleset`'s sequencer sends on a tier whose ADIF mode is `mode` (`"FT8"`,
+    /// `"FT4"`, `"FT2"`, `"TempoFast"`, …).
+    ///
+    /// By the rules file's event id, because which WSJT-X activity a contest's stations run is
+    /// a fact about the contest that its exchange does not state: the WW Digi contest
+    /// exchanges grids too, and calls `CQ WW`.
+    pub fn for_contest(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> Self {
+        let banned = ruleset
+            .banned_modes
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case(mode));
+        if !matches!(mode, "FT8" | "FT4") || banned {
+            return Self::FieldDay;
+        }
+        match ruleset.event {
+            "arrlfd" | "wfd" => Self::FieldDay,
+            "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => Self::NaVhf,
+            _ => Self::Standard,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FdState {
     /// Monitoring; will answer the first CQ heard (search & pounce).
@@ -2770,6 +2822,12 @@ pub struct FieldDayStation {
     pub dxcall: Option<String>,
     /// A caller's exchange, remembered until their RR73 lets us log it.
     peer_exch: Option<(String, String, String)>, // (call, class, section)
+    /// The grid of the station being worked, as it sent it, remembered until the contact is
+    /// logged — the received GRID of a contest that exchanges one.
+    peer_grid: Option<String>,
+    /// What this station puts on the air. Field Day's until the engine, which knows the
+    /// contest and the tier, says otherwise ([`set_messages`](Self::set_messages)).
+    messages: FtMessages,
     pub log: FieldDayLog,
     pub transcript: Vec<String>,
 }
@@ -2799,6 +2857,8 @@ impl FieldDayStation {
             }),
             dxcall: None,
             peer_exch: None,
+            peer_grid: None,
+            messages: FtMessages::FieldDay,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -2817,6 +2877,8 @@ impl FieldDayStation {
             pending: None,
             dxcall: None,
             peer_exch: None,
+            peer_grid: None,
+            messages: FtMessages::FieldDay,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -2838,22 +2900,128 @@ impl FieldDayStation {
 
     /// Return a finished station (`Done`, closing frame already sent) to its
     /// starting posture so it works the NEXT contact instead of going silent
-    /// after a single QSO — Run → back to calling CQ FD, S&P → back to
+    /// after a single QSO — Run → back to calling its CQ, S&P → back to
     /// listening. The contest log is kept, so it remains the dupe/score source.
     pub fn rearm(&mut self, running: bool) {
         self.dxcall = None;
         self.peer_exch = None;
+        self.peer_grid = None;
         if running {
             self.state = FdState::CallingCq;
-            self.pending = Some(Msg::Cq {
-                de: self.mycall().to_string(),
-                grid: self.mygrid.clone(),
-                dir: "FD".to_string(),
-            });
+            self.pending = Some(self.cq());
         } else {
             self.state = FdState::Listening;
             self.pending = None;
         }
+    }
+
+    /// Put `messages` on the air from now on. A change re-arms the station: a contact begun in
+    /// one set of messages cannot be finished in another, so Run goes back to calling its
+    /// (new) CQ and S&P back to listening. The same set again changes nothing.
+    pub fn set_messages(&mut self, messages: FtMessages, running: bool) {
+        if self.messages != messages {
+            self.messages = messages;
+            self.rearm(running);
+        }
+    }
+
+    /// What this station puts on the air.
+    pub fn messages(&self) -> FtMessages {
+        self.messages
+    }
+
+    /// Whether what this station sends carries its grid: every set of messages but Field
+    /// Day's, whose exchange is the class and section. The keying gate asks.
+    pub fn sends_grid(&self) -> bool {
+        self.messages != FtMessages::FieldDay
+    }
+
+    /// The CQ this station calls (`genCQMsg`, mainwindow.cpp 9514-9524): `CQ FD` with the
+    /// grid as it has always gone out, `CQ TEST` in the ARRL VHF contests, and a plain CQ
+    /// where WSJT-X has no activity, both with the four-character grid WSJT-X sends.
+    fn cq(&self) -> Msg {
+        let (dir, grid) = match self.messages {
+            FtMessages::FieldDay => ("FD", self.mygrid.clone()),
+            FtMessages::NaVhf => ("TEST", self.air_grid()),
+            FtMessages::Standard => ("", self.air_grid()),
+        };
+        Msg::Cq {
+            de: self.mycall().to_string(),
+            grid,
+            dir: dir.to_string(),
+        }
+    }
+
+    /// The grid this station sends outside Field Day: the contest's own GRID where it
+    /// exchanges one (a rover's "I moved" changes it), else the Settings locator cut to four
+    /// characters, as WSJT-X's `my_grid().left(4)` is.
+    fn air_grid(&self) -> String {
+        match self.log.session.field("GRID") {
+            "" => crate::qso::air_grid(&self.mygrid),
+            grid => grid.to_string(),
+        }
+    }
+
+    /// Addressed to this station: base calls, so a portable call matches.
+    fn to_me(&self, to: &str) -> bool {
+        crate::message::same_call(to, self.mycall())
+    }
+
+    /// Sent by the station being worked: base calls, as [`to_me`](Self::to_me).
+    fn from_dx(&self, de: &str) -> bool {
+        self.dxcall
+            .as_deref()
+            .is_some_and(|dx| crate::message::same_call(dx, de))
+    }
+
+    /// The contest's fields a contact with a station on `grid` exchanges: its GRID received
+    /// and mine sent where the contest exchanges one, the way a typed entry records them, and
+    /// nothing otherwise — the standard messages carry none of the exchange. One builder for
+    /// the row [`log_worked`](Self::log_worked) writes and the question
+    /// [`worked_before`](Self::worked_before) asks, so the two judge the same contact.
+    fn exchanged(
+        &self,
+        grid: Option<&str>,
+    ) -> (
+        Vec<crate::contest::FieldValue>,
+        Vec<crate::contest::FieldValue>,
+    ) {
+        let rx = grid
+            .and_then(|g| self.log.session.exchange.copied("GRID", g))
+            .into_iter()
+            .collect();
+        let tx = self
+            .log
+            .session
+            .my_exchange
+            .iter()
+            .filter(|v| v.key == "GRID")
+            .cloned()
+            .collect();
+        (rx, tx)
+    }
+
+    /// Whether this very contact is already in the log — the log's own exact verdict, the
+    /// exchange included, so a rover in a new grid is a new contact.
+    ///
+    /// ⚠️ **Not [`FieldDayLog::is_dupe`], which Field Day's S&P asks.** That answers `false`
+    /// for every contest whose dupe key reads an exchange slot (the VHF contests key on the
+    /// grid, the QSO parties on the QTH), so S&P would answer the runner it has just worked on
+    /// that runner's next CQ, and again after that. A CQ in these contests carries all of the
+    /// key, so the question can be asked whole.
+    fn worked_before(&self, call: &str, grid: Option<&str>) -> bool {
+        let (rx, tx) = self.exchanged(grid);
+        self.log.is_dupe_row(call, &self.log.band, "DIG", &rx, &tx)
+    }
+
+    /// Log the contact with `call`, whose grid was `grid` ([`exchanged`](Self::exchanged)).
+    fn log_worked(&mut self, call: &str, grid: Option<&str>, slot: u64) {
+        let (rx, tx) = self.exchanged(grid);
+        let submode = self.log.current_submode.clone();
+        self.log
+            .log_exchange_at(call, rx, tx, "DIG", &submode, slot, now_unix());
+        self.transcript
+            .push(format!("logged {call} {}", grid.unwrap_or_default()));
     }
 
     fn my_exch_msg(&self, to: &str, roger: bool) -> Msg {
@@ -2873,6 +3041,11 @@ impl FieldDayStation {
 
     /// Process the signals decoded this slot and advance the exchange.
     pub fn observe(&mut self, decodes: &[Decode], slot: u64) {
+        match self.messages {
+            FtMessages::NaVhf => return self.observe_na_vhf(decodes, slot),
+            FtMessages::Standard => return self.observe_standard(decodes, slot),
+            FtMessages::FieldDay => {}
+        }
         for d in decodes {
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
@@ -2975,6 +3148,196 @@ impl FieldDayStation {
             }
         }
     }
+
+    /// [`observe`](Self::observe) in the ARRL VHF contests: WSJT-X 3.0.2's NA VHF Contest
+    /// sequence (`mainwindow.cpp`). A CQ is answered with the grid, because Tx1 is switched
+    /// off and Tx2 carries the grid (8238-8248, 9633); a caller's grid is rogered with mine as
+    /// `R <grid>` (Tx3, 9111-9116); `R <grid>` is closed with RR73 (Tx4, 9250-9255); and the
+    /// runner answers RR73 or RRR with 73 (Tx5, 9210-9215).
+    fn observe_na_vhf(&mut self, decodes: &[Decode], slot: u64) {
+        for d in decodes {
+            let m = Msg::parse(&d.message);
+            match (self.state, &m) {
+                // S&P: a CQ that carries a grid → my grid. (A CQ without one is from a
+                // station whose call the grid message cannot carry.)
+                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                    if self.worked_before(de, Some(grid)) {
+                        self.transcript.push(format!("skip dupe {de}"));
+                        continue;
+                    }
+                    self.dxcall = Some(de.clone());
+                    self.pending = Some(Msg::Grid {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                        grid: self.air_grid(),
+                    });
+                    self.state = FdState::AwaitExchange;
+                    self.transcript.push(format!("answer CQ {de}"));
+                }
+                // Running: a caller's grid → roger it and send mine.
+                (FdState::CallingCq, Msg::Grid { to, de, grid })
+                    if self.to_me(to) && !grid.is_empty() =>
+                {
+                    self.dxcall = Some(de.clone());
+                    self.peer_grid = Some(grid.clone());
+                    self.pending = Some(rogered_grid(de, self.mycall(), &self.air_grid()));
+                    self.state = FdState::AwaitConfirm;
+                    self.transcript
+                        .push(format!("caller {de} {grid} → R + my grid"));
+                }
+                // Running: the caller confirmed → log them, and close with 73.
+                (FdState::AwaitConfirm, Msg::Rr73 { to, de } | Msg::Rrr { to, de })
+                    if self.to_me(to) && self.from_dx(de) =>
+                {
+                    let grid = self.peer_grid.take();
+                    self.log_worked(de, grid.as_deref(), slot);
+                    self.pending = Some(Msg::Bye73 {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                    });
+                    self.state = FdState::Done;
+                }
+                // S&P: the runner rogered and sent its grid → log it, and close with RR73.
+                (FdState::AwaitExchange, Msg::Other(text)) => {
+                    let Some((to, de, grid)) = rogered_grid_of(text) else {
+                        continue;
+                    };
+                    if !self.to_me(&to) || !self.from_dx(&de) {
+                        continue;
+                    }
+                    self.log_worked(&de, Some(&grid), slot);
+                    self.pending = Some(Msg::Rr73 {
+                        to: de,
+                        de: self.mycall().to_string(),
+                    });
+                    self.state = FdState::Done;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// [`observe`](Self::observe) in a contest WSJT-X has no activity for: the standard
+    /// sequence `processMessage` runs with none (`mainwindow.cpp`). A CQ is answered with the
+    /// grid (Tx1), a grid with a report (Tx2, 9134), a report with `R` and mine (Tx3, 9283), `R`
+    /// and a report with RR73 (Tx4, 9250-9255), and RR73 or RRR with 73 (Tx5, 9210-9215). The
+    /// report sent is the SNR the other station was decoded at, as WSJT-X's is.
+    fn observe_standard(&mut self, decodes: &[Decode], slot: u64) {
+        for d in decodes {
+            let m = Msg::parse(&d.message);
+            let rpt = d.snr.clamp(-30, 49);
+            match (self.state, &m) {
+                // S&P: a CQ that carries a grid → my grid.
+                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                    if self.worked_before(de, Some(grid)) {
+                        self.transcript.push(format!("skip dupe {de}"));
+                        continue;
+                    }
+                    self.dxcall = Some(de.clone());
+                    self.peer_grid = Some(grid.clone());
+                    self.pending = Some(Msg::Grid {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                        grid: self.air_grid(),
+                    });
+                    self.state = FdState::AwaitExchange;
+                    self.transcript.push(format!("answer CQ {de}"));
+                }
+                // Running: a caller's grid → my report.
+                (FdState::CallingCq, Msg::Grid { to, de, grid })
+                    if self.to_me(to) && !grid.is_empty() =>
+                {
+                    self.dxcall = Some(de.clone());
+                    self.peer_grid = Some(grid.clone());
+                    self.pending = Some(Msg::Report {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                        snr: rpt,
+                    });
+                    self.state = FdState::AwaitExchange;
+                    self.transcript.push(format!("caller {de} {grid} → report"));
+                }
+                // Running: a caller that sent its report without its grid → R and mine.
+                (FdState::CallingCq, Msg::Report { to, de, .. }) if self.to_me(to) => {
+                    self.dxcall = Some(de.clone());
+                    self.pending = Some(Msg::RReport {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                        snr: rpt,
+                    });
+                    self.state = FdState::AwaitConfirm;
+                    self.transcript
+                        .push(format!("caller {de} report → R + report"));
+                }
+                // The report after my grid → R and mine.
+                (FdState::AwaitExchange, Msg::Report { to, de, .. })
+                    if self.to_me(to) && self.from_dx(de) =>
+                {
+                    self.pending = Some(Msg::RReport {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                        snr: rpt,
+                    });
+                    self.state = FdState::AwaitConfirm;
+                }
+                // `R` and a report after my report → log, and close with RR73.
+                (FdState::AwaitExchange, Msg::RReport { to, de, .. })
+                    if self.to_me(to) && self.from_dx(de) =>
+                {
+                    let grid = self.peer_grid.take();
+                    self.log_worked(de, grid.as_deref(), slot);
+                    self.pending = Some(Msg::Rr73 {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                    });
+                    self.state = FdState::Done;
+                }
+                // RR73 or RRR after my `R` and report → log, and close with 73.
+                (FdState::AwaitConfirm, Msg::Rr73 { to, de } | Msg::Rrr { to, de })
+                    if self.to_me(to) && self.from_dx(de) =>
+                {
+                    let grid = self.peer_grid.take();
+                    self.log_worked(de, grid.as_deref(), slot);
+                    self.pending = Some(Msg::Bye73 {
+                        to: de.clone(),
+                        de: self.mycall().to_string(),
+                    });
+                    self.state = FdState::Done;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `<to> <de> R <grid>` — WSJT-X's Tx3 in its grid contests (`genStdMsgs`, mainwindow.cpp
+/// 9657), a standard (i3=1) message with the R bit set.
+///
+/// ⚠️ Built and read HERE rather than taught to [`Msg`]: `Msg::parse` reads every decode in the
+/// app, outside any contest too, and a new form there would change how the band activity, the
+/// roster and the alerts read a message while no contest is running. The sequencer that sends
+/// this message is the one thing that needs to read it.
+fn rogered_grid(to: &str, de: &str, grid: &str) -> Msg {
+    Msg::Other(format!("{to} {de} R {grid}"))
+}
+
+/// The `(to, de, grid)` of a [`rogered_grid`] message, or `None`: two callsigns, `R`, and a
+/// four-character locator in the packer's own form — letters `A` to `R`, then two digits —
+/// that is not `RR73` (`packjt77.f90` `pack77_1`'s `is_grid4`).
+fn rogered_grid_of(text: &str) -> Option<(String, String, String)> {
+    let t: Vec<&str> = text.split_whitespace().collect();
+    let &[to, de, "R", grid] = t.as_slice() else {
+        return None;
+    };
+    let b = grid.as_bytes();
+    let is_grid = b.len() == 4
+        && grid != "RR73"
+        && (b'A'..=b'R').contains(&b[0])
+        && (b'A'..=b'R').contains(&b[1])
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit();
+    (is_grid && crate::message::is_callsign(to) && crate::message::is_callsign(de))
+        .then(|| (to.to_string(), de.to_string(), grid.to_string()))
 }
 
 /// Run a Field Day exchange between a running and an S&P station over the
@@ -4306,6 +4669,388 @@ mod tests {
             "K2DEF W9XYZ RR73",
             "closes with RR73 to the caller"
         );
+    }
+
+    // -- each contest's own FT8/FT4 messages ------------------------------------
+
+    /// A station in the rules file's `event`, with `mygrid` in Settings, speaking what the
+    /// engine picks for that contest on FT8.
+    fn ft8_station(event: &str, mygrid: &str, running: bool) -> FieldDayStation {
+        let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = crate::contest::StationData {
+            mycall: "K1ABC".into(),
+            mygrid: mygrid.into(),
+            contest_qth_state: "MA".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        let mut st = if running {
+            FieldDayStation::running("K1ABC", mygrid, session, "6M")
+        } else {
+            FieldDayStation::search_and_pounce("K1ABC", mygrid, session, "6M")
+        };
+        st.set_messages(FtMessages::for_contest(rs, "FT8"), running);
+        st
+    }
+
+    /// What the station sends next, as it goes on the air.
+    fn next(st: &FieldDayStation) -> String {
+        st.outgoing().map(|m| m.to_text()).unwrap_or_default()
+    }
+
+    /// The newest row: call, received fields, sent fields.
+    fn last_row(st: &FieldDayStation) -> (String, Vec<String>, Vec<String>) {
+        let q = st.log.qsos().last().expect("a row");
+        let kv = |v: &[crate::contest::FieldValue]| -> Vec<String> {
+            v.iter().map(|f| format!("{}={}", f.key, f.raw)).collect()
+        };
+        (q.call.clone(), kv(&q.rx), kv(&q.tx))
+    }
+
+    /// ⭐ Which messages every shipped contest speaks, on every tier — and the table is the
+    /// whole rules file, so a contest added to it is a failure here until someone decides.
+    #[test]
+    fn each_contest_speaks_the_wsjtx_activity_it_matches() {
+        use FtMessages::*;
+        let year = crate::fd_rules::CURRENT_RULES_YEAR;
+        let want = [
+            ("arrlfd", FieldDay),
+            // Winter Field Day, Illinois and New York ban FT8 and FT4: nothing new.
+            ("wfd", FieldDay),
+            ("ilqp", FieldDay),
+            ("nyqp", FieldDay),
+            ("arrlvhf_jan", NaVhf),
+            ("arrlvhf_jun", NaVhf),
+            ("arrlvhf_sep", NaVhf),
+            ("arrlss_cw", Standard),
+            ("arrlss_ssb", Standard),
+            ("cqww_cw", Standard),
+            ("cqww_ssb", Standard),
+            ("cqww_rtty", Standard),
+            ("cqwpx_cw", Standard),
+            ("cqwpx_ssb", Standard),
+            ("cqp", Standard),
+            ("ohqp", Standard),
+            ("tnqp", Standard),
+            ("txqp", Standard),
+        ];
+        for (event, messages) in want {
+            let rs = crate::fd_rules::ruleset_by_id(event, year).expect(event);
+            for mode in ["FT8", "FT4"] {
+                assert_eq!(
+                    FtMessages::for_contest(rs, mode),
+                    messages,
+                    "{event} on {mode}"
+                );
+            }
+            for mode in ["FT2", "TempoFast", "TempoDeep", "RTTY", ""] {
+                assert_eq!(
+                    FtMessages::for_contest(rs, mode),
+                    FieldDay,
+                    "{event} on {mode:?} keeps Field Day's messages"
+                );
+            }
+        }
+        let seed: serde_json::Value =
+            serde_json::from_str(include_str!("fd_rules.seed.json")).expect("the seed parses");
+        let mut shipped: Vec<&str> = seed["rulesets"]
+            .as_array()
+            .expect("rulesets")
+            .iter()
+            .filter_map(|r| r["event"].as_str())
+            .collect();
+        let mut listed: Vec<&str> = want.iter().map(|(e, _)| *e).collect();
+        shipped.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(listed, shipped, "every shipped contest is decided above");
+    }
+
+    /// The control: a station starts on Field Day's messages, and naming them again moves
+    /// nothing — not the CQ, not a contact in flight.
+    #[test]
+    fn field_day_messages_are_where_every_station_starts_and_stay_put() {
+        let mut run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
+        assert_eq!(run.messages(), FtMessages::FieldDay);
+        assert!(!run.sends_grid(), "Field Day's exchange is grid-exempt");
+        run.set_messages(FtMessages::FieldDay, true);
+        assert_eq!(next(&run), "CQ FD W9XYZ EN37");
+        run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0);
+        run.set_messages(FtMessages::FieldDay, true);
+        assert_eq!(
+            run.state,
+            FdState::AwaitConfirm,
+            "the contact is still in flight"
+        );
+        assert_eq!(next(&run), "K2DEF W9XYZ R 3A WI");
+    }
+
+    /// ⭐ The ARRL VHF contests, Running: `CQ TEST`, `R <grid>` to the caller's grid, and 73 to
+    /// its RR73 — WSJT-X's NA VHF Contest sequence. The caller's grid is logged as the GRID it
+    /// sent, and mine as the GRID I sent.
+    #[test]
+    fn vhf_running_calls_cq_test_rogers_the_grid_and_closes_with_73() {
+        let mut run = ft8_station("arrlvhf_jan", "FN42", true);
+        assert!(run.sends_grid());
+        assert_eq!(next(&run), "CQ TEST K1ABC FN42");
+        run.observe(&[dec("K1ABC W9XYZ EN37")], 1);
+        assert_eq!(run.state, FdState::AwaitConfirm);
+        assert_eq!(next(&run), "W9XYZ K1ABC R FN42");
+        assert_eq!(
+            run.log.qsos().len(),
+            0,
+            "nothing logged before the confirmation"
+        );
+        run.observe(&[dec("K1ABC W9XYZ RR73")], 3);
+        assert_eq!(run.state, FdState::Done);
+        assert_eq!(next(&run), "W9XYZ K1ABC 73");
+        assert_eq!(
+            last_row(&run),
+            (
+                "W9XYZ".into(),
+                vec!["GRID=EN37".into()],
+                vec!["GRID=FN42".into()]
+            )
+        );
+        assert_eq!(run.log.qsos()[0].mode, "DIG");
+        // The 73 goes out once; then the engine re-arms the run onto its CQ.
+        run.after_tx();
+        assert!(run.done());
+        run.rearm(true);
+        assert_eq!(next(&run), "CQ TEST K1ABC FN42");
+        // RRR closes it the same way (WSJT-X's Tx4 is RR73 or RRR).
+        run.observe(&[dec("K1ABC N0ABC EM48")], 5);
+        run.observe(&[dec("K1ABC N0ABC RRR")], 7);
+        assert_eq!(next(&run), "N0ABC K1ABC 73");
+        assert_eq!(run.log.qsos().len(), 2);
+    }
+
+    /// ⭐ The ARRL VHF contests, S&P: a CQ is answered with my grid, and the runner's
+    /// `R <grid>` is logged and closed with RR73.
+    #[test]
+    fn vhf_sp_answers_with_its_grid_and_closes_with_rr73() {
+        let mut sp = ft8_station("arrlvhf_jun", "FN42", false);
+        assert_eq!(next(&sp), "", "S&P sends nothing until it hears a CQ");
+        sp.observe(&[dec("CQ TEST W9XYZ EN37")], 1);
+        assert_eq!(sp.state, FdState::AwaitExchange);
+        assert_eq!(next(&sp), "W9XYZ K1ABC FN42");
+        sp.observe(&[dec("K1ABC W9XYZ R EN37")], 3);
+        assert_eq!(sp.state, FdState::Done);
+        assert_eq!(next(&sp), "W9XYZ K1ABC RR73");
+        assert_eq!(
+            last_row(&sp),
+            (
+                "W9XYZ".into(),
+                vec!["GRID=EN37".into()],
+                vec!["GRID=FN42".into()]
+            )
+        );
+        // Back to listening, the same runner's next CQ is the same contact and is not answered;
+        // the same runner in a new grid is a new contact and is.
+        sp.after_tx();
+        sp.rearm(false);
+        sp.observe(&[dec("CQ TEST W9XYZ EN37")], 5);
+        assert_eq!((sp.state, next(&sp)), (FdState::Listening, String::new()));
+        sp.observe(&[dec("CQ TEST W9XYZ EN38")], 7);
+        assert_eq!(next(&sp), "W9XYZ K1ABC FN42", "a rover in a new grid");
+        // A plain CQ is answered the same way: S&P answers any CQ, as Field Day's does.
+        let mut sp = ft8_station("arrlvhf_sep", "FN42", false);
+        sp.observe(&[dec("CQ W9XYZ EN37")], 1);
+        assert_eq!(next(&sp), "W9XYZ K1ABC FN42");
+    }
+
+    /// What WSJT-X would not answer, neither does this: a CQ with no grid, a grid sent to
+    /// somebody else, and a confirmation from anybody but the station being worked.
+    #[test]
+    fn vhf_answers_only_its_own_contact() {
+        let mut sp = ft8_station("arrlvhf_jan", "FN42", false);
+        sp.observe(&[dec("CQ TEST PJ4/K1XYZ")], 1);
+        assert_eq!((sp.state, next(&sp)), (FdState::Listening, String::new()));
+        sp.observe(&[dec("CQ TEST W9XYZ EN37")], 3);
+        sp.observe(&[dec("K1ABC N0ABC R EM48")], 5);
+        sp.observe(&[dec("N0ABC W9XYZ R EN37")], 5);
+        sp.observe(&[dec("K1ABC W9XYZ R RR73")], 5);
+        assert_eq!(
+            sp.state,
+            FdState::AwaitExchange,
+            "none of those is my roger"
+        );
+        assert!(sp.log.qsos().is_empty());
+
+        let mut run = ft8_station("arrlvhf_jan", "FN42", true);
+        run.observe(&[dec("N0ABC W9XYZ EN37")], 1);
+        assert_eq!(
+            run.state,
+            FdState::CallingCq,
+            "a grid sent to somebody else"
+        );
+        run.observe(&[dec("<K1ABC> PJ4/W9XYZ")], 1);
+        assert_eq!(run.state, FdState::CallingCq, "a call with no grid");
+        run.observe(&[dec("K1ABC W9XYZ EN37")], 3);
+        run.observe(&[dec("K1ABC N0ABC RR73")], 5);
+        assert_eq!(run.state, FdState::AwaitConfirm, "an RR73 from a bystander");
+        assert!(run.log.qsos().is_empty());
+        run.observe(&[dec("K1ABC W9XYZ RR73")], 7);
+        assert_eq!(
+            run.log.qsos().len(),
+            1,
+            "the partner's RR73 still closes it"
+        );
+    }
+
+    #[test]
+    fn rogered_grid_is_read_only_in_the_packers_own_form() {
+        let ok = |t: &str| rogered_grid_of(t).map(|(a, b, g)| format!("{a} {b} {g}"));
+        assert_eq!(
+            ok("K1ABC W9XYZ R EN37").as_deref(),
+            Some("K1ABC W9XYZ EN37")
+        );
+        assert_eq!(
+            rogered_grid("W9XYZ", "K1ABC", "FN42").to_text(),
+            "W9XYZ K1ABC R FN42"
+        );
+        for not in [
+            "K1ABC W9XYZ R RR73",
+            "K1ABC W9XYZ R EN37AB",
+            "K1ABC W9XYZ R SA00",
+            "K1ABC W9XYZ R AS00",
+            "K1ABC W9XYZ EN37",
+            "K1ABC W9XYZ R 3A WI",
+            "K1ABC DE R EN37",
+            "K1ABC W9XYZ R-07",
+        ] {
+            assert_eq!(ok(not), None, "{not}");
+        }
+    }
+
+    /// ⭐ A contest WSJT-X has no activity for, both roles: the standard messages, the
+    /// report being the SNR the other station was decoded at. The row carries the call and
+    /// nothing of the contest's exchange, because none of it went either way.
+    #[test]
+    fn a_contest_without_an_activity_runs_the_standard_messages() {
+        let mut run = ft8_station("txqp", "FN42", true);
+        assert!(run.sends_grid());
+        assert_eq!(next(&run), "CQ K1ABC FN42");
+        run.observe(&[dec("K1ABC W9XYZ EN37")], 1);
+        assert_eq!(next(&run), "W9XYZ K1ABC -05");
+        run.observe(&[dec("K1ABC W9XYZ R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "W9XYZ K1ABC RR73".into())
+        );
+        assert_eq!(last_row(&run), ("W9XYZ".into(), vec![], vec![]));
+
+        let mut sp = ft8_station("ohqp", "FN42", false);
+        sp.observe(&[dec("CQ W9XYZ EN37")], 1);
+        assert_eq!(next(&sp), "W9XYZ K1ABC FN42");
+        sp.observe(&[dec("K1ABC W9XYZ -07")], 3);
+        assert_eq!(next(&sp), "W9XYZ K1ABC R-05");
+        assert!(sp.log.qsos().is_empty(), "nothing logged before the RR73");
+        sp.observe(&[dec("K1ABC W9XYZ RR73")], 5);
+        assert_eq!(
+            (sp.state, next(&sp)),
+            (FdState::Done, "W9XYZ K1ABC 73".into())
+        );
+        assert_eq!(last_row(&sp), ("W9XYZ".into(), vec![], vec![]));
+        // The same station's next CQ is the same contact: S&P does not answer it again.
+        sp.after_tx();
+        sp.rearm(false);
+        sp.observe(&[dec("CQ W9XYZ EN37")], 7);
+        assert_eq!((sp.state, next(&sp)), (FdState::Listening, String::new()));
+    }
+
+    /// A caller that sends its report without its grid is rogered (Tx3), as WSJT-X does and
+    /// as the standard sequencer does outside a contest.
+    #[test]
+    fn a_standard_runner_rogers_a_caller_that_skipped_its_grid() {
+        let mut run = ft8_station("cqp", "FN42", true);
+        run.observe(&[dec("K1ABC W9XYZ -07")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitConfirm, "W9XYZ K1ABC R-05".into())
+        );
+        run.observe(&[dec("K1ABC W9XYZ RR73")], 3);
+        assert_eq!(next(&run), "W9XYZ K1ABC 73");
+        assert_eq!(run.log.qsos().len(), 1);
+    }
+
+    #[test]
+    fn the_standard_messages_answer_only_their_own_contact() {
+        let mut sp = ft8_station("tnqp", "FN42", false);
+        sp.observe(&[dec("CQ PJ4/K1XYZ")], 1);
+        assert_eq!(sp.state, FdState::Listening, "a CQ without a grid");
+        sp.observe(&[dec("CQ W9XYZ EN37")], 3);
+        sp.observe(&[dec("K1ABC N0ABC -07")], 5);
+        assert_eq!(
+            sp.state,
+            FdState::AwaitExchange,
+            "a report from a bystander"
+        );
+        sp.observe(&[dec("K1ABC W9XYZ -07")], 7);
+        sp.observe(&[dec("K1ABC N0ABC RR73")], 9);
+        assert_eq!(sp.state, FdState::AwaitConfirm, "an RR73 from a bystander");
+        assert!(sp.log.qsos().is_empty());
+
+        let mut run = ft8_station("tnqp", "FN42", true);
+        run.observe(&[dec("N0ABC W9XYZ EN37"), dec("N0ABC W9XYZ -07")], 1);
+        assert_eq!(run.state, FdState::CallingCq, "sent to somebody else");
+        run.observe(&[dec("<K1ABC> PJ4/W9XYZ")], 1);
+        assert_eq!(run.state, FdState::CallingCq, "a call with no grid");
+        run.observe(&[dec("K1ABC W9XYZ EN37")], 3);
+        run.observe(&[dec("K1ABC N0ABC R-07")], 5);
+        assert_eq!(
+            run.state,
+            FdState::AwaitExchange,
+            "an R-report from a bystander"
+        );
+        assert!(run.log.qsos().is_empty());
+    }
+
+    /// A change of messages (a tier change, in the engine) re-arms: a contact half-worked in
+    /// one set cannot be finished in another. The same set keeps it.
+    #[test]
+    fn a_change_of_messages_rearms_and_the_same_set_keeps_the_contact() {
+        let mut run = ft8_station("arrlvhf_jan", "FN42", true);
+        run.observe(&[dec("K1ABC W9XYZ EN37")], 1);
+        run.set_messages(FtMessages::NaVhf, true);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitConfirm, "W9XYZ K1ABC R FN42".into())
+        );
+        run.set_messages(FtMessages::FieldDay, true);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::CallingCq, "CQ FD K1ABC FN42".into())
+        );
+        assert_eq!(run.dxcall, None);
+
+        let mut sp = ft8_station("txqp", "FN42", false);
+        sp.observe(&[dec("CQ W9XYZ EN37")], 1);
+        sp.set_messages(FtMessages::FieldDay, false);
+        assert_eq!((sp.state, next(&sp)), (FdState::Listening, String::new()));
+    }
+
+    /// The grid on the air is four characters, as WSJT-X sends it, and in the VHF contests it
+    /// is the session's own — the grid a rover moved to.
+    #[test]
+    fn the_grid_on_the_air_is_four_characters_and_follows_a_move() {
+        let run = ft8_station("txqp", "FN42ab", true);
+        assert_eq!(next(&run), "CQ K1ABC FN42");
+        let mut run = ft8_station("arrlvhf_jan", "FN42ab", true);
+        assert_eq!(next(&run), "CQ TEST K1ABC FN42");
+        run.log
+            .session
+            .move_to(&[("GRID", "FN43")])
+            .expect("a rover moves");
+        run.rearm(true);
+        assert_eq!(next(&run), "CQ TEST K1ABC FN43");
+        run.observe(&[dec("K1ABC W9XYZ EN37")], 1);
+        assert_eq!(next(&run), "W9XYZ K1ABC R FN43");
     }
 
     // -- §3.3: the sent exchange is a per-ROW value ---------------------------

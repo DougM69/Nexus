@@ -26,6 +26,9 @@ pub mod contest_entry;
 /// The contest strip's contact in progress, shared with the logger window, through the engine.
 #[cfg(test)]
 mod contest_entry_tests;
+/// Each contest's own FT8/FT4 messages, Running and S&P, against a WSJT-X partner.
+#[cfg(test)]
+mod contest_ft_messages_tests;
 pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
@@ -106,7 +109,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tempo_core::contest::ContestSession;
-use tempo_core::fieldday::FieldDayStation;
+use tempo_core::fieldday::{FieldDayStation, FtMessages};
 use tempo_core::logbook::QsoRecord;
 use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
@@ -13925,6 +13928,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.confirm_with_rrr = self.settings.prefer_rrr;
         }
+        // ⭐ THE CONTEST'S OWN FT8/FT4 MESSAGES — chosen here and in `set_tier`, the two places
+        // the contest and the tier meet. A new station speaks Field Day's, so for Field Day,
+        // for a contest that bans the mode and for every tier but FT8/FT4 this changes nothing.
+        let air_mode = self.adif_mode_for_tier();
+        if let Mode::FieldDay { station, running } = &mut self.mode {
+            let messages = FtMessages::for_contest(station.log.ruleset(), air_mode);
+            station.set_messages(messages, *running);
+        }
         // Restore the durable FD journal into the fresh station — entering Field
         // Day used to build an EMPTY log, so a restart (or a run↔S&P toggle)
         // mid-event dropped every contact and the next exit flush overwrote the
@@ -15037,8 +15048,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // so the log's funnel follows it (FD entry stamps it the same way) —
         // an FT4-tier WFD contact must never export or push as "FT8".
         let fd_submode = self.adif_mode_for_tier();
-        if let Mode::FieldDay { station, .. } = &mut self.mode {
+        if let Mode::FieldDay { station, running } = &mut self.mode {
             station.log.current_submode = fd_submode.to_string();
+            // …and so do its messages: FT8 and FT4 speak the contest's own, every other tier
+            // Field Day's. A change re-arms the sequencer; FT8↔FT4 is no change.
+            let messages = FtMessages::for_contest(station.log.ruleset(), fd_submode);
+            station.set_messages(messages, *running);
         }
         // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
         // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
@@ -23286,8 +23301,12 @@ contact yourself."
         // tier, not an Ft8|Ft4 list); FT1/DX1 free-text isn't grid-bound, so it's
         // exempt. This is the last line of defense — the command layer also blocks
         // entering a keying mode without a valid identity (with a clear message).
-        // (Field Day exchanges carry no grid, so only the callsign is required.)
-        let needs_grid = !matches!(self.mode, Mode::FieldDay { .. });
+        // (Field Day exchanges carry no grid, so only the callsign is required; every other
+        // contest's FT8/FT4 messages carry one.)
+        let needs_grid = match &self.mode {
+            Mode::FieldDay { station, .. } => station.sends_grid(),
+            _ => true,
+        };
         if self.structured_tx_ready(needs_grid).is_err() {
             self.app.set_transmitting(false);
             return None;
@@ -24976,12 +24995,15 @@ contact yourself."
             }
             Mode::FieldDay { station, running } => {
                 let state_before = station.state;
-                let count_before = station.log.qso_count();
+                // Rows, not `qso_count`: a contest that logs its duplicates (the ARRL VHF
+                // contests do) writes a marked row that the count leaves out, and that row
+                // must reach the journal like any other.
+                let rows_before = station.log.qsos().len();
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
                 // The FD sequencer logged a contact this slot → journal it
                 // (after the match — persist_fd_log needs `self` unborrowed).
-                fd_logged = station.log.qso_count() > count_before;
+                fd_logged = station.log.qsos().len() > rows_before;
                 // Run/S&P resilience: once the contact is fully closed (Done and
                 // the closing frame has gone out, so `done()` is true), re-arm to
                 // work the NEXT station instead of transmitting nothing forever —
