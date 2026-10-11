@@ -479,6 +479,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **With a compound or nonstandard call (PJ4/K1ABC, K1ABC/QRP), the contest's CQ is WSJT-X's plain
+  `CQ <call>`.** Call CQ and the Contest screen's Running sent the contest's CQ with your grid,
+  `CQ FD PJ4/K1ABC FN42`, which FT8 cannot carry and sent as another station's call, `CQ FD K1ABC
+  FN42`. The Tx6 row already sends the plain CQ. NEEDS-BENCH: Call CQ with a compound call in ARRL
+  Field Day.
 - **A contest picked in Settings no longer stops FT8 QSO mode and Chat.** With a contest picked
   whose exchange was not filled in (the Texas QSO Party with no county or state, say), switching to
   FT8 QSO mode, to call CQ or to search and pounce, or to Chat was refused with that contest's

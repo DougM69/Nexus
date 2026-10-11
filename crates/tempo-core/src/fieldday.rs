@@ -2971,16 +2971,26 @@ impl FtMessages {
     /// `CQ TEST` in the ARRL VHF contests, and where WSJT-X has no activity the CQ the operator
     /// typed in Tx6, `dir` its direction ("" for a plain CQ), as WSJT-X's normal mode sends its
     /// Tx6; both with `sent_grid`: the contest's own `session_grid` where it exchanges one, else
-    /// `mygrid` cut to the four characters WSJT-X sends. A nonstandard `mycall` carries no
-    /// direction: the packer has no form for one (it would go out as truncated free text).
+    /// `mygrid` cut to the four characters WSJT-X sends.
+    ///
+    /// ⛔ **A nonstandard `mycall` calls WSJT-X's plain CQ, `CQ <call>`, whatever the messages.**
+    /// WSJT-X's `stdCall` (mainwindow.cpp 9541-9552) decides, and for a call that fails it
+    /// `genCQMsg` sends `"%1 %2".arg(m_CQtype).arg(my_callsign)` — no grid (9488-9494) — with no
+    /// activity token (9506-9510). FT8 cannot carry such a call beside a token or a grid: `CQ FD
+    /// PJ4/K1ABC FN42` packs as `CQ FD K1ABC FN42`, another station's call. No direction either:
+    /// the packer has no form for one beside it (it would go out as truncated free text).
     pub fn cq(self, mycall: &str, mygrid: &str, session_grid: &str, dir: &str) -> Msg {
+        if !crate::message::is_std_call(mycall) {
+            return Msg::Cq {
+                de: mycall.to_string(),
+                grid: String::new(),
+                dir: String::new(),
+            };
+        }
         let (dir, grid) = match self {
             Self::FieldDay => ("FD", mygrid.to_string()),
             Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
-            Self::Standard if crate::message::is_std_call(mycall) => {
-                (dir, sent_grid(session_grid, mygrid))
-            }
-            Self::Standard => ("", sent_grid(session_grid, mygrid)),
+            Self::Standard => (dir, sent_grid(session_grid, mygrid)),
         };
         Msg::Cq {
             de: mycall.to_string(),
@@ -3069,14 +3079,11 @@ impl FieldDayStation {
         Self {
             mygrid: mygrid.to_string(),
             state: FdState::CallingCq,
-            pending: Some(Msg::Cq {
-                de: mycall.to_string(),
-                grid: mygrid.to_string(),
-                // Field Day's running CQ is the directed "CQ FD <call> <grid>" —
-                // the `FD` token advertises a Field Day CQ (`to_text` renders it,
-                // `is_cq_dir` accepts it). S&P still answers ANY CQ, FD or plain.
-                dir: "FD".to_string(),
-            }),
+            // Field Day's running CQ is the directed "CQ FD <call> <grid>" — the `FD` token
+            // advertises a Field Day CQ (`to_text` renders it, `is_cq_dir` accepts it), and S&P
+            // still answers ANY CQ, FD or plain — but a nonstandard call's is WSJT-X's plain
+            // `CQ <call>` ([`FtMessages::cq`]).
+            pending: Some(FtMessages::FieldDay.cq(mycall, mygrid, "", "")),
             dxcall: None,
             peer_exch: None,
             peer_grid: None,
@@ -5520,6 +5527,33 @@ mod tests {
         assert_eq!(typed(FtMessages::NaVhf, "K1ABC"), "CQ TEST K1ABC FN42");
         let nonstandard = typed(FtMessages::Standard, "PJ4/K1ABC");
         assert!(!nonstandard.contains("QP"), "{nonstandard}");
+        // A nonstandard call calls WSJT-X's plain CQ whatever the messages (`genCQMsg`: no grid,
+        // no token, for a call `stdCall` refuses), and the running station starts with it.
+        for m in [
+            FtMessages::FieldDay,
+            FtMessages::NaVhf,
+            FtMessages::Standard,
+        ] {
+            for call in ["PJ4/K1ABC", "K1ABC/QRP"] {
+                let cq = m.cq(call, "FN42ab", "EN52", "QP").to_text();
+                assert_eq!(cq, format!("CQ {call}"), "{m:?}");
+            }
+        }
+        let data = crate::contest::StationData {
+            mycall: "PJ4/K1ABC".into(),
+            mygrid: "FN42".into(),
+            contest_qth_state: "MA".into(),
+            ..Default::default()
+        };
+        let rs = crate::fd_rules::ruleset_by_id("txqp", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        let run = FieldDayStation::running("PJ4/K1ABC", "FN42", session, "20M");
+        assert_eq!(
+            run.pending.as_ref().map(Msg::to_text).as_deref(),
+            Some("CQ PJ4/K1ABC"),
+            "the first CQ of a new Running"
+        );
     }
 
     /// The direction reaches a running station's CQ at once, and every CQ after; S&P calls none.

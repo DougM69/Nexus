@@ -1657,6 +1657,78 @@ fn where_wsjtx_has_no_activity_the_running_calls_the_cq_typed_in_tx6() {
     );
 }
 
+/// ⭐ A NONSTANDARD CALL CALLS WSJT-X'S PLAIN CQ ON EVERY CONTEST PATH, never another station's
+/// call. WSJT-X's `stdCall` (mainwindow.cpp 9541-9552) decides, and for a call that fails it
+/// `genCQMsg` sends `"%1 %2".arg(m_CQtype).arg(my_callsign)` — no grid (9488-9494) — and no
+/// activity token (9506-9510). FT8 cannot carry such a call beside a token or a grid: `CQ FD
+/// PJ4/K1ABC FN42` packs as `CQ FD K1ABC FN42`. By value, in Field Day, an ARRL VHF contest and a
+/// QSO party on FT8 and FT4: Call CQ, the Contest screen's Running and the Tx6 row each key `CQ
+/// <call>`, and every over a receiver decodes names the operator's own call. The control: a `/P`
+/// call is standard, and keeps the contest's CQ.
+#[test]
+fn a_nonstandard_call_calls_the_plain_cq_on_every_contest_path() {
+    for me in ["PJ4/K1ABC", "K1ABC/QRP"] {
+        let plain = format!("CQ {me}");
+        for contest in ["arrlfd", "arrlvhf_jan", "txqp"] {
+            for tier in [Tier::Ft8, Tier::Ft4] {
+                let what = format!("{me} {contest:?} {}", tier_name(tier));
+                let station = || {
+                    let mut e = engine_for(contest, MY_GRID);
+                    let mut s = e.settings().clone();
+                    s.mycall = me.into();
+                    e.apply_settings(s);
+                    e.set_tier(tier);
+                    e
+                };
+                // Each path keys the CQ it calls, on two of its overs: what goes out, and what a
+                // receiver decodes.
+                let cqs = |e: &mut Engine| -> Vec<(String, String)> {
+                    [0, 2]
+                        .into_iter()
+                        .filter_map(|slot| {
+                            let text = keyed(e, slot)?;
+                            e.ingest_decodes_for_test(&[], slot + 1);
+                            let air = air_form(&text).1;
+                            Some((text, air))
+                        })
+                        .collect()
+                };
+                let want = vec![(plain.clone(), plain.clone()); 2];
+                let mut e = station();
+                e.start_running().expect("Call CQ starts");
+                assert!(
+                    matches!(&e.mode, Mode::FieldDay { running: true, .. }),
+                    "{what}"
+                );
+                assert_eq!(cqs(&mut e), want, "{what}: Call CQ");
+                let mut e = station();
+                e.set_mode("fieldday-run")
+                    .expect("the Contest screen's Running");
+                assert_eq!(cqs(&mut e), want, "{what}: the Contest screen's Running");
+                // The Tx6 row: no contest CQ on it for this call, so it calls its own.
+                let mut e = station();
+                assert_eq!(e.contest_running_cq(), None, "{what}");
+                e.start_cq(None).expect("Tx 6");
+                assert_eq!(cqs(&mut e), want, "{what}: Tx 6");
+            }
+        }
+    }
+    // The control: `/P` is standard (`stdCall`'s `(/R | /P)?`), and keeps the contest's CQ.
+    let mut e = engine_for("arrlfd", MY_GRID);
+    let mut s = e.settings().clone();
+    s.mycall = "K1ABC/P".into();
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.start_running().expect("Call CQ starts");
+    let text = keyed(&mut e, 0).expect("the Running keys");
+    assert_eq!(text, "CQ FD K1ABC/P FN42");
+    assert_eq!(
+        air_form(&text).1,
+        "CQ FD K1ABC/P FN42",
+        "a /P call is carried whole"
+    );
+}
+
 /// ⛔ The transmit guards hold for the cockpit's gestures exactly as for the Contest screen's
 /// buttons: a contest whose messages carry the grid keys nothing on Call CQ without one; the
 /// wall-clock watchdog ends a run Call CQ started; Halt stops a contact a double-click started;

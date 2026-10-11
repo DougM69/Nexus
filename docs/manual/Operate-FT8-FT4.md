@@ -103,7 +103,8 @@ The Tx panel is visible only in Classic layout. It contains:
   `CQ TEST`) and Tx 6 calls it through the contest's Running, as Call CQ does; your own Tx6 text
   comes back when the contest ends. In the other FT8/FT4 contests Tx6 stays yours, and Tx 6 and
   Call CQ send what you typed (`CQ QP …` included) through the contest's Running, as WSJT-X does
-  with no special activity set.
+  with no special activity set. With a compound call (PJ4/K1ABC) every contest CQ is the plain
+  `CQ <call>`, as in WSJT-X: FT8 cannot carry such a call beside a contest token or a grid.
 
 In Roster layout the equivalent information appears in the modern QSO strip alongside the Call Roster.
 
