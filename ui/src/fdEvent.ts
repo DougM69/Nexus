@@ -98,6 +98,15 @@ export function contestShortName(id: string | undefined): string {
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 
+/** The contest's part of an export's file name — `ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`:
+ *  its rules-file id, blank meaning ARRL Field Day as it does everywhere else. Every exported file
+ *  was named `fd-…` whatever the contest. An id a downloaded rules file added may carry characters
+ *  no file name can (a `/` turns the name into a path, and Downloads keeps only its last part), so
+ *  each run of them becomes one `-`; every shipped id passes through unchanged. */
+export function contestFileStem(id: string | undefined): string {
+  return (id?.trim() || 'arrlfd').replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
 /** Why club sync cannot run a contest — the three reasons the engine refuses one for. */
 export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown'
 

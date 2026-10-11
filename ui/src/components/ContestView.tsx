@@ -16,7 +16,7 @@ import { FdAdvisories } from './FdAdvisories'
 import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
-import { clubSyncRefusal, clubSyncRefusalText, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
@@ -2237,12 +2237,14 @@ export function ContestView({
         text = await exportLog(format)
       }
       const stamp = new Date().toISOString().slice(0, 10)
+      // Named for the contest whose log it is, the one the banner and the tooltips name.
+      const stem = contestFileStem(shownEvent)
       const base =
         format === 'cabrillo' || format === 'adif'
-          ? 'fd-log'
+          ? `${stem}-log`
           : format.startsWith('club-')
-            ? 'fd-club-log'
-            : `fd-${format}`
+            ? `${stem}-club-log`
+            : `${stem}-${format}`
       // Real Rust write to Downloads, same as the Logbook exports — a `<a download>` blob is
       // silently CANCELLED by wry on macOS (no download handler is wired), so all four FD
       // export buttons produced no file there while looking successful. The toast fires only
