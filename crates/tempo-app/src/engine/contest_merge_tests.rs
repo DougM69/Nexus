@@ -1033,3 +1033,30 @@ fn a_contact_merged_elsewhere_while_the_merge_is_planned_is_written_once() {
     assert_eq!((report.added(), report.already), (1, 0));
     assert_eq!(calls(&e), ["K9AAA", "W9BBB"], "each once");
 }
+
+/// ⭐ **A copy still on its way to disk lets no contact go.** With the writer held up, the copies
+/// the offer's merge wrote are in no file yet: the contacts are offered no more, and the journal
+/// keeps them until their copies are on disk.
+#[test]
+fn a_copy_still_on_its_way_to_disk_lets_no_contact_go() {
+    let d = Dir::new("contest-unmerged-on-its-way");
+    let e = launch(&d, &ilqp_settings());
+    never_merged_five_days_back(&d, &e);
+    let s = quit(e);
+    let (mut e, _) = offered(launch(&d, &s));
+    party(&mut e, "N9CCC", "DUPG");
+    let hold = tempo_core::logbook::sqlite::WriteHold::take(&d.db()).expect("stall the writer");
+    let shared = Mutex::new(e);
+    let (report, _) = super::contest_unmerged::merge_unmerged(&shared, "ilqp");
+    assert_eq!(report.expect("the contest runs").added(), 2);
+    let offer = super::contest_unmerged::unmerged(&shared).expect("the contest runs");
+    assert!(offer.is_empty(), "{offer:?}");
+    let e = shared.into_inner().unwrap();
+    let journal = e.field_day_log_adif().expect("the contest log");
+    assert!(
+        journal.contains("K9AAA") && journal.contains("W9BBB"),
+        "kept until their copies are on disk"
+    );
+    drop(hold);
+    quit(e);
+}
