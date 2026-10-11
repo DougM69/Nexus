@@ -13082,13 +13082,16 @@ impl RadioLoop {
                     tx_watchdog: false,
                     sub_mode: "",
                     fast_mode: false,
-                    // The LIVE mode wins: field_day is Some only while the
-                    // Field Day mode is actually RUNNING, whereas special_op
+                    // The LIVE mode wins: field_day is Some only while a
+                    // contest is actually RUNNING, whereas special_op
                     // is a persistent setting an operator can forget to turn
                     // off — a stale Hound flag must not misadvertise an
-                    // active FD session (review catch). 6=FOX stays unbuilt.
-                    special_op: if snap.field_day.is_some() {
-                        3
+                    // active contest session (review catch). 6=FOX stays unbuilt.
+                    // A running contest reports the activity WSJT-X itself would
+                    // be set to for it: 3 (Field Day) in ARRL Field Day only,
+                    // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
+                    special_op: if let Some(fd) = &snap.field_day {
+                        tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
                     } else if matches!(
                         eng.settings().special_op,
                         tempo_app::settings::SpecialOp::Hound
@@ -15697,6 +15700,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 mod tests {
     mod civ_coverage;
     mod clock_repair_tests;
+    mod contest_status;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;

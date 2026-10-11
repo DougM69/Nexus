@@ -2777,12 +2777,27 @@ pub enum FtMessages {
 }
 
 impl FtMessages {
-    /// The messages `ruleset`'s sequencer sends on a tier whose ADIF mode is `mode` (`"FT8"`,
-    /// `"FT4"`, `"FT2"`, `"TempoFast"`, …).
+    /// The WSJT-X activity a contest's own stations run, by the rules file's event id (blank is
+    /// a fresh install's contest, ARRL Field Day).
     ///
-    /// By the rules file's event id, because which WSJT-X activity a contest's stations run is
-    /// a fact about the contest that its exchange does not state: the WW Digi contest
-    /// exchanges grids too, and calls `CQ WW`.
+    /// By id, because which activity a contest's stations run is a fact about the contest that
+    /// its exchange does not state: the WW Digi contest exchanges grids too, and calls `CQ WW`.
+    ///
+    /// ⚠️ **Winter Field Day has none**, though its exchange has Field Day's shape: WSJT-X's
+    /// Field Day exchange takes the class letters A to F only (`Configuration.cpp`,
+    /// `field_day_exchange_re`), and Winter Field Day's categories are H, I, O and M.
+    pub fn of_contest(event: &str) -> Self {
+        match event {
+            "" | "arrlfd" => Self::FieldDay,
+            "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => Self::NaVhf,
+            _ => Self::Standard,
+        }
+    }
+
+    /// The messages `ruleset`'s sequencer sends on a tier whose ADIF mode is `mode` (`"FT8"`,
+    /// `"FT4"`, `"FT2"`, `"TempoFast"`, …): its contest's own ([`of_contest`](Self::of_contest))
+    /// on FT8 and FT4, and Field Day's, unchanged, on every other tier, wherever the rules ban
+    /// the mode, and in Winter Field Day.
     pub fn for_contest(ruleset: &crate::fd_rules::FdRuleset, mode: &str) -> Self {
         let banned = ruleset
             .banned_modes
@@ -2792,9 +2807,21 @@ impl FtMessages {
             return Self::FieldDay;
         }
         match ruleset.event {
-            "arrlfd" | "wfd" => Self::FieldDay,
-            "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => Self::NaVhf,
-            _ => Self::Standard,
+            // Field Day's exchange, as it has always sent: WSJT-X has no activity for it, and a
+            // rules file that stopped banning the mode would not change what goes on the air.
+            "wfd" => Self::FieldDay,
+            event => Self::of_contest(event),
+        }
+    }
+
+    /// WSJT-X's own number for this activity, the Special Operation Mode its UDP Status carries
+    /// (`NetworkMessage.hpp`: 0 NONE, 1 NA VHF, 3 FIELD DAY; `mainwindow.cpp`'s
+    /// `statusUpdate` sends `m_specOp` as it is set).
+    pub fn special_op(self) -> u8 {
+        match self {
+            Self::FieldDay => 3,
+            Self::NaVhf => 1,
+            Self::Standard => 0,
         }
     }
 }
@@ -4766,6 +4793,44 @@ mod tests {
         shipped.sort_unstable();
         listed.sort_unstable();
         assert_eq!(listed, shipped, "every shipped contest is decided above");
+    }
+
+    /// ⭐ The activity each contest's own stations run, whatever the tier and whatever its rules
+    /// ban, and the number WSJT-X reports for it in its UDP Status: Field Day 3 in ARRL Field
+    /// Day only, NA VHF 1 in the three ARRL VHF contests, NONE 0 everywhere else — Winter Field
+    /// Day included, whose categories WSJT-X's Field Day exchange does not take.
+    #[test]
+    fn each_contest_reports_the_activity_wsjtx_would() {
+        let year = crate::fd_rules::CURRENT_RULES_YEAR;
+        let seed: serde_json::Value =
+            serde_json::from_str(include_str!("fd_rules.seed.json")).expect("the seed parses");
+        let mut events: Vec<&str> = seed["rulesets"]
+            .as_array()
+            .expect("rulesets")
+            .iter()
+            .filter_map(|r| r["event"].as_str())
+            .collect();
+        events.push("");
+        assert_eq!(events.len(), 19);
+        for event in events {
+            let want = match event {
+                "" | "arrlfd" => (FtMessages::FieldDay, 3),
+                "arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep" => (FtMessages::NaVhf, 1),
+                _ => (FtMessages::Standard, 0),
+            };
+            let got = FtMessages::of_contest(event);
+            assert_eq!((got, got.special_op()), want, "{event:?}");
+            if let Some(rs) = crate::fd_rules::ruleset_by_id(event, year) {
+                let banned = rs
+                    .banned_modes
+                    .iter()
+                    .any(|b| b.eq_ignore_ascii_case("FT8"));
+                if !banned {
+                    assert_eq!(FtMessages::for_contest(rs, "FT8"), got, "{event} on FT8");
+                }
+            }
+        }
+        assert_eq!(FtMessages::of_contest("wfd"), FtMessages::Standard);
     }
 
     /// The control: a station starts on Field Day's messages, and naming them again moves
