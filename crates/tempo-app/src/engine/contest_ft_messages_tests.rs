@@ -413,15 +413,7 @@ fn play(mut e: Engine, tier: Tier, role: Role, act: Act) -> Scene {
             .collect(),
         _ => Vec::new(),
     };
-    let mode = match &e.mode {
-        Mode::FieldDay { station, running } => {
-            format!("FieldDay running={running} state={:?}", station.state)
-        }
-        Mode::Qso { station, running } => {
-            format!("Qso running={running} state={:?}", station.state)
-        }
-        Mode::Chat => "Chat".into(),
-    };
+    let mode = mode_line(&e);
     lines.push(format!("  end: {mode} tx={}", on_off(e.tx_enabled())));
     for l in &logged {
         lines.push(format!("  LOG {l}"));
@@ -641,6 +633,19 @@ fn no_contest(tier: Tier, running: bool) -> String {
     out
 }
 
+/// Where the station is: the mode, its role and its sequencer's state.
+fn mode_line(e: &Engine) -> String {
+    match &e.mode {
+        Mode::FieldDay { station, running } => {
+            format!("FieldDay running={running} state={:?}", station.state)
+        }
+        Mode::Qso { station, running } => {
+            format!("Qso running={running} state={:?}", station.state)
+        }
+        Mode::Chat => "Chat".into(),
+    }
+}
+
 fn on_off(on: bool) -> &'static str {
     if on {
         "on"
@@ -691,16 +696,11 @@ fn scene_period(contest: &str, tier: Tier) -> String {
             e.ingest_decodes_for_test(&[heard(&text)], slot + 1);
         }
     }
-    let mode = match &e.mode {
-        Mode::FieldDay { station, running } => {
-            format!("FieldDay running={running} state={:?}", station.state)
-        }
-        Mode::Qso { station, running } => {
-            format!("Qso running={running} state={:?}", station.state)
-        }
-        Mode::Chat => "Chat".into(),
-    };
-    out.push_str(&format!("  end: {mode} tx={}\n", on_off(e.tx_enabled())));
+    out.push_str(&format!(
+        "  end: {} tx={}\n",
+        mode_line(&e),
+        on_off(e.tx_enabled())
+    ));
     if let Mode::FieldDay { station, .. } = &e.mode {
         for q in station.log.qsos() {
             out.push_str(&format!(
@@ -1647,4 +1647,49 @@ fn tx_goes_off_after_a_double_clicked_contest_contact() {
             "{contest}: S&P's own pounce keeps TX on"
         );
     }
+}
+
+/// ⭐ The Operate strip's S&P hands the station to the running contest's S&P, its messages and
+/// its log, from the contest's Running and from FT8 QSO mode, as the Contest screen's S&P does,
+/// opening the contest's session when it enters the contest from outside it. Outside the
+/// contest's own messages (Contest mode off, or FT1) it is FT8 QSO mode's S&P as before, and a
+/// contest that cannot start refuses it and nothing changes.
+#[test]
+fn the_strips_sp_is_the_running_contests_sp() {
+    let contest_sp = "FieldDay running=false state=Listening";
+    for contest in ["arrlfd", "arrlvhf_jan", "txqp"] {
+        for (from, opens) in [("fieldday-run", false), ("qso-monitor", true)] {
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(Tier::Ft8);
+            e.set_mode(from).expect(from);
+            let opened = e.start_search_and_pounce_opens_session();
+            let r = e.start_search_and_pounce();
+            assert_eq!(
+                (r, opened, mode_line(&e)),
+                (Ok(()), opens, contest_sp.to_string()),
+                "{contest} from {from}"
+            );
+        }
+    }
+    let monitor = "Qso running=false state=Listening";
+    for (on, tier) in [(false, Tier::Ft8), (true, Tier::TempoFast)] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        let mut s = e.settings().clone();
+        s.fd_active = on;
+        e.apply_settings(s);
+        e.set_tier(tier);
+        e.set_mode("qso-run").expect("a plain run");
+        let opened = e.start_search_and_pounce_opens_session();
+        let r = e.start_search_and_pounce();
+        assert_eq!(
+            (r, opened, mode_line(&e)),
+            (Ok(()), false, monitor.to_string()),
+            "Contest mode {on} on {}",
+            tier_name(tier)
+        );
+    }
+    let mut e = contest_that_cannot_start();
+    let r = e.start_search_and_pounce();
+    assert!(r.is_err(), "no class: {r:?}");
+    assert_eq!(mode_line(&e), monitor, "still FT8 QSO mode");
 }

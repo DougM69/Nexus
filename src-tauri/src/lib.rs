@@ -47285,4 +47285,19 @@ mod contest_entry_command_tests {
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// ★ The strip's S&P re-enters the contest's S&P with the session's sweep: K9NEW reads worked
+    /// this session.
+    #[test]
+    fn the_strips_sp_enters_the_contest_with_its_rows() {
+        let (dir, engine) = back_in_ft8_qso_mode("contest-entry-sp");
+        let snap = crate::start_search_and_pounce_on(&engine).expect("S&P is taken");
+        assert_eq!(
+            snap.field_day.as_ref().map(|fd| fd.running),
+            Some(false),
+            "the contest's S&P"
+        );
+        assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

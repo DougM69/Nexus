@@ -12196,19 +12196,52 @@ impl RadioLoop {
                         // onto the DX's frequency, not always from the grid at band-center.
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
+                            let dx_freq = Some(delta_freq as f32);
+                            // ⭐ It works the station as the operator's own double-click does
+                            // (`Engine::work_station`): a CQ, while a contest runs whose own
+                            // FT8/FT4 messages apply, goes to the contest's S&P. Entering that
+                            // from outside the contest opens its session, whose rows are read off
+                            // the Engine lock (SPEC-2 v3 C19) this tick holds: that answer is
+                            // made on a thread of its own, as the cockpit's command makes it.
+                            if eng.work_station_opens_session(sender, Some(&message)) {
+                                let engine = Arc::clone(engine);
+                                let (sender, message) = (sender.to_string(), message.clone());
+                                std::thread::spawn(move || {
+                                    let worked = tempo_app::engine::act_opening_session(
+                                        &engine,
+                                        |eng| {
+                                            eng.work_station_opens_session(&sender, Some(&message))
+                                        },
+                                        |eng| {
+                                            eng.work_station(
+                                                &sender,
+                                                None,
+                                                Some(&message),
+                                                Some(snr),
+                                                dx_freq,
+                                            )?;
+                                            eng.set_tx_enabled(true);
+                                            Ok(())
+                                        },
+                                        |_| (),
+                                    );
+                                    if let Err(reason) = worked {
+                                        crate::civ::diag::note(&format!(
+                                            "UDP Reply for {sender} refused: {reason}"
+                                        ));
+                                    }
+                                });
+                                continue;
+                            }
                             // A refusal (no derivable parity — the context was just flushed
                             // by a QSY/tier switch) must NOT fall through to the arm below:
                             // arming TX for a QSO that was never started is exactly the
                             // unattended-keying shape the refusal exists to prevent. The
                             // companion sent a message, so the reason goes to the diag log
                             // rather than vanishing.
-                            if let Err(reason) = eng.call_station_ctx(
-                                sender,
-                                None,
-                                Some(&message),
-                                Some(snr),
-                                Some(delta_freq as f32),
-                            ) {
+                            if let Err(reason) =
+                                eng.work_station(sender, None, Some(&message), Some(snr), dx_freq)
+                            {
                                 crate::civ::diag::note(&format!(
                                     "UDP Reply for {sender} refused: {reason}"
                                 ));
@@ -15700,6 +15733,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 mod tests {
     mod civ_coverage;
     mod clock_repair_tests;
+    mod contest_reply;
     mod contest_status;
     mod decode_in_flight;
     mod failed_unkey;

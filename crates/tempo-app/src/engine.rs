@@ -14429,8 +14429,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// The cockpit's "work this station" — the `call_station` command: a double-click on a
-    /// decode, a roster row, a station card, an alert. Each is [`Self::call_station_ctx`],
-    /// WSJT-X's double-click, but one:
+    /// decode, a roster row, a station card, an alert — and a logger's WSJT-X UDP Reply, which is
+    /// WSJT-X's double-click from another program. Each is [`Self::call_station_ctx`], WSJT-X's
+    /// double-click, but one:
     ///
     /// ⭐ **A double-click on a CQ while a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]) hands that station to the contest's S&P**
@@ -14439,7 +14440,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// contest for FT8 QSO mode and the standard messages, which a WSJT-X station in its Field Day
     /// or NA VHF activity never answers.
     ///
-    /// The WSJT-X UDP Reply and the Remote page call `call_station_ctx` directly, unchanged.
+    /// The Remote page calls `call_station_ctx` directly, unchanged.
     pub fn work_station(
         &mut self,
         dxcall: &str,
@@ -22151,16 +22152,25 @@ contact yourself."
         self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-run")
     }
 
-    /// The Operate strip's S&P: FT8 QSO monitoring (`qso-monitor`). The Remote page's S&P keeps
-    /// its own path.
+    /// The Operate strip's S&P: FT8 QSO monitoring (`qso-monitor`), but:
+    ///
+    /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), S&P is the contest's S&P**, its messages and its log, as
+    /// the strip's Call CQ is its Running ([`Self::start_running`]) and as the Contest screen's
+    /// S&P is: with TX on it answers the next CQ it hears. A contest that cannot start (its
+    /// exchange not filled in) refuses it, as the Contest screen's S&P does, and nothing changes.
+    /// The Remote page's S&P keeps its own path.
     pub fn start_search_and_pounce(&mut self) -> Result<(), String> {
+        if self.contest_ft_messages().is_some() {
+            return self.set_mode("fieldday-sp");
+        }
         self.set_mode("qso-monitor")
     }
 
-    /// Whether [`Self::start_search_and_pounce`] opens a contest session. See
-    /// [`Self::work_station_opens_session`].
+    /// Whether [`Self::start_search_and_pounce`] opens a contest session: the contest's S&P
+    /// entered from another mode. See [`Self::work_station_opens_session`].
     pub fn start_search_and_pounce_opens_session(&self) -> bool {
-        false
+        self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-sp")
     }
 
     /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.
