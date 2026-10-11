@@ -148,8 +148,8 @@ fn every_key_sends_the_signed_text_in_the_illinois_qso_party_and_at_field_day() 
                 "W9XYZ",
                 "K9AAA",
                 "TU 5NN COOK",
-                "AGN AGN",
                 "K9AAA QSO B4",
+                "AGN AGN",
             ],
         ),
         (
@@ -162,8 +162,8 @@ fn every_key_sends_the_signed_text_in_the_illinois_qso_party_and_at_field_day() 
                 "W9XYZ",
                 "K9AAA",
                 "TU 3A WI",
-                "AGN AGN",
                 "K9AAA QSO B4",
+                "AGN AGN",
             ],
         ),
     ] {

@@ -121,7 +121,7 @@
 //       seq.abort() + Engine::rtty_stop() (queue cleared, rtty_abort + slot_tx_abort → unkey)
 //       — and `stream` is the ENTIRE RTTY vocabulary. Both are CONVENIENCES built on the
 //       guarantee, never what holds it up, so hiding either pane is fine.
-//     · A PANE MAY START A TRANSMISSION. SIX DO: Phone's voice keyer (F1–F6 → playVoiceMessage
+//     · A PANE MAY START A TRANSMISSION. SIX DO: Phone's voice keyer (a slot's F-key → playVoiceMessage
 //       keys the rig) and Operate's `txmsgs` (Tx6 = "Call CQ (Alt+6)" → startCq) plus its two
 //       decode panes and two rosters (double-click → call_station_ctx, which ENABLES TX and
 //       keys the current period). All hideable, correctly. Phone's and CW's `bandActivity` are

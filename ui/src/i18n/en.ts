@@ -10552,11 +10552,11 @@ export const EN = {
   'phone.rxDsp.agc.off': 'Off',
 
   // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
-  // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
+  // F-key names stay as they are, and `{{slot}}` is the number one of them carries; `{{label}}` is the
   // operator's own name for a slot and is never translated. `{{hint}}` is the Mac Fn-key note
   // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
-  'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
-  'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
+  'phone.keyer.hint': 'click a slot or press its F-key to send · Esc stops',
+  'phone.keyer.hint.mac': 'click a slot or press Fn with its F-key to send · Esc stops',
   // `{{exchange}}` is the running contest's exchange, a token; the element around it comes
   // from the call site.
   'phone.keyer.fd.hint':

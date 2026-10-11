@@ -152,7 +152,7 @@ describe('the F1–F8 row', () => {
         pskProfiles: [{ name: 'contest', macros: [{ key: 'F2', label: 'Run exch', text: '{CALL} 599 05 05' }] }],
       }),
     })
-    expect(['F1', 'F2', 'F3', 'F7', 'F8'].map(labelOf)).toEqual(['CQ', 'Run exch', 'TU', 'AGN', 'B4'])
+    expect(['F1', 'F2', 'F3', 'F7', 'F8'].map(labelOf)).toEqual(['CQ', 'Run exch', 'TU', 'B4', 'AGN'])
     expect(screen.getByRole('button', { name: 'Contest' }).getAttribute('aria-pressed')).toBe('true')
   })
 

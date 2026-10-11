@@ -227,7 +227,9 @@ station.
 
 ### Use the voice keyer
 
-The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
+The voice keyer has seven slots, on F1–F6 and F8: **CQ, My Call, Report, QRZ?, 73, Again, AGN**.
+**AGN** on F8 is the slot [Enter Sends Message](../manual/Field-Day.md#enter-sends-message-esm)
+plays in a contest when you need a repeat, from the same key as AGN on CW and RTTY.
 
 ![The Voice Keyer pane. Under the line "click or press F1–F6 to send · Esc stops" and a ■ Stop button, six slot cards: F1 CQ, F2 My Call, F3 Report, F4 QRZ?, F5 73 and F6 Again. F2 is outlined and carries a ▶ play arrow; the other five read "record". Each card has a ● record button, an import arrow and a ✕.](../img/manual/phone-voice-keyer.webp)
 

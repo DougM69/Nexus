@@ -2117,8 +2117,9 @@ contact runs, step by step, and the rules ESM keeps are in the
   your choice, and a step left on *Built in* sends it. A key you changed in the
   cockpit keeps its place, so its step sends your text.
 - **Voice keyer steps** — which recording each step plays, one slot per step.
-  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F5
-  AGN. An empty slot plays nothing.
+  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F8
+  AGN, the key AGN is on in the CW and RTTY contest sets; F5 and F6 are yours.
+  An empty slot plays nothing.
 
 Every step row shows what Enter would send there, or why it would send nothing:
 no key mapped, or a key with nothing on it. A set with no step mapped makes ESM

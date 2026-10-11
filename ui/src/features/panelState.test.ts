@@ -529,7 +529,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   })
 
   it('Phone can hide the voice keyer — it starts overs, it is not the way you end one', () => {
-    // The pane TRANSMITS (F1–F6 play a canned message with PTT keyed), which is why the
+    // The pane TRANSMITS (its F-keys play a canned message with PTT keyed), which is why the
     // blunt rule kept it out. It is admissible under the narrowed one because hiding it
     // IS a stop: the unmount cleanup calls stopVoice, so the hide cannot strand you keyed.
     // The abort itself is proven at the real site in PhoneCockpit.keyerHide.test.tsx.

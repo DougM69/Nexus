@@ -95,7 +95,7 @@ A **6-minute continuous TX watchdog** (same default as the digital cockpit) auto
 
 ## Voice Keyer
 
-The voice keyer offers **six message slots** labeled F1–F6 with defaults: CQ, My Call, Report, QRZ?, 73, Again. All slots are empty until you populate them.
+The voice keyer offers **seven message slots**, on F1–F6 and F8, with defaults: CQ, My Call, Report, QRZ?, 73, Again and, on F8, AGN. There is no F7. All slots are empty until you populate them.
 
 ### Recording
 
@@ -109,11 +109,13 @@ Click Import on any slot to load a WAV file from disk. Nexus accepts WAVs at any
 
 ### Playback
 
-Press `F1`–`F6` (or click the slot play button) to transmit the message. Nexus keys PTT, plays the WAV through the sound card TX output, and releases PTT when playback ends. Press `Esc` or click Stop to abort mid-message; the output ring is flushed and PTT drops immediately.
+Press a slot's F-key, `F1`–`F6` or `F8` (or click the slot play button), to transmit the message. Nexus keys PTT, plays the WAV through the sound card TX output, and releases PTT when playback ends. Press `Esc` or click Stop to abort mid-message; the output ring is flushed and PTT drops immediately.
 
 Voice keyer playback requires the `radio` Cargo feature (the full rig-connected build). The headless/testing build returns an error.
 
-In a contest with [Enter Sends Message](Field-Day.md#enter-sends-message-esm) on, Enter plays the slots by step: `F1` CQ, `F2` your exchange, `F3` TU, `F4` your call and `F5` AGN, unless you map other slots in Settings → Contesting ▸ Enter Sends Message.
+In a contest with [Enter Sends Message](Field-Day.md#enter-sends-message-esm) on, Enter plays the slots by step: `F1` CQ, `F2` your exchange, `F3` TU, `F4` your call and `F8` AGN, unless you map other slots in Settings → Contesting ▸ Enter Sends Message. AGN is on `F8` as it is in the CW and RTTY contest sets and in N1MM's default message sets. `F5` and `F6` are yours: on CW `F5` sends his call, and a recording cannot say one.
+
+AGN used to be on `F5`. If you ran Enter Sends Message in Phone with AGN recorded in `F5`, the update copies that recording to `F8` and leaves `F5` empty. A recording in `F5` that was for something else, such as a 73, stays in `F5`, and so does a slot you mapped to a step yourself.
 
 ## QSO Recording
 
@@ -156,7 +158,7 @@ You go from "there's a needed station on 20 m SSB" to "rig is there, call is in 
 | `tx_watchdog_min` | `6` | Auto-halt after 6 continuous minutes of TX |
 | `cat_broker` | `false` | Enable to let WSJT-X/N1MM share the radio through Nexus |
 | `cat_broker_port` | `4532` | CAT broker listen port |
-| `voice_messages` | 6 empty slots | F1=CQ F2=My Call F3=Report F4=QRZ? F5=73 F6=Again |
+| `voice_messages` | 7 empty slots | F1=CQ F2=My Call F3=Report F4=QRZ? F5=73 F6=Again F8=AGN |
 | `phone_mode` | `ssb` | `fm` selects FM voice (drives rig to FM + repeater shift/CTCSS) |
 | `rptr_shift` | `simplex` | FM repeater shift: `plus` / `minus` / `simplex` (no shift) |
 | `ctcss_tone_hz` | `0.0` | FM CTCSS/PL tone in Hz (e.g. `100.0`); `0.0` = off |
