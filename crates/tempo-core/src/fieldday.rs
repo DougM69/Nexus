@@ -271,9 +271,10 @@ pub struct LoggedQso {
     /// 0 = never assigned (rows built by paths that predate sync).
     pub seq: u64,
     /// ⭐ **This contact duplicates one already in the log** — it is REPORTED to the
-    /// sponsor and worth nothing. Only ever `true` under a ruleset whose
+    /// sponsor and worth nothing. `true` under a ruleset whose
     /// [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes) says the sponsor
-    /// cross-checks; Field Day refuses the contact instead, so no Field Day row ever
+    /// cross-checks, and in any other only on a contact the operator worked on the air
+    /// ([`kept`](Self::kept)): Field Day refuses a typed one, so no typed Field Day row
     /// carries it.
     ///
     /// ⚠️ **It is a fact about the LOG, not about the contact**, which is why it is
@@ -290,6 +291,16 @@ pub struct LoggedQso {
     /// line; `X-QSO` means "I want this contact EXCLUDED" and carries CQ's anti-abuse
     /// warning. This flag is for OUR scoring and display.
     pub dupe: bool,
+    /// ⭐ **A duplicate the operator worked ON THE AIR, in a contest that refuses a typed
+    /// one** ([`FieldDayLog::log_picked_at`]): a double-click on the station's CQ, or a
+    /// logger's Reply to it, made the contact, and the other station logs it. So it is in
+    /// the log where a typed dupe is refused, [`dupe`](Self::dupe)-marked and worth nothing.
+    ///
+    /// ⚠️ **Unlike the mark it IS journaled** (`APP_NEXUS_KEPT`), because it is not derived
+    /// from the log: the ruleset alone would refuse this row again on the way back in, and
+    /// a row the live log holds that a restart drops is a contact lost. `false` on every
+    /// row of a contest that logs its dupes, which admits them anyway.
+    pub kept: bool,
     /// ⭐ **Worked through a bird** ([`SatLeg`]) — `None` on every terrestrial contact,
     /// which is all but a handful of rows in a lifetime.
     ///
@@ -893,22 +904,26 @@ impl FieldDayLog {
     /// (removing it hands the other operator a NIL); Field Day, which checks no logs at
     /// all, keeps refusing it.
     ///
+    /// ⭐ **`kept` is the one exception: a contact that WAS made** ([`LoggedQso::kept`]).
+    /// The operator worked the station on the air, so the question of whether it happened
+    /// is closed, and it is logged and marked whatever the ruleset says of a typed dupe.
+    ///
     /// Both write paths — [`log_exchange_at`](Self::log_exchange_at) and the journal's
     /// `restore_row` — come through here, because two copies of this decision is how
     /// the live log and the restored one come to disagree about the same contact.
-    fn admit_row(&mut self, key: Vec<String>, satellite: bool) -> Option<bool> {
+    fn admit_row(&mut self, key: Vec<String>, satellite: bool, kept: bool) -> Option<bool> {
         // ⭐ A satellite contact this ruleset gives no credit (Winter Field Day) is logged,
         // worth nothing, and a dupe of nothing: kept out of the index, it can never refuse a
         // later contact that does count.
         if satellite && !self.ruleset().satellite_credit {
             return Some(false);
         }
-        self.admit(key)
+        self.admit(key, kept)
     }
 
-    fn admit(&mut self, key: Vec<String>) -> Option<bool> {
+    fn admit(&mut self, key: Vec<String>, kept: bool) -> Option<bool> {
         let dupe = self.worked.contains(&key);
-        if dupe && !self.dupe_rule().log_dupes {
+        if dupe && !kept && !self.dupe_rule().log_dupes {
             return None;
         }
         self.worked.insert(key);
@@ -1232,12 +1247,43 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
     ) -> bool {
-        self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, None)
+        self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, None, false)
+    }
+
+    /// ⭐ **[`log_exchange_at`](Self::log_exchange_at) for a contact the operator picked off
+    /// the air** — a double-click on the station's CQ, or a logger's Reply to it
+    /// ([`FieldDayStation::answer_cq`]). The contact was made and the other station logs it,
+    /// so a duplicate is written, marked and worth nothing in every contest
+    /// ([`LoggedQso::kept`]), where a typed one is refused in a contest that does not log
+    /// its dupes. A fresh contact is the row `log_exchange_at` writes.
+    #[allow(clippy::too_many_arguments)] // log_exchange_at's own
+    pub fn log_picked_at(
+        &mut self,
+        call: &str,
+        rx: Vec<crate::contest::FieldValue>,
+        tx: Vec<crate::contest::FieldValue>,
+        mode: &str,
+        submode: &str,
+        slot: u64,
+        when_unix: u64,
+    ) -> bool {
+        self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, None, true)
+    }
+
+    /// [`log`](Self::log) for a contact the operator picked off the air: Field Day's
+    /// exchange, derived as `log` derives it and written as
+    /// [`log_picked_at`](Self::log_picked_at) writes it.
+    pub fn log_picked(&mut self, call: &str, class: &str, section: &str, slot: u64) -> bool {
+        let rx = self.received(class, section);
+        let tx = self.session.tx_for_row(call, "DIG");
+        let submode = self.current_submode.clone();
+        self.log_picked_at(call, rx, tx, "DIG", &submode, slot, now_unix())
     }
 
     /// The one write site, with the optional satellite leg every other entry point
     /// passes `None` for. See [`SatLeg`] for why the exception exists and why it is the
-    /// downlink.
+    /// downlink. `kept`: the operator worked this contact on the air
+    /// ([`log_picked_at`](Self::log_picked_at)).
     #[allow(clippy::too_many_arguments)] // log_exchange_at's own, plus the leg
     fn log_exchange_on(
         &mut self,
@@ -1249,6 +1295,7 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
         sat: Option<&SatLeg>,
+        kept: bool,
     ) -> bool {
         let mode = mode.to_ascii_uppercase();
         // ⭐ THE ROW'S BAND, AND FOR A BIRD IT IS NOT THE LOG'S. Resolved before the dupe
@@ -1273,9 +1320,12 @@ impl FieldDayLog {
             .key_of(call, &band, &mode, &rx, &tx, sat_key);
         // The per-ruleset split lives in [`admit`](Self::admit) — one decision, shared
         // with the journal restore, so the live log and the restored one cannot disagree.
-        let Some(dupe) = self.admit_row(key, sat.is_some()) else {
+        let Some(dupe) = self.admit_row(key, sat.is_some(), kept) else {
             return false;
         };
+        // Kept only where the pick is what let a duplicate in: a contest that logs its dupes
+        // admits the row anyway, and writes it as it always has.
+        let kept = kept && dupe && !self.dupe_rule().log_dupes;
         // ⭐ FIRING SITE 1 of 3 (§6.3): the cheap one, at the moment the operator can
         // still fix it. O(1) — a rule that says "every row carries the same value" is
         // fully checked by comparing this row against the first. It WARNS: the contact
@@ -1329,6 +1379,7 @@ impl FieldDayLog {
             when_unix,
             seq,
             dupe,
+            kept,
             sat: sat.cloned(),
             operator: self.operator.clone(),
             station_call: self.station_call.clone(),
@@ -1408,7 +1459,7 @@ impl FieldDayLog {
             .filter_map(|(k, v)| spec.copied(k, v))
             .collect();
         let tx = self.session.tx_for_row(call, mode);
-        self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, sat)
+        self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, sat, false)
     }
 
     /// A received Field Day exchange as a field vector, resolved against the exchange
@@ -1431,9 +1482,10 @@ impl FieldDayLog {
     ///
     /// ⚠️ **Every number the operator CLAIMS is derived through here**, and that is the
     /// whole safety property of logging dupes at all: the row goes in the file, and no
-    /// count, point, multiplier or board cell moves. Rows are only ever marked under a
-    /// ruleset that reports them, so for Field Day this yields the whole log and every
-    /// number below is bit-identical to what it always was.
+    /// count, point, multiplier or board cell moves. Rows are marked under a ruleset that
+    /// reports them, and in any other only where the operator worked a dupe on the air
+    /// ([`LoggedQso::kept`]), so for a Field Day log without one this yields the whole log
+    /// and every number below is bit-identical to what it always was.
     ///
     /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
     /// is sent**, by the marks a row carries (its `dupe`, and its `sat` when the status says
@@ -1797,6 +1849,11 @@ impl FieldDayLog {
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
                 s.push_str(&adif_field("APP_NEXUS_REMOVED", &at.to_string()));
+            }
+            // A dupe the operator worked on the air, which the restore would otherwise refuse
+            // ([`LoggedQso::kept`]). Private, and only on such a row: no other row moves.
+            if q.kept {
+                s.push_str(&adif_field("APP_NEXUS_KEPT", "1"));
             }
             s.push_str("<EOR>\n");
         }
@@ -2272,25 +2329,32 @@ impl FieldDayLog {
                 })
                 .unwrap_or_default(),
         );
+        // The journaled sync seq round-trips; a legacy row without the tag
+        // backfills the next free seq in row order (1..n on a whole legacy
+        // journal), so pre-sync journals join the sequence deterministically.
+        let journaled_seq = f
+            .get("APP_NEXUS_QSEQ")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0);
+        // ⭐ A dupe the operator worked on the air ([`LoggedQso::kept`]) is admitted again
+        // where this ruleset alone would refuse it, so the index no longer tells this journal
+        // read a second time from a second contact. The row's own number does.
+        let kept = f.get("APP_NEXUS_KEPT").is_some_and(|v| v.trim() == "1");
         // ⭐ A REMOVED contact is outside the dupe check — that is what removing it means — so
         // it is never offered to the index. Offered, a station worked again since would refuse
         // it out of the journal right here, and the next save would drop it for good. Its
         // numbers are still read below, which is what stops a restart reissuing them.
         let dupe = match removed_unix {
             Some(_) => false,
-            None => match self.admit_row(key, sat.is_some()) {
+            None if kept && journaled_seq.is_some_and(|s| self.qsos.iter().any(|q| q.seq == s)) => {
+                return RowFate::Passed;
+            }
+            None => match self.admit_row(key, sat.is_some(), kept) {
                 Some(dupe) => dupe,
                 None => return RowFate::Passed,
             },
         };
-        // The journaled sync seq round-trips; a legacy row without the tag
-        // backfills the next free seq in row order (1..n on a whole legacy
-        // journal), so pre-sync journals join the sequence deterministically.
-        let seq = f
-            .get("APP_NEXUS_QSEQ")
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .filter(|&v| v > 0)
-            .unwrap_or(self.next_seq);
+        let seq = journaled_seq.unwrap_or(self.next_seq);
         self.next_seq = self.next_seq.max(seq + 1);
         // ⭐ **THE SERIAL RUN, advanced past this row exactly as `next_seq` is above —
         // and this is the half that goes ON THE AIR.** A re-used `seq` collides with a
@@ -2361,6 +2425,7 @@ impl FieldDayLog {
             when_unix,
             seq,
             dupe,
+            kept,
             sat,
             // Who was at the key, from the journal's own `OPERATOR` — a row journaled before
             // the tag existed names nobody, which is what it always meant.
@@ -3395,12 +3460,18 @@ impl FieldDayStation {
         self.log.is_dupe_row(call, &self.log.band, "DIG", &rx, &tx)
     }
 
-    /// Log the contact with `call`, whose grid was `grid` ([`exchanged`](Self::exchanged)).
+    /// Log the contact with `call`, whose grid was `grid` ([`exchanged`](Self::exchanged)): a
+    /// duplicate too when the operator picked it ([`FieldDayLog::log_picked_at`]).
     fn log_worked(&mut self, call: &str, grid: Option<&str>, slot: u64) {
         let (rx, tx) = self.exchanged(grid);
         let submode = self.log.current_submode.clone();
-        self.log
-            .log_exchange_at(call, rx, tx, "DIG", &submode, slot, now_unix());
+        if self.picked {
+            self.log
+                .log_picked_at(call, rx, tx, "DIG", &submode, slot, now_unix());
+        } else {
+            self.log
+                .log_exchange_at(call, rx, tx, "DIG", &submode, slot, now_unix());
+        }
         self.transcript
             .push(format!("logged {call} {}", grid.unwrap_or_default()));
     }
@@ -3487,7 +3558,8 @@ impl FieldDayStation {
                         "caller {de} {class} {section} rogered early → log + RR73"
                     ));
                 }
-                // S&P: the runner rogered + sent their exchange → log + RR73.
+                // S&P: the runner rogered + sent their exchange → log + RR73. A contact the
+                // operator picked is logged even as a duplicate (`FieldDayLog::log_picked`).
                 (
                     FdState::AwaitExchange,
                     Msg::FieldDay {
@@ -3498,7 +3570,11 @@ impl FieldDayStation {
                         section,
                     },
                 ) if to == self.mycall() => {
-                    self.log.log(de, class, section, slot);
+                    if self.picked {
+                        self.log.log_picked(de, class, section, slot);
+                    } else {
+                        self.log.log(de, class, section, slot);
+                    }
                     self.pending = Some(Msg::Rr73 {
                         to: de.clone(),
                         de: self.mycall().to_string(),

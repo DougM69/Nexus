@@ -95,6 +95,11 @@ pub struct DupeRule {
     /// The whole justification above is inapplicable there, and Field Day's deliverable
     /// is a dupe sheet plus **raw non-dupe** QSO counts. So FD keeps refusing.
     ///
+    /// ⭐ **What it refuses is a TYPED dupe.** A dupe the operator worked on the air (an FT
+    /// double-click on its CQ, or a logger's Reply) is a contact that was made, and is
+    /// logged and marked in every contest whatever this says
+    /// ([`LoggedQso::kept`](crate::fieldday::LoggedQso::kept)).
+    ///
     /// ⚠️ **Not part of the key**, deliberately: it says what to DO with a duplicate,
     /// never what makes two contacts the same one. The four key-building sites in two
     /// languages (this module's header) are untouched by it, and the while-typing DUPE

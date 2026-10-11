@@ -466,6 +466,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A station you already worked in a contest, double-clicked on FT8 or FT4, is now logged as a
+  dupe.** A double-click on its CQ, or a logger's Reply to it, works the station as before and the
+  other station logs you, but in Field Day and the Tennessee, Ohio, California and Texas QSO parties
+  Nexus logged nothing, which can cost them a not-in-log. The contact is now in the contest log
+  marked as a dupe for 0 points, the way N1MM does: the score and multipliers do not change, and it
+  is kept in the Cabrillo and ADIF files, in the Merge into your Logbook and in club sync. A dupe you
+  type is still refused, and S&P still passes a station you have worked.
 - **A contest picked in Settings no longer stops FT8 QSO mode and Chat.** With a contest picked
   whose exchange was not filled in (the Texas QSO Party with no county or state, say), switching to
   FT8 QSO mode, to call CQ or to search and pounce, or to Chat was refused with that contest's

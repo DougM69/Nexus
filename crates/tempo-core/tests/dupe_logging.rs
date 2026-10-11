@@ -16,6 +16,13 @@
 //! keeps refusing the contact exactly as it always has. That split is the whole point of
 //! this file, and `field_day_still_refuses_a_dupe` is the half that must never move.
 //!
+//! ⭐ **Except a dupe worked ON THE AIR.** A double-click on a CQ (or a logger's Reply, the
+//! same pick from another program) answers a station the log already holds, and the
+//! contact is made: the other station logs it. That contact is written in every contest,
+//! Field Day included, marked and worth nothing, and the Cabrillo keeps it (the operator's
+//! ruling, 2026-10-11: "the way N1MM does"). A TYPED dupe is still refused, and S&P's own
+//! pounce still passes a worked station by. The last section of this file.
+//!
 //! ⚠️ **"Marked" means marked in OUR data model**, for scoring and display. Neither
 //! sponsor asks for a marker, and CQ's worked example logs the dupe as a plain `QSO:`
 //! line; `X-QSO` means "I want this EXCLUDED" and carries CQ's anti-abuse warning. So
@@ -25,7 +32,7 @@
 //! depends on this one. Every callsign is an example call.
 use tempo_core::contest::{install_call_resolver, CallLocation, ContestSession, StationData};
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
-use tempo_core::fieldday::{FdEvent, FieldDayLog};
+use tempo_core::fieldday::{FdEvent, FieldDayLog, FieldDayStation, FtMessages};
 
 /// The stub country file: prefix → (entity, continent), longest prefix wins. Enough
 /// entities that CQ WW's `ByRelation` point table prices these contacts at something
@@ -483,5 +490,305 @@ fn the_club_dupe_sheet_replay_can_only_reach_a_refusing_ruleset() {
             !log.dupe_rule().log_dupes,
             "{event:?} is reachable from the club replay and must refuse duplicates"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A dupe worked on the air: logged, marked and worth nothing wherever a typed one is refused
+// ---------------------------------------------------------------------------
+
+/// The contests that refuse a typed dupe and whose own messages an FT8 double-click on a CQ
+/// follows: ARRL Field Day's exchange, and the standard messages in the four parties that allow
+/// FT8. Winter Field Day and the Illinois party ban FT8 and FT4, and every other contest on the
+/// list logs its dupes already.
+const PICKED: [&str; 5] = ["arrlfd", "tnqp", "ohqp", "cqp", "txqp"];
+
+fn dec(text: &str) -> modes::Decode {
+    modes::Decode {
+        message: text.to_string(),
+        sync: 1.0,
+        snr: -5,
+        dt: 0.0,
+        freq: 1500.0,
+        nap: 0,
+        qual: 1.0,
+        rv: None,
+        raw: None,
+        mode: None,
+    }
+}
+
+/// An S&P station on FT8 in `event`, sending the contest's own messages: K1ABC in
+/// Massachusetts, 2B EMA at Field Day.
+fn ft8_sp(event: &str) -> FieldDayStation {
+    resolver();
+    let rs = ruleset_by_id(event, CURRENT_RULES_YEAR).expect("a shipped ruleset");
+    let session = if event == "arrlfd" {
+        ContestSession::field_day(FdEvent::ArrlFd, "2B", "EMA")
+    } else {
+        let st = StationData {
+            mycall: "K1ABC".to_string(),
+            mygrid: "FN42".to_string(),
+            contest_qth_state: "MA".to_string(),
+            ..Default::default()
+        };
+        ContestSession::for_ruleset(rs, &st).unwrap_or_else(|e| panic!("{event}: {e}"))
+    };
+    let mut st = FieldDayStation::search_and_pounce("K1ABC", "FN42", session, "20m");
+    st.set_messages(FtMessages::for_contest(rs, "FT8"), false);
+    st
+}
+
+/// What the station sends next, as it goes on the air.
+fn next(st: &FieldDayStation) -> String {
+    st.outgoing().map(|m| m.to_text()).unwrap_or_default()
+}
+
+/// The operator double-clicks W9XYZ's CQ ([`FieldDayStation::answer_cq`], which a logger's
+/// Reply reaches too), and W9XYZ, running, finishes the contact as WSJT-X does: at Field Day
+/// with `section` in its exchange. Every over this station sent, in order; the station is back
+/// to listening after it.
+fn picked_contact(st: &mut FieldDayStation, event: &str, section: &str, slot: u64) -> Vec<String> {
+    st.answer_cq("W9XYZ", "EN37");
+    finished(st, event, section, slot)
+}
+
+/// S&P's own pounce on W9XYZ's CQ, finished as [`picked_contact`] finishes.
+fn pounced_contact(st: &mut FieldDayStation, event: &str, section: &str, slot: u64) -> Vec<String> {
+    let cq = match event {
+        "arrlfd" => "CQ FD W9XYZ EN37",
+        "arrlvhf_jan" => "CQ TEST W9XYZ EN37",
+        _ => "CQ W9XYZ EN37",
+    };
+    st.observe(&[dec(cq)], slot);
+    finished(st, event, section, slot + 1)
+}
+
+/// The contact answered, run to its end by W9XYZ as WSJT-X runs it.
+fn finished(st: &mut FieldDayStation, event: &str, section: &str, slot: u64) -> Vec<String> {
+    let rogered = format!("K1ABC W9XYZ R 1D {section}");
+    let replies = match event {
+        "arrlfd" => vec![rogered.as_str()],
+        "arrlvhf_jan" => vec!["K1ABC W9XYZ R EN37"],
+        _ => vec!["K1ABC W9XYZ -07", "K1ABC W9XYZ RR73"],
+    };
+    let mut sent = vec![next(st)];
+    for (k, reply) in replies.into_iter().enumerate() {
+        st.after_tx();
+        st.observe(&[dec(reply)], slot + 2 * k as u64 + 1);
+        sent.push(next(st));
+    }
+    st.after_tx();
+    assert!(st.done(), "{event}: the contact ran to its end");
+    st.rearm(false);
+    sent
+}
+
+/// Each row's call and dupe mark, in log order.
+fn marks(log: &FieldDayLog) -> Vec<(String, bool)> {
+    log.qsos()
+        .iter()
+        .map(|q| (q.call.clone(), q.dupe))
+        .collect()
+}
+
+/// `n` rows of W9XYZ, the first the contact and every later one a dupe.
+fn w9xyz(n: usize) -> Vec<(String, bool)> {
+    (0..n).map(|i| ("W9XYZ".to_string(), i > 0)).collect()
+}
+
+/// The records in the contest ADIF the entry submits.
+fn submitted(log: &FieldDayLog) -> usize {
+    log.submission_adif()
+        .to_ascii_uppercase()
+        .matches("<EOR>")
+        .count()
+}
+
+/// ⭐ **THE CHANGE: a dupe worked on the air is logged as one**, in every contest whose typed
+/// dupe is refused. The double-click answers a station this running's log already holds and the
+/// contact is made, so it is written and marked, and it moves no number: the same overs on the
+/// air, the same count, points and multipliers (at Field Day a section only the dupe carried is
+/// not claimed), and a Cabrillo file that is the one before with the dupe's QSO line added,
+/// every header as it was. The contest ADIF keeps it too.
+#[test]
+fn a_dupe_the_operator_picked_off_the_air_is_logged_marked_and_moves_no_number() {
+    for event in PICKED {
+        let mut st = ft8_sp(event);
+        let first = picked_contact(&mut st, event, "WI", 1);
+        let numbers = |l: &FieldDayLog| (l.qso_count(), score(l), l.worked_values("SECTION"));
+        let before = numbers(&st.log);
+        let file = st.log.cabrillo(14_074).expect("a one-mode log exports");
+        assert_eq!(submitted(&st.log), 1, "{event}: PREMISE, one contact");
+
+        // W9XYZ again, picked off the air, and copied in another section this time.
+        let again = picked_contact(&mut st, event, "IL", 11);
+        assert_eq!(again, first, "{event}: the same overs on the air");
+        assert_eq!(
+            marks(&st.log),
+            w9xyz(2),
+            "{event}: logged, and marked a dupe"
+        );
+        assert_eq!(
+            numbers(&st.log),
+            before,
+            "{event}: the dupe is worth nothing"
+        );
+        let after = st.log.cabrillo(14_074).expect("a one-mode log exports");
+        let mut lines: Vec<&str> = after.lines().collect();
+        let at = lines
+            .iter()
+            .rposition(|l| l.starts_with("QSO:"))
+            .expect("QSO lines");
+        let dupe = lines.remove(at);
+        assert!(
+            dupe.contains("W9XYZ"),
+            "{event}: the dupe's QSO line: {dupe}"
+        );
+        assert_eq!(
+            lines,
+            file.lines().collect::<Vec<_>>(),
+            "{event}: the file before, with the dupe's QSO line added"
+        );
+        assert_eq!(submitted(&st.log), 2, "{event}: the contest ADIF keeps it");
+    }
+}
+
+/// ⭐ **It survives a restart, still marked**: the journal brings back a dupe the ruleset alone
+/// would refuse, and so does the journal the restored log writes. Read twice into one log, the
+/// journal keeps each contact once, as it always has.
+#[test]
+fn a_picked_dupe_survives_a_restart_still_marked_and_a_second_read_keeps_it_once() {
+    for event in PICKED {
+        let mut st = ft8_sp(event);
+        picked_contact(&mut st, event, "WI", 1);
+        picked_contact(&mut st, event, "WI", 11);
+        let row = |q: &tempo_core::fieldday::LoggedQso| {
+            let kv = |v: &[tempo_core::contest::FieldValue]| -> Vec<String> {
+                v.iter().map(|f| format!("{}={}", f.key, f.raw)).collect()
+            };
+            (
+                kv(&q.rx),
+                kv(&q.tx),
+                q.mode.clone(),
+                q.submode.clone(),
+                q.band.clone(),
+            )
+        };
+        assert_eq!(marks(&st.log), w9xyz(2), "{event}: PREMISE, the dupe");
+        let mut own = ft8_sp(event);
+        pounced_contact(&mut own, event, "WI", 1);
+        assert_eq!(
+            row(&st.log.qsos()[1]),
+            row(&own.log.qsos()[0]),
+            "{event}: the dupe is the row S&P's own pounce writes for the same contact"
+        );
+        let journal = st.log.journal_adif();
+        let now = st.log.qsos()[0].when_unix;
+        let mut back = ft8_sp(event).log;
+        back.restore_journal(&journal, 0, now);
+        assert_eq!(marks(&back), w9xyz(2), "{event}: back, still marked");
+        assert_eq!(
+            (back.qso_count(), score(&back), back.cabrillo(14_074)),
+            (st.log.qso_count(), score(&st.log), st.log.cabrillo(14_074)),
+            "{event}: scored and filed the same"
+        );
+        back.restore_journal(&journal, 0, now);
+        assert_eq!(
+            marks(&back),
+            w9xyz(2),
+            "{event}: read twice, each contact once"
+        );
+        let mut again = ft8_sp(event).log;
+        again.restore_journal(&back.journal_adif(), 0, now);
+        assert_eq!(
+            marks(&again),
+            w9xyz(2),
+            "{event}: and after a second restart"
+        );
+    }
+}
+
+/// A contest that logs its dupes logs a picked one as it always has: marked, and written with
+/// nothing more in its journal or its files.
+#[test]
+fn a_contest_that_logs_its_dupes_writes_a_picked_one_as_it_always_has() {
+    let mut st = ft8_sp("arrlvhf_jan");
+    let first = picked_contact(&mut st, "arrlvhf_jan", "", 1);
+    assert_eq!(picked_contact(&mut st, "arrlvhf_jan", "", 11), first);
+    assert_eq!(marks(&st.log), w9xyz(2));
+    for file in [
+        st.log.journal_adif(),
+        st.log.adif(),
+        st.log.submission_adif(),
+    ] {
+        assert!(!file.contains("APP_NEXUS_KEPT"), "{file}");
+    }
+}
+
+/// A typed write of the contact `call` with exactly the key the FT row carries: at Field Day
+/// its class and section, in a party no exchange at all (the standard messages carry none).
+fn typed(log: &mut FieldDayLog, event: &str, call: &str) -> bool {
+    match event {
+        "arrlfd" => log.log(call, "1D", "WI", 0),
+        _ => log.log_exchange_at(call, Vec::new(), Vec::new(), "DIG", "FT8", 0, START),
+    }
+}
+
+/// The controls, which hold before the change and after it: only the operator's pick keeps a
+/// dupe. S&P's own pounce passes the worked station's CQ by and answers a new station's; a
+/// contact S&P pounced on itself and that was typed into the log before it ended is not logged
+/// a second time; a TYPED dupe is still refused; and on the run, a station already in the log
+/// that calls is worked as WSJT-X works it and, in these contests, still not logged.
+#[test]
+fn only_the_operators_pick_keeps_a_dupe() {
+    for event in PICKED {
+        let mut st = ft8_sp(event);
+        picked_contact(&mut st, event, "WI", 1);
+        let cq = |call: &str| match event {
+            "arrlfd" => format!("CQ FD {call} EN37"),
+            _ => format!("CQ {call} EN37"),
+        };
+        st.observe(&[dec(&cq("W9XYZ"))], 3);
+        assert_eq!(next(&st), "", "{event}: S&P passes a worked station by");
+        let rows = st.log.qsos().len();
+        assert!(!typed(&mut st.log, event, "W9XYZ"), "{event}: a typed dupe");
+        assert_eq!(st.log.qsos().len(), rows, "{event}: is refused");
+
+        // S&P answers W9ABC's CQ itself; W9ABC is typed in before the contact ends.
+        st.observe(&[dec(&cq("W9ABC"))], 5);
+        assert_ne!(next(&st), "", "{event}: S&P answers a new station");
+        assert!(typed(&mut st.log, event, "W9ABC"), "{event}: typed in");
+        let replies: &[&str] = match event {
+            "arrlfd" => &["K1ABC W9ABC R 1D WI"],
+            _ => &["K1ABC W9ABC -07", "K1ABC W9ABC RR73"],
+        };
+        for (k, reply) in replies.iter().enumerate() {
+            st.after_tx();
+            st.observe(&[dec(reply)], 7 + 2 * k as u64);
+        }
+        assert_eq!(st.log.qsos().len(), rows + 1, "{event}: S&P's own, once");
+
+        // The run: W9XYZ, already in the log, calls and is worked to the end.
+        let mut run = ft8_sp(event);
+        run.set_messages(FtMessages::for_contest(run.log.ruleset(), "FT8"), true);
+        run.rearm(true);
+        assert!(typed(&mut run.log, event, "W9XYZ"), "{event}: PREMISE");
+        let calls: &[&str] = match event {
+            "arrlfd" => &["K1ABC W9XYZ 1D WI", "K1ABC W9XYZ RR73"],
+            _ => &["K1ABC W9XYZ EN37", "K1ABC W9XYZ R-07"],
+        };
+        let mut sent = Vec::new();
+        for (k, call) in calls.iter().enumerate() {
+            run.after_tx();
+            run.observe(&[dec(call)], 1 + 2 * k as u64);
+            sent.push(next(&run));
+        }
+        run.after_tx();
+        assert!(
+            run.done() && sent[0].starts_with("W9XYZ K1ABC"),
+            "{event}: worked on the run: {sent:?}"
+        );
+        assert_eq!(marks(&run.log), w9xyz(1), "{event}: and not logged");
     }
 }
