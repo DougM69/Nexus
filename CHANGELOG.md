@@ -421,6 +421,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worked there was not marked worked or dupe. When the logbook is too busy to read at that moment
   (a big import, another window, a sync), the restore tries again for a few seconds, as a save
   does, then says the logbook was busy and restores nothing, so trying again in a moment works.
+- **Nexus Remote says "Station data unavailable" after every loss of the station's data.** When the
+  readings stopped at the moment a background read of the decode history also gave up, the workspace
+  stopped trusting the readings and refused its controls, as it should, but it never faded and never
+  showed "Station data unavailable", however long the loss lasted. It now does, five seconds into
+  every loss, as it already did in every other case.
 - **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
   launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
   every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations

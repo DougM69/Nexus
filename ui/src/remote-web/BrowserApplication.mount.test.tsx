@@ -21,7 +21,8 @@ import type { HostedConnection } from './client'
 import type { ApplicationClient } from './application-client'
 import type { OperationState } from './operation-protocol'
 import type { MonitorSource } from '../remote-monitor/session'
-import { APPLICATION_COMMANDS } from './application-protocol'
+import { APPLICATION_COMMANDS, APPLICATION_TIMEOUT_MS } from './application-protocol'
+import { STALE_DISPLAY_HOLD_MS } from './useStaleDisplay'
 import fixtures from '../remote-monitor/fixtures.v2.json'
 import settingsFixture from '../components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot } from '../types'
@@ -196,4 +197,31 @@ it('an unstable host prop does trip that bound, so it can fail', async () => {
   const settled = appRenders
   await elapse(WINDOW_MS)
   expect(appRenders - settled).toBeGreaterThan(BUDGET)
+})
+
+// THE RENDER THAT FIRST SEES THE READINGS LAPSE MUST COUNT, even when it changes nothing else.
+// The readings' age is the client's clock, not React state, so React learns of a lapse in whichever
+// render runs next. When that render changes no state, React keeps its hooks and drops its effects, so
+// the stale display's hold took the lapse as seen without ever starting its 2 s timer, and the
+// workspace went on showing stale readings without ever saying so. In Remote's compiled browser at v9
+// the render was a decode-history read failing while the history was already empty: the read's
+// deadline and the snapshot's fall 3 s after the same reply. Here a session notice that leaves the
+// session where it was asks for the same kind of render, at a moment the test chooses.
+it('the stale display comes when the readings lapse in a render that changes nothing else', async () => {
+  const h = connection(silentObservation())
+  let age = 0, phase = 'ready'
+  const listeners = new Set<() => void>()
+  const client = h.connection.application as unknown as { age: () => number; getPhase: () => string
+    subscribe: (listener: () => void) => () => void }
+  client.age = () => age
+  client.getPhase = () => phase
+  client.subscribe = listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+  const { container } = render(<BrowserApplication connection={h.connection} disconnect={() => {}} />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+  expect(booted(container)).toBe(true)
+  age = APPLICATION_TIMEOUT_MS
+  await act(async () => { phase = 'connecting'; listeners.forEach(f => f()); phase = 'ready'; listeners.forEach(f => f()) })
+  expect(container.querySelector('.app')?.getAttribute('data-remote-stale')).toBe(null)
+  await elapse(STALE_DISPLAY_HOLD_MS + 600)
+  expect(container.querySelector('.app')?.getAttribute('data-remote-stale')).toBe('true')
 })
