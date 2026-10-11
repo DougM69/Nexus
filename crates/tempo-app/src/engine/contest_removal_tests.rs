@@ -282,11 +282,11 @@ fn a_logbook_delete_never_reaches_a_row_it_does_not_name() {
         // Last year's first contact, under the name an earlier build gave it.
         copy(qid_for("IL QSO Party:KANE", "aaaa0001", 1), last_year),
     ] {
-        e.contest_row_deleted(&rec);
+        e.contest_row_deleted(&rec, None);
         assert_eq!(logged(&e).len(), 1, "the row it does not name stays");
     }
     // The control: the qid the merge gives this very row reaches it.
-    e.contest_row_deleted(&copy(qid_for(&session, "aaaa0001", 1), now));
+    e.contest_row_deleted(&copy(qid_for(&session, "aaaa0001", 1), now), None);
     assert!(logged(&e).is_empty());
 }
 

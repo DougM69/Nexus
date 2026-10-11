@@ -26341,7 +26341,7 @@ contact yourself."
         let Some(gone) = self.station.delete_row(id) else {
             return false;
         };
-        self.contest_row_deleted(&gone);
+        self.contest_row_deleted(&gone, None);
         true
     }
 

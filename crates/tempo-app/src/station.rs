@@ -1439,7 +1439,9 @@ impl LogPlan {
     /// reads to skip a row already there — one narrow pass over the store's `contest_qid` and
     /// `when_unix`, whatever the log's size. The time is what tells a copy merged under an
     /// earlier build's name for this running from one of last year's
-    /// ([`tempo_core::contest::MergeIdentity::names`]).
+    /// ([`tempo_core::contest::MergeIdentity::names`]). Each copy once, as this process's
+    /// changes leave it — so a delete can count a contact's copies
+    /// ([`crate::engine::Engine::contest_row_deleted`]).
     ///
     /// ⚠️ It reads the store: never under the Engine lock.
     pub(crate) fn merge_identities(&self) -> Result<Vec<(String, u64)>, String> {
@@ -1456,6 +1458,8 @@ impl LogPlan {
                 .map(|c| (c.qid.clone(), r.when_unix))
         };
         let mut seen = Vec::new();
+        // The rows already answered for, so that none is answered twice.
+        let mut read = HashSet::new();
         let mut keep = |r: &QsoRecord| {
             // This process's own version of the row, where one is on its way: a row it deleted
             // is not there, and one it changed carries what the change left.
@@ -1464,6 +1468,7 @@ impl LogPlan {
                 Some(None) => {}
                 None => seen.extend(qid(r)),
             }
+            read.extend(r.id);
             ControlFlow::Continue(())
         };
         let crate::logstore::LogRows::Store(reads) = &self.rows;
@@ -1472,13 +1477,15 @@ impl LogPlan {
                 db.each_narrow(QIDS, Scope::All, Order::Log, &mut keep)
             })
             .map_err(|e| e.to_string())?;
-        // Rows on their way the store has not taken at all.
-        seen.extend(
-            self.pending
-                .rows_matching(|r| qid(r).is_some())
-                .iter()
-                .filter_map(|r| qid(r)),
-        );
+        // Rows on their way the store has not taken at all — each once, as the newest of this
+        // process's changes leaves it.
+        for r in self.pending.rows_matching(|r| qid(r).is_some()) {
+            match r.id {
+                Some(id) if !read.insert(id) => {}
+                Some(id) => seen.extend(self.pending.row(id).flatten().and_then(|mine| qid(&mine))),
+                None => seen.extend(qid(&r)),
+            }
+        }
         Ok(seen)
     }
 

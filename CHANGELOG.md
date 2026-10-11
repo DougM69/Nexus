@@ -402,8 +402,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact is now named by its contest and the year it was made, not by where you were, so the
   merge can be pressed any number of times. Contacts merged by an earlier version keep their
   names and are recognised: merging again after this update adds only contacts never merged, and
-  never removes or rewrites one already in your logbook. The same contest a year later, from the
-  same county, is merged too; before, its contacts were taken for last year's and left out.
+  never removes or rewrites one already in your logbook. A contact an earlier version already
+  added twice stays twice until you delete one; deleting one of the two leaves the contest log as
+  it is, and deleting the last copy takes the contact out of the contest log, as any delete does.
+  The same contest a year later, from the same county, is merged too; before, its contacts were
+  taken for last year's and left out.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

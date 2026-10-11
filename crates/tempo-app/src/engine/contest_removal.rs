@@ -191,7 +191,18 @@ impl Engine {
     /// name an earlier build gave it), so last weekend's contact, or another position's, never
     /// reaches this log's row with the same seq. While club sync runs the row stays, as a
     /// removal is refused — the logbook delete itself is the operator's and stands.
-    pub(crate) fn contest_row_deleted(&mut self, row: &QsoRecord) {
+    ///
+    /// ⛔ **And only the LAST copy.** An earlier build's second merge after a move wrote some
+    /// contacts into the logbook twice, and deleting one of the two tidies the logbook; it does
+    /// not say the contact was not made, so the contest row stays while another copy of it does.
+    /// `copies` is every merged copy the logbook held before this delete, each once and this one
+    /// among them, read with the lock released ([`crate::logwrite::change_row`], which every
+    /// command's delete goes through); `None` when nothing read them.
+    pub(crate) fn contest_row_deleted(
+        &mut self,
+        row: &QsoRecord,
+        copies: Option<&[(String, u64)]>,
+    ) {
         let Some(qid) = row.contest.as_deref().map(|c| c.qid.as_str()) else {
             return;
         };
@@ -204,6 +215,28 @@ impl Engine {
         else {
             return;
         };
+        let another = copies.is_some_and(|copies| {
+            station
+                .log
+                .qsos()
+                .iter()
+                .find(|q| q.seq == seq)
+                .is_some_and(|q| {
+                    let id = tempo_core::contest::MergeIdentity::of(&station.log, &posid, q);
+                    copies.iter().filter(|(c, w)| id.names(c, *w)).count() > 1
+                })
+        });
+        if another {
+            tempo_core::applog::info(
+                "contest",
+                &format!(
+                    "a copy of {} was deleted from the logbook; another copy is still there, so \
+                     the contest log keeps the contact",
+                    row.call
+                ),
+            );
+            return;
+        }
         if club_sync {
             tempo_core::applog::warn(
                 "contest",

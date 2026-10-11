@@ -13,7 +13,7 @@ use super::*;
 use crate::logstore::tests::{flush, open_fast, Dir};
 use crate::test_util::StoredLog;
 use std::sync::Mutex;
-use tempo_core::logbook::UploadOutcome;
+use tempo_core::logbook::{LogOp, UploadOutcome};
 
 /// This laptop's position id: the second part of every merge identity it mints.
 const POS: &str = "a1b2c3d4";
@@ -348,29 +348,38 @@ fn the_club_outbox_is_the_same_after_i_moved_and_a_restart() {
 /// `contest-merge` fixtures — and W9BBB's copy uploaded to QRZ. Then I moved to Will and a
 /// restart, on this build.
 fn merged_by_an_earlier_build_then_moved(d: &Dir) -> Engine {
+    earlier_build_merged_as(d, &["IL QSO Party:KANE"])
+}
+
+/// [`merged_by_an_earlier_build_then_moved`], with the contacts merged once under each session
+/// name in `sessions`: two names is the logbook that build doubled (merged from Kane, then again
+/// under Will after the restart).
+fn earlier_build_merged_as(d: &Dir, sessions: &[&str]) -> Engine {
     let mut e = launch(d, &ilqp_settings());
     party(&mut e, "K9AAA", "COOK");
     party(&mut e, "W9BBB", "LAKE");
-    let copies: Vec<QsoRecord> = {
-        let Mode::FieldDay { station, .. } = &e.mode else {
-            panic!("the contest runs")
+    for session in sessions {
+        let copies: Vec<QsoRecord> = {
+            let Mode::FieldDay { station, .. } = &e.mode else {
+                panic!("the contest runs")
+            };
+            let mut lb = tempo_core::logbook::Logbook::new();
+            tempo_core::contest::merge_into_general(&station.log, POS, &mut lb);
+            lb.records()
+                .iter()
+                .zip(station.log.qsos())
+                .map(|(r, q)| {
+                    let mut r = QsoRecord::clone(r);
+                    r.id = None;
+                    let c = r.contest.as_deref_mut().expect("merged");
+                    c.session = session.to_string();
+                    c.qid = format!("{session}:{POS}:{}", q.seq);
+                    r
+                })
+                .collect()
         };
-        let mut lb = tempo_core::logbook::Logbook::new();
-        tempo_core::contest::merge_into_general(&station.log, POS, &mut lb);
-        lb.records()
-            .iter()
-            .zip(station.log.qsos())
-            .map(|(r, q)| {
-                let mut r = QsoRecord::clone(r);
-                r.id = None;
-                let c = r.contest.as_deref_mut().expect("merged");
-                c.session = "IL QSO Party:KANE".into();
-                c.qid = format!("IL QSO Party:KANE:{POS}:{}", q.seq);
-                r
-            })
-            .collect()
-    };
-    e.station.append(copies, false);
+        e.station.append(copies, false);
+    }
     let w9bbb = copy_of(&e, "W9BBB");
     assert!(e.stamp_qrz_upload(&w9bbb, UploadOutcome::Accepted, 1_792_343_000, None));
     e.contest_i_moved(vec![("QTH".into(), "WILL".into())])
@@ -484,4 +493,47 @@ fn a_merge_after_a_restart_queues_nothing_already_merged() {
     e.fd_set_upload(true, vec!["qrz".into()]).unwrap();
     assert_eq!(merge(&mut e), (0, 1));
     assert!(e.take_pending_uploads().is_empty());
+}
+
+/// ⭐ **Deleting one of two copies an earlier build wrote tidies the logbook and keeps the contest
+/// row**; deleting the last copy takes the contact out of the contest log, as any delete does —
+/// through the command every logbook delete goes through.
+#[test]
+fn deleting_a_duplicate_an_earlier_build_wrote_keeps_the_contest_row() {
+    let d = Dir::new("contest-merge-earlier-doubled");
+    let e = earlier_build_merged_as(&d, &["IL QSO Party:KANE", "IL QSO Party:WILL"]);
+    assert_eq!(
+        calls(&e),
+        ["K9AAA", "W9BBB", "K9AAA", "W9BBB"],
+        "PREMISE: the logbook that build doubled"
+    );
+    let copy = |e: &Engine, qid: &str| {
+        e.stored_log()
+            .iter()
+            .find(|r| r.contest.as_deref().is_some_and(|c| c.qid == qid))
+            .and_then(|r| r.id)
+            .expect("the copy")
+    };
+    let delete = |e: Engine, id| {
+        let shared = Mutex::new(e);
+        let (made, _) =
+            crate::logwrite::change_ops(&shared, id, None, &[LogOp::Delete(id)], "delete");
+        assert!(made.is_ok(), "the logbook delete is made: {made:?}");
+        shared.into_inner().unwrap()
+    };
+    let id = copy(&e, &format!("IL QSO Party:WILL:{POS}:2"));
+    let e = delete(e, id);
+    assert_eq!(calls(&e), ["K9AAA", "W9BBB", "K9AAA"]);
+    assert_eq!(
+        contest_calls(&e),
+        ["K9AAA", "W9BBB"],
+        "another copy of W9BBB is in the logbook"
+    );
+    assert!(e.contest_removed().is_empty());
+    // The last copy: the contact leaves the contest log, kept as removed.
+    let id = copy(&e, &format!("IL QSO Party:KANE:{POS}:2"));
+    let e = delete(e, id);
+    assert_eq!(calls(&e), ["K9AAA", "K9AAA"]);
+    assert_eq!(contest_calls(&e), ["K9AAA"]);
+    assert_eq!(e.contest_removed()[0].rows[0].call, "W9BBB");
 }
