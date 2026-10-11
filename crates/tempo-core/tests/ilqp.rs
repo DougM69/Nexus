@@ -1165,10 +1165,11 @@ fn the_contacts_never_merged_are_offered_and_merged_once() {
     // Its copies on their way to disk: offered no more, and still kept.
     let copies = copies_of(&report.written);
     assert_eq!(settle_aged(&mut back, POS, &copies, &[]), []);
+    let again = plan_aged_merge(&back, "ilqp", &session, POS, copies.clone());
     assert_eq!(
-        plan_aged_merge(&back, "ilqp", &session, POS, copies.clone()).added(),
-        0,
-        "a second press writes nothing"
+        (again.added(), again.already),
+        (0, 0),
+        "a second press writes nothing, and answers only for what it offered"
     );
     assert_eq!(
         journal_calls(&back.journal_adif()),
@@ -1373,5 +1374,97 @@ fn the_contacts_kept_past_the_window_change_nothing_submitted_or_synced() {
         kept.journal_adif(),
         then.journal_adif(),
         "the journal alone differs"
+    );
+}
+
+/// ⭐ **The same station worked again days later in the same running is merged both times.** Each
+/// was its session's only contact with it, so neither was a dupe where it was logged; read back
+/// together, the later one would be refused as the earlier one's dupe and never merged.
+#[test]
+fn the_same_station_worked_again_days_later_is_merged_both_times() {
+    use tempo_core::contest::{plan_aged_merge, settle_aged};
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    let later = SUN + 5 * 86_400;
+    let mut again = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    again.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    worked(&mut again, "K9AAA", "COOK", later);
+    assert_eq!(
+        again.ruleset().running_of(SUN),
+        again.ruleset().running_of(later),
+        "PREMISE: one running"
+    );
+
+    let much_later = later + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&again.journal_adif(), much_later - FOUR_DAYS, much_later);
+    let offered = settle_aged(&mut back, POS, &[], &[]);
+    assert_eq!(offered.iter().map(|u| u.count).sum::<usize>(), 2);
+    let session = back.session.clone();
+    let report = plan_aged_merge(&back, "ilqp", &session, POS, Vec::new());
+    let when: Vec<u64> = report.written.iter().map(|r| r.when_unix).collect();
+    assert_eq!(when, [later, SUN], "both, each once");
+}
+
+/// **Each contest's contacts are offered on their own**, in the order the journal keeps them.
+#[test]
+fn each_contest_is_offered_on_its_own() {
+    use tempo_core::contest::{settle_aged, Unmerged};
+    let mut field_day = FieldDayLog::new(
+        "W9AWE",
+        tempo_core::contest::ContestSession::field_day(
+            tempo_core::fieldday::FdEvent::ArrlFd,
+            "3A",
+            "IL",
+        ),
+        "40m",
+    );
+    assert!(field_day.log_fields_at(
+        "K1ABC",
+        &fields(&[("CLASS", "2A"), ("SECTION", "EMA")]),
+        "CW",
+        "",
+        0,
+        SUN - 9 * 86_400
+    ));
+    let mut party = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    party.restore_journal(&field_day.journal_adif(), SUN - FOUR_DAYS, SUN);
+    worked(&mut party, "K9AAA", "COOK", SUN);
+    worked(&mut party, "W9BBB", "LAKE", SUN + 60);
+    let later = SUN + 5 * 86_400;
+    let mut back = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    back.restore_journal(&party.journal_adif(), later - FOUR_DAYS, later);
+    assert_eq!(
+        settle_aged(&mut back, POS, &[], &[]),
+        [
+            Unmerged {
+                event: "ilqp",
+                count: 2,
+                first_unix: SUN,
+                last_unix: SUN + 60,
+            },
+            Unmerged {
+                event: "arrlfd",
+                count: 1,
+                first_unix: SUN - 9 * 86_400,
+                last_unix: SUN - 9 * 86_400,
+            },
+        ]
+    );
+}
+
+/// **A journal read twice into one log keeps each contact once** — as it holds each record of
+/// another contest once.
+#[test]
+fn a_journal_read_twice_keeps_each_contact_once() {
+    let (_, back) = five_days_on();
+    let journal = back.journal_adif();
+    let later = SUN + 6 * 86_400;
+    let mut twice = FieldDayLog::new("W9AWE", select(&station("IL", "KANE")), "40m");
+    twice.restore_journal(&journal, later - FOUR_DAYS, later);
+    twice.restore_journal(&journal, later - FOUR_DAYS, later);
+    assert_eq!(
+        journal_calls(&twice.journal_adif()),
+        ["N9CCC", "K9AAA", "W9BBB"]
     );
 }

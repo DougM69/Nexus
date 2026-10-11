@@ -25,6 +25,23 @@ use tempo_core::contest::{ContestSession, MergeReport, Unmerged};
 
 const NOT_ACTIVE: &str = "Contest mode is not active";
 
+#[cfg(test)]
+thread_local! {
+    // A change to the Logbook made after a plan's read and before the plan is used, on this
+    // thread: a test's. (A plain comment: a doc comment cannot attach through `thread_local!`.)
+    pub(crate) static RACE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The racing change, if a test set one: made once, with no lock held.
+#[cfg(test)]
+fn race() {
+    let hook = RACE.with(|r| r.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 impl Engine {
     /// [`unmerged`] under the lock: the contacts the journal keeps past its window asked of the
     /// Logbook as `plan` read it — `copies` every merge identity it holds, `on_disk` those of them
@@ -138,6 +155,8 @@ pub fn unmerged(engine: &Mutex<Engine>) -> Result<Vec<Unmerged>, String> {
         };
         let copies = plan.merge_identities()?;
         let on_disk = plan.durable_merge_identities()?;
+        #[cfg(test)]
+        race();
         let made = engine_lock(engine).contest_unmerged_planned(&plan, &copies, &on_disk)?;
         if let Some(offer) = made {
             return Ok(offer);
@@ -169,6 +188,8 @@ pub fn merge_unmerged(
             Ok(seen) => seen,
             Err(e) => return (Err(e), Durability::default()),
         };
+        #[cfg(test)]
+        race();
         let (made, durability) = engine_lock(engine)
             .with_log_tickets(|e| e.contest_merge_unmerged_planned(&plan, event, seen));
         match made {

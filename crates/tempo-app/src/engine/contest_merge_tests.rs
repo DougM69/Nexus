@@ -910,3 +910,126 @@ fn a_contact_merged_before_it_aged_out_still_leaves_the_journal() {
     quit(e);
     assert_eq!(journal_calls(&d), ["N9CCC", "N9DDD"]);
 }
+
+/// [`offered`] and [`merge_offered`] with `change` made to the Logbook after the Logbook is read
+/// and before what was read is used: another window's change, or the operator's, made as a
+/// command makes it, with the Engine lock released.
+fn racing<T>(
+    e: Engine,
+    change: impl FnOnce(&Mutex<Engine>) + 'static,
+    ask: impl FnOnce(&Mutex<Engine>) -> T,
+) -> (Engine, T) {
+    let shared = std::sync::Arc::new(Mutex::new(e));
+    let theirs = std::sync::Arc::clone(&shared);
+    super::contest_unmerged::RACE
+        .with(|r| *r.borrow_mut() = Some(Box::new(move || change(&theirs))));
+    let out = ask(&shared);
+    assert!(
+        super::contest_unmerged::RACE.with(|r| r.borrow().is_none()),
+        "PREMISE: the change was made"
+    );
+    let e = std::sync::Arc::try_unwrap(shared)
+        .ok()
+        .expect("the one engine")
+        .into_inner()
+        .unwrap();
+    (e, out)
+}
+
+/// The two never merged, then merged from the offer and on disk after a relaunch.
+fn merged_from_the_offer(d: &Dir) -> Engine {
+    let e = launch(d, &ilqp_settings());
+    never_merged_five_days_back(d, &e);
+    let s = quit(e);
+    let (e, _) = offered(launch(d, &s));
+    let (e, merged) = merge_offered(e, "ilqp");
+    assert_eq!(merged, (2, 0), "PREMISE: merged");
+    launch(d, &quit(e))
+}
+
+/// ⭐ **A copy deleted from the Logbook while the contest screen asks lets no contact go.** The
+/// Logbook is read, then the operator deletes one copy: the answer is made again on the Logbook
+/// as it now is, so that contact stays in the journal, and is offered again.
+#[test]
+fn a_copy_deleted_while_the_logbook_is_asked_lets_no_contact_go() {
+    let d = Dir::new("contest-unmerged-race-delete");
+    let e = merged_from_the_offer(&d);
+    let id = copy_of(&e, "K9AAA").id.expect("stored");
+    let (mut e, offer) = racing(
+        e,
+        move |shared| {
+            let (made, _) =
+                crate::logwrite::change_ops(shared, id, None, &[LogOp::Delete(id)], "delete");
+            assert!(matches!(made, Ok(Ok(_))), "the delete: {made:?}");
+        },
+        |shared| super::contest_unmerged::unmerged(shared).expect("the contest runs"),
+    );
+    assert_eq!(offer.iter().map(|u| u.count).sum::<usize>(), 1, "{offer:?}");
+    party(&mut e, "N9CCC", "DUPG");
+    quit(e);
+    assert_eq!(
+        journal_calls(&d),
+        ["N9CCC", "K9AAA"],
+        "W9BBB let go, K9AAA kept"
+    );
+}
+
+/// ⭐ **…and a copy whose delete is still on its way to disk is not a copy on disk.** The store
+/// still holds the row while the writer is held up, and the contact it named stays.
+#[test]
+fn a_copy_whose_delete_is_on_its_way_lets_no_contact_go() {
+    let d = Dir::new("contest-unmerged-delete-held");
+    let mut e = merged_from_the_offer(&d);
+    let hold = tempo_core::logbook::sqlite::WriteHold::take(&d.db()).expect("stall the writer");
+    assert!(e.delete_qso(copy_of(&e, "K9AAA").id.expect("stored")));
+    assert!(
+        crate::logstore::tests::stored(&d)
+            .iter()
+            .any(|r| r.call == "K9AAA"),
+        "PREMISE: the store still holds it"
+    );
+    let (mut e, offer) = offered(e);
+    assert_eq!(offer.iter().map(|u| u.count).sum::<usize>(), 1, "{offer:?}");
+    drop(hold);
+    party(&mut e, "N9CCC", "DUPG");
+    quit(e);
+    assert_eq!(
+        journal_calls(&d),
+        ["N9CCC", "K9AAA"],
+        "W9BBB let go, K9AAA kept"
+    );
+}
+
+/// ⭐ **A contact another window merges while this one's merge is planned is written once.** The
+/// merge is planned again on the Logbook as it now is, and writes only what is still missing.
+#[test]
+fn a_contact_merged_elsewhere_while_the_merge_is_planned_is_written_once() {
+    let d = Dir::new("contest-unmerged-race-merge");
+    let e = launch(&d, &ilqp_settings());
+    let (first, _) = never_merged_five_days_back(&d, &e);
+    let s = quit(e);
+    let (e, offer) = offered(launch(&d, &s));
+    assert_eq!(offer.iter().map(|u| u.count).sum::<usize>(), 2, "PREMISE");
+    let mut lb = tempo_core::logbook::Logbook::new();
+    tempo_core::contest::merge_into_general(&first, POS, &mut lb);
+    let elsewhere: Vec<QsoRecord> = lb
+        .records()
+        .iter()
+        .filter(|r| r.call == "K9AAA")
+        .map(|r| {
+            let mut r = QsoRecord::clone(r);
+            r.id = None;
+            r
+        })
+        .collect();
+    let (e, (report, _)) = racing(
+        e,
+        move |shared| {
+            engine_lock(shared).station.append(elsewhere, false);
+        },
+        |shared| super::contest_unmerged::merge_unmerged(shared, "ilqp"),
+    );
+    let report = report.expect("the contest runs");
+    assert_eq!((report.added(), report.already), (1, 0));
+    assert_eq!(calls(&e), ["K9AAA", "W9BBB"], "each once");
+}
