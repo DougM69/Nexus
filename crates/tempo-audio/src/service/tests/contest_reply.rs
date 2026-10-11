@@ -88,12 +88,12 @@ fn station(tag: &str, on: bool, mode: &str) -> (std::path::PathBuf, Arc<Mutex<En
     (dir, engine)
 }
 
-/// The station once a logger's Reply to W1AW's CQ FD has been answered: the contest it is in, if
-/// any (Running, and the station it works), FT8 QSO mode's station otherwise, and whether TX is
-/// armed.
-fn after_a_reply(
-    engine: &Arc<Mutex<Engine>>,
-) -> (Option<(bool, Option<String>)>, Option<String>, bool) {
+/// The station once a Reply is answered: the contest it is in, if any (Running, and the station it
+/// works), FT8 QSO mode's station otherwise, and whether TX is armed.
+type Answered = (Option<(bool, Option<String>)>, Option<String>, bool);
+
+/// The station once a logger's Reply to W1AW's CQ FD has been answered.
+fn after_a_reply(engine: &Arc<Mutex<Engine>>) -> Answered {
     let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let server =
         WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap()).unwrap();
