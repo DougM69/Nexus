@@ -384,6 +384,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **I moved works in the QSO parties.** In the Illinois, New York, California, Ohio, Tennessee
+  and Texas QSO parties, saving a new county with **I moved** on the log strip failed with an
+  error, so a mobile or rover went on sending the county it had left. The move is now accepted:
+  the next contact sends and logs the new county, a station you worked from the old county is a
+  new contact again, the score counts it, the Cabrillo file carries each contact's own county,
+  and the new county becomes your County in Settings, so a restart keeps it. A station outside
+  the state moves to another state or province the same way. I moved still says no, and why, to
+  a county across the state line (that is a separate entry), a county line (send both counties
+  yourself and log each contact once per county), a serial number or a report, a contest whose
+  exchange has no county, state or province of yours, and CQ WW RTTY, whose rules have no
+  provision for a station that moves.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
