@@ -1294,3 +1294,81 @@ fn call_cq_outside_the_contests_messages_is_a_plain_run() {
         "no CQ DX left behind"
     );
 }
+
+/// The double-click follows the contest that is running, not the picker: a session survives a
+/// change of picker while it runs, and S&P answers in the running session's messages.
+#[test]
+fn a_double_click_follows_the_running_session_not_the_picker() {
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    let mut s = e.settings().clone();
+    // A contest whose rules ban FT8: were the picker followed, the click would leave.
+    s.fd_event = "ilqp".into();
+    e.apply_settings(s);
+    assert!(
+        matches!(e.mode, Mode::FieldDay { .. }),
+        "the running session stays"
+    );
+    e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("the double-click is taken");
+    assert!(
+        matches!(e.mode, Mode::FieldDay { running: false, .. }),
+        "in the running contest's S&P"
+    );
+    assert_eq!(keyed(&mut e, 2).as_deref(), Some("W9XYZ K1ABC FN42"));
+}
+
+/// A double-click carries the decode's own sender; a click naming one station on another's CQ
+/// is not that station's CQ, and works the named station outside the contest, as before. And a
+/// deferred "disable TX after 73" left from an earlier contact never disarms the station the
+/// double-click is working.
+#[test]
+fn the_double_click_works_only_the_cqs_own_station_and_keeps_tx() {
+    let mut e = engine_for("arrlfd", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+    e.work_station("K2DEF", None, Some("CQ FD W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("worked");
+    assert!(
+        matches!(&e.mode, Mode::Qso { station, .. } if station.dxcall.as_deref() == Some("K2DEF")),
+        "the named station, outside the contest"
+    );
+    let mut e = engine_for("arrlfd", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.pending_tx_disable = true;
+    e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("CQ FD W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("the double-click is taken");
+    assert!(
+        !e.pending_tx_disable,
+        "the earlier contact's disable is cancelled"
+    );
+}
+
+/// Whether the runner sends the 73 follows the tier it is on now: a run started on FT1 and
+/// moved to FT8 answers the caller's RR73 with 73; a run moved from FT8 to FT1 does not.
+#[test]
+fn the_runners_73_follows_the_tier_it_is_on() {
+    for (from, to, want_73) in [
+        (Tier::TempoFast, Tier::Ft8, true),
+        (Tier::Ft8, Tier::TempoFast, false),
+    ] {
+        let what = format!("{} to {}", tier_name(from), tier_name(to));
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(from);
+        e.set_mode("fieldday-run").expect("the run starts");
+        e.set_tier(to);
+        e.set_tx_enabled(true); // a mode switch that moves the dial turns TX off, as WSJT-X does
+        let cq = keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ 1D WI")], 2);
+        keyed(&mut e, 2).expect("the rogered exchange");
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 4);
+        let after = keyed(&mut e, 4);
+        if want_73 {
+            assert_eq!(after.as_deref(), Some("W9XYZ K1ABC 73"), "{what}");
+        } else {
+            assert_eq!(after, Some(cq), "{what}: straight back to CQ");
+        }
+    }
+}
