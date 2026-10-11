@@ -1914,7 +1914,7 @@ export const EN = {
   'logEntry.shared.changed': 'The contact changed in the other window before it was logged. Check it and log it again.',
   'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
   'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
-  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
+  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by / or +.',
   'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.hint': 'Did you mean {{codes}}?',

@@ -72,7 +72,23 @@ const ilqp = (): FieldDayStatus =>
     ],
   }) as unknown as FieldDayStatus
 
-function renderStrip(exchange: 'terrestrial' | 'satellite' = 'terrestrial') {
+/** The New York QSO Party, whose county list keeps ONE county per contact (`countyLine.ts`): a
+ *  station on a line is logged once per county, one entry at a time. */
+const nyqp = (): FieldDayStatus =>
+  ({
+    ...ilqp(),
+    event: 'nyqp',
+    receives: [
+      { key: 'RST', kind: 'rst', required: true },
+      { key: 'QTH', kind: 'oneOf', required: true, domains: ['ny_counties', 'ny_mults', 'dx_literal'] },
+    ],
+    composing: [
+      { key: 'RST', raw: '599' },
+      { key: 'QTH', raw: 'DUT', domain: 'ny_counties' },
+    ],
+  }) as unknown as FieldDayStatus
+
+function renderStrip(exchange: 'terrestrial' | 'satellite' = 'terrestrial', fd: FieldDayStatus = ilqp()) {
   return render(
     <LogEntry
       onOpenLogbook={() => {}}
@@ -84,7 +100,7 @@ function renderStrip(exchange: 'terrestrial' | 'satellite' = 'terrestrial') {
       onSpot={() => {}}
       pendingWork={null}
       onConsumeWork={() => {}}
-      fieldDay={ilqp()}
+      fieldDay={fd}
       fdMode="CW"
     />,
   )
@@ -213,7 +229,7 @@ describe('a county line in the ILQP QTH box', () => {
     enter('K9NR', 'COOK/DUPG/COOK')
     expect(verdict()).toEqual(['COOK is in this county line twice.'])
     enter('K9NR', 'COOK/')
-    expect(verdict()).toEqual(['Finish the county line: 2 to 4 counties joined by /.'])
+    expect(verdict()).toEqual(['Finish the county line: 2 to 4 counties joined by / or +.'])
     expect(logButton().disabled).toBe(true)
     await Promise.resolve()
     expect(api.contestLogManualRows).not.toHaveBeenCalled()
@@ -250,5 +266,97 @@ describe('a county line in the ILQP QTH box', () => {
     await vi.waitFor(() => expect(api.contestLogManual).toHaveBeenCalledTimes(1))
     expect(api.contestLogManual.mock.calls[0]).toEqual(['K9NR', row('COOK'), 'CW', undefined])
     expect(api.contestLogManualRows).not.toHaveBeenCalled()
+  })
+})
+
+// ⭐ `+` JOINS A COUNTY LINE EXACTLY AS `/` DOES. N3FJP's loggers take a county line as
+// `COOK+WILL`, so an operator coming from one types that at the Illinois QSO Party. Every case is
+// asserted BY VALUE beside its slash twin, and the controls show the `+` is the county box's
+// alone: a report keeps its `+`, and New York, whose list keeps one county per contact, is untouched.
+describe('a county line joined by + in the ILQP QTH box', () => {
+  /** Clear what one contact left behind, so the next pass of a loop starts as a new strip. */
+  const nextStrip = () => {
+    cleanup()
+    for (const f of Object.values(api)) f.mockClear()
+    pushToast.mockClear()
+  }
+  const sent = () => ({ single: api.contestLogManual.mock.calls, rows: api.contestLogManualRows.mock.calls })
+
+  it('logs COOK+WILL as the same two contacts, with the same words, as COOK/WILL', async () => {
+    for (const typed of ['COOK+WILL', 'COOK/WILL']) {
+      renderStrip()
+      enter('K9NR', typed)
+      await vi.waitFor(() => expect(sent().single.length + sent().rows.length).toBe(1))
+      expect(sent(), typed).toEqual({ single: [], rows: [['K9NR', [row('COOK'), row('WILL')], 'CW', undefined]] })
+      await vi.waitFor(() =>
+        expect(toasts('success'), typed).toEqual(['Logged K9NR 599 COOK/WILL (CW): 2 contacts, one per county']),
+      )
+      nextStrip()
+    }
+  })
+
+  it('says which county of the line was the dupe, as it does for the slash', async () => {
+    for (const typed of ['COOK+WILL', 'COOK/WILL']) {
+      api.contestLogManualRows.mockImplementationOnce(() => Promise.resolve([true, false]))
+      renderStrip()
+      enter('K9NR', typed)
+      await vi.waitFor(() => expect(sent().single.length + sent().rows.length).toBe(1))
+      expect(sent().single, typed).toEqual([])
+      await vi.waitFor(() => expect(toasts('error')).toHaveLength(1))
+      expect(toasts('success'), typed).toEqual(['Logged K9NR 599 COOK (CW)'])
+      expect(toasts('error'), typed).toEqual(['K9NR in WILL is a dupe on this band/mode, not logged again'])
+      nextStrip()
+    }
+  })
+
+  it('completes the part after the +, and the box reads / once it is left', () => {
+    renderStrip()
+    fireEvent.change(qthBox(), { target: { value: 'COOK+DUP' } })
+    expect(hits()).toEqual(['DUPG'])
+    fireEvent.mouseDown(document.querySelector('.le-fd-suggest button')!)
+    expect(qthBox().value).toBe('COOK+DUPG')
+    // Leaving the box writes what will be logged, as a typed name becomes its code.
+    fireEvent.keyDown(qthBox(), { key: ' ', code: 'Space' })
+    expect(qthBox().value).toBe('COOK/DUPG')
+    fireEvent.change(qthBox(), { target: { value: 'cook+DuPage+will' } })
+    fireEvent.keyDown(qthBox(), { key: 'Tab' })
+    expect(qthBox().value).toBe('COOK/DUPG/WILL')
+  })
+
+  it('refuses a stray + exactly as a stray /, with a hint that names both', async () => {
+    renderStrip()
+    for (const typed of ['COOK+', '+COOK', 'COOK++WILL', 'COOK/', '/COOK', 'COOK//WILL']) {
+      enter('K9NR', typed)
+      expect(verdict(), typed).toEqual(['Finish the county line: 2 to 4 counties joined by / or +.'])
+      expect(logButton().disabled, typed).toBe(true)
+    }
+    await Promise.resolve()
+    expect(sent()).toEqual({ single: [], rows: [] })
+  })
+
+  it('CONTROL: a + in the report box is the report, logged as typed with one county', async () => {
+    renderStrip()
+    fireEvent.change(callBox(), { target: { value: 'K9NR' } })
+    fireEvent.change(box('RST'), { target: { value: '+05' } })
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    await vi.waitFor(() => expect(sent().single.length + sent().rows.length).toBe(1))
+    expect(sent()).toEqual({
+      single: [['K9NR', [['RST', '+05'], ['QTH', 'COOK']], 'CW', undefined]],
+      rows: [],
+    })
+  })
+
+  it('CONTROL: New York keeps one county per contact, so DUT+PUT is one value there, as DUT/PUT is', async () => {
+    for (const typed of ['DUT/PUT', 'DUT+PUT']) {
+      renderStrip('terrestrial', nyqp())
+      enter('K2XYZ', typed)
+      await vi.waitFor(() => expect(sent().single.length + sent().rows.length).toBe(1))
+      expect(sent(), typed).toEqual({
+        single: [['K2XYZ', [['RST', '599'], ['QTH', typed]], 'CW', undefined]],
+        rows: [],
+      })
+      nextStrip()
+    }
   })
 })

@@ -1304,7 +1304,7 @@ export const JA: PartialCatalog = {
   "logEntry.shared.changed": "The contact changed in the other window before it was logged. Check it and log it again.",
   "logEntry.countyLine.repeated": "{{value}}がこの郡境に2回含まれています。",
   "logEntry.countyLine.tooMany": "郡境の交信は最大{{max}}郡までです。",
-  "logEntry.countyLine.incomplete": "郡境を完成させてください: 2〜{{max}}郡を / で区切って入力します。",
+  "logEntry.countyLine.incomplete": "郡境を完成させてください: 2〜{{max}}郡を / または + で区切って入力します。",
   "logEntry.contest.location.blank": "コールサインは米国またはカナダですが、コンテスト用の州・準州が設定されていないため、Nexus は QTH なしの DX 交換を送ります。設定 › コンテストで設定してください。米国・カナダ国外から運用している場合は無視して構いません。",
   "logEntry.contest.location.unlisted": "{{typed}} はこのコンテストの州・準州の一覧にないため、Nexus は QTH なしの DX 交換を送ります。設定 › コンテストで設定してください。米国・カナダ国外から運用している場合は無視して構いません。",
   "logEntry.contest.location.hint": "{{codes}} のことですか？",
