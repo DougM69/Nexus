@@ -18,8 +18,9 @@ fn picked_and_unfilled(contest: &str, on: bool) -> Engine {
     e
 }
 
-/// ⭐ Call CQ (Tx6's plain run), S&P and Chat switch, with Contest mode off and on; the
-/// contest's own S&P is still refused for the exchange it lacks (the control).
+/// ⭐ A plain CQ run (`start_cq`: the Tx6 row outside a contest, and the Remote page's), S&P and
+/// Chat switch, with Contest mode off and on; the contest's own S&P is still refused for the
+/// exchange it lacks (the control).
 #[test]
 fn plain_modes_never_wait_on_the_contests_setup() {
     for on in [false, true] {
@@ -31,7 +32,7 @@ fn plain_modes_never_wait_on_the_contests_setup() {
         assert_eq!(
             e.start_cq(None),
             Ok(()),
-            "Contest mode {on}: Tx6's plain CQ"
+            "Contest mode {on}: a plain CQ run"
         );
         assert!(
             matches!(&e.mode, Mode::Qso { running: true, .. }),

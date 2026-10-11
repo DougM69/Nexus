@@ -333,6 +333,10 @@ impl Publisher {
                             // computer's own windows only (the contest logger beside the main
                             // window); a Remote viewer sees the main window's strip in the stream.
                             fields.remove("contestEntry");
+                            // The Tx6 row's contest CQ is this computer's cockpit's: on the
+                            // Remote page the row keeps `start_cq`, which sends the CQ it shows.
+                            fields.remove("contestCq");
+                            fields.remove("contestCqTyped");
                         }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
@@ -756,6 +760,59 @@ mod tests {
             "the Remote's snapshot carries no shared contest entry"
         );
         assert!(!data.contains("K1ABC"), "nor the call typed into it");
+    }
+    /// The Tx6 row's contest CQ, which the cockpit on this computer shows and calls through the
+    /// contest's Running, never reaches the Remote: it is not one of the page's keys, and the
+    /// Remote page's Tx6 row keeps `start_cq`, which sends the CQ it shows.
+    #[test]
+    fn the_tx6_rows_contest_cq_never_reaches_the_remote() {
+        use std::sync::{Arc, Mutex};
+        let mut engine = tempo_app::engine::Engine::new("K1ABC", "FN42", 0);
+        let mut s = engine.settings().clone();
+        s.fd_event = "arrlfd".into();
+        s.fd_class = "2B".into();
+        s.fd_section = "EMA".into();
+        s.fd_active = true;
+        engine.apply_settings(s);
+        engine.set_tier(tempo_app::dto::Tier::Ft8);
+        assert_eq!(
+            engine.snapshot().contest_cq.as_deref(),
+            Some("CQ FD K1ABC FN42"),
+            "control: the station's own snapshot carries it"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("contestCq").is_none(),
+            "the Remote's snapshot carries no Tx6 contest CQ"
+        );
+        // …nor the flag that the Running calls the Tx6 row's own CQ, where WSJT-X has no activity.
+        let mut s = shared.lock().unwrap().settings().clone();
+        s.fd_event = "txqp".into();
+        shared.lock().unwrap().apply_settings(s);
+        assert!(
+            shared.lock().unwrap().snapshot().contest_cq_typed,
+            "control: the station's own snapshot carries it"
+        );
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("contestCqTyped").is_none(),
+            "the Remote's snapshot carries no typed-CQ flag"
+        );
     }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {

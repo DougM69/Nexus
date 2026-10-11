@@ -2294,7 +2294,8 @@ pub struct Settings {
     pub band_edge_tones: bool,
     /// WSJT-X "CW ID after 73": key MYCALL in CW once the final 73/RR73 over
     /// has finished transmitting (stock default off). Keys through the normal
-    /// CW path (PTT + tone), not appended inside the FT8 waveform.
+    /// CW path (PTT + tone), not appended inside the over's waveform. Never in
+    /// FT8, FT4, FT2, FT1 or DX1: WSJT-X sends none in FT8/FT4.
     #[serde(default)]
     pub cw_id_after_73: bool,
     /// WSJT-X: "Clear DX call and grid after logging" (stock default off).

@@ -3126,6 +3126,50 @@ impl FtMessages {
             Self::Standard => 0,
         }
     }
+
+    /// The CQ a running station with these messages calls from `mycall` (`genCQMsg`,
+    /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` as Field Day has always sent it,
+    /// `CQ TEST` in the ARRL VHF contests, and where WSJT-X has no activity the CQ the operator
+    /// typed in Tx6, `dir` its direction ("" for a plain CQ), as WSJT-X's normal mode sends its
+    /// Tx6; both with `sent_grid`: the contest's own `session_grid` where it exchanges one, else
+    /// `mygrid` cut to the four characters WSJT-X sends. A nonstandard `mycall` carries no
+    /// direction: the packer has no form for one (it would go out as truncated free text).
+    pub fn cq(self, mycall: &str, mygrid: &str, session_grid: &str, dir: &str) -> Msg {
+        let (dir, grid) = match self {
+            Self::FieldDay => ("FD", mygrid.to_string()),
+            Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
+            Self::Standard if crate::message::is_std_call(mycall) => {
+                (dir, sent_grid(session_grid, mygrid))
+            }
+            Self::Standard => ("", sent_grid(session_grid, mygrid)),
+        };
+        Msg::Cq {
+            de: mycall.to_string(),
+            grid,
+            dir: dir.to_string(),
+        }
+    }
+
+    /// [`cq`](Self::cq) as it goes on the air: the packer sends four characters of a grid, and
+    /// WSJT-X's Tx6 shows four (`genCQMsg`: `grid.left (4)`). What the Operate cockpit's Tx6 row
+    /// shows while the contest runs, where WSJT-X has an activity for it (no direction typed).
+    pub fn cq_on_air(self, mycall: &str, mygrid: &str, session_grid: &str) -> String {
+        let mut cq = self.cq(mycall, mygrid, session_grid, "");
+        if let Msg::Cq { grid, .. } = &mut cq {
+            *grid = crate::qso::air_grid(grid);
+        }
+        cq.to_text()
+    }
+}
+
+/// The grid a contest station sends outside Field Day's messages: the contest's own GRID where it
+/// exchanges one (a rover's "I moved" changes it), else the Settings locator cut to four
+/// characters, as WSJT-X's `my_grid().left(4)` is.
+fn sent_grid(session_grid: &str, mygrid: &str) -> String {
+    match session_grid {
+        "" => crate::qso::air_grid(mygrid),
+        grid => grid.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3164,6 +3208,9 @@ pub struct FieldDayStation {
     /// The contact in hand is one the operator picked ([`answer_cq`](Self::answer_cq)), not one
     /// S&P pounced on. Cleared when the station re-arms.
     picked: bool,
+    /// The direction of the operator's Tx6 CQ, called where WSJT-X has no activity
+    /// ([`set_cq_dir`](Self::set_cq_dir)); empty for a plain CQ.
+    cq_dir: String,
     pub log: FieldDayLog,
     pub transcript: Vec<String>,
 }
@@ -3197,6 +3244,7 @@ impl FieldDayStation {
             messages: FtMessages::FieldDay,
             wsjtx_field_day: false,
             picked: false,
+            cq_dir: String::new(),
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -3219,6 +3267,7 @@ impl FieldDayStation {
             messages: FtMessages::FieldDay,
             wsjtx_field_day: false,
             picked: false,
+            cq_dir: String::new(),
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -3315,30 +3364,32 @@ impl FieldDayStation {
         self.messages != FtMessages::FieldDay
     }
 
-    /// The CQ this station calls (`genCQMsg`, mainwindow.cpp 9514-9524): `CQ FD` with the
-    /// grid as it has always gone out, `CQ TEST` in the ARRL VHF contests, and a plain CQ
-    /// where WSJT-X has no activity, both with the four-character grid WSJT-X sends.
+    /// The CQ this station calls ([`FtMessages::cq`]).
     fn cq(&self) -> Msg {
-        let (dir, grid) = match self.messages {
-            FtMessages::FieldDay => ("FD", self.mygrid.clone()),
-            FtMessages::NaVhf => ("TEST", self.air_grid()),
-            FtMessages::Standard => ("", self.air_grid()),
-        };
-        Msg::Cq {
-            de: self.mycall().to_string(),
-            grid,
-            dir: dir.to_string(),
+        self.messages.cq(
+            self.mycall(),
+            &self.mygrid,
+            self.log.session.field("GRID"),
+            &self.cq_dir,
+        )
+    }
+
+    /// The direction of the operator's Tx6 CQ ("" for a plain CQ), which a running station
+    /// calls where WSJT-X has no activity for the contest ([`FtMessages::cq`]). A change rebuilds
+    /// the CQ a calling station is about to send, as [`rearm`](Self::rearm) does; nothing else is
+    /// touched.
+    pub fn set_cq_dir(&mut self, dir: &str) {
+        if self.cq_dir != dir {
+            self.cq_dir = dir.to_string();
+            if self.state == FdState::CallingCq {
+                self.pending = Some(self.cq());
+            }
         }
     }
 
-    /// The grid this station sends outside Field Day: the contest's own GRID where it
-    /// exchanges one (a rover's "I moved" changes it), else the Settings locator cut to four
-    /// characters, as WSJT-X's `my_grid().left(4)` is.
+    /// The grid this station sends outside Field Day (`sent_grid`).
     fn air_grid(&self) -> String {
-        match self.log.session.field("GRID") {
-            "" => crate::qso::air_grid(&self.mygrid),
-            grid => grid.to_string(),
-        }
+        sent_grid(self.log.session.field("GRID"), &self.mygrid)
     }
 
     /// Addressed to this station: base calls, so a portable call matches.
@@ -5604,6 +5655,51 @@ mod tests {
         run.observe(&[dec("K1ABC W9XYZ RR73")], 3);
         assert_eq!(next(&run), "W9XYZ K1ABC 73");
         assert_eq!(run.log.qsos().len(), 1);
+    }
+
+    /// The CQ a running station calls, by value, for each set of messages: Field Day's with the
+    /// locator as typed and never a contest GRID, the others with the contest's own GRID or the
+    /// locator's four characters; and, as the Tx6 row shows it, with four characters on the air.
+    #[test]
+    fn the_running_cq_by_value() {
+        let cq = |m: FtMessages, session: &str| m.cq("K1ABC", "FN42ab", session, "").to_text();
+        assert_eq!(cq(FtMessages::FieldDay, ""), "CQ FD K1ABC FN42ab");
+        assert_eq!(cq(FtMessages::FieldDay, "EN52"), "CQ FD K1ABC FN42ab");
+        assert_eq!(cq(FtMessages::NaVhf, ""), "CQ TEST K1ABC FN42");
+        assert_eq!(cq(FtMessages::NaVhf, "EN52"), "CQ TEST K1ABC EN52");
+        assert_eq!(cq(FtMessages::Standard, ""), "CQ K1ABC FN42");
+        assert_eq!(cq(FtMessages::Standard, "EN52"), "CQ K1ABC EN52");
+        assert_eq!(
+            FtMessages::FieldDay.cq_on_air("K1ABC", "FN42ab", ""),
+            "CQ FD K1ABC FN42"
+        );
+        // A direction typed in Tx6 is the CQ only where WSJT-X has no activity, and never a
+        // nonstandard call's.
+        let typed = |m: FtMessages, call: &str| m.cq(call, "FN42ab", "", "QP").to_text();
+        assert_eq!(typed(FtMessages::Standard, "K1ABC"), "CQ QP K1ABC FN42");
+        assert_eq!(typed(FtMessages::FieldDay, "K1ABC"), "CQ FD K1ABC FN42ab");
+        assert_eq!(typed(FtMessages::NaVhf, "K1ABC"), "CQ TEST K1ABC FN42");
+        let nonstandard = typed(FtMessages::Standard, "PJ4/K1ABC");
+        assert!(!nonstandard.contains("QP"), "{nonstandard}");
+    }
+
+    /// The direction reaches a running station's CQ at once, and every CQ after; S&P calls none.
+    #[test]
+    fn a_typed_direction_reaches_the_running_cq() {
+        let cq = |st: &FieldDayStation| st.pending.as_ref().map(Msg::to_text);
+        let mut run = ft8_station("txqp", "FN42", true);
+        assert_eq!(cq(&run).as_deref(), Some("CQ K1ABC FN42"));
+        run.set_cq_dir("QP");
+        assert_eq!(cq(&run).as_deref(), Some("CQ QP K1ABC FN42"));
+        run.rearm(true);
+        assert_eq!(
+            cq(&run).as_deref(),
+            Some("CQ QP K1ABC FN42"),
+            "after a contact"
+        );
+        let mut sp = ft8_station("txqp", "FN42", false);
+        sp.set_cq_dir("QP");
+        assert_eq!(cq(&sp), None, "S&P calls no CQ");
     }
 
     #[test]

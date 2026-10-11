@@ -7429,7 +7429,7 @@ export const EN = {
     'Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your interface is wired the other way.',
   'settings.cw.idAfter73.label': 'CW ID after 73',
   'settings.cw.idAfter73.hint':
-    'Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X option, default off). Uses the normal CW keying path — PTT + tone — after the FT8 over, never on top of it.',
+    'Keys your callsign in CW once the final 73 has fully left the air, in Q65, FST4 and MSK144 (stock WSJT-X option, default off). As in WSJT-X, FT8 and FT4 send no CW ID, and neither do FT2, TempoFast or TempoDeep. Uses the normal CW keying path — PTT + tone — after the over, never on top of it.',
 
   // The F-key macro editor. Each key's ROLE is prose (what the key is FOR); F1's role is the
   // Q-code it sends and stays a token in the panel, exactly as the QSO macro set does.
@@ -9417,6 +9417,8 @@ export const EN = {
   'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
   // The directed-CQ tokens are what goes on the air; they stay as written.
   'operate.tx.tx6.hint': 'Edit for a directed CQ — CQ DX / CQ NA / CQ POTA / CQ TEST',
+  'operate.tx.tx6.contest.aria': "Tx6 Call CQ (the contest's CQ)",
+  'operate.tx.tx6.contest.hint': "The contest's CQ — Tx 6 calls it as Call CQ does",
   'operate.tx.callCq.title': 'Call CQ (Alt+6)',
   'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
   // #254 — a Tx6 text that is not a CQ in WSJT-X's grammar is refused before anything keys,

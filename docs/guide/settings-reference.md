@@ -912,8 +912,10 @@ with the radio.
 - **Keying line** (serial keyline only) — DTR (the CW convention) or RTS. "DTR is
   standard (RTS = PTT); flip to RTS if your interface is wired the other way."
 - **CW ID after 73** — keys your callsign in CW once the final 73 has fully left
-  the air (stock WSJT-X option, default off). It uses the normal CW keying path —
-  PTT + tone — after the FT8 over, never on top of it.
+  the air, in Q65, FST4 and MSK144 (stock WSJT-X option, default off). As in
+  WSJT-X, FT8 and FT4 send no CW ID, and neither do FT2, TempoFast or TempoDeep.
+  It uses the normal CW keying path — PTT + tone — after the over, never on top
+  of it.
 
 **Macros (F-key profiles)**
 

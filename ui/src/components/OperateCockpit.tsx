@@ -984,12 +984,37 @@ export function OperateCockpit({
     }
   }, [snap.qso?.dxcall, snap.qso?.dxgrid])
 
+  // ⭐ WHILE A CONTEST RUNS THAT WSJT-X HAS AN ACTIVITY FOR, THE TX6 ROW IS THE CONTEST'S CQ.
+  // WSJT-X's Tx6 is its activity's CQ once one is set (`genCQMsg`): `CQ FD`, `CQ TEST`. The engine
+  // names the CQ the contest's Running calls (`snap.contestCq`, present only while such a contest
+  // runs, for a standard call); the row shows it, read-only, and on this computer Tx 6 calls
+  // the contest's Running exactly as the strip's Call CQ does, so what goes on the air is what the
+  // row shows. The operator's own Tx6 text stays underneath and is back when the contest ends. The
+  // Remote page's row keeps its own CQ and `startCq`, as its Call CQ does.
+  const contestCq = control ? (snap.contestCq ?? null) : null
+  // …and where WSJT-X has no activity for the running contest, its Tx6 is the operator's own,
+  // directed or plain, as in its normal mode: the row stays editable, and on this computer Tx 6 and
+  // Call CQ hand the direction typed there to the contest's Running (`snap.contestCqTyped`).
+  const contestCqTyped = control && snap.contestCqTyped === true
+
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
   // follows qso.txNow when it matches a row, else the operator's local pick.
-  const rowTexts = stdMessageList({ ...msgs, tx5, tx6 })
+  const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
   const txNow = snap.qso?.txNow ?? null
   const liveNext = txNow ? rowTexts.indexOf(txNow) : -1
   const nextIndex = liveNext >= 0 ? liveNext : localNext
+
+  /** #254's refusal of a Tx6 text that is not a CQ in WSJT-X's grammar, naming the form that
+   *  would work when `cqSuggestionFromText` can derive one from the operator's own words. */
+  const refuseMalformedCq = () => {
+    const fix = cqSuggestionFromText(tx6, snap.mycall)
+    pushToast(
+      fix
+        ? t('operate.tx.cq.malformed.try', { fix })
+        : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
+      'error',
+    )
+  }
 
   /** Fire Tx row n (1-based).
    * Tx6 = Call CQ — parse the editable Tx6 text for a directed token and call
@@ -998,6 +1023,13 @@ export function OperateCockpit({
   const doTx = (n: number) => {
     if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
+      // In a contest: the contest's Running, as the strip's Call CQ asks for it — the station
+      // refuses it with its reason when the contest cannot start, and the reason is shown.
+      if (contestCq) {
+        setLocalNext(5)
+        void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
       const dir = cqDirFromText(tx6, snap.mycall)
       // ⭐ #254 — A MALFORMED CQ IS REFUSED, NOT REPLACED.
       //
@@ -1011,13 +1043,12 @@ export function OperateCockpit({
       // and nothing is auto-rewritten — we refuse before anything keys and name the form that
       // would work when `cqSuggestionFromText` can derive one from the operator's OWN words.
       if (dir === undefined) {
-        const fix = cqSuggestionFromText(tx6, snap.mycall)
-        pushToast(
-          fix
-            ? t('operate.tx.cq.malformed.try', { fix })
-            : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
-          'error',
-        )
+        refuseMalformedCq()
+        return
+      }
+      if (contestCqTyped) {
+        setLocalNext(5)
+        void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
         return
       }
       if (control) setLocalNext(5)
@@ -1324,6 +1355,7 @@ export function OperateCockpit({
               onTx5={handleTx5}
               tx6={tx6}
               onTx6={handleTx6}
+              tx6Contest={contestCq}
               nextIndex={nextIndex}
               onTx={doTx}
               onGenerate={handleGenerate}
@@ -1913,8 +1945,22 @@ export function OperateCockpit({
             // contest runs, which the station refuses with its reason when the contest cannot
             // start. A control that keys must not fail silently, so the reason is shown. The
             // Remote page's is `startCq`, as before.
-            if (control) void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
-            else void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
+            //
+            // Where WSJT-X has no activity for the running contest, Call CQ calls the CQ typed in
+            // Tx6, as WSJT-X's CQ is its Tx6 then: the direction rides along, and a Tx6 that is no
+            // CQ is refused as Tx 6 refuses it.
+            if (control) {
+              let dir: string | null = null
+              if (contestCqTyped) {
+                const typed = cqDirFromText(tx6, snap.mycall)
+                if (typed === undefined) {
+                  refuseMalformedCq()
+                  return
+                }
+                dir = typed
+              }
+              void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+            } else void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
           }}
           onResend={onResend}
           onFreetext={onFreetext}
@@ -2199,6 +2245,7 @@ export function OperateCockpit({
                       onTx5={handleTx5}
                       tx6={tx6}
                       onTx6={handleTx6}
+                      tx6Contest={contestCq}
                       nextIndex={nextIndex}
                       onTx={doTx}
                       onGenerate={handleGenerate}

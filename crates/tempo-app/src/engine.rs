@@ -3082,7 +3082,8 @@ pub struct Engine {
     /// would trip the hard-stop path and cut the 73 itself mid-over.
     pending_tx_disable: bool,
     /// Deferred WSJT-X-style CW ID (armed when the final 73 leaves; consumed
-    /// by the service on TX-idle so the ID never keys over the FT8 audio).
+    /// by the service on TX-idle so the ID never keys over the over's audio).
+    /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
     pending_cw_id: bool,
     /// JTAlert-style callsign highlights from UDP HighlightCallsign (type 13):
     /// uppercased call → (bg, fg) CSS hex. None/None entries are removed.
@@ -14242,6 +14243,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let air_mode = self.adif_mode_for_tier();
         if let Mode::FieldDay { station, running } = &mut self.mode {
             let ruleset = station.log.ruleset();
+            // The direction typed in the Tx6 row, which a Running calls where WSJT-X has no
+            // activity ([`Self::start_running_with_cq`]); the other messages pass it by.
+            station.set_cq_dir(self.cq_dir.as_deref().unwrap_or(""));
             station.set_messages(FtMessages::for_contest(ruleset, air_mode), *running);
             station.set_wsjtx_field_day(FtMessages::wsjtx_field_day(ruleset, air_mode));
         }
@@ -14795,6 +14799,47 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
         let mode = self.adif_mode_for_tier();
         FtMessages::follows_contest(ruleset, mode).then(|| FtMessages::for_contest(ruleset, mode))
+    }
+
+    /// ⭐ **The CQ the contest's Running calls, as it goes on the air** — what the Operate
+    /// cockpit's Tx6 row shows while a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), and on this computer calls through the contest's Running,
+    /// as Call CQ does ([`Self::start_running`]). WSJT-X's Tx6 is its activity's CQ once one is
+    /// set (`genCQMsg`, mainwindow.cpp 9502-9524): `CQ FD` or `CQ TEST`. `None` everywhere else,
+    /// where the row keeps its own CQ: outside those contests, where WSJT-X has no activity (the
+    /// Running calls the row's CQ there, [`Self::contest_cq_typed`]), and for a nonstandard call.
+    ///
+    /// Built as the Running builds its CQ ([`FtMessages::cq`]) from what it would be built from
+    /// now: the Settings call and locator, and inside the contest its session's own GRID (a
+    /// rover's move); a Running entered from outside it starts a session whose GRID is the
+    /// Settings locator's four characters.
+    pub fn contest_running_cq(&self) -> Option<String> {
+        let messages = self.contest_ft_messages()?;
+        // Where WSJT-X has no activity the row is the operator's own ([`Self::contest_cq_typed`]),
+        // and it gives the row an activity's CQ only for a standard call (`genCQMsg`:
+        // `stdCall(my_callsign)`): a nonstandard call's row keeps its own CQ, `CQ <call>`.
+        if messages == FtMessages::Standard
+            || !tempo_core::message::is_std_call(&self.settings.mycall)
+        {
+            return None;
+        }
+        let session_grid = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.field("GRID"),
+            _ => "",
+        };
+        Some(messages.cq_on_air(&self.settings.mycall, &self.settings.mygrid, session_grid))
+    }
+
+    /// ⭐ **A contest runs whose Running calls the CQ typed in the Tx6 row**: one whose own FT8/FT4
+    /// messages apply ([`Self::contest_ft_messages`]) and which WSJT-X has no activity for, where
+    /// its Tx6 is the operator's own, directed or plain, as in its normal mode. The row stays the
+    /// operator's, and on this computer Tx 6 and Call CQ hand its direction to the contest's
+    /// Running ([`Self::start_running_with_cq`]). A standard call only, as WSJT-X's
+    /// (`genCQMsg`: `stdCall(my_callsign)`): the packer has no form for a nonstandard call's
+    /// directed CQ, and its row keeps its own CQ.
+    pub fn contest_cq_typed(&self) -> bool {
+        self.contest_ft_messages() == Some(FtMessages::Standard)
+            && tempo_core::message::is_std_call(&self.settings.mycall)
     }
 
     /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
@@ -22418,21 +22463,41 @@ contact yourself."
     ///
     /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]), Call CQ is the contest's Running** — `CQ FD`, `CQ TEST`,
-    /// or the standard CQ where WSJT-X has no activity — as WSJT-X's CQ is the activity's once
-    /// one is set (`genCQMsg`, mainwindow.cpp 9466-9531). Before, it left the contest for FT8
-    /// QSO mode, so a station that started its run here lost it to S&P on opening the Contest
-    /// screen. A contest that cannot start (its exchange not filled in) refuses it, as the
-    /// Contest screen's Running does, and nothing changes. Like any Call CQ it clears a
-    /// directed-CQ token left from the Tx6 row.
+    /// or where WSJT-X has no activity the CQ typed in the Tx6 row — as WSJT-X's CQ is the
+    /// activity's once one is set, and its Tx6 where none is (`genCQMsg`, mainwindow.cpp
+    /// 9466-9531). Before, it left the contest for FT8 QSO mode, so a station that started its run
+    /// here lost it to S&P on opening the Contest screen. A contest that cannot start (its exchange
+    /// not filled in) refuses it, as the Contest screen's Running does, and nothing changes. Like
+    /// any Call CQ it clears a directed-CQ token left from the Tx6 row, except where the Running
+    /// calls the row's CQ ([`Self::start_running_with_cq`]).
     ///
-    /// The Tx6 row and the Remote page call `start_cq` directly, with the CQ they show.
+    /// The Remote page calls `start_cq` directly, with the CQ it shows. On this computer the Tx6
+    /// row calls this while a contest runs, the CQ it shows then being the contest's
+    /// ([`Self::contest_running_cq`]) or its own ([`Self::contest_cq_typed`]), and `start_cq`
+    /// everywhere else.
     pub fn start_running(&mut self) -> Result<(), String> {
+        self.start_running_with_cq(None)
+    }
+
+    /// [`Self::start_running`] with the direction of the CQ typed in the Tx6 row (`None` for a
+    /// plain one), which the contest's Running calls where WSJT-X has no activity for the contest
+    /// ([`Self::contest_cq_typed`]), on its first CQ and after every contact; the Contest screen's
+    /// Running keeps it. Everywhere else it is set aside: the contests WSJT-X has an activity for
+    /// call their own CQ, and outside a contest Call CQ is a plain run.
+    pub fn start_running_with_cq(&mut self, dir: Option<&str>) -> Result<(), String> {
         if self.contest_ft_messages().is_some() {
             // The screen's Running refuses a run without a valid callsign at the command (the
             // `set_mode` command's identity check), and so does this one.
             self.structured_tx_ready(false)?;
-            self.set_mode("fieldday-run")?;
-            self.cq_dir = None;
+            let typed = dir
+                .map(|d| d.trim().to_uppercase())
+                .filter(|d| !d.is_empty() && self.contest_cq_typed());
+            // In place before the Running is built, which reads it; a refusal puts it back.
+            let before = std::mem::replace(&mut self.cq_dir, typed);
+            if let Err(why) = self.set_mode("fieldday-run") {
+                self.cq_dir = before;
+                return Err(why);
+            }
             return Ok(());
         }
         self.start_cq(None)
@@ -23570,6 +23635,8 @@ contact yourself."
         s.parsec_presence = self.parsec_presence_dto();
         s.tx_alarms = self.tx_alarms.clone();
         s.contest_entry = self.contest_entry_dto();
+        s.contest_cq = self.contest_running_cq();
+        s.contest_cq_typed = self.contest_cq_typed();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -24019,7 +24086,21 @@ contact yourself."
                             // this final over finishes (the service drains it
                             // on TX-idle, same timing as the deferred disable —
                             // keying CW mid-FT8-over would splatter both).
-                            if self.settings.cw_id_after_73 {
+                            // Never in FT8 or FT4: WSJT-X 3.0.2 clears the ID on
+                            // every GUI tick in those two modes
+                            // (`widgets/mainwindow.cpp:7673`), so the setting
+                            // sends nothing there. FT2, FT1 and DX1 do as FT8
+                            // does; Q65, FST4 and MSK144 keep it.
+                            if self.settings.cw_id_after_73
+                                && !matches!(
+                                    self.app.tier(),
+                                    Tier::Ft8
+                                        | Tier::Ft4
+                                        | Tier::Ft2
+                                        | Tier::TempoFast
+                                        | Tier::TempoDeep
+                                )
+                            {
                                 self.pending_cw_id = true;
                             }
                         }
@@ -35300,8 +35381,10 @@ mod tests {
 
     #[test]
     fn cw_id_after_73_arms_on_the_final_over_and_halt_clears_it() {
-        // Mirrors disable_tx_after_73_is_deferred_and_snp_only's drive exactly.
+        // Mirrors disable_tx_after_73_is_deferred_and_snp_only's drive exactly, on Q65, which
+        // keeps the ID (FT8 sends none, as WSJT-X).
         let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Q65);
         e.settings.cw_id_after_73 = true;
         e.call_station("W9XYZ"); // S&P: we answer them
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
@@ -35311,6 +35394,7 @@ mod tests {
         assert!(!e.take_pending_cw_id(), "one-shot");
         // Default-off: without the setting the flag never arms.
         let mut d = Engine::new("K2DEF", "FN31", 0);
+        d.set_tier(Tier::Q65);
         d.call_station("W9XYZ");
         d.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         d.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
@@ -35324,6 +35408,88 @@ mod tests {
         let _ = e.poll_tx(8);
         e.halt_tx();
         assert!(!e.take_pending_cw_id(), "halt clears a pending CW ID");
+    }
+
+    /// ⭐ NO CW ID IN THE FT MODES, AS WSJT-X. WSJT-X 3.0.2 arms its CW ID on the over that
+    /// carries a contact's first 73 in every mode, then clears it on every 100 ms GUI tick in
+    /// FT8 and FT4 (`widgets/mainwindow.cpp:7673`), long before the modulator reads it after the
+    /// last symbol, so "CW ID after 73" sends nothing in those two modes. FT2, FT1 and DX1 do as
+    /// FT8 does. Q65, FST4 and MSK144 keep it: the ID is armed when the final 73 leaves and the
+    /// radio loop keys MYCALL once that over has played. The stored setting is left as it is.
+    #[test]
+    fn the_cw_id_after_73_keys_only_outside_the_ft_modes() {
+        let mut armed = Vec::new();
+        for tier in [
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Ft2,
+            Tier::TempoFast,
+            Tier::TempoDeep,
+            Tier::Q65,
+            Tier::Fst4,
+            Tier::Msk144,
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.cw_id_after_73 = true;
+            e.set_tier(tier);
+            // The final 73 of an S&P contact, as the sequencer drives it.
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+            assert_eq!(
+                e.snapshot().qso.and_then(|q| q.tx_now).as_deref(),
+                Some("W9XYZ K2DEF 73"),
+                "{tier:?}: the closing over"
+            );
+            assert!(
+                !e.poll_tx(4).is_empty(),
+                "{tier:?}: the closing 73 transmits"
+            );
+            let id = e.take_pending_cw_id();
+            if id {
+                // What the radio loop does with it once the over has played out.
+                let mycall = e.settings.mycall.clone();
+                e.send_cw(&mycall);
+                assert_eq!(
+                    e.poll_cw_one().as_deref(),
+                    Some("K2DEF"),
+                    "{tier:?}: the ID keys"
+                );
+            }
+            armed.push((tier, id));
+            assert!(
+                e.settings.cw_id_after_73,
+                "{tier:?}: the setting is as stored"
+            );
+        }
+        assert_eq!(
+            armed,
+            [
+                (Tier::Ft8, false),
+                (Tier::Ft4, false),
+                (Tier::Ft2, false),
+                (Tier::TempoFast, false),
+                (Tier::TempoDeep, false),
+                (Tier::Q65, true),
+                (Tier::Fst4, true),
+                (Tier::Msk144, true),
+            ],
+            "a CW ID armed after the final 73"
+        );
+        // …and the stored choice round-trips through the settings file, on and off.
+        let dir = std::env::temp_dir().join(format!("tempo_cw_id_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for on in [true, false] {
+            let s = Settings {
+                cw_id_after_73: on,
+                ..Settings::default()
+            };
+            s.save(&path).unwrap();
+            assert_eq!(Settings::load(&path).cw_id_after_73, on);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -64265,6 +64431,23 @@ mod digital_side_licence_tests {
         e
     }
 
+    /// [`ft_station`] on Q65, which keeps the CW ID after its 73 (FT8 sends none, as WSJT-X), on
+    /// the same dial: the Digital verdict is the same carrier, one TX offset above it.
+    fn q65_station(
+        sc: Soundcard,
+        class: LicenseClass,
+        dial: f64,
+        sideband: &str,
+        off_hz: f32,
+        pitch: f32,
+    ) -> Engine {
+        let mut e = ft_station(sc, class, dial, sideband, off_hz, pitch);
+        e.set_tier(Tier::Q65);
+        let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+        e.set_frequency(dial, band, sideband);
+        e
+    }
+
     /// ⭐ THE CW ID AFTER AN FT 73, WHERE IT KEYS. With WSJT-X's "CW ID after 73" on, the radio
     /// loop keys MYCALL through the CW path once the final over has played out, from the Digital
     /// section, where the gate judged FT8's carrier one TX offset above the dial. The CW goes out
@@ -64273,7 +64456,8 @@ mod digital_side_licence_tests {
     /// General segment, keyed the call at 7.0246, or at 7.0240, below the 7.025 floor; and at
     /// 14.1496 with a 300 Hz offset (FT8 at 14.1499) the soundcard keyer's 600 Hz tone went out
     /// at 14.1502, past a General's 14.150, while the rig's own keyer keys legally on the dial.
-    /// The same QSO inside each segment keys its ID.
+    /// The same QSO inside each segment keys its ID. Driven on Q65, whose carrier sits where
+    /// FT8's did: FT8, FT4, FT2, FT1 and DX1 send no ID (WSJT-X clears it in FT8 and FT4).
     #[test]
     fn the_cw_id_after_an_ft_73_is_judged_where_it_keys() {
         let general = LicenseClass::General;
@@ -64293,11 +64477,11 @@ mod digital_side_licence_tests {
                 );
             }
             let keys = refused_at.is_none();
-            let mut e = ft_station(sc, general, dial, "USB", off_hz, 600.0);
+            let mut e = q65_station(sc, general, dial, "USB", off_hz, 600.0);
             e.settings.cw_id_after_73 = true;
             assert!(
                 e.tx_allowed(),
-                "precondition: FT8's carrier at {dial} + {off_hz} Hz"
+                "precondition: Q65's carrier at {dial} + {off_hz} Hz"
             );
             // The final 73 of an S&P contact, as the sequencer drives it.
             e.call_station("W9XYZ");
@@ -64334,11 +64518,12 @@ mod digital_side_licence_tests {
     /// ⛔ …AND THE CW SCREEN'S LEAVE RULE NEVER TOUCHES IT (the operator: "Leave it as is"). The
     /// rule drops what CW had queued when the CW section is LEFT; the ID is queued, and keyed,
     /// from Digital, so it keys there as before on both keyers, across the section re-assert an
-    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`.
+    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`. Driven on
+    /// Q65, which keeps the ID.
     #[test]
     fn the_cw_id_after_an_ft_73_still_keys_from_digital() {
         for sc in Soundcard::CW {
-            let mut e = ft_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
+            let mut e = q65_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
             e.settings.cw_id_after_73 = true;
             e.call_station("W9XYZ");
             e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ -10", -7)], 1);
