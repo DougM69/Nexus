@@ -304,6 +304,10 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
       }
       // Don't let an F-key key the rig while a recording is in progress.
       if (recording !== null) return
+      // Until the slot list is there, or when it could not be read, F1–F12 are all held and play
+      // nothing, so none reaches the webview, where F5 reloads the app on Windows (operator,
+      // 2026-10-11). Once the slots are there, a slot's own key is the only one held.
+      if (msgs.length === 0 && /^F([1-9]|1[0-2])$/.test(e.key)) e.preventDefault()
       const slot = Number(/^F(\d)$/.exec(e.key)?.[1])
       if (msgs.some((x) => x.slot === slot)) {
         e.preventDefault()

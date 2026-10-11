@@ -115,7 +115,7 @@ Voice keyer playback requires the `radio` Cargo feature (the full rig-connected 
 
 In a contest with [Enter Sends Message](Field-Day.md#enter-sends-message-esm) on, Enter plays the slots by step: `F1` CQ, `F2` your exchange, `F3` TU, `F4` your call and `F8` AGN, unless you map other slots in Settings → Contesting ▸ Enter Sends Message. AGN is on `F8` as it is in the CW and RTTY contest sets and in N1MM's default message sets. `F5` and `F6` are yours: on CW `F5` sends his call, and a recording cannot say one.
 
-AGN used to be on `F5`. If you ran Enter Sends Message in Phone with AGN recorded in `F5`, the update copies that recording to `F8` and leaves `F5` empty. A recording in `F5` that was for something else, such as a 73, stays in `F5`, and so does a slot you mapped to a step yourself.
+AGN used to be on `F5`. If you ran Enter Sends Message in Phone with AGN on `F5`, `F5` keeps whatever you recorded there and the update gives `F8` a copy of it, so every key plays what it played before, in a contest or out of one. Record a real AGN in `F8` whenever you like: `F8` has a file of its own, and `F5` keeps its recording. `F8` starts empty if you never ran Enter Sends Message in Phone, put AGN on a slot of your own, or mapped a step to `F5`.
 
 ## QSO Recording
 
