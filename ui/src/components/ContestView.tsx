@@ -2817,9 +2817,9 @@ export function ContestView({
       )}
       {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
       {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
-      {/* …and the ones past its four days that the logbook does not hold, with their merge. It
-          writes into the operator's logbook, so never from afar, as the merge below. */}
-      {!observed && (unmerged.length > 0 || unmergedReport || unmergedError) && (
+      {/* …and the ones past its four days that the logbook does not hold, with their merge: never
+          asked for by a Remote observer, so never shown there, and never pressed from afar. */}
+      {(unmerged.length > 0 || unmergedReport || unmergedError) && (
         <FdUnmergedNote
           unmerged={unmerged}
           busy={unmergedBusy}
