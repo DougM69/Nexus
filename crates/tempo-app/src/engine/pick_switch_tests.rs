@@ -104,7 +104,7 @@ fn state(m: &Mutex<Engine>) -> Contest {
             let s = &station.log.session;
             (
                 Some(*running),
-                Some((s.event_id.clone(), s.id.clone(), s.contest_id.clone())),
+                Some((s.event_id.clone(), format!("{:?}", s.my_location), s.contest_id.clone())),
             )
         }
         _ => (None, None),
