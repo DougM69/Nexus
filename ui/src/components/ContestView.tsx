@@ -185,7 +185,8 @@ interface Props {
 
 /**
  * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
- * turn on while there is something, and says what it is.
+ * turn on while there is something, and says what it is. Settings asks the same question
+ * where its copy of the switch is turned on, so the two cannot disagree about a contest.
  *
  * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
  * both events need a class (WFD calls it a category) and a section before the station enters
@@ -193,9 +194,9 @@ interface Props {
  * stops at the first. Every other reason is that constructor's own sentence off the preview
  * (`FdRulesetDto.problem`), which names the slot: "Your COUNTY is empty…".
  */
-type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
+export type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
 
-function startBlocker(
+export function startBlocker(
   s: Pick<Settings, 'fdEvent' | 'fdClass' | 'fdSection'> | null,
   preview: FdRulesetDto | null | undefined,
 ): StartBlocker | null {

@@ -174,6 +174,7 @@ import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api
 import { getDxccEntityNames } from '../api'
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { continentName } from './CountryExclude'
+import { startBlocker } from './ContestView'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
@@ -3595,10 +3596,10 @@ export function SettingsPanel({
   // Why club sync cannot run the picked contest at all, or null when it can — shown beside
   // the switches before anybody turns one on. The station's preview answers for the SAVED
   // pick, so it is asked only while the form's pick is the saved one.
-  const clubRefusalHere = contestClubRefusal(
-    form.fdEvent,
-    (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null,
-  )
+  // The station's preview answers for the SAVED pick, so it is asked only while the form's pick
+  // is the saved one.
+  const previewHere = (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null
+  const clubRefusalHere = contestClubRefusal(form.fdEvent, previewHere)
   // The contest Contest mode starts, by its sponsor's name: the switch names it wherever it is
   // offered. A blank pick is ARRL Field Day, the contest a blank pick runs.
   const pickedContest = contestName(form.fdEvent?.trim() || 'arrlfd')
@@ -4553,10 +4554,10 @@ export function SettingsPanel({
                             onClick={() => {
                               const next = !form.fdActive
                               updateBool('fdActive', next)
-                              // Turning on with no Class/Section yet → jump to the FD setup
-                              // tab (now visible) so they're filled; the backend won't enter
-                              // Field Day until both are set.
-                              if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('contesting')
+                              // Turning on a contest that cannot start yet → the Contesting tab,
+                              // where what it needs is set: Field Day's class and section, or the
+                              // station data another contest sends. The Contest screen's own test.
+                              if (next && startBlocker(form, previewHere)) setTab('contesting')
                             }}
                             aria-label={
                               form.fdActive
