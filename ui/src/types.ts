@@ -3526,6 +3526,41 @@ export interface FdClubBoardRow {
   clockMs?: number | null
 }
 
+/** This laptop's club link (`ClubLinkDto`): where its join stands and, on the host, its hosting
+ *  line. Shown in Settings' club section and on the Contest screen whatever the Field Day mode
+ *  switch says (the words are `features/clubLink.ts`). This laptop's screen only: Remote's
+ *  snapshot leaves it out. */
+export interface ClubLink {
+  role: 'host' | 'position'
+  /** The address this laptop's position joins, with the port it uses. */
+  addr: string
+  state: 'looking' | 'joined' | 'turnedAway' | 'unreachable' | 'lost'
+  /** Why the last attempt did not reach the host, in 'unreachable' and in 'lost' once one has. */
+  why?: 'badAddress' | 'refused' | 'noAnswer'
+  /** The host's own words, in 'turnedAway'. */
+  told?: string
+  /** When the link went down (unix seconds), in 'lost'; 0 otherwise. */
+  downSinceUnix: number
+  event: string
+  hostCall: string
+  /** This laptop's position, by the name the host's board shows it under. */
+  position: string
+  clubCode: string
+  hosting?: ClubHosting
+}
+
+/** The host's line: whether the club is open, where a position joins it, and who is in. */
+export interface ClubHosting {
+  up: boolean
+  port: number
+  /** Each of this laptop's network addresses with the port, and the adapter it is on. */
+  addrs: { addr: string; adapter: string }[]
+  /** Other positions connected now (this laptop's own is left out). */
+  connected: number
+  failed?: 'start' | 'portInUse' | 'port'
+  detail?: string
+}
+
 /** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
 export interface FdClubStatus {
   /** 'disabled' | 'offline' | 'behind' | 'synced' — derived from (link, queue),
@@ -4674,6 +4709,9 @@ export interface AppSnapshot {
   activePeer: string | null
   qso: QsoStatus | null
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link, whatever the Field Day mode switch says; absent while club sync
+   *  does not run. */
+  clubLink?: ClubLink | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent

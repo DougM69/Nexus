@@ -4,7 +4,7 @@ import { settingsForm, type SettingsConfiguration } from '../remote-web/configur
 import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
 import { useReceiverGain } from '../remote-web/useReceiverGain'
 import { useRemotePreferences } from '../remote-web/useRemotePreferences'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { LanStation } from '../remote-native/LanStation'
@@ -119,6 +119,7 @@ import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, isFieldDay } from '../fdEvent'
+import { ADDR_SEP, clubLinkLines, FIND_CLUB_EVENTS_SECS } from '../features/clubLink'
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -188,7 +189,7 @@ import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, reve
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
-import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
+import type { AssistanceEvent, ClubLink, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
 import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
@@ -246,6 +247,9 @@ interface Props {
    *  snapshot in hand, and a missing session reads as "no role", never as a blank
    *  chip claiming one. */
   fieldDay?: FieldDayStatus | null
+  /** This laptop's club link (`AppSnapshot.clubLink`), said in the club section where the
+   *  address is typed. Optional for the same reason as `fieldDay`. */
+  clubLink?: ClubLink | null
   /** Called after a successful save so the shell can refresh its snapshot. */
   onSaved?: () => void
   /** Where to land. Accepts a section id (`'audio'`), a tab id, a tab label, a legacy tab name
@@ -1052,6 +1056,7 @@ const UNIT_HZ = 'Hz'
 
 export function SettingsPanel({
   fieldDay,
+  clubLink,
   onSaved,
   target,
   targetSeq,
@@ -13123,6 +13128,32 @@ export function SettingsPanel({
                 </span>
               </div>
             </div>
+            {/* Where this laptop's club link stands, as saved (`features/clubLink.ts`): the host's
+                line with the addresses to type, or this laptop's join. Said here, where the
+                address is typed, whatever the Field Day mode switch says. */}
+            {clubLink &&
+              clubLinkLines(clubLink).map((l) => (
+                <p
+                  key={l.key}
+                  className={l.alert ? 'settings-note settings-warn' : 'settings-note'}
+                  role={l.alert ? 'alert' : 'status'}
+                  data-club-link={l.key}
+                >
+                  {l.text}
+                  {l.addrs?.map((a, i) => (
+                    <Fragment key={a}>
+                      {i > 0 ? ADDR_SEP : ' '}
+                      <span className="mono">{a}</span>
+                    </Fragment>
+                  ))}
+                  {l.code && (
+                    <>
+                      {' '}
+                      <span className="mono">{t('fieldDay.club.code', { code: l.code })}</span>
+                    </>
+                  )}
+                </p>
+              ))}
             <div className="settings-field">
               <button
                 type="button"
@@ -13141,7 +13172,9 @@ export function SettingsPanel({
                   : t('settings.fdClub.discover.action')}
               </button>
               {fdScan !== null && fdScan.length === 0 && !fdScanBusy && (
-                <span className="settings-hint">{t('settings.fdClub.discover.empty')}</span>
+                <span className="settings-hint">
+                  {t('settings.fdClub.discover.empty', { secs: FIND_CLUB_EVENTS_SECS })}
+                </span>
               )}
               {(fdScan ?? []).map((b) => (
                 <button disabled={remote}

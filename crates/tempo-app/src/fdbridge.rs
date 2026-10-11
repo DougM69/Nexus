@@ -19,7 +19,8 @@
 use crate::engine::{engine_lock, Engine};
 use std::sync::{Arc, Mutex};
 use tempo_net::fdsync::{
-    ClockSample, ClubBackend, ClubState, JoinAccept, PosReport, PositionKey, PositionSync, WireQso,
+    ClockSample, ClubBackend, ClubState, JoinAccept, PosReport, PositionKey, PositionSync,
+    Unreachable, WireQso,
 };
 
 fn now_unix() -> u64 {
@@ -142,6 +143,10 @@ impl PositionSync for EnginePositionSync {
         engine_lock(&self.0)
             .fd_mirror_mut()
             .on_link(connected, now_unix());
+    }
+
+    fn on_unreachable(&self, why: Unreachable) {
+        engine_lock(&self.0).fd_mirror_mut().on_unreachable(why);
     }
 
     fn on_clock(&self, sample: ClockSample) {

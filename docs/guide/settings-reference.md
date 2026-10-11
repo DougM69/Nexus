@@ -2176,7 +2176,11 @@ Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
 port on the site LAN, and only while the toggle is on — the spectator scoreboard
 below and [Conditions on a TV](#conditions-on-a-tv) are the other two things that
 listen beyond the local computer); every other position joins it with **Find
-club events** or by typing the host's `host:port` into **Join event at**. Each
+club events** or by typing the host's address into **Join event at**: the host
+shows it after **Positions join at**, and an address typed without a port joins
+port 42073. Under **Join event at** each laptop says where its join stands, and
+the host says where it is hosting and how many other positions are connected
+(the Contest screen says the same, with Field Day mode on or off). Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
 powers the while-typing dupe warning. **Event name** is what joining positions

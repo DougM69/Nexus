@@ -62,7 +62,7 @@ use tempo_core::contest::{
 };
 use tempo_core::fd_rules::FdRuleset;
 use tempo_core::fieldday::{FdEvent, FieldDayLog};
-use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireField, WireQso};
+use tempo_net::fdsync::{ClubState, PosReport, Unreachable, WireBoardRow, WireField, WireQso};
 
 /// Why a club cannot run a contest's ruleset — a reason the screen names, never a
 /// silent wrong log.
@@ -2141,6 +2141,14 @@ pub struct ClubMirror {
     pub clock: crate::clubclock::ClubClock,
     /// The last host `error` line, verbatim (version refusal etc.).
     pub last_error: Option<String>,
+    /// Why the last attempt to reach the host did not connect: `None` once one does, and after
+    /// the join address changes ([`Self::forget_host`]).
+    pub unreachable: Option<Unreachable>,
+    /// The link up now has had its welcome: this laptop is in the event.
+    pub welcomed: bool,
+    /// A welcome has come since the join address was set: a link down now is a host lost, not
+    /// one never found.
+    pub joined_before: bool,
 }
 
 impl ClubMirror {
@@ -2177,6 +2185,8 @@ impl ClubMirror {
         // its first round trip the welcome's whole seconds stand.
         self.clock = Default::default();
         self.last_error = None;
+        self.welcomed = true;
+        self.joined_before = true;
     }
 
     /// One answered round trip of the timed ping (`fdsync::ClockSample`). Updates what the
@@ -2193,6 +2203,129 @@ impl ClubMirror {
             self.down_since_unix = now;
         }
         self.connected = connected;
+        if connected {
+            self.unreachable = None;
+        } else {
+            self.welcomed = false;
+        }
+    }
+
+    /// An attempt to reach the host did not connect ([`tempo_net::fdsync::PositionSync::on_unreachable`]).
+    pub fn on_unreachable(&mut self, why: Unreachable) {
+        self.unreachable = Some(why);
+    }
+
+    /// The join address changed: what the link line knew is about another host. The club state
+    /// the host pushed stays until the next host's snapshot replaces it, as it always has.
+    pub fn forget_host(&mut self) {
+        self.event.clear();
+        self.host_call.clear();
+        self.last_error = None;
+        self.unreachable = None;
+        self.welcomed = false;
+        self.joined_before = false;
+    }
+
+    /// ⭐ **Where this laptop's link to its host stands** ([`LinkState`]). The newest fact
+    /// wins: a connection that failed after a refusal is the host gone, not the refusal again.
+    pub fn link_state(&self) -> LinkState {
+        if self.connected && self.welcomed {
+            LinkState::Joined
+        } else if self.last_error.is_some() && self.unreachable.is_none() {
+            LinkState::TurnedAway
+        } else if let Some(why) = self.unreachable {
+            if self.joined_before {
+                LinkState::Lost(Some(why))
+            } else {
+                LinkState::Unreachable(why)
+            }
+        } else if self.joined_before && !self.connected {
+            LinkState::Lost(None)
+        } else {
+            LinkState::Looking
+        }
+    }
+}
+
+/// ⭐ **Where a laptop's link to its club host stands** — what the club section of Settings and
+/// the Contest screen say, whatever the Field Day mode switch says. Derived from the mirror
+/// alone, as [`SyncState`] is, so the line and the chip cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkState {
+    /// Trying the address, and nothing has come back from it yet.
+    Looking,
+    /// In the event: the host's welcome came on the link that is up now.
+    Joined,
+    /// The host answered with a refusal (the mirror's `last_error`), and nothing since has
+    /// changed that.
+    TurnedAway,
+    /// This laptop has not reached the host at this address: why its last attempt failed.
+    Unreachable(Unreachable),
+    /// It was in the event and the link is down, so the pump is trying again: why the last
+    /// attempt since failed, once one has.
+    Lost(Option<Unreachable>),
+}
+
+impl LinkState {
+    /// The DTO string the screens switch on.
+    pub fn code(self) -> &'static str {
+        match self {
+            LinkState::Looking => "looking",
+            LinkState::Joined => "joined",
+            LinkState::TurnedAway => "turnedAway",
+            LinkState::Unreachable(_) => "unreachable",
+            LinkState::Lost(_) => "lost",
+        }
+    }
+
+    /// Why the last attempt did not reach the host, where the state carries one.
+    pub fn why(self) -> Option<Unreachable> {
+        match self {
+            LinkState::Unreachable(why) => Some(why),
+            LinkState::Lost(why) => why,
+            _ => None,
+        }
+    }
+}
+
+/// Why this laptop is not hosting the club event it was switched on to host. The host's own
+/// screen says so; the Connections log used to be the only place that did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostFailure {
+    /// The engine would not start the club log: its own sentence.
+    Start(String),
+    /// Another program holds the port.
+    PortInUse,
+    /// The port could not be opened for another reason: the system's words.
+    Port(String),
+}
+
+impl HostFailure {
+    /// A failed bind of the host's port.
+    pub fn of_bind(e: &std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            HostFailure::PortInUse
+        } else {
+            HostFailure::Port(e.to_string())
+        }
+    }
+
+    /// The DTO string the screens switch on.
+    pub fn code(&self) -> &'static str {
+        match self {
+            HostFailure::Start(_) => "start",
+            HostFailure::PortInUse => "portInUse",
+            HostFailure::Port(_) => "port",
+        }
+    }
+
+    /// The words that came with it: the engine's sentence or the system's, empty for a port in
+    /// use.
+    pub fn detail(&self) -> &str {
+        match self {
+            HostFailure::Start(why) | HostFailure::Port(why) => why,
+            HostFailure::PortInUse => "",
+        }
     }
 }
 
@@ -2750,6 +2883,97 @@ mod tests {
         assert_eq!(SyncState::derive(true, true, 0, 0), Synced);
         assert_eq!(SyncState::Synced.code(), "synced");
         assert_eq!(SyncState::derive(true, false, 0, 7).code(), "offline");
+    }
+
+    #[test]
+    fn the_link_line_says_where_the_join_stands() {
+        use tempo_net::fdsync::Unreachable::*;
+        let mut m = ClubMirror::default();
+        assert_eq!(m.link_state(), LinkState::Looking, "nothing back yet");
+        // Nothing listens there: never reached.
+        m.on_unreachable(Refused);
+        assert_eq!(m.link_state(), LinkState::Unreachable(Refused));
+        m.on_unreachable(NoAnswer);
+        assert_eq!(
+            m.link_state(),
+            LinkState::Unreachable(NoAnswer),
+            "the latest attempt's"
+        );
+        // A connection opens: looking again until the host answers it.
+        m.on_link(true, 100);
+        assert_eq!(m.link_state(), LinkState::Looking);
+        // Turned away, by the host's own words, through the retries after it.
+        m.last_error = Some("this club is on the air as W9AAA".into());
+        m.on_link(false, 101);
+        assert_eq!(m.link_state(), LinkState::TurnedAway);
+        m.on_link(true, 115);
+        assert_eq!(m.link_state(), LinkState::TurnedAway, "a retry's handshake");
+        m.on_link(false, 115);
+        // Let in.
+        m.on_link(true, 130);
+        m.on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        assert_eq!(m.link_state(), LinkState::Joined);
+        // The host goes quiet: lost, and trying again.
+        m.on_link(false, 200);
+        assert_eq!(m.link_state(), LinkState::Lost(None));
+        m.on_unreachable(NoAnswer);
+        assert_eq!(m.link_state(), LinkState::Lost(Some(NoAnswer)));
+        assert_eq!(m.down_since_unix, 200, "since when");
+        // Back.
+        m.on_link(true, 230);
+        assert_eq!(m.link_state(), LinkState::Looking, "until the welcome");
+        m.on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        assert_eq!(m.link_state(), LinkState::Joined);
+        // Turned away after being in (the host gave the position to another laptop).
+        m.last_error = Some("another laptop holds this position".into());
+        m.on_link(false, 300);
+        assert_eq!(m.link_state(), LinkState::TurnedAway);
+        // A refusal, then the host itself gone: the newest fact wins.
+        m.on_unreachable(NoAnswer);
+        assert_eq!(m.link_state(), LinkState::Lost(Some(NoAnswer)));
+        // Another address: nothing known about it.
+        m.forget_host();
+        assert_eq!(m.link_state(), LinkState::Looking);
+        assert_eq!((m.event.as_str(), m.host_call.as_str()), ("", ""));
+        assert_eq!(m.last_error, None);
+        m.on_unreachable(BadAddress);
+        assert_eq!(
+            m.link_state(),
+            LinkState::Unreachable(BadAddress),
+            "never reached at the new address"
+        );
+    }
+
+    #[test]
+    fn link_states_and_host_failures_have_the_codes_the_screens_switch_on() {
+        use tempo_net::fdsync::Unreachable::*;
+        let codes: Vec<_> = [
+            LinkState::Looking,
+            LinkState::Joined,
+            LinkState::TurnedAway,
+            LinkState::Unreachable(Refused),
+            LinkState::Lost(None),
+        ]
+        .map(LinkState::code)
+        .to_vec();
+        assert_eq!(
+            codes,
+            ["looking", "joined", "turnedAway", "unreachable", "lost"]
+        );
+        assert_eq!(LinkState::Unreachable(Refused).why(), Some(Refused));
+        assert_eq!(LinkState::Lost(Some(NoAnswer)).why(), Some(NoAnswer));
+        assert_eq!(LinkState::Lost(None).why(), None);
+        assert_eq!(LinkState::TurnedAway.why(), None);
+        use std::io::{Error, ErrorKind};
+        let in_use = HostFailure::of_bind(&Error::from(ErrorKind::AddrInUse));
+        assert_eq!((in_use.code(), in_use.detail()), ("portInUse", ""));
+        let denied = HostFailure::of_bind(&Error::new(ErrorKind::PermissionDenied, "forbidden"));
+        assert_eq!((denied.code(), denied.detail()), ("port", "forbidden"));
+        let start = HostFailure::Start("club sync cannot run CQ WW".into());
+        assert_eq!(
+            (start.code(), start.detail()),
+            ("start", "club sync cannot run CQ WW")
+        );
     }
 
     // ---- v2: the wire, the journal, and both compatibility directions -----

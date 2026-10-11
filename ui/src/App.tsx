@@ -3207,6 +3207,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         <main className="layout single">
           <ContestView
             fieldDay={snap.fieldDay}
+            clubLink={snap.clubLink}
             onSetMode={handleSetMode}
             fdActive={settings?.fdActive ?? false}
             fdRuleset={fdRuleset}
@@ -3298,6 +3299,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         <main className="layout single">
           <SettingsPanel
             fieldDay={snap.fieldDay}
+            clubLink={snap.clubLink}
             key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
             target={settingsTarget?.where}

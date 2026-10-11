@@ -384,6 +384,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A laptop joining a club event now says whether it is in.** After Find club events or a host
+  address typed into Join event at, a joining laptop said nothing about its join unless Field Day
+  mode was on and a club block appeared. Settings ▸ Contesting, under Join event at, and the
+  Contest screen, with Field Day mode on or off, now say which it is: looking for the host at that
+  address; joined, with the event, the host's call, this laptop's position and its club code;
+  turned away, in the host's own words; cannot reach the host, because nothing listens there or
+  nothing answers, with what to check (Nexus hosting there, both laptops on the same network,
+  Windows Firewall on the host allowing Nexus on Private networks); or the host lost, and Nexus
+  trying again. An address typed without a port, such as 192.168.1.10, now joins port 42073; it
+  used to be retried in silence and never joined.
+- **The host of a club event shows where to join it.** With Host a club event on, the host's
+  Contest screen and Settings ▸ Contesting say that it is hosting, on which port, at which of its
+  network addresses (each with its adapter's name: the address the other laptops type into Join
+  event at), and how many other positions are connected. When it cannot host they say why:
+  another program using the port, a port that would not open, or a contest club sync cannot run.
+  That used to reach the Connections log only.
+- **Find club events finds a host that has more than one network adapter, and says what to check
+  when it hears nothing.** A host announced itself only to 255.255.255.255, which a computer sends
+  out of one network adapter, so a host with Wi-Fi and Ethernet, or with the virtual adapters WSL,
+  Hyper-V or a VPN add, could announce itself on a network the other laptops are not on. It now
+  also announces itself to the broadcast address of each network it is on. Find club events
+  listens for 5 seconds instead of 2, and when it hears nothing it says to check that the host has
+  Host a club event on, that both laptops are on the same network, and that Windows Firewall on
+  this laptop allows Nexus on Private networks, with Windows calling the network Private, not
+  Public. NEEDS-BENCH: two Windows laptops on the club's own network.
 - **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
   new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
   contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected

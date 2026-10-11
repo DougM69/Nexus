@@ -28854,12 +28854,12 @@ struct FdEventBeacon {
     host: String,
 }
 
-/// Listen ~2 s for club-sync host beacons — the "Find club events" button.
-/// Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast;
-/// the manual host:port field always remains).
+/// Listen for club-sync host beacons ([`tempo_net::fdsync::DISCOVER_SECS`]) — the "Find club
+/// events" button. Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast, or
+/// this laptop's firewall drops it; the manual host:port field always remains).
 #[tauri::command(async)]
 fn fd_discover_events() -> Result<Vec<FdEventBeacon>, String> {
-    tempo_net::fdsync::discover(2)
+    tempo_net::fdsync::discover(tempo_net::fdsync::DISCOVER_SECS)
         .map(|found| {
             found
                 .into_iter()
@@ -33889,13 +33889,21 @@ fn start_on_the_logbook(
                         // A club the engine will not host is not a port problem: it says
                         // its own reason, and nothing about the port.
                         let bound = started
-                            .map_err(|e| format!("couldn't host the club event: {e}."))
+                            .map_err(|e| {
+                                (
+                                    tempo_app::fdevent::HostFailure::Start(e.to_string()),
+                                    format!("couldn't host the club event: {e}."),
+                                )
+                            })
                             .and_then(|()| {
                                 std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
-                                    format!(
-                                        "couldn't host on port {port}: {e} — change the Host \
-                                         port in Settings ▸ Contesting or stop the program \
-                                         using it."
+                                    (
+                                        tempo_app::fdevent::HostFailure::of_bind(&e),
+                                        format!(
+                                            "couldn't host on port {port}: {e} — change the \
+                                             Host port in Settings ▸ Contesting or stop the \
+                                             program using it."
+                                        ),
                                     )
                                 })
                             });
@@ -33911,27 +33919,34 @@ fn start_on_the_logbook(
                                 });
                                 // The discovery beacon, once a second while
                                 // hosting (best-effort: AP-isolated Wi-Fi eats
-                                // broadcast, which is why manual entry stays).
+                                // broadcast, which is why manual entry stays), to
+                                // 255.255.255.255 and to each subnet this laptop is
+                                // on: the first leaves by one adapter only. The same
+                                // address list is the host's line on screen.
                                 let sd = shutdown.clone();
                                 let beacon_engine = mgr_engine.clone();
                                 std::thread::spawn(move || {
                                     let sock = tempo_net::fdsync::beacon_socket();
                                     while !sd.load(Ordering::Relaxed) {
+                                        let lan = tempo_net::fdsync::lan_addrs();
+                                        let targets = tempo_net::fdsync::beacon_targets(&lan);
+                                        let (event, call) = {
+                                            let mut e = engine_lock(&beacon_engine);
+                                            e.fd_note_host_lan(lan);
+                                            (
+                                                e.fd_event_label().unwrap_or_default(),
+                                                e.settings().mycall.clone(),
+                                            )
+                                        };
                                         if let Ok(sock) = &sock {
-                                            let (event, call) = {
-                                                let e = engine_lock(&beacon_engine);
-                                                (
-                                                    e.fd_event_label().unwrap_or_default(),
-                                                    e.settings().mycall.clone(),
-                                                )
-                                            };
                                             tempo_net::fdsync::send_beacon(
-                                                sock, &event, &call, port,
+                                                sock, &event, &call, port, &targets,
                                             );
                                         }
                                         std::thread::sleep(std::time::Duration::from_secs(1));
                                     }
                                 });
+                                engine_lock(&mgr_engine).fd_host_result(None);
                                 hosting = Some((port, contest, shutdown));
                                 bind_failed = None;
                                 conn_log(
@@ -33943,8 +33958,13 @@ fn start_on_the_logbook(
                                     ),
                                 );
                             }
-                            Err(e) => {
-                                engine_lock(&mgr_engine).fd_host_stop();
+                            Err((failure, e)) => {
+                                {
+                                    let mut eng = engine_lock(&mgr_engine);
+                                    eng.fd_host_stop();
+                                    // The host's own line says why, not the log alone.
+                                    eng.fd_host_result(Some(failure));
+                                }
                                 if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
                                     conn_log("FD sync", "error", format!("{e} Retrying quietly."));
                                 }

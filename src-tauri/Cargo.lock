@@ -5587,9 +5587,11 @@ version = "0.2.0"
 name = "tempo-net"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "socket2",
+ "windows 0.62.2",
 ]
 
 [[package]]
