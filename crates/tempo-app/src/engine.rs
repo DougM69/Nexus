@@ -3081,7 +3081,8 @@ pub struct Engine {
     /// would trip the hard-stop path and cut the 73 itself mid-over.
     pending_tx_disable: bool,
     /// Deferred WSJT-X-style CW ID (armed when the final 73 leaves; consumed
-    /// by the service on TX-idle so the ID never keys over the FT8 audio).
+    /// by the service on TX-idle so the ID never keys over the over's audio).
+    /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
     pending_cw_id: bool,
     /// JTAlert-style callsign highlights from UDP HighlightCallsign (type 13):
     /// uppercased call → (bg, fg) CSS hex. None/None entries are removed.
@@ -24012,7 +24013,21 @@ contact yourself."
                             // this final over finishes (the service drains it
                             // on TX-idle, same timing as the deferred disable —
                             // keying CW mid-FT8-over would splatter both).
-                            if self.settings.cw_id_after_73 {
+                            // Never in FT8 or FT4: WSJT-X 3.0.2 clears the ID on
+                            // every GUI tick in those two modes
+                            // (`widgets/mainwindow.cpp:7673`), so the setting
+                            // sends nothing there. FT2, FT1 and DX1 do as FT8
+                            // does; Q65, FST4 and MSK144 keep it.
+                            if self.settings.cw_id_after_73
+                                && !matches!(
+                                    self.app.tier(),
+                                    Tier::Ft8
+                                        | Tier::Ft4
+                                        | Tier::Ft2
+                                        | Tier::TempoFast
+                                        | Tier::TempoDeep
+                                )
+                            {
                                 self.pending_cw_id = true;
                             }
                         }
@@ -35292,8 +35307,10 @@ mod tests {
 
     #[test]
     fn cw_id_after_73_arms_on_the_final_over_and_halt_clears_it() {
-        // Mirrors disable_tx_after_73_is_deferred_and_snp_only's drive exactly.
+        // Mirrors disable_tx_after_73_is_deferred_and_snp_only's drive exactly, on Q65, which
+        // keeps the ID (FT8 sends none, as WSJT-X).
         let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Q65);
         e.settings.cw_id_after_73 = true;
         e.call_station("W9XYZ"); // S&P: we answer them
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
@@ -35303,6 +35320,7 @@ mod tests {
         assert!(!e.take_pending_cw_id(), "one-shot");
         // Default-off: without the setting the flag never arms.
         let mut d = Engine::new("K2DEF", "FN31", 0);
+        d.set_tier(Tier::Q65);
         d.call_station("W9XYZ");
         d.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         d.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
@@ -35316,6 +35334,88 @@ mod tests {
         let _ = e.poll_tx(8);
         e.halt_tx();
         assert!(!e.take_pending_cw_id(), "halt clears a pending CW ID");
+    }
+
+    /// ⭐ NO CW ID IN THE FT MODES, AS WSJT-X. WSJT-X 3.0.2 arms its CW ID on the over that
+    /// carries a contact's first 73 in every mode, then clears it on every 100 ms GUI tick in
+    /// FT8 and FT4 (`widgets/mainwindow.cpp:7673`), long before the modulator reads it after the
+    /// last symbol, so "CW ID after 73" sends nothing in those two modes. FT2, FT1 and DX1 do as
+    /// FT8 does. Q65, FST4 and MSK144 keep it: the ID is armed when the final 73 leaves and the
+    /// radio loop keys MYCALL once that over has played. The stored setting is left as it is.
+    #[test]
+    fn the_cw_id_after_73_keys_only_outside_the_ft_modes() {
+        let mut armed = Vec::new();
+        for tier in [
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Ft2,
+            Tier::TempoFast,
+            Tier::TempoDeep,
+            Tier::Q65,
+            Tier::Fst4,
+            Tier::Msk144,
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.cw_id_after_73 = true;
+            e.set_tier(tier);
+            // The final 73 of an S&P contact, as the sequencer drives it.
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+            assert_eq!(
+                e.snapshot().qso.and_then(|q| q.tx_now).as_deref(),
+                Some("W9XYZ K2DEF 73"),
+                "{tier:?}: the closing over"
+            );
+            assert!(
+                !e.poll_tx(4).is_empty(),
+                "{tier:?}: the closing 73 transmits"
+            );
+            let id = e.take_pending_cw_id();
+            if id {
+                // What the radio loop does with it once the over has played out.
+                let mycall = e.settings.mycall.clone();
+                e.send_cw(&mycall);
+                assert_eq!(
+                    e.poll_cw_one().as_deref(),
+                    Some("K2DEF"),
+                    "{tier:?}: the ID keys"
+                );
+            }
+            armed.push((tier, id));
+            assert!(
+                e.settings.cw_id_after_73,
+                "{tier:?}: the setting is as stored"
+            );
+        }
+        assert_eq!(
+            armed,
+            [
+                (Tier::Ft8, false),
+                (Tier::Ft4, false),
+                (Tier::Ft2, false),
+                (Tier::TempoFast, false),
+                (Tier::TempoDeep, false),
+                (Tier::Q65, true),
+                (Tier::Fst4, true),
+                (Tier::Msk144, true),
+            ],
+            "a CW ID armed after the final 73"
+        );
+        // …and the stored choice round-trips through the settings file, on and off.
+        let dir = std::env::temp_dir().join(format!("tempo_cw_id_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for on in [true, false] {
+            let s = Settings {
+                cw_id_after_73: on,
+                ..Settings::default()
+            };
+            s.save(&path).unwrap();
+            assert_eq!(Settings::load(&path).cw_id_after_73, on);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -64257,6 +64357,23 @@ mod digital_side_licence_tests {
         e
     }
 
+    /// [`ft_station`] on Q65, which keeps the CW ID after its 73 (FT8 sends none, as WSJT-X), on
+    /// the same dial: the Digital verdict is the same carrier, one TX offset above it.
+    fn q65_station(
+        sc: Soundcard,
+        class: LicenseClass,
+        dial: f64,
+        sideband: &str,
+        off_hz: f32,
+        pitch: f32,
+    ) -> Engine {
+        let mut e = ft_station(sc, class, dial, sideband, off_hz, pitch);
+        e.set_tier(Tier::Q65);
+        let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+        e.set_frequency(dial, band, sideband);
+        e
+    }
+
     /// ⭐ THE CW ID AFTER AN FT 73, WHERE IT KEYS. With WSJT-X's "CW ID after 73" on, the radio
     /// loop keys MYCALL through the CW path once the final over has played out, from the Digital
     /// section, where the gate judged FT8's carrier one TX offset above the dial. The CW goes out
@@ -64265,7 +64382,8 @@ mod digital_side_licence_tests {
     /// General segment, keyed the call at 7.0246, or at 7.0240, below the 7.025 floor; and at
     /// 14.1496 with a 300 Hz offset (FT8 at 14.1499) the soundcard keyer's 600 Hz tone went out
     /// at 14.1502, past a General's 14.150, while the rig's own keyer keys legally on the dial.
-    /// The same QSO inside each segment keys its ID.
+    /// The same QSO inside each segment keys its ID. Driven on Q65, whose carrier sits where
+    /// FT8's did: FT8, FT4, FT2, FT1 and DX1 send no ID (WSJT-X clears it in FT8 and FT4).
     #[test]
     fn the_cw_id_after_an_ft_73_is_judged_where_it_keys() {
         let general = LicenseClass::General;
@@ -64285,11 +64403,11 @@ mod digital_side_licence_tests {
                 );
             }
             let keys = refused_at.is_none();
-            let mut e = ft_station(sc, general, dial, "USB", off_hz, 600.0);
+            let mut e = q65_station(sc, general, dial, "USB", off_hz, 600.0);
             e.settings.cw_id_after_73 = true;
             assert!(
                 e.tx_allowed(),
-                "precondition: FT8's carrier at {dial} + {off_hz} Hz"
+                "precondition: Q65's carrier at {dial} + {off_hz} Hz"
             );
             // The final 73 of an S&P contact, as the sequencer drives it.
             e.call_station("W9XYZ");
@@ -64326,11 +64444,12 @@ mod digital_side_licence_tests {
     /// ⛔ …AND THE CW SCREEN'S LEAVE RULE NEVER TOUCHES IT (the operator: "Leave it as is"). The
     /// rule drops what CW had queued when the CW section is LEFT; the ID is queued, and keyed,
     /// from Digital, so it keys there as before on both keyers, across the section re-assert an
-    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`.
+    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`. Driven on
+    /// Q65, which keeps the ID.
     #[test]
     fn the_cw_id_after_an_ft_73_still_keys_from_digital() {
         for sc in Soundcard::CW {
-            let mut e = ft_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
+            let mut e = q65_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
             e.settings.cw_id_after_73 = true;
             e.call_station("W9XYZ");
             e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ -10", -7)], 1);

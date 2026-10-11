@@ -314,6 +314,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **No CW ID after an FT8 or FT4 contact, as in WSJT-X.** With CW ID after 73 on, Nexus no longer
+  keys your call in CW after its final 73 in FT8, FT4, FT2, TempoFast or TempoDeep, so Disable TX
+  after sending 73 now leaves TX off after those contacts (the ID turned it back on). Q65, FST4 and
+  MSK144 send the ID as before, and the setting keeps its value. NEEDS-BENCH: an FT8 and a Q65
+  contact into a dummy load with the setting on.
 - **Running in ARRL Field Day on FT8 and FT4 answers the caller's RR73 with 73**, as WSJT-X does,
   and then calls CQ FD again. FT1 and Winter Field Day close as before, without the 73.
   NEEDS-BENCH: a contact with a station running WSJT-X in Field Day mode.

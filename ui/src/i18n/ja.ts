@@ -4692,7 +4692,7 @@ export const JA: PartialCatalog = {
   "settings.cw.keyLine.dtr": "DTR（CWの慣例）",
   "settings.cw.keyLine.hint": "どの制御線で無線機をキーイングするかです。DTRが標準（RTS = PTT）。インターフェースの配線が逆の場合はRTSに切り替えてください。",
   "settings.cw.idAfter73.label": "73後のCW ID",
-  "settings.cw.idAfter73.hint": "最後の73が完全に送出された後、コールサインをCWでキーイングします（WSJT-X標準のオプション、デフォルトはオフ）。FT8の送信が終わってから通常のCWキーイング経路（PTT + トーン）を使い、重ねて送ることはありません。",
+  "settings.cw.idAfter73.hint": "最後の73が完全に送出された後、Q65、FST4、MSK144でコールサインをCWでキーイングします（WSJT-X標準のオプション、デフォルトはオフ）。WSJT-Xと同様に、FT8とFT4ではCW IDを送出せず、FT2、TempoFast、TempoDeepでも送出しません。送信が終わってから通常のCWキーイング経路（PTT + トーン）を使い、重ねて送ることはありません。",
   "settings.cw.macros.title": "マクロ（Fキープロファイル）",
   "settings.cw.macros.label": "CWコックピットのFキー",
   "settings.cw.macros.profiles.aria": "有効なCWマクロプロファイル",

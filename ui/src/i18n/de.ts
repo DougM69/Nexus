@@ -5077,7 +5077,7 @@ export const DE: PartialCatalog = {
   "settings.cw.keyLine.dtr": "DTR (bei CW üblich)",
   "settings.cw.keyLine.hint": "Welche Steuerleitung das Gerät tastet. DTR ist Standard (RTS = PTT); auf RTS umstellen, wenn Ihr Interface andersherum verdrahtet ist.",
   "settings.cw.idAfter73.label": "CW-Kennung nach 73",
-  "settings.cw.idAfter73.hint": "Tastet Ihr Rufzeichen in CW, sobald das abschließende 73 vollständig gesendet ist (WSJT-X-Werksoption, standardmäßig aus). Nutzt den normalen CW-Tastweg — PTT + Ton — nach dem FT8-Durchgang, nie darüber.",
+  "settings.cw.idAfter73.hint": "Tastet Ihr Rufzeichen in CW, sobald das abschließende 73 vollständig gesendet ist, in Q65, FST4 und MSK144 (WSJT-X-Werksoption, standardmäßig aus). Wie in WSJT-X senden FT8 und FT4 keine CW-Kennung, ebenso wenig FT2, TempoFast und TempoDeep. Nutzt den normalen CW-Tastweg — PTT + Ton — nach dem Durchgang, nie darüber.",
   "settings.cw.macros.title": "Makros (F-Tasten-Profile)",
   "settings.cw.macros.label": "F-Tasten im CW-Cockpit",
   "settings.cw.macros.profiles.aria": "Aktives CW-Makroprofil",

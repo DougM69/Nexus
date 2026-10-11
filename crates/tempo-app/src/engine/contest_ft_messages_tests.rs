@@ -317,6 +317,8 @@ struct Scene {
     end: String,
     /// Whether TX was still on at the end.
     tx: bool,
+    /// The slots at which the radio loop would key a CW ID ("CW ID after 73").
+    cw_ids: Vec<u64>,
 }
 
 fn fields(v: &[tempo_core::contest::FieldValue]) -> String {
@@ -349,11 +351,16 @@ fn play(mut e: Engine, tier: Tier, role: Role, act: Act) -> Scene {
     }
     let mut partner = Partner::new(act, role.partner_runs());
     let (mut lines, mut sent) = (Vec::new(), Vec::new());
+    let mut cw_ids = Vec::new();
     let mut clicked = false;
     for slot in 0..SLOTS {
         // The radio loop's deferred "Disable Tx after sending 73", once the last over has played.
         if e.take_pending_tx_disable() {
             e.set_tx_enabled(false);
+        }
+        // …and its deferred CW ID, which it keys at the same moment.
+        if e.take_pending_cw_id() {
+            cw_ids.push(slot);
         }
         if slot % 2 == 0 {
             if slot == 0 && matches!(role, Role::CallCq | Role::CallCqFromQso) {
@@ -413,6 +420,9 @@ fn play(mut e: Engine, tier: Tier, role: Role, act: Act) -> Scene {
             .collect(),
         _ => Vec::new(),
     };
+    if e.take_pending_cw_id() {
+        cw_ids.push(SLOTS);
+    }
     let mode = mode_line(&e);
     lines.push(format!("  end: {mode} tx={}", on_off(e.tx_enabled())));
     for l in &logged {
@@ -434,6 +444,7 @@ fn play(mut e: Engine, tier: Tier, role: Role, act: Act) -> Scene {
         logged,
         end: mode,
         tx: e.tx_enabled(),
+        cw_ids,
     }
 }
 
@@ -1649,6 +1660,60 @@ fn tx_goes_off_after_a_double_clicked_contest_contact() {
             "{contest}: S&P's own pounce keeps TX on"
         );
     }
+}
+
+/// ⭐ NO FT MODE KEYS A CW ID, ON ANY PATH. With "CW ID after 73" on, no scene keys one: every
+/// contest the picker offers on FT8 and FT4, and two grid contests and a state QSO party on FT1,
+/// DX1 and FT2, through the Contest screen's Running and S&P and every gesture of the Operate
+/// cockpit's. WSJT-X 3.0.2 clears the ID on every GUI tick in FT8 and FT4
+/// (`widgets/mainwindow.cpp:7673`), whatever the activity; FT2, FT1 and DX1 do as FT8 does. The
+/// gestures that leave the contest close an S&P contact with this station's 73 in QSO mode, the
+/// over the ID followed. The control: the same gesture on Q65, which keeps the ID, keys one.
+#[test]
+fn no_ft_mode_keys_a_cw_id_on_any_path() {
+    let roles = [
+        Role::Running,
+        Role::SearchAndPounce,
+        Role::DoubleClick,
+        Role::ClickFromSp,
+        Role::ClickFromRun,
+        Role::ClickFromQso,
+        Role::CallCq,
+        Role::CallCqFromQso,
+        Role::StripSpFromRun,
+        Role::StripSpFromQso,
+    ];
+    let cw_ids = |contest: &str, tier: Tier, role: Role| {
+        let mut e = engine_for(contest, MY_GRID);
+        let mut st = e.settings().clone();
+        st.cw_id_after_73 = true;
+        e.apply_settings(st);
+        play(e, tier, role, act_of(contest)).cw_ids
+    };
+    let mut with_id = Vec::new();
+    let tiers = [
+        (&CONTESTS[..], Tier::Ft8),
+        (&CONTESTS[..], Tier::Ft4),
+        (&["arrlfd", "arrlvhf_jan", "txqp"][..], Tier::TempoFast),
+        (&["arrlfd", "arrlvhf_jan", "txqp"][..], Tier::TempoDeep),
+        (&["arrlfd", "arrlvhf_jan", "txqp"][..], Tier::Ft2),
+    ];
+    for (contests, tier) in tiers {
+        for &contest in contests {
+            for role in roles {
+                let ids = cw_ids(contest, tier, role);
+                if !ids.is_empty() {
+                    with_id.push(format!("{contest:?} {} {role:?}: {ids:?}", tier_name(tier)));
+                }
+            }
+        }
+    }
+    assert_eq!(with_id, Vec::<String>::new(), "CW IDs keyed in an FT mode");
+    assert_eq!(
+        cw_ids("txqp", Tier::Q65, Role::ClickFromSp),
+        [7],
+        "control: Q65 keys its CW ID after this station's 73"
+    );
 }
 
 /// ⭐ The Operate strip's S&P hands the station to the running contest's S&P, its messages and

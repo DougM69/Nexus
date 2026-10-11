@@ -7407,7 +7407,7 @@ export const EN = {
     'Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your interface is wired the other way.',
   'settings.cw.idAfter73.label': 'CW ID after 73',
   'settings.cw.idAfter73.hint':
-    'Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X option, default off). Uses the normal CW keying path — PTT + tone — after the FT8 over, never on top of it.',
+    'Keys your callsign in CW once the final 73 has fully left the air, in Q65, FST4 and MSK144 (stock WSJT-X option, default off). As in WSJT-X, FT8 and FT4 send no CW ID, and neither do FT2, TempoFast or TempoDeep. Uses the normal CW keying path — PTT + tone — after the over, never on top of it.',
 
   // The F-key macro editor. Each key's ROLE is prose (what the key is FOR); F1's role is the
   // Q-code it sends and stays a token in the panel, exactly as the QSO macro set does.

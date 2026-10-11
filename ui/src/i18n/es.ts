@@ -5543,7 +5543,7 @@ export const ES: PartialCatalog = {
   "settings.contestCategory.unassisted.aria.end": "Finalizar la participación sin asistencia",
   "settings.contestCategory.unassisted.hint": "Desactiva a la vez el decodificador de CW con IA, los spots de DX cluster / RBN, el feed de necesarios de PSK Reporter, Super Check Partial y el historial de indicativos, y registra el cambio con fecha y hora. Efecto inmediato. Tus ajustes de cada uno de ellos no se tocan y vuelven al desactivar esto.",
   "settings.contestCategory.unassisted.label": "Participación sin asistencia",
-  "settings.cw.idAfter73.hint": "Manipula tu indicativo en CW en cuanto el 73 final ha salido del aire por completo (opción de serie de WSJT-X, desactivada por defecto). Usa la ruta normal de manipulación en CW — PTT + tono — después del turno de FT8, nunca encima.",
+  "settings.cw.idAfter73.hint": "Manipula tu indicativo en CW en cuanto el 73 final ha salido del aire por completo, en Q65, FST4 y MSK144 (opción de serie de WSJT-X, desactivada por defecto). Como en WSJT-X, FT8 y FT4 no envían ID en CW, ni tampoco FT2, TempoFast ni TempoDeep. Usa la ruta normal de manipulación en CW — PTT + tono — después del turno, nunca encima.",
   "settings.cw.idAfter73.label": "ID en CW tras el 73",
   "settings.cw.keyLine.dtr": "DTR (la convención en CW)",
   "settings.cw.keyLine.hint": "Qué línea de control manipula el equipo. DTR es lo estándar (RTS = PTT); cambia a RTS si tu interfaz está cableada al revés.",
