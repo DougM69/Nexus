@@ -3526,6 +3526,70 @@ export interface FdClubBoardRow {
   clockMs?: number | null
 }
 
+/** This laptop's club link (`ClubLinkDto`): where its join stands and, on the host, its hosting
+ *  line. Shown in Settings' club section and on the Contest screen whatever the Field Day mode
+ *  switch says (the words are `features/clubLink.ts`). This laptop's screen only: Remote's
+ *  snapshot leaves it out. */
+export interface ClubLink {
+  role: 'host' | 'position'
+  /** The address this laptop's position joins, with the port it uses. */
+  addr: string
+  state: 'looking' | 'joined' | 'turnedAway' | 'unreachable' | 'lost'
+  /** Why the last attempt did not reach the host, in 'unreachable' and in 'lost' once one has. */
+  why?: 'badAddress' | 'refused' | 'noAnswer'
+  /** The host's own words, in 'turnedAway'. */
+  told?: string
+  /** When the link went down (unix seconds), in 'lost'; 0 otherwise. */
+  downSinceUnix: number
+  event: string
+  hostCall: string
+  /** This laptop's position, by the name the host's board shows it under. */
+  position: string
+  clubCode: string
+  hosting?: ClubHosting
+}
+
+/** The host's line: whether the club is open, where a position joins it, and who is in. */
+export interface ClubHosting {
+  up: boolean
+  port: number
+  /** Each of this laptop's network addresses with the port, and the adapter it is on. */
+  addrs: { addr: string; adapter: string }[]
+  /** Other positions connected now (this laptop's own is left out). */
+  connected: number
+  failed?: 'start' | 'portInUse' | 'port'
+  detail?: string
+}
+
+/** Where Nexus's club sync rules stand in Windows Firewall on this laptop
+ *  (`tempo_net::fdfirewall::Status`, `club_firewall_status`); the words are
+ *  `features/clubFirewall.ts`. */
+export interface ClubFirewall {
+  /** `off`: the firewall is off for Private and Public networks, so there is nothing to allow.
+   *  `missing`: none of Nexus's rules is there. `stale`: some are, not as a press would make them
+   *  now (another port, another copy of Nexus). `inPlace`: all three are. */
+  state: 'off' | 'missing' | 'stale' | 'inPlace'
+  /** A rule of Nexus's is there, so there is something to remove. */
+  ours: boolean
+  /** Windows' own rule blocks Nexus on that kind of network, and a block wins over every allow. */
+  blockedPrivate: boolean
+  blockedPublic: boolean
+  /** The firewall blocks every incoming connection on that kind of network. */
+  blocksAllPrivate: boolean
+  blocksAllPublic: boolean
+  /** The ports Nexus's rules are for: the Host port, Find club events', the scoreboard's. */
+  hostPort: number
+  searchPort: number
+  boardPort: number
+}
+
+/** What a press of Allow Nexus through Windows Firewall, or of its Remove, did: whether the
+ *  command ran and exited 0, and the firewall read back afterwards (`null` when unreadable). */
+export interface ClubFirewallPress {
+  ran: boolean
+  status: ClubFirewall | null
+}
+
 /** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
 export interface FdClubStatus {
   /** 'disabled' | 'offline' | 'behind' | 'synced' — derived from (link, queue),
@@ -4692,6 +4756,9 @@ export interface AppSnapshot {
   activePeer: string | null
   qso: QsoStatus | null
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link, whatever the Field Day mode switch says; absent while club sync
+   *  does not run. */
+  clubLink?: ClubLink | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent

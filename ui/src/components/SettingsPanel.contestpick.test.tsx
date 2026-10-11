@@ -341,13 +341,15 @@ describe('the role / category block', () => {
     expect(await chip('Entry category', 'CHECKLOG')).not.toBeUndefined()
   })
 
-  // A club event needs ports through the firewall, and Nexus adds no rule of its own, so the
-  // ports are named where the event is switched on.
+  // A club event needs ports through a firewall that is on, so the ports are named where the
+  // event is switched on, on every platform (Windows' button is SettingsPanel.clubfirewall).
   it('names the club event\'s firewall ports beside Host a club event', async () => {
     renderPanel()
     await openContesting()
     expect(
-      await screen.findByText(/a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373/),
+      await screen.findByText(
+        'A club event uses TCP 42073 (the Host port), UDP 42074 (Find club events) and TCP 7373 (the club TV scoreboard). A firewall that is on must let Nexus in on them.',
+      ),
     ).toBeTruthy()
   })
 

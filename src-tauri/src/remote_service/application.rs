@@ -326,6 +326,9 @@ impl Publisher {
                         // Paths on this computer, and the remedy is at this computer.
                         if let Some(fields) = value.as_object_mut() {
                             fields.remove("keptFiles");
+                            // This laptop's club link: its network addresses and its club
+                            // code, which are its own screen's, and the remedy is here too.
+                            fields.remove("clubLink");
                             // The contest strip's contact in progress is shared between this
                             // computer's own windows only (the contest logger beside the main
                             // window); a Remote viewer sees the main window's strip in the stream.
@@ -1073,6 +1076,10 @@ mod tests {
             // Repair clock raises Windows' administrator prompt on the STATION's screen, for the
             // same reason, and the repair waits on it.
             "repair_clock",
+            // So does the club section's Allow Nexus through Windows Firewall, and what it reads
+            // is the station's own firewall, for the station's own screen.
+            "club_firewall_press",
+            "club_firewall_status",
         ] {
             assert!(serde_json::from_value::<Command>(json!(command)).is_err());
         }
@@ -1145,6 +1152,10 @@ mod tests {
                 .is_some_and(|c| !c.contains_key("clubCode")),
             "{club}"
         );
+        // This laptop's club link (its addresses and its code) stays on its own screen. The
+        // control: the station's own snapshot carries it.
+        assert!(value["data"].get("clubLink").is_none(), "{}", value["data"]);
+        assert!(engine.lock().unwrap().snapshot().club_link.is_some());
         let mut keys: Vec<&str> = club["refused"][0]
             .as_object()
             .expect("the turned-away entry is in Remote's snapshot")

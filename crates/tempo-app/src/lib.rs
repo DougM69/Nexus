@@ -16,6 +16,7 @@ pub mod alltxt;
 pub mod bandplan;
 pub mod call_history;
 pub mod clocksync;
+pub mod club_firewall;
 pub mod clubclock;
 pub mod connect_web;
 pub mod dto;
@@ -991,6 +992,8 @@ impl AppState {
             work_call: None,
             work_park: None,
             field_day: None,
+            // The engine's club link (fills in snapshot()).
+            club_link: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
             late_decodes: None,

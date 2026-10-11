@@ -2842,6 +2842,74 @@ pub struct FdClubDto {
     pub club_code: String,
 }
 
+/// ⭐ **This laptop's club link** ([`AppSnapshot::club_link`]): where its join stands and, on the
+/// host, its hosting line. Shown in Settings' club section and on the Contest screen whatever the
+/// Field Day mode switch says, which is why it is not in [`FdClubDto`]: that block exists only
+/// while the mode is on.
+///
+/// ⛔ This laptop's screen only: it carries this computer's network addresses and its club code,
+/// so Remote's snapshot leaves it out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClubLinkDto {
+    /// "host" | "position".
+    pub role: String,
+    /// The address this laptop's position joins, with the port it uses (the host's own is its
+    /// loopback).
+    pub addr: String,
+    /// `fdevent::LinkState`: "looking" | "joined" | "turnedAway" | "unreachable" | "lost".
+    pub state: String,
+    /// Why the last attempt did not reach the host, in "unreachable" and in "lost" once an
+    /// attempt has failed: "badAddress" | "refused" | "noAnswer".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// The host's own words, in "turnedAway".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told: Option<String>,
+    /// When the link went down (unix seconds), in "lost"; 0 otherwise.
+    pub down_since_unix: u64,
+    /// The event and the host's call from the last welcome (empty before one).
+    pub event: String,
+    pub host_call: String,
+    /// This laptop's position, by the name the host's board shows it under.
+    pub position: String,
+    /// This laptop's club code (`fdevent::club_code`), empty without a club key.
+    pub club_code: String,
+    /// The host's alone: its hosting line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosting: Option<ClubHostingDto>,
+}
+
+/// [`ClubLinkDto::hosting`]: whether the club is open, where a position joins it, and who is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClubHostingDto {
+    /// The port is open and the club log is up.
+    pub up: bool,
+    pub port: u16,
+    /// Where a position joins: each of this laptop's network addresses with the port, and the
+    /// adapter it is on.
+    pub addrs: Vec<ClubLanAddrDto>,
+    /// Other positions connected now: this laptop's own, joined over loopback, is left out.
+    pub connected: u32,
+    /// Why it is not up (`fdevent::HostFailure`): "start" | "portInUse" | "port".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<String>,
+    /// The words that came with the failure: the engine's sentence or the system's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+}
+
+/// One entry of [`ClubHostingDto::addrs`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClubLanAddrDto {
+    /// `address:port`, as a joiner types it.
+    pub addr: String,
+    /// The adapter's name ("Wi-Fi"), empty when the system gives none.
+    pub adapter: String,
+}
+
 /// [`FdClubDto::kept_out`]: how many contacts the host keeps listed, and the newest of them
 /// (at most `fdevent::KEPT_OUT_SHOWN`), oldest of those first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3997,6 +4065,10 @@ pub struct AppSnapshot {
     pub qso: Option<QsoStatus>,
     /// Present when `mode == FieldDay`.
     pub field_day: Option<FieldDayStatus>,
+    /// ⭐ This laptop's club link ([`ClubLinkDto`]), whatever the Field Day mode switch says.
+    /// Absent while club sync does not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub club_link: Option<ClubLinkDto>,
     /// Signals decoded in the most recent RX slot (live decode feed).
     pub recent_decodes: Vec<DecodeRow>,
     /// The period a band or mode change caught while it was being decoded, which WSJT-X shows

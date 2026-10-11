@@ -2768,6 +2768,19 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// ⭐ **Which position pump owns the club link** ([`Self::fd_link_take_over`]): the
+    /// generation the newest pump's bridge carries. The shell's supervisor stops a pump and
+    /// starts the next for the same address when the contest changes; the stopped one notices
+    /// within a quarter of a second and then reports its link down, and on a LAN the next one is
+    /// often in by then. That late report took the chip Offline and the line to "Lost the host"
+    /// while the new link was up. Every call a pump makes into the mirror is checked against
+    /// this, so a stopped pump's last calls land on nothing.
+    fd_link_gen: u64,
+    /// The host's network addresses as its beacon last listed them (`fdsync::lan_addrs`): where
+    /// its hosting line tells a joiner to join. Empty while not hosting.
+    fd_host_lan: Vec<tempo_net::fdsync::LanAddr>,
+    /// Why hosting is not up, as the shell's supervisor last found ([`Self::fd_host_result`]).
+    fd_host_failure: Option<crate::fdevent::HostFailure>,
     /// ⛔ **This position's club key** — what its JOIN proves the position with, which the shell
     /// reads (or makes) once at startup and hands here ([`Self::set_fd_position_key`]). Held
     /// apart from Settings on purpose: Settings reach the screen, Remote and settings.json, and
@@ -5450,6 +5463,9 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_link_gen: 0,
+            fd_host_lan: Vec::new(),
+            fd_host_failure: None,
             fd_position_key: Default::default(),
             fd_position_key_hash: String::new(),
             fd_forwarded_seq: 0,
@@ -5940,6 +5956,9 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // The address the club link line is about, before the save: a save that moves it
+        // starts the line afresh at the end of this function.
+        let club_target_was = self.fd_sync_targets().1;
         // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
         // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
         // new settings land, because after the assignment the old answer is gone and the edge is
@@ -6366,6 +6385,11 @@ impl Engine {
         let scope_now = self.settings.yaesu_rf_scope;
         if scope_was_on && !scope_now {
             self.clear_scope_state();
+        }
+        // Another join address (or hosting switched on or off): what the link line knew was
+        // about another host.
+        if self.fd_sync_targets().1 != club_target_was {
+            self.fd_mirror.forget_host();
         }
     }
 
@@ -12363,6 +12387,83 @@ impl Engine {
     /// re-porting). The journal file stays — a restart replays it.
     pub fn fd_host_stop(&mut self) {
         self.fd_club = None;
+        self.fd_host_lan.clear();
+        self.fd_host_failure = None;
+    }
+
+    /// What the shell's supervisor found when it last tried to host: `None` = the port is open
+    /// and the club is up, `Some` = why not. The host's hosting line says which.
+    pub fn fd_host_result(&mut self, failure: Option<crate::fdevent::HostFailure>) {
+        self.fd_host_failure = failure;
+    }
+
+    /// The host's network addresses, as its beacon lists them each second. Ignored while not
+    /// hosting: a beacon thread's last second after a stop describes no club.
+    pub fn fd_note_host_lan(&mut self, lan: Vec<tempo_net::fdsync::LanAddr>) {
+        if self.fd_club.is_some() {
+            self.fd_host_lan = lan;
+        }
+    }
+
+    /// ⭐ **This laptop's club link** ([`crate::dto::ClubLinkDto`]), for the screens that show it
+    /// whatever the Field Day mode switch says. `None` while club sync does not run.
+    pub fn fd_club_link(&self) -> Option<crate::dto::ClubLinkDto> {
+        let addr = self.fd_sync_targets().1?;
+        let m = &self.fd_mirror;
+        let state = m.link_state();
+        let port = self.settings.fd_host_port;
+        let hosting = self
+            .settings
+            .fd_host_enable
+            .then(|| crate::dto::ClubHostingDto {
+                up: self.fd_club.is_some() && self.fd_host_failure.is_none(),
+                port,
+                addrs: self
+                    .fd_host_lan
+                    .iter()
+                    .map(|a| crate::dto::ClubLanAddrDto {
+                        addr: format!("{}:{port}", a.ip),
+                        adapter: a.adapter.clone(),
+                    })
+                    .collect(),
+                connected: self.fd_club.as_ref().map_or(0, |club| {
+                    let own = self.settings.fd_position_id.as_str();
+                    club.positions()
+                        .keys()
+                        .filter(|pos| pos.as_str() != own && club.connected(pos))
+                        .count() as u32
+                }),
+                failed: self.fd_host_failure.as_ref().map(|f| f.code().to_string()),
+                detail: self
+                    .fd_host_failure
+                    .as_ref()
+                    .map(|f| f.detail().to_string())
+                    .unwrap_or_default(),
+            });
+        Some(crate::dto::ClubLinkDto {
+            role: if hosting.is_some() {
+                "host"
+            } else {
+                "position"
+            }
+            .to_string(),
+            addr: tempo_net::fdsync::join_target(&addr),
+            state: state.code().to_string(),
+            why: state.why().map(|why| why.code().to_string()),
+            told: (state == crate::fdevent::LinkState::TurnedAway)
+                .then(|| m.last_error.clone())
+                .flatten(),
+            down_since_unix: if matches!(state, crate::fdevent::LinkState::Lost(_)) {
+                m.down_since_unix
+            } else {
+                0
+            },
+            event: m.event.clone(),
+            host_call: m.host_call.clone(),
+            position: self.fd_position_label(),
+            club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
+            hosting,
+        })
     }
 
     pub fn fd_hosting(&self) -> bool {
@@ -12826,6 +12927,19 @@ impl Engine {
         &mut self.fd_mirror
     }
 
+    /// ⭐ **A new position pump takes the club link over** (`fdbridge::EnginePositionSync::new`,
+    /// and the shell's supervisor as it stops one): from now on every older pump's calls into
+    /// the mirror are ignored ([`Self::fd_link_owned_by`]). Returns the new owner's generation.
+    pub fn fd_link_take_over(&mut self) -> u64 {
+        self.fd_link_gen = self.fd_link_gen.wrapping_add(1);
+        self.fd_link_gen
+    }
+
+    /// Is the pump with this generation the one that owns the club link now?
+    pub fn fd_link_owned_by(&self, gen: u64) -> bool {
+        self.fd_link_gen == gen
+    }
+
     /// ⭐ **The contest this position's ROWS belong to** — the JOIN's `contest`.
     ///
     /// The live session's when Field Day is running, because that is what the rows were
@@ -12886,10 +13000,7 @@ impl Engine {
         if crate::fdevent::canonical_contest(theirs) == mine {
             return Ok(());
         }
-        Err(crate::fdevent::contest_mismatch(
-            &crate::fdevent::contest_name(theirs),
-            &mine,
-        ))
+        Err(crate::fdevent::contest_mismatch(theirs, &mine))
     }
 
     /// Presence for the club band board — the n3fjp `report_band` idea made
@@ -22831,6 +22942,8 @@ contact yourself."
                 s.field_day = self.field_day_status();
             }
         }
+        // Outside the Field Day block, which exists only while the mode is on.
+        s.club_link = self.fd_club_link();
 
         // #64, display side only: a DXpedition Fox packs two messages into one frame —
         // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
@@ -44834,6 +44947,208 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **A joining laptop says where its join stands, whatever the Field Day mode switch
+    /// says.** At the rehearsal the joiner typed the host's address and saw nothing: the club
+    /// block lives inside the Field Day block, which is not there while the mode is off, and
+    /// nothing anywhere said whether the address was tried, refused, unanswered or let in.
+    #[test]
+    fn the_club_link_says_where_a_join_stands_with_the_field_day_mode_off() {
+        use tempo_net::fdsync::Unreachable;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_event = "ilqp".into();
+        s.fd_position_name = "CW tent".into();
+        s.fd_join_addr = " 192.168.1.10 ".into();
+        e.apply_settings(s);
+        e.set_fd_position_key(tempo_net::fdsync::PositionKey::new(club_key_hash(
+            "this laptop",
+        )));
+        assert!(!e.settings().fd_active, "premise: the mode is off");
+        let link = |e: &Engine| e.snapshot().club_link.expect("a join address is set");
+        assert_eq!(
+            e.snapshot().field_day,
+            None,
+            "no Field Day block to carry it"
+        );
+        let l = link(&e);
+        assert_eq!(
+            (l.role.as_str(), l.addr.as_str(), l.state.as_str()),
+            ("position", "192.168.1.10:42073", "looking"),
+            "the address as it is joined, the club's port added"
+        );
+        assert_eq!(l.position, "CW tent");
+        assert_eq!(
+            l.club_code,
+            crate::fdevent::club_code(&e.fd_position_key_hash)
+        );
+        assert!(!l.club_code.is_empty());
+        assert_eq!(l.hosting, None, "a position hosts nothing");
+        // No answer there.
+        e.fd_mirror_mut().on_unreachable(Unreachable::NoAnswer);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.why.as_deref()),
+            ("unreachable", Some("noAnswer"))
+        );
+        // Turned away, in the host's own words.
+        e.fd_mirror_mut().on_link(true, 100);
+        e.fd_mirror_mut().last_error = Some("this club is on the air as W9AAA".into());
+        e.fd_mirror_mut().on_link(false, 101);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.told.as_deref()),
+            ("turnedAway", Some("this club is on the air as W9AAA"))
+        );
+        // The host gone after it: the refusal is no longer what the line quotes.
+        e.fd_mirror_mut().on_unreachable(Unreachable::NoAnswer);
+        let l = link(&e);
+        assert_eq!((l.state.as_str(), l.told.as_deref()), ("unreachable", None));
+        // In: the event, the host, this laptop's position and its code.
+        e.fd_mirror_mut().on_link(true, 120);
+        e.fd_mirror_mut()
+            .on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        let l = link(&e);
+        assert_eq!(
+            (
+                l.state.as_str(),
+                l.event.as_str(),
+                l.host_call.as_str(),
+                l.told.as_deref()
+            ),
+            ("joined", "ILQP rehearsal", "W9AAA", None)
+        );
+        // Lost, since when, and why the attempt since failed.
+        e.fd_mirror_mut().on_link(false, 200);
+        e.fd_mirror_mut().on_unreachable(Unreachable::Refused);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.why.as_deref(), l.down_since_unix),
+            ("lost", Some("refused"), 200)
+        );
+        // The JSON key the screens read.
+        assert_eq!(
+            serde_json::to_value(e.snapshot()).unwrap()["clubLink"]["state"],
+            "lost"
+        );
+        // A connection again: no longer down, so no time it went down.
+        e.fd_mirror_mut().on_link(true, 230);
+        let l = link(&e);
+        assert_eq!((l.state.as_str(), l.down_since_unix), ("looking", 0));
+        // Club sync off: no line. The control for every assertion above.
+        let mut s = e.settings().clone();
+        s.fd_join_addr.clear();
+        e.apply_settings(s);
+        assert_eq!(e.snapshot().club_link, None);
+        assert!(serde_json::to_value(e.snapshot())
+            .unwrap()
+            .get("clubLink")
+            .is_none());
+    }
+
+    /// A new join address starts the link line afresh: what it knew was about another host. The
+    /// same address saved again changes nothing.
+    #[test]
+    fn a_new_join_address_starts_the_link_line_afresh() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        e.apply_settings(s.clone());
+        e.fd_mirror_mut().on_link(true, 100);
+        e.fd_mirror_mut().last_error = Some("this club is on the air as W9AAA".into());
+        e.fd_mirror_mut().on_link(false, 101);
+        let state = |e: &Engine| e.snapshot().club_link.map(|l| l.state);
+        e.apply_settings(s.clone());
+        assert_eq!(state(&e).as_deref(), Some("turnedAway"), "the same address");
+        s.fd_join_addr = "192.168.1.11:42073".into();
+        e.apply_settings(s);
+        assert_eq!(state(&e).as_deref(), Some("looking"), "another address");
+    }
+
+    /// ⭐ **The host says that it is hosting, where a position joins it, and who is in** — or why
+    /// it is not hosting. A failed bind used to reach the Connections log only.
+    #[test]
+    fn the_host_line_says_where_to_join_and_who_is_in() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-host-line-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_fd_position_key(tempo_net::fdsync::PositionKey::new(club_key_hash(
+            "the host",
+        )));
+        let hosting = |e: &Engine| {
+            let l = e.snapshot().club_link.expect("hosting is on");
+            assert_eq!(l.role, "host");
+            assert_eq!(l.addr, "127.0.0.1:42073", "it joins itself");
+            l.hosting.expect("the host's line")
+        };
+        // Not up yet: the supervisor has not opened the port.
+        assert!(!hosting(&e).up);
+        e.fd_host_start(dir.join("club.ndjson")).unwrap();
+        // The club log is up, and the last try at the port failed: not up.
+        e.fd_host_result(Some(crate::fdevent::HostFailure::PortInUse));
+        assert!(!hosting(&e).up);
+        e.fd_host_result(None);
+        let lan = |adapter: &str, ip: [u8; 4]| tempo_net::fdsync::LanAddr {
+            adapter: adapter.into(),
+            ip: ip.into(),
+            prefix: 24,
+        };
+        e.fd_note_host_lan(vec![
+            lan("Wi-Fi", [192, 168, 1, 10]),
+            lan("Ethernet", [10, 0, 0, 5]),
+        ]);
+        let h = hosting(&e);
+        assert!(h.up);
+        assert_eq!(
+            (h.port, h.failed.as_deref(), h.detail.as_str()),
+            (42073, None, "")
+        );
+        assert_eq!(
+            h.addrs
+                .iter()
+                .map(|a| (a.addr.as_str(), a.adapter.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("192.168.1.10:42073", "Wi-Fi"),
+                ("10.0.0.5:42073", "Ethernet")
+            ]
+        );
+        assert_eq!(h.connected, 0, "nobody in yet");
+        // This laptop's own position and one more in: one other. Each leaves.
+        let own_hash = e.fd_position_key_hash.clone();
+        let other_hash = crate::fdevent::sha256_hex(&club_key_hash("the CW tent"));
+        let own = e
+            .fd_club_join(3, "eeee0001", "", "W9XYZ", "arrlfd", "", &own_hash)
+            .expect("the host's own position");
+        let other = e
+            .fd_club_join(3, "aaaa0002", "CW tent", "W9XYZ", "arrlfd", "", &other_hash)
+            .expect("a position");
+        assert_eq!(hosting(&e).connected, 1, "the other position");
+        e.fd_club_disconnect("aaaa0002", other.link);
+        assert_eq!(hosting(&e).connected, 0);
+        e.fd_club_disconnect("eeee0001", own.link);
+        assert_eq!(hosting(&e).connected, 0);
+        // The port taken by another program: not up, and why.
+        e.fd_host_stop();
+        e.fd_host_result(Some(crate::fdevent::HostFailure::PortInUse));
+        let h = hosting(&e);
+        assert!(!h.up);
+        assert_eq!(h.failed.as_deref(), Some("portInUse"));
+        assert_eq!(h.addrs, vec![], "no addresses for a club that is not open");
+        // A beacon's last second after a stop lists nothing.
+        e.fd_note_host_lan(vec![lan("Wi-Fi", [192, 168, 1, 10])]);
+        assert_eq!(hosting(&e).addrs, vec![]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -45326,8 +45641,11 @@ mod tests {
             )
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
-            refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
-            "{refused}"
+            refused.starts_with(
+                "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field \
+                 Day."
+            ),
+            "both contests as the picker names them: {refused}"
         );
         let t = 1_792_342_800; // 1700Z, 18 October 2026
         for row in [
@@ -45462,9 +45780,12 @@ mod tests {
         let other = e
             .fd_accept_host_contest("arrlfd")
             .expect_err("a host running another contest");
-        assert!(
-            other.contains("ARRL-FIELD-DAY") && other.contains("IL QSO Party"),
-            "{other}"
+        assert_eq!(
+            other,
+            "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO \
+             Party. Pick ARRL Field Day as the contest on the Contesting tab in Settings, then \
+             rejoin. Contacts you log meanwhile stay in your own log.",
+            "both contests named as the picker names them"
         );
         // A pick that differs from the running session — set here directly, because a SAVE that
         // moves the pick switches the session with it (`save_switches_contest`): the rows are

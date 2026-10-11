@@ -1,6 +1,7 @@
 import type { FdDisplaySettings } from '../fieldDayObservation'
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type {
+  ClubLink,
   ContestBoard,
   FdClubStatus,
   FdMergeReport,
@@ -17,6 +18,7 @@ import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } 
 import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
+import { ADDR_SEP, clubLinkLines, type ClubLinkLine } from '../features/clubLink'
 import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -159,6 +161,9 @@ const FD_POWER_TIERS = [
 
 interface Props {
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link (`AppSnapshot.clubLink`), said here whatever the Field Day mode
+   *  switch says. Not passed on Remote or in the logger window. */
+  clubLink?: ClubLink | null
   onSetMode?: (mode: ModeRequest) => void
   /** A complete ephemeral display capture; native loaders and writes stay disabled. */
   observation?: FdDisplaySettings
@@ -922,6 +927,34 @@ function clockCell(ms: number | null | undefined): string {
     : t('fieldDay.club.board.clock.behind', { secs: -secs })
 }
 
+/** The club link's lines (`features/clubLink.ts`) in the club block's two styles: the addresses
+ *  and the club code each in a box a reader can copy from. */
+function ClubLinkRows({ lines }: { lines: ClubLinkLine[] }) {
+  return (
+    <>
+      {lines.map((l) => (
+        <div key={l.key} style={l.alert ? CLUB_WARN : CLUB_NOTE} role={l.alert ? 'alert' : 'status'} data-club-link={l.key}>
+          {l.text}
+          {l.addrs?.map((a, i) => (
+            <Fragment key={a}>
+              {i > 0 ? ADDR_SEP : ' '}
+              <span className="mono">{a}</span>
+            </Fragment>
+          ))}
+          {l.code && (
+            <>
+              {' '}
+              <span className="mono" style={{ ...CLUB_CODE, fontSize: textPx(12) }}>
+                {t('fieldDay.club.code', { code: l.code })}
+              </span>
+            </>
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
 /** The chip's text for each derived state (honesty rule: the queue is IN the
  * label, so "connected but behind" can never masquerade as synced). */
 function clubChipText(club: FdClubStatus): string {
@@ -1142,6 +1175,7 @@ export function FdClubSection({
   readOnly = false,
   fieldDay = true,
   keepsDupes = false,
+  link = null,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
@@ -1158,6 +1192,9 @@ export function FdClubSection({
   /** The contest reports its duplicates (`DupeRule::log_dupes`), so the club file keeps a
    *  repeat as a zero-point line instead of keeping only the earliest. */
   keepsDupes?: boolean
+  /** This laptop's club link: the lines the block does not already say. The contest screen's
+   *  own block only, never the pop-out or Remote. */
+  link?: ClubLink | null
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
@@ -1290,6 +1327,7 @@ export function FdClubSection({
           </button>
         )}
       </div>
+      {link && <ClubLinkRows lines={clubLinkLines(link, true)} />}
       {/* This PC's clock against the host's: said from 2 s, a warning past 30 s. Shown
           only — Nexus never changes a clock. */}
       {Math.abs(club.skewSecs) > CLOCK_WARN_SECS ? (
@@ -1520,6 +1558,24 @@ export function FdClubRefused({ contest, why }: { contest: string; why: ClubSync
       <div style={CLUB_WARN} role="status">
         {clubSyncRefusalText(why, contest)}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Where this laptop's club link stands, said where the club block would be while the Field Day
+ * mode is off: there is no club block then, and a laptop told to join a host said nothing at
+ * all about whether it had.
+ */
+export function FdClubLink({ link }: { link: ClubLink }) {
+  return (
+    <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
+      <div style={CLUB_HEADER}>
+        <span style={{ fontSize: textPx(13), fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.club.head')}
+        </span>
+      </div>
+      <ClubLinkRows lines={clubLinkLines(link)} />
     </div>
   )
 }
@@ -1863,6 +1919,7 @@ export function FieldDayScoreboard({
 
 export function ContestView({
   fieldDay,
+  clubLink,
   onSetMode,
   fdActive = false,
   fdRuleset = null,
@@ -2639,8 +2696,12 @@ export function ContestView({
           readOnly={observed}
           fieldDay={fdEventIsFieldDay}
           keepsDupes={fieldDay.dupeRule?.logDupes === true}
+          link={observed ? null : clubLink}
         />
       )}
+      {/* …or, with the Field Day mode off, where this laptop's club link stands: club sync
+          follows its own settings, not that switch. */}
+      {!fieldDay?.club && !clubRefusal && !observed && clubLink && <FdClubLink link={clubLink} />}
       {/* …or why it is not syncing: switched on for a contest club sync cannot run. The
           station's own settings, which a Remote observation does not carry. */}
       {!fieldDay?.club && clubRefusal && (

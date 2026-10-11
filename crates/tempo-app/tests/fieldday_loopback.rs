@@ -78,7 +78,7 @@ fn start_host(eng: &Shared, listener: std::net::TcpListener) -> Arc<AtomicBool> 
 
 fn start_pump(eng: &Shared, addr: &str) -> Arc<AtomicBool> {
     let sd = Arc::new(AtomicBool::new(false));
-    let backend: Arc<dyn PositionSync> = Arc::new(EnginePositionSync(eng.clone()));
+    let backend: Arc<dyn PositionSync> = Arc::new(EnginePositionSync::new(eng.clone()));
     let (a, sd2) = (addr.to_string(), sd.clone());
     std::thread::spawn(move || fdsync::run_position_until(&a, backend, sd2));
     sd
@@ -2043,5 +2043,189 @@ fn a_laptop_back_from_a_dropped_link_is_turned_away_only_until_the_host_notices(
         sd.store(true, Ordering::Relaxed);
     }
     std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A port nothing holds, below the kernel's ephemeral range: let go, only a bind that names it
+/// can take it, so a refused connect there, or a host bound there again, is this test's own.
+fn port_below_the_ephemeral_range() -> u16 {
+    use std::hash::BuildHasher;
+    let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|range| range.split_whitespace().next()?.parse().ok())
+        .unwrap_or(32_768u16);
+    let (floor, ceiling) = (20_000u16, low.min(32_768));
+    (0..64u8)
+        .map(|attempt| {
+            let r = std::hash::RandomState::new().hash_one(attempt);
+            floor + (r % u64::from(ceiling - floor)) as u16
+        })
+        .find(|&port| std::net::TcpListener::bind(("127.0.0.1", port)).is_ok())
+        .expect("a free port below the ephemeral range")
+}
+
+/// A laptop set up to join at `addr` for `contest` with its Field Day mode OFF: club sync
+/// follows its own settings, not that switch.
+fn joiner_with_the_mode_off(posid: &str, name: &str, contest: &str, addr: &str) -> Shared {
+    let mut e = Engine::new("W9ABC", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.fd_event = contest.into();
+    s.fd_position_id = posid.into();
+    s.fd_position_name = name.into();
+    s.fd_join_addr = addr.into();
+    e.apply_settings(s);
+    e.set_fd_position_key(club_key(posid));
+    Arc::new(Mutex::new(e))
+}
+
+/// ⭐ **A joining laptop says where its join stands — through real sockets, the real bridge and
+/// the snapshot its screens read — with its Field Day mode off.** At the rehearsal a laptop
+/// typed the host's address and nothing on it said whether it was connected. Each answer an
+/// address can give is met in turn: nothing listening there, nothing answering, a host that
+/// turns the laptop away by name, the same host letting it in, and that host going away. The
+/// host's own line counts it in.
+#[test]
+fn a_joining_laptop_says_where_its_join_stands_with_its_field_day_mode_off() {
+    let link = |eng: &Shared| {
+        engine_lock(eng)
+            .snapshot()
+            .club_link
+            .expect("club sync runs while a join address is set")
+    };
+    let shown = |eng: &Shared| format!("{:?}", engine_lock(eng).snapshot().club_link);
+
+    // Nothing listens at the address.
+    let dead = format!("127.0.0.1:{}", port_below_the_ephemeral_range());
+    let b = joiner_with_the_mode_off("bbbb0002", "CW tent", "ilqp", &dead);
+    assert!(
+        engine_lock(&b).snapshot().field_day.is_none(),
+        "premise: the mode is off, so there is no club block"
+    );
+    assert_eq!(link(&b).state, "looking", "nothing back yet");
+    let b_sd = start_pump(&b, &dead);
+    wait_showing(
+        "nothing listening there",
+        5,
+        || link(&b).why.as_deref() == Some("refused"),
+        || shown(&b),
+    );
+    assert_eq!(link(&b).state, "unreachable");
+    b_sd.store(true, Ordering::Relaxed);
+
+    // Nothing answers: a listener whose one-connection queue is full drops the next SYN, as a
+    // host whose firewall drops it does.
+    let raw = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .unwrap();
+    let any: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
+    raw.bind(&any.into()).unwrap();
+    raw.listen(0).unwrap();
+    let full: std::net::TcpListener = raw.into();
+    let quiet = full.local_addr().unwrap().to_string();
+    let _queued = std::net::TcpStream::connect(&quiet).unwrap();
+    let c = joiner_with_the_mode_off("cccc0003", "SSB tent", "ilqp", &quiet);
+    let c_sd = start_pump(&c, &quiet);
+    wait_showing(
+        "no answer there",
+        8,
+        || link(&c).why.as_deref() == Some("noAnswer"),
+        || shown(&c),
+    );
+    assert_eq!(link(&c).state, "unreachable");
+    c_sd.store(true, Ordering::Relaxed);
+
+    // A host that turns it away: an ARRL Field Day club, and this laptop logging the party.
+    let dir = std::env::temp_dir().join(format!("fd-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let port = port_below_the_ephemeral_range();
+    let addr = format!("127.0.0.1:{port}");
+    let host = fd_engine("W9ABC", "aaaa0001", "HQ", "");
+    {
+        let mut e = engine_lock(&host);
+        let mut s = e.settings().clone();
+        s.fd_host_enable = true;
+        s.fd_host_port = port;
+        e.apply_settings(s);
+        e.fd_host_start(dir.join("fd_event_link.jsonl")).unwrap();
+        e.fd_host_result(None);
+    }
+    let host_sd = start_host(&host, reusable_listener(port));
+    let d = joiner_with_the_mode_off("dddd0004", "Digital", "ilqp", &addr);
+    let d_sd = start_pump(&d, &addr);
+    wait_showing(
+        "turned away",
+        5,
+        || link(&d).state == "turnedAway",
+        || shown(&d),
+    );
+    let told = link(&d).told.expect("the host's words");
+    assert!(
+        told.starts_with(
+            "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO Party."
+        ),
+        "{told}"
+    );
+    assert_eq!(
+        Some(told),
+        last_error(&d),
+        "the host's own sentence, as the club block shows it"
+    );
+    d_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Set right and let in (the shell restarts the pump when the contest changes): the event,
+    // the host, this laptop's position and its club code.
+    {
+        let mut e = engine_lock(&d);
+        let mut s = e.settings().clone();
+        s.fd_event = "arrlfd".into();
+        e.apply_settings(s);
+    }
+    let d_sd = start_pump(&d, &addr);
+    wait_showing("let in", 5, || link(&d).state == "joined", || shown(&d));
+    let l = link(&d);
+    assert_eq!(
+        (
+            l.event.as_str(),
+            l.host_call.as_str(),
+            l.position.as_str(),
+            l.told.as_deref()
+        ),
+        ("W9ABC Field Day", "W9ABC", "Digital", None)
+    );
+    assert_eq!(
+        l.club_code,
+        tempo_app::fdevent::club_code(&sha256_hex(club_key("dddd0004").secret()))
+    );
+    let hosting = || {
+        engine_lock(&host)
+            .snapshot()
+            .club_link
+            .and_then(|l| l.hosting)
+            .expect("the host's line")
+    };
+    assert!(hosting().up);
+    assert_eq!((hosting().port, hosting().connected), (port, 1));
+
+    // The host goes away: lost, since when, and why the attempt since failed.
+    host_sd.store(true, Ordering::Relaxed);
+    wait_showing(
+        "the host lost",
+        20,
+        || link(&d).state == "lost",
+        || shown(&d),
+    );
+    assert!(link(&d).down_since_unix > 0);
+    wait_showing(
+        "why the next attempt failed",
+        10,
+        || link(&d).why.as_deref() == Some("refused"),
+        || shown(&d),
+    );
+    assert_eq!(link(&d).state, "lost", "still lost, and trying again");
+    d_sd.store(true, Ordering::Relaxed);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -587,7 +587,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // section — which is exactly the section the operator could not make sense of.
     keywords: ['club', 'sync', 'host', 'join', 'multi-op', 'multiop', 'lan',
       'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
-      'club log', 'spectator', 'tv', 'projector', 'big screen'],
+      'club log', 'spectator', 'tv', 'projector', 'big screen', 'firewall', 'windows firewall'],
   },
 
   // ---- Appearance --------------------------------------------------------------

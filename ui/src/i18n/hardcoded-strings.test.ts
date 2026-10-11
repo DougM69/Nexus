@@ -156,6 +156,11 @@ const MIGRATED = [
   'components/LogEntry.tsx',
   // Removing the newest contest contact: the strip's and the contest screen's sentences.
   'features/contestRemoval.ts',
+  // The club link's words (2026-10-10), which Settings' club section and the Contest screen
+  // share — born migrated.
+  'features/clubLink.ts',
+  // Club sync's Windows Firewall lines (2026-10-10), Settings' club section — born migrated.
+  'features/clubFirewall.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',

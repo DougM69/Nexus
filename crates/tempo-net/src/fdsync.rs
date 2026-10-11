@@ -1148,6 +1148,10 @@ pub trait PositionSync: Send + Sync {
     fn position_report(&self) -> Option<PosReport>;
     /// Link up/down transitions (drives the Offline/Behind/Synced chip).
     fn on_link(&self, connected: bool);
+    /// One attempt to reach the host ended before a connection opened, and why. The joining
+    /// laptop's screen says which, with what to check; the pump tries again on its backoff, as
+    /// after any session.
+    fn on_unreachable(&self, why: Unreachable);
     /// One answered round trip of this position's timed ping — what the position measures
     /// its clock against the host's from. Data for the screen and the board, like every
     /// other method here: the trait has no way to set, step or steer a clock.
@@ -1163,6 +1167,66 @@ fn send_timed_ping(w: &mut impl Write) -> std::io::Result<(u64, Instant)> {
     Ok((t0, sent))
 }
 
+/// Why a position's connection to its host did not open ([`PositionSync::on_unreachable`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unreachable {
+    /// The join address is not one to connect to: not `address:port`, or a name this laptop
+    /// cannot find.
+    BadAddress,
+    /// The host's computer answered that nothing listens on that port: Nexus there is not
+    /// hosting, or hosts on another port.
+    Refused,
+    /// Nothing answered: the connection timed out or found no route. The host is off or on
+    /// another network, or its firewall dropped the connection, which is also how a Windows
+    /// computer that is not hosting answers.
+    NoAnswer,
+}
+
+impl Unreachable {
+    /// The DTO string the screens switch on.
+    pub fn code(self) -> &'static str {
+        match self {
+            Unreachable::BadAddress => "badAddress",
+            Unreachable::Refused => "refused",
+            Unreachable::NoAnswer => "noAnswer",
+        }
+    }
+
+    /// What a failed connect tells the operator: refused, or no answer. Every other way a
+    /// connect fails leaves the same things to check as a timeout does.
+    pub fn of(e: &std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::ConnectionRefused {
+            Unreachable::Refused
+        } else {
+            Unreachable::NoAnswer
+        }
+    }
+}
+
+/// How long a position waits for the host to answer its connection.
+const CONNECT_SECS: u64 = 3;
+
+/// The join address as a position connects to it, worked out without looking a name up: what
+/// was typed, with the club's port ([`DEFAULT_TCP_PORT`]) after an address typed without one, so
+/// "192.168.1.10" joins 192.168.1.10:42073. The screens show this, so the port a position tried
+/// is in front of the operator when no host answers there.
+pub fn join_target(typed: &str) -> String {
+    let typed = typed.trim();
+    match typed.parse::<std::net::IpAddr>() {
+        Ok(ip) => std::net::SocketAddr::new(ip, DEFAULT_TCP_PORT).to_string(),
+        Err(_) if !typed.is_empty() && !typed.contains(':') => {
+            format!("{typed}:{DEFAULT_TCP_PORT}")
+        }
+        Err(_) => typed.to_string(),
+    }
+}
+
+/// The address [`join_target`] names, looked up: `None` when it is not one to connect to.
+pub fn join_address(typed: &str) -> Option<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    join_target(typed).to_socket_addrs().ok()?.next()
+}
+
 /// One connected session: join → welcome → stream the gap → duplex pump.
 /// Returns when the link dies or `shutdown` is set. `Ok(true)` = a welcome
 /// was received (reset the reconnect backoff).
@@ -1171,16 +1235,15 @@ fn run_position_session(
     backend: &Arc<dyn PositionSync>,
     shutdown: &Arc<AtomicBool>,
 ) -> std::io::Result<bool> {
-    let sock_addr = addr
-        .parse::<std::net::SocketAddr>()
-        .or_else(|_| {
-            use std::net::ToSocketAddrs;
-            addr.to_socket_addrs()?
-                .next()
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no address"))
-        })
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(3))?;
+    let Some(sock_addr) = join_address(addr) else {
+        backend.on_unreachable(Unreachable::BadAddress);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a join address",
+        ));
+    };
+    let stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(CONNECT_SECS))
+        .inspect_err(|e| backend.on_unreachable(Unreachable::of(e)))?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
     let _ = stream.set_nodelay(true);
     let mut writer = stream.try_clone()?;
@@ -1410,26 +1473,229 @@ pub fn beacon_socket() -> std::io::Result<UdpSocket> {
     Ok(sock)
 }
 
-/// Send one beacon (best-effort — AP-isolated Wi-Fi eats broadcast, which is
-/// why manual `host:port` entry always remains).
-pub fn send_beacon(sock: &UdpSocket, event: &str, call: &str, port: u16) {
-    let _ = sock.send_to(
-        beacon_line(event, call, port).as_bytes(),
-        ("255.255.255.255", BEACON_PORT),
-    );
+/// One IPv4 address this computer holds on a network, with the adapter it is on: what the
+/// host's screen lists for a joiner to type, and the subnet its beacon is broadcast to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanAddr {
+    /// The adapter's name as the system gives it ("Wi-Fi", "eth0"); empty when it gives none.
+    pub adapter: String,
+    pub ip: std::net::Ipv4Addr,
+    /// The subnet's prefix length: 24 for a 255.255.255.0 netmask.
+    pub prefix: u8,
 }
+
+impl LanAddr {
+    /// The subnet's own broadcast address, `None` for a /31 or a /32: a point-to-point link or
+    /// an address on its own (a VPN's) has none.
+    pub fn broadcast(&self) -> Option<std::net::Ipv4Addr> {
+        if self.prefix >= 31 {
+            return None;
+        }
+        let mask = u32::MAX
+            .checked_shl(32 - u32::from(self.prefix))
+            .unwrap_or(0);
+        Some(std::net::Ipv4Addr::from(u32::from(self.ip) | !mask))
+    }
+}
+
+/// Every IPv4 address this computer holds on an adapter that is up, loopback left out, in the
+/// order the system lists them. Empty when the system cannot list them.
+pub fn lan_addrs() -> Vec<LanAddr> {
+    system_lan_addrs()
+}
+
+/// [`lan_addrs`] from `getifaddrs`: adapters that are up and running (a cable unplugged leaves
+/// an address on an adapter that reaches nobody).
+#[cfg(unix)]
+fn system_lan_addrs() -> Vec<LanAddr> {
+    let mut out = Vec::new();
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs fills `head` with a list that is freed below, and nothing taken from
+    // it outlives that: the name is copied and the addresses are read by value.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return out;
+    }
+    let wanted = (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_uint;
+    let mut node = head;
+    while !node.is_null() {
+        // SAFETY: `node` is a node of the list getifaddrs gave, which is not freed yet.
+        let ifa = unsafe { &*node };
+        node = ifa.ifa_next;
+        if ifa.ifa_flags & wanted != wanted
+            || ifa.ifa_flags & libc::IFF_LOOPBACK as libc::c_uint != 0
+            || ifa.ifa_addr.is_null()
+            || ifa.ifa_netmask.is_null()
+            || ifa.ifa_name.is_null()
+        {
+            continue;
+        }
+        // SAFETY: a non-null `ifa_addr` points at a sockaddr whose family names its shape, and
+        // for AF_INET it and the netmask beside it are sockaddr_in.
+        let (ip, mask) = unsafe {
+            if i32::from((*ifa.ifa_addr).sa_family) != libc::AF_INET {
+                continue;
+            }
+            let ip = (*(ifa.ifa_addr as *const libc::sockaddr_in))
+                .sin_addr
+                .s_addr;
+            let mask = (*(ifa.ifa_netmask as *const libc::sockaddr_in))
+                .sin_addr
+                .s_addr;
+            (u32::from_be(ip), u32::from_be(mask))
+        };
+        // SAFETY: a non-null `ifa_name` is the adapter's NUL-terminated name.
+        let adapter = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+        out.push(LanAddr {
+            adapter: adapter.to_string_lossy().into_owned(),
+            ip: ip.into(),
+            prefix: mask.leading_ones() as u8,
+        });
+    }
+    // SAFETY: `head` came from getifaddrs and is freed once.
+    unsafe { libc::freeifaddrs(head) };
+    out
+}
+
+/// [`lan_addrs`] from `GetAdaptersAddresses`: adapters that are up, by their own names ("Wi-Fi",
+/// "Ethernet", "vEthernet (WSL)").
+#[cfg(windows)]
+fn system_lan_addrs() -> Vec<LanAddr> {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+    // iptypes.h and winerror.h; the crate's features carry neither.
+    const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    // u64 words keep the buffer aligned for the structures written into it. The size asked
+    // for comes back in `size` when the buffer is too small, and an adapter can come up
+    // between two calls, so three tries.
+    let mut size: u32 = 16 * 1024;
+    let mut buf: Vec<u64> = Vec::new();
+    let mut listed = false;
+    for _ in 0..3 {
+        buf = vec![0u64; (size as usize).div_ceil(8)];
+        // SAFETY: `buf` holds `size` bytes, aligned for IP_ADAPTER_ADDRESSES_LH.
+        let rc = unsafe {
+            GetAdaptersAddresses(
+                u32::from(AF_INET.0),
+                flags,
+                None,
+                Some(buf.as_mut_ptr().cast()),
+                &mut size,
+            )
+        };
+        if rc == 0 {
+            listed = true;
+            break;
+        }
+        if rc != ERROR_BUFFER_OVERFLOW {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    if !listed {
+        return out;
+    }
+    let mut adapter = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+    while !adapter.is_null() {
+        // SAFETY: each node, and every pointer in it, lies in `buf`, which outlives the walk.
+        let a = unsafe { &*adapter };
+        adapter = a.Next;
+        if a.OperStatus != IfOperStatusUp || a.IfType == IF_TYPE_SOFTWARE_LOOPBACK {
+            continue;
+        }
+        let name = if a.FriendlyName.is_null() {
+            String::new()
+        } else {
+            // SAFETY: a non-null FriendlyName is a NUL-terminated wide string in `buf`.
+            unsafe { a.FriendlyName.to_string() }.unwrap_or_default()
+        };
+        let mut unicast = a.FirstUnicastAddress;
+        while !unicast.is_null() {
+            // SAFETY: as above.
+            let u = unsafe { &*unicast };
+            unicast = u.Next;
+            let sa = u.Address.lpSockaddr;
+            // SAFETY: a non-null lpSockaddr is a sockaddr whose family names its shape.
+            if sa.is_null() || unsafe { (*sa).sa_family } != AF_INET {
+                continue;
+            }
+            // SAFETY: an AF_INET sockaddr is a SOCKADDR_IN.
+            let b = unsafe { (*(sa as *const SOCKADDR_IN)).sin_addr.S_un.S_un_b };
+            out.push(LanAddr {
+                adapter: name.clone(),
+                ip: std::net::Ipv4Addr::new(b.s_b1, b.s_b2, b.s_b3, b.s_b4),
+                prefix: u.OnLinkPrefixLength,
+            });
+        }
+    }
+    out
+}
+
+/// No adapter list on a system with neither API: the beacon goes where it always did.
+#[cfg(not(any(unix, windows)))]
+fn system_lan_addrs() -> Vec<LanAddr> {
+    Vec::new()
+}
+
+/// Where one beacon goes: the limited broadcast, 255.255.255.255, which leaves a computer by one
+/// adapter only, and then the broadcast address of each subnet in `lan`, which leaves by the
+/// adapter on that subnet. So a host with Wi-Fi, a cable and the virtual adapters WSL, Hyper-V
+/// or a VPN add is heard on every network it is on. Each address once, in `lan`'s order.
+pub fn beacon_targets(lan: &[LanAddr]) -> Vec<std::net::Ipv4Addr> {
+    let mut out = vec![std::net::Ipv4Addr::BROADCAST];
+    for b in lan.iter().filter_map(LanAddr::broadcast) {
+        if !out.contains(&b) {
+            out.push(b);
+        }
+    }
+    out
+}
+
+/// Send one beacon to each of `targets` ([`beacon_targets`]), best-effort: AP-isolated Wi-Fi
+/// eats broadcast, which is why typing the host's address always remains.
+pub fn send_beacon(
+    sock: &UdpSocket,
+    event: &str,
+    call: &str,
+    port: u16,
+    targets: &[std::net::Ipv4Addr],
+) {
+    send_beacon_to(sock, &beacon_line(event, call, port), targets, BEACON_PORT);
+}
+
+/// [`send_beacon`]'s datagrams, to `beacon_port` (a test's own port; the club's is
+/// [`BEACON_PORT`]).
+fn send_beacon_to(sock: &UdpSocket, line: &str, targets: &[std::net::Ipv4Addr], beacon_port: u16) {
+    for ip in targets {
+        let _ = sock.send_to(line.as_bytes(), (*ip, beacon_port));
+    }
+}
+
+/// How long "Find club events" listens: five of a host's once-a-second beacons, so a datagram or
+/// two lost on busy Wi-Fi still finds it.
+pub const DISCOVER_SECS: u64 = 5;
 
 /// Listen for host beacons for up to `secs` and return every distinct event
 /// heard — the "Find club events" button. `SO_REUSEADDR` so two Nexus
 /// instances on one box can both listen (the flexdisc socket shape).
 pub fn discover(secs: u64) -> std::io::Result<Vec<BeaconInfo>> {
+    discover_on(BEACON_PORT, secs)
+}
+
+/// [`discover`] on `beacon_port` (a test's own port; the club's is [`BEACON_PORT`]).
+fn discover_on(beacon_port: u16, secs: u64) -> std::io::Result<Vec<BeaconInfo>> {
     let raw = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
     raw.set_reuse_address(true)?;
-    let addr: std::net::SocketAddr = ([0, 0, 0, 0], BEACON_PORT).into();
+    let addr: std::net::SocketAddr = ([0, 0, 0, 0], beacon_port).into();
     raw.bind(&addr.into())?;
     let sock: UdpSocket = raw.into();
     sock.set_read_timeout(Some(Duration::from_millis(400)))?;
@@ -2742,6 +3008,8 @@ mod tests {
         refuse_host: Mutex<Option<String>>,
         /// Every round trip the pump handed back, in arrival order.
         samples: Mutex<Vec<ClockSample>>,
+        /// Every attempt that did not reach the host, and why, in order.
+        unreachable: Mutex<Vec<Unreachable>>,
         /// This position's club key, a throwaway one.
         key: PositionKey,
     }
@@ -2757,6 +3025,7 @@ mod tests {
                 host_contests: Mutex::new(Vec::new()),
                 refuse_host: Mutex::new(None),
                 samples: Mutex::new(Vec::new()),
+                unreachable: Mutex::new(Vec::new()),
                 key: throwaway_key(),
             }
         }
@@ -2828,6 +3097,9 @@ mod tests {
         }
         fn on_link(&self, up: bool) {
             self.linked.lock().unwrap().push(up);
+        }
+        fn on_unreachable(&self, why: Unreachable) {
+            self.unreachable.lock().unwrap().push(why);
         }
         fn on_clock(&self, sample: ClockSample) {
             self.samples.lock().unwrap().push(sample);
@@ -2902,6 +3174,11 @@ mod tests {
             *posn.linked.lock().unwrap(),
             vec![true, false],
             "link chip saw up then down"
+        );
+        assert_eq!(
+            *posn.unreachable.lock().unwrap(),
+            Vec::<Unreachable>::new(),
+            "a host that answered is never reported unreachable"
         );
         assert_eq!(
             *club.keys.lock().unwrap(),
@@ -3649,6 +3926,271 @@ mod tests {
             *posn.club_qsos.lock().unwrap(),
             7,
             "the over-long line was not read"
+        );
+    }
+
+    // ---- why a join attempt did not reach the host ------------------------
+
+    /// Run a pump at `addr` until it has reported one attempt that did not reach the host, or
+    /// `secs` passed, and hand back what it reported and how its link went.
+    fn first_unreachable(addr: &str, secs: u64) -> (Vec<Unreachable>, Vec<bool>) {
+        let posn = Arc::new(FakePosition::default());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline && posn.unreachable.lock().unwrap().is_empty() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+        let why = posn.unreachable.lock().unwrap().clone();
+        let linked = posn.linked.lock().unwrap().clone();
+        (why, linked)
+    }
+
+    #[test]
+    fn an_address_typed_without_a_port_joins_the_club_port() {
+        assert_eq!(join_target("192.168.1.10"), "192.168.1.10:42073");
+        assert_eq!(join_target(" 192.168.1.10 "), "192.168.1.10:42073");
+        assert_eq!(join_target("fe80::1"), "[fe80::1]:42073");
+        assert_eq!(join_target("laptop-a"), "laptop-a:42073");
+        // A port typed is the port joined.
+        assert_eq!(join_target("192.168.1.10:42111"), "192.168.1.10:42111");
+        assert_eq!(join_target("[fe80::1]:42111"), "[fe80::1]:42111");
+        assert_eq!(join_target(""), "");
+        assert_eq!(
+            join_address("192.168.1.10"),
+            Some(([192, 168, 1, 10], DEFAULT_TCP_PORT).into())
+        );
+        // Not addresses, and nothing is looked up for them.
+        assert_eq!(join_address(""), None);
+        assert_eq!(join_address("192.168.1.10:"), None);
+        assert_eq!(join_address("192.168.1.10:99999"), None);
+    }
+
+    #[test]
+    fn a_join_where_nothing_listens_is_reported_refused() {
+        // Below the ephemeral range, so nothing but a bind naming it can take the port once it
+        // is let go ([`listener_below_the_ephemeral_range`]): nothing listens there.
+        let listener = listener_below_the_ephemeral_range();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let (why, linked) = first_unreachable(&addr.to_string(), 5);
+        assert_eq!(why.first(), Some(&Unreachable::Refused));
+        assert_eq!(linked, Vec::<bool>::new(), "no link came up");
+    }
+
+    #[test]
+    fn a_join_nothing_answers_is_reported_as_no_answer() {
+        // A listener that takes one connection and is never accepted from: its queue is full,
+        // so the kernel drops the next one's SYN and that connect times out, as one to a host
+        // whose firewall drops it does.
+        let raw = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .unwrap();
+        let any: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
+        raw.bind(&any.into()).unwrap();
+        raw.listen(0).unwrap();
+        let listener: TcpListener = raw.into();
+        let addr = listener.local_addr().unwrap();
+        let _queued = TcpStream::connect(addr).expect("the one connection the queue holds");
+        let started = Instant::now();
+        let (why, linked) = first_unreachable(&addr.to_string(), 2 * CONNECT_SECS + 2);
+        assert_eq!(why.first(), Some(&Unreachable::NoAnswer));
+        assert!(
+            started.elapsed() >= Duration::from_secs(CONNECT_SECS),
+            "the attempt waited out its timeout"
+        );
+        assert_eq!(linked, Vec::<bool>::new(), "no link came up");
+        drop(listener);
+    }
+
+    #[test]
+    fn a_join_address_that_is_not_one_is_reported_as_such() {
+        for typed in ["192.168.1.10:99999", ""] {
+            let (why, linked) = first_unreachable(typed, 2);
+            assert_eq!(why.first(), Some(&Unreachable::BadAddress), "{typed:?}");
+            assert_eq!(linked, Vec::<bool>::new(), "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn each_failed_connect_is_named_for_what_it_tells_the_operator() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            Unreachable::of(&Error::from(ErrorKind::ConnectionRefused)),
+            Unreachable::Refused
+        );
+        for kind in [
+            ErrorKind::TimedOut,
+            ErrorKind::HostUnreachable,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::PermissionDenied,
+        ] {
+            assert_eq!(
+                Unreachable::of(&Error::from(kind)),
+                Unreachable::NoAnswer,
+                "{kind:?}"
+            );
+        }
+        assert_eq!(Unreachable::BadAddress.code(), "badAddress");
+        assert_eq!(Unreachable::Refused.code(), "refused");
+        assert_eq!(Unreachable::NoAnswer.code(), "noAnswer");
+    }
+
+    // ---- the beacon on every network the host is on -------------------------
+
+    fn lan(adapter: &str, ip: [u8; 4], prefix: u8) -> LanAddr {
+        LanAddr {
+            adapter: adapter.into(),
+            ip: ip.into(),
+            prefix,
+        }
+    }
+
+    #[test]
+    fn a_subnets_broadcast_address_is_its_host_bits_set() {
+        assert_eq!(
+            lan("Wi-Fi", [192, 168, 1, 10], 24).broadcast(),
+            Some([192, 168, 1, 255].into())
+        );
+        assert_eq!(
+            lan("vEthernet (WSL)", [172, 29, 160, 1], 20).broadcast(),
+            Some([172, 29, 175, 255].into())
+        );
+        assert_eq!(
+            lan("Ethernet", [10, 1, 2, 3], 8).broadcast(),
+            Some([10, 255, 255, 255].into())
+        );
+        assert_eq!(
+            lan("cable, no DHCP", [169, 254, 7, 9], 16).broadcast(),
+            Some([169, 254, 255, 255].into())
+        );
+        assert_eq!(lan("VPN", [10, 8, 0, 2], 32).broadcast(), None);
+        assert_eq!(lan("link", [10, 9, 0, 0], 31).broadcast(), None);
+    }
+
+    #[test]
+    fn the_beacon_goes_to_each_subnet_the_host_is_on_as_well_as_the_limited_broadcast() {
+        // A Windows laptop with Wi-Fi, a cable and the adapter WSL adds: 255.255.255.255 leaves
+        // by one of them only.
+        let host = [
+            lan("Wi-Fi", [192, 168, 1, 10], 24),
+            lan("Ethernet", [10, 0, 0, 5], 24),
+            lan("vEthernet (WSL)", [172, 29, 160, 1], 20),
+            // Two addresses on one subnet: its broadcast address once.
+            lan("Ethernet", [10, 0, 0, 6], 24),
+            // A VPN's address alone has no broadcast address.
+            lan("VPN", [10, 8, 0, 2], 32),
+        ];
+        assert_eq!(
+            beacon_targets(&host),
+            vec![
+                std::net::Ipv4Addr::BROADCAST,
+                [192, 168, 1, 255].into(),
+                [10, 0, 0, 255].into(),
+                [172, 29, 175, 255].into(),
+            ]
+        );
+        assert_eq!(
+            beacon_targets(&[]),
+            vec![std::net::Ipv4Addr::BROADCAST],
+            "a host that cannot list its adapters still sends what it always did"
+        );
+    }
+
+    // Linux: every 127.0.0.0/8 address is this computer's, so two receivers can share a port.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_beacon_reaches_every_address_it_is_sent_to() {
+        // Two receivers on one port, at two loopback addresses: one datagram each.
+        let first = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second = UdpSocket::bind(("127.0.0.2", port)).unwrap();
+        let sender = beacon_socket().unwrap();
+        let line = beacon_line("ILQP rehearsal", "W9XYZ", 42073);
+        send_beacon_to(
+            &sender,
+            &line,
+            &[[127, 0, 0, 1].into(), [127, 0, 0, 2].into()],
+            port,
+        );
+        for rx in [&first, &second] {
+            rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut buf = [0u8; 512];
+            let (n, _) = rx.recv_from(&mut buf).expect("a beacon arrived");
+            assert_eq!(
+                parse_beacon(&buf[..n]),
+                Some(("ILQP rehearsal".into(), "W9XYZ".into(), 42073))
+            );
+        }
+    }
+
+    /// A UDP port nothing holds, below the kernel's ephemeral range, for a test that lets it go
+    /// and binds it again: only a bind that names it can land there meanwhile (the reasoning of
+    /// [`listener_below_the_ephemeral_range`], for UDP's own ports).
+    fn udp_port_below_the_ephemeral_range() -> u16 {
+        use std::hash::BuildHasher;
+        let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+            .ok()
+            .and_then(|range| range.split_whitespace().next()?.parse().ok())
+            .unwrap_or(32_768u16);
+        let (floor, ceiling) = (20_000u16, low.min(32_768));
+        (0..64u8)
+            .map(|attempt| {
+                let r = std::hash::RandomState::new().hash_one(attempt);
+                floor + (r % u64::from(ceiling - floor)) as u16
+            })
+            .find(|&port| UdpSocket::bind(("0.0.0.0", port)).is_ok())
+            .expect("a free UDP port below the ephemeral range")
+    }
+
+    #[test]
+    fn find_club_events_hears_a_host_whose_first_beacon_comes_three_seconds_in() {
+        // A port of the test's own, never the club's.
+        let port = udp_port_below_the_ephemeral_range();
+        let sender = std::thread::spawn(move || {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            for _ in 0..2 {
+                let line = beacon_line("ILQP rehearsal", "W9XYZ", 42073);
+                send_beacon_to(&sock, &line, &[[127, 0, 0, 1].into()], port);
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+        let found = discover_on(port, DISCOVER_SECS).unwrap();
+        sender.join().unwrap();
+        assert_eq!(
+            found.iter().map(|b| b.event.as_str()).collect::<Vec<_>>(),
+            ["ILQP rehearsal"]
+        );
+    }
+
+    #[test]
+    fn this_computers_addresses_include_the_one_it_sends_from() {
+        // The address the system picks to send toward a documentation address (a UDP connect
+        // sends nothing). No route at all = nothing to compare with on this computer.
+        let probe = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let Ok(()) = probe.connect("192.0.2.1:9") else {
+            eprintln!("no IPv4 route on this computer: nothing to compare with");
+            return;
+        };
+        let std::net::IpAddr::V4(from) = probe.local_addr().unwrap().ip() else {
+            unreachable!("an IPv4 socket")
+        };
+        let mine = lan_addrs();
+        assert!(
+            mine.iter().any(|a| a.ip == from),
+            "{from} is not among {mine:?}"
+        );
+        assert!(
+            mine.iter().all(|a| !a.ip.is_loopback() && a.prefix <= 32),
+            "{mine:?}"
         );
     }
 }

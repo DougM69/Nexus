@@ -204,7 +204,29 @@ here — nothing is listening on the network until you turn it on.*
 If every position runs Nexus, you don't need a third-party master log at all.
 One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
 Host a club event**; every other position presses **Find club events** (or
-types the host's address) and joins. From then on:
+types the host's address) and joins.
+
+- **The host says where to join it.** Its Contest screen, and the club section
+  of Settings, say that it is hosting, on which port, and at which of its
+  network addresses, after **Positions join at**, each with the name of the
+  adapter it is on (Wi-Fi, Ethernet). That address is what the other laptops
+  type into **Join event at**; typed without a port, an address joins port
+  42073. The same line counts the other positions connected. When the host
+  cannot host, the line says why: another program using the port, a port that
+  would not open, or a contest club sync does not run.
+- **Every other laptop says where its join stands**, under **Join event at**
+  and on the Contest screen, with Contest mode on or off: looking for the host
+  at that address; joined, with the event, the host's call, this laptop's
+  position and its club code; turned away, in the host's own words; cannot
+  reach the host, because nothing listens there or nothing answers, with what
+  to check; or the host lost, and Nexus trying again.
+- **Find club events** listens for 5 seconds. The host announces itself once a
+  second on every network it is on, so a laptop with Wi-Fi and a cable, or with
+  the virtual adapters WSL, Hyper-V or a VPN add, is found on each of them.
+  When it hears nothing it says what to check; typing the host's address always
+  works where a Wi-Fi network keeps laptops apart.
+
+From then on:
 
 ![The club board: a synced chip, the host callsign, club totals, and one row per operating position with band, mode, operator, QSO count and rate.](../img/manual/fieldday-club-board.webp)
 
@@ -264,13 +286,24 @@ manual's Field Day page has the steps for the Illinois QSO Party.
 
 Before any club event:
 
-- **Windows asks about the firewall** the first time a PC hosts, and the first
-  time a position looks for club events. Allow Nexus on **Private** networks. If
-  Windows calls the site network Public, change it to Private, because a Public
-  network blocks all of it. The host listens on TCP port 42073 (the **Host
-  port**) and announces itself on UDP port 42074, which **Find club events**
-  listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
-  firewall rule of its own.
+- **Windows Firewall.** On each Windows laptop, press **Allow Nexus through
+  Windows Firewall** in the club section of Settings ▸ Contesting. Windows asks
+  for administrator rights once, as it does for **Repair clock**, and Nexus adds
+  three inbound rules for itself on **Private and Public** networks, so a site
+  network Windows calls Public works too: TCP on the **Host port** (42073 unless
+  you change it), UDP 42074, which the host announces itself on and **Find club
+  events** listens for, and TCP on the spectator scoreboard's port (7373 unless
+  you change it). They are named "Nexus club sync - …". The line beside the
+  button says whether they are in place; a second press, or a changed Host
+  port, replaces them, and **Remove Nexus's firewall rules** takes them out.
+  With Windows Firewall off there is nothing to allow, and club sync works as
+  it is. If Windows itself blocks Nexus, which is what a Cancel at its own
+  question leaves (and a block wins over any allow), or blocks every incoming
+  connection, the line says so and where to change it. On a laptop where you
+  have no administrator rights, allow Nexus by hand under Windows Security ▸
+  Firewall & network protection ▸ Allow an app through firewall, on Private and
+  Public networks. When a laptop cannot reach the host, check the host's
+  firewall; when its Find club events hears nothing, check its own.
 - **Set every clock first.** Nexus never changes a PC's clock. Each position
   measures its clock against the host's every 5 seconds over the club link, and
   from 2 seconds off its club line says so ("This PC's clock is 3 s behind the

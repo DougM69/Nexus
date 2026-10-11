@@ -31,6 +31,8 @@ import type {
   LogExport,
   DetectedRig,
   FdEventBeacon,
+  ClubFirewall,
+  ClubFirewallPress,
   FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
@@ -952,6 +954,22 @@ export async function contestIMoved(values: [string, string][]): Promise<AppSnap
  * Empty = nothing announcing (or the Wi-Fi eats broadcast — manual entry stays). */
 export async function fdDiscoverEvents(): Promise<FdEventBeacon[]> {
   return invoke<FdEventBeacon[]>('fd_discover_events', {})
+}
+
+/** Where Nexus's club sync rules stand in Windows Firewall on this laptop, read with no
+ *  administrator rights (`club_firewall_status`). `null` off Windows, and when the firewall
+ *  cannot be read. */
+export async function clubFirewallStatus(): Promise<ClubFirewall | null> {
+  return invoke<ClubFirewall | null>('club_firewall_status')
+}
+
+/** Allow Nexus through Windows Firewall (`'allow'`: Nexus's three club sync rules, on Private and
+ *  Public networks) or remove its rules (`'remove'`), through one Windows administrator prompt;
+ *  resolves with the firewall read back. Rejects with `onAir` while anything is transmitting,
+ *  `running` while a press is still waiting on Windows, `path` or `port` when the command cannot
+ *  be built, and `unsupported` off Windows. */
+export async function clubFirewallPress(action: 'allow' | 'remove'): Promise<ClubFirewallPress> {
+  return invoke<ClubFirewallPress>('club_firewall_press', { action })
 }
 
 /** Export the merged CLUB log from the host (deduped earliest-wins).
