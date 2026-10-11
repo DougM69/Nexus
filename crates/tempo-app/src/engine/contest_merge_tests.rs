@@ -1060,3 +1060,20 @@ fn a_copy_still_on_its_way_to_disk_lets_no_contact_go() {
     drop(hold);
     quit(e);
 }
+
+/// **This contest's contacts are merged in the session that is running**, as the restore read its
+/// own rows, whatever Settings have said since: a County cleared in Settings, which would stop the
+/// contest being entered again, does not stop the merge.
+#[test]
+fn the_running_contests_contacts_are_merged_whatever_settings_say_since() {
+    let d = Dir::new("contest-unmerged-settings-since");
+    let e = launch(&d, &ilqp_settings());
+    never_merged_five_days_back(&d, &e);
+    let s = quit(e);
+    let (mut e, _) = offered(launch(&d, &s));
+    save(&mut e, |s| s.contest_qth_county = String::new());
+    assert!(e.in_field_day(), "PREMISE: the session runs on");
+    let (e, merged) = merge_offered(e, "ilqp");
+    assert_eq!(merged, (2, 0));
+    assert_eq!(calls(&e), ["K9AAA", "W9BBB"]);
+}
