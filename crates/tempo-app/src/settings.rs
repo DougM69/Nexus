@@ -5775,20 +5775,21 @@ impl Settings {
     /// * CW: the step map of a profile on the built-in sets trades F7 and F8 with them (a Reset
     ///   keeps the map a profile had, and the cockpit reads it over the built-in sets). A profile
     ///   with macros of its own is its own layout, and does not move.
-    /// * Phone: F5's recording goes to F8 only when it WAS the AGN message, which the slot's label
-    ///   cannot say (no build ever let the operator rename one, so F5 reads "73" whatever it holds).
-    ///   It is AGN when the operator used Enter Sends Message in Phone (its switch is on, or they
-    ///   mapped its steps), AGN came from the built-in steps rather than a key they picked, and no
-    ///   step they mapped plays F5. Anything else in F5, such as the casual set's 73 or a step they
-    ///   put there themselves, stays where it is: the slot is theirs.
+    /// * Phone: F5 keeps whatever it holds, and F8 starts with a copy of it when Enter Sends
+    ///   Message played F5 for AGN: the operator used it in Phone (its switch is on, or they mapped
+    ///   its steps), AGN came from the built-in steps rather than a key they picked, and no step
+    ///   they mapped plays F5. Whether F5 holds that AGN or the casual set's 73, its label cannot
+    ///   say (no build ever let the operator rename a slot, so F5 reads "73" whatever it holds), so
+    ///   F5 is never cleared or rebound (operator, 2026-10-11): F5 plays what it played, ESM's AGN
+    ///   plays the same audio from F8, and the operator records a real AGN in F8 when they like.
     ///
-    /// ⛔ NEVER LOSES OR OVERWRITES A RECORDING. The audio is COPIED to `slot8.wav` beside it and
-    /// F5's file is left on disk, untouched and no longer bound, until a new F5 recording replaces
-    /// it. The copy needs that name because the recorder writes slot N to `slot<N>.wav`: F8 bound
-    /// to `slot5.wav` would be overwritten by the next F5 recording. A `slot8.wav` already there is
-    /// never written over; one holding the same bytes is this migration's own copy from a launch
-    /// whose save did not land, and F8 takes it. When no copy can be made, F5 keeps its recording
-    /// and F8 starts empty.
+    /// ⛔ NEVER LOSES OR OVERWRITES A RECORDING. The audio is COPIED to `slot8.wav` beside F5's
+    /// file, which stays bound to F5 as it was. The copy is a file of its own because the recorder
+    /// writes slot N to `slot<N>.wav`: F8 bound to `slot5.wav` would change with the next F5
+    /// recording, and a new F8 recording writes `slot8.wav`, never F5's file. A `slot8.wav`
+    /// already there is never written over; one holding the same bytes is this migration's own
+    /// copy from a launch whose save did not land, and F8 takes it. When no copy can be made, F8
+    /// starts empty.
     ///
     /// Returns whether the settings changed, so the caller saves them.
     pub fn move_agn_to_f8(&mut self) -> bool {
@@ -5796,11 +5797,6 @@ impl Settings {
             return false;
         }
         let f8 = self.agn_recording_copied_to_f8().unwrap_or_default();
-        if !f8.is_empty() {
-            if let Some(f5) = self.voice_messages.iter_mut().find(|m| m.slot == 5) {
-                f5.file.clear();
-            }
-        }
         self.voice_messages.push(VoiceMessage {
             slot: 8,
             label: "AGN".to_string(),
@@ -5832,7 +5828,7 @@ impl Settings {
         true
     }
 
-    /// F5's recording copied to `slot8.wav` beside it when it is the AGN message
+    /// F5's recording copied to `slot8.wav` beside it when Enter Sends Message played F5 for AGN
     /// ([`Self::move_agn_to_f8`]): the copy's path, or None and nothing written over.
     fn agn_recording_copied_to_f8(&self) -> Option<String> {
         let f5 = self.voice_messages.iter().find(|m| m.slot == 5)?;
@@ -13455,6 +13451,26 @@ mod agn_f8_tests {
         std::fs::read(file).unwrap()
     }
 
+    /// What slot `n` plays: the bytes of the file it is bound to, or None.
+    fn plays(s: &Settings, n: u8) -> Option<Vec<u8>> {
+        let m = s.voice_messages.iter().find(|m| m.slot == n)?;
+        std::fs::read(&m.file).ok()
+    }
+
+    /// What the recorder does for slot `n` (`stop_voice_recording` in src-tauri): the new take
+    /// written to `voice/slot<n>.wav` through a file renamed over it, and the slot bound to it.
+    fn record(dir: &Path, s: &mut Settings, n: u8, take: &[u8]) {
+        let file = wav(dir, n);
+        let partial = format!("{file}.partial");
+        std::fs::write(&partial, take).unwrap();
+        std::fs::rename(&partial, &file).unwrap();
+        s.voice_messages
+            .iter_mut()
+            .find(|m| m.slot == n)
+            .unwrap()
+            .file = file;
+    }
+
     /// The slots as (slot, label, file), for a comparison by value.
     fn slots(s: &Settings) -> Vec<(u8, String, String)> {
         s.voice_messages
@@ -13524,27 +13540,49 @@ mod agn_f8_tests {
         assert_eq!(slots(&s), want);
     }
 
-    /// The case the Phone move exists for: Phone's ESM on, AGN on the built-in F5, recorded there.
+    /// The case the Phone copy exists for: Phone's ESM on, AGN on the built-in F5. F5's label
+    /// cannot say whether it holds that AGN or the casual set's 73, so F5 keeps it, and F8 starts
+    /// with a copy in a file of its own: F5 plays what it played, and so does ESM's AGN.
     #[test]
-    fn the_agn_recording_goes_from_f5_to_f8_once_and_survives_a_save_and_load() {
+    fn with_phone_esm_on_f5_keeps_its_recording_and_f8_starts_with_a_copy() {
         let (dir, mut s) = old_station("moves", true, None);
         assert!(s.move_agn_to_f8());
-        let want = after(&dir, String::new(), wav(&dir, 8));
+        let want = after(&dir, wav(&dir, 5), wav(&dir, 8));
         assert_eq!(slots(&s), want);
         assert_eq!(
             read(&wav(&dir, 8)),
             audio(5),
-            "F8 holds the AGN that F5 held"
+            "F8 holds a copy of what F5 held"
         );
         assert_eq!(read(&wav(&dir, 5)), audio(5), "F5's file is left as it was");
         for n in 1..=4 {
             assert_eq!(read(&wav(&dir, n)), audio(n), "F{n} is untouched");
         }
         let mut back = round_trip(&dir, &s);
-        assert_eq!(slots(&back), want, "the file keeps the move");
+        assert_eq!(slots(&back), want, "the file keeps the copy");
         assert!(!back.move_agn_to_f8(), "once: the file has an F8 now");
         assert_eq!(slots(&back), want);
         assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// F8's copy is a file of its own: recording a real AGN in F8 leaves F5 playing what it did.
+    #[test]
+    fn recording_f8_again_leaves_f5_as_it_was() {
+        let (dir, mut s) = old_station("record_f8", true, None);
+        assert!(s.move_agn_to_f8());
+        record(&dir, &mut s, 8, b"a real AGN, recorded in F8");
+        assert_eq!(plays(&s, 8), Some(b"a real AGN, recorded in F8".to_vec()));
+        assert_eq!(plays(&s, 5), Some(audio(5)), "F5 plays what it played");
+    }
+
+    /// And the other way: a new recording in F5 leaves F8's copy as it was.
+    #[test]
+    fn recording_f5_again_leaves_f8s_copy_as_it_was() {
+        let (dir, mut s) = old_station("record_f5", true, None);
+        assert!(s.move_agn_to_f8());
+        record(&dir, &mut s, 5, b"a new 73, recorded in F5");
+        assert_eq!(plays(&s, 5), Some(b"a new 73, recorded in F5".to_vec()));
+        assert_eq!(plays(&s, 8), Some(audio(5)), "F8 plays the copy");
     }
 
     /// Phone's ESM never used: F5 is the casual set's 73, and it stays the operator's.
@@ -13561,7 +13599,7 @@ mod agn_f8_tests {
     fn mapped_steps_show_phone_esm_was_used_with_its_switch_off() {
         let (dir, mut s) = old_station("mapped", false, Some(roles(&[("exch", &["F6"])])));
         assert!(s.move_agn_to_f8());
-        assert_eq!(slots(&s), after(&dir, String::new(), wav(&dir, 8)));
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
         assert_eq!(read(&wav(&dir, 8)), audio(5));
         assert_eq!(s.voice_esm_roles, Some(roles(&[("exch", &["F6"])])));
     }
@@ -13592,7 +13630,7 @@ mod agn_f8_tests {
     fn an_empty_key_list_for_agn_was_the_built_in_f5() {
         let (dir, mut s) = old_station("again_empty", true, Some(roles(&[("again", &[])])));
         assert!(s.move_agn_to_f8());
-        assert_eq!(slots(&s), after(&dir, String::new(), wav(&dir, 8)));
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
         assert_eq!(read(&wav(&dir, 8)), audio(5));
     }
 
@@ -13621,7 +13659,7 @@ mod agn_f8_tests {
         let (dir, mut s) = old_station("slot8_ours", true, None);
         std::fs::write(wav(&dir, 8), audio(5)).unwrap();
         assert!(s.move_agn_to_f8());
-        assert_eq!(slots(&s), after(&dir, String::new(), wav(&dir, 8)));
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
         assert_eq!(read(&wav(&dir, 8)), audio(5));
     }
 

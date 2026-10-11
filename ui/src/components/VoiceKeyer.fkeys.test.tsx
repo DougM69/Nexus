@@ -4,9 +4,13 @@
 // Message plays for AGN in a contest, from the key AGN is on in the CW and RTTY contest sets and
 // in N1MM's default message sets (the operator, 2026-10-10). A key with no slot, F7 among them,
 // plays nothing and is left to the rest of the window; the line over the slots names no range.
+// Until the slot list is there, or when it cannot be read, F1–F12 are all held and play nothing,
+// so none reaches the webview, where F5 reloads the app on Windows (the operator, 2026-10-11).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { VoiceKeyer } from './VoiceKeyer'
+import { getVoiceMessages } from '../api'
+import type { VoiceMessage } from '../types'
 
 const { playVoiceMessage } = vi.hoisted(() => ({
   playVoiceMessage: vi.fn(async (_slot: number): Promise<unknown> => ({})),
@@ -82,5 +86,28 @@ describe('the voice keyer’s F-keys', () => {
     expect(container.querySelector('.vk-hint')?.textContent).toBe(
       'click a slot or press its F-key to send · Esc stops',
     )
+  })
+})
+
+const F1_TO_F12 = Array.from({ length: 12 }, (_, i) => `F${i + 1}`)
+
+describe('the voice keyer’s F-keys before its slots are there', () => {
+  it('holds F1–F12 from the moment it opens, and plays nothing', async () => {
+    vi.mocked(getVoiceMessages).mockReturnValueOnce(new Promise<VoiceMessage[]>(() => {}))
+    await renderKeyer()
+    for (const key of F1_TO_F12) {
+      expect(await press(key), `${key} reached the window`).toBe(false)
+    }
+    expect(played()).toEqual([])
+    expect(await press('a'), 'a key that is not an F-key is not the keyer’s').toBe(true)
+  })
+
+  it('holds F1–F12 when the slot list could not be read', async () => {
+    vi.mocked(getVoiceMessages).mockRejectedValueOnce(new Error('unavailable'))
+    await renderKeyer()
+    for (const key of F1_TO_F12) {
+      expect(await press(key), `${key} reached the window`).toBe(false)
+    }
+    expect(played()).toEqual([])
   })
 })

@@ -365,8 +365,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for Enter Sends Message; a CW macro profile of your own keeps its keys. In Phone the voice keyer has a new slot, F8 AGN,
   which Enter Sends Message plays when you need a repeat, and F5 is yours: on CW F5 sends his
   call, and a recording cannot say one. If you ran Enter Sends Message in Phone in a test build,
-  where AGN was on F5, the update copies that recording to F8 and leaves F5 empty; a recording in
-  F5 that was for something else, such as a 73, stays in F5.
+  where AGN was on F5, F5 keeps whatever you recorded there and F8 starts with a copy of it, so
+  every key plays what it played before, in a contest or out of one; record a real AGN in F8
+  whenever you like, and F5 keeps its own.
 
 - **Field Day mode is now Contest mode: one switch for whichever contest is picked.** It always
   started the contest picked in Settings ▸ Contesting ▸ Contest, a QSO party or CQ WW as much as Field
