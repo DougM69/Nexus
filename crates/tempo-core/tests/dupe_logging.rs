@@ -1,5 +1,4 @@
-//! ⭐ **A duplicate contact in a CROSS-CHECKED contest is LOGGED, MARKED and scored
-//! ZERO — and Field Day keeps refusing one.**
+//! ⭐ **A duplicate contact is LOGGED, MARKED and scored ZERO, in every contest.**
 //!
 //! The sponsors say the same thing twice and mean it literally. ARRL LGCK.1 and CQ
 //! XII.E.1: *"Duplicate contacts are removed with no additional penalty."* CQ's own
@@ -9,19 +8,14 @@
 //! contact."* Dropping the row is what costs points — the other station's NIL is 1×
 //! extra at ARRL, 2× extra at CQ — so the log carries the dupe and the checker zeroes it.
 //!
-//! ⚠️ **ARRL FIELD DAY IS NOT ONE OF THESE CONTESTS.** It has no log checking at all —
-//! no cross-check, no NIL, and *"Complete station logs are NOT required for submission,
-//! and ARRL does not use the logs."* The NIL justification has zero force there, Field
-//! Day's deliverable is a dupe sheet plus **raw non-dupe** QSO counts, and so Field Day
-//! keeps refusing the contact exactly as it always has. That split is the whole point of
-//! this file, and `field_day_still_refuses_a_dupe` is the half that must never move.
-//!
-//! ⭐ **Except a dupe worked ON THE AIR.** A double-click on a CQ (or a logger's Reply, the
-//! same pick from another program) answers a station the log already holds, and the
-//! contact is made: the other station logs it. That contact is written in every contest,
-//! Field Day included, marked and worth nothing, and the Cabrillo keeps it (the operator's
-//! ruling, 2026-10-11: "the way N1MM does"). A TYPED dupe is still refused, and S&P's own
-//! pounce still passes a worked station by. The last section of this file.
+//! ⭐ **Every other contest logs it too, since the operator's ruling of 2026-10-11:** a dupe
+//! typed into the strip, answered with a double-click or a logger's Reply, or calling the run
+//! is "logged marked as a dupe for 0 points, as N1MM does". The other station logs the
+//! contact either way. ARRL Field Day checks no logs at all (*"Complete station logs are NOT
+//! required for submission, and ARRL does not use the logs."*), and its deliverable is a dupe
+//! sheet plus **raw non-dupe** QSO counts, which still leave the dupe out. No shipped
+//! sponsor's rules say to remove dupes. What is SENT does not change: S&P's own pounce still
+//! passes a worked station by.
 //!
 //! ⚠️ **"Marked" means marked in OUR data model**, for scoring and display. Neither
 //! sponsor asks for a marker, and CQ's worked example logs the dupe as a plain `QSO:`
@@ -87,16 +81,6 @@ fn cqww_log() -> FieldDayLog {
     let session = ContestSession::for_ruleset(rs, &st)
         .unwrap_or_else(|e| panic!("cqww_cw session refused: {e}"));
     FieldDayLog::new("W9XYZ", session, "20m")
-}
-
-/// An ARRL Field Day log — the contest with no log checking, which keeps refusing.
-fn fd_log() -> FieldDayLog {
-    resolver();
-    FieldDayLog::new(
-        "W9XYZ",
-        ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
-        "20m",
-    )
 }
 
 fn fields(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -270,40 +254,8 @@ fn a_logged_dupe_is_a_plain_qso_line_in_cabrillo() {
 }
 
 // ---------------------------------------------------------------------------
-// Field Day: unchanged, because nothing checks its log
+// The while-typing verdict, which logging the dupe does not change
 // ---------------------------------------------------------------------------
-
-/// ⚠️ **THE HALF THAT MUST NOT MOVE.** ARRL Field Day has no log checking — no
-/// cross-check, no NIL, and the logs are not used — so the reason to keep a dupe does
-/// not exist there. It is refused and nothing is written, exactly as it shipped.
-#[test]
-fn field_day_still_refuses_a_dupe() {
-    let mut log = fd_log();
-    assert!(
-        log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, START),
-        "the first contact"
-    );
-    assert!(
-        !log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, START + 1800),
-        "Field Day REFUSES the dupe — no log checking means no NIL to avoid"
-    );
-    assert_eq!(log.qsos().len(), 1, "and writes nothing");
-    assert_eq!(log.qso_count(), 1);
-}
-
-/// Winter Field Day is the same event family and the same ruling.
-#[test]
-fn winter_field_day_still_refuses_a_dupe() {
-    resolver();
-    let mut log = FieldDayLog::new(
-        "W9XYZ",
-        ContestSession::field_day(FdEvent::WinterFd, "2O", "WI"),
-        "20m",
-    );
-    assert!(log.log_mode_at("K1ABC", "2O", "WI", "CW", 0, START));
-    assert!(!log.log_mode_at("K1ABC", "2O", "WI", "CW", 0, START + 1800));
-    assert_eq!(log.qsos().len(), 1);
-}
 
 /// A dupe is still a DUPE to the while-typing verdict in a contest that logs it — the
 /// operator is told before they commit, which is the whole reason the check exists. What
@@ -362,23 +314,26 @@ fn a_logged_dupe_spends_the_serial_it_sent_and_does_not_re_issue_it() {
 }
 
 // ---------------------------------------------------------------------------
-// The policy table — which contests report their duplicates, and which refuse
+// The policy table — what the rules FILE says, which builds before the ruling apply
 // ---------------------------------------------------------------------------
 
-/// ⭐ **THE WHOLE RULING, one line per shipped ruleset.** A contest is here because a
-/// sponsor's own words put it here, and the two tests below hold the data to it from
-/// both ends: one reads it back through the loader, one reads the seed FILE, so a flip,
-/// an addition or a removal is a red test rather than a silent rescore.
+/// ⭐ **The seed's `log_dupes`, one line per shipped ruleset**: what builds before the
+/// operator's ruling of 2026-10-11 apply, since they read the same published file. A
+/// contest is here because a sponsor's own words put it here. This build logs every
+/// contest's dupes whatever the file says (`fd_rules::build`), which the loader test below
+/// holds; the seed test holds the file to this table, so a flip that would reach those older
+/// builds is a red test rather than a silent change.
 const DUPE_POLICY: &[(&str, bool)] = &[
     // ⚠️ NO LOG CHECKING AT ALL — no cross-check, no NIL, and "Complete station logs are
     // NOT required for submission, and ARRL does not use the logs." Nothing is spared by
-    // keeping the row, and the deliverable wants RAW NON-DUPE counts. Refuse, as shipped.
+    // keeping the row, and the deliverable wants RAW NON-DUPE counts. Older builds refuse;
+    // this one logs it (the operator's ruling).
     ("arrlfd", false),
     ("wfd", false),
     // ⚠️ FIVE SEPARATE SPONSORS, AND EVIDENCE FROM NONE OF THEM. ARRL's and CQ's
     // reasoning is not theirs to inherit; applying it to a sponsor who never stated it
-    // is a guess about someone else's rules. These stay at the shipped behaviour until
-    // somebody reads the actual rule and changes this line on purpose.
+    // is a guess about someone else's rules. None of them says to remove a dupe either
+    // (each read in the seed's notes): older builds refuse, this one logs it.
     ("tnqp", false),
     ("ohqp", false),
     ("cqp", false),
@@ -408,17 +363,14 @@ const DUPE_POLICY: &[(&str, bool)] = &[
     ("cqwpx_ssb", true),
 ];
 
-/// The policy reaches `DupeRule` — the LOADER end. A key in the seed that never arrives
-/// on the rule would leave the sponsor's ruling written down and not applied.
+/// The LOADER end: every shipped ruleset logs its dupes in this build, whatever the seed
+/// says of it (the operator's ruling of 2026-10-11, decided in `fd_rules::build`).
 #[test]
-fn every_shipped_ruleset_carries_the_dupe_policy_the_sponsor_backs() {
-    for &(id, expected) in DUPE_POLICY {
+fn every_shipped_ruleset_logs_its_dupes_whatever_the_file_says() {
+    for &(id, _) in DUPE_POLICY {
         let rs = ruleset_by_id(id, CURRENT_RULES_YEAR)
             .unwrap_or_else(|| panic!("{id} is a shipped ruleset"));
-        assert_eq!(
-            rs.dupe_rule.log_dupes, expected,
-            "{id}: log_dupes should be {expected} — see the sponsor note in DUPE_POLICY"
-        );
+        assert!(rs.dupe_rule.log_dupes, "{id} refuses a dupe");
     }
 }
 
@@ -463,44 +415,14 @@ fn the_seed_declares_a_dupe_policy_for_every_contest_and_no_others() {
     );
 }
 
-/// ⚠️ **THE CLUB DUPE SHEET READS THE LOG'S RETURN BOOL AS "UNIQUE"**
-/// (`tempo-app/src/fd_scoreboard.rs`, the replay that fills `unique[i]`), and that
-/// reading is only true while the ruleset REFUSES duplicates — under a reporting
-/// ruleset the bool means "written", which is a different question.
-///
-/// It holds, and it holds STRUCTURALLY rather than by the current seed: that replay
-/// builds its log from `ContestSession::field_day(FdEvent, ..)`, so the rulesets it can
-/// reach are exactly the arms of [`FdEvent`], and neither of them reports. The `match`
-/// below is the tripwire — it is exhaustive, so adding an arm for a contest that
-/// reports its dupes is a COMPILE error here rather than a silently wrong dupe sheet
-/// over there.
-#[test]
-fn the_club_dupe_sheet_replay_can_only_reach_a_refusing_ruleset() {
-    fn refuses_by_construction(e: FdEvent) -> bool {
-        match e {
-            // ⚠️ Adding an arm? The club dupe sheet's `unique[i]` assumes every event
-            // here refuses duplicates. Check fd_scoreboard.rs before extending this.
-            FdEvent::ArrlFd | FdEvent::WinterFd => true,
-        }
-    }
-    for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
-        assert!(refuses_by_construction(event));
-        let log = FieldDayLog::new("W9XYZ", ContestSession::field_day(event, "2A", "WI"), "20m");
-        assert!(
-            !log.dupe_rule().log_dupes,
-            "{event:?} is reachable from the club replay and must refuse duplicates"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
-// A dupe worked on the air: logged, marked and worth nothing wherever a typed one is refused
+// A dupe answered with a double-click or a logger's Reply: logged, marked, worth nothing
 // ---------------------------------------------------------------------------
 
-/// The contests that refuse a typed dupe and whose own messages an FT8 double-click on a CQ
-/// follows: ARRL Field Day's exchange, and the standard messages in the four parties that allow
-/// FT8. Winter Field Day and the Illinois party ban FT8 and FT4, and every other contest on the
-/// list logs its dupes already.
+/// The contests that refused a dupe until the operator's ruling of 2026-10-11 and whose own
+/// messages an FT8 double-click on a CQ follows: ARRL Field Day's exchange, and the standard
+/// messages in the four parties that allow FT8. Winter Field Day and the Illinois party ban FT8
+/// and FT4, and every other contest on the list logged its dupes already.
 const PICKED: [&str; 5] = ["arrlfd", "tnqp", "ohqp", "cqp", "txqp"];
 
 fn dec(text: &str) -> modes::Decode {
@@ -605,8 +527,8 @@ fn submitted(log: &FieldDayLog) -> usize {
         .count()
 }
 
-/// ⭐ **THE CHANGE: a dupe worked on the air is logged as one**, in every contest whose typed
-/// dupe is refused. The double-click answers a station this running's log already holds and the
+/// ⭐ **A dupe answered off the air is logged as one**, in every contest that refused a dupe
+/// until the ruling. The double-click answers a station this running's log already holds and the
 /// contact is made, so it is written and marked, and it moves no number: the same overs on the
 /// air, the same count, points and multipliers (at Field Day a section only the dupe carried is
 /// not claimed), and a Cabrillo file that is the one before with the dupe's QSO line added,
@@ -709,23 +631,6 @@ fn a_picked_dupe_survives_a_restart_still_marked_and_a_second_read_keeps_it_once
     }
 }
 
-/// A contest that logs its dupes logs a picked one as it always has: marked, and written with
-/// nothing more in its journal or its files.
-#[test]
-fn a_contest_that_logs_its_dupes_writes_a_picked_one_as_it_always_has() {
-    let mut st = ft8_sp("arrlvhf_jan");
-    let first = picked_contact(&mut st, "arrlvhf_jan", "", 1);
-    assert_eq!(picked_contact(&mut st, "arrlvhf_jan", "", 11), first);
-    assert_eq!(marks(&st.log), w9xyz(2));
-    for file in [
-        st.log.journal_adif(),
-        st.log.adif(),
-        st.log.submission_adif(),
-    ] {
-        assert!(!file.contains("APP_NEXUS_KEPT"), "{file}");
-    }
-}
-
 /// A typed write of the contact `call` with exactly the key the FT row carries: at Field Day
 /// its class and section, in a party no exchange at all (the standard messages carry none).
 fn typed(log: &mut FieldDayLog, event: &str, call: &str) -> bool {
@@ -735,45 +640,126 @@ fn typed(log: &mut FieldDayLog, event: &str, call: &str) -> bool {
     }
 }
 
-/// The controls, which hold before the change and after it: only the operator's pick keeps a
-/// dupe. S&P's own pounce passes the worked station's CQ by and answers a new station's; a
-/// contact S&P pounced on itself and that was typed into the log before it ended is not logged
-/// a second time; a TYPED dupe is still refused; and on the run, a station already in the log
-/// that calls is worked as WSJT-X works it and, in these contests, still not logged.
+/// The control, which holds before the ruling and after it: what is SENT does not change. S&P's
+/// own pounce passes the CQ of a station already in the log by, and answers a new station's.
 #[test]
-fn only_the_operators_pick_keeps_a_dupe() {
+fn sp_still_passes_a_worked_station_by_and_answers_a_new_one() {
     for event in PICKED {
         let mut st = ft8_sp(event);
-        picked_contact(&mut st, event, "WI", 1);
+        assert!(typed(&mut st.log, event, "W9XYZ"), "{event}: PREMISE");
         let cq = |call: &str| match event {
             "arrlfd" => format!("CQ FD {call} EN37"),
             _ => format!("CQ {call} EN37"),
         };
-        st.observe(&[dec(&cq("W9XYZ"))], 3);
+        st.observe(&[dec(&cq("W9XYZ"))], 1);
         assert_eq!(next(&st), "", "{event}: S&P passes a worked station by");
-        let rows = st.log.qsos().len();
-        assert!(!typed(&mut st.log, event, "W9XYZ"), "{event}: a typed dupe");
-        assert_eq!(st.log.qsos().len(), rows, "{event}: is refused");
+        st.observe(&[dec(&cq("W9ABC"))], 3);
+        assert!(
+            next(&st).starts_with("W9ABC K1ABC"),
+            "{event}: S&P answers a new station: {}",
+            next(&st)
+        );
+    }
+}
 
-        // S&P answers W9ABC's CQ itself; W9ABC is typed in before the contact ends.
-        st.observe(&[dec(&cq("W9ABC"))], 5);
-        assert_ne!(next(&st), "", "{event}: S&P answers a new station");
-        assert!(typed(&mut st.log, event, "W9ABC"), "{event}: typed in");
-        let replies: &[&str] = match event {
-            "arrlfd" => &["K1ABC W9ABC R 1D WI"],
-            _ => &["K1ABC W9ABC -07", "K1ABC W9ABC RR73"],
-        };
-        for (k, reply) in replies.iter().enumerate() {
-            st.after_tx();
-            st.observe(&[dec(reply)], 7 + 2 * k as u64);
+// ---------------------------------------------------------------------------
+// Every contest logs its dupes: a typed one, and one that calls the run
+// ---------------------------------------------------------------------------
+
+/// The contests whose typed dupe was refused until the operator's ruling of 2026-10-11.
+const REFUSED_UNTIL_NOW: [&str; 7] = ["arrlfd", "wfd", "tnqp", "ohqp", "cqp", "txqp", "ilqp"];
+
+/// A log in `event` for K1ABC in Massachusetts: 2B EMA at Field Day, 2O EMA at Winter
+/// Field Day, and out of state at a party.
+fn contest_log(event: &str) -> FieldDayLog {
+    match event {
+        "wfd" => {
+            resolver();
+            FieldDayLog::new(
+                "K1ABC",
+                ContestSession::field_day(FdEvent::WinterFd, "2O", "EMA"),
+                "20m",
+            )
         }
-        assert_eq!(st.log.qsos().len(), rows + 1, "{event}: S&P's own, once");
+        _ => ft8_sp(event).log,
+    }
+}
 
-        // The run: W9XYZ, already in the log, calls and is worked to the end.
+/// One contact with W9ABC typed into `log` in `mode` ("CW" or "PH"), `min` minutes in: at
+/// either Field Day its class and section, at a party its report (CQP's serial) and the county
+/// it sent.
+fn typed_contact(log: &mut FieldDayLog, event: &str, mode: &str, min: u64) -> bool {
+    let rst = if mode == "PH" { "59" } else { "599" };
+    let at = START + min * 60;
+    let county = |qth: &str| match event {
+        "cqp" => fields(&[("NR", "12"), ("QTH", qth)]),
+        _ => fields(&[("RST", rst), ("QTH", qth)]),
+    };
+    match event {
+        "arrlfd" => log.log_mode_at("W9ABC", "2A", "WI", mode, 0, at),
+        "wfd" => log.log_mode_at("W9ABC", "2O", "WI", mode, 0, at),
+        "cqp" => log.log_fields_at("W9ABC", &county("ALAM"), mode, "", 0, at),
+        "tnqp" | "txqp" => log.log_fields_at("W9ABC", &county("ANDE"), mode, "", 0, at),
+        _ => log.log_fields_at("W9ABC", &county("ADAM"), mode, "", 0, at),
+    }
+}
+
+/// ⭐ **A dupe typed into the CW or Phone strip is logged, marked and worth nothing** in every
+/// contest that refused one until now (the operator's ruling, 2026-10-11: "Enter on a dupe logs
+/// it marked as a dupe for 0 points, as N1MM does"): written, with the count, the score and the
+/// multipliers as they were, and a Cabrillo file that is the one before with its QSO line added.
+#[test]
+fn a_typed_dupe_is_logged_marked_and_moves_no_number() {
+    for event in REFUSED_UNTIL_NOW {
+        for mode in ["CW", "PH"] {
+            let mut log = contest_log(event);
+            assert!(typed_contact(&mut log, event, mode, 0), "{event} {mode}");
+            let numbers = |l: &FieldDayLog| {
+                let worked = (l.worked_values("SECTION"), l.worked_values("QTH"));
+                (l.qso_count(), score(l), worked)
+            };
+            let before = numbers(&log);
+            let file = log.cabrillo(14_030).expect("a one-mode log exports");
+
+            let logged = typed_contact(&mut log, event, mode, 30);
+            let dupes: Vec<bool> = log.qsos().iter().map(|q| q.dupe).collect();
+            assert_eq!(
+                (logged, dupes),
+                (true, vec![false, true]),
+                "{event} {mode}: the dupe is logged, and marked"
+            );
+            assert_eq!(numbers(&log), before, "{event} {mode}: worth nothing");
+            let after = log.cabrillo(14_030).expect("a one-mode log exports");
+            let mut lines: Vec<&str> = after.lines().collect();
+            let at = lines
+                .iter()
+                .rposition(|l| l.starts_with("QSO:"))
+                .expect("QSO lines");
+            let dupe = lines.remove(at);
+            assert!(dupe.contains("W9ABC"), "{event} {mode}: {dupe}");
+            assert_eq!(
+                lines,
+                file.lines().collect::<Vec<_>>(),
+                "{event} {mode}: the file before, with the dupe's QSO line added"
+            );
+        }
+    }
+}
+
+/// ⭐ **A station already in the log that calls your CQ is logged too** (the operator's ruling,
+/// 2026-10-11, signed: "Every contact completed on the air in a contest is logged, a dupe marked
+/// for 0 points"). The runner works it as before, as WSJT-X works whoever calls; the contact is
+/// written, marked.
+#[test]
+fn a_dupe_that_calls_the_run_is_worked_as_before_and_logged_marked() {
+    for event in PICKED {
         let mut run = ft8_sp(event);
         run.set_messages(FtMessages::for_contest(run.log.ruleset(), "FT8"), true);
         run.rearm(true);
-        assert!(typed(&mut run.log, event, "W9XYZ"), "{event}: PREMISE");
+        assert!(
+            typed(&mut run.log, event, "W9XYZ"),
+            "{event}: PREMISE, W9XYZ in the log"
+        );
         let calls: &[&str] = match event {
             "arrlfd" => &["K1ABC W9XYZ 1D WI", "K1ABC W9XYZ RR73"],
             _ => &["K1ABC W9XYZ EN37", "K1ABC W9XYZ R-07"],
@@ -784,11 +770,11 @@ fn only_the_operators_pick_keeps_a_dupe() {
             run.observe(&[dec(call)], 1 + 2 * k as u64);
             sent.push(next(&run));
         }
-        run.after_tx();
-        assert!(
-            run.done() && sent[0].starts_with("W9XYZ K1ABC"),
-            "{event}: worked on the run: {sent:?}"
-        );
-        assert_eq!(marks(&run.log), w9xyz(1), "{event}: and not logged");
+        let want: &[&str] = match event {
+            "arrlfd" => &["W9XYZ K1ABC R 2B EMA", ""],
+            _ => &["W9XYZ K1ABC -05", "W9XYZ K1ABC RR73"],
+        };
+        assert_eq!(sent, want, "{event}: worked on the run as before");
+        assert_eq!(marks(&run.log), w9xyz(2), "{event}: logged, and marked");
     }
 }

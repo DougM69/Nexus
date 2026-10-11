@@ -1,8 +1,9 @@
-//! A station this running's contest log already holds, picked off the air: a double-click on its
-//! CQ, or a logger's Reply to it. The contact is made, and the other station logs it, so it is
-//! logged here too: marked a dupe, worth nothing, and everywhere a contact goes — the contest's
-//! journal and files, the Logbook at the Merge, the club. A typed dupe in the same contest is
-//! still refused, and S&P's own pounce still passes the station by.
+//! A station this running's contest log already holds, worked again on FT8: picked off the air
+//! with a double-click on its CQ or a logger's Reply to it, or answering the run's CQ. The contact
+//! is made, and the other station logs it, so it is logged here too (the operator's rulings of
+//! 2026-10-11): marked a dupe, worth nothing, and everywhere a contact goes — the contest's
+//! journal and files, the Logbook at the Merge, the club. What goes on the air does not change,
+//! and S&P's own pounce still passes the station by.
 //!
 //! Driven through the verbs the gestures call (`work_station`, with the arguments the cockpit's
 //! double-click and the radio loop's Reply pass), against the scripted WSJT-X partner of the
@@ -223,5 +224,63 @@ fn a_picked_dupe_is_journaled_exported_merged_and_sent_to_the_club() {
         let back = launch(contest, &d);
         assert_eq!(rows(&back), w9xyz(2), "{contest}: back after a restart");
         assert_eq!(numbers(&back), at_quit, "{contest}: scored the same");
+    }
+}
+
+/// The operator's Enable TX and Call CQ from slot `from` (even) on, and W9XYZ answers the CQ and
+/// finishes the contact as WSJT-X does. Every over this station sent.
+fn called(e: &mut Engine, act: Act, from: u64) -> Vec<String> {
+    let mut partner = Partner::new(act, false);
+    let mut sent = Vec::new();
+    e.set_tx_enabled(true);
+    assert_eq!(e.start_running(), Ok(()), "Call CQ");
+    for slot in from..from + SLOTS {
+        if e.take_pending_tx_disable() {
+            e.set_tx_enabled(false);
+        }
+        if slot % 2 == 0 {
+            if let Some(text) = keyed(e, slot) {
+                partner.hear(&text);
+                sent.push(text);
+            }
+            continue;
+        }
+        match partner.transmit() {
+            Some(text) => e.ingest_decodes_for_test(&[heard(&text)], slot + 1),
+            None => e.ingest_decodes_for_test(&[], slot + 1),
+        }
+    }
+    sent
+}
+
+/// ⭐ **A station already in this running's log that calls your CQ is logged too** (the operator's
+/// ruling, 2026-10-11, signed: "Every contact completed on the air in a contest is logged, a dupe
+/// marked for 0 points ... No change to what is sent"). The run works it exactly as it works a
+/// station it never worked, and the contact is written, marked, worth nothing.
+#[test]
+fn a_dupe_that_calls_the_run_is_worked_as_before_and_logged_marked() {
+    for (contest, act) in [("arrlfd", Act::FieldDay), ("txqp", Act::None)] {
+        let fresh = {
+            let d = Dir::new("run-fresh");
+            let mut e = launch(contest, &d);
+            called(&mut e, act, 0)
+        };
+        assert!(
+            fresh.iter().any(|o| o.starts_with("W9XYZ K1ABC")),
+            "{contest}: PREMISE, the run works W9XYZ: {fresh:?}"
+        );
+        let d = Dir::new("run-dupe");
+        let mut e = launch(contest, &d);
+        worked(&mut e, act, Pick::DoubleClick, 0);
+        assert_eq!(rows(&e), w9xyz(1), "{contest}: PREMISE, W9XYZ in the log");
+        let before = numbers(&e);
+
+        let again = called(&mut e, act, SLOTS);
+        assert_eq!(
+            again, fresh,
+            "{contest}: the run sends what it always sends"
+        );
+        assert_eq!(rows(&e), w9xyz(2), "{contest}: logged, marked");
+        assert_eq!(numbers(&e), before, "{contest}: worth nothing");
     }
 }

@@ -1244,8 +1244,15 @@ fn a_contests_contacts_five_ten_and_thirty_days_back_are_all_in_its_log_after_a_
     );
     assert_eq!(
         e.contest_log_manual("K9AAA", &rx, "CW", None),
-        Ok(false),
-        "the dupe check: K9AAA worked again thirty days on"
+        Ok(true),
+        "K9AAA worked again thirty days on is logged…"
+    );
+    let Mode::FieldDay { station, .. } = &e.mode else {
+        panic!("the contest runs")
+    };
+    assert!(
+        station.log.qsos().last().is_some_and(|q| q.dupe),
+        "…marked a dupe: the dupe check holds the whole running"
     );
 }
 

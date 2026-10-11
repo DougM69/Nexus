@@ -808,7 +808,10 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             continue;
         }
         log.band = r.band.trim().to_string();
-        unique[i] = log.log_submode_at(
+        // ⭐ Unique is "written, and not marked a dupe": every contest logs its dupes now
+        // (`DupeRule::log_dupes`), so a repeat is written too, marked, and the bool alone no
+        // longer says the row counts. The loops below read the same mark.
+        let written = log.log_submode_at(
             &r.call,
             &r.class,
             &r.section,
@@ -817,6 +820,7 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             0,
             r.when_unix,
         );
+        unique[i] = written && log.qsos().last().is_some_and(|q| !q.dupe);
     }
 
     let (qso_points, powered) = rs.scoring.qso_and_powered(log.score_rows(), d.power_mult);
@@ -872,7 +876,12 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
     };
 
     // Rates + hourly buckets over the COUNTING (deduped) QSOs.
-    let counted: Vec<u64> = log.qsos().iter().map(|q| q.when_unix).collect();
+    let counted: Vec<u64> = log
+        .qsos()
+        .iter()
+        .filter(|q| !q.dupe)
+        .map(|q| q.when_unix)
+        .collect();
     let rate_hour = counted
         .iter()
         .filter(|&&w| w + 3600 > now_unix && w <= now_unix)
@@ -951,7 +960,7 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
 
     // Band × mode grid over the counting QSOs, longest wavelength first.
     let mut bands: BTreeMap<String, BandModeRow> = BTreeMap::new();
-    for q in log.qsos() {
+    for q in log.qsos().iter().filter(|q| !q.dupe) {
         let e = bands.entry(q.band.clone()).or_insert_with(|| BandModeRow {
             band: q.band.clone(),
             ph: 0,

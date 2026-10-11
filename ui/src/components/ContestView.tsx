@@ -1189,8 +1189,9 @@ export function FdClubSection({
   /** The club runs one of the two Field Days. Any other contest has no sections, so its
    *  counters leave them out rather than show a zero that means nothing. */
   fieldDay?: boolean
-  /** The contest reports its duplicates (`DupeRule::log_dupes`), so the club file keeps a
-   *  repeat as a zero-point line instead of keeping only the earliest. */
+  /** The contest logs its duplicates (`DupeRule::log_dupes`), so the club file keeps a
+   *  repeat as a zero-point line instead of keeping only the earliest — except a Field Day
+   *  club's, which keeps only the earliest whatever the contest logs (`export_indices`). */
   keepsDupes?: boolean
   /** This laptop's club link: the lines the block does not already say. The contest screen's
    *  own block only, never the pop-out or Remote. */
@@ -1199,6 +1200,9 @@ export function FdClubSection({
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
   const big = detached
+  // What the club FILE keeps, which is what its export buttons say: every contest logs its
+  // dupes, but a Field Day club writes its earliest-wins unique rows, as 1.x wrote them.
+  const fileKeepsDupes = keepsDupes && !fieldDay
   // What the last Give press did, until the next one.
   const [giveNote, setGiveNote] = useState<{ text: string; alert: boolean } | null>(null)
   // The entry a Give press asks about, until the host answers: the position goes only to the
@@ -1294,7 +1298,7 @@ export function FdClubSection({
               disabled={busy}
               onClick={() => onExport('club-cabrillo')}
               title={
-                keepsDupes
+                fileKeepsDupes
                   ? t('fieldDay.club.export.cabrillo.titleKept')
                   : t('fieldDay.club.export.cabrillo.title')
               }
@@ -1307,7 +1311,7 @@ export function FdClubSection({
               disabled={busy}
               onClick={() => onExport('club-adif')}
               title={
-                keepsDupes
+                fileKeepsDupes
                   ? t('fieldDay.club.export.adif.titleKept')
                   : t('fieldDay.club.export.adif.title')
               }

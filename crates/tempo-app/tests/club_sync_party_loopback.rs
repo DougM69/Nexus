@@ -301,7 +301,9 @@ fn an_illinois_qso_party_club_merges_dupes_late_joins_drops_and_a_host_restart()
             "no QSO line ends {tail:?}: {cab}"
         );
     }
-    assert_eq!(lines.len(), 4, "five rows, one club dupe: {cab}");
+    // Five rows, one of them the club dupe (the RTTY repeat): in the file as a zero-point line,
+    // as every contest logs its dupes since the operator's ruling of 2026-10-11.
+    assert_eq!(lines.len(), 5, "{cab}");
 
     // --- the host restarts: its journal rebuilds the party's club ----------------
     host_sd.store(true, Ordering::Relaxed);

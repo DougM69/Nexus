@@ -195,7 +195,7 @@ fn cw_and_digital_are_one_mode_for_dupes_and_two_points_each() {
     assert!(log.log_fields_at("K9AAA", &cook, "CW", "", 0, 100));
     // The same station, same band, on RTTY: the sponsor counts one mode for both.
     assert!(
-        !log.log_fields_at("K9AAA", &cook, "DIG", "RTTY", 0, 110),
+        log.log_fields_at("K9AAA", &cook, "DIG", "RTTY", 0, 110) && log.qsos()[1].dupe,
         "CW then digital on one band is a dupe"
     );
     // Phone IS a second mode.
@@ -1439,14 +1439,14 @@ fn the_same_station_worked_again_days_later_is_merged_both_times() {
         "PREMISE: one running"
     );
     assert!(
-        !again.log_fields_at(
+        again.log_fields_at(
             "K9AAA",
             &fields(&[("RST", "599"), ("QTH", "COOK")]),
             "CW",
             "",
             0,
             later
-        ),
+        ) && again.qsos().last().is_some_and(|q| q.dupe),
         "a dupe of the party's own"
     );
 
@@ -1568,14 +1568,14 @@ fn the_partys_log_holds_every_contact_five_ten_and_thirty_days_on() {
             "{days} days on"
         );
         assert!(
-            !back.log_fields_at(
+            back.log_fields_at(
                 "K9AAA",
                 &fields(&[("RST", "599"), ("QTH", "COOK")]),
                 "CW",
                 "",
                 0,
                 later
-            ),
+            ) && back.qsos().last().is_some_and(|q| q.dupe),
             "{days} days on, K9AAA worked again is a dupe"
         );
     }

@@ -42,7 +42,8 @@ fn nyqp() -> Engine {
     })
 }
 
-/// The Illinois QSO Party from Kane County, which refuses a duplicate contact.
+/// The Illinois QSO Party from Kane County, which logs a duplicate contact too since the
+/// operator's ruling of 2026-10-11 (marked, worth nothing): every contest does.
 fn ilqp() -> Engine {
     contest("ilqp", |s| {
         s.contest_qth_state = "IL".into();
@@ -319,8 +320,11 @@ fn an_enter_older_than_the_last_log_is_refused_whatever_it_shows() {
     assert_eq!(calls(&e), ["K1ABC"]);
 }
 
+/// Enter on a dupe through the shared entry logs it, marked and worth nothing (the operator's
+/// ruling, 2026-10-11), and moves the entry on as any logged contact does. Until the ruling the
+/// Illinois party refused it and left the entry where it was.
 #[test]
-fn a_dupe_the_contest_refuses_leaves_the_entry_where_it_was() {
+fn a_dupe_entered_from_the_shared_entry_is_logged_marked_and_moves_the_entry_on() {
     let mut e = ilqp();
     let fields = [("RST", "599"), ("QTH", "COOK")];
     // Worked before the window opened, from the strip alone.
@@ -341,13 +345,21 @@ fn a_dupe_the_contest_refuses_leaves_the_entry_where_it_was() {
         .unwrap();
     assert_eq!(
         enter(&mut e, &claim(rev, "K9ABC", &fields), &fields, "CW"),
-        Ok(false)
+        Ok(true)
     );
+    let marks: Vec<bool> = e
+        .snapshot()
+        .field_day
+        .expect("the contest runs")
+        .log
+        .iter()
+        .map(|q| q.dupe)
+        .collect();
+    assert_eq!(marks, [false, true], "logged, and marked a dupe");
     let entry = e.snapshot().contest_entry.unwrap();
-    assert_eq!(
-        (entry.rev, entry.call.as_str()),
-        (rev, "K9ABC"),
-        "a refused dupe is not a contact"
+    assert!(
+        entry.rev > rev && entry.call.is_empty(),
+        "the dupe is a contact: the entry moved on"
     );
 }
 
