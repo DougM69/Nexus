@@ -1948,9 +1948,9 @@ the Cabrillo headers.
 - **Contest** — ARRL Field Day, Winter Field Day, ARRL November Sweepstakes (CW or
   Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
-  Ohio, Tennessee and Texas QSO Parties. Field Day Setup below is the setup for the
-  two Field Day events. (This is the same setting the Event chips used to carry inside
-  Field Day Setup; it moved up one level so there is one contest picker rather than a
+  Ohio, Tennessee and Texas QSO Parties. Contest mode below is the switch that starts
+  the contest picked here. (This is the same setting the Event chips used to carry inside
+  what was then Field Day Setup; it moved up one level so there is one contest picker rather than a
   setting buried inside one contest's own section.)
 - **Your role** — read-only, and derived rather than chosen. A role is decided by where
   you are: in a QSO party the in-state and out-of-state stations send different things,
@@ -1996,8 +1996,8 @@ goes on the air has to be one you typed.
   from the county name will often be the wrong one.
 - **State or province** — your state, province or territory, two letters. This is
   **not** your ARRL section. Western New York is `WNY` as a section and `NY` as a
-  state, and a QSO party wants the state; Field Day Setup below is where the
-  section lives. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
+  state, and a QSO party wants the state; Contest mode below is where the
+  section lives, for the two Field Day events. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
   from the usual ones: `NF` (VO1) and `LB` (VO2) rather than `NL`, `NWT` rather
   than `NT`, and `PEI` rather than `PE`. Typing `NT` or `PE` is read as `NWT` or
   `PEI`; `NL` is not, because it is two call areas, so pick `NF` or `LB`. With a
@@ -2111,9 +2111,11 @@ this section only says that ESM is set at the station.
 
 ### Contest mode
 
-- **Field Day mode** — the master switch. "Turn on for Field Day weekend: the
-  Class/Section exchange appears across all modes. Off the rest of the year." It
-  stays on across restarts until you turn it off. The **same switch** also
+- **Contest mode** — the switch for whichever contest is picked in [Contest](#contest)
+  above, named for it: "For Illinois QSO Party, the contest picked above. When it is
+  on, the log strips in every mode, the Contest screen and the exports follow its
+  rules. Off the rest of the year." It stays on across restarts until you turn it
+  off. It was called Field Day mode; the setting is the same one. The **same switch** also
   appears in [Appearance ▸ Features](#features) under Contesting, and at the top
   of the **Contest** screen (the tent in the left bar), which saves it at once and
   says what is missing when the picked contest cannot start yet.
@@ -2136,8 +2138,10 @@ this section only says that ESM is set at the station.
   which one you operate from — so Nexus keeps your old value, asks, and won't
   start Field Day until you've picked, rather than sending a section you never
   chose for a whole contest.*
-- **Power multiplier** — ×5 (QRP/battery, ≤5 W on natural power), ×2 (≤100 W),
-  ×1 (>100 W). "Multiplies your QSO points. Choose before the event."
+- **Power multiplier**, shown for ARRL Field Day only — ×5 (QRP/battery, ≤5 W on
+  natural power), ×2 (≤100 W), ×1 (>100 W). "Multiplies your QSO points. Choose
+  before the event." No other contest's score has one; Winter Field Day scores by
+  its objectives.
 
 Class and Section **start empty on purpose** and the station won't enter Field
 Day until both are set — a banner says so while the mode is on and they're blank.
@@ -2429,9 +2433,10 @@ sections cannot be turned off.*
   Propagation, Contesting, POTA/SOTA, Logging, System. Each row is a toggle with
   a one-line "why you'd want it". Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
-- The **Contesting** group hosts the **Field Day mode** master switch (the same
-  setting as [Contesting ▸ Contest mode](#contest-mode)). Turning it on
-  with no Class or Section set jumps you to the Contesting tab to fill them in.
+- The **Contesting** group hosts the **Contest mode** switch (the same setting as
+  [Contesting ▸ Contest mode](#contest-mode)), named for the picked contest. Turning
+  it on when that contest cannot start yet (Field Day's class or section, or another
+  contest's station data) takes you to the Contesting tab to fill it in.
 
 ### App updates
 

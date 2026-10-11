@@ -159,8 +159,9 @@ Thirteen panels tear off into their own OS window — see
   polar plots, frequencies, and rotor auto-track.
 
 ### Contesting & portable
-- **[Field Day & POTA/SOTA](contesting-pota.md)** — ARRL/Winter Field Day mode
-  with Cabrillo and club interop, plus the POTA/SOTA hunter.
+- **[Field Day & POTA/SOTA](contesting-pota.md)** — Contest mode for ARRL/Winter Field
+  Day and every other contest in the picker, with Cabrillo and club interop, plus the
+  POTA/SOTA hunter.
 
 ### System
 - **[Repeaters](program.md)** — the radio-programming workbench: the repeaters
