@@ -2967,7 +2967,9 @@ impl FieldDayStation {
         crate::message::same_call(to, self.mycall())
     }
 
-    /// Sent by the station being worked: base calls, as [`to_me`](Self::to_me).
+    /// Sent by the station being worked: base calls, as [`to_me`](Self::to_me). The name is
+    /// the standard sequencer's (`qso::Station::from_dx`), lint allowance and all.
+    #[allow(clippy::wrong_self_convention)]
     fn from_dx(&self, de: &str) -> bool {
         self.dxcall
             .as_deref()
