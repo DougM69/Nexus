@@ -2874,6 +2874,9 @@ pub struct FieldDayStation {
     /// Day's runner answers its RR73 or RRR with 73. Off until the engine says so
     /// ([`set_wsjtx_field_day`](Self::set_wsjtx_field_day)).
     wsjtx_field_day: bool,
+    /// The contact in hand is one the operator picked ([`answer_cq`](Self::answer_cq)), not one
+    /// S&P pounced on. Cleared when the station re-arms.
+    picked: bool,
     pub log: FieldDayLog,
     pub transcript: Vec<String>,
 }
@@ -2906,6 +2909,7 @@ impl FieldDayStation {
             peer_grid: None,
             messages: FtMessages::FieldDay,
             wsjtx_field_day: false,
+            picked: false,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -2927,6 +2931,7 @@ impl FieldDayStation {
             peer_grid: None,
             messages: FtMessages::FieldDay,
             wsjtx_field_day: false,
+            picked: false,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -2951,6 +2956,7 @@ impl FieldDayStation {
     /// after a single QSO — Run → back to calling its CQ, S&P → back to
     /// listening. The contest log is kept, so it remains the dupe/score source.
     pub fn rearm(&mut self, running: bool) {
+        self.picked = false;
         self.dxcall = None;
         self.peer_exch = None;
         self.peer_grid = None;
@@ -3005,7 +3011,15 @@ impl FieldDayStation {
         self.peer_grid = (self.messages == FtMessages::Standard).then(|| grid.to_string());
         self.pending = Some(answer);
         self.state = FdState::AwaitExchange;
+        self.picked = true;
         self.transcript.push(format!("answer CQ {de}"));
+    }
+
+    /// Whether the contact in hand is one the operator picked ([`answer_cq`](Self::answer_cq)):
+    /// "Disable Tx after sending 73" turns TX off after it, as WSJT-X does after a double-clicked
+    /// contact, where S&P's own pounces keep TX on to work the next CQ.
+    pub fn picked(&self) -> bool {
+        self.picked
     }
 
     /// Whether what this station sends carries its grid: every set of messages but Field
@@ -4964,6 +4978,46 @@ mod tests {
             next(&clicked),
             "W9XYZ K1ABC 2B EMA",
             "the double-click works it"
+        );
+    }
+
+    /// A contact the operator picked (a double-click on its CQ) is told apart from S&P's own
+    /// pounce through its last over, and no longer: re-armed for the next, the station has picked
+    /// nothing, and its next pounce is its own.
+    #[test]
+    fn a_picked_contact_is_told_apart_until_the_station_rearms() {
+        let sp = || {
+            FieldDayStation::search_and_pounce(
+                "K1ABC",
+                "FN42",
+                ContestSession::field_day(FdEvent::ArrlFd, "2B", "EMA"),
+                "20M",
+            )
+        };
+        let mut heard = sp();
+        heard.observe(&[dec("CQ FD W9XYZ EN37")], 0);
+        assert_eq!(
+            (heard.state, heard.picked()),
+            (FdState::AwaitExchange, false),
+            "S&P's own pounce"
+        );
+        let mut clicked = sp();
+        clicked.answer_cq("W9XYZ", "EN37");
+        clicked.after_tx();
+        clicked.observe(&[dec("K1ABC W9XYZ R 1D WI")], 1);
+        clicked.after_tx();
+        assert_eq!(
+            (clicked.done(), clicked.picked()),
+            (true, true),
+            "picked through its last over"
+        );
+        clicked.rearm(false);
+        assert!(!clicked.picked(), "re-armed, nothing picked");
+        clicked.observe(&[dec("CQ FD K2DEF FN31")], 2);
+        assert_eq!(
+            (clicked.state, clicked.picked()),
+            (FdState::AwaitExchange, false),
+            "the next pounce is S&P's own"
         );
     }
 

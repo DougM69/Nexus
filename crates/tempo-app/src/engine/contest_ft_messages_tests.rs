@@ -315,6 +315,8 @@ struct Scene {
     logged: Vec<String>,
     /// Where the station ended: the mode, its role and its sequencer's state.
     end: String,
+    /// Whether TX was still on at the end.
+    tx: bool,
 }
 
 fn fields(v: &[tempo_core::contest::FieldValue]) -> String {
@@ -326,7 +328,11 @@ fn fields(v: &[tempo_core::contest::FieldValue]) -> String {
 
 /// Run `role` in `contest` on `tier` against a WSJT-X partner in `act`.
 fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
-    let mut e = engine_for(contest, grid);
+    play(engine_for(contest, grid), tier, role, act)
+}
+
+/// [`scene`] on the station `e`, set up for its contest.
+fn play(mut e: Engine, tier: Tier, role: Role, act: Act) -> Scene {
     e.set_tier(tier);
     let entered = match role {
         Role::Running | Role::ClickFromRun | Role::StripSpFromRun => e.set_mode("fieldday-run"),
@@ -435,6 +441,7 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
         sent,
         logged,
         end: mode,
+        tx: e.tx_enabled(),
     }
 }
 
@@ -1594,5 +1601,50 @@ fn the_contests_sp_answers_each_cq_on_the_period_opposite_it() {
                 tier_name(tier)
             );
         }
+    }
+}
+
+/// ⭐ "Disable Tx after sending 73" turns TX off after a contest contact the operator picked with a
+/// double-click on its CQ, once its last over has gone out, as WSJT-X turns it off after a
+/// double-clicked contact's RR73 or 73; the station stays in the contest's S&P, listening. With
+/// the setting off TX stays on, and S&P's own pounces keep TX on to work the next CQ they hear.
+#[test]
+fn tx_goes_off_after_a_double_clicked_contest_contact() {
+    let listening = "FieldDay running=false state=Listening";
+    for contest in ["arrlfd", "arrlvhf_jan", "txqp"] {
+        let s = scene(
+            contest,
+            Tier::Ft8,
+            Role::DoubleClick,
+            act_of(contest),
+            MY_GRID,
+        );
+        assert_eq!(
+            (s.logged.len(), s.tx, s.end.as_str()),
+            (1, false, listening),
+            "{contest}: TX off after the double-clicked contact, still in S&P"
+        );
+        let mut e = engine_for(contest, MY_GRID);
+        let mut st = e.settings().clone();
+        st.disable_tx_after_73 = false;
+        e.apply_settings(st);
+        let s = play(e, Tier::Ft8, Role::DoubleClick, act_of(contest));
+        assert_eq!(
+            (s.logged.len(), s.tx, s.end.as_str()),
+            (1, true, listening),
+            "{contest}: with the setting off TX stays on"
+        );
+        let s = scene(
+            contest,
+            Tier::Ft8,
+            Role::SearchAndPounce,
+            act_of(contest),
+            MY_GRID,
+        );
+        assert_eq!(
+            (s.logged.len(), s.tx, s.end.as_str()),
+            (1, true, listening),
+            "{contest}: S&P's own pounce keeps TX on"
+        );
     }
 }

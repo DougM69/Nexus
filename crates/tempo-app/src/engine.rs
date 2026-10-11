@@ -23771,6 +23771,13 @@ contact yourself."
                 let m = station.outgoing();
                 if m.is_some() {
                     station.after_tx();
+                    // Stock "Disable Tx after sending 73" after a contact the operator picked (a
+                    // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
+                    // it, and the radio loop turns TX off once it has played, as WSJT-X does after
+                    // a double-clicked contact's RR73 or 73. S&P's own pounces keep TX on.
+                    if station.done() && station.picked() && self.settings.disable_tx_after_73 {
+                        self.pending_tx_disable = true;
+                    }
                 }
                 m.map(|x| x.to_text())
             }
