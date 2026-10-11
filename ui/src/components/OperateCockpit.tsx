@@ -1883,6 +1883,7 @@ export function OperateCockpit({
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
           qso={snap.qso}
+          contestRunning={snap.fieldDay?.running}
           radio={snap.radio}
           rxOnly={isRxOnly(tier)}
           beacon={isBeacon(tier)}
@@ -1903,8 +1904,12 @@ export function OperateCockpit({
           onCallCq={() => {
             // The labelled "Call CQ" is always a PLAIN run — it also clears a
             // sticky directed token so a leftover "CQ DX" can't surprise.
-            // This computer's strip asks for it by its own verb; the Remote page's is `startCq`.
-            void (control ? startRunning() : startCq(null)).then((s) => onSnap?.(s)).catch(() => {})
+            // This computer's strip asks for it by its own verb: the contest's Running while a
+            // contest runs, which the station refuses with its reason when the contest cannot
+            // start. A control that keys must not fail silently, so the reason is shown. The
+            // Remote page's is `startCq`, as before.
+            if (control) void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+            else void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
           }}
           onResend={onResend}
           onFreetext={onFreetext}

@@ -27,7 +27,7 @@ const SFD_START = Date.UTC(2027, 5, 26, 18) / 1000
 
 type Role = { spec: string; queue: string[]; dxcall: string | null }
 
-const { station, engine, setMode, setSettings } = vi.hoisted(() => ({
+const { station, engine, setMode, setSettings, startRunning } = vi.hoisted(() => ({
   station: { current: {} as Record<string, unknown> },
   /** The spec `set_mode` last entered, what the sequencer will send next, and the station being
    *  worked. `null` is what a launch restores: the contest's S&P while the master is on, Chat
@@ -35,6 +35,7 @@ const { station, engine, setMode, setSettings } = vi.hoisted(() => ({
   engine: { current: null as Role | null },
   setMode: vi.fn(),
   setSettings: vi.fn(),
+  startRunning: vi.fn(),
 }))
 
 /** What `set_mode` leaves (`Engine::set_mode`): the run flag is the spec's own, a run calls CQ, and
@@ -45,12 +46,15 @@ const entered = (spec: string): Role => ({
   dxcall: null,
 })
 
+/** The master is on and the exchange is set: the contest can run. */
+const contestOn = () =>
+  station.current.fdActive === true &&
+  String(station.current.fdClass ?? '').trim() !== '' &&
+  String(station.current.fdSection ?? '').trim() !== ''
+
 /** The engine's half: in the contest while the master is on and the exchange is set. */
 const snapshot = (): AppSnapshot => {
-  const on =
-    station.current.fdActive === true &&
-    String(station.current.fdClass ?? '').trim() !== '' &&
-    String(station.current.fdSection ?? '').trim() !== ''
+  const on = contestOn()
   const spec = engine.current?.spec ?? (on ? 'fieldday-sp' : 'chat')
   const contest = on && spec.startsWith('fieldday')
   const qso = spec.startsWith('qso')
@@ -124,6 +128,11 @@ vi.mock('./api', async (importOriginal) => {
     engine.current = entered(spec)
     return snapshot()
   })
+  // The strip's Call CQ (`Engine::start_running`): the contest's Running while the contest runs.
+  startRunning.mockImplementation(async () => {
+    engine.current = entered(contestOn() ? 'fieldday-run' : 'qso-run')
+    return snapshot()
+  })
   return {
     ...auto,
     askLog: vi.fn(async () => {
@@ -134,6 +143,7 @@ vi.mock('./api', async (importOriginal) => {
     getSettings: vi.fn(async () => ({ ...station.current })),
     setSettings,
     setMode,
+    startRunning,
     getFdRuleset: vi.fn(async () => ({
       event: 'arrlfd',
       rulesYear: 2026,
@@ -237,6 +247,7 @@ beforeEach(() => {
   engine.current = null
   setMode.mockClear()
   setSettings.mockClear()
+  startRunning.mockClear()
 })
 afterEach(cleanup)
 
@@ -333,6 +344,28 @@ describe('opening the screen keeps a station already in the contest in its role'
     expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
     expect(roleButton('Running').getAttribute('aria-pressed')).toBe('true')
     expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp', 'fieldday-run'])
+  })
+})
+
+describe("the FT cockpit's Call CQ while the contest runs", () => {
+  const stripCallCq = () => {
+    const group = screen.getByRole('group', { name: 'Sequencer role' })
+    const found = [...group.querySelectorAll('button')].find((b) => b.textContent === 'Call CQ')
+    if (!found) throw new Error('no Call CQ in the strip')
+    return found
+  }
+
+  it("starts the contest's run, lights Call CQ, and opening the screen keeps the run", async () => {
+    station.current = { ...station.current, fdActive: true }
+    render(<App />)
+    fireEvent.click(await waitFor(stripCallCq, WAIT))
+    await waitFor(() => expect(engine.current?.spec).toBe('fieldday-run'), WAIT)
+    await waitFor(() => expect(stripCallCq().getAttribute('aria-pressed')).toBe('true'), WAIT)
+    await openContest()
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
+    expect(roleButton('Running').getAttribute('aria-pressed')).toBe('true')
+    expect(setMode).not.toHaveBeenCalled()
   })
 })
 

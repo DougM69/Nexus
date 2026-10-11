@@ -22079,9 +22079,24 @@ contact yourself."
         self.set_mode("qso-run")
     }
 
-    /// The Operate strip's Call CQ: a plain CQ run ([`Self::start_cq`]). The Tx6 row and the
-    /// Remote page call `start_cq` directly, with the CQ they show.
+    /// The Operate strip's Call CQ: a plain CQ run ([`Self::start_cq`]), but one:
+    ///
+    /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), Call CQ is the contest's Running** — `CQ FD`, `CQ TEST`,
+    /// or the standard CQ where WSJT-X has no activity — as WSJT-X's CQ is the activity's once
+    /// one is set (`genCQMsg`, mainwindow.cpp 9466-9531). Before, it left the contest for FT8
+    /// QSO mode, so a station that started its run here lost it to S&P on opening the Contest
+    /// screen. A contest that cannot start (its exchange not filled in) refuses it, as the
+    /// Contest screen's Running does, and nothing changes. Like any Call CQ it clears a
+    /// directed-CQ token left from the Tx6 row.
+    ///
+    /// The Tx6 row and the Remote page call `start_cq` directly, with the CQ they show.
     pub fn start_running(&mut self) -> Result<(), String> {
+        if self.contest_ft_messages().is_some() {
+            self.set_mode("fieldday-run")?;
+            self.cq_dir = None;
+            return Ok(());
+        }
         self.start_cq(None)
     }
 

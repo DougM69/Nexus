@@ -308,6 +308,8 @@ struct Scene {
     sent: Vec<String>,
     /// The contest log's rows: call, received fields, sent fields, dupe mark.
     logged: Vec<String>,
+    /// Where the station ended: the mode, its role and its sequencer's state.
+    end: String,
 }
 
 fn fields(v: &[tempo_core::contest::FieldValue]) -> String {
@@ -414,6 +416,7 @@ fn scene(contest: &str, tier: Tier, role: Role, act: Act, grid: &str) -> Scene {
         lines,
         sent,
         logged,
+        end: mode,
     }
 }
 
@@ -1080,4 +1083,214 @@ fn every_other_click_works_the_station_as_before() {
         .expect("ignored");
     assert!(listening(&e), "your own CQ: nothing");
     assert!(!e.tx_enabled, "and TX stays off");
+}
+
+/// The contests whose FT8/FT4 messages these tests can run: every one on the list but CQ WW and
+/// CQ WPX, which need a country file this binary does not install.
+fn resolver_free() -> impl Iterator<Item = &'static str> {
+    CONTESTS
+        .into_iter()
+        .filter(|c| !c.starts_with("cqww") && !c.starts_with("cqwpx"))
+}
+
+/// The contests whose rules ban FT8 and FT4.
+fn bans_ft8(contest: &str) -> bool {
+    matches!(contest, "wfd" | "ilqp" | "nyqp")
+}
+
+/// ⭐ **The Operate cockpit's own gestures while a contest runs, every contest, FT8 and FT4, by
+/// value.** A double-click on the partner's CQ hands that station to the contest's S&P, which
+/// sends exactly what S&P sends and logs the same row; the strip's Call CQ is the contest's
+/// Running and sends what Running sends. In the three contests that ban FT8 and FT4 both leave
+/// the contest as they always have, and nothing reaches the contest log.
+#[test]
+fn the_cockpits_gestures_work_the_running_contest() {
+    for contest in resolver_free() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for role in [Role::ClickFromSp, Role::CallCq] {
+                let what = format!("{contest:?} {} {role:?}", tier_name(tier));
+                let s = scene(contest, tier, role, act_of(contest), MY_GRID);
+                assert_eq!(s.entered, Ok(()), "{what}");
+                if bans_ft8(contest) {
+                    assert!(
+                        s.end.starts_with("Qso"),
+                        "{what}: left as before, {}",
+                        s.end
+                    );
+                    assert!(s.logged.is_empty(), "{what}: {:?}", s.logged);
+                    continue;
+                }
+                let like = if role == Role::CallCq {
+                    Role::Running
+                } else {
+                    Role::SearchAndPounce
+                };
+                let (want, row) = expected(contest, like, tier_name(tier));
+                assert!(
+                    s.sent.len() >= want.len() && s.sent[..want.len()] == want[..],
+                    "{what}: sent {:?}",
+                    s.sent
+                );
+                if like == Role::SearchAndPounce {
+                    assert_eq!(s.sent.len(), want.len(), "{what}: nothing more");
+                }
+                assert_eq!(s.logged, row.into_iter().collect::<Vec<_>>(), "{what}");
+                let running = role == Role::CallCq;
+                assert!(
+                    s.end.starts_with(&format!("FieldDay running={running}")),
+                    "{what}: {}",
+                    s.end
+                );
+            }
+        }
+    }
+    // The same double-click from the contest's Running and from FT8 QSO mode, and Call CQ from
+    // FT8 QSO mode.
+    for contest in ["arrlfd", "arrlvhf_jan", "txqp"] {
+        let cq = expected(contest, Role::Running, "FT8").0[0].clone();
+        for role in [Role::ClickFromRun, Role::ClickFromQso, Role::CallCqFromQso] {
+            let what = format!("{contest:?} FT8 {role:?}");
+            let s = scene(contest, Tier::Ft8, role, act_of(contest), MY_GRID);
+            let like = if role == Role::CallCqFromQso {
+                Role::Running
+            } else {
+                Role::SearchAndPounce
+            };
+            let (mut want, row) = expected(contest, like, "FT8");
+            if role == Role::ClickFromRun {
+                want.insert(0, cq.clone());
+            }
+            assert!(
+                s.sent.len() >= want.len() && s.sent[..want.len()] == want[..],
+                "{what}: sent {:?}",
+                s.sent
+            );
+            assert_eq!(s.logged, row.into_iter().collect::<Vec<_>>(), "{what}");
+        }
+    }
+}
+
+/// ⛔ Call CQ while the contest cannot start (its exchange not filled in) is refused as the
+/// Contest screen's Running is, and changes nothing.
+#[test]
+fn call_cq_in_a_contest_that_cannot_start_changes_nothing() {
+    let mut e = contest_that_cannot_start();
+    let r = e.start_running();
+    assert!(r.is_err(), "no class: {r:?}");
+    assert!(
+        matches!(&e.mode, Mode::Qso { running: false, .. }),
+        "still in FT8 QSO mode"
+    );
+    assert!(!e.tx_enabled, "TX stays off");
+    assert_eq!(keyed(&mut e, 0), None, "nothing keys");
+}
+
+/// The Tx6 row still calls the CQ it shows, plain or directed, as an FT8 QSO-mode run, in a
+/// contest too: the strip's Call CQ is the only one that follows the contest.
+#[test]
+fn the_tx6_row_still_sends_the_cq_it_shows() {
+    for (dir, want) in [(None, "CQ K1ABC FN42"), (Some("DX"), "CQ DX K1ABC FN42")] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(Tier::Ft8);
+        e.start_cq(dir).expect("the run starts");
+        assert!(
+            matches!(&e.mode, Mode::Qso { running: true, .. }),
+            "Tx6 {dir:?}: FT8 QSO mode"
+        );
+        assert_eq!(keyed(&mut e, 0).as_deref(), Some(want), "Tx6 {dir:?}");
+    }
+}
+
+/// ⛔ The transmit guards hold for the cockpit's gestures exactly as for the Contest screen's
+/// buttons: a contest whose messages carry the grid keys nothing on Call CQ without one; the
+/// wall-clock watchdog ends a run Call CQ started; Halt stops a contact a double-click started;
+/// and with "Double-click on call sets Tx enable" off, a double-click leaves TX off.
+#[test]
+fn the_transmit_guards_hold_for_the_cockpits_gestures() {
+    // No grid in Settings: Call CQ keys nothing.
+    let mut e = engine_for("txqp", "");
+    e.set_tier(Tier::Ft8);
+    e.start_running().expect("the run starts");
+    for slot in [0, 2, 4] {
+        assert_eq!(keyed(&mut e, slot), None, "no grid, no over (slot {slot})");
+    }
+    // The watchdog ends a run Call CQ started.
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    let mut s = e.settings().clone();
+    s.tx_watchdog_min = 6;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.start_running().expect("the run starts");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ TEST K1ABC FN42"));
+    e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(6 * 60 + 1));
+    assert_eq!(keyed(&mut e, 2), None, "the watchdog trips");
+    assert!(!e.tx_enabled, "and disarms TX");
+    // Halt stops a contact a double-click started.
+    let mut e = engine_for("txqp", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("CQ W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("CQ W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("the double-click is taken");
+    assert_eq!(keyed(&mut e, 2).as_deref(), Some("W9XYZ K1ABC FN42"));
+    e.halt_tx();
+    for slot in [4, 6, 8] {
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ -07")], slot);
+        assert_eq!(
+            keyed(&mut e, slot),
+            None,
+            "nothing after Halt (slot {slot})"
+        );
+    }
+    // The double-click arms TX only where the operator lets it.
+    let mut e = engine_for("txqp", MY_GRID);
+    let mut s = e.settings().clone();
+    s.double_click_sets_tx = false;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.ingest_decodes_for_test(&[heard("CQ W9XYZ EN37")], 2);
+    e.work_station(DX, None, Some("CQ W9XYZ EN37"), Some(DX_SNR), None)
+        .expect("the double-click is taken");
+    assert!(!e.tx_enabled, "TX stays off");
+    assert_eq!(keyed(&mut e, 2), None, "and nothing keys");
+}
+
+/// Where a running contest's own FT8/FT4 messages do not apply (the contest switch off, FT2, a
+/// contest whose rules ban FT8), Call CQ is the plain CQ run it always was. And like any Call CQ
+/// it clears a directed-CQ token the Tx6 row left, so no later run inherits "CQ DX".
+#[test]
+fn call_cq_outside_the_contests_messages_is_a_plain_run() {
+    let plain = |e: &mut Engine, what: &str| {
+        e.start_running().expect(what);
+        assert!(
+            matches!(&e.mode, Mode::Qso { running: true, .. }),
+            "{what}: QSO mode"
+        );
+        assert_eq!(keyed(e, 0).as_deref(), Some("CQ K1ABC FN42"), "{what}");
+    };
+    let mut e = Engine::new(ME, MY_GRID, 0);
+    let mut s = e.settings().clone();
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    plain(&mut e, "the contest switch off");
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft2);
+    plain(&mut e, "FT2");
+    let mut e = engine_for("ilqp", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    plain(&mut e, "a contest that bans FT8");
+    // The token: Tx6's "CQ DX", then Call CQ in the contest, then the contest switched off.
+    let mut e = engine_for("arrlvhf_jan", MY_GRID);
+    e.set_tier(Tier::Ft8);
+    e.start_cq(Some("DX")).expect("Tx6");
+    e.start_running().expect("Call CQ");
+    let mut s = e.settings().clone();
+    s.fd_active = false;
+    e.apply_settings(s);
+    e.set_mode("qso-run").expect("a run");
+    assert_eq!(
+        keyed(&mut e, 2).as_deref(),
+        Some("CQ K1ABC FN42"),
+        "no CQ DX left behind"
+    );
 }

@@ -22,6 +22,7 @@ import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const startCq = vi.fn(async () => null)
+const startRunning = vi.fn(async (): Promise<null> => null)
 const pushToast = vi.fn()
 
 vi.mock('../api', () => ({
@@ -34,6 +35,7 @@ vi.mock('../api', () => ({
   pointRotatorAtCall: vi.fn(async () => null),
   redecode: vi.fn(async () => null),
   startCq: (...a: unknown[]) => startCq(...(a as [])),
+  startRunning: () => startRunning(),
   startQsoRecording: vi.fn(async () => null),
   stopQsoRecording: vi.fn(async () => null),
   setSkipTx1: vi.fn(async () => null),
@@ -122,11 +124,11 @@ function panelsApi(): PanelLayoutApi<OperatePanelId> {
   }
 }
 
-function renderCockpit() {
+function renderCockpit(snap: AppSnapshot = makeSnap()) {
   const noop = () => {}
   return render(
     <OperateCockpit
-      snap={makeSnap()}
+      snap={snap}
       theme="dark"
       tier="FT8"
       onTierChange={noop}
@@ -175,6 +177,8 @@ beforeEach(() => {
     unobserve() {}
   } as unknown as typeof ResizeObserver
   startCq.mockClear()
+  startRunning.mockReset()
+  startRunning.mockImplementation(async () => null)
   pushToast.mockClear()
 })
 afterEach(cleanup)
@@ -231,5 +235,47 @@ describe('#254 — a malformed directed CQ is refused, never quietly replaced', 
     await waitFor(() => expect(startCq).toHaveBeenCalledTimes(1))
     expect(startCq).toHaveBeenCalledWith(null)
     expect(pushToast).not.toHaveBeenCalled()
+  })
+})
+
+// THE STRIP'S CALL CQ IS THE CONTEST'S RUNNING WHILE A CONTEST RUNS. The engine decides that
+// (`Engine::start_running`); on this computer the strip asks for it by its own verb — the Tx6 row
+// keeps `startCq`, which sends the CQ it shows — says why when it is refused, and shows the
+// contest's run as its own: in a contest the snapshot carries it in `fieldDay`, not `qso`.
+describe("the strip's Call CQ", () => {
+  const roles = () => screen.getByRole('group', { name: 'Sequencer role' })
+  const stripButton = (name: 'Call CQ' | 'S&P') => {
+    const found = [...roles().querySelectorAll('button')].find((b) => b.textContent === name)
+    if (!found) throw new Error(`no ${name} in the strip`)
+    return found
+  }
+  const inContest = (running: boolean) =>
+    ({ ...makeSnap(), mode: 'fieldDay', qso: null, fieldDay: { running, state: running ? 'CallingCq' : 'Listening', dxcall: null } }) as unknown as AppSnapshot
+
+  it('asks for the run by its own verb, never the Tx6 one', async () => {
+    renderCockpit()
+    fireEvent.click(stripButton('Call CQ'))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledTimes(1))
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it('says why when the run is refused', async () => {
+    const why = 'Set your Field Day class and ARRL/RAC section in Settings first'
+    startRunning.mockImplementation(async () => {
+      throw why
+    })
+    renderCockpit()
+    fireEvent.click(stripButton('Call CQ'))
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(why, 'error'))
+  })
+
+  it("lights Call CQ while the contest's run is on, and S&P while its S&P is", () => {
+    renderCockpit(inContest(true))
+    expect(stripButton('Call CQ').getAttribute('aria-pressed')).toBe('true')
+    expect(stripButton('S&P').getAttribute('aria-pressed')).toBe('false')
+    cleanup()
+    renderCockpit(inContest(false))
+    expect(stripButton('Call CQ').getAttribute('aria-pressed')).toBe('false')
+    expect(stripButton('S&P').getAttribute('aria-pressed')).toBe('true')
   })
 })
