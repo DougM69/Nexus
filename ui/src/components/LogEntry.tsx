@@ -28,6 +28,7 @@ import {
 } from '../features/contestDomains'
 import {
   countyLineDomain,
+  countyList,
   isCountyLine,
   lastCountyPart,
   readCountyLine,
@@ -39,7 +40,7 @@ import { scpLine } from '../features/scp'
 import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
 import { fdFieldOk, fdSlotValue, fdVerdict, slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
-import { contestDupe } from '../features/contestDupe'
+import { contestDupe, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { isEditKey } from '../features/contestEdit'
@@ -1993,15 +1994,45 @@ export function LogEntry({
   const fdModeClass = fdMode ?? 'PH'
   // The exchange being typed, for a contest whose dupe key names a slot (every QSO party:
   // a station is worked once per band and mode FROM EACH COUNTY). The received side is what
-  // the boxes hold now; the sent side is what this station is sending now, which is what the
-  // engine stamps on the row it is about to write.
-  const fdDupe = contestDupe(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
-    rx: (slot) => {
-      const box = fdReceives.find((f) => f.key === slot)
-      return box ? fdValue(box) : ''
-    },
-    tx: (slot) => composingSlot(fieldDay?.composing, slot),
-  })
+  // the boxes will LOG, a county typed by name as its code (`fdSlotValue`, the function the
+  // log resolves it with); the sent side is what this station is sending now, which is what
+  // the engine stamps on the row it is about to write.
+  const fdRx = (slot: string): string => {
+    const box = fdReceives.find((f) => f.key === slot)
+    return box ? fdSlotValue(box, fdValue(box), fdLineDomain(box)) : ''
+  }
+  const fdDupeOf = (rx: (slot: string) => string): ContestDupeVerdict =>
+    contestDupe(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+      rx,
+      tx: (slot) => composingSlot(fieldDay?.composing, slot),
+    })
+  // ⭐ A COUNTY LINE IS JUDGED COUNTY BY COUNTY, as the log writes it: one row per county, each
+  // admitted on its own key. Judged whole, `COOK/WILL` is no row's county, so a line whose every
+  // county was already worked warned of nothing while each county alone did. The line's one
+  // verdict, which ESM reads too, is an own dupe only when EVERY county is one (a line with a
+  // new county is a contact that scores), and a club dupe when any county is.
+  const fdLineBox = fdReceives.find((f) => fdLineDomain(f) && isCountyLine(fdValue(f)))
+  const fdLineRead = fdLineBox ? readCountyLine(fdLineDomain(fdLineBox)!, fdValue(fdLineBox)) : undefined
+  const fdLineDupes =
+    fdLineBox && fdLineRead?.ok
+      ? fdLineRead.counties.map((county) => ({
+          county,
+          dupe: fdDupeOf((slot) => (slot === fdLineBox.key ? county : fdRx(slot))),
+        }))
+      : undefined
+  /** The line's counties whose verdict `keep` takes, in the order typed. */
+  const fdLineCounties = (keep: (dupe: ContestDupeVerdict) => boolean): string[] =>
+    (fdLineDupes ?? []).filter((c) => keep(c.dupe)).map((c) => c.county)
+  const fdLineOwn = fdLineCounties((d) => d === 'own')
+  const fdLineNew = fdLineCounties((d) => d !== 'own')
+  const fdDupe: ContestDupeVerdict =
+    fdLineDupes === undefined
+      ? fdDupeOf(fdRx)
+      : fdLineOwn.length === fdLineDupes.length
+        ? 'own'
+        : fdLineDupes.some((c) => c.dupe === 'club')
+          ? 'club'
+          : 'none'
   const fdOwnDupe = fdDupe === 'own'
   const fdClubDupe = fdDupe === 'club'
   // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just
@@ -2580,6 +2611,15 @@ export function LogEntry({
                     mode: fdModeClass,
                   })
                 : t('logEntry.fd.dupe.ownAnyBandOrMode', { call: fdTypedCall })}
+            {fdLineDupes && t('logEntry.countyLine.dupeFor', { counties: countyList(fdLineOwn) })}
+          </div>
+        )}
+        {/* Some counties of a line already worked: which, and which are new. The contact still
+            scores in the new ones, so this is not the line's "Dupe:" sentence. */}
+        {slotFree && !fdOwnDupe && fdLineOwn.length > 0 && (
+          <div className="le-fd-hint" role="alert">
+            {t('logEntry.countyLine.someDupe', { counties: countyList(fdLineOwn), count: fdLineOwn.length })}
+            {t('logEntry.countyLine.someNew', { counties: countyList(fdLineNew), count: fdLineNew.length })}
           </div>
         )}
         {slotFree && fdClubDupe && (
@@ -2589,6 +2629,7 @@ export function LogEntry({
               band: snap.radio.band,
               mode: fdModeClass,
             })}
+            {fdLineDupes && t('logEntry.countyLine.dupeFor', { counties: countyList(fdLineCounties((d) => d === 'club')) })}
           </div>
         )}
         {slotFree && wveMissingQth && (

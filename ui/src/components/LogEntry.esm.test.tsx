@@ -375,6 +375,56 @@ describe('Enter Sends Message — one press, one message', () => {
     expect(logged()).toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
   })
 
+  // ⭐ A COUNTY LINE IS A DUPE ONLY WHEN EVERY COUNTY IS ONE. The strip judges the line county by
+  // county, as the log writes it (one row per county, each on its own key, under ILQP's rule), so a
+  // line whose every county was worked gets what one worked county gets, and a line with a new
+  // county is a contact that scores: my exchange, and every county logs as it is.
+  it('treats a county line as a dupe only when every county is one', async () => {
+    const worked = (...counties: string[]) =>
+      party(
+        counties.map((c) => ({ ...row('K9AAA', c, T0), dkey: ['K9AAA', '20M', 'CW', c, 'KANE'] })),
+        {
+          receives: [
+            { key: 'RST', kind: 'rst', required: true },
+            { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+          ],
+          dupeModeGroups: [['CW', 'DIG']],
+          dupeRule: {
+            byCall: true,
+            byBand: true,
+            byModeClass: true,
+            byFields: ['QTH'],
+            bySentFields: ['QTH'],
+            modeClassGroups: [['CW', 'DIG']],
+          },
+        } as unknown as Partial<FieldDayStatus>,
+      )
+    const rows = () => api.contestLogManualRows.mock.calls.map((c) => [c[0], c[1]])
+    render(<Strip fieldDay={worked('COOK', 'WILL')} />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK/WILL')
+    await enter(qthBox())
+    expect(harness.sent).toEqual([])
+    expect(rows()).toEqual([])
+    expect(line()).toBe('A dupe of your own log: Enter sends nothing and logs nothing.')
+    cleanup()
+
+    render(<Strip fieldDay={worked('COOK')} />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK/WILL')
+    await enter(qthBox())
+    expect(harness.sent.map((m) => [m.role, m.text, m.call])).toEqual([['exch', 'TU {RST} {EXCH}', 'K9AAA']])
+    expect(rows()).toEqual([
+      [
+        'K9AAA',
+        [
+          [['RST', '599'], ['QTH', 'COOK']],
+          [['RST', '599'], ['QTH', 'WILL']],
+        ],
+      ],
+    ])
+  })
+
   it('refuses a step the set does not map by name (decision 4), and Alt+Enter still logs', async () => {
     harness.roles = { cq: ['F1'], callExch: ['F2'], myCall: ['F4'], again: ['F7'] } // no TU, no S&P exchange
     render(<Strip fieldDay={party()} />)

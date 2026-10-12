@@ -287,10 +287,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   box joined by `/`, as the station sends them (`COOK/DUPG`, up to four), and Enter logs one
   contact per county, all at the same time, band and mode. N1MM Logger+ takes county lines the
   same way. Each county can be typed as its code or its name and is offered from the sponsor's
-  list. A county already worked on that band and mode is not logged again, and Nexus says which
-  one it was while the others are logged. A part that is not a county on the sponsor's list stops
-  the whole line. Each county is an ordinary contact in the log, and a single county logs as
-  before.
+  list. While you type, the Dupe warning names the counties already worked on that band and mode:
+  `… on 40m CW for COOK and WILL` when every county is one, `COOK is a dupe; WILL is new` when only
+  some are. Enter logs every county, a dupe marked for 0 points as a single contact is. A part
+  that is not a county on the sponsor's list stops the whole line. Each county is an ordinary
+  contact in the log, and a single county logs as before.
 - **FlexRadio: CW through the Flex native client, built and off until a tester has checked it on
   a radio.** Once it is switched on, the CW screen's CAT keyer sends each word of a message to the
   radio's own CW keyer, which keys and unkeys the radio with its break-in, as it does through
