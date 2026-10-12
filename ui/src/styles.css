@@ -19260,6 +19260,41 @@ button.cq-skiptx1.on {
 .contest-logger-recent .fd-mode-chip {
   font-size: calc(14px * var(--text-scale));
 }
+/* A MODE THE CONTEST DOES NOT PERMIT, over the boxes (ContestLargeEntry): the header chip's own
+   sentence, whole — the chip ellipsizes in its banner row, this wraps — at the size of the verdicts
+   under the boxes, its box on the log line's own (inset as the strip's padding insets the boxes, and
+   centred on the entry's measure past it). */
+.contest-logger-scaled > .fd-advisory {
+  max-width: none;
+  margin: var(--space-2) max(var(--space-4), calc((100% - 1600px) / 2 + var(--space-4))) 0;
+  white-space: normal;
+  font-size: var(--fs-title);
+}
+/* THE CONTEST SCREEN'S ENTRY, in the main window (App.tsx): the same large log line at the top of
+   the screen while a contest runs, the last contacts under it, and the screen below, scrolling in
+   its own panel as it always has. One wrapper, there with or without the entry: alone, the screen
+   fills it exactly as it filled the shell before, so a contest starting or ending moves nothing else.
+
+   THE VERTICAL BUDGET is the logger window's (above), in the same order: the screen gives way first,
+   down to its floor (`min(9em, 30%)`, which yields to a short window); then the last contacts, down to
+   their newest row; and past both — below the supported floor, or the largest text on a short window
+   — this wrapper scrolls, as the logger window's document does. The entry never shrinks and never
+   scrolls on its own.
+
+   The app's Text size reaches the two scaled blocks under another name, as `.contest-logger` hands it
+   down in the logger window (a cycle there says why). */
+.contest-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  --logger-outer-text-scale: var(--text-scale);
+}
+.contest-screen > .contest-logger-recent + .layout.single {
+  min-height: min(9em, 30%);
+  border-top: 1px solid var(--border-soft);
+}
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor
    (0.65 × 1.25 ≈ 0.81 effective). That floor was the per-surface-natural bug in

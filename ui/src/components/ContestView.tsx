@@ -30,6 +30,7 @@ import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
 import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
+import { stationMode, usePskName } from '../features/contestMode'
 import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { t } from '../i18n'
@@ -178,6 +179,11 @@ interface Props {
   /** The active digital tier (App's snap.link.tier) — the banned-mode chip
    *  checks it against the ruleset's bannedModes. */
   tier?: string
+  /** The station's operating section (`snap.radio.operatingMode`). Given, the banned-mode chip names
+   *  the mode the station is on — the tier on the digital section, the mode its contacts log under on
+   *  the others (`stationMode`) — so a station on phone at a contest that bans FT8 is not told FT8 is
+   *  not permitted. Absent (the Remote page, whose observation carries no section), it reads `tier`. */
+  section?: string
   /** Open Settings at a section (App's `openSettingsAt`): where the mode switch sends an
    *  operator whose contest cannot start yet. */
   onOpenSettings?: (target: string) => void
@@ -2213,6 +2219,7 @@ export function ContestView({
   fdActive = false,
   fdRuleset = null,
   tier,
+  section,
   observation,
   onOpenSettings,
   onSettingsSaved,
@@ -2222,6 +2229,9 @@ export function ContestView({
   onOperatorFocused,
 }: Props) {
   const observed = observation !== undefined
+  // The mode the banned-mode chip names: the station's own, given its section.
+  const pskName = usePskName(observed ? undefined : section)
+  const activeMode = section === undefined ? tier : stationMode(section, tier, pskName)
   // The clock the spot advisory judges the event window by.
   const nowUnix = useNowUnix()
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
@@ -2802,7 +2812,7 @@ export function ContestView({
         <FdAdvisories
           fdActive={fdActive}
           ruleset={fdRuleset}
-          activeMode={tier}
+          activeMode={activeMode}
           assistanceOn={fieldDay?.assistanceOn ?? []}
           showAssistance
           eventWindow={

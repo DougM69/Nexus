@@ -4391,6 +4391,7 @@ export const DE: PartialCatalog = {
   "contestLogger.size.smaller": "Kleinere Schrift",
   "contestLogger.size.larger": "Größere Schrift",
   "contestLogger.recent.title": "Last contacts",
+  "contestScreen.entry.title": "Kontakt loggen",
   "fieldDay.score.qsos": "QSOs",
   "fieldDay.score.sections": "Sektionen",
   "fieldDay.score.mults": "Mult",

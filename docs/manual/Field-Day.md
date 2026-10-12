@@ -209,6 +209,14 @@ Navigate to the Phone cockpit. The log strip similarly adds Class and Section fi
 
 All three mode classes write into the **same unified FD log**, so the live score and Cabrillo export reflect the full multi-mode total in real time.
 
+### The Contest screen
+
+With a contest running, the **Contest** screen has a log line of its own at the top: the logger window's large Call and exchange boxes, with the dupe warning right under them, then your last five contacts, newest first, and the rest of the screen below, scrolling on its own. **A−** and **A+** make the boxes and the last contacts smaller or larger, from 80 to 160 %, on top of your Text size setting; this computer remembers the size for the main window, and the logger window keeps its own.
+
+It is the same log line as the cockpits' LOG panes: the same boxes, dupe warning, Super Check Partial line, call history and keys (Ctrl+D, Ctrl+Y, Alt+W, Ctrl+O), and with the logger window open the same contact as that window, so a contact logs once. It logs under the mode of the last cockpit you used, shown with the band in its top row: phone as PH, CW as CW, RTTY, PSK and the FT modes as DIG. If that mode is one the contest does not permit (FT8 or FT4 at the Illinois QSO Party), the line says so; the contact still logs, and the sponsor will not count it. The same warning in the screen's header shows only while you are on such a mode.
+
+Nothing on it transmits: no PTT, no F-key messages, no Enter Sends Message and no Tune. **Esc** there stops TX, as the top bar's **Stop TX** does, and leaves the boxes as they are. With Contest mode off, or no contest that can start, the screen is as it was.
+
 ### Contest Log Persistence
 
 The contest log survives restarts: every logged contact is journaled to `fieldday_backup.adi` (beside `settings.json`), and the journal is restored automatically whenever Contest mode puts the station back in the contest — a mid-event quit, crash, or Run/Search-and-Pounce switch loses nothing. Every contact of the running you are in comes back, however long ago it was logged, so a log exported a week or a month after the contest is complete. An earlier event's contacts are not restored.

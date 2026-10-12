@@ -1679,6 +1679,7 @@ export const FR: PartialCatalog = {
   "contestLogger.size.smaller": "Texte plus petit",
   "contestLogger.size.larger": "Texte plus grand",
   "contestLogger.recent.title": "Last contacts",
+  "contestScreen.entry.title": "Enregistrer un contact",
   "fieldDay.role.aria": "Running ou S&P",
   "fieldDay.role.running": "Running",
   "fieldDay.role.sp": "S&P",

@@ -1,0 +1,694 @@
+// @vitest-environment jsdom
+//
+// THE CONTEST SCREEN TAKES THE CONTACTS (2026-10-11). Rehearsing the Illinois QSO Party on two
+// laptops, the operator found nowhere on the main window's Contest screen to type a contact, and
+// picked "Big entry on Contest": "The Logger window's large Call / RST / County boxes, dupe warning
+// and last contacts at the top of the Contest screen. Same log line, so a contact logs once; it never
+// transmits."
+//
+// AT THE WIRE, IN THE REAL APP (stop-control-wiring.test.tsx's idiom): the real `./api` under a
+// recording bridge, so every assertion is about the command and the argument object that left the UI.
+//   · The screen's order: the Logger window's entry (its boxes, the dupe warning under them), the last
+//     contacts, then the screen; with no contest running, the screen alone, exactly as before.
+//   · Esc in the Call box while the rig is keyed sends the station's halt, once, and leaves the
+//     contact in the boxes. Every other key in every box, and every button of the entry, sends
+//     nothing that transmits; Enter logs and sends no message, Enter Sends Message switched on in
+//     every cockpit.
+//   · Enter sends the very bytes the Phone screen's LOG pane sends for the same keystrokes.
+//   · A− / A+ is remembered on this computer for the main window, under its own key; and the app's
+//     Text size reaches the boxes, computed through the real sheets (jsdom lays nothing out, so the
+//     font size is walked, as ContestLogger.entryFirst.test.tsx walks the logger window's).
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, cleanup, waitFor, fireEvent, act, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import App from './App'
+import { DetachedPanel } from './DetachedPanel'
+import { contestName } from './fdEvent'
+import { allFeatureIds } from './features/registry'
+import { pastTheSwitch } from './components/ConnectView.testkit'
+import { cmpSpec, elOf, expandWith, parseRules, reachesChain, rootTokensFrom, type El, type Rule } from './cssCascade'
+import { t } from './i18n'
+import defaultSettings from './components/__fixtures__/defaultSettings.json'
+
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 30_000 })
+
+// ── the recorder ────────────────────────────────────────────────────────────────────────────
+type BridgeCall = { cmd: string; args?: Record<string, unknown> }
+const bridgeCalls: BridgeCall[] = []
+const mark = (): number => bridgeCalls.length
+
+/** What transmits, or decides whether or what the station transmits: the logger window's reviewed
+ *  list (ContestLogger.txfree.test.tsx) with the stop wiring's verbs. */
+const KEYING = new Set([
+  'set_ptt', 'halt_tx', 'set_tune', 'atu_tune', 'set_tx_enabled', 'stop_cw', 'send_cw', 'send_cw_armed',
+  'stop_voice', 'play_voice_message', 'set_mode', 'start_running', 'call_station', 'qso_resend', 'qso_freetext',
+  'override_next_tx', 'log_current_qso', 'set_tx_even', 'set_tx_cycle_auto', 'set_tx_offset', 'set_tx_level',
+  'set_rf_power', 'rtty_send', 'rtty_stop', 'rtty_set_auto', 'rtty_auto_abort', 'psk_send', 'psk_stop',
+  'sstv_stop', 'arm_stream_mic', 'release_stream_mic', 'set_settings', 'set_operating_mode', 'set_frequency',
+  'set_contest_esm',
+])
+/** The transmit-path commands sent since `from`, in order. */
+const keyingSince = (from: number): string[] => bridgeCalls.slice(from).map((c) => c.cmd).filter((c) => KEYING.has(c))
+
+// ── the station: the Illinois QSO Party from Kane County, on 20 m phone ─────────────────────
+const T0 = 1_792_342_800
+const row = (mins: number, call: string, qth: string) => ({
+  call,
+  class: '',
+  section: '',
+  band: '20m',
+  mode: 'PH',
+  submode: 'USB',
+  whenUnix: T0 - mins * 60,
+  rcvd: ['59', qth],
+})
+/** Oldest first, as the engine keeps it. K9ABC from COOK on 20 m phone is the second contact. */
+const LOG = [
+  row(41, 'N9ZZZ', 'LAKE'),
+  row(37, 'K9ABC', 'COOK'),
+  row(29, 'K9AAA', 'KANE'),
+  row(18, 'N9AAA', 'DUPG'),
+  row(9, 'W0AAA', 'MO'),
+  row(2, 'K9DEF', 'WILL'),
+]
+const ILQP = {
+  running: false,
+  state: 'Idle',
+  qsoCount: LOG.length,
+  sections: 0,
+  points: LOG.length * 2,
+  multCount: 5,
+  event: 'ilqp',
+  role: 'in_state',
+  log: LOG,
+  receives: [
+    { key: 'RST', kind: 'rst', required: true },
+    { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+  ],
+  composing: [
+    { key: 'RST', raw: '59' },
+    { key: 'QTH', raw: 'KANE', domain: 'il_counties' },
+  ],
+  composingText: '59 KANE',
+  assistanceOn: [],
+  upload: { enabled: false, destinations: [], available: [], hint: '' },
+  eventStartUnix: T0 - 3600,
+  eventEndUnix: T0 + 3600,
+}
+const ILQP_RULES = {
+  event: 'ilqp',
+  rulesYear: 2026,
+  bannedModes: ['FT8', 'FT4'],
+  spottingAllowed: true,
+  clusterAllowed: true,
+  enforcement: 'warn',
+  role: 'in_state',
+  exchange: [],
+  problem: '',
+  eventStartUnix: T0 - 3600,
+  eventEndUnix: T0 + 3600,
+}
+
+/** Keyed or not; the section the station is on; and the contest, or none (Contest mode off). */
+let transmitting = false
+let operatingMode = 'phone'
+let fieldDay: unknown = ILQP
+let settingsAnswer: Record<string, unknown> = {}
+
+const snapshot = () => ({
+  mycall: 'W9XYZ',
+  mygrid: 'EN52',
+  mode: fieldDay ? 'fieldDay' : 'Normal',
+  radio: {
+    dialMhz: operatingMode === 'digital' ? 14.074 : 14.25,
+    band: '20m',
+    catOk: true,
+    sideband: 'USB',
+    rigMode: operatingMode === 'digital' ? 'PKTUSB' : 'USB',
+    operatingMode,
+    transmitting,
+    txEnabled: true,
+    txAllowed: true,
+    tuning: false,
+    rxOffsetHz: 1500,
+    txOffsetHz: 1500,
+    txLevel: 0.5,
+    slot: 0,
+  },
+  aiCw: { enabled: false, status: '', text: '' },
+  link: { tier: 'Ft8', periodSecs: 15, snrDb: -8, dtSec: 0.1, freqHz: 1500, rv: 0, state: 'idle', quality: 1 },
+  stations: [],
+  conversations: [],
+  activePeer: null,
+  qso: null,
+  fieldDay,
+  recentDecodes: [],
+  harqRescues: 0,
+})
+
+function respond(cmd: string): unknown {
+  if (cmd === 'halt_tx') transmitting = false
+  if (/^(get_snapshot|halt_tx|set_operating_mode|set_area|set_mode|select_peer|contest_log_manual|contest_working|contest_entry_reset)$/.test(cmd)) {
+    return snapshot()
+  }
+  if (cmd === 'contest_log_manual_rows') return [true]
+  if (cmd === 'get_settings') return settingsAnswer
+  if (cmd === 'get_fd_ruleset') return ILQP_RULES
+  if (cmd === 'get_awards') return { achievements: [] }
+  if (cmd === 'get_journey') return { firsts: [], feats: [], ladders: [] }
+  if (cmd === 'app_version') return '0.0.0-test'
+  if (cmd === 'radio_launch_info') return { showPicker: false }
+  if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log|contest_removed|contest_unmerged|get_scp_calls)$/.test(cmd)) return []
+  if (/^(get_propagation|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (cmd === 'ask_log') throw new Error('no log in this test')
+  return {}
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  pastTheSwitch()
+  bridgeCalls.length = 0
+  transmitting = false
+  operatingMode = 'phone'
+  fieldDay = ILQP
+  settingsAnswer = { ...defaultSettings, mycall: 'W9XYZ', mygrid: 'EN52', fdActive: true, fdEvent: 'ilqp' }
+  window.__TAURI_INTERNALS__ = {
+    invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+      bridgeCalls.push({ cmd, args })
+      return respond(cmd) as T
+    },
+  }
+  localStorage.setItem(
+    'nexus.features.v1',
+    JSON.stringify({ profile: 'custom', enabled: Object.fromEntries(allFeatureIds().map((id) => [id, true])) }),
+  )
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+  window.matchMedia = ((q: string) =>
+    ({ matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }) as unknown as MediaQueryList) as typeof window.matchMedia
+})
+afterEach(() => {
+  cleanup()
+  delete window.__TAURI_INTERNALS__
+  document.documentElement.removeAttribute('data-text-size')
+})
+
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
+
+/** The real App on `view`, past its boot snapshot. */
+async function mountOn(view: string): Promise<void> {
+  localStorage.setItem('nexus.workspace', 'dx')
+  window.location.hash = `#${view}`
+  render(<App />)
+  await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull(), { timeout: 15_000 })
+  await settle()
+}
+
+/** The Contest screen with its entry on show. */
+async function contestScreen(): Promise<HTMLElement> {
+  await mountOn('fieldDay')
+  return waitFor(
+    () => {
+      const host = document.querySelector<HTMLElement>('.contest-screen')
+      expect(host?.querySelector('.le-fd-input-call'), 'the Contest screen shows no entry').toBeTruthy()
+      return host!
+    },
+    { timeout: 15_000 },
+  )
+}
+
+const boxesIn = (root: Element) => [...root.querySelectorAll<HTMLInputElement>('.le-fd-big input')]
+
+/** Type a contact the way the boxes take one: the call, the report left as offered, the county. */
+async function typeContact(root: Element): Promise<HTMLInputElement[]> {
+  const boxes = boxesIn(root)
+  fireEvent.change(boxes[0], { target: { value: 'K9ABC' } })
+  fireEvent.change(boxes[2], { target: { value: 'COOK' } })
+  await settle()
+  return boxes
+}
+
+// ── the screen ──────────────────────────────────────────────────────────────────────────────
+
+describe('the main window’s Contest screen takes contacts', () => {
+  it('the entry first — the boxes, the dupe warning right under them — then the last contacts, then the screen', async () => {
+    const host = await contestScreen()
+    const tagged = (el: Element) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')}`
+    expect([...host.children].map(tagged)).toEqual([
+      'section.contest-logger-entry',
+      'section.contest-logger-recent',
+      'main.layout.single',
+    ])
+    const [entry, recent, screen] = [...host.children] as HTMLElement[]
+    const boxes = await typeContact(entry)
+    expect(boxes.map((b) => b.value)).toEqual(['K9ABC', '59', 'COOK'])
+    // The band and mode the contact logs under, in the header row the Phone LOG pane shows.
+    expect(entry.querySelector('.le-fd-mode')!.textContent).toBe('PH')
+    expect(entry.querySelector('.le-fd-header')!.textContent).toContain(t('logEntry.contest.hint', { band: '20m' }))
+    // The dupe warning, as the log line computes it, after the boxes.
+    const dupe = within(entry).getByRole('alert')
+    expect(dupe.textContent).toBe(t('logEntry.fd.dupe.own', { call: 'K9ABC', band: '20m', mode: 'PH' }))
+    expect(entry.querySelector('.le-fd-big')!.compareDocumentPosition(dupe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The newest five, newest first.
+    expect([...recent.querySelectorAll('.fd-log-row .fd-col.call')].map((c) => c.textContent)).toEqual([
+      'K9DEF',
+      'W0AAA',
+      'N9AAA',
+      'K9AAA',
+      'K9ABC',
+    ])
+    // The screen follows, the whole log in it, oldest first.
+    expect([...screen.querySelectorAll('.fd-log-row .fd-col.call')].map((c) => c.textContent)).toEqual(LOG.map((q) => q.call))
+    // One entry, in the main window as in the logger window.
+    expect(document.querySelectorAll('.contest-logger-entry')).toHaveLength(1)
+  })
+
+  it('with no contest running the screen is as it was: no entry, no last contacts', async () => {
+    fieldDay = null
+    await mountOn('fieldDay')
+    const host = await waitFor(() => {
+      const h = document.querySelector('.contest-screen')
+      expect(h?.querySelector('section.panel.fieldday'), 'control: the Contest screen is on show').toBeTruthy()
+      return h!
+    })
+    expect([...host.children].map((c) => c.tagName.toLowerCase() + '.' + [...c.classList].join('.'))).toEqual(['main.layout.single'])
+    expect(document.querySelector('.contest-logger-entry, .contest-logger-recent, .le-fd-input-call')).toBeNull()
+  })
+})
+
+// ── the mode the contest does not permit ────────────────────────────────────────────────────
+
+describe('a mode the contest does not permit', () => {
+  const banned = (mode: string) =>
+    t('fieldDay.advisory.banned', { mode, event: contestName('ilqp'), year: 2026 })
+
+  it('on FT8 the entry says so in words, the header chip shows, and the contact still logs', async () => {
+    operatingMode = 'digital'
+    const host = await contestScreen()
+    const entry = host.querySelector('.contest-logger-entry')!
+    expect(entry.querySelector('.fd-advisory.banned')?.textContent).toBe(`⚠ ${banned('FT8')}`)
+    expect(host.querySelector('.fd-event-banner .fd-advisory.banned')?.textContent).toBe(`⚠ ${banned('FT8')}`)
+    // The rules line says what the contest permits, as it always did.
+    expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
+    // Logging stays allowed: the contact goes, under the digital class.
+    expect(entry.querySelector('.le-fd-mode')!.textContent).toBe('DIG')
+    const boxes = await typeContact(entry)
+    const from = mark()
+    fireEvent.keyDown(boxes[2], { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(bridgeCalls.slice(from).map((c) => c.cmd)).toContain('contest_log_manual'))
+    expect(bridgeCalls.slice(from).find((c) => c.cmd === 'contest_log_manual')!.args).toEqual({
+      call: 'K9ABC',
+      fields: [['RST', '599'], ['QTH', 'COOK']],
+      mode: 'DIG',
+      submode: null,
+    })
+  })
+
+  it('on phone neither the entry nor the header warns — the FT tier left at FT8 is not the station’s mode', async () => {
+    const host = await contestScreen()
+    expect(host.querySelector('.fd-advisory')).toBeNull()
+    // The rules line still says what the contest permits.
+    expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
+  })
+})
+
+// ── transmit ────────────────────────────────────────────────────────────────────────────────
+
+/** Every key a keyboard can send that any cockpit binds, and the rest of the keyboard besides —
+ *  ContestLogger.txfree.test.tsx's sweep, less Esc, which is the stop and is pressed on its own. */
+function everyKeyButEsc(): KeyboardEventInit[] {
+  const out: KeyboardEventInit[] = []
+  for (let n = 1; n <= 24; n++) out.push({ key: `F${n}`, code: `F${n}` })
+  for (const key of ['Enter', 'Tab', 'Backspace', 'Delete', 'Insert', 'Pause', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ContextMenu']) {
+    out.push({ key, code: key })
+  }
+  const mods: KeyboardEventInit[] = [{}, { ctrlKey: true }, { altKey: true }, { metaKey: true }, { shiftKey: true }]
+  for (const m of mods) {
+    out.push({ key: ' ', code: 'Space', ...m })
+    for (let d = 0; d <= 9; d++) out.push({ key: String(d), code: `Digit${d}`, ...m })
+    for (const c of 'abcdefghijklmnopqrstuvwxyz') out.push({ key: c, code: `Key${c.toUpperCase()}`, ...m })
+  }
+  return out
+}
+
+describe('the entry transmits nothing, and Esc is still the stop', () => {
+  it('Esc in the Call box while the rig is keyed sends the halt, once, and the contact stays in the boxes', async () => {
+    transmitting = true
+    const host = await contestScreen()
+    const [call] = await typeContact(host)
+    call.focus()
+    const from = mark()
+    fireEvent.keyDown(call, { key: 'Escape', code: 'Escape' })
+    fireEvent.keyUp(call, { key: 'Escape', code: 'Escape' })
+    await waitFor(() => expect(keyingSince(from)).toEqual(['halt_tx']))
+    await settle()
+    expect(keyingSince(from), 'one press, one halt').toEqual(['halt_tx'])
+    expect(boxesIn(host).map((b) => b.value), 'Esc clears nothing here: it is the stop').toEqual(['K9ABC', '59', 'COOK'])
+  })
+
+  it('every other key in every box reaches no command that transmits', async () => {
+    const host = await contestScreen()
+    await typeContact(host)
+    const from = mark()
+    for (const box of boxesIn(host)) {
+      for (const k of everyKeyButEsc()) {
+        fireEvent.keyDown(box, k)
+        fireEvent.keyUp(box, k)
+      }
+      await settle()
+    }
+    await settle()
+    expect(keyingSince(from)).toEqual([])
+    // Control: the sweep reached the log line — Enter logged the contact typed before it.
+    expect(bridgeCalls.slice(from).map((c) => c.cmd)).toContain('contest_log_manual')
+  })
+
+  it('the F-keys send nothing from the boxes', async () => {
+    const host = await contestScreen()
+    const [call] = await typeContact(host)
+    const from = mark()
+    for (let n = 1; n <= 12; n++) {
+      fireEvent.keyDown(call, { key: `F${n}`, code: `F${n}` })
+      fireEvent.keyUp(call, { key: `F${n}`, code: `F${n}` })
+    }
+    await settle()
+    // Nothing but the app's own polls (its reads) reached the bridge: no verb of any kind.
+    expect(bridgeCalls.slice(from).map((c) => c.cmd).filter((c) => !c.startsWith('get_'))).toEqual([])
+  })
+
+  it('the webview’s own F-keys are held there too, so F5 cannot reload the window mid-contact; Alt, Ctrl and Cmd are the system’s', async () => {
+    const host = await contestScreen()
+    const [call] = await typeContact(host)
+    for (let n = 1; n <= 12; n++) {
+      expect(fireEvent.keyDown(call, { key: `F${n}`, code: `F${n}` }), `F${n} was left to the webview`).toBe(false)
+    }
+    expect(fireEvent.keyDown(call, { key: 'F4', code: 'F4', altKey: true }), 'Alt+F4 still closes the window').toBe(true)
+    expect(fireEvent.keyDown(call, { key: 'F5', code: 'F5', ctrlKey: true }), 'a modified F-key is the system’s').toBe(true)
+    expect(boxesIn(host).map((b) => b.value)).toEqual(['K9ABC', '59', 'COOK'])
+  })
+
+  it('with no contest running the screen’s Esc and F-keys are as they were: no halt, nothing held', async () => {
+    fieldDay = null
+    await mountOn('fieldDay')
+    await waitFor(() => expect(document.querySelector('.contest-screen section.panel.fieldday')).toBeTruthy())
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    const from = mark()
+    expect(fireEvent.keyDown(document.body, { key: 'F5', code: 'F5' }), 'F5 is the webview’s, as before').toBe(true)
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
+    await settle()
+    expect(keyingSince(from)).toEqual([])
+  })
+
+  it('every button of the entry and the last contacts reaches no command that transmits', async () => {
+    const host = await contestScreen()
+    await typeContact(host)
+    const from = mark()
+    const seen = new Set<Element>()
+    let clicked = 0
+    for (let round = 0; round < 4; round++) {
+      const fresh = [...host.querySelectorAll<HTMLElement>('.contest-logger-entry button, .contest-logger-recent button')].filter(
+        (b) => !seen.has(b),
+      )
+      if (fresh.length === 0) break
+      for (const b of fresh) {
+        seen.add(b)
+        if (!b.isConnected) continue
+        fireEvent.click(b)
+        clicked += 1
+        await settle()
+      }
+    }
+    expect(clicked, 'control: the sweep clicked the entry').toBeGreaterThan(3)
+    expect(keyingSince(from)).toEqual([])
+  })
+
+  it('control: the sweep sees a transmit command — the top bar’s Stop TX, and the screen’s Running', async () => {
+    const host = await contestScreen()
+    const from = mark()
+    fireEvent.click(within(document.querySelector('header.topbar') as HTMLElement).getByRole('button', { name: /^stop tx$/i }))
+    fireEvent.click(within(host.querySelector('main.layout.single') as HTMLElement).getByRole('button', { name: t('fieldDay.role.running') }))
+    await waitFor(() => expect(keyingSince(from)).toEqual(['halt_tx', 'set_mode']))
+  })
+
+  it('Enter logs the contact and sends no message, with Enter Sends Message on in every cockpit', async () => {
+    settingsAnswer = { ...settingsAnswer, contestEsmPhone: true, contestEsmCw: true, contestEsmRtty: true }
+    const host = await contestScreen()
+    const boxes = await typeContact(host)
+    const from = mark()
+    fireEvent.keyDown(boxes[2], { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(bridgeCalls.slice(from).map((c) => c.cmd)).toContain('contest_log_manual'))
+    await settle()
+    expect(keyingSince(from)).toEqual([])
+  })
+})
+
+// ── the Logger window keeps one entry ───────────────────────────────────────────────────────
+
+describe('the Logger window is unchanged: one entry, its own', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('shows the entry once, first, over its copy of the screen, and its Esc still only clears', async () => {
+    window.history.replaceState(null, '', '/?panel=contestlog')
+    render(<DetachedPanel panel="contestlog" />)
+    const app = await waitFor(
+      () => {
+        const a = document.querySelector('.app.detached.contest-logger')
+        expect(a?.querySelector('.le-fd-input-call'), 'control: the logger window drew its entry').toBeTruthy()
+        return a!
+      },
+      { timeout: 15_000 },
+    )
+    const parts = [...app.children].filter((c) => !c.classList.contains('ui-toast-viewport') && !c.querySelector('.ui-toast-viewport'))
+    expect(parts.map((c) => `${c.tagName.toLowerCase()}.${[...c.classList].join('.')}`)).toEqual([
+      'section.contest-logger-entry',
+      'section.contest-logger-recent',
+      'main.layout.single',
+    ])
+    expect(document.querySelectorAll('.contest-logger-entry')).toHaveLength(1)
+    expect(document.querySelectorAll('.le-fd-input-call')).toHaveLength(1)
+    const boxes = await typeContact(app)
+    const from = mark()
+    fireEvent.keyDown(boxes[0], { key: 'Escape', code: 'Escape' })
+    await settle()
+    expect(keyingSince(from), 'the logger window sends no stop').toEqual([])
+    expect(boxesIn(app)[0].value, 'its Esc clears the entry, as it always did').toBe('')
+  })
+})
+
+// ── one log line ────────────────────────────────────────────────────────────────────────────
+
+describe('a contact logged here is the Phone screen’s contact, byte for byte', () => {
+  /** Type K9ABC / 59 / COOK into `boxes` and press Enter in the county box; the bytes that left. */
+  async function logFrom(boxes: () => HTMLInputElement[]): Promise<string[]> {
+    const b = boxes()
+    fireEvent.change(b[0], { target: { value: 'K9ABC' } })
+    fireEvent.change(b[2], { target: { value: 'COOK' } })
+    await settle()
+    const from = mark()
+    fireEvent.keyDown(boxes()[2], { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(bridgeCalls.slice(from).map((c) => c.cmd)).toContain('contest_log_manual'))
+    return bridgeCalls
+      .slice(from)
+      .filter((c) => c.cmd === 'contest_log_manual')
+      .map((c) => JSON.stringify(c.args))
+  }
+
+  it('the same keystrokes send the same contest_log_manual from the Phone LOG pane and from here', async () => {
+    await mountOn('phone')
+    const phoneStrip = () => {
+      const s = document.querySelector('main.phone-cockpit .log-entry-fd')
+      expect(s, 'control: the Phone LOG pane is the contest strip').toBeTruthy()
+      return boxesIn(s!)
+    }
+    await waitFor(() => phoneStrip(), { timeout: 15_000 })
+    const phone = await logFrom(phoneStrip)
+    cleanup()
+
+    await contestScreen()
+    const here = await logFrom(() => boxesIn(document.querySelector('.contest-logger-entry')!))
+
+    expect(here).toEqual(phone)
+    expect(here).toEqual([JSON.stringify({ call: 'K9ABC', fields: [['RST', '59'], ['QTH', 'COOK']], mode: 'PH', submode: null })])
+  })
+})
+
+// ── A− / A+ and the text size ───────────────────────────────────────────────────────────────
+
+const read = (name: string) =>
+  readFileSync(resolve(process.cwd(), 'src', name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+const RULES: Rule[] = parseRules(read('styles.css') + '\n' + read('cockpit-panes.css')).filter((r) =>
+  r.decls.some((d) => d.prop === 'font-size' || d.prop === 'font' || d.prop.startsWith('--')),
+)
+const ROOT = rootTokensFrom(RULES, 'dark')
+const important = (v: string) => /!\s*important\s*$/.test(v)
+const bare = (v: string) => v.replace(/!\s*important\s*$/, '').trim()
+const beats = (a: { rule: Rule; value: string }, b: { rule: Rule; value: string }) =>
+  important(a.value) !== important(b.value)
+    ? important(a.value)
+    : cmpSpec(a.rule.spec, b.rule.spec) > 0 || (cmpSpec(a.rule.spec, b.rule.spec) === 0 && a.rule.order > b.rule.order)
+
+/** Evaluate a resolved length to px: calc/min/max/clamp over px, unitless, rem, em and %. */
+function evalPx(src: string, em: number): number {
+  let i = 0
+  const s = src.trim()
+  const ws = () => {
+    while (i < s.length && /\s/.test(s[i])) i++
+  }
+  const expr = (): number => {
+    let v = term()
+    for (ws(); i < s.length && (s[i] === '+' || s[i] === '-'); ws()) {
+      const op = s[i++]
+      const r = term()
+      v = op === '+' ? v + r : v - r
+    }
+    return v
+  }
+  const term = (): number => {
+    let v = factor()
+    for (ws(); i < s.length && (s[i] === '*' || s[i] === '/'); ws()) {
+      const op = s[i++]
+      const r = factor()
+      v = op === '*' ? v * r : v / r
+    }
+    return v
+  }
+  const args = (): number[] => {
+    const out: number[] = []
+    ws()
+    if (s[i] !== '(') throw new Error(`expected ( in ${s}`)
+    i++
+    for (;;) {
+      out.push(expr())
+      ws()
+      if (s[i] === ',') {
+        i++
+        continue
+      }
+      if (s[i] === ')') {
+        i++
+        return out
+      }
+      throw new Error(`bad argument list in ${s}`)
+    }
+  }
+  const factor = (): number => {
+    ws()
+    const fn = /^(calc|min|max|clamp)\b/.exec(s.slice(i))
+    if (fn) {
+      i += fn[1].length
+      const a = args()
+      if (fn[1] === 'calc') return a[0]
+      if (fn[1] === 'min') return Math.min(...a)
+      if (fn[1] === 'max') return Math.max(...a)
+      return Math.min(Math.max(a[0], a[1]), a[2])
+    }
+    if (s[i] === '(') {
+      i++
+      const v = expr()
+      ws()
+      i++
+      return v
+    }
+    const num = /^(-?\d*\.?\d+)(px|rem|em|%)?/.exec(s.slice(i))
+    if (!num) throw new Error(`cannot read "${s.slice(i)}" in ${s}`)
+    i += num[0].length
+    const n = Number(num[1])
+    if (num[2] === 'rem') return n * 16
+    if (num[2] === 'em') return n * em
+    if (num[2] === '%') return (n * em) / 100
+    return n
+  }
+  const v = expr()
+  ws()
+  if (i !== s.length) throw new Error(`trailing "${s.slice(i)}" in ${s}`)
+  return v
+}
+
+/** The font size, in px, the real sheets give `node` at the app's Text size `scale` (Normal 1,
+ *  Larger 1.25 — `[data-text-size]` sets `--text-scale` on <html>, whose font size follows it):
+ *  CSS's own inheritance walked from <body> down, every custom property an element declares (its
+ *  sheet winner, or its inline style) resolved on that element and handed down computed. */
+function fontPx(node: Element, scale = 1): number {
+  const path: Element[] = []
+  for (let n: Element | null = node; n && n !== document.documentElement; n = n.parentElement) path.unshift(n)
+  // The root's tokens at this Text size: `--text-scale` first, then every token that reads it.
+  const root = new Map(ROOT).set('--text-scale', String(scale))
+  let tokens = new Map([...root].map(([k, v]) => [k, expandWith(root, v)]))
+  let px = 16 * scale // html { font-size: calc(100% * var(--text-scale)) } over the UA's 16 px
+  const chain: El[] = []
+  for (const el of path) {
+    chain.push(elOf(el))
+    const cands = RULES.filter((r) => reachesChain(r.selector, chain, 'dark'))
+    const declared = new Map<string, string>()
+    const winners = new Map<string, { rule: Rule; value: string }>()
+    for (const rule of cands) {
+      for (const d of rule.decls) {
+        if (!d.prop.startsWith('--')) continue
+        const prev = winners.get(d.prop)
+        if (!prev || beats({ rule, value: d.value }, prev)) winners.set(d.prop, { rule, value: d.value })
+      }
+    }
+    for (const [k, w] of winners) declared.set(k, bare(w.value))
+    const style = (el as HTMLElement).style
+    for (let i = 0; i < style.length; i++) {
+      if (style[i].startsWith('--')) declared.set(style[i], style.getPropertyValue(style[i]))
+    }
+    if (declared.size) {
+      const own = new Map(tokens)
+      for (const [k, v] of declared) own.set(k, v)
+      const next = new Map(tokens)
+      for (const k of declared.keys()) next.set(k, expandWith(own, own.get(k)!))
+      tokens = next
+    }
+    let win: { rule: Rule; value: string } | null = null
+    for (const rule of cands) {
+      const d = rule.decls.filter((x) => x.prop === 'font-size' || x.prop === 'font').pop()
+      if (d && (!win || beats({ rule, value: d.value }, win))) win = { rule, value: d.value }
+    }
+    const value = win ? bare(win.value) : null
+    if (value && value !== 'inherit' && value !== 'unset') {
+      try {
+        const n = evalPx(expandWith(tokens, value), px)
+        if (Number.isFinite(n) && n > 0) px = n
+      } catch {
+        // invalid at computed-value time: font-size behaves as `unset`, i.e. inherits
+      }
+    }
+  }
+  return px
+}
+
+describe('A− / A+ and the app’s Text size', () => {
+  const larger = () => document.querySelector<HTMLButtonElement>(`.contest-logger-step[aria-label="${t('contestLogger.size.larger')}"]`)!
+
+  it('is remembered on this computer for the main window, under its own key and never the logger window’s', async () => {
+    await contestScreen()
+    expect(document.querySelector('.contest-logger-size')!.textContent).toBe(t('contestLogger.size.label', { pct: 100 }))
+    fireEvent.click(larger())
+    fireEvent.click(larger())
+    expect(document.querySelector('.contest-logger-size')!.textContent).toBe(t('contestLogger.size.label', { pct: 120 }))
+    expect(localStorage.getItem('nexus.contestLogger.textScale'), 'the main window’s own key').toBe('1.2')
+    expect(localStorage.getItem('nexus.contestLogger.textScale.contestlog'), 'the logger window’s is its own').toBeNull()
+    cleanup()
+    await contestScreen()
+    expect(document.querySelector('.contest-logger-size')!.textContent).toBe(t('contestLogger.size.label', { pct: 120 }))
+  })
+
+  it('the boxes read large and follow the app’s Text size: 40 px at Normal, 50 px at Larger, and A+ moves both', async () => {
+    await contestScreen()
+    const call = () => document.querySelector('.contest-logger-entry .le-fd-input-call')!
+    const newest = () => document.querySelector('.contest-logger-recent .fd-log-row')!
+    expect(fontPx(call())).toBe(40)
+    expect(fontPx(call(), 1.25)).toBe(50)
+    expect(fontPx(newest(), 1.25)).toBe(25)
+    fireEvent.click(larger())
+    expect(fontPx(call())).toBeCloseTo(44, 6)
+    expect(fontPx(call(), 1.25)).toBeCloseTo(55, 6)
+    // The bar's own buttons stay at the app's size, under the finger pressing them.
+    expect(fontPx(larger(), 1.25)).toBe(17.5)
+  })
+})

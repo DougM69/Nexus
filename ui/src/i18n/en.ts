@@ -3927,6 +3927,9 @@ export const EN = {
   'contestLogger.size.smaller': 'Smaller text',
   'contestLogger.size.larger': 'Larger text',
   'contestLogger.recent.title': 'Last contacts',
+  // The same bar over the same log line at the top of the main window's Contest screen
+  // (ContestLargeEntry, App.tsx): the screen's name for it.
+  'contestScreen.entry.title': 'Log a contact',
 
   'fieldDay.score.qsos': 'QSOs',
   'fieldDay.score.sections': 'Sections',

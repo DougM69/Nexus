@@ -154,10 +154,13 @@ and drag the window to the logger's monitor. It opens on that monitor again next
   its own.
 - **A− and A+** at the top right make the log line and the last contacts smaller or larger, from
   80 to 160 %, on top of your Text size setting. That computer remembers the size for the logger
-  window.
+  window; until you size it there, it opens at the size of the Contest screen's own log line.
+- **The same log line tops the Contest screen** in the main window while a contest runs, with its
+  own A− and A+, so the operator can type contacts there too. Nothing on it transmits either, but
+  in the main window Esc stops TX, as the top bar's Stop TX does, and leaves the boxes as they are.
 
-- **One contact, two windows.** The logger's line and your own contest log strip are the same
-  contact: whatever either of you types shows in both as it is typed, with the same dupe warning,
+- **One contact, two windows.** The logger's line and your own contest log strip (a cockpit's LOG
+  pane, or the log line at the top of the Contest screen) are the same contact: whatever either of you types shows in both as it is typed, with the same dupe warning,
   Super Check Partial line, call-history fill and Ctrl+D take-back line. Enter in either window
   logs it, once: if you both press it at the same moment, the second window is told it was
   already logged.
