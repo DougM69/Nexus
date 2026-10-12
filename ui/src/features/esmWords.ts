@@ -3,14 +3,15 @@
 // stepped aside and Enter logs as it does with ESM off. One reason, one sentence, so a reason
 // reads the same in the strip, on the ESM plate and in Settings' role picker.
 //
-// CQ, TU and AGN are on-air words and invariant, held as constants the way the macro captions
-// are; the other steps are words, named in the catalog. A key name (F1–F8) is invariant too.
+// CQ, TU, AGN and QSO B4 are on-air words and invariant, held as constants the way the macro
+// captions are; the other steps are words, named in the catalog. A key name (F1–F8) is invariant too.
 import { t } from '../i18n'
 import type { EsmInert, EsmRefusal, EsmRole } from './esm'
 
 const CQ = 'CQ'
 const TU = 'TU'
 const AGN = 'AGN'
+const B4 = 'QSO B4'
 
 /** A step's name, as the strip and the role picker say it. */
 export function esmStepName(role: EsmRole): string {
@@ -27,6 +28,8 @@ export function esmStepName(role: EsmRole): string {
       return t('contest.esm.step.exch')
     case 'again':
       return AGN
+    case 'b4':
+      return B4
   }
 }
 
@@ -35,6 +38,8 @@ export function esmRefusalText(refusal: EsmRefusal): string {
   switch (refusal.why) {
     case 'dupe':
       return t('contest.esm.refused.dupe')
+    case 'b4Sent':
+      return t('contest.esm.refused.b4Sent', { step: B4 })
     case 'txOff':
       return t('contest.esm.refused.txOff')
     case 'txLocked':

@@ -227,6 +227,71 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM). The keyer has no
+  // QSO B4 slot — its slots are F1–F6 and F8, none labelled B4 — so Enter plays nothing for a dupe
+  // and the strip names the step, until a slot you recorded is mapped to it in Settings.
+  describe('a dupe while running', () => {
+    const worked = {
+      ...ILQP,
+      log: [{ call: 'K9AAA', class: '', section: '', band: '20m', mode: 'PH', submode: 'USB', whenUnix: 1_792_342_800, rcvd: ['59', 'COOK'] }],
+    } as unknown as FieldDayStatus
+    const mount = async (voiceRoles?: Record<string, string[]>) => {
+      render(
+        <PhoneCockpit
+          snap={makeSnap()}
+          theme="dark"
+          onWorkSpot={() => {}}
+          spots={[]}
+          panels={fakePanels()}
+          fieldDay={worked}
+          esmSetting={{ on: true, callOnce: false, onSwitch: () => {}, voiceRoles }}
+        />,
+      )
+      await flush()
+      await flush()
+      fireEvent.keyDown(document.body, { key: 'F1' }) // the keyer's F1, by hand: CQ, and Run
+      await flush()
+      fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+      fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+      await flush()
+    }
+
+    it('plays nothing on the built-in steps, where no slot holds QSO B4, and the strip names the step', async () => {
+      await mount()
+      await enter(qthBox())
+      expect(played(), 'CQ only').toEqual([1])
+      expect(loggedCalls()).toEqual([])
+      expect(line()).toBe('QSO B4: no key is mapped, so Enter sends nothing and logs nothing at that step.')
+    })
+
+    it('names the slot to record when QSO B4 is mapped to an empty one', async () => {
+      await mount({ b4: ['F6'] })
+      await enter(qthBox())
+      expect(played()).toEqual([1])
+      expect(line()).toBe('QSO B4: F6 is empty, so Enter sends nothing and logs nothing at that step.')
+    })
+
+    it('plays the recorded slot mapped to QSO B4 once, and the next Enter logs the dupe, playing nothing', async () => {
+      const api = await import('../api')
+      const slots = vi.mocked(api.getVoiceMessages)
+      const shipped = slots.getMockImplementation()!
+      slots.mockImplementation(async () =>
+        (await shipped()).map((m) => (m.slot === 6 ? { ...m, label: 'QSO B4', file: '/voice/slot6.wav' } : m)),
+      )
+      try {
+        await mount({ b4: ['F6'] })
+        await enter(qthBox())
+        expect(played(), 'CQ, then F6').toEqual([1, 6])
+        expect(loggedCalls()).toEqual([])
+        await enter(qthBox())
+        expect(played(), 'nothing more plays').toEqual([1, 6])
+        expect(loggedCalls()).toEqual(['K9AAA'])
+      } finally {
+        slots.mockImplementation(shipped)
+      }
+    })
+  })
+
   it('searches and pounces with call once: the next Enter asks AGN, from F8', async () => {
     await renderCockpit({ callOnce: true })
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })

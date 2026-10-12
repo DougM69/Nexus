@@ -4395,6 +4395,7 @@ export const EN = {
   'contest.esm.step.myCall': 'Your call',
   'contest.esm.step.exch': 'Your S&P exchange',
   'contest.esm.refused.dupe': 'A dupe of your own log: Enter sends nothing and logs nothing.',
+  'contest.esm.refused.b4Sent': '{{step}} went to this call. Enter logs it as a dupe once his exchange is copied.',
   'contest.esm.refused.txOff':
     'TX is off, and Enter never turns it on. Turn TX on yourself, then press Enter.',
   'contest.esm.refused.txLocked':
@@ -4431,6 +4432,7 @@ export const EN = {
   'contest.esm.mode.title':
     'Running or search and pounce: click to switch. The key that holds your CQ switches to running, and clicking a spot switches to S&P.',
   'contest.esm.next': 'Enter sends {{keys}}',
+  'contest.esm.logDupe': 'Enter logs the dupe and sends nothing',
   'contest.esm.logOnly.title': 'Alt+Enter logs the contact without sending anything.',
   'contest.esm.phone.speak': 'Say his call and your exchange.',
   'contest.esm.notSent': 'Nothing was sent, and nothing was logged: {{why}}',

@@ -44,6 +44,7 @@ import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
+import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
 import { ENTRY_CHANGED, ENTRY_LOGGED, useSharedEntry, type StripContent } from '../features/contestEntryShare'
 import type { EsmHost } from '../features/esmHost'
@@ -735,6 +736,9 @@ export function LogEntry({
   // key lets it lapse, as every other key lets a removal lapse.
   const [esmLine, setEsmLine] = useState<{ text: string; alert: boolean; about?: string } | null>(null)
   const esmLineKey = useRef<Event | null>(null)
+  // The line Alt+W wiped (`pressWipe`, below), kept until any other key: what a second Alt+W puts back.
+  const wipedRef = useRef<{ call: string; fields: Record<string, string>; fill: FillState } | null>(null)
+  const pressWipeRef = useRef<() => void>(() => {})
   const armedRef = useRef(removeArmed)
   armedRef.current = removeArmed
   const pressRemove = () => {
@@ -793,11 +797,14 @@ export function LogEntry({
     const call = newest?.call.toUpperCase()
     setEsmLine((l) => (l && l.about !== undefined && l.about === call ? l : null))
   }, [newestKey, fdLogLen])
-  // Ctrl+D from anywhere in the cockpit showing this strip — only while its host is on screen,
-  // since the RTTY, PSK and JS8 strips stay mounted when hidden.
+  // Ctrl+D, Alt+W and Ctrl+O from anywhere in the cockpit showing this strip — only while its host
+  // is on screen, since the RTTY, PSK and JS8 strips stay mounted when hidden.
   useEffect(() => {
     if (!removable || !active) return
     const onKey = (e: KeyboardEvent) => {
+      // Every key but Alt+W itself (a bare modifier is not a key) ends the chance to put back a line
+      // Alt+W wiped: N1MM's "if nothing new has been typed in since".
+      if (!isModifierKey(e) && !isWipeKey(e)) wipedRef.current = null
       if (isRemoveKey(e)) {
         // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
         // in a macOS text box) never runs.
@@ -813,6 +820,16 @@ export function LogEntry({
       setRemoveArmed(null)
       setRemoveNote(null)
       if (e !== esmLineKey.current) setEsmLine(null)
+      // The strip's own keys while it shows (`features/contestKeys.ts`), held from the webview: a
+      // Mac's Option+W would type ∑ into the box, and Ctrl+O is a browser's Open. Held down, each is
+      // one press.
+      if (isWipeKey(e)) {
+        e.preventDefault()
+        if (!e.repeat) pressWipeRef.current()
+      } else if (isOperatorBoxKey(e)) {
+        e.preventDefault()
+        if (!e.repeat) askForOperatorBox()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1576,6 +1593,31 @@ export function LogEntry({
     onReset?.()
   }
 
+  // ⭐ ALT+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`; N1MM's "Alt+W can be
+  // reversed by typing it again"). The wipe clears the call as Clear does — the serial in flight
+  // released, Enter Sends Message at a new contact — and every box as well, a report back to its
+  // default, keeping what the line held. A second Alt+W, with no other key between and the line
+  // still as the wipe left it, puts back the call, the boxes and their call-history marks, and takes
+  // the station's serial number up again, as the call box's commit does. What went out to the call
+  // is not put back: Enter Sends Message starts that contact over, as after Clear.
+  const pressWipe = () => {
+    const wiped = wipedRef.current
+    wipedRef.current = null
+    const blank =
+      logCall.trim() === '' && fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
+    if (wiped && blank) {
+      setLogCall(wiped.call)
+      setFdFields(wiped.fields)
+      setFill(wiped.fill)
+      if (wiped.call.trim()) void contestWorking(wiped.call.trim()).catch(() => {})
+      return
+    }
+    wipedRef.current = { call: logCall, fields: fdFields, fill: fillRef.current }
+    reset()
+    setFdFields({})
+  }
+  pressWipeRef.current = pressWipe
+
   // THE LOGGER WINDOW'S ESC (`sharedEntry`): it clears the entry, as Clear does, from anywhere in
   // that window. Nothing in that window transmits, so its Esc has no over to stop, and a logger
   // clearing a typo never reaches the operator's. On every other strip Esc stays the cockpit's
@@ -2168,6 +2210,18 @@ export function LogEntry({
       esm.dispatch(decision.next)
       esmCaret(decision.caret)
       setEsmLine({ text: t('contest.esm.phone.speak'), alert: false })
+      return
+    }
+    if (decision.kind === 'log') {
+      // QSO B4 has gone to this dupe: the press logs it through the one log path, sending nothing,
+      // and the log's clear is a new contact for ESM too. A press still logging holds the next off.
+      esmBusy.current = true
+      try {
+        await logIt()
+      } finally {
+        esmBusy.current = false
+      }
+      esmCaret(decision.caret)
       return
     }
     esmBusy.current = true

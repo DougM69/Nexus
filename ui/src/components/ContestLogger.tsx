@@ -40,6 +40,7 @@ import { t } from '../i18n'
 import { PSK_MODE_BY_SLUG } from '../pskModes'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import { useContestSwitch } from '../contestSwitch'
+import { useOperatorBoxAsk } from '../features/contestKeys'
 import { annotate, ContestLogHead, ContestLogRow, ContestView } from './ContestView'
 import { LogEntry } from './LogEntry'
 
@@ -151,6 +152,10 @@ export function ContestLogger({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const fd = snap.fieldDay ?? null
+  // CTRL+O FROM THE LOG LINE (`features/contestKeys.ts`): the operator box is this window's own, in
+  // its copy of the Contest screen below.
+  const [operatorAsk, setOperatorAsk] = useState(0)
+  useOperatorBoxAsk(() => setOperatorAsk((n) => n + 1))
   // A contest switched by a pick saved in the main window: this copy of the Contest screen says
   // so too.
   const contestSwitch = useContestSwitch(fd)
@@ -221,6 +226,8 @@ export function ContestLogger({
           tier={snap.link.tier}
           logger
           contestSwitch={contestSwitch}
+          operatorAsk={operatorAsk}
+          onOperatorFocused={() => setOperatorAsk(0)}
         />
       </main>
     </>

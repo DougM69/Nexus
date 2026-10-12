@@ -261,6 +261,7 @@ describe('Settings ▸ Contesting ▸ Enter Sends Message', () => {
       ['Your call', 'F4'],
       ['Your S&P exchange', 'F6'],
       ['AGN', 'F8'],
+      ['QSO B4', 'F7'],
     ])
     expect(cw.querySelector('.esm-roles-none')).toBeNull()
   })

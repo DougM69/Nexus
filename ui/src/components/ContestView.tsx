@@ -192,6 +192,11 @@ interface Props {
   /** The switch a saved pick just made, for the session shown here (`useContestSwitch`, kept by
    *  App and the logger window): the screen says the station switched, and from what. */
   contestSwitch?: ContestSwitch | null
+  /** CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`), kept by App and the logger window:
+   *  the asks the operator box has not answered yet. At each new one the box takes the caret once
+   *  it can be typed in, and `onOperatorFocused` says it did. */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
 }
 
 /**
@@ -1890,12 +1895,17 @@ export function FieldDayScoreboard({
   onSaveOperator,
   detached = false,
   readOnly = false,
+  operatorAsk,
+  onOperatorFocused,
 }: {
   fieldDay: FieldDayStatus | null
   settings: FdDisplaySettings | null
   onSaveOperator: (call: string) => void
   detached?: boolean
   readOnly?: boolean
+  /** Ctrl+O from a contest strip: the asks the operator box has not answered (ContestView's). */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
 }) {
   const log = fieldDay?.log ?? []
   const isWfd = (fieldDay?.event ?? '') === 'wfd'
@@ -1919,6 +1929,20 @@ export function FieldDayScoreboard({
     if (v === (settings?.fdOperator ?? '')) return
     onSaveOperator(v)
   }
+  // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): at each ask the box takes the caret
+  // as soon as it can be typed in — its settings read — and says so, so an ask is answered once.
+  // A read-only box never takes it.
+  const opBox = useRef<HTMLInputElement>(null)
+  const opTypable = settings != null && !readOnly
+  useEffect(() => {
+    const box = opBox.current
+    if (!operatorAsk || !opTypable || !box) return
+    box.focus({ preventScroll: true })
+    box.scrollIntoView?.({ block: 'nearest' })
+    box.select()
+    onOperatorFocused?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operatorAsk, opTypable])
 
   return (
     <>
@@ -1927,6 +1951,7 @@ export function FieldDayScoreboard({
         <label style={OP_FIELD}>
           <span style={OP_LABEL}>{t('fieldDay.operator.label')}</span>
           <input
+            ref={opBox}
             style={OP_INPUT}
             value={opDraft}
             disabled={!settings}
@@ -2092,6 +2117,8 @@ export function ContestView({
   onSettingsSaved,
   logger = false,
   contestSwitch = null,
+  operatorAsk,
+  onOperatorFocused,
 }: Props) {
   const observed = observation !== undefined
   // The clock the spot advisory judges the event window by.
@@ -2923,7 +2950,14 @@ export function ContestView({
       )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
-      <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />
+      <FieldDayScoreboard
+        fieldDay={fieldDay}
+        settings={settings}
+        onSaveOperator={saveOperator}
+        readOnly={observed}
+        operatorAsk={operatorAsk}
+        onOperatorFocused={onOperatorFocused}
+      />
 
       {/* SCORING: the power multiplier and the bonus chase, in one place.
           Both halves of the score used to live on different screens — the multiplier in

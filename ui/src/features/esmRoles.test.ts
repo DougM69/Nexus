@@ -48,6 +48,7 @@ describe('the contest layout on RTTY\'s contest set, as it ships', () => {
       myCall: '{MYCALL} {MYCALL}',
       exch: 'TU 599 {EXCH} {EXCH}',
       again: 'AGN? AGN?',
+      b4: '{CALL} QSO B4 TU {MYCALL}',
     })
   })
 
@@ -119,6 +120,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       myCall: '{MYCALL}',
       exch: 'TU {RST} {EXCH}',
       again: 'AGN AGN',
+      b4: '! QSO B4',
     })
   })
 
@@ -130,6 +132,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       myCall: '{MYCALL}',
       exch: 'TU {EXCH}',
       again: 'AGN AGN',
+      b4: '! QSO B4',
     })
     expect(messages(CONTEST_LAYOUT_ROLES, CW_FIELD_DAY_LAYOUT)).toEqual({
       cq: 'CQ FD DE {MYCALL} {MYCALL} K',
@@ -138,6 +141,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       myCall: '{MYCALL}',
       exch: 'TU {EXCH}',
       again: 'AGN AGN',
+      b4: '! QSO B4',
     })
     for (const set of [CW_CONTEST_NO_REPORT_LAYOUT, CW_FIELD_DAY_LAYOUT]) {
       expect(set.filter((m) => m.text.includes('{RST}'))).toEqual([])
@@ -161,6 +165,12 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
 
   it('sends AGN from F8, the key the sets now carry it on', () => {
     expect(CONTEST_LAYOUT_ROLES.again).toEqual(['F8'])
+  })
+
+  it('sends QSO B4 from F7, the key all three sets hold it on, and no other step from it', () => {
+    expect(CONTEST_LAYOUT_ROLES.b4).toEqual(['F7'])
+    const others = Object.entries(CONTEST_LAYOUT_ROLES).filter(([role]) => role !== 'b4')
+    expect(others.filter(([, keys]) => keys?.includes('F7'))).toEqual([])
   })
 
   it('gets the layout\'s role table only when the set in use IS a layout set, key for key and text for text', () => {
@@ -193,7 +203,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
 describe('the voice-slot convention', () => {
   const recorded = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F8'].map((key) => ({ key, text: `${key}.wav` }))
 
-  it('F1 CQ · F2 my exchange · F3 TU · F4 my call · F8 AGN, and no slot for his call', () => {
+  it('F1 CQ · F2 my exchange · F3 TU · F4 my call · F8 AGN, and no slot for his call or for QSO B4', () => {
     expect(messages(VOICE_SLOT_ROLES, recorded)).toEqual({
       cq: 'F1.wav',
       callExch: { why: 'unmapped', role: 'callExch' },
@@ -201,6 +211,7 @@ describe('the voice-slot convention', () => {
       myCall: 'F4.wav',
       exch: 'F2.wav',
       again: 'F8.wav',
+      b4: { why: 'unmapped', role: 'b4' },
     })
   })
 

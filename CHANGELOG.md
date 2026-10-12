@@ -73,6 +73,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it stands, so type over it when the station sends something different. ESM steps aside, and
   Enter logs as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the
   voice keyer is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
+- **Three more contest keys from N1MM: QSO B4 to a dupe with Enter Sends Message, Alt+W and
+  Ctrl+O.** With ESM on, when a dupe of your own log calls your run, Enter sends QSO B4 once (F7 in
+  the CW and RTTY contest sets) and the next Enter logs the contact, marked a dupe for 0 points,
+  sending nothing; in S&P Enter still sends nothing to a dupe, as in N1MM. The Phone voice keyer has
+  no QSO B4 slot: record one in F5 or F6 and map QSO B4 to it in Settings ▸ Contesting ▸ Enter Sends
+  Message. Without ESM nothing changes. **Alt+W** clears the whole contest log line, the call and
+  every exchange box, and a second Alt+W right after puts it back (Option+W on a Mac). **Ctrl+O**
+  from any contest log strip opens the Contest screen with the cursor in its Operator box (in the
+  logger window, that window's own), leaving the mode and the radio as they are.
 - **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
   last** beside Clear on the log strip) names your newest contest contact on the strip's message
   line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes

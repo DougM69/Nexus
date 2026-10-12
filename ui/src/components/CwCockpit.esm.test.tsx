@@ -287,6 +287,38 @@ describe('Enter Sends Message in the CW cockpit', () => {
     expect(engine.keyed[engine.keyed.length - 1], 'F7 by hand').toBe('K9AAA QSO B4')
   })
 
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM): Enter keys the
+  // set's QSO B4 from F7, once, and the next Enter logs the dupe, keying nothing.
+  it('running, a dupe gets QSO B4 from F7 once, and the next Enter logs it, keying nothing', async () => {
+    settings.macros.cwProfiles = []
+    const worked = {
+      ...ILQP,
+      log: [{ call: 'K9AAA', class: '', section: '', band: '20m', mode: 'CW', submode: '', whenUnix: 1_792_342_800, rcvd: ['599', 'COOK'] }],
+    } as unknown as FieldDayStatus
+    render(
+      <CwCockpit snap={snap()} theme="dark" onWorkSpot={() => {}} spots={[]} fieldDay={worked} esmSetting={{ on: true, callOnce: false, onSwitch }} />,
+    )
+    await flush()
+    await flush()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    expect(lit(), 'the dock lights the B4 key').toEqual(['F7'])
+    engine.calls = []
+    await enter(stripCall())
+    expect(engine.keyed[engine.keyed.length - 1]).toBe('K9AAA QSO B4')
+    expect(engine.calls.filter((c) => !c.startsWith('selectPeer'))).toEqual(['sendCwArmed'])
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    expect(lit(), 'the next Enter sends nothing').toEqual([])
+    expect(plate()?.textContent).toContain('Enter logs the dupe and sends nothing')
+    const keyed = engine.keyed.length
+    engine.calls = []
+    await enter(qthBox())
+    expect(engine.keyed, 'nothing keyed').toHaveLength(keyed)
+    expect(engine.calls.filter((c) => !c.startsWith('selectPeer'))).toEqual(['contestLogManual'])
+  })
+
   // ⭐ A PROFILE ON THE BUILT-IN SETS SENDS THEIR STEPS, the ones Settings shows for it. Reset to
   // defaults used to empty a profile's keys and keep the steps mapped to them, where Settings can
   // neither show nor clear them, and Enter then sent those keys of the built-in set: AGN on F7
