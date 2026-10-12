@@ -6,7 +6,7 @@ real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
 **Contest mode is the exception**: it stays off until you switch it on at the
 top of the **Contest** screen (the tent in the left bar) or in
-[Contesting ▸ Contest mode](settings-reference.md#contest-mode), because it
+[Contesting ▸ Contest](settings-reference.md#contest), under the picker, because it
 reshapes the app for a weekend most operators are not having. It is one switch for
 whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
 Field Day or any other, and it names that contest wherever it is shown.
@@ -29,10 +29,11 @@ mode-class) dupe checking, and a scoreboard.
 off. The class, section and multiplier shown are one station's own entries —
 set yours from the rules for the event you are in.*
 
-In [Settings ▸ Contesting ▸ Contest mode](settings-reference.md#contest-mode):
+In [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day), shown while one of
+the two Field Days is picked:
 
 1. **Contest** — ARRL Field Day or Winter Field Day, picked in
-   [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest) above this section.
+   [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest) at the top of the tab.
    This changes scoring labels and export headers.
 2. **Class / Category** and **ARRL Section** — these start **empty on purpose**,
    and Field Day refuses to start until you set yours. (An old default of "WI"
@@ -450,4 +451,4 @@ reaches the contact.
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Logbook & QSL](logbook-qsl.md)
-- [Settings reference — Contest mode](settings-reference.md#contest-mode)
+- [Settings reference — Contest](settings-reference.md#contest) and [Field Day](settings-reference.md#field-day)

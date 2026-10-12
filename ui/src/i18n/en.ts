@@ -767,7 +767,7 @@ export const EN = {
   'settings.station.opState.label': 'State',
   // ⚠️ `{MYSTATE}` — CW macro token, as above.
   'settings.station.opState.hint':
-    'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).',
+    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro and the QTH an RTTY ragchew sends. A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
 
   'settings.station.licenseClass.label': 'License Class',
   // The <option> VALUES ('technician' … 'open') are persisted tokens and stay in the code.
@@ -4265,7 +4265,7 @@ export const EN = {
   // Paired with the surfaces above so the wording matches on both sides of the setting.
   // ⚠️ Invariant and staying in the panel: the class/category placeholders (1D, 2O), the
   // section placeholder (WI) and the section list itself, which is data.
-  'settings.contestCategory.legend': 'Contest Category',
+  'settings.contestCategory.legend': 'Your entry',
   'settings.contestPick.legend': 'Contest',
   'settings.contestPick.contest.label': 'Contest',
   'settings.contestPick.contest.aria': 'Which contest you are entering',
@@ -4307,7 +4307,7 @@ export const EN = {
   'settings.contestStation.county.label': 'County',
   'settings.contestStation.county.hint': 'Your county, abbreviated the way the QSO party abbreviates it (Franklin is FRAN). Only in-state entries send this.',
   'settings.contestStation.state.label': 'State or province',
-  'settings.contestStation.state.hint': 'Your state, province or territory, two letters. This is not your ARRL section — Western New York is WNY as a section and NY as a state, and a QSO party wants the state.',
+  'settings.contestStation.state.hint': 'Where your station is for this contest: your state, province or territory, two letters. This is not your ARRL section — Western New York is WNY as a section and NY as a state, and a QSO party wants the state. It is separate from the Station tab\'s State, the one your everyday macros send, so a portable or mobile entry can put here where it is operating.',
   'settings.contestStation.check.label': 'Check',
   'settings.contestStation.check.hint': 'The last two digits of the year you were first licensed. Sweepstakes asks for it, and you send the same two digits all contest.',
   'settings.contestStation.cqZone.label': 'CQ zone',
@@ -4315,7 +4315,7 @@ export const EN = {
   'settings.contestStation.ituZone.label': 'ITU zone',
   'settings.contestStation.ituZone.hint': 'Your ITU zone, 1 to 90. IARU asks for it. Leave it at 0 if you do not know it yet.',
   'settings.contestStation.power.label': 'Power sent',
-  'settings.contestStation.power.hint': 'The power you send as part of the exchange, in the sponsor’s own words (KW, 500, 5). This is not the Field Day power multiplier below — this one goes on the air exactly as you type it.',
+  'settings.contestStation.power.hint': 'The power you send as part of this contest’s exchange, in the sponsor’s own words (KW, 500, 5). It goes on the air exactly as you type it; the power your log declares is Power category, under Your entry.',
   'settings.contestScore.incomplete': 'This score leaves out the bonus points this contest works out from your log — this build does not compute them, so what the sponsor credits you will be higher. Everything the log needs to be accepted is here; the number is not your claimed score.',
   'settings.contestCategory.unassisted.label': 'Unassisted entry',
   // Two whole accessible names — the switch does one of two different things, and neither is
@@ -4442,7 +4442,7 @@ export const EN = {
   // CONTEST MODE: one switch for whichever contest is picked, named for that (it was "Field Day
   // mode" while it already started every contest). The keys keep their `fieldDay` names, as the
   // stored `fdActive` setting does. {{contest}} is the picked contest's own name, invariant.
-  'settings.fieldDay.legend': 'Contest mode',
+  'settings.fieldDay.legend': 'Field Day',
   'settings.fieldDay.mode.label': 'Contest mode',
   'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
   'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',

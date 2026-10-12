@@ -108,7 +108,8 @@ import { pushToast, withErrorToast } from '../toast'
 // Accessibility), the Logging & Connectors sections above Confirmations (Connections,
 // Worked-before (B4) & dupes, Integrations & Feeds, DXKeeper, N3FJP, N1MM+, the LoTW users
 // list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts), the
-// two Contesting sections (Contest Category + Contest mode), and the Digital tab — the
+// Contesting sections migrated with them (Your entry, Field Day, and the Contest mode switch
+// and rules data now under Contest), and the Digital tab — the
 // FT8/FT4 section's Logging Behavior, Decoder and Station Housekeeping sub-groups plus JT65,
 // MSK144, Beacons, FST4, Q65 and the quick-reply macros. Every remaining tab's fieldsets are
 // still hardcoded English and are deliberately outside the i18n guard's scope; see its header.
@@ -120,7 +121,7 @@ import { pushToast, withErrorToast } from '../toast'
 import { setLocale, t, type MessageKey } from '../i18n'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
-import { CONTESTS, clubSyncRefusalText, contestClubRefusal, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
+import { CONTESTS, CONTESTS_SENDING_POWER, clubSyncRefusalText, contestClubRefusal, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { ADDR_SEP, clubLinkLines, FIND_CLUB_EVENTS_SECS } from '../features/clubLink'
 import {
   CLUB_SEARCH_PORT,
@@ -12119,7 +12120,7 @@ export function SettingsPanel({
               {/* ⭐ THE CONTEST PICKER (§9). It is the event chips, one level up: the
                   contest is what decides the exchange, the dupe rule, the multiplier
                   universe and the Cabrillo headers, so it is the first thing on this
-                  tab and Contest mode below shows Field Day's fields for the contests they describe.
+                  tab, and Field Day below shows its fields for the two contests they describe.
                   Six shipped contests: the two Field Day events and the four state QSO
                   parties. The list is `CONTESTS` — the rules-file ids, in one place —
                   so adding a contest is a rules-file row plus a line there, and nothing
@@ -12158,20 +12159,12 @@ export function SettingsPanel({
                 )}
               </div>
 
-              {/* ⭐ THE ROLE / CATEGORY BLOCK.
-
-                  ROLE is READ-ONLY and comes from the live session, because a role is
-                  DERIVED from where the operator is, never typed: crossing a state line
+              {/* ⭐ THE ROLE. It is READ-ONLY and comes from the live session, because a role
+                  is DERIVED from where the operator is, never typed: crossing a state line
                   changes it, and a role the operator could set independently of their
                   location would let the two disagree. Both Field Day events are
                   symmetric — one unconditional role, an empty id — so there is nothing
-                  to show yet, and the block says so rather than showing a blank chip.
-
-                  CATEGORY-OPERATOR is a DECLARATION, so the operator makes it. It is
-                  the header that shipped as the string literal `MULTI-OP`: every solo
-                  Field Day entry Nexus exported claimed more than one operator was at
-                  the station. A new session reads this; the exporter reads the session,
-                  because one run of one contest under one callsign IS the entry. */}
+                  to show yet, and the block says so rather than showing a blank chip. */}
               <div className="settings-field">
                 <span className="settings-label">{t('settings.contestPick.role.label')}</span>
                 {/* THE LIVE SESSION'S role wins when there is one — it is the role
@@ -12213,150 +12206,97 @@ export function SettingsPanel({
                 })()}
               </div>
 
+              {/* The Contest mode switch, under the picker it starts (Contesting is always visible):
+                  turning it on starts the picked contest — its log strip in every cockpit, the
+                  Contest screen. It and the rules data serve every contest, so they sit here and
+                  not with Field Day's own fields below. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
+                <button disabled={remote}
+                  type="button"
+                  role="switch"
+                  aria-checked={!!form.fdActive}
+                  className={`toggle${form.fdActive ? ' on' : ''}`}
+                  onClick={() => updateBool('fdActive', !form.fdActive)}
+                  aria-label={
+                    form.fdActive
+                      ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
+                      : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
+              </label>
+              {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
+                  bonuses and sections. No cron — rules change ~yearly, so this pre-event
+                  button is the refresh path; a download applies at the NEXT launch. */}
               <div className="settings-field">
-                <span className="settings-label">{t('settings.contestPick.category.label')}</span>
-                <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.category.aria')}>
-                  {/* The Cabrillo TOKENS are invariant — they go in the file verbatim. */}
-                  {CABRILLO_OPERATOR_CATEGORIES.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      className={`theme-chip${(form.contestCategoryOperator || 'SINGLE-OP') === c ? ' active' : ''}`}
-                      aria-pressed={(form.contestCategoryOperator || 'SINGLE-OP') === c}
-                      disabled={locked('contestCategoryOperator')}
-                      onClick={() => update('contestCategoryOperator', c)}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-                <span className="settings-hint">{t('settings.contestPick.category.hint')}</span>
-              </div>
-
-              {/* ⭐ The three axes Sweepstakes turns into its precedence letter. They are
-                  here rather than under "Your station data" because they describe the
-                  ENTRY, which is what the other Cabrillo CATEGORY-* headers describe —
-                  and because leaving one blank is what refuses an SS session. */}
-              {/* ⚠️ The message keys are LITERALS, not built from the field name: the
-                  orphan-entry guard scans the source for `t('…')` calls, and a template
-                  literal is invisible to it — six catalog entries would read as
-                  translated-for-nobody. */}
-              {([
-                [
-                  'contestCategoryPower',
-                  CABRILLO_POWER_CATEGORIES,
-                  t('settings.contestPick.power.label'),
-                  t('settings.contestPick.power.aria'),
-                ],
-                [
-                  'contestCategoryAssisted',
-                  CABRILLO_ASSISTED_CATEGORIES,
-                  t('settings.contestPick.assisted.label'),
-                  t('settings.contestPick.assisted.aria'),
-                ],
-                [
-                  'contestCategoryStation',
-                  CABRILLO_STATION_CATEGORIES,
-                  t('settings.contestPick.station.label'),
-                  t('settings.contestPick.station.aria'),
-                ],
-              ] as const).map(([field, tokens, label, aria]) => (
-                <div className="settings-field" key={field}>
-                  <span className="settings-label">{label}</span>
-                  <div className="theme-switcher" role="group" aria-label={aria}>
-                    {tokens.map((c) => (
-                      <button
-                        key={c || 'unset'}
-                        type="button"
-                        className={`theme-chip${(form[field] || '') === c ? ' active' : ''}`}
-                        aria-pressed={(form[field] || '') === c}
-                        disabled={locked(field)}
-                        onClick={() => update(field, c)}
-                      >
-                        {c || t('settings.contestPick.entryAxes.unset')}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
-              {/* Winter Field Day has no high-power entry: its Cabrillo takes QRP or LOW, and a
-                  power left at HIGH writes no CATEGORY-POWER line rather than one it does not
-                  have. Said here, beside the picker that decides it. */}
-              {(form.fdEvent ?? '').trim() === 'wfd' && (
-                <span className="settings-hint">{t('settings.contestPick.power.wfd')}</span>
-              )}
-              {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
-                  when the log is exported rather than when a contest starts: nothing sent on
-                  the air depends on it. NAME is the Station tab's operator name. */}
-              <label className="settings-field">
-                <span className="settings-label">{t('settings.contestPick.email.label')}</span>
-                <input
-                  disabled={locked('contestEmail')}
-                  className="settings-input"
-                  type="email"
-                  value={form.contestEmail ?? ''}
-                  onChange={(e) => update('contestEmail', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">{t('settings.contestPick.email.hint')}</span>
-              </label>
-              {/* ⭐ THE SPONSOR'S OWN ENTRY LINES. A contest whose rules declare entry classes
-                  (the Illinois QSO Party, whose processing software reads the header) is
-                  offered exactly those, from the rules data and never from a list kept here;
-                  the names are the sponsor's own and are never translated. A saved class that
-                  is not one of this contest's shows as unset, which is also what the export
-                  does with it. CLUB and the extra OPERATORS are typed, and all three are read
-                  when the log is exported. */}
-              {rulesetPreview?.entryClasses?.length ? (
-                <label className="settings-field">
-                  <span className="settings-label">{t('settings.contestPick.entryClass.label')}</span>
-                  <select
-                    disabled={locked('contestEntryClass')}
-                    className="settings-input"
-                    value={
-                      rulesetPreview.entryClasses.includes(form.contestEntryClass ?? '')
-                        ? form.contestEntryClass
-                        : ''
-                    }
-                    onChange={(e) => update('contestEntryClass', e.target.value)}
+                <div className="lotw-users-row">
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    disabled={remote || (fdRulesFetching)}
+                    onClick={() => {
+                      setFdRulesFetching(true)
+                      fetchFdRules()
+                        .then((st) => {
+                          setFdRules(st)
+                          const pending =
+                            st.installedGenerated !== '' &&
+                            st.installedGenerated > st.activeGenerated
+                          pushToast(
+                            pending
+                              ? t('settings.fdRules.update.done', {
+                                  date: st.installedGenerated.slice(0, 10),
+                                })
+                              : t('settings.fdRules.update.current', {
+                                  date: st.activeGenerated.slice(0, 10),
+                                }),
+                            'success',
+                            5000,
+                          )
+                        })
+                        .catch((e) =>
+                          pushToast(
+                            t('settings.fdRules.update.failed', {
+                              detail: e instanceof Error ? e.message : String(e),
+                            }),
+                            'error',
+                          ),
+                        )
+                        .finally(() => setFdRulesFetching(false))
+                    }}
                   >
-                    <option value="">{t('settings.contestPick.entryAxes.unset')}</option>
-                    {rulesetPreview.entryClasses.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="settings-hint">{t('settings.contestPick.entryClass.hint')}</span>
-                </label>
-              ) : null}
-              <label className="settings-field">
-                <span className="settings-label">{t('settings.contestPick.club.label')}</span>
-                <input
-                  disabled={locked('contestClub')}
-                  className="settings-input"
-                  type="text"
-                  value={form.contestClub ?? ''}
-                  onChange={(e) => update('contestClub', e.target.value)}
-                  autoComplete="off"
-                />
-                <span className="settings-hint">{t('settings.contestPick.club.hint')}</span>
-              </label>
-              <label className="settings-field">
-                <span className="settings-label">{t('settings.contestPick.operators.label')}</span>
-                <input
-                  disabled={locked('contestOperators')}
-                  className="settings-input mono"
-                  type="text"
-                  value={form.contestOperators ?? ''}
-                  onChange={(e) => update('contestOperators', e.target.value.toUpperCase())}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <span className="settings-hint">{t('settings.contestPick.operators.hint')}</span>
-              </label>
+                    {fdRulesFetching
+                      ? t('settings.fdRules.update.busy')
+                      : t('settings.fdRules.update.action')}
+                  </button>
+                  <span className="settings-hint">
+                    {fdRules === null
+                      ? t('settings.fdRules.empty')
+                      : t('settings.fdRules.status', {
+                          year: fdRules.rulesYear,
+                          date: fdRules.activeGenerated.slice(0, 10),
+                        })}
+                  </span>
+                </div>
+                {fdRules !== null &&
+                  fdRules.installedGenerated !== '' &&
+                  fdRules.installedGenerated > fdRules.activeGenerated && (
+                    <span className="settings-hint">
+                      {t('settings.fdRules.pending', {
+                        date: fdRules.installedGenerated.slice(0, 10),
+                      })}
+                    </span>
+                  )}
+                {fdRules !== null && fdRules.rulesYear < new Date().getUTCFullYear() && (
+                  <span className="settings-hint">
+                    {t('settings.fdRules.stale', { year: fdRules.rulesYear })}
+                  </span>
+                )}
+                <span className="settings-hint">{t('settings.fdRules.hint')}</span>
+              </div>
             </fieldset>
           )}
 
@@ -12460,6 +12400,10 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.contestStation.ituZone.hint')}</span>
                 </label>
 
+                {/* Only for a contest whose exchange sends the station's power: nothing else reads
+                    it, and none of the shipped contests does (`CONTESTS_SENDING_POWER`). A value
+                    already stored stays in the form, so a Save keeps it. */}
+                {CONTESTS_SENDING_POWER.includes((form.fdEvent ?? '').trim() || 'arrlfd') && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.contestStation.power.label')}</span>
                   <input
@@ -12472,9 +12416,9 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  {/* ⚠️ Not the power MULTIPLIER below: this one goes on the air verbatim. */}
                   <span className="settings-hint">{t('settings.contestStation.power.hint')}</span>
                 </label>
+                )}
               </div>
             </fieldset>
           )}
@@ -12482,8 +12426,88 @@ export function SettingsPanel({
           {tab === 'contesting' && (
             <fieldset className="settings-section" id="settings-contest-category">
               <legend>{t('settings.contestCategory.legend')}</legend>
-              {/* ONE switch for every QSO-finding assistance source. It takes effect IMMEDIATELY
-                  (its own command, not Save) because an operator flips it as an event starts, and
+              {/* ⭐ CATEGORY-OPERATOR is a DECLARATION, so the operator makes it. It is
+                  the header that shipped as the string literal `MULTI-OP`: every solo
+                  Field Day entry Nexus exported claimed more than one operator was at
+                  the station. A new session reads this; the exporter reads the session,
+                  because one run of one contest under one callsign IS the entry. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.category.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.category.aria')}>
+                  {/* The Cabrillo TOKENS are invariant — they go in the file verbatim. */}
+                  {CABRILLO_OPERATOR_CATEGORIES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`theme-chip${(form.contestCategoryOperator || 'SINGLE-OP') === c ? ' active' : ''}`}
+                      aria-pressed={(form.contestCategoryOperator || 'SINGLE-OP') === c}
+                      disabled={locked('contestCategoryOperator')}
+                      onClick={() => update('contestCategoryOperator', c)}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                <span className="settings-hint">{t('settings.contestPick.category.hint')}</span>
+              </div>
+
+              {/* ⭐ The three axes Sweepstakes turns into its precedence letter. They are
+                  here rather than under "Your station data" because they describe the
+                  ENTRY, which is what the other Cabrillo CATEGORY-* headers describe —
+                  and because leaving one blank is what refuses an SS session. */}
+              {/* ⚠️ The message keys are LITERALS, not built from the field name: the
+                  orphan-entry guard scans the source for `t('…')` calls, and a template
+                  literal is invisible to it — six catalog entries would read as
+                  translated-for-nobody. */}
+              {([
+                [
+                  'contestCategoryPower',
+                  CABRILLO_POWER_CATEGORIES,
+                  t('settings.contestPick.power.label'),
+                  t('settings.contestPick.power.aria'),
+                ],
+                [
+                  'contestCategoryAssisted',
+                  CABRILLO_ASSISTED_CATEGORIES,
+                  t('settings.contestPick.assisted.label'),
+                  t('settings.contestPick.assisted.aria'),
+                ],
+                [
+                  'contestCategoryStation',
+                  CABRILLO_STATION_CATEGORIES,
+                  t('settings.contestPick.station.label'),
+                  t('settings.contestPick.station.aria'),
+                ],
+              ] as const).map(([field, tokens, label, aria]) => (
+                <div className="settings-field" key={field}>
+                  <span className="settings-label">{label}</span>
+                  <div className="theme-switcher" role="group" aria-label={aria}>
+                    {tokens.map((c) => (
+                      <button
+                        key={c || 'unset'}
+                        type="button"
+                        className={`theme-chip${(form[field] || '') === c ? ' active' : ''}`}
+                        aria-pressed={(form[field] || '') === c}
+                        disabled={locked(field)}
+                        onClick={() => update(field, c)}
+                      >
+                        {c || t('settings.contestPick.entryAxes.unset')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
+              {/* Winter Field Day has no high-power entry: its Cabrillo takes QRP or LOW, and a
+                  power left at HIGH writes no CATEGORY-POWER line rather than one it does not
+                  have. Said here, beside the picker that decides it. */}
+              {(form.fdEvent ?? '').trim() === 'wfd' && (
+                <span className="settings-hint">{t('settings.contestPick.power.wfd')}</span>
+              )}
+              {/* ONE switch for every QSO-finding assistance source, with the entry's declarations
+                  because it and Spotting assistance are one story: that row is what the Cabrillo
+                  log says, and this switch turns off the aids that would make it untrue. It takes
+                  effect IMMEDIATELY (its own command, not Save) because an operator flips it as an event starts, and
                   a switch that needed a restart mid-contest would be useless. The form field is
                   synced so a later Save cannot write the stale value back. */}
               <label className="settings-field">
@@ -12545,6 +12569,77 @@ export function SettingsPanel({
                   </span>
                 </div>
               )}
+              {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
+                  when the log is exported rather than when a contest starts: nothing sent on
+                  the air depends on it. NAME is the Station tab's operator name. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.email.label')}</span>
+                <input
+                  disabled={locked('contestEmail')}
+                  className="settings-input"
+                  type="email"
+                  value={form.contestEmail ?? ''}
+                  onChange={(e) => update('contestEmail', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.contestPick.email.hint')}</span>
+              </label>
+              {/* ⭐ THE SPONSOR'S OWN ENTRY LINES. A contest whose rules declare entry classes
+                  (the Illinois QSO Party, whose processing software reads the header) is
+                  offered exactly those, from the rules data and never from a list kept here;
+                  the names are the sponsor's own and are never translated. A saved class that
+                  is not one of this contest's shows as unset, which is also what the export
+                  does with it. CLUB and the extra OPERATORS are typed, and all three are read
+                  when the log is exported. */}
+              {rulesetPreview?.entryClasses?.length ? (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.entryClass.label')}</span>
+                  <select
+                    disabled={locked('contestEntryClass')}
+                    className="settings-input"
+                    value={
+                      rulesetPreview.entryClasses.includes(form.contestEntryClass ?? '')
+                        ? form.contestEntryClass
+                        : ''
+                    }
+                    onChange={(e) => update('contestEntryClass', e.target.value)}
+                  >
+                    <option value="">{t('settings.contestPick.entryAxes.unset')}</option>
+                    {rulesetPreview.entryClasses.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">{t('settings.contestPick.entryClass.hint')}</span>
+                </label>
+              ) : null}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.club.label')}</span>
+                <input
+                  disabled={locked('contestClub')}
+                  className="settings-input"
+                  type="text"
+                  value={form.contestClub ?? ''}
+                  onChange={(e) => update('contestClub', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.contestPick.club.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.operators.label')}</span>
+                <input
+                  disabled={locked('contestOperators')}
+                  className="settings-input mono"
+                  type="text"
+                  value={form.contestOperators ?? ''}
+                  onChange={(e) => update('contestOperators', e.target.value.toUpperCase())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.contestPick.operators.hint')}</span>
+              </label>
             </fieldset>
           )}
 
@@ -12863,44 +12958,21 @@ export function SettingsPanel({
             </fieldset>
           )}
 
-          {tab === 'contesting' && (
+          {/* ⭐ FIELD DAY'S OWN FIELDS, for the two Field Day events and for nothing else: class
+              and section are their exchange, and the power multiplier (below) is ARRL Field Day's
+              alone. A QSO party sends a county or a state, from Your station data above;
+              prompting for a Field Day class there would be asking for a value nothing
+              transmits. The switch and the rules data serve every contest and sit in Contest. */}
+          {tab === 'contesting' && isFieldDay(form.fdEvent) && (
           <fieldset className="settings-section" id="settings-field-day">
             <legend>{t('settings.fieldDay.legend')}</legend>
-            {/* The Contest mode switch lives here (Contesting is always visible) — turning it on
-                starts the picked contest: its log strip in every cockpit, the Contest screen. */}
-            <label className="settings-field">
-              <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
-              <button disabled={remote}
-                type="button"
-                role="switch"
-                aria-checked={!!form.fdActive}
-                className={`toggle${form.fdActive ? ' on' : ''}`}
-                onClick={() => updateBool('fdActive', !form.fdActive)}
-                aria-label={
-                  form.fdActive
-                    ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
-                    : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
-                }
-              >
-                <span className="toggle-knob" />
-              </button>
-              <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
-            </label>
-            {/* ⭐ CLASS + SECTION ARE FIELD DAY'S OWN EXCHANGE, so they are shown for the
-                two Field Day events and for nothing else. A QSO party sends a county or
-                a state, from Station data above; prompting for a Field Day class there
-                would be asking for a value nothing transmits. The power multiplier is
-                ARRL Field Day's alone (below). The switch and the rules data belong to
-                whichever contest is picked and stay. */}
-            {isFieldDay(form.fdEvent) &&
-              form.fdActive &&
+            {form.fdActive &&
               (!form.fdClass.trim() || !form.fdSection.trim()) && (
                 <p className="settings-note">
                   <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} vals={{ contest: pickedContest }} />
                 </p>
               )}
             <div className="settings-grid">
-              {isFieldDay(form.fdEvent) && (
               <label className="settings-field">
                 <span className="settings-label">
                   {(form.fdEvent ?? 'arrlfd') === 'wfd'
@@ -12922,9 +12994,7 @@ export function SettingsPanel({
                     : t('settings.fieldDay.class.hint')}
                 </span>
               </label>
-              )}
 
-              {isFieldDay(form.fdEvent) && (
               <label className="settings-field">
                 <span className="settings-label">{t('settings.fieldDay.section.label')}</span>
                 <input disabled={remote}
@@ -12958,12 +13028,11 @@ export function SettingsPanel({
                   {t('settings.fieldDay.section.hint', { count: FD_SECTION_OPTIONS.length })}
                 </span>
               </label>
-              )}
 
               {/* ARRL Field Day's power multiplier, shown for it alone: no other contest's score
                   reads it (Winter Field Day scores by its objectives), as the Contest screen's
                   scoring panel already holds. The setting itself is kept as it is. */}
-              {isFieldDay(form.fdEvent) && (form.fdEvent ?? '').trim() !== 'wfd' && (
+              {(form.fdEvent ?? '').trim() !== 'wfd' && (
               <div className="settings-field">
                 <span className="settings-label">{t('settings.fieldDay.power.label')}</span>
                 <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.power.aria')}>
@@ -12990,75 +13059,6 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
               )}
-            </div>
-            {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
-                bonuses and sections. No cron — rules change ~yearly, so this pre-event
-                button is the refresh path; a download applies at the NEXT launch. */}
-            <div className="settings-field">
-              <div className="lotw-users-row">
-                <button
-                  type="button"
-                  className="settings-test-btn"
-                  disabled={remote || (fdRulesFetching)}
-                  onClick={() => {
-                    setFdRulesFetching(true)
-                    fetchFdRules()
-                      .then((st) => {
-                        setFdRules(st)
-                        const pending =
-                          st.installedGenerated !== '' &&
-                          st.installedGenerated > st.activeGenerated
-                        pushToast(
-                          pending
-                            ? t('settings.fdRules.update.done', {
-                                date: st.installedGenerated.slice(0, 10),
-                              })
-                            : t('settings.fdRules.update.current', {
-                                date: st.activeGenerated.slice(0, 10),
-                              }),
-                          'success',
-                          5000,
-                        )
-                      })
-                      .catch((e) =>
-                        pushToast(
-                          t('settings.fdRules.update.failed', {
-                            detail: e instanceof Error ? e.message : String(e),
-                          }),
-                          'error',
-                        ),
-                      )
-                      .finally(() => setFdRulesFetching(false))
-                  }}
-                >
-                  {fdRulesFetching
-                    ? t('settings.fdRules.update.busy')
-                    : t('settings.fdRules.update.action')}
-                </button>
-                <span className="settings-hint">
-                  {fdRules === null
-                    ? t('settings.fdRules.empty')
-                    : t('settings.fdRules.status', {
-                        year: fdRules.rulesYear,
-                        date: fdRules.activeGenerated.slice(0, 10),
-                      })}
-                </span>
-              </div>
-              {fdRules !== null &&
-                fdRules.installedGenerated !== '' &&
-                fdRules.installedGenerated > fdRules.activeGenerated && (
-                  <span className="settings-hint">
-                    {t('settings.fdRules.pending', {
-                      date: fdRules.installedGenerated.slice(0, 10),
-                    })}
-                  </span>
-                )}
-              {fdRules !== null && fdRules.rulesYear < new Date().getUTCFullYear() && (
-                <span className="settings-hint">
-                  {t('settings.fdRules.stale', { year: fdRules.rulesYear })}
-                </span>
-              )}
-              <span className="settings-hint">{t('settings.fdRules.hint')}</span>
             </div>
           </fieldset>
           )}

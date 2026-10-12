@@ -202,7 +202,7 @@ of a page.
 | See whether an upload actually went | [Settings ▸ Logging & Connectors ▸ Connections](settings-reference.md#connections) |
 | Change how "worked before" is decided | [Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
 | Get an alert when a new one appears | [Settings ▸ Spots & Alerts ▸ Pounce](settings-reference.md#pounce--new-one-alert) |
-| Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Contest mode](settings-reference.md#contest-mode) |
+| Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day) |
 | Change theme, contrast or Night | [Settings ▸ Appearance ▸ Theme](settings-reference.md#theme) |
 | Change UI scale, text size or density, or pick a one-tap look | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
 | Turn a whole section off | [Settings ▸ Appearance ▸ Features](settings-reference.md#features) |

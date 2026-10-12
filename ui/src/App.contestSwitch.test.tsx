@@ -279,7 +279,7 @@ async function openSettingsContesting() {
   fireEvent.click(within(nav).getByRole('button', { name: 'Settings' }))
   fireEvent.click(await screen.findByRole('tab', { name: 'Contesting' }, WAIT))
   return waitFor(() => {
-    const section = document.querySelector('#settings-field-day') as HTMLElement | null
+    const section = document.querySelector('#settings-contest-pick') as HTMLElement | null
     expect(section).not.toBeNull()
     return within(section!).getByRole('switch', { name: /^(Enable|Disable) Contest mode: ARRL Field Day$/ })
   }, WAIT)

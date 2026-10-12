@@ -174,7 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the QRP objective and your Power category disagree. Nexus Remote shows your objectives too,
   read-only, once its page has been updated.
 - **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
-  Settings ▸ Contesting ▸ Contest has **Entry class** (the eight classes in the 2026 rules,
+  Settings ▸ Contesting ▸ Your entry has **Entry class** (the eight classes in the 2026 rules,
   including the new Unlimited that a club running more than one transmitter at once must enter),
   **Club** and **Other operators**, all read when you export, so you can set them after the
   party. The OPERATORS line lists everyone who was set as Operator at the key when they logged a
@@ -396,8 +396,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot start yet (a QSO party's county, say), the old one still ends and the Contest screen says
   what is missing.
 - **The Contest mode switch is no longer in Settings ▸ Appearance ▸ Features.** It stays at the top
-  of the Contest screen and in Settings ▸ Contesting ▸ Contest mode, and a Settings search for
-  "contest mode" goes there. Your setting is unchanged.
+  of the Contest screen and in Settings ▸ Contesting ▸ Contest, under the picker, and a Settings
+  search for "contest mode" goes there. Your setting is unchanged.
+- **Settings ▸ Contesting is in the order you set up an entry.** First the contest, with the Contest
+  mode switch and Check for rules updates; then Your station data, what you send; then **Your
+  entry**, what your log declares: Entry category, Power category, Spotting assistance, Station
+  type, the Unassisted entry switch and its record, Email, Entry class, Club and Other operators;
+  then Super Check Partial and call history, and Enter Sends Message; then **Field Day**, the class,
+  section and power multiplier, shown only while ARRL or Winter Field Day is picked; then the club.
+  Every setting keeps its value. **Power sent** shows only for a contest whose exchange carries
+  your power, and none on the list does, so it is out of sight (a value you typed is kept). The
+  Station tab's State and the contest's State or province now say which is which: the first is what
+  your everyday macros send, the second where your station is for the contest, which can differ
+  when you operate away from home.
 - **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
   Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
   elevation boxes, with the line for the call in your log entry under them, so the bearing (and
@@ -432,7 +443,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries a copy of ARRL Field Day's bonus list: those bonuses are not part of Winter Field Day,
   and one ticked there now scores nothing. Its Cabrillo file gains the lines the sponsor's example
   log has: your name (Settings ▸ Station), the email for contest logs, the club and the other
-  operators (Settings ▸ Contesting ▸ Contest), each where you have set it.
+  operators (Settings ▸ Contesting ▸ Your entry), each where you have set it.
 - **Winter Field Day's Cabrillo header is the one in the sponsor's example.** It carries
   `X-EXCHANGE` (your class and category, such as `3O`) and, when your Power category is QRP or LOW,
   `CATEGORY-POWER`. Winter Field Day's limit is 100 W PEP and it has no high-power entry, so a

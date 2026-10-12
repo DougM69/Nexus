@@ -117,27 +117,30 @@ const lastSaved = () => {
   return calls.length ? (calls[calls.length - 1][0] as Record<string, unknown>) : null
 }
 
-/** Every field of §3.4's block, with a value and the label it is entered under. */
+/** Every field of §3.4's block the tab shows for every contest, with a value and the label it is
+ *  entered under. The sixth, Power sent, shows only for a contest whose exchange sends the
+ *  station's power — none of the shipped ones (`SettingsPanel.contestgroups.test.tsx`, per
+ *  contest), so it is not typed here; a stored value survives a Save (the same file's round trip). */
 const BLOCK = [
   { key: 'contestQthCounty', label: 'County', typed: 'FRAN', want: 'FRAN' },
   { key: 'contestQthState', label: 'State or province', typed: 'WI', want: 'WI' },
   { key: 'contestCheck', label: 'Check', typed: '74', want: '74' },
   { key: 'contestCqZone', label: 'CQ zone', typed: '4', want: 4 },
   { key: 'contestItuZone', label: 'ITU zone', typed: '8', want: 8 },
-  { key: 'contestPower', label: 'Power sent', typed: 'KW', want: 'KW' },
 ] as const
 
 describe('the station-data block', () => {
-  it('renders under the contest picker and above Contest mode', async () => {
+  it('renders under the contest picker and above Your entry', async () => {
     renderPanel()
     await openContesting()
+    await inputFor('County')
     const legends = [...document.querySelectorAll('fieldset.settings-section legend')].map(
       (n) => n.textContent,
     )
     expect(legends).toContain('Your station data')
     expect(legends.indexOf('Your station data')).toBeGreaterThan(legends.indexOf('Contest'))
     expect(legends.indexOf('Your station data')).toBeLessThan(
-      legends.indexOf('Contest mode'),
+      legends.indexOf('Your entry'),
     )
   })
 
@@ -204,11 +207,11 @@ describe('the station-data block', () => {
 // line), read by the engine at export, and a plain text setting like the rest of this tab — so
 // what this proves is the same round trip: typed, saved, and back after a reload.
 describe('the contest log email', () => {
-  it('is on the Contest section, empty by default, and survives a save and a reload', async () => {
+  it('is in Your entry, empty by default, and survives a save and a reload', async () => {
     const view = renderPanel()
     await openContesting()
     const email = await inputFor('Email for contest logs')
-    expect(email.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Contest')
+    expect(email.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Your entry')
     expect(email.value).toBe('')
     fireEvent.change(email, { target: { value: 'op@example.com' } })
     await save()
