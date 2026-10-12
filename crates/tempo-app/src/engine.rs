@@ -39,6 +39,10 @@ mod contest_ft_messages_tests;
 /// A contest log merged into the Logbook twice, across a move and a restart, through the engine.
 #[cfg(test)]
 mod contest_merge_tests;
+/// One power story per contest: Power category is what the log declares; Power sent and Field
+/// Day's power multiplier reach no shipped contest's log headers or sent exchange.
+#[cfg(test)]
+mod contest_power_tests;
 pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]

@@ -46,7 +46,11 @@ Your operator identity, license privileges, and default frequency.
   seats. It is the same setting as **Operator at the key** under
   [Who's who at this event](#whos-who-at-this-event); editing either one moves
   both.
-- **State** — "Your US state/province — the CW `{MYSTATE}` macro (ragchew QTH)."
+- **State** — your US state or province for everyday contacts: the CW `{MYSTATE}`
+  macro and the QTH an RTTY ragchew sends. A contest has a box of its own,
+  **State or province** under [Your station data](#your-station-data) on the
+  Contesting tab, because a contest entry can be somewhere else: a portable or mobile
+  entry types where it is operating there, and this one stays as it is.
 - **License Class** — Technician / General / Amateur Extra (US), or **Open** for
   non-US operators. "Sets your transmit privileges + the licensed-segment band
   dropdown. Open = no limits (outside the US)." This is a software transmit guard
@@ -1954,14 +1958,15 @@ Always visible — capability, not configuration, gates the tabs.
 
 The first thing on this tab, because the contest decides everything under it: the
 exchange you pass, what counts as a duplicate, how the log is scored, and what goes in
-the Cabrillo headers.
+the Cabrillo headers. The switch that starts it and the rules data every contest
+reads are here with it.
 
 - **Contest** — ARRL Field Day, Winter Field Day, ARRL November Sweepstakes (CW or
   Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
-  Illinois, New York, Ohio, Tennessee and Texas QSO Parties. Contest mode below is the
-  switch that starts the contest picked here. While it is running a contest, a line under
-  the picker says which one, and saving a different pick switches at once, exactly as
+  Illinois, New York, Ohio, Tennessee and Texas QSO Parties. **Contest mode**, under
+  it, is the switch that starts the contest picked here. While it is running a
+  contest, a line under the picker says which one, and saving a different pick switches at once, exactly as
   turning Contest mode off and on does: the running contest ends, the new one starts in
   Search-and-Pounce without calling CQ, each keeps its own contacts, and the Contest screen
   says "Now running …". Saving anything else keeps the running contest and its log. (This is the
@@ -1974,6 +1979,63 @@ the Cabrillo headers.
   out-of-state, W/VE or DX, and the same word sits beside **Sending** on the contest log
   strip. Both Field Day events work the same way for everyone, so there is no role to
   show yet.
+- **Contest mode** — the switch for whichever contest is picked above, named for it:
+  "For Illinois QSO Party, the contest picked above. When it is on, the log strips in
+  every mode, the Contest screen and the exports follow its rules. Off the rest of the
+  year." It stays on across restarts until you turn it
+  off. It was called Field Day mode; the setting is the same one. The **same switch** is
+  at the top of the **Contest** screen (the tent in the left bar), which saves it at once and
+  says what is missing when the picked contest cannot start yet. Those are its only two
+  places: it is not among the [Features](#features).
+- **Check for rules updates** — the rules data behind every contest on the list:
+  scoring, dates, exchanges and multipliers. The line beside the button says which
+  rules year and data date are in use; a downloaded update applies at the next
+  launch.
+
+### Your station data
+
+What your station sends when a contest asks for it. Fill in the ones your contest
+uses and leave the rest alone — nothing here is guessed, because an exchange that
+goes on the air has to be one you typed.
+
+- **County** — your county, abbreviated the way the QSO party abbreviates it
+  (Franklin is `FRAN`, Bee is `BEE`). Only in-state entries send this. Use the
+  sponsor's own list: the abbreviations are irregular, and a code you worked out
+  from the county name will often be the wrong one.
+- **State or province** — your state, province or territory, two letters. This is
+  **not** your ARRL section. Western New York is `WNY` as a section and `NY` as a
+  state, and a QSO party wants the state; [Field Day](#field-day) below is where the
+  section lives, for the two Field Day events. Nor is it the Station tab's
+  [State](#operator--radio), the QTH your everyday CW and RTTY macros send: put here
+  where your station is for this contest, which for a portable or mobile entry is
+  not home. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
+  from the usual ones: `NF` (VO1) and `LB` (VO2) rather than `NL`, `NWT` rather
+  than `NT`, and `PEI` rather than `PE`. Typing `NT` or `PE` is read as `NWT` or
+  `PEI`; `NL` is not, because it is two call areas, so pick `NF` or `LB`. With a
+  code the contest does not list, or none, you enter as a DX station and send no
+  QTH. If your callsign is in the US or Canada, Nexus warns you about that here,
+  on the contest log strip and when the contest starts, and suggests the code a
+  section means (`EMA` is `MA`). It never stops you: operating from outside the US
+  and Canada really is DX.
+- **Check** — the last two digits of the year you were first licensed. Sweepstakes
+  asks for it, and you send the same two digits all contest.
+- **CQ zone** — 1 to 40, for CQ WW. Leave it at 0 if you do not know it yet.
+- **ITU zone** — 1 to 90, for IARU. Leave it at 0 if you do not know it yet.
+- **Power sent** — the power you send *as part of the exchange*, in the sponsor's
+  own words (`KW`, `500`, `5`), on the air exactly as you type it. Shown only for a
+  contest whose exchange carries your power, and none of the contests on the list
+  does, so you will not see it today; a value saved before is kept. The power your
+  log declares is **Power category**, under [Your entry](#your-entry).
+
+If a contest needs something your station has not filled in, Nexus refuses the
+contest's rules rather than sending a blank — you find out while setting up, not at
+1400 on contest Saturday.
+
+### Your entry
+
+What your Cabrillo log declares about the entry, and the switch that keeps the
+"unassisted" in it true.
+
 - **Entry category** — what your Cabrillo log declares about the station:
   `SINGLE-OP`, `MULTI-OP` or `CHECKLOG`. It is a claim, so you make it rather than
   Nexus guessing: pick `CHECKLOG` when you are sending the log to help the sponsor
@@ -1984,6 +2046,16 @@ the Cabrillo headers.
   air as its precedence letter, and a CQ WW RTTY log carries the power category and
   the assistance as header lines. Winter Field Day takes only `QRP` or `LOW` (its limit is
   100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
+  This is the one power your log declares: **Power sent** is what an exchange carries,
+  and Field Day's power multiplier is its score.
+- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
+  PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
+  **Takes effect at once**" — its own command, not Save, because an operator
+  flips it as an event starts. "Your own settings for each of those are left
+  alone and come back when you switch this off."
+- **Assistance record** — the timestamped journal: a row per flip and a row each
+  time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
+  it survives restarts. Newest first.
 - **Email for contest logs** — goes on the EMAIL line of the Cabrillo log you
   export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you
   about your entry. The NAME line is your operator name from the
@@ -2002,55 +2074,10 @@ the Cabrillo headers.
   callsigns separated by spaces or commas. All three are read when you export the
   log, so you can fill them in after the contest.
 
-### Your station data
-
-What your station sends when a contest asks for it. Fill in the ones your contest
-uses and leave the rest alone — nothing here is guessed, because an exchange that
-goes on the air has to be one you typed.
-
-- **County** — your county, abbreviated the way the QSO party abbreviates it
-  (Franklin is `FRAN`, Bee is `BEE`). Only in-state entries send this. Use the
-  sponsor's own list: the abbreviations are irregular, and a code you worked out
-  from the county name will often be the wrong one.
-- **State or province** — your state, province or territory, two letters. This is
-  **not** your ARRL section. Western New York is `WNY` as a section and `NY` as a
-  state, and a QSO party wants the state; Contest mode below is where the
-  section lives, for the two Field Day events. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
-  from the usual ones: `NF` (VO1) and `LB` (VO2) rather than `NL`, `NWT` rather
-  than `NT`, and `PEI` rather than `PE`. Typing `NT` or `PE` is read as `NWT` or
-  `PEI`; `NL` is not, because it is two call areas, so pick `NF` or `LB`. With a
-  code the contest does not list, or none, you enter as a DX station and send no
-  QTH. If your callsign is in the US or Canada, Nexus warns you about that here,
-  on the contest log strip and when the contest starts, and suggests the code a
-  section means (`EMA` is `MA`). It never stops you: operating from outside the US
-  and Canada really is DX.
-- **Check** — the last two digits of the year you were first licensed. Sweepstakes
-  asks for it, and you send the same two digits all contest.
-- **CQ zone** — 1 to 40, for CQ WW. Leave it at 0 if you do not know it yet.
-- **ITU zone** — 1 to 90, for IARU. Leave it at 0 if you do not know it yet.
-- **Power sent** — the power you send *as part of the exchange*, in the sponsor's
-  own words (`KW`, `500`, `5`). This is not the Field Day power multiplier below,
-  which is a scoring tier you pick from a list; this one goes on the air exactly as
-  you type it.
-
-If a contest needs something your station has not filled in, Nexus refuses the
-contest's rules rather than sending a blank — you find out while setting up, not at
-1400 on contest Saturday.
-
-### Contest Category
-
-- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
-  PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
-  **Takes effect at once**" — its own command, not Save, because an operator
-  flips it as an event starts. "Your own settings for each of those are left
-  alone and come back when you switch this off."
-- **Assistance record** — the timestamped journal: a row per flip and a row each
-  time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
-  it survives restarts. Newest first.
-
 ![The Contest Category group: Unassisted entry switched off, an ASSISTED badge on a line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since 23:18Z, and below it an Assistance record of eight timestamped rows.](../img/manual/settings-contest-category.webp)
 
-*Contest Category in Nexus 1.10.3. The badge states what you are entitled to
+*The Unassisted switch and its record in Nexus 1.10.3, when they were a group of
+their own called Contest Category. The badge states what you are entitled to
 claim right now; the record underneath is the evidence, kept across restarts.*
 
 ### Super Check Partial and call history
@@ -2129,19 +2156,14 @@ no key mapped, or a key with nothing on it. A set with no step mapped makes ESM
 step aside, and Enter logs as it does with ESM off. On the hosted Remote page
 this section only says that ESM is set at the station.
 
-### Contest mode
+### Field Day
 
-- **Contest mode** — the switch for whichever contest is picked in [Contest](#contest)
-  above, named for it: "For Illinois QSO Party, the contest picked above. When it is
-  on, the log strips in every mode, the Contest screen and the exports follow its
-  rules. Off the rest of the year." It stays on across restarts until you turn it
-  off. It was called Field Day mode; the setting is the same one. The **same switch** is
-  at the top of the **Contest** screen (the tent in the left bar), which saves it at once and
-  says what is missing when the picked contest cannot start yet. Those are its only two
-  places: it is not among the [Features](#features).
-- **Event** — moved up to [Contest](#contest) at the top of this tab, where it is now
-  the contest picker. Same setting, one level up.
-- **FD Class** / **WFD Category** (the label follows the Event) — "Number of
+Shown only while ARRL Field Day or Winter Field Day is picked: their own exchange,
+and ARRL Field Day's power multiplier.
+
+- **Event** — the contest picker at the top of this tab ([Contest](#contest)); the
+  same setting the Event chips here used to carry.
+- **FD Class** / **WFD Category** (the label follows the contest) — "Number of
   transmitters + class letter: A=club/group portable, B=1–2 person portable,
   C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A."
   For WFD the box is **WFD Class and Category**: "The number of transmitters (your
@@ -2161,7 +2183,8 @@ this section only says that ESM is set at the station.
 - **Power multiplier**, shown for ARRL Field Day only — ×5 (QRP/battery, ≤5 W on
   natural power), ×2 (≤100 W), ×1 (>100 W). "Multiplies your QSO points. Choose
   before the event." No other contest's score has one; Winter Field Day scores by
-  its objectives.
+  its objectives. It is a score, not a declaration: the power your log declares is
+  **Power category**, under [Your entry](#your-entry).
 
 Class and Section **start empty on purpose** and the station won't enter Field
 Day until both are set — a banner says so while the mode is on and they're blank.
@@ -2463,7 +2486,7 @@ sections cannot be turned off.*
   a one-line "why you'd want it". Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
 - **Contest mode** is not here: it is at the top of the **Contest** screen and in
-  [Contesting ▸ Contest mode](#contest-mode).
+  [Contesting ▸ Contest](#contest).
 
 ### App updates
 

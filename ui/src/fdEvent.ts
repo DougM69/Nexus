@@ -94,9 +94,22 @@ export function contestShortName(id: string | undefined): string {
   return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
 }
 
-/** Is this one of the two Field Day events, whose class + section Settings ▸ Contest mode asks for? */
+/** Is this one of the two Field Day events, whose class + section Settings ▸ Contesting ▸ Field Day
+ *  asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
+
+/**
+ * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
+ * Settings ▸ Contesting ▸ Your station data shows **Power sent** for. None of the shipped ones does
+ * (the contests that send power, ARRL International DX among them, are not on the picker), so the
+ * box is shown for none of them; a value already stored is kept and is still saved.
+ *
+ * ⚠️ A MIRROR, like `CLUB_SYNC_REFUSED` below: `fd_rules.rs` reads this list back and compares it
+ * with every seeded ruleset whose sent exchange reads `contest_power`, both ways, so a contest that
+ * starts sending power is a red test rather than a box nobody can find.
+ */
+export const CONTESTS_SENDING_POWER: readonly string[] = []
 
 /** The contest's part of an export's file name — `ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`:
  *  its rules-file id, blank meaning ARRL Field Day as it does everywhere else. Every exported file

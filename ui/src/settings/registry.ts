@@ -495,25 +495,27 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
 
   // ---- Contesting --------------------------------------------------------------
-  // The contest itself comes FIRST on this tab: it decides the exchange, the dupe rule,
-  // the multiplier universe and the Cabrillo headers, so every section under it belongs
-  // to whichever contest is picked. `Contest mode` holds the switch that starts it, and the
-  // families in later batches land in this picker rather than beside it.
+  // In the order an entry is set up: the contest and the switch that starts it, what the station
+  // sends, what the log declares, the aids, Field Day's own fields, then the club.
+  //
+  // The contest itself comes FIRST on this tab: it decides the exchange, the dupe rule, the
+  // multiplier universe and the Cabrillo headers, so every section under it belongs to whichever
+  // contest is picked. It also holds the Contest mode switch that starts that contest and the
+  // rules data every contest reads; both moved here from Field Day's section, which is now Field
+  // Day's alone. The families in later batches land in this picker rather than beside it.
   {
     id: 'contest-pick',
     label: 'Contest',
     tab: 'contesting',
     neededInHourOne: true,
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
-      'which contest', 'role', 'in state', 'out of state', 'category', 'entry category',
-      'cabrillo', 'category-operator', 'single-op', 'multi-op', 'checklog', 'single op',
-      'multi op', 'check log', 'operators', 'email', 'e-mail', 'cabrillo email',
-      'entry class', 'entry-class', 'unlimited', 'club', 'contest club', 'qrp-competition'],
+      'which contest', 'role', 'in state', 'out of state', 'contest mode', 'field day mode',
+      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —
   // a QSO party sends the county or the state, Sweepstakes sends the check — and
-  // above Contest mode, which starts the contest rather than describing the station.
+  // above the entry, which is what the log declares rather than what the station sends.
   {
     id: 'contest-station',
     label: 'Your station data',
@@ -523,15 +525,24 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'cq zone', 'itu zone', 'zone', 'power sent', 'exchange', 'qso party',
       'sweepstakes', 'my county', 'my state', 'station data', 'what i send'],
   },
+  // What the entry's Cabrillo log declares: the category, the power, the assistance, the station
+  // type, the email, the sponsor's entry class, the club and the other operators — and the
+  // Unassisted switch, the other half of "assisted", which turns the aids below off. It was
+  // "Contest Category" while it held that switch alone; the id is a public name and stays.
   {
     id: 'contest-category',
-    label: 'Contest Category',
+    label: 'Your entry',
     tab: 'contesting',
-    keywords: ['contest', 'assisted', 'unassisted', 'category', 'entry'],
+    keywords: ['category', 'entry category', 'cabrillo', 'category-operator', 'single-op',
+      'multi-op', 'checklog', 'single op', 'multi op', 'check log', 'power category', 'qrp',
+      'low power', 'high power', 'assisted', 'unassisted', 'spotting assistance',
+      'assistance record', 'station type', 'school', 'operators', 'email', 'e-mail',
+      'cabrillo email', 'entry class', 'entry-class', 'unlimited', 'club', 'contest club',
+      'qrp-competition'],
   },
   // The contest strip's two aids: the Super Check Partial list Nexus downloads and the
-  // call-history file the operator imports. Under Contest Category because its Unassisted
-  // switch turns both off. Both serve every contest.
+  // call-history file the operator imports. After Your entry, whose Unassisted switch turns
+  // both off. Both serve every contest.
   {
     id: 'scp-call-history',
     label: 'Super Check Partial and call history',
@@ -550,17 +561,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['esm', 'n1mm esm', 'enter key', 'run', 's&p', 'search and pounce', 'call once',
       'role picker', 'steps', 'next message', 'his call', 'tu'],
   },
-  // CONTEST MODE: the switch that starts the picked contest, what it needs when the pick is
-  // Field Day (the class, the section, ARRL Field Day's power multiplier), and the rules data
-  // every contest reads. It was "Field Day Setup" while its switch already started every
-  // contest; the id stays `field-day` (a public name), and the old label is in SECTION_ALIASES.
+  // FIELD DAY'S OWN FIELDS — the class (or WFD's class and category), the ARRL section, and ARRL
+  // Field Day's power multiplier — shown only while one of the two Field Days is picked. It was
+  // "Field Day Setup", then "Contest mode" while it also held the switch and the rules data; the
+  // id stays `field-day` (a public name), and the old labels are in SECTION_ALIASES.
   {
     id: 'field-day',
-    label: 'Contest mode',
+    label: 'Field Day',
     tab: 'contesting',
-    keywords: ['contest mode', 'field day mode', 'start the contest', 'field day', 'arrl', 'class',
-      'section', 'exchange', 'power multiplier', 'winter field day', 'rules', 'rules year',
-      'rules update', 'wfd'],
+    keywords: ['arrl', 'winter field day', 'wfd', 'class', 'fd class', 'wfd category',
+      'section', 'arrl section', 'exchange', 'power multiplier', 'battery', 'natural power'],
   },
   // A club site answers "who are you?" three different ways — the call that goes on the air,
   // the tent you are sitting in, and the person at the key — and all three already existed as
@@ -776,9 +786,12 @@ export const SECTION_ALIASES: Record<string, string> = {
   'logbook-qsl': 'confirmations',
   'qsl-services': 'confirmations',
   'setup-health': 'radios',
-  // The Contest mode section's old LABEL (its id never changed): a pointer to "Field Day Setup"
-  // lands on it, and the docs guard and the manual's generator read the name as dead.
+  // Field Day's section by its old LABELS (its id never changed). "Field Day Setup" was the
+  // whole section, whose class and section are still there; "Contest mode" was the name it had
+  // while it also held the switch, which now sits under the picker. The docs guard and the
+  // manual's generator read both names as dead.
   'field-day-setup': 'field-day',
+  'contest-mode': 'contest-pick',
 }
 
 /** Where a deep link should land: a tab, and optionally a section to scroll to. */

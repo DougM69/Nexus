@@ -117,7 +117,7 @@ const writes = () => api.get('setSettings').mock.calls.map((c) => c[0] as Record
 async function switchOffInTheForm() {
   await screen.findAllByDisplayValue('W9CLB')
   fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
-  const group = document.getElementById('settings-field-day')!
+  const group = document.getElementById('settings-contest-pick')!
   fireEvent.click(within(group).getByRole('switch', { name: /Disable Contest mode/ }))
 }
 
@@ -143,7 +143,7 @@ describe('a Save that turns Contest mode off', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Not now' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(writes()).toEqual([])
-    const group = document.getElementById('settings-field-day')!
+    const group = document.getElementById('settings-contest-pick')!
     expect(within(group).getByRole('switch', { name: /Enable Contest mode/ }).getAttribute('aria-checked')).toBe('false')
   })
 

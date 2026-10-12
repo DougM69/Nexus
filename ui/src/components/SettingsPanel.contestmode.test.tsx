@@ -170,35 +170,42 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
   })
 })
 
-describe('the section the switch sits in is Contest mode, and holds nothing of Field Day’s for another contest', () => {
-  /** Every word the section shows, and every name and tooltip it gives a control. */
+describe('the switch sits in Contest, under the picker, and says nothing of Field Day for another contest', () => {
+  /** Every word a block shows, and every name and tooltip it gives a control. */
   const saidIn = (el: Element) => [
     el.textContent ?? '',
     ...[...el.querySelectorAll('[aria-label], [title]')].flatMap((c) =>
       [c.getAttribute('aria-label'), c.getAttribute('title')].filter((v): v is string => !!v),
     ),
   ]
-  const section = () => document.querySelector('#settings-field-day')!
+  /** The switch's own row and the rules data's, which moved with it. */
+  const rows = (sw: HTMLElement) => [
+    sw.closest('.settings-field')!,
+    screen.getByRole('button', { name: 'Check for rules updates' }).closest('.settings-field')!,
+  ]
 
-  it('a QSO party: its legend, its switch, its rules data, and no Field Day anywhere in it', async () => {
+  it('a QSO party: in Contest, with its rules data, and no Field Day in either row', async () => {
     holding({ fdEvent: 'ilqp' })
     renderPanel()
     await openTab('Contesting')
-    await switchNamed('Enable Contest mode: Illinois QSO Party')
-    expect(section().querySelector('legend')!.textContent).toBe('Contest mode')
-    expect(saidIn(section()).filter((s) => /Field Day/.test(s))).toEqual([])
-    expect(section().textContent).toContain(
+    const sw = await switchNamed('Enable Contest mode: Illinois QSO Party')
+    expect(sw.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Contest')
+    expect(rows(sw).flatMap(saidIn).filter((s) => /Field Day/.test(s))).toEqual([])
+    expect(rows(sw)[1].textContent).toContain(
       'Scoring, dates, exchanges and multipliers for every contest in the Contest list above. Checked on demand; a downloaded update applies at the next launch.',
     )
+    // …and Field Day's own group is not on the tab at all.
+    expect(document.querySelector('#settings-field-day')).toBeNull()
   })
 
-  it('CONTROL: on ARRL Field Day the same scan finds Field Day, in the switch’s name and its own power multiplier', async () => {
+  it('CONTROL: on ARRL Field Day the same scan finds Field Day in the switch’s name, and its power multiplier in its own group', async () => {
     holding({ fdEvent: 'arrlfd' })
     renderPanel()
     await openTab('Contesting')
-    await switchNamed('Enable Contest mode: ARRL Field Day')
-    const hits = saidIn(section()).filter((s) => /Field Day/.test(s))
-    expect(hits).toContain('Enable Contest mode: ARRL Field Day')
-    expect(hits).toContain('Field Day power multiplier')
+    const sw = await switchNamed('Enable Contest mode: ARRL Field Day')
+    expect(rows(sw).flatMap(saidIn).filter((s) => /Field Day/.test(s))).toContain('Enable Contest mode: ARRL Field Day')
+    const fd = document.querySelector('#settings-field-day')!
+    expect(fd.querySelector('legend')!.textContent).toBe('Field Day')
+    expect(saidIn(fd)).toContain('Field Day power multiplier')
   })
 })

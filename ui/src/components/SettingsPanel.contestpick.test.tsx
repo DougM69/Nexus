@@ -111,15 +111,16 @@ const chip = async (label: string, text: string) =>
 
 
 describe('the contest picker', () => {
-  it('is the first section on the tab, and Contest mode comes after it', async () => {
+  it('is the first section on the tab, and holds the Contest mode switch that starts the pick', async () => {
     renderPanel()
     await openContesting()
     const legends = [...document.querySelectorAll('fieldset.settings-section legend')].map(
       (n) => n.textContent,
     )
     expect(legends[0]).toBe('Contest')
-    expect(legends.indexOf('Contest mode')).toBeGreaterThan(0)
+    expect(sectionOf(await screen.findByRole('switch', { name: /^Enable Contest mode: / }))).toBe('Contest')
     expect(legends).not.toContain('Field Day Setup')
+    expect(legends).not.toContain('Contest mode')
   })
 
   it('offers the shipped contests and picks the one the settings name', async () => {
@@ -161,7 +162,7 @@ describe('the contest picker', () => {
     expect((await chip('Contest', 'Winter Field Day')).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('picks a QSO party, and Contest mode drops the class, section and power multiplier it does not use', async () => {
+  it('picks a QSO party, and Field Day\'s class, section and power multiplier go, which it does not use', async () => {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({ ...defaultSettings, fdEvent: 'tnqp' } as never),
     )
@@ -202,7 +203,7 @@ describe('the contest picker', () => {
     expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
   })
 
-  it('lives in ONE place — the picker is not also inside Contest mode', async () => {
+  it('lives in ONE place — the picker is not also inside Field Day', async () => {
     renderPanel()
     await openContesting()
     // Two controls writing one setting is how they come to disagree. The contest chips

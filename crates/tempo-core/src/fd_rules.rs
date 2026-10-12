@@ -3743,6 +3743,96 @@ mod tests {
         assert_eq!(unpicked(&short), vec!["ohqp"]);
     }
 
+    /// The settings a ruleset's SENT exchange reads, over every role: a `setting:` source by its
+    /// own name, a `derived:` one by the inputs [`SENT_SLOT_DERIVATIONS`] declares for it.
+    fn sent_settings(rs: &FdRuleset) -> std::collections::BTreeSet<&'static str> {
+        let mut out = std::collections::BTreeSet::new();
+        for role in rs.exchange.roles {
+            for key in role.sends {
+                let Some(field) = rs.exchange.fields.iter().find(|f| f.key == *key) else {
+                    continue;
+                };
+                match field.source.split_once(':') {
+                    Some(("setting", name)) => {
+                        out.insert(name);
+                    }
+                    Some(("derived", what)) => {
+                        if let Some((_, inputs)) =
+                            SENT_SLOT_DERIVATIONS.iter().find(|(id, _)| *id == what)
+                        {
+                            out.extend(inputs.iter().copied());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// The ids in `CONTESTS_SENDING_POWER`'s list, or `None` when fdEvent.ts does not declare it.
+    fn ts_contests_sending_power(ts: &str) -> Option<std::collections::BTreeSet<&str>> {
+        let declared = ts.split("export const CONTESTS_SENDING_POWER").nth(1)?;
+        let list = declared.split_once('=')?.1;
+        let body = list.split_once('[')?.1.split_once(']')?.0;
+        Some(
+            body.split(',')
+                .map(|id| id.trim().trim_matches('\''))
+                .filter(|id| !id.is_empty())
+                .collect(),
+        )
+    }
+
+    /// ⭐ **Settings shows Power sent for exactly the contests whose exchange sends it.**
+    ///
+    /// `CONTESTS_SENDING_POWER` in ui/src/fdEvent.ts is that list, written out, because the panel
+    /// needs the answer for a pick not yet saved and the rules data lives here. It is held to every
+    /// seeded ruleset both ways: a contest whose exchange starts sending `contest_power` without a
+    /// line there would ship a slot nobody can fill, and a line there for a contest that sends none
+    /// would show a box nothing reads. Empty today: no seeded contest sends the station's power.
+    #[test]
+    fn power_sent_is_offered_for_exactly_the_contests_whose_exchange_sends_it() {
+        let ts = include_str!("../../../ui/src/fdEvent.ts");
+        let mirrored = ts_contests_sending_power(ts)
+            .expect("CONTESTS_SENDING_POWER is declared in ui/src/fdEvent.ts");
+        let reading = |setting: &str| -> std::collections::BTreeSet<&'static str> {
+            table()
+                .rulesets
+                .iter()
+                .filter(|r| sent_settings(r).contains(setting))
+                .map(|r| r.event)
+                .collect()
+        };
+        assert_eq!(
+            mirrored,
+            reading("contest_power"),
+            "CONTESTS_SENDING_POWER in ui/src/fdEvent.ts"
+        );
+        // POSITIVE CONTROLS. The parser reads a list that names contests, and refuses a file
+        // without the declaration rather than reading it as an empty list…
+        assert_eq!(
+            ts_contests_sending_power(
+                "export const CONTESTS_SENDING_POWER: readonly string[] = ['arrldx', 'iaru']\n"
+            ),
+            Some(["arrldx", "iaru"].into_iter().collect())
+        );
+        assert_eq!(
+            ts_contests_sending_power("export const CONTESTS = []\n"),
+            None
+        );
+        // …and the reading of the seed finds the settings exchanges DO send, by value.
+        assert_eq!(
+            reading("contest_cq_zone"),
+            ["cqww_cw", "cqww_rtty", "cqww_ssb"].into_iter().collect()
+        );
+        assert_eq!(
+            reading("contest_check"),
+            ["arrlss_cw", "arrlss_ssb"].into_iter().collect()
+        );
+        assert!(reading("contest_qth_state").contains("ilqp"));
+        assert!(reading("contest_category_power").contains("arrlss_cw"));
+    }
+
     /// SAME GUARD for the RETIRED list: [`RETIRED_SECTIONS`] vs `RETIRED_SECTIONS`
     /// in ui/src/features/arrlSections.ts.
     ///
