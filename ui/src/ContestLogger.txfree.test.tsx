@@ -52,6 +52,8 @@ const ALLOWED = new Set([
   'get_snapshot', 'get_settings', 'get_propagation', 'get_need_alerts', 'get_band_plan', 'get_fd_ruleset',
   // the contest screen: its log, the removed list, the operator box, exports, merge, upload, club
   'contest_removed', 'contest_remove_last', 'contest_restore', 'set_fd_operator', 'export_log',
+  // a contact's edit, which writes the contest log and its journal and nothing else
+  'contest_edit',
   'save_text_to_downloads', 'fd_merge_to_general', 'fd_set_upload', 'fd_club_export', 'fd_club_give_position',
   // the journal's contacts the logbook does not hold: the read, and their merge into the logbook
   'contest_unmerged', 'contest_merge_unmerged',
@@ -125,7 +127,9 @@ function respond(cmd: string): unknown {
   if (cmd === 'contest_log_manual_rows') return [true]
   if (cmd === 'export_log' || cmd === 'fd_club_export') return 'QSO: …'
   if (cmd === 'save_text_to_downloads') return '/tmp/x'
-  if (cmd === 'contest_remove_last' || cmd === 'contest_restore') return { outcome: 'refused', refusal: 'changed' }
+  if (cmd === 'contest_remove_last' || cmd === 'contest_restore' || cmd === 'contest_edit') {
+    return { outcome: 'refused', refusal: 'changed' }
+  }
   if (cmd === 'fd_merge_to_general') return [{ added: 0, already: 1, refused: 0, queued: false }, snapshot]
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
   if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null

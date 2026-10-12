@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file is exactly what it was. The Score Summary also lists QSOs by band and mode, for ARRL Field
   Day exactly as item 18 of ARRL's summary sheet lays them out (CW, Digital and Phone; 160 m to
   70 cm, Other and Satellite), and for every other contest in its own modes.
+- **Fix a contest contact in place: Ctrl+Y, or Edit on the Contest screen.** Ctrl+Y in the contest
+  log strip opens your newest contact for edit, and every row of the Contest screen's log has
+  **Edit**: change the call, what they sent, the band or the mode, then press Enter. The contact
+  keeps its time, serial and number, a restart keeps the edit, and the dupe marks, multipliers,
+  score, Cabrillo, ADIF and a later merge into your logbook follow it. Not at a club yet: there,
+  take the contact back with Ctrl+D and log it again.
 - **Allow Nexus through Windows Firewall, for club sync.** On Windows, the club section of Settings
   ▸ Contesting has a button that asks for administrator rights once, the way Repair clock does, and
   adds three inbound rules for Nexus itself on Private and Public networks: the Host port (TCP 42073

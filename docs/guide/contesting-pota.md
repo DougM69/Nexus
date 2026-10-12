@@ -95,6 +95,11 @@ it. It is kept under **Removed** on the contest screen, out of the score and eve
 and **Restore** puts it back exactly. The [Field Day manual](../manual/Field-Day.md#take-back-the-last-contact)
 has the details, including where a contact may already have gone.
 
+Logged it with a busted call or exchange, or on the wrong band? **Press Ctrl+Y** to fix your
+newest contact in place, or click **Edit** on any row of the contest screen's log. It keeps its
+time and serial, and the score, dupes and exports follow the edit. Not at a club yet: there, take
+it back and log it again. [Edit a Contact](../manual/Field-Day.md#edit-a-contact) has the details.
+
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
 scores by its objectives instead**: QSO points × (the objective multipliers + 1),

@@ -22,7 +22,7 @@ use std::sync::Mutex;
 
 use super::{engine_lock, now_unix_secs, Engine, Mode};
 use crate::dto::FieldDayQso;
-use tempo_core::fieldday::{RemoveRefusal, RemovedQso};
+use tempo_core::fieldday::{LoggedQso, RemoveRefusal, RemovedQso};
 use tempo_core::logbook::{QsoRecord, UploadOutcome, UploadState};
 
 /// Why a removal or a restore changed nothing.
@@ -123,7 +123,7 @@ impl Engine {
         };
         self.persist_fd_log(); // journal it — the removal must survive a crash too
         let mut removal = self.contest_removal_of(entry);
-        removal.sent = self.contest_sent_to(&removal.entry);
+        removal.sent = self.contest_sent_to(&removal.entry.rows);
         removal.club = self.contest_club_route();
         Ok(Ok(removal))
     }
@@ -286,13 +286,12 @@ impl Engine {
         }
     }
 
-    /// Where `entry` had gone before it was removed: each forwarder destination configured
-    /// now, when a slot boundary had already passed it. A destination configured after it went
-    /// out, or removed before, is answered as configured now — the forwarder keeps no
-    /// per-contact record of which destinations it reached.
-    fn contest_sent_to(&self, entry: &RemovedQso) -> ContestSentTo {
-        let forwarded = entry
-            .rows
+    /// Where a contact's `rows` had gone before it was removed or edited: each forwarder
+    /// destination configured now, when a slot boundary had already passed it. A destination
+    /// configured after it went out, or removed before, is answered as configured now — the
+    /// forwarder keeps no per-contact record of which destinations it reached.
+    pub(super) fn contest_sent_to(&self, rows: &[LoggedQso]) -> ContestSentTo {
+        let forwarded = rows
             .iter()
             .any(|q| q.seq > 0 && q.seq <= self.fd_forwarded_seq);
         if !forwarded {
@@ -310,7 +309,7 @@ impl Engine {
 
 /// The services holding a merged copy, by its upload marks: one that was sent it (pending) or
 /// took it (accepted, or already had it) — never one that refused it.
-fn holders(marks: &[UploadState]) -> Vec<&'static str> {
+pub(super) fn holders(marks: &[UploadState]) -> Vec<&'static str> {
     let has = |m: &Option<tempo_core::logbook::UploadStatus>| {
         matches!(
             m.as_ref().map(|s| s.outcome),

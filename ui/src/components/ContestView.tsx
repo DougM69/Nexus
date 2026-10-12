@@ -31,6 +31,7 @@ import { composingSlot, composingText } from '../features/contestExchange'
 import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
+import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -2334,6 +2335,37 @@ export function ContestView({
       .catch(() => {})
   }
 
+  // ⭐ EDIT A CONTACT IN PLACE — any row's Edit opens it where it stands (a county line as one
+  // contact), and the strip's Ctrl+Y opens the newest the same way. It keeps its time, serial and
+  // number. Never offered when observing, as removal is not; refused through the Remote stream;
+  // and at a club the screen says how a contact is fixed there today instead: club sync cannot
+  // carry an edit to the other laptops.
+  const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
+  const editRows = editing
+    ? log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
+    : []
+  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  useEffect(() => {
+    if (editing && editRows.length === 0) setEditing(null)
+  }, [editing, editRows.length])
+  const editRow = (q: FieldDayQso) => {
+    if (isStreamInput()) {
+      setRemovedNote({ text: t('contest.edit.remote'), alert: true })
+      return
+    }
+    setRemoveAsk(null)
+    if (fieldDay?.club) {
+      setRemovedNote({ text: t('contest.edit.club'), alert: true })
+      return
+    }
+    setRemovedNote(null)
+    setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
+  }
+  const editDone = (note: EditNote | null) => {
+    setEditing(null)
+    if (note) setRemovedNote(note)
+  }
+
   // Worked-section set for the summary/dupe exports (the board derives its own
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
@@ -3211,26 +3243,52 @@ export function ContestView({
         <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
-          {rows.map((r, i) => (
-            <ContestLogRow
-              key={`${r.qso.call}-${i}`}
-              row={r}
-              fieldDayColumns={fdEventIsFieldDay}
-              slotColumns={slotColumns}
-            >
-              {removable && i === rows.length - 1 && (
-                <button
-                  type="button"
-                  className="fd-remove"
-                  aria-pressed={removeAsk != null}
-                  title={t('fieldDay.log.remove.title')}
-                  onClick={removeNewest}
-                >
-                  {t('fieldDay.log.remove')}
-                </button>
-              )}
-            </ContestLogRow>
-          ))}
+          {rows.map((r, i) => {
+            // The contact being edited shows its edit in place of its rows: in its first row's
+            // place, and its other counties' rows not at all.
+            if (editRows.includes(r.qso)) {
+              return r.qso === editRows[0] ? (
+                <ContestContactEdit
+                  key={`edit-${r.qso.call}-${r.qso.whenUnix}`}
+                  rows={editRows}
+                  receives={fieldDay?.receives ?? []}
+                  bands={fieldDay?.bands}
+                  onDone={editDone}
+                />
+              ) : null
+            }
+            return (
+              <ContestLogRow
+                key={`${r.qso.call}-${i}`}
+                row={r}
+                fieldDayColumns={fdEventIsFieldDay}
+                slotColumns={slotColumns}
+              >
+                {removable && r.qso.whenUnix ? (
+                  <button
+                    type="button"
+                    className="fd-edit"
+                    title={t('contest.edit.title')}
+                    aria-label={t('contest.edit.aria', { contact: contactLabel([r.qso]) })}
+                    onClick={() => editRow(r.qso)}
+                  >
+                    {t('contest.edit.label')}
+                  </button>
+                ) : null}
+                {removable && i === rows.length - 1 && (
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    aria-pressed={removeAsk != null}
+                    title={t('fieldDay.log.remove.title')}
+                    onClick={removeNewest}
+                  >
+                    {t('fieldDay.log.remove')}
+                  </button>
+                )}
+              </ContestLogRow>
+            )
+          })}
         </div>
       </div>
 

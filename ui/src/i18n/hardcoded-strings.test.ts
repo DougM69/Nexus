@@ -156,6 +156,10 @@ const MIGRATED = [
   'components/LogEntry.tsx',
   // Removing the newest contest contact: the strip's and the contest screen's sentences.
   'features/contestRemoval.ts',
+  // Editing a logged contest contact (2026-10-11): the edit's words and its in-place form, which
+  // the strip and the contest screen share — born migrated; mode and band names are tokens.
+  'features/contestEdit.ts',
+  'components/ContestContactEdit.tsx',
   // The club link's words (2026-10-10), which Settings' club section and the Contest screen
   // share — born migrated.
   'features/clubLink.ts',

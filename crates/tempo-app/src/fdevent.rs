@@ -2732,6 +2732,38 @@ mod tests {
         assert_eq!(club.qsos_raw(), before + 1);
     }
 
+    /// ⭐ **Club sync v4 cannot carry an edit, and this is why.** The host names a row by
+    /// `(position, seq)` and keeps the one it merged first: the same row sent again with its call
+    /// corrected changes nothing, and nor does a take-back and restore around it, which puts back
+    /// the row the host already holds. So a position refuses an edit while club sync runs
+    /// (`Engine::contest_edit`) rather than leave the club's file to keep the busted call in
+    /// silence: carrying one needs a line v4 does not have. CONTROL: a row the host has not
+    /// merged yet arrives as it is sent.
+    #[test]
+    fn a_row_sent_again_with_its_call_edited_changes_nothing_at_a_v4_host() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        let calls = |club: &ClubLog| -> Vec<String> {
+            club.rows().iter().map(|r| r.call.clone()).collect()
+        };
+        club.merge(&wq("aaaa", 1, "K1ABD", "20m", "CW", "EMA", 100), 10);
+        club.merge(&wq("aaaa", 1, "K1ABC", "20m", "CW", "EMA", 100), 11);
+        assert_eq!(calls(&club), ["K1ABD"], "the row again, edited: nothing");
+        assert!(club.take_back("aaaa", 1, 12));
+        club.merge(&wq("aaaa", 1, "K1ABC", "20m", "CW", "EMA", 100), 13);
+        assert!(club.put_back("aaaa", 1, 14));
+        assert_eq!(
+            calls(&club),
+            ["K1ABD"],
+            "…nor a take-back and restore around it"
+        );
+        club.merge(&wq("aaaa", 2, "K1ABC", "20m", "CW", "EMA", 200), 15);
+        assert_eq!(
+            calls(&club),
+            ["K1ABD", "K1ABC"],
+            "CONTROL: a new row arrives"
+        );
+    }
+
     #[test]
     fn cross_position_dupe_merges_but_scores_once() {
         // N3FJP semantics: both rows kept (a warning at the position, never a

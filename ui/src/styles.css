@@ -12957,7 +12957,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--accent);
   color: var(--accent-ink);
 }
-.fd-remove {
+.fd-remove,
+.fd-edit {
   margin-left: var(--space-2);
   font-size: calc(10px * var(--text-scale));
   padding: 1px var(--space-2);
@@ -12989,6 +12990,43 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .fd-removed-at {
   color: var(--text-faint);
+}
+/* ⭐ The edit of a logged contest contact (ContestContactEdit): one wrapping row of captioned boxes,
+   Save and Cancel — in the place of the rows it edits on the contest screen, and of the entry boxes
+   in the strip, so neither grows a block of its own. Its height is its content. */
+.contest-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.contest-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.contest-edit-cap {
+  font-size: calc(10px * var(--text-scale));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  font-weight: 700;
+}
+.contest-edit-field .settings-input {
+  width: 7em;
+}
+.contest-edit-call .settings-input {
+  width: 9em;
+}
+.contest-edit-why {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--state-weak);
+  font-size: calc(11px * var(--text-scale));
 }
 /* Enlarged FD exchange form (Call / Class / Section) — big, readable, captioned
    so a logger beside the operator can read the exchange across the table at Field

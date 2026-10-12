@@ -620,3 +620,114 @@ fn an_overlay_the_contest_does_not_score_writes_nothing() {
     assert_eq!(overlay("cqww_cw"), Vec::<String>::new());
     assert_eq!(overlay("cqwpx_cw"), ["CATEGORY-OVERLAY: TB-WIRES"]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A contact edited after it was logged.
+// ---------------------------------------------------------------------------------------------
+
+use tempo_core::fieldday::ContactEdit;
+
+/// The second contact's call as it was first logged: its last letter busted to an `X`.
+fn busted(call: &str) -> String {
+    format!("{}X", &call[..call.len() - 1])
+}
+
+/// One contest's log as [`export`] builds it, but with its second contact logged under a
+/// [`busted`] call and then edited, as Ctrl+Y or the Contest screen's Edit sends it, to the call
+/// the golden logged: the file before the edit, and the file after it.
+fn export_edited(case: &Case, entry: Entry, entrant: &CabrilloEntrant) -> (String, String) {
+    resolver();
+    let rs = ruleset_by_id(case.event, CURRENT_RULES_YEAR).expect("a shipped ruleset");
+    let session = ContestSession::for_ruleset(rs, &station(case, entry))
+        .unwrap_or_else(|e| panic!("{} refused: {e}", case.event));
+    let mut log = FieldDayLog::new("W9XYZ", session, case.rows[0].1);
+    if entry == Entry::Declared {
+        log.operator = "K1ABC".into();
+    }
+    let pairs = |fields: Fields| -> Vec<(String, String)> {
+        fields
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let when = |i: usize| 1_790_380_800 + 60 * i as u64;
+    for (i, &(call, band, fields)) in case.rows.iter().enumerate() {
+        log.band = band.to_string();
+        let call = if i == 1 {
+            busted(call)
+        } else {
+            call.to_string()
+        };
+        assert!(
+            log.log_fields_at(&call, &pairs(fields), case.mode, case.submode, 0, when(i)),
+            "{}: {call} logs",
+            case.event
+        );
+    }
+    let file = |log: &FieldDayLog| {
+        log.cabrillo_with(14_000, entrant)
+            .unwrap_or_else(|e| panic!("{} exports: {e}", case.event))
+    };
+    let before = file(&log);
+    let (call, band, fields) = case.rows[1];
+    let edit = ContactEdit {
+        call: call.into(),
+        rows: vec![pairs(fields)],
+        band: band.into(),
+        mode: String::new(),
+    };
+    log.edit_contact(&busted(call), when(1), &edit)
+        .unwrap_or_else(|e| panic!("{}: the edit was refused: {e:?}", case.event));
+    (before, file(&log))
+}
+
+/// ⭐ **An edited call reaches the file, and nothing else moves** — all eighteen contests, both
+/// entries. The second contact is logged under a busted call and edited to the call the golden
+/// logged, and the file is then the golden, byte for byte: an edit keeps the contact's time,
+/// serial, operator and what was sent, so only its call may change, and it changes to the right
+/// one. CONTROL: before the edit every file differs from its golden on that one QSO line, by the
+/// call alone.
+#[test]
+fn an_edited_call_exports_the_golden_of_the_call_logged_right() {
+    let golden = std::fs::read_to_string(GOLDEN).unwrap_or_else(|e| panic!("{GOLDEN}: {e}"));
+    let goldens: std::collections::HashMap<&str, &str> = golden
+        .split("### ")
+        .filter(|p| !p.is_empty())
+        .map(|p| p.split_once('\n').expect("a heading line"))
+        .collect();
+    let mut files = 0;
+    for case in &cases() {
+        let right = case.rows[1].0;
+        let wrong = busted(right);
+        for entry in [Entry::Defaults, Entry::Declared] {
+            let head = format!("{} {entry:?}", case.event);
+            let want = goldens[head.as_str()];
+            let (before, after) = export_edited(case, entry, &existing_entrant(entry));
+            assert_eq!(
+                after, want,
+                "{head}: the edited log's file is not the golden"
+            );
+            assert!(!after.contains(&wrong), "{head}: the busted call stayed");
+            // CONTROL: the busted call was in the file until the edit, on one QSO line only.
+            assert_eq!(
+                before.lines().count(),
+                want.lines().count(),
+                "{head}: line count"
+            );
+            let differ: Vec<(&str, &str)> = before
+                .lines()
+                .zip(want.lines())
+                .filter(|(b, w)| b != w)
+                .collect();
+            assert_eq!(differ.len(), 1, "{head}: before the edit: {differ:?}");
+            assert!(differ[0].0.starts_with("QSO: "), "{head}: {differ:?}");
+            assert_eq!(
+                differ[0].0.replace(&wrong, right),
+                differ[0].1,
+                "{head}: by the call alone"
+            );
+            files += 1;
+        }
+    }
+    assert_eq!(files, 36, "eighteen contests, two entries each");
+}

@@ -29,6 +29,10 @@ mod contest_before_tests;
 /// A dupe typed into the contest strip: logged, marked, worth nothing, in every contest.
 #[cfg(test)]
 mod contest_dupe_tests;
+pub mod contest_edit;
+/// Editing a contest contact in place, through the engine.
+#[cfg(test)]
+mod contest_edit_tests;
 pub mod contest_entry;
 /// The contest strip's contact in progress, shared with the logger window, through the engine.
 #[cfg(test)]
