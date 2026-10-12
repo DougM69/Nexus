@@ -16,7 +16,7 @@
 //   · its look, computed from the real sheets on the chain this window renders: an outline in the
 //     de-emphasised state ink, no fill, and 4.5:1 or better on its face in every theme and mode. The
 //     main window's Contest screen is held to the same in App.contestScreenEntry.test.tsx.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -40,6 +40,10 @@ import {
   type Rule,
 } from './cssCascade'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
+
+// The window polls in real time, and the look is swept over every theme and mode: about 2 s alone,
+// and the full suite's own parallelism took that past the default 5 s once.
+vi.setConfig({ testTimeout: 60_000 })
 
 const T0 = 1_792_342_800
 
