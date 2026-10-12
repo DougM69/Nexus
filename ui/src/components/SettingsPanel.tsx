@@ -2565,6 +2565,16 @@ export function SettingsPanel({
   // shows under the list, from the station's snapshot. While this laptop hosts, the backend ignores
   // a join address (`Engine::fd_sync_targets`), so the list's buttons are disabled (`hostingHere`).
   const [fdJoinNote, setFdJoinNote] = useState<string | null>(null)
+  // The line a joining click starts is brought into view once, when it shows ('nearest', so a line
+  // already on screen moves nothing): with the list at the panel's bottom edge it would otherwise
+  // land just out of sight, and the click would look dead again. Later lines never scroll.
+  const revealJoinLine = useRef(false)
+  const joinLineRef = useRef<HTMLParagraphElement | null>(null)
+  useEffect(() => {
+    if (!revealJoinLine.current || !joinLineRef.current) return
+    revealJoinLine.current = false
+    joinLineRef.current.scrollIntoView?.({ block: 'nearest' })
+  }, [clubLink])
   const joinFoundEvent = async (host: string) => {
     setFdJoinNote(null)
     try {
@@ -2578,6 +2588,7 @@ export function SettingsPanel({
       // Saved, so it is not an edit of this form's: a later Save leaves it to whoever holds it then.
       setForm((prev) => (prev ? { ...prev, fdJoinAddr: host } : prev))
       if (savedRef.current) savedRef.current = { ...savedRef.current, fdJoinAddr: host }
+      revealJoinLine.current = true
       onSaved?.()
     } catch (err) {
       const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
@@ -13460,6 +13471,7 @@ export function SettingsPanel({
               clubLinkLines(clubLink).map((l) => (
                 <p
                   key={l.key}
+                  ref={l.key === 'link' ? joinLineRef : undefined}
                   className={l.alert ? 'settings-note settings-warn' : 'settings-note'}
                   role={l.alert ? 'alert' : 'status'}
                   data-club-link={l.key}

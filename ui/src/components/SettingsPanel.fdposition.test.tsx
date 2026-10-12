@@ -506,6 +506,59 @@ describe('clicking a found club event joins it', () => {
     }
   })
 
+  /** Stand-in for the browser's scrollIntoView (jsdom has none): the elements it was asked to show. */
+  function stubReveal() {
+    const reveal = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = reveal
+    return {
+      lines: () =>
+        reveal.mock.contexts
+          .map((el, i) => ({ el: el as Element, args: reveal.mock.calls[i] }))
+          .filter((c) => c.el.matches?.('[data-club-link="link"]')),
+      restore: () => {
+        Element.prototype.scrollIntoView = original
+      },
+    }
+  }
+
+  it('brings the line the click starts into view once, and later lines never scroll the panel', async () => {
+    // Measured in Chrome at 1024×768: with the found event at the panel's bottom edge, the line
+    // lands 11 px under it, out of sight. 'nearest' brings it in and moves nothing when it shows.
+    const reveal = stubReveal()
+    try {
+      backend(settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+      const onSaved = vi.fn()
+      const { rerender } = renderPanel(undefined, onSaved)
+      await openContesting()
+      fireEvent.click(await findEvents())
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
+      rerender(panel(link({ state: 'looking' }), onSaved))
+      expect(reveal.lines().map((c) => [c.el.textContent, c.args])).toEqual([
+        ['Looking for the host at 192.168.1.20:42073…', [{ block: 'nearest' }]],
+      ])
+      // The shell's next snapshots move the line on; the panel stays where the operator puts it.
+      rerender(panel(link({ state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9ABC' }), onSaved))
+      expect(reveal.lines()).toHaveLength(1)
+    } finally {
+      reveal.restore()
+    }
+  })
+
+  it('CONTROL: a line that shows without a click is not brought into view', async () => {
+    const reveal = stubReveal()
+    try {
+      backend(settingsFixture({ fdJoinAddr: HOST, fdPositionName: 'SSB tent' }))
+      const { rerender } = renderPanel(link({ state: 'looking' }))
+      await openContesting()
+      await screen.findByText('Looking for the host at 192.168.1.20:42073…')
+      rerender(panel(link({ state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9ABC' })))
+      expect(reveal.lines()).toHaveLength(0)
+    } finally {
+      reveal.restore()
+    }
+  })
+
   it('CONTROL: other unsaved edits are not saved by the click, and are not lost', async () => {
     const station = backend(
       settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent', fdEventName: 'Club party' }),
