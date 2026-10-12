@@ -12463,15 +12463,16 @@ impl Engine {
                         adapter: a.adapter.clone(),
                     })
                     .collect(),
-                // The positions the host's board says Connected (`fdevent::PositionLink`). Beside
-                // the board, the snapshot counts the board's own rows instead (`Self::snapshot`).
+                // The lines of the host's board that say Connected (`fdevent::PositionLink`), its
+                // own left out. Beside the board, the snapshot counts the board's own rows instead
+                // (`Self::snapshot`), so a second turning between two reads cannot split them.
                 connected: self.fd_club.as_ref().map_or(0, |club| {
                     let own = self.settings.fd_position_id.as_str();
-                    club.positions()
-                        .keys()
-                        .filter(|pos| {
-                            pos.as_str() != own
-                                && club.link(pos, now) == crate::fdevent::PositionLink::Connected
+                    self.fd_club_board_rows(now)
+                        .iter()
+                        .filter(|r| {
+                            r.pos != own
+                                && club.link(&r.pos, now) == crate::fdevent::PositionLink::Connected
                         })
                         .count() as u32
                 }),
@@ -13220,6 +13221,19 @@ impl Engine {
         )
     }
 
+    /// ⭐ **The club board's rows as this laptop's screens show them, and as its Remote capture
+    /// carries them and is bounded by** (`bounded_field_day_status`): on the HOST, the board its club
+    /// sends every position now ([`tempo_net::fdsync::board_fit`] of its live club log, cut to the
+    /// positions heard from most recently when one club line cannot carry them all), so the host's
+    /// own board is current from the moment a position joins, with or without its own loopback
+    /// position in, and is cut as every position's is; on a position, the board the host last sent.
+    pub(crate) fn fd_club_board_rows(&self, now: u64) -> Vec<tempo_net::fdsync::WireBoardRow> {
+        match &self.fd_club {
+            Some(club) => tempo_net::fdsync::board_fit(&club.board_rows(now)).rows,
+            None => self.fd_mirror.board.clone(),
+        }
+    }
+
     /// The `FieldDayStatus.club` block, `None` while sync is not configured.
     /// `own` is the live FD log (subtracts own keys from the club dupe set —
     /// the UI's while-typing check is own ∪ club, and own already ships).
@@ -13244,15 +13258,15 @@ impl Engine {
             .cloned()
             .collect();
         dupes.sort();
-        // ⭐ The rows are the board the club sends, the host's included (its own loopback
-        // position's copy, cut to what one club line carries), which is what the Remote capture's
-        // bound measures (`bounded_field_day_status`). On the HOST each row also says where that
-        // position's link stands now, read from its live club log (`fdevent::PositionLink`); a
-        // position holds only the rows the host sent, which carry none.
+        // ⭐ The rows are the board the club sends (`Self::fd_club_board_rows`), which is what the
+        // Remote capture's bound measures. On the HOST each row also says where that position's
+        // link stands now, read from its live club log (`fdevent::PositionLink`), by the reading
+        // its hosting line counts connected positions by; a position holds only the rows the host
+        // sent it, which carry none.
         let now = now_unix_secs();
         let own = self.settings.fd_position_id.as_str();
-        let mut board: Vec<crate::dto::FdClubBoardRow> = m
-            .board
+        let rows = self.fd_club_board_rows(now);
+        let mut board: Vec<crate::dto::FdClubBoardRow> = rows
             .iter()
             .map(|r| crate::dto::FdClubBoardRow {
                 posid: r.pos.clone(),

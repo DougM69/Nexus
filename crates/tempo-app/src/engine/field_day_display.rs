@@ -214,6 +214,9 @@ impl Engine {
             return Ok(None);
         };
         let log = &station.log;
+        // The club board's rows as the capture carries them: on a host the board its club sends
+        // now, on a position the board the host sent it (`Engine::fd_club_board_rows`).
+        let board = self.fd_club_board_rows(crate::engine::now_unix_secs());
         // ROWS, which is what the capture carries and the browser bounds: `qso_count` leaves out a
         // logged dupe and a satellite contact the contest gives no credit, so it can sit under the
         // bound while the log it ships is over it.
@@ -224,7 +227,7 @@ impl Engine {
                     // under a wider key — so they get the same count bound. Unbounded,
                     // a host could grow the capture past the limit the triple enforces.
                     || self.fd_mirror.dkeys.len() > 4096
-                    || self.fd_mirror.board.len() > 128
+                    || board.len() > 128
                     || self.fd_mirror.sections.len() > 256))
         {
             return Err("applicationTooLarge");
@@ -298,7 +301,7 @@ impl Engine {
                     check(s)?;
                 }
             }
-            for r in &self.fd_mirror.board {
+            for r in &board {
                 for s in [&r.pos, &r.name, &r.band, &r.mode, &r.op] {
                     check(s)?;
                 }
@@ -417,10 +420,11 @@ mod tests {
     }
 
     /// ⭐ **A host's capture carries the board its bound measured**: the host's board rows are the
-    /// board the club sends (its own loopback position's copy, cut to what one club line carries),
-    /// whatever its own club log has heard of, so a host whose log knows more positions than the
-    /// hosted page takes (128) still ships a capture the page reads. Each row says where its link
-    /// stands, from the live club log. CONTROL: the club log does know every one of them.
+    /// board its club sends every position now, cut to what one club line carries, so a host whose
+    /// log has heard of more positions than the hosted page takes (128) still ships a capture the
+    /// page reads, and its own loopback position need not be in for the host to see who is. Each
+    /// row says where its link stands, from the live club log. CONTROL: the club log does know
+    /// every one of them.
     #[test]
     fn a_hosts_capture_carries_the_board_its_bound_measured() {
         let dir = std::env::temp_dir().join(format!("fdd-host-bound-{}", std::process::id()));
@@ -435,17 +439,39 @@ mod tests {
             club.join(&id, "", "W1AW", now);
             club.open_link(&id);
         }
-        // What one club line carries of them, as the host's own position was last sent it.
-        e.fd_mirror.board = club.board_rows(now)[..59].to_vec();
-        e.fd_mirror.connected = true;
+        // What the club sends each position: the positions heard from most recently, as many as
+        // one club line carries.
+        let sent: std::collections::BTreeSet<String> =
+            tempo_net::fdsync::board_fit(&club.board_rows(now))
+                .rows
+                .into_iter()
+                .map(|r| r.pos)
+                .collect();
         assert_eq!(
             e.fd_club.as_ref().unwrap().positions().len(),
             130,
             "CONTROL"
         );
+        assert!(sent.len() < 130, "premise: one club line cannot carry 130");
+        assert!(
+            e.fd_mirror.board.is_empty(),
+            "premise: the host's own position is not in"
+        );
         let value = e.bounded_field_day_status().unwrap().unwrap();
         let board = value.club.unwrap().board;
-        assert_eq!(board.len(), 59, "the board the bound measured");
+        assert!(
+            board.len() <= 128,
+            "the hosted page takes at most 128: {}",
+            board.len()
+        );
+        assert_eq!(
+            board
+                .iter()
+                .map(|r| r.posid.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            sent,
+            "the board the club sends"
+        );
         assert!(
             board.iter().all(|r| r.link.as_deref() == Some("connected")),
             "each row's link, from the live club log: {board:?}"
