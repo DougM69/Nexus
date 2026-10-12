@@ -9,7 +9,8 @@
 //! It happened once: contest declarations were added under an unmoved stamp.
 //!
 //! This pins the stamp and a digest of the rest of the file, and fails, saying what to do, when
-//! either moves. The digest is FNV-1a 64 over the parsed JSON without `generated`, serialized
+//! either moves, or when the stamp is not in the fixed `YYYY-MM-DDTHH:MM:SSZ` form that a
+//! plain-string comparison needs. The digest is FNV-1a 64 over the parsed JSON without `generated`, serialized
 //! again with every object's keys sorted, so line endings, whitespace and key order are not
 //! changes, while a value, an array's order or a key added or removed is. The sort is explicit
 //! (`sort_all_objects`) so the digest does not depend on whether some crate in the build turns
@@ -25,9 +26,18 @@ const PINNED_STAMP: &str = "2026-10-12T08:00:00Z";
 const PINNED_DIGEST: u64 = 0x6fda3de984935dcb;
 
 /// `Ok` when `seed` carries the pinned stamp and content; otherwise what to do about it. Stamps
-/// compare as plain strings, as `fd_rules::install_from` compares them.
+/// compare as plain strings, as `fd_rules::install_from` compares them, which orders them only in
+/// the fixed `YYYY-MM-DDTHH:MM:SSZ` form, so a stamp in any other form is refused first.
 fn check_seed_stamp(pinned_stamp: &str, pinned_digest: u64, seed: &[u8]) -> Result<(), String> {
     let (stamp, digest) = stamp_and_digest(seed)?;
+    if !is_fixed_form_utc(&stamp) {
+        return Err(format!(
+            "fd_rules.seed.json's `generated` is {stamp:?}, not in the YYYY-MM-DDTHH:MM:SSZ form. \
+             Stamps compare as plain strings, so a stamp in any other form can order wrongly \
+             against the ones stations hold. Write it like 2026-10-12T08:00:00Z, later than \
+             {pinned_stamp}, then update both pins in this test: run it again and it prints them."
+        ));
+    }
     match stamp.as_str().cmp(pinned_stamp) {
         Ordering::Equal if digest == pinned_digest => Ok(()),
         Ordering::Equal => Err(format!(
@@ -67,6 +77,16 @@ fn stamp_and_digest(seed: &[u8]) -> Result<(String, u64), String> {
         .ok_or("fd_rules.seed.json has no top-level `generated` string")?;
     json.sort_all_objects();
     Ok((stamp, fnv1a_64(json.to_string().as_bytes())))
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ`: digits where the template has `d`, the separators exactly.
+fn is_fixed_form_utc(stamp: &str) -> bool {
+    const TEMPLATE: &[u8] = b"dddd-dd-ddTdd:dd:ddZ";
+    stamp.len() == TEMPLATE.len()
+        && stamp.bytes().zip(TEMPLATE).all(|(c, &t)| match t {
+            b'd' => c.is_ascii_digit(),
+            sep => c == sep,
+        })
 }
 
 /// FNV-1a, 64-bit: the same value on every build, platform and toolchain, with no dependency.
@@ -173,6 +193,26 @@ fn an_earlier_stamp_fails_even_with_the_content_unchanged() {
         why.contains("Move `generated` to a UTC time later than 2026-10-12T08:00:00Z"),
         "{why}"
     );
+}
+
+#[test]
+fn a_stamp_not_in_the_fixed_form_fails_and_names_the_form() {
+    // Stamps compare as plain strings, which orders them only in the fixed form:
+    // "2026-10-12T9:00:00Z" sorts after "2026-10-12T10:00:00Z", because '9' > '1'.
+    for odd in [
+        "2026-10-12T9:00:00Z",
+        "2026-10-12 08:00:00Z",
+        "2026-10-12T08:00:00+00:00",
+        "2026-10-12",
+    ] {
+        let seed = edited(&[(SYNTHETIC_STAMP, odd)]);
+        let why = check_seed_stamp(SYNTHETIC_STAMP, digest_of(SYNTHETIC), seed.as_bytes())
+            .expect_err("a stamp in another form");
+        assert!(
+            why.contains("not in the YYYY-MM-DDTHH:MM:SSZ form"),
+            "{odd}: {why}"
+        );
+    }
 }
 
 #[test]
