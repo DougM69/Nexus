@@ -1454,6 +1454,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spot that Nexus can only place as phone or digital from its frequency is still a new mode only
   when you have never worked that country in any mode of that kind. The DXCC award totals still
   count CW, Phone and Digital, as ARRL does.
+- **New mode no longer lists WSPR beacons and other stations you cannot log in their mode.** With
+  New mode on, the Needed board listed a new mode for almost every station PSK Reporter heard near
+  you in WSPR, VarAC, JTTY or FreeDV, most of them in the United States and Canada, as "New mode —
+  WSPR United States (any band)". The rows read Digital and a click took you to FT8, so they looked
+  like FT8 needs for countries you have worked hundreds of times in FT8. Nobody works a WSPR beacon
+  and no contact is logged under those other names, so those needs could never go out. The radio's
+  own WSPR and FST4W decodes did the same on the roster and in Band Activity. A station heard in
+  one of them is now a new mode only when you have never worked its country in any mode of that
+  kind. FT8, FT4, JS8, Q65, FST4, RTTY, PSK31 and the other modes a contact is logged in still count
+  on their own.
 - **A contact imported from JS8Call keeps JS8 as its mode.** JS8Call logs JS8 as MFSK with JS8 as
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same

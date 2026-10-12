@@ -14,8 +14,8 @@
 use propagation::model::mode_key;
 use propagation::needalert::{score_slots, NeedAlert};
 use propagation::{
-    activation_alert, Band, DxpeditionPlan, DxpeditionTracker, LogNeeds, NeedKind, NeedTag,
-    OtaSpot, PropAdvisor, SpaceWx,
+    activation_alert, Band, DxpeditionPlan, DxpeditionTracker, LogNeeds, ModeClass, NeedKind,
+    NeedTag, OtaSpot, PropAdvisor, SpaceWx,
 };
 use serde_json::Value;
 
@@ -60,10 +60,17 @@ fn the_fold_is_the_tables() {
     }
 }
 
+/// The keys the table holds that name no one mode a contact is logged in: a family (a bare MFSK, a
+/// bare PSK), N3FJP's generic phone token, and a beacon (FST4W, which nobody works). A contact may
+/// be STORED as one, and then that key is what it worked; a station HEARD as one is judged by its
+/// class (`a_station_heard_in_a_mode_no_contact_is_logged_in_is_judged_by_its_class`).
+const HEARD_BY_CLASS: [&str; 4] = ["MFSK", "PSK", "PH", "FST4W"];
+
 /// THE WORKED SIDE AND THE HEARD SIDE THROUGH ONE FOLD, over every spelling the table holds. A
 /// contact logged in one mode answers a station heard in a mode with the SAME key as worked (the
 /// chip goes out), and a station heard in any OTHER key as a new mode, even within one class:
-/// FT4 does not cover FT8, nor SSB cover FM.
+/// FT4 does not cover FT8, nor SSB cover FM. A station heard as a key in [`HEARD_BY_CLASS`] is new
+/// only when the contact is of another class.
 #[test]
 fn each_mode_is_worked_by_its_own_contacts_and_by_no_other() {
     let t = table();
@@ -75,11 +82,12 @@ fn each_mode_is_worked_by_its_own_contacts_and_by_no_other() {
         for hear in folds {
             for spelling in [text(hear, "stored"), text(hear, "key")] {
                 let new_mode = is_new_mode(&heard(&n, "C5R", "20m", spelling));
-                assert_eq!(
-                    new_mode,
-                    text(logged, "key") != text(hear, "key"),
-                    "logged {logged}, heard in {spelling:?}",
-                );
+                let want = if HEARD_BY_CLASS.contains(&text(hear, "key")) {
+                    ModeClass::from_adif(text(logged, "key")) != ModeClass::from_adif(spelling)
+                } else {
+                    text(logged, "key") != text(hear, "key")
+                };
+                assert_eq!(new_mode, want, "logged {logged}, heard in {spelling:?}");
             }
         }
     }
@@ -176,7 +184,328 @@ fn a_station_heard_only_by_class_is_judged_by_class() {
     );
 }
 
-/// The log of the report: The Gambia on 20 m SSB, confirmed, and on 40 m FT4.
+/// A STATION HEARD IN A MODE NO CONTACT IS LOGGED IN IS JUDGED BY ITS CLASS. PSK Reporter names a
+/// station's mode in the words of the program that reported it; one capture of reports near EN52
+/// (2026-10-12) named FT8, WSPR, FT4, CW, VARAC, JS8, FT2, SAFECOM, PSK31, JTTY, JT65 and FREEDV.
+/// Nobody works a WSPR beacon, and no contact is logged as VARAC, JTTY, FREEDV or SAFECOM, so judged
+/// as modes of their own each one was a "new mode" no contact could ever clear: the 1.17.1 test
+/// builds listed every WSPR beacon in the United States and Canada as one, against a log holding
+/// hundreds of FT8 contacts with both. The radio's own WSPR and FST4W decodes did the same. Each
+/// mode a contact IS logged in stays a mode of its own.
+#[test]
+fn a_station_heard_in_a_mode_no_contact_is_logged_in_is_judged_by_its_class() {
+    let mut n = LogNeeds::new();
+    // The United States on 20 m, in FT8 and on SSB, both confirmed; K1XYZ is heard in its zone.
+    n.add("K1ABC", "20m", "FT8", None, None, true);
+    n.add("W1AW", "20m", "SSB", None, None, true);
+    for token in [
+        "WSPR", "FST4W", "VARAC", "FREEDV", "JTTY", "SAFECOM", "OTHER", "MFSK", "PSK",
+    ] {
+        let a = heard(&n, "K1XYZ", "20m", token);
+        assert!(
+            !is_new_mode(&a),
+            "{token:?}: a mode of its class is worked: {a:?}"
+        );
+    }
+    for mode in [
+        "JS8",
+        "FT4",
+        "FT2",
+        "Q65",
+        "FST4",
+        "CW",
+        "RTTY",
+        "PSK31",
+        "PSK125",
+        "QPSK31",
+        "MSK144",
+        "JT65",
+        "AM",
+        "FM",
+        "TempoFast",
+    ] {
+        let a = heard(&n, "K1XYZ", "20m", mode).unwrap_or_else(|| panic!("{mode}: no row"));
+        assert_eq!(a.tags, vec![NeedTag::NewMode], "{mode}");
+        let json = serde_json::to_value(&a).expect("serializes");
+        assert_eq!(json["exactMode"], mode_key(mode), "{mode}: {json}");
+    }
+
+    // No digital contact at all: the beacon is the class need, and the row names the class.
+    let mut voice_only = LogNeeds::new();
+    voice_only.add("W1AW", "20m", "SSB", None, None, true);
+    let a = heard(&voice_only, "K1XYZ", "20m", "WSPR").expect("no digital mode ever worked");
+    assert_eq!(a.tags, vec![NeedTag::NewMode]);
+    assert_eq!(a.headline, "New mode — Digital United States (any band)");
+    let json = serde_json::to_value(&a).expect("serializes");
+    assert!(json["exactMode"].is_null(), "WSPR names no mode: {json}");
+}
+
+/// ADIF fields as one record, then `<EOR>`.
+#[cfg(feature = "live")]
+fn adif_record(fields: &[(&str, &str)]) -> String {
+    let mut r: String = fields
+        .iter()
+        .map(|(name, value)| format!("<{name}:{}>{value}", value.len()))
+        .collect();
+    r.push_str("<EOR>\n");
+    r
+}
+
+/// The calls of the report's log: `n` United States calls (K, W, N, and AA to AK; AH is mostly
+/// Pacific islands and AL is Alaska, entities of their own) and `n / 2` Canadian ones (VE, VA),
+/// across every call area.
+#[cfg(feature = "live")]
+fn us_and_canada(n: usize) -> (Vec<String>, Vec<String>) {
+    let letters = |i: usize| -> String {
+        [i / 676 % 26, i / 26 % 26, i % 26]
+            .iter()
+            .map(|&k| (b'A' + k as u8) as char)
+            .collect()
+    };
+    let us_prefixes = [
+        "K", "W", "N", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AI", "AJ", "AK",
+    ];
+    let us = (0..n)
+        .map(|i| format!("{}{}{}", us_prefixes[i % 13], i % 10, letters(i)))
+        .collect();
+    let ve = (0..n / 2)
+        .map(|i| format!("{}{}{}", ["VE", "VA"][i % 2], 1 + i % 7, letters(i)))
+        .collect();
+    (us, ve)
+}
+
+/// THE REPORT'S LOG, as the Logbook holds it: hundreds of FT8 contacts with the United States and
+/// Canada as Nexus writes them, FT4 as Nexus writes it (MODE=MFSK, SUBMODE=FT4), the same two
+/// countries on SSB, and again as imports bring them: a LoTW report, a QRZ logbook download, a
+/// Club Log export, and another program's ADIF that spells a digital contact DATA, DIGITAL or a
+/// bare MFSK. Germany is worked on CW alone and Japan in FT8: the disagreeing data.
+#[cfg(feature = "live")]
+fn the_reports_log() -> String {
+    let bands = ["80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m"];
+    let (us, ve) = us_and_canada(260);
+    let mut adif = String::new();
+    for (i, call) in us.iter().chain(&ve).enumerate() {
+        let date = format!("2026{:02}{:02}", 1 + i % 9, 1 + i % 28);
+        let band = bands[i % bands.len()];
+        // Nexus writes FT8 as itself, and FT4 as ADIF's MFSK submode; LoTW confirms most of it.
+        let mode: &[(&str, &str)] = if i % 9 == 4 {
+            &[("MODE", "MFSK"), ("SUBMODE", "FT4")]
+        } else {
+            &[("MODE", "FT8")]
+        };
+        let mut fields = vec![("CALL", call.as_str()), ("BAND", band)];
+        fields.extend_from_slice(mode);
+        fields.extend([
+            ("QSO_DATE", date.as_str()),
+            ("TIME_ON", "120000"),
+            ("LOTW_QSL_RCVD", "Y"),
+            ("PROGRAMID", "Nexus"),
+        ]);
+        adif.push_str(&adif_record(&fields));
+    }
+    // Phone, as the Phone cockpit logs it.
+    for call in ["W1AW", "VE3SSB"] {
+        adif.push_str(&adif_record(&[
+            ("CALL", call),
+            ("BAND", "20m"),
+            ("MODE", "SSB"),
+            ("SUBMODE", "USB"),
+            ("QSO_DATE", "20260410"),
+            ("TIME_ON", "150000"),
+        ]));
+    }
+    // A LoTW report row, a QRZ logbook download (lower-case tags), a Club Log export.
+    adif.push_str(&adif_record(&[
+        ("APP_LoTW_OWNCALL", "KD9TAW"),
+        ("STATION_CALLSIGN", "KD9TAW"),
+        ("CALL", "W8LTW"),
+        ("BAND", "20M"),
+        ("FREQ", "14.07600"),
+        ("MODE", "FT8"),
+        ("APP_LoTW_MODEGROUP", "DATA"),
+        ("QSO_DATE", "20260301"),
+        ("TIME_ON", "120000"),
+        ("QSL_RCVD", "Y"),
+        ("QSLRDATE", "20260302"),
+    ]));
+    adif.push_str(&adif_record(&[
+        ("call", "VE3QRZ"),
+        ("band", "40m"),
+        ("mode", "FT8"),
+        ("qso_date", "20260302"),
+        ("time_on", "1300"),
+        ("app_qrzlog_status", "C"),
+    ]));
+    adif.push_str(&adif_record(&[
+        ("CALL", "VA3CLB"),
+        ("QSO_DATE", "20260303"),
+        ("TIME_ON", "140000"),
+        ("BAND", "30m"),
+        ("MODE", "FT8"),
+        ("RST_SENT", "-10"),
+    ]));
+    // Another program's ADIF: a digital contact as DATA, DIGITAL, or a bare MFSK.
+    for (call, mode) in [("N4DAT", "DATA"), ("K5DIG", "DIGITAL"), ("VE7MFS", "MFSK")] {
+        adif.push_str(&adif_record(&[
+            ("CALL", call),
+            ("BAND", "20m"),
+            ("MODE", mode),
+            ("QSO_DATE", "20260304"),
+            ("TIME_ON", "160000"),
+        ]));
+    }
+    // Germany on CW alone, Japan in FT8, both confirmed on 20 m.
+    for (call, mode) in [("DL1CW", "CW"), ("DL2CW", "CW"), ("JA1FT", "FT8")] {
+        adif.push_str(&adif_record(&[
+            ("CALL", call),
+            ("BAND", "20m"),
+            ("MODE", mode),
+            ("QSO_DATE", "20260305"),
+            ("TIME_ON", "170000"),
+            ("LOTW_QSL_RCVD", "Y"),
+        ]));
+    }
+    adif
+}
+
+/// One PSK Reporter report on 20 m: `tx` heard in `mode` by `rx` at `rx_grid`, at the board's time.
+#[cfg(feature = "live")]
+fn pskr_report(tx: &str, mode: &str, rx: &str, rx_grid: &str) -> propagation::PathSpot {
+    propagation::PathSpot {
+        time: NOW,
+        tx_call: tx.into(),
+        tx_grid: None,
+        rx_call: rx.into(),
+        rx_grid: Some(rx_grid.into()),
+        band: Band::B20,
+        mode: Some(mode.into()),
+        snr: None,
+        freq_mhz: None,
+    }
+}
+
+/// THE BOARD OF THE REPORT, by value: the report's log read through the real ADIF reader, the
+/// stations PSK Reporter's receivers near EN52 heard on 20 m in each mode that capture named, one
+/// the operator's own signal reaches (the getting-out arm), and the radio's own FT8 decodes,
+/// scored and ranked as the Needed board ranks them.
+#[cfg(feature = "live")]
+fn the_reports_board() -> (LogNeeds, Vec<NeedAlert>) {
+    use propagation::needalert::{heard_near_me, rank, workable_by_getting_out, Heard};
+    let mut needs = LogNeeds::new();
+    for q in tempo_core::logbook::parse_adif(&the_reports_log()) {
+        let sat = q.prop_mode.as_deref() == Some("SAT");
+        needs.add_qso(
+            &q.call,
+            &q.band,
+            &q.mode,
+            q.grid.as_deref(),
+            q.state.as_deref(),
+            q.award_confirmed,
+            sat,
+        );
+    }
+    let mut reports: Vec<propagation::PathSpot> = [
+        ("K1ABC", "FT8"),
+        ("VE3ABC", "FT8"),
+        ("W9WSP", "WSPR"),
+        ("VE3WSP", "WSPR"),
+        ("N8VAR", "VARAC"),
+        ("VA3VAR", "VARAC"),
+        ("K4JTY", "JTTY"),
+        ("W5FDV", "FREEDV"),
+        ("AB1SAF", "SAFECOM"),
+        ("K1JSE", "JS8"),
+        ("DL1ABC", "FT8"),
+        ("JA1ABC", "FT8"),
+    ]
+    .iter()
+    .map(|(tx, mode)| pskr_report(tx, mode, "K9RX", "EN52"))
+    .collect();
+    // The operator heard in Ohio, and a WSPR beacon there heard only from England.
+    reports.push(pskr_report("KD9TAW", "FT8", "W8RCV", "EN81"));
+    reports.push(pskr_report("W8WSP", "WSPR", "G4RCV", "IO91"));
+    let me = propagation::geo::maidenhead_to_latlon("EN52").expect("EN52");
+    let mut heard = heard_near_me(&reports, me);
+    heard.extend(workable_by_getting_out(&reports, "KD9TAW"));
+    for call in ["K1ABC", "VE3ABC"] {
+        heard.push(Heard {
+            call: call.into(),
+            band: "20m".into(),
+            mode: "FT8".into(),
+            freq_mhz: None,
+            admitted_at: None,
+            evidence: Some("decoded by YOUR radio on this band".into()),
+            grid: None,
+            us_state: None,
+        });
+    }
+    let board = rank(&heard, &needs, &needs.slots());
+    (needs, board)
+}
+
+/// THE REPORT, BY VALUE: "seeing a ton of ft8 neededs when "mode" is turned on, but I have already
+/// gotten those countries on the ft8 mode. Countries like usa and canada where I have hundreds of
+/// contacts already". "Mode" is the board's New mode chip, which lists the rows tagged NewMode. On
+/// this log it lists two: Germany in FT8 (worked on CW alone) and the United States in JS8 (never
+/// worked in JS8), and no station of the United States or Canada in FT8, WSPR, VarAC, JTTY, FreeDV
+/// or SAFECOM. The radio's own FT8 decodes of both countries, and its WSPR decodes, are no need.
+#[cfg(feature = "live")]
+#[test]
+fn the_new_mode_rows_are_the_modes_the_log_does_not_hold() {
+    let (us, ve) = us_and_canada(260);
+    for call in &us {
+        let entity = propagation::dxcc::resolve(call).map(|i| i.entity);
+        assert_eq!(entity, Some("United States"), "premise: {call}");
+    }
+    for call in &ve {
+        let entity = propagation::dxcc::resolve(call).map(|i| i.entity);
+        assert_eq!(entity, Some("Canada"), "premise: {call}");
+    }
+    let (needs, board) = the_reports_board();
+    let new_mode: Vec<String> = board
+        .iter()
+        .filter(|a| a.tags.contains(&NeedTag::NewMode))
+        .map(|a| format!("{} {} {}", a.call, a.band, a.headline))
+        .collect();
+    assert_eq!(
+        new_mode,
+        [
+            "DL1ABC 20m New mode — FT8 Fed. Rep. of Germany (any band)",
+            "K1JSE 20m New mode — JS8 United States (any band)",
+        ],
+        "the rows the New mode chip lists"
+    );
+    for call in ["K1ABC", "VE3ABC", "JA1ABC"] {
+        assert!(
+            board.iter().all(|a| a.call != call),
+            "{call}: worked in FT8 and confirmed, so no row: {board:?}"
+        );
+    }
+    // The radio's own decodes, on the FT8 tier and on the WSPR tier.
+    for (call, mode) in [("K1ABC", "FT8"), ("VE3ABC", "FT8"), ("W9WSP", "WSPR")] {
+        let a = heard(&needs, call, "20m", mode);
+        assert!(a.is_none(), "{call} decoded in {mode}: {a:?}");
+    }
+}
+
+/// THE DESKTOP'S WINDOWS ARE TESTED AGAINST THIS BOARD, NOT A COPY OF IT. The fixture is the
+/// report's board, and `ui/src/neededNewMode.agreement.test.tsx` shows it in each window that shows
+/// a need. When the board changes this fails and prints the rows: put them in the file, and the
+/// desktop's test then says what the windows make of them.
+#[cfg(feature = "live")]
+#[test]
+fn the_reports_board_is_the_one_the_desktop_windows_are_tested_against() {
+    let got = serde_json::to_value(the_reports_board().1).expect("serializes");
+    let want: Value = serde_json::from_str(include_str!(
+        "../../../ui/src/features/__fixtures__/needed-new-mode-board.json"
+    ))
+    .expect("the fixture parses");
+    assert!(
+        got == want,
+        "the board now reads:\n{}",
+        serde_json::to_string_pretty(&got).expect("prints")
+    );
+}
 fn the_gambia_on_ssb_and_ft4() -> LogNeeds {
     let mut n = LogNeeds::new();
     n.add("C56YK", "20m", "SSB", None, None, true);
