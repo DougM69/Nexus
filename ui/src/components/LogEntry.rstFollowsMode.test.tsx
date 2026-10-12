@@ -232,6 +232,10 @@ describe('the report follows the mode with the logger window open', () => {
     }
     expect(rstIn('main').value, 'the next contact, main window').toBe('59')
     expect(rstIn('logger').value, 'the next contact, logger window').toBe('59')
+    // …nor the county typed for it, in either window or in the shared entry.
+    expect(qthIn('main').value, 'the next contact county, main window').toBe('')
+    expect(qthIn('logger').value, 'the next contact county, logger window').toBe('')
+    expect(engine.entry.fields.QTH ?? '', 'the next contact county, shared entry').toBe('')
   })
 
   it('CONTROL: a report typed for the contact in progress crosses the move to CW, in both windows', async () => {

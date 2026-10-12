@@ -83,6 +83,14 @@ export function takeUp(local: StripContent, e: ContestEntryShared): StripContent
   return { call: e.call, fields: { ...local.fields, ...e.fields }, fill, take }
 }
 
+/** An entry no window has put since a contact was logged from it. `consume` (`contest_entry.rs`)
+ *  takes the call and the marks and leaves that contact's boxes until a window puts the next
+ *  contact's, so these boxes are the logged contact's, never the next one's. Every put carries
+ *  marks, and a new sharing's entry has no boxes. */
+function holdsLoggedBoxes(e: ContestEntryShared): boolean {
+  return e.call === '' && e.marks == null && Object.keys(e.fields).length > 0
+}
+
 /** Nothing typed: no call and no box. */
 function blankEntry(e: ContestEntryShared): boolean {
   return e.call.trim() === '' && Object.keys(e.fields).length === 0
@@ -102,6 +110,13 @@ function blankStrip(c: StripContent): boolean {
  *  - an entry newer than the last one this strip agreed with is taken up (`adopt`), unless a put
  *    of this strip's own is still on its way, whose answer moves it on.
  *
+ * ⭐ A LOGGED CONTACT'S BOXES END WITH IT. The strip's own after-log clear ends them when its
+ * snapshot shows the contact. The entry the log left still holds them (`holdsLoggedBoxes`), so it
+ * is taken up through that same clear (`afterLog`), whichever of the two lands first. Taken as it
+ * stood, in the render where the clear also ran it put the logged county back over the clear, in
+ * both windows and for good, and a plain Enter logged it again for the next station. What the strip
+ * then shows is not what it took, so it is put, and the shared entry starts the next contact too.
+ *
  * `claim` is Enter's half: what is on screen goes first, then the answer is the entry Enter saw,
  * for the log command to name. `undefined` while not sharing: log as always. `sharing` says
  * whether this strip takes part now, so a strip that does not can skip the claim altogether.
@@ -112,6 +127,9 @@ export function useSharedEntry(opts: {
   seeds: boolean
   content: StripContent
   adopt: (c: StripContent) => void
+  /** The boxes the next contact starts with once a contact is logged: the strip's own after-log
+   *  clear, applied to the boxes it is handed. */
+  afterLog: (fields: Record<string, string>) => Record<string, string>
 }): { sharing: boolean; claim: (c: StripContent) => Promise<EntryClaim | undefined> } {
   const { entry, content } = opts
   const live = opts.on && entry !== undefined
@@ -121,6 +139,8 @@ export function useSharedEntry(opts: {
   contentRef.current = content
   const adoptRef = useRef(opts.adopt)
   adoptRef.current = opts.adopt
+  const afterLogRef = useRef(opts.afterLog)
+  afterLogRef.current = opts.afterLog
   /** The entry this strip last agreed with: its rev, and the content as this strip shows it. */
   const synced = useRef<{ rev: number; key: string } | null>(null)
   const chain = useRef<Promise<unknown>>(Promise.resolve())
@@ -162,7 +182,9 @@ export function useSharedEntry(opts: {
     const next = takeUp(contentRef.current, entry)
     synced.current = { rev: entry.rev, key: contentKey(next) }
     tookUpAt.current = thisRender
-    adoptRef.current(next)
+    // The entry a log left: the strip shows its boxes as the after-log clear leaves them, which
+    // differ from `synced`, so it puts them at its next render.
+    adoptRef.current(holdsLoggedBoxes(entry) ? { ...next, fields: afterLogRef.current(next.fields) } : next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, rev])
 

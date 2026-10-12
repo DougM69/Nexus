@@ -96,10 +96,27 @@ const fdFieldLabel = slotCaption
  *  ⚠️ A DTO row carries `class`/`section`, not a received VECTOR — the generalised row
  *  lands with the contests that receive something else. Until then this is the whole
  *  mapping, and an unknown slot reads back empty rather than guessing a column. */
-function fdRcvd(row: FieldDayQso, key: string): string {
+function fdRcvd(row: Pick<FieldDayQso, 'class' | 'section'>, key: string): string {
   if (key === 'CLASS') return row.class
   if (key === 'SECTION') return row.section
   return ''
+}
+
+/** The boxes the next contact starts with once `row` is in the log: a signal report goes back to
+ *  untouched (absent, so it shows the report of the mode the strip logs under), and every other
+ *  box takes what a row carries over (`fdRcvd`), empty for the rest. No row (the contact was taken
+ *  back since): every box empties. */
+function afterLogged(
+  fields: Record<string, string>,
+  receives: ContestFieldSpec[],
+  row: Pick<FieldDayQso, 'class' | 'section'> | undefined,
+): Record<string, string> {
+  const next = { ...fields }
+  for (const f of receives) {
+    if (f.kind === 'rst') delete next[f.key]
+    else next[f.key] = row ? fdRcvd(row, f.key) : ''
+  }
+  return next
 }
 
 /** The report a contest strip offers before anything is typed: 59 on phone, 599 on CW and
@@ -644,14 +661,7 @@ export function LogEntry({
       if (lastEntry) {
         // Every box is rewritten, so no box is a call-history fill or the operator's any more.
         setFill(EMPTY_FILL)
-        setFdFields((prev) => {
-          const next = { ...prev }
-          for (const f of fdReceives) {
-            if (f.kind === 'rst') delete next[f.key]
-            else next[f.key] = fdRcvd(lastEntry, f.key)
-          }
-          return next
-        })
+        setFdFields((prev) => afterLogged(prev, fdReceives, lastEntry))
       }
     }
     fdSeenLen.current = fdLogLen
@@ -931,6 +941,9 @@ export function LogEntry({
       setRemoveArmed(c.take.armed)
       setRemoveNote(c.take.note)
     },
+    // The entry a log left still holds that contact's boxes: they end as the after-log clear
+    // (above) ends this strip's own.
+    afterLog: (fields) => afterLogged(fields, fdReceives, fieldDay?.log?.[fdLogLen - 1]),
   })
   /** The engine's two refusals of an Enter made on the shared entry, said in words, logging
    *  nothing: the other window logged the contact first, or changed it since this one showed it.
@@ -1739,6 +1752,16 @@ export function LogEntry({
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
       const fsub = fmode === 'DIG' ? fdSubmode : undefined
+      // ⭐ A CONTACT THIS STRIP LOGS ENDS AS ITS LOG LANDS (below): its boxes become the next
+      // contact's then, as the after-log clear makes them once the snapshot shows the contact.
+      // With the logger window open, what this strip puts next (the call going blank, the next call
+      // typed before that snapshot) reaches the other window, which takes it up over its own clear:
+      // put with the logged contact's boxes, it carried their county into the next contact.
+      // `loggedRow` is what a row of this contact carries over (Field Day's class and section).
+      const loggedRow = {
+        class: ex.find(([k]) => k === 'CLASS')?.[1] ?? '',
+        section: ex.find(([k]) => k === 'SECTION')?.[1] ?? '',
+      }
       // ⭐ A COUNTY LINE IS ONE ACTION AND SEVERAL CONTACTS: the same vector once per county,
       // with that county in the line's box, in ONE engine call — so every row carries one
       // time, band and mode, and each is dupe-checked on its own. The gate above has already
@@ -1789,6 +1812,7 @@ export function LogEntry({
           // leaves the entry on screen, as a refused single contact does.
           if (logged.length > 0) {
             endFill(true)
+            setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
             reset()
           }
         }
@@ -1822,6 +1846,7 @@ export function LogEntry({
           'success',
         )
         endFill(true)
+        setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
         reset()
       }
       return
