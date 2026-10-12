@@ -1902,6 +1902,16 @@ export const EN = {
     one: '{{call}} in {{counties}} is a dupe on this band/mode, not logged again',
     other: '{{call}} in {{counties}} are dupes on this band/mode, not logged again',
   },
+  // ⭐ THE WARNING WHILE A COUNTY LINE IS TYPED, county by county: the log writes one row per
+  // county and judges each on its own key. Every county already worked: the own-dupe sentence
+  // (or the club's), then `dupeFor` naming them ("… on 40m CW for COOK and WILL"), a trailing
+  // statement with its own leading separator so a locale words and places it on its own. Some:
+  // `someDupe` then `someNew`, two statements because each has its own count (one message cannot
+  // select a plural form for two, the `logbook.import.dupes` ruling). {{counties}} is county
+  // codes, invariant tokens, joined as the interface's language joins a list.
+  'logEntry.countyLine.dupeFor': ' for {{counties}}',
+  'logEntry.countyLine.someDupe': { one: '{{counties}} is a dupe', other: '{{counties}} are dupes' },
+  'logEntry.countyLine.someNew': { one: '; {{counties}} is new', other: '; {{counties}} are new' },
   'logEntry.countyLine.unknown': "{{value}} is not a county on the sponsor's list, so this county line cannot be logged.",
   'logEntry.remove.label': 'Remove last',
   'logEntry.remove.title': 'Remove the newest contest contact (Ctrl+D). Press twice: the first press names it, and a second within 5 seconds removes it.',

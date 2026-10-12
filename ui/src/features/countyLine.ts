@@ -20,6 +20,7 @@
 // `ilqpQth.ts`, read through `contestDomains.ts`.
 // ---------------------------------------------------------------------------
 
+import { getLocale } from '../i18n'
 import { resolveDomainValue } from './contestDomains'
 
 /** The county lists whose sponsor counts a county-line contact once per county, and the most
@@ -94,4 +95,17 @@ export function lastCountyPart(raw: string): string {
 /** The box with its last part replaced by `code`, the county picked from the list. */
 export function withLastCountyPart(raw: string, code: string): string {
   return raw.slice(0, raw.length - lastCountyPart(raw).length) + code
+}
+
+/** `Intl.ListFormat`, where the runtime has it (every webview Nexus ships in does). */
+const ListFormat = (
+  Intl as unknown as {
+    ListFormat?: new (locale: string, o: { style: string; type: string }) => { format(items: string[]): string }
+  }
+).ListFormat
+
+/** Counties as a sentence names them, `COOK and WILL`, joined as the interface's language joins
+ *  a list. The codes are invariant tokens. */
+export function countyList(codes: string[]): string {
+  return ListFormat ? new ListFormat(getLocale(), { style: 'long', type: 'conjunction' }).format(codes) : codes.join(', ')
 }
