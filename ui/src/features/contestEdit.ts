@@ -69,12 +69,13 @@ export function bandOptions(q: FieldDayQso | undefined, bands: readonly string[]
 }
 
 /** The edit the form makes of `rows` — or why it cannot be saved: the first box the strip would
- *  refuse to log, in the order the boxes are shown, and a county line given another number of
- *  counties than the contact has. */
+ *  refuse to log, in the order the boxes are shown and named as they are captioned for `role`,
+ *  and a county line given another number of counties than the contact has. */
 export function editOf(
   form: EditForm,
   rows: readonly FieldDayQso[],
   receives: readonly ContestFieldSpec[],
+  role?: string,
 ): { edit: ContestContactEdit } | { why: string } {
   const call = form.call.replace(/\s+/g, '').toUpperCase()
   if (call === '') return { why: t('contest.edit.needCall') }
@@ -83,7 +84,7 @@ export function editOf(
   for (const f of receives) {
     const raw = form.fields[f.key] ?? ''
     const domain = countyLineDomain(f.domains)
-    if (!fdFieldOk(f, raw, domain)) return { why: fdVerdict(f, raw, domain) }
+    if (!fdFieldOk(f, raw, domain)) return { why: fdVerdict(f, raw, domain, role) }
     const value = fdSlotValue(f, raw, domain)
     if (domain && isCountyLine(value)) {
       const read = readCountyLine(domain, value)

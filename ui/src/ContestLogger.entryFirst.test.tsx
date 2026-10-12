@@ -23,7 +23,6 @@ import { resolve } from 'node:path'
 import { DetachedPanel } from './DetachedPanel'
 import { LAST_CONTACTS, loggerTextScale } from './components/ContestLogger'
 import { cmpSpec, elOf, expandWith, parseRules, reachesChain, rootTokensFrom, type El, type Rule } from './cssCascade'
-import { slotCaption } from './features/contestSlots'
 import { t } from './i18n'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
@@ -302,6 +301,12 @@ describe('the contest logger window puts the entry first', () => {
       '59',
       'COOK',
     ])
+    // …under the captions the log line gives them: the county box says it is the county box.
+    expect([...entry.querySelectorAll('.le-fd-big .le-fd-cap')].map((c) => c.textContent)).toEqual([
+      t('logEntry.fd.call.label'),
+      'RST',
+      'County / State',
+    ])
     // The dupe warning, as the log line computes it, right under the boxes: after them in the entry,
     // so before the last contacts.
     const dupe = within(entry).getByRole('alert')
@@ -323,8 +328,8 @@ describe('the contest logger window puts the entry first', () => {
     expect([...recent.querySelectorAll('.fd-log-head .fd-col')].map((c) => c.textContent)).toEqual([
       t('fieldDay.log.column.time'),
       t('fieldDay.log.column.call'),
-      slotCaption('RST'),
-      slotCaption('QTH'),
+      'RST',
+      'County / State',
       t('fieldDay.log.column.band'),
       t('fieldDay.log.column.mode'),
     ])

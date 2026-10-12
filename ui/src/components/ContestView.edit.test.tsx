@@ -176,7 +176,7 @@ describe('Edit opens a contact in place', () => {
     await settle()
     expect(api.contestEdit).not.toHaveBeenCalled()
     expect(editor()!.querySelector('.contest-edit-why')?.textContent).toBe(
-      'QTH "XXXX" isn\'t a known value — required to log.',
+      'County "XXXX" isn\'t a known value — required to log.',
     )
     type(boxes()[2], 'LAKE')
     const [band, mode] = [...editor()!.querySelectorAll<HTMLSelectElement>('select')]
