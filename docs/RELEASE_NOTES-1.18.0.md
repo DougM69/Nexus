@@ -961,4 +961,4 @@ All of this is on the Flex native client (Beta), and none of it is checked on a 
 
 Super Check Partial: supercheckpartial.com, maintained by W9KKN.
 
-**190 changes since 1.17.0.** The full list is in the CHANGELOG.
+**151 changes since 1.17.0.** The full list is in the CHANGELOG.

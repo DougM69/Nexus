@@ -9,6 +9,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With ESM
+  on, each Enter in the contest log strip sends the contact's next message from your F-keys, and the
+  Enter for its last step logs the contact. Running: CQ, then his call and your exchange, then TU,
+  which logs it. Searching and pouncing: your call, then your exchange, which logs it, even when
+  call history fills his exchange as you type his call. It is off until you turn it on, for each
+  cockpit separately, with the ESM switch in its TX dock or in Settings ▸ Contesting ▸ Enter Sends
+  Message, where you can also choose which of your own keys sends each step. Settings ▸ CW ▸ Reset
+  to defaults clears the steps you mapped with the profile's own keys, so a profile on the built-in
+  sets sends their steps, as Settings ▸ Contesting shows them, and Customize starts with none
+  mapped. The dock shows **Run** or **S&P** (click it to switch; your CQ key switches to Run, and
+  clicking a spot to S&P), lights the key or keys the next Enter sends, and says why when it sends
+  nothing. Enter never turns TX on: after Stop TX, Esc or the watchdog it sends nothing until you
+  turn TX back on yourself, with an F-key in CW, the TX button in RTTY or PTT in Phone. It sends
+  what that F-key sends, by the same path and with the same checks, and an Enter that is refused
+  logs nothing. One press is one message: holding Enter sends once, and Alt+Enter logs without
+  sending anything. A message you stop counts as not sent, so the next Enter sends it again; if you
+  stop the TU or the exchange whose Enter logged the contact, the contact stays logged and the strip
+  says so, and Ctrl+D twice takes it back. In Phone, Enter plays the voice keyer's recordings (F1
+  CQ, F2 your exchange, F3 TU, F4 your call, F8 AGN), and when you are running you say his call and
+  your exchange yourself. A box filled from call history counts as copied: Enter sends and logs it
+  as it stands, so type over it when the station sends something different. ESM steps aside, and
+  Enter logs as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the
+  voice keyer is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
+- **Super Check Partial and call history in the contest strip.** As you type a call in any
+  contest's log strip, a line under the boxes lists the calls active in recent contests that
+  contain what you have typed: calls already in your log first, then the rest, then (from the
+  fourth character) calls one character different. Click one to put it in the Call box. The list
+  (`MASTER.SCP`, about 360 KB of callsigns) comes from supercheckpartial.com, maintained by W9KKN.
+  Nexus downloads it the first time a contest starts and checks for a newer copy at most once a
+  day, following the site's rules for logging software; it is never shipped with Nexus. Settings ▸
+  Contesting ▸ Super Check Partial and call history turns it off, turns the daily check off, and
+  has Update now. You can also import an N1MM-format call-history file for one contest: as you
+  type a call that is in it, the exchange boxes it can check (a county, state, section or zone the
+  contest accepts) fill from it and say **history** in their caption, and whatever you type wins.
+  A report, a serial number, a Field Day class or a Sweepstakes check never comes from the file.
+  Unassisted mode turns both off, and the assistance record lists them.
+- **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
+  last** beside Clear on the log strip) names your newest contest contact on the strip's message
+  line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
+  it. Any other key, the 5 seconds, or a new contact cancels it, a held-down Ctrl+D counts as one
+  press, and the caret stays where it was. A county-line contact goes with all its counties. The
+  contact is never deleted: it leaves the score, the multipliers, the rate, the dupe check and every
+  export, and the contest screen keeps it under **Removed**, where **Restore** puts it back exactly
+  (same time, serial and number) unless you have worked that station again on that band and mode.
+  Its serial number and its club-sync number are never given to another contact, even after a
+  restart. The strip also says where the contact had already gone (N3FJP, the N1MM broadcast, WSJT-X
+  listeners, and your logbook with the services it was uploaded to), because Nexus cannot take it
+  back from there. At a club, the club takes it back too (see "Ctrl+D works at a club" below).
+  Ctrl+D never keys or stops the transmitter, and Esc still stops TX. It is not offered on the
+  Remote page or in the Remote client, and a press through the Remote stream removes nothing and
+  says so. The newest row on the contest screen has its own **Remove**, which asks the same way.
+  Deleting a contact in the Logbook that you merged from the contest still running now removes it
+  from the contest log too (restorable), as editing it there already corrects the contest log. Going
+  back to an older Nexus brings removed contacts back as ordinary contacts.
+- **Fix a contest contact in place: Ctrl+Y, or Edit on the Contest screen.** Ctrl+Y in the contest
+  log strip opens your newest contact for edit, and every row of the Contest screen's log has
+  **Edit**: change the call, what they sent, the band or the mode, then press Enter. The contact
+  keeps its time, serial and number, a restart keeps the edit, and the dupe marks, multipliers,
+  score, Cabrillo, ADIF and a later merge into your logbook follow it. Not at a club yet: there,
+  take the contact back with Ctrl+D and log it again.
+- **Three more contest keys from N1MM: QSO B4 to a dupe with Enter Sends Message, Alt+W and
+  Ctrl+O.** With ESM on, when a dupe of your own log calls your run, Enter sends QSO B4 once (F7 in
+  the CW and RTTY contest sets) and the next Enter logs the contact, marked a dupe for 0 points,
+  sending nothing; in S&P Enter still sends nothing to a dupe, as in N1MM. The Phone voice keyer has
+  no QSO B4 slot: record one in F5 or F6 and map QSO B4 to it in Settings ▸ Contesting ▸ Enter Sends
+  Message. Without ESM nothing changes. **Alt+W** clears the whole contest log line, the call and
+  every exchange box, and a second Alt+W right after puts it back (Option+W on a Mac). **Ctrl+O**
+  from any contest log strip opens the Contest screen with the cursor in its Operator box (in the
+  logger window, that window's own), leaving the mode and the radio as they are.
+- **A contest logger window, for a second person logging at a second monitor and keyboard.** Click
+  **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box.
+  Its log line is the top of the window, in large type, with the dupe warning right under the boxes,
+  then the last five contacts, newest first, and the whole Contest screen below; **A−** / **A+**
+  makes the line and the contacts smaller or larger, and that computer remembers it. The log line
+  shares the contact in progress with your own contest strip: whatever either of you types shows in
+  both windows as it is typed, with the same dupe warning, Super Check Partial line, call-history
+  fill and Ctrl+D take-back line, and Enter in either window logs it once, even when you both press
+  it at the same moment. Nothing in the logger window transmits: no PTT, no F-key messages, no Tune;
+  its F-keys do nothing, so F5 cannot reload it, Space only types, and its Esc clears the log line
+  without touching your over. A key with Alt, Ctrl or Cmd held is left to the system there, as on
+  the main window's Contest screen, so Alt+F4 closes the logger window (not yet tried on Windows).
+  Stop TX and every transmit control stay on your screen, and the contest switch, Running / S&P and
+  scoring are read-only in the logger window. It logs as this computer's own position under the mode
+  you are operating, so club sync and your exports are unchanged, and it reopens on the monitor
+  where you left it. A Remote viewer sees the main window only. NEEDS-BENCH: two monitors, two
+  keyboards and mice with MouseMux, logging voice contacts.
 - **The Contest screen takes your contacts.** With a contest running, the top of the Contest screen
   is the logger window's large log line: the Call and exchange boxes in large type with the dupe
   warning right under them, the last five contacts, and A− / A+, which this computer remembers for
@@ -20,51 +106,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows only then: at the Illinois QSO Party it said FT8 was not permitted while you were on phone.
 - **The Contest screen pops out to a window of its own.** ⧉ Pop out, at the right end of the line
   with the Contest mode switch, opens everything below the log line in its own window, to put on
-  another monitor: the Contest mode switch, Running / S&P, the exports and the merge, the club board,
-  the score, the county or sections board, the bonuses and the log, all working there as they do on
-  the main screen. While it is open, the main window's Contest screen keeps the log line with its
-  Operator box (Ctrl+O still lands there) and the last contacts, and one line where the rest was, with
-  **Bring it back**. Closing the window any way brings it back too, and so does restarting Nexus. The
-  window opens where you last put it, fitted to the monitors you have then. Its F-keys do nothing, so
-  F5 cannot reload it, and its Esc is not a stop: Esc and Stop TX in the main window are.
-- **The club host sees where each position's link stands.** The host's club board, on the Contest
-  screen and in its pop-out, has a Status column: Connected while a position has been heard in the
-  last 10 seconds (each one sends a heartbeat every 5), Reconnecting once it misses its heartbeats,
-  and Lost once 15 seconds pass and the host closes its link, each with when the host last heard it
-  ("heard 12 s ago", "heard 4 min ago"). The host's "other positions connected" line counts the same
-  Connected lines, and a joined laptop's club line says the same of its link to the host.
-- **The club host can remove a position, and let it back.** Remove, on each other position's line
-  of the host's club board, asks first and then closes that laptop's link and turns it away each
-  time it tries again, until the host presses Allow back; the laptop's own screen says the host
-  removed it. Every position that has joined has its line there, however many: once the club has
-  more positions than each position's own board can show, the host's board still lists them all.
-  The contacts it already sent stay in the club's log, score, Cabrillo and ADIF exactly
-  as they were, the ones it logs meanwhile go up when it is let back, and a removal is kept through
-  a restart of the host. Club sync is still v4, so a laptop on an earlier v4 build is turned away
-  the same way, in the same words.
-- **The club board shows every position in a band × mode grid.** Above the positions table, on
-  the Contest screen, in the logger window, in the board's pop-out and on the hosted Remote page,
-  each position's name sits in the cell of its band and mode: the contest's bands across, every one
-  the same width so an empty cell is a free band and mode, and the contest's own mode classes down
-  (CW/DIG and PH at the Illinois QSO Party, which counts CW and digital as one mode; CW, DIG and PH
-  at Field Day). Two positions on one band and mode both show in the cell, a position on a band
-  the contest does not use gets a column of its own, and one with no band yet is named under the
-  grid. On the host's own screen each name is coloured by its link, green Connected, amber
-  Reconnecting and red Lost, with ✓, ↻ or ✕ beside it and a legend under the grid, and a position
-  the host removed is left out of the grid (its line in the table keeps Allow back). A joined
-  laptop and Remote are not sent the host's link words, so there no name is coloured; each laptop
-  marks its own name ⌂. There, a position the host has not heard for more than 15 seconds is
-  greyed with ⚠ after its name, as its line in the table is, and the legend says what ⚠ means.
-  The table's Reconnecting and Lost now read in the grid's amber and red.
-  When the bands do not fit the window the grid scrolls sideways by itself, never the page.
-- **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
-  set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
-  page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial
-  you sent so both logs number the contact the same; in CQ WW RTTY both reports, the zone the
-  station sent and its state or province; in the VHF Contest Log the grid. Field Day's push is byte
-  for byte what it was. A QSO party, Sweepstakes or CQ WW CW/SSB contact still reaches N3FJP without
-  its exchange: N3FJP does not publish which boxes those programs use, so Nexus fills none rather
-  than guess. NEEDS-BENCH: N3FJP's CQ WPX, CQ WW RTTY and VHF programs running on Windows.
+  another monitor: the Contest mode switch, Running / S&P, the exports and the merge, the club
+  board, the score, the county or sections board, the bonuses and the log, all working there as they
+  do on the main screen. While it is open, the main window's Contest screen keeps the log line with
+  its Operator box (Ctrl+O still lands there) and the last contacts, and one line where the rest
+  was, with **Bring it back**. Closing the window any way brings it back too, and so does restarting
+  Nexus. The window opens where you last put it, fitted to the monitors you have then. Its F-keys do
+  nothing, so F5 cannot reload it, and its Esc is not a stop: Esc and Stop TX in the main window
+  are. Not yet tried on Windows.
+- **Every contest log strip shows the running score.** While a contest runs, the Log pane of the CW,
+  Phone, RTTY and PSK cockpits reads like `ILQP · 212 pts · 48 Q · 19 mults · 41/hr` (score, contacts,
+  multipliers or Field Day's sections, and your rate over the last ten contacts), the same numbers as
+  the Contest screen; the Satellites strip and the logger window show it in the strip's top line where
+  there is room. Nothing in the strip moves or grows for it, at any window size or text size.
+- **Turning Contest mode off offers a contest-over checklist.** Before the mode goes off, Nexus asks
+  **Contest over?**: merge the contest's contacts into your logbook, export the Cabrillo log, and put
+  back what the contest changed (the callsign a club set, the operator, the position, MULTI-OP, the
+  entry class, the power category, Unassisted), each shown as it is now and as it was before. Nothing
+  is ticked to begin with and nothing is done that you did not tick; **Not now** leaves everything,
+  the mode included, as it is. Nexus keeps those seven as they were just before the first change
+  made with a contest picked in Settings ▸ Contesting or Contest mode on, or as they were when the
+  mode went on, so a club call typed in the day before can still go back to your own. With no
+  contest picked, changing your callsign or Unassisted leaves nothing for a later checklist to put
+  back.
+- **Illinois QSO Party: a station on a county line takes one entry.** The 2026 rules count a station
+  on the border of two to four counties once per county. Type its counties into the county box
+  joined by `/`, as the station sends them (`COOK/DUPG`, up to four), or by `+`, the way N3FJP takes
+  them (`COOK+DUPG`), and Enter logs one contact per county, all at the same time, band and mode;
+  both marks give the same counties, dupes, score and Cabrillo lines. N1MM Logger+ takes county
+  lines the same way. Each county can be typed as its code or its name and is offered from the
+  sponsor's list. While you type, the Dupe warning names the counties already worked on that band
+  and mode: `… on 40m CW for COOK and WILL` when every county is one, `COOK is a dupe; WILL is new`
+  when only some are. Enter logs every county, a dupe marked for 0 points as a single contact is. A
+  part that is not a county on the sponsor's list stops the whole line. Each county is an ordinary
+  contact in the log, and a single county logs as before.
+- **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
+  Settings ▸ Contesting ▸ Your entry has **Entry class** (the eight classes in the 2026 rules,
+  including the new Unlimited that a club running more than one transmitter at once must enter),
+  **Club** and **Other operators**, all read when you export, so you can set them after the
+  party. The OPERATORS line lists everyone who was set as Operator at the key when they logged a
+  contact, then any others you type, and a QRP entry gets `QRP-COMPETITION: YES` from its Power
+  category. Each contest contact now records the operator at the key, and the contest log's
+  backup file keeps it across a restart. Every other contest's file is unchanged.
 - **The rest of a contest entry's Cabrillo declarations, and a band-by-mode table in the
   Summary.** Settings ▸ Contesting ▸ Your entry now offers what a sponsor's Cabrillo template
   asks for beyond the entry category, each only for a contest whose sponsor has it: a multi-operator
@@ -85,12 +168,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes it and the CLUB line too. When CQ requires a line you have not set, the Contest screen
   names it before you export, with a button to Your entry. A serial-number contest's Score Summary
   shows the serial being sent instead of 0. Every other contest's Cabrillo file is unchanged.
-- **Fix a contest contact in place: Ctrl+Y, or Edit on the Contest screen.** Ctrl+Y in the contest
-  log strip opens your newest contact for edit, and every row of the Contest screen's log has
-  **Edit**: change the call, what they sent, the band or the mode, then press Enter. The contact
-  keeps its time, serial and number, a restart keeps the edit, and the dupe marks, multipliers,
-  score, Cabrillo, ADIF and a later merge into your logbook follow it. Not at a club yet: there,
-  take the contact back with Ctrl+D and log it again.
+- **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
+  set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
+  page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial
+  you sent so both logs number the contact the same; in CQ WW RTTY both reports, the zone the
+  station sent and its state or province; in the VHF Contest Log the grid. Field Day's push is byte
+  for byte what it was. A QSO party, Sweepstakes or CQ WW CW/SSB contact still reaches N3FJP without
+  its exchange: N3FJP does not publish which boxes those programs use, so Nexus fills none rather
+  than guess. NEEDS-BENCH: N3FJP's CQ WPX, CQ WW RTTY and VHF programs running on Windows.
+- **The spectator scoreboard is redesigned for a TV across the room, and works for any contest club
+  sync runs, on a position as on the host.** The claimed score is the biggest thing on the board,
+  with how it is made beside it, then the rate (the last hour, the last ten minutes and a bar for
+  each hour), the contacts by band and mode, each position's band and mode right now, the
+  multipliers with their counts and caps, the bonus stations, the latest contact, the clock and the
+  time left. The map shows what the contest counts: the sections globe for the two Field Days, and
+  for the Illinois QSO Party the state's 102 counties, each one lit when the club works it, with the
+  host's own county outlined. The board looks the same at 1080p and at 4K. It is dark by default;
+  add `?theme=light` to its address for the light board, or `?theme=auto` to follow the TV's own
+  setting. A TV showing the board on a position got a grey "served from the host station" overlay,
+  and so did one on a host running the Illinois QSO Party. A position now shows the host's board,
+  from the host it joined (turn on Spectator scoreboard on the host too, on the same port), and a
+  host shows its club whatever contest it runs. If the host can't be reached, the TV says so in
+  plain words, keeps the last board it had and comes back by itself. A station with no club says so,
+  with what to do, and Settings ▸ Contesting ▸ Field Day Club Sync says the same beside the
+  scoreboard's address.
+- **Club sync: each position says how far its clock is from the host's, and the host's club board
+  shows every position's.** Every 5 seconds each position measures its clock against the host's
+  over the club link, allowing for the time the measurement spends on the network. From 2 seconds
+  off, its club line says so ("This PC's clock is 3 s behind the host's"); past 30 seconds it is
+  the warning it has always been. The host's club board has a new **Clock** column: in step, how
+  many seconds ahead or behind. Nexus Remote's
+  Field Day view shows the column too, for the host. Nexus only shows the difference: it never
+  changes a clock, FT8 and FT4 timing is untouched, and contact times still come from each
+  position's own clock, so put a wrong one right in that PC's date and time settings.
 - **Allow Nexus through Windows Firewall, for club sync.** On Windows, the club section of Settings
   ▸ Contesting has a button that asks for administrator rights once, the way Repair clock does, and
   adds three inbound rules for Nexus itself on Private and Public networks: the Host port (TCP 42073
@@ -103,85 +213,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection, the line says that too. Not while transmitting: Windows' prompt takes the whole
   screen. A joining laptop that gets no answer from the host, and a Find club events that hears
   nothing, now point at the button. NEEDS-BENCH: Windows, with the firewall on and off.
-- **A contest logger window, for a second person logging at a second monitor and keyboard.** Click
-  **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box.
-  Its log line is the top of the window, in large type, with the dupe warning right under the boxes,
-  then the last five contacts, newest first, and the whole Contest screen below; **A−** / **A+**
-  makes the line and the contacts smaller or larger, and that computer remembers it. The log line
-  shares the contact in progress with your own contest strip: whatever either of you types shows in
-  both windows as it is typed, with the same dupe warning, Super Check Partial line, call-history
-  fill and Ctrl+D take-back line, and Enter in either window logs it once, even when you both press
-  it at the same moment.
-  Nothing in the logger window transmits: no PTT, no F-key messages, no Tune; the F-keys and Space do
-  nothing there but type, and its Esc clears the log line without touching your over. Stop TX and
-  every transmit control stay on your screen, and the contest switch, Running / S&P and scoring are
-  read-only in the logger window. It logs as this computer's own position under the mode you are
-  operating, so club sync and your exports are unchanged, and it reopens on the monitor where you
-  left it. A Remote viewer sees the main window only. NEEDS-BENCH: two monitors, two keyboards and
-  mice with MouseMux, logging voice contacts.
-- **Turning Contest mode off offers a contest-over checklist.** Before the mode goes off, Nexus asks
-  **Contest over?**: merge the contest's contacts into your logbook, export the Cabrillo log, and put
-  back what the contest changed (the callsign a club set, the operator, the position, MULTI-OP, the
-  entry class, the power category, Unassisted), each shown as it is now and as it was before. Nothing
-  is ticked to begin with and nothing is done that you did not tick; **Not now** leaves everything,
-  the mode included, as it is. Nexus keeps those seven as they were just before the first change
-  made with a contest picked in Settings ▸ Contesting or Contest mode on, or as they were when the
-  mode went on, so a club call typed in the day before can still go back to your own. With no
-  contest picked, changing your callsign or Unassisted leaves nothing for a later checklist to put
-  back.
-- **Every contest log strip shows the running score.** While a contest runs, the Log pane of the CW,
-  Phone, RTTY and PSK cockpits reads like `ILQP · 212 pts · 48 Q · 19 mults · 41/hr` (score, contacts,
-  multipliers or Field Day's sections, and your rate over the last ten contacts), the same numbers as
-  the Contest screen; the Satellites strip and the logger window show it in the strip's top line where
-  there is room. Nothing in the strip moves or grows for it, at any window size or text size.
-- **Enter Sends Message (ESM) in the CW, RTTY and Phone cockpits, as N1MM Logger+ has it.** With
-  ESM on, each Enter in the contest log strip sends the contact's next message from your F-keys,
-  and the Enter for its last step logs the contact. Running: CQ, then his call and your exchange,
-  then TU, which logs it. Searching and pouncing: your call, then your exchange, which logs it,
-  even when call history fills his exchange as you type his call. It is off until you turn it on,
-  for each cockpit separately, with the ESM switch in its TX dock or in Settings ▸ Contesting ▸
-  Enter Sends Message, where you can also choose which of your own keys sends each step. The dock
-  shows **Run** or **S&P** (click it to switch; your CQ key switches to Run, and clicking a spot
-  to S&P), lights the key or keys the next Enter sends, and says why when it sends nothing. Enter
-  never turns TX on: after Stop TX, Esc or the watchdog it sends nothing until you turn TX back on
-  yourself, with an F-key in CW, the TX button in RTTY or PTT in Phone. It sends what that F-key
-  sends, by the same path and with the same checks, and an Enter that is refused logs nothing. One
-  press is one message: holding Enter sends once, and Alt+Enter logs without sending anything. A
-  message you stop counts as not sent, so the next Enter sends it again; if you stop the TU or the
-  exchange whose Enter logged the contact, the contact stays logged and the strip says so, and
-  Ctrl+D twice takes it back. In Phone, Enter plays the voice keyer's recordings (F1 CQ, F2 your
-  exchange, F3 TU, F4 your call, F8 AGN), and when you are running you say his call and your
-  exchange yourself. A box filled from call history counts as copied: Enter sends and logs it as
-  it stands, so type over it when the station sends something different. ESM steps aside, and
-  Enter logs as before, while RTTY's auto sequence runs or Continuous TX is latched, or while the
-  voice keyer is hidden. It never works in FT8, FT4 or any FT mode, nor on the Remote page.
-- **Three more contest keys from N1MM: QSO B4 to a dupe with Enter Sends Message, Alt+W and
-  Ctrl+O.** With ESM on, when a dupe of your own log calls your run, Enter sends QSO B4 once (F7 in
-  the CW and RTTY contest sets) and the next Enter logs the contact, marked a dupe for 0 points,
-  sending nothing; in S&P Enter still sends nothing to a dupe, as in N1MM. The Phone voice keyer has
-  no QSO B4 slot: record one in F5 or F6 and map QSO B4 to it in Settings ▸ Contesting ▸ Enter Sends
-  Message. Without ESM nothing changes. **Alt+W** clears the whole contest log line, the call and
-  every exchange box, and a second Alt+W right after puts it back (Option+W on a Mac). **Ctrl+O**
-  from any contest log strip opens the Contest screen with the cursor in its Operator box (in the
-  logger window, that window's own), leaving the mode and the radio as they are.
-- **Take back the last contest contact: press Ctrl+D twice.** In a contest, Ctrl+D (or **Remove
-  last** beside Clear on the log strip) names your newest contest contact on the strip's message
-  line, with its call, band, mode, time and exchange, and a second press within 5 seconds removes
-  it. Any other key, the 5 seconds, or a new contact cancels it, a held-down Ctrl+D counts as one
-  press, and the caret stays where it was. A county-line contact goes with all its counties. The
-  contact is never deleted: it leaves the score, the multipliers, the rate, the dupe check and
-  every export, and the contest screen keeps it under **Removed**, where **Restore** puts it back
-  exactly (same time, serial and number) unless you have worked that station again on that band
-  and mode. Its serial number and its club-sync number are never given to another contact, even
-  after a restart. The strip also says where the contact had already gone (N3FJP, the N1MM
-  broadcast, WSJT-X listeners, and your logbook with the services it was uploaded to), because
-  Nexus cannot take it back from there. At a club, the club takes it back too (see "Ctrl+D works
-  at a club" below). Ctrl+D never keys or stops the transmitter, and Esc still
-  stops TX. It is not offered on the Remote page or in the Remote client. The newest row on the
-  contest screen has its own **Remove**, which asks the same way. Deleting a contact in the
-  Logbook that you merged from the contest still running now removes it from the contest log too
-  (restorable), as editing it there already corrects the contest log. Going back to an older
-  Nexus brings removed contacts back as ordinary contacts.
+- **Club sync: the host can give a club position to the laptop it belongs to.** A laptop turned away
+  because another laptop holds its position (one whose settings were copied from it, say, or a
+  laptop that lost its club key file) has **Give this laptop its position** on its line in the club
+  block on the host's Contest screen. It first shows that laptop's club code, beside the name and
+  call it gave, which any laptop can give, and asks you to check the code against the one on that
+  laptop's own Contest screen. **The codes match: give it the position** then gives it: the laptop
+  joins on its next try and sends the club its whole log, and the laptop that held the position is
+  closed and turned away by name. Its contacts leave the club's log, every laptop's club dupe
+  warning and a Field Day club's section count at once, until it rejoins. Its line then has the same
+  button, so a wrong press is undone the same way. The host keeps the change through a restart. Only
+  on the host's own screen: never from Remote.
+- **The club host sees where each position's link stands.** The host's club board, on the Contest
+  screen and in its pop-out, has a Status column: Connected while a position has been heard in the
+  last 10 seconds (each one sends a heartbeat every 5), Reconnecting once it misses its heartbeats,
+  and Lost once 15 seconds pass and the host closes its link, each with when the host last heard it
+  ("heard 12 s ago", "heard 4 min ago"). The host's "other positions connected" line counts the same
+  Connected lines, and a joined laptop's club line says the same of its link to the host.
+- **The club host can remove a position, and let it back.** Remove, on each other position's line of
+  the host's club board, asks first and then closes that laptop's link and turns it away each time
+  it tries again, until the host presses Allow back; the laptop's own screen says the host removed
+  it. Every position that has joined has its line there, however many: once the club has more
+  positions than each position's own board can show, the host's board still lists them all. The
+  contacts it already sent stay in the club's log, score, Cabrillo and ADIF exactly as they were,
+  the ones it logs meanwhile go up when it is let back, and a removal is kept through a restart of
+  the host. Not yet tried on two laptops.
+- **The club board shows every position in a band × mode grid.** Above the positions table, on
+  the Contest screen, in the logger window, in the board's pop-out and on the hosted Remote page,
+  each position's name sits in the cell of its band and mode: the contest's bands across, every one
+  the same width so an empty cell is a free band and mode, and the contest's own mode classes down
+  (CW/DIG and PH at the Illinois QSO Party, which counts CW and digital as one mode; CW, DIG and PH
+  at Field Day). Two positions on one band and mode both show in the cell, a position on a band
+  the contest does not use gets a column of its own, and one with no band yet is named under the
+  grid. On the host's own screen each name is coloured by its link, green Connected, amber
+  Reconnecting and red Lost, with ✓, ↻ or ✕ beside it and a legend under the grid, and a position
+  the host removed is left out of the grid (its line in the table keeps Allow back). A joined
+  laptop and Remote are not sent the host's link words, so there no name is coloured; each laptop
+  marks its own name ⌂. There, a position the host has not heard for more than 15 seconds is
+  greyed with ⚠ after its name, as its line in the table is, and the legend says what ⚠ means.
+  The table's Reconnecting and Lost now read in the grid's amber and red.
+  When the bands do not fit the window the grid scrolls sideways by itself, never the page.
+- **Ctrl+D works at a club.** With club sync on, Ctrl+D twice (or Remove last) takes your newest
+  contact back from the club too: the host keeps it, marked taken back and never deleted, every
+  laptop's club dupe check and the club board drop it, and the club Cabrillo and the club's counts
+  leave it out. Restore on the contest screen puts it back everywhere, and the club file is then
+  exactly what it was. A laptop away from the host catches the club up when the link is back, and
+  its club chip counts the take-back until then. Each laptop takes back only contacts it logged
+  itself. Club sync moves to a new version for this, so every laptop in the club needs this
+  release: an older Nexus is turned away when it joins, and told to update.
+- **Winter Field Day's objectives, and the score they make.** For Winter Field Day the contest
+  screen shows the sponsor's thirteen 2027 objectives where ARRL Field Day shows its bonuses: tick
+  each one you complete, or mark it planned, as with the bonuses. The score everywhere is the
+  sponsor's QSO points × (objective multipliers + 1): the contest screen and its pop-out, the club
+  line every position shows, the club TV scoreboard, the summary you download and the Cabrillo
+  `CLAIMED-SCORE`. 100% alternative power counts station equipment on alternative power with it,
+  and twelve bands counts six. For six bands, twelve bands and multiple modes, a hint from your log
+  says how far it shows you are; you tick them yourself, as the sponsor's form asks. A note says
+  when the QRP objective and your Power category disagree. Nexus Remote shows your objectives too,
+  read-only, once its page has been updated.
+- **Move panes by dragging them with the mouse.** In FT8/FT4, Phone, CW and JS8, pick a pane up by
+  its title bar and drop it onto another column, between two panes, or (in Phone, on a window wide
+  enough for it) onto the left side. While you drag, the columns it can go to are outlined, a line
+  shows where it will land, and a column with nothing in it shows a box where it would stand. ⊞
+  Panels ▸ Arrange's list drags the same way, by a pane's name or the ⠿ beside it, and its ▲ ▼ ◀ ▶
+  stay for the keyboard and screen readers. A drop makes exactly the move the arrows would, into
+  the same saved arrangement, so Undo last change takes it back and Classic and Roster still keep
+  their own. Esc, or letting go anywhere else, puts the pane back, and Esc still stops transmit as
+  it always has. FT's Tx messages, which have no title bar, are picked up by the ⠿ at the start of
+  their DX row. Buttons, filters and fields in a title work as before, a double-click on a decode
+  still answers the station, and nothing in the TX strip (TX On/Off, Tune, ATU, Stop TX), the dock
+  or PTT can be dragged or dropped onto. On a touch screen, hold a finger on a title until the pane
+  lifts; a swipe still scrolls.
+- **Boxes in Phone, CW and JS8: any Conditions pane among the cockpit's own.** In ⊞ Panels ▸
+  Arrange, every column, and Phone's left side, ends with **+ Add a box**: up to six boxes, each
+  showing any pane of Conditions (the Clock, Space Wx, POTA/SOTA, the Spots and Needed boards and
+  the rest), picked from the box's title. A pane shows once on a screen, the dashboard rail beside
+  it included: picking one that is already showing, in the rail or in a box, moves it there, and the
+  other side takes what it showed. While the rail shows a pane, a box in the cockpit that holds the
+  same pane shows another. Boxes move like panes, and hiding or moving one ends nothing. A click in
+  a box never changes the station you are working, and nothing in a box transmits. No box shows
+  until you add one, so nobody's screen changes on update, and Reset layout hides them again. Not on
+  Nexus Remote.
+- **FT8 and FT4: arrange the panes, and add boxes.** In ⊞ Panels ▸ Arrange, the panes of the FT
+  layout you are in move between its columns: Band Activity, Rx Frequency, the Tx messages, Stations
+  and the callsign card among Column 1, Column 2 and the side rail in Classic; the Call Roster, Band
+  Activity, Rx Frequency and the card between the main column and the side rail in Roster. Each
+  layout can also show the other's panes: tick the Call Roster in Classic's ⊞ Panels, or the Tx
+  messages or Stations in Roster's, and it stands in that layout, to move like the rest; its ✕ takes
+  it out of that layout only. Classic and Roster each keep their own arrangement. Each column also
+  takes boxes, up to six, of any Conditions pane, as Phone, CW and JS8 do. Moving a pane changes
+  nothing it does: a double-click still answers the station, Band Activity keeps its decodes, and
+  the sorts, the Stations list's filter and its search stay as you set them, as they do when the
+  dashboard rail's boxes move into FT's side rail on a small window and back. In an arranged column
+  the callsign card keeps its size, and a crowded column scrolls instead. Nothing moves until you
+  move it, so nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes
+  are not on Nexus Remote.
+- **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
+  **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
+  its own, and a click works the station as it does on the Needed screen, moving the radio and
+  opening its cockpit. Nothing transmits. Beside a cockpit, a click selects the station in the rail
+  only, never the station your cockpit is working. In a box narrower than its columns the list
+  scrolls sideways inside the box. On Nexus Remote the box says the list is not available there.
 - **The Rotor box points the antenna at the station in your log entry.** In the dashboard rail
   beside FT8/FT4, Phone, CW, RTTY, PSK and JS8, the Rotor box keeps the antenna's live bearing on
   its first line, and its second line now shows the call in that cockpit's log entry with the
@@ -196,46 +328,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The same Rotor box standing in a cockpit's own columns shows the same line. SSTV and APRS have no
   log entry, so the line stays empty there. The rotator readouts in the cockpit headers, and Nexus
   Remote, are unchanged.
-- **Field Day mode has a switch on the contest screen, and the left bar calls that screen
-  Contest.** The tent item in the left bar now reads **Contest**, and its tooltip names the
-  contest you picked (for example "Contest — Illinois QSO Party"). It keeps its place in your bar
-  order, and it stays on the bar with Field Day mode off: the top of its screen has the same Field
-  Day mode switch as Settings ▸ Contesting ▸ Field Day Setup, beside the picked contest and when it
-  runs (its dates in UTC and the countdown), and it saves at once. Opening the screen with the mode
-  off does not start the contest. If the contest cannot start yet, the switch stays off and the
-  screen says what is missing (your Class and Section for Field Day, or the field a QSO party
-  needs), with a button to that place in Settings. With the mode on, the screen says which
-  contest's rules apply, the modes it does not permit, and during Winter Field Day that no spots
-  are posted over the internet. With club sync on it says that turning the mode off keeps this
-  station in the club event, sends no contacts until the mode is back on, and loses nothing from
-  the log. The scoreboard's own window and the main window's title read Contest too. ARRL
-  Field Day and Winter Field Day keep their names.
-- **Move panes by dragging them with the mouse.** In FT8/FT4, Phone, CW and JS8, pick a pane up by
-  its title bar and drop it onto another column, between two panes, or (in Phone, on a window wide
-  enough for it) onto the left side. While you drag, the columns it can go to are outlined, a line
-  shows where it will land, and a column with nothing in it shows a box where it would stand. ⊞
-  Panels ▸ Arrange's list drags the same way, by a pane's name or the ⠿ beside it, and its ▲ ▼ ◀ ▶
-  stay for the keyboard and screen readers. A drop makes exactly the move the arrows would, into
-  the same saved arrangement, so Undo last change takes it back and Classic and Roster still keep
-  their own. Esc, or letting go anywhere else, puts the pane back, and Esc still stops transmit as
-  it always has. FT's Tx messages, which have no title bar, are picked up by the ⠿ at the start of
-  their DX row. Buttons, filters and fields in a title work as before, a double-click on a decode
-  still answers the station, and nothing in the TX strip (TX On/Off, Tune, ATU, Stop TX), the dock
-  or PTT can be dragged or dropped onto. On a touch screen, hold a finger on a title until the pane
-  lifts; a swipe still scrolls.
-- **Super Check Partial and call history in the contest strip.** As you type a call in any
-  contest's log strip, a line under the boxes lists the calls active in recent contests that
-  contain what you have typed: calls already in your log first, then the rest, then (from the
-  fourth character) calls one character different. Click one to put it in the Call box. The list
-  (`MASTER.SCP`, about 360 KB of callsigns) comes from supercheckpartial.com, maintained by W9KKN.
-  Nexus downloads it the first time a contest starts and checks for a newer copy at most once a
-  day, following the site's rules for logging software; it is never shipped with Nexus. Settings ▸
-  Contesting ▸ Super Check Partial and call history turns it off, turns the daily check off, and
-  has Update now. You can also import an N1MM-format call-history file for one contest: as you
-  type a call that is in it, the exchange boxes it can check (a county, state, section or zone the
-  contest accepts) fill from it and say **history** in their caption, and whatever you type wins.
-  A report, a serial number, a Field Day class or a Sweepstakes check never comes from the file.
-  Unassisted mode turns both off, and the assistance record lists them.
+- **The hunt tag above the log line has an ✕ that ends the hunt.** A hunt set with HUNT on the
+  POTA / SOTA list, on the map, or by an FT8, FT4 or RTTY row on the Needed board could be cleared
+  only at the top of the POTA / SOTA list, and the log line's Clear could not get rid of its park:
+  the hunt filled it straight back in. The ✕ on the 🌲 tag ends the hunt as that one does, so the
+  tag and the line at the top of the list go together, and the park the hunt filled in goes with
+  them. A park you typed, or one a Needed click filled in, stays. The ✕ is not offered on the
+  Remote page.
 - **Icom network (LAN / Wi-Fi), Beta: the IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2
   straight over your network, receive and control only.** Settings ▸ Radio ▸ Rig & CAT ▸ Connection
   has a new choice for these six radios. Nexus logs in to the radio's own network server, the one
@@ -254,24 +353,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4, 8 and 16 seconds, then every 30; if the radio refused the login or another program took it,
   Nexus waits for Test CAT. USB stays the default and nothing changes unless you pick it. An older
   Nexus reads this connection as Serial. NEEDS-BENCH: not yet tried on a radio; an IC-7760 is first.
-- **Winter Field Day's objectives, and the score they make.** For Winter Field Day the contest
-  screen shows the sponsor's thirteen 2027 objectives where ARRL Field Day shows its bonuses: tick
-  each one you complete, or mark it planned, as with the bonuses. The score everywhere is the
-  sponsor's QSO points × (objective multipliers + 1): the contest screen and its pop-out, the club
-  line every position shows, the club TV scoreboard, the summary you download and the Cabrillo
-  `CLAIMED-SCORE`. 100% alternative power counts station equipment on alternative power with it,
-  and twelve bands counts six. For six bands, twelve bands and multiple modes, a hint from your log
-  says how far it shows you are; you tick them yourself, as the sponsor's form asks. A note says
-  when the QRP objective and your Power category disagree. Nexus Remote shows your objectives too,
-  read-only, once its page has been updated.
-- **The Illinois QSO Party's Cabrillo file carries the header lines the sponsor's software reads.**
-  Settings ▸ Contesting ▸ Your entry has **Entry class** (the eight classes in the 2026 rules,
-  including the new Unlimited that a club running more than one transmitter at once must enter),
-  **Club** and **Other operators**, all read when you export, so you can set them after the
-  party. The OPERATORS line lists everyone who was set as Operator at the key when they logged a
-  contact, then any others you type, and a QRP entry gets `QRP-COMPETITION: YES` from its Power
-  category. Each contest contact now records the operator at the key, and the contest log's
-  backup file keeps it across a restart. Every other contest's file is unchanged.
 - **Download everything again, for LoTW confirmations an earlier download missed (#399).**
   Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW has a new button beside Download
   confirmations. It asks first, then downloads your whole confirmation history once, straight away,
@@ -280,51 +361,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release: that first download asked for too little, and each download after it carried on from
   there, so older confirmations never arrived. Your logged contacts and the confirmations on them
   are not changed.
-- **The spectator scoreboard is redesigned for a TV across the room, and works for any contest club
-  sync runs.** The claimed score is the biggest thing on the board, with how it is made beside it,
-  then the rate (the last hour, the last ten minutes and a bar for each hour), the contacts by band
-  and mode, each position's band and mode right now, the multipliers with their counts and caps,
-  the bonus stations, the latest contact, the clock and the time left. The map shows what the
-  contest counts: the sections globe for the two Field Days, and for the Illinois QSO Party the
-  state's 102 counties, each one lit when the club works it, with the host's own county outlined.
-  The board looks the same at 1080p and at 4K. It is dark by default; add `?theme=light` to its
-  address for the light board, or `?theme=auto` to follow the TV's own setting.
-- **Club sync: each position says how far its clock is from the host's, and the host's club board
-  shows every position's.** Every 5 seconds each position measures its clock against the host's
-  over the club link, allowing for the time the measurement spends on the network. From 2 seconds
-  off, its club line says so ("This PC's clock is 3 s behind the host's"); past 30 seconds it is
-  the warning it has always been. The host's club board has a new **Clock** column: in step, how
-  many seconds ahead or behind. Nexus Remote's
-  Field Day view shows the column too, for the host. Nexus only shows the difference: it never
-  changes a clock, FT8 and FT4 timing is untouched, and contact times still come from each
-  position's own clock, so put a wrong one right in that PC's date and time settings.
-- **Needed is a box now: on Conditions, and in the dashboard rail beside every cockpit.** Pick
-  **Needed** in any box's picker and the Needed board stands there: the same list, with filters of
-  its own, and a click works the station as it does on the Needed screen, moving the radio and
-  opening its cockpit. Nothing transmits. Beside a cockpit, a click selects the station in the rail
-  only, never the station your cockpit is working. In a box narrower than its columns the list
-  scrolls sideways inside the box. On Nexus Remote the box says the list is not available there.
-- **Boxes in Phone, CW and JS8: any Conditions pane among the cockpit's own.** In ⊞ Panels ▸
-  Arrange, every column, and Phone's left side, ends with **+ Add a box**: up to six boxes, each
-  showing any pane of Conditions (the Clock, Space Wx, POTA/SOTA, the Spots and Needed boards and
-  the rest), picked from the box's title. A pane shows once on a screen: picking one that is already
-  showing moves it into the box. Boxes move like panes, and hiding or moving one ends nothing. A
-  click in a box never changes the station you are working, and nothing in a box transmits. No box
-  shows until you add one, so nobody's screen changes on update, and Reset layout hides them again.
-  Not on Nexus Remote.
-- **FT8 and FT4: arrange the panes, and add boxes.** In ⊞ Panels ▸ Arrange, the panes of the FT
-  layout you are in move between its columns: Band Activity, Rx Frequency, the Tx messages, Stations
-  and the callsign card among Column 1, Column 2 and the side rail in Classic; the Call Roster, Band
-  Activity, Rx Frequency and the card between the main column and the side rail in Roster. Each
-  layout can also show the other's panes: tick the Call Roster in Classic's ⊞ Panels, or the Tx
-  messages or Stations in Roster's, and it stands in that layout, to move like the rest; its ✕ takes
-  it out of that layout only. Classic and Roster each keep their own arrangement. Each column also takes boxes, up to six, of any
-  Conditions pane, as Phone, CW and JS8 do. Moving a pane changes nothing it does: a double-click
-  still answers the station, and Band Activity keeps its decodes. In an arranged column the callsign
-  card keeps its size, and a crowded column scrolls instead. Nothing moves until you move it, so
-  nobody's FT screen changes on update, and Reset layout puts both layouts back. Boxes are not on
-  Nexus Remote.
-
 - **Check confirmations, for confirmations earlier versions put on the wrong contact (#400).**
   If you worked a station twice on one band and mode in a UTC day, the earlier contact could take
   the later one's LoTW, eQSL or QRZ confirmation, or LoTW's mark that it holds the later one's
@@ -337,17 +373,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes are first saved, as they were, to a file beside your log, and importing that file with
   Logbook ▸ Import ADIF puts them back. A paper card is never touched, and a contact that loses a
   false LoTW confirmation and was never uploaded goes in your next LoTW upload.
-
-- **Illinois QSO Party: a station on a county line takes one entry.** The 2026 rules count a
-  station on the border of two to four counties once per county. Type its counties into the QTH
-  box joined by `/`, as the station sends them (`COOK/DUPG`, up to four), and Enter logs one
-  contact per county, all at the same time, band and mode. N1MM Logger+ takes county lines the
-  same way. Each county can be typed as its code or its name and is offered from the sponsor's
-  list. While you type, the Dupe warning names the counties already worked on that band and mode:
-  `… on 40m CW for COOK and WILL` when every county is one, `COOK is a dupe; WILL is new` when only
-  some are. Enter logs every county, a dupe marked for 0 points as a single contact is. A part
-  that is not a county on the sponsor's list stops the whole line. Each county is an ordinary
-  contact in the log, and a single county logs as before.
 - **FlexRadio: CW through the Flex native client, built and off until a tester has checked it on
   a radio.** Once it is switched on, the CW screen's CAT keyer sends each word of a message to the
   radio's own CW keyer, which keys and unkeys the radio with its break-in, as it does through
@@ -386,119 +411,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that the radio may still be transmitting, and drops the connection. The ATU is also refused
   where the radio's carrier would fall outside your CW privileges. Until it is switched on, the
   Flex native client offers no ATU button, as before. NEEDS-BENCH on a FLEX radio.
-- **Club sync: the host can give a club position to the laptop it belongs to.** A laptop turned
-  away because another laptop holds its position (one whose settings were copied from it, say,
-  or a laptop that lost its club key file) has **Give this laptop its position** on its line in
-  the club block on the host's Contest screen. One press gives it the position: it joins on its
-  next try and sends the club its whole log, and the laptop that held the position is closed and
-  turned away by name, its contacts out of the club's log until it rejoins. Its line then has the
-  same button, so a wrong press is undone the same way. The host keeps the change through a
-  restart. Only on the host's own screen: never from Remote.
-- **The hunt tag above the log line has an ✕ that ends the hunt.** A hunt set with HUNT on the
-  POTA / SOTA list, on the map, or by an FT8, FT4 or RTTY row on the Needed board could be cleared
-  only at the top of the POTA / SOTA list, and the log line's Clear could not get rid of its park:
-  the hunt filled it straight back in. The ✕ on the 🌲 tag ends the hunt as that one does, so the
-  tag and the line at the top of the list go together, and the park the hunt filled in goes with
-  them. A park you typed, or one a Needed click filled in, stays. The ✕ is not offered on the
-  Remote page.
-- **Ctrl+D works at a club.** With club sync on, Ctrl+D twice (or Remove last) takes your newest
-  contact back from the club too: the host keeps it, marked taken back and never deleted, every
-  laptop's club dupe check and the club board drop it, and the club Cabrillo and the club's counts
-  leave it out. Restore on the contest screen puts it back everywhere, and the club file is then
-  exactly what it was. A laptop away from the host catches the club up when the link is back, and
-  its club chip counts the take-back until then. Each laptop takes back only contacts it logged
-  itself. Club sync moves to a new version for this, so every laptop in the club needs this
-  release: an older Nexus is turned away when it joins, and told to update.
 
 ### Changed
 
-- **The Contest screen's operator box is at the top, and the screen below it uses the whole
-  window.** While a contest runs, the Operator box sits on the log line's title line beside
-  Sending and I moved, in the main window and in the Logger window, and Ctrl+O puts the cursor
-  there; the scoreboard below no longer has a second one (with no contest running it keeps its box,
-  as the torn-off scoreboard does). It saves the operator as it always did, the top bar's operator
-  follows it, and Enter there never logs a contact. Under the log line and the last contacts, which
-  keep their size, the contest controls, club board, score, sections and log now use the full width
-  of a wide window: Logger window, the exports, Summary and Dupe sheet sit in one row, with the
-  merge and its upload switch beside them where there is room, and the longer sentences keep a
-  width you can read. On a small window the upload boxes no longer run off the right edge: at
-  1024 × 768, WRL (and Cloudlog in the Logger window) could not be reached.
-- **A contest log line says what each exchange box is for.** The box for the other station's
-  county was captioned QTH, which reads as anything but "their county". Each box now says what it
-  holds for your role in the contest you picked: **County / State** inside a QSO party's state and
-  **IL county** (or NY, OH, TN, TX, CA) outside it, **State** in CQ WW RTTY, **Serial** in CQ WPX
-  and the California QSO Party, **Grid** in the VHF contests, and Serial, Precedence, Call, Check
-  and Section in Sweepstakes. Field Day's Class and Section and CQ WW's Zone are unchanged. While
-  empty, a county box shows a county from its own list as an example (`COOK`), and a state or
-  section box shows `WI`. The logger window, the Contest screen's log table and the edit of a
-  logged contact use the same words. What is logged, sent and scored is unchanged.
-- **No CW ID after an FT8 or FT4 contact, as in WSJT-X.** With CW ID after 73 on, Nexus no longer
-  keys your call in CW after its final 73 in FT8, FT4, FT2, TempoFast or TempoDeep, so Disable TX
-  after sending 73 now leaves TX off after those contacts (the ID turned it back on). Q65, FST4 and
-  MSK144 send the ID as before, and the setting keeps its value. NEEDS-BENCH: an FT8 and a Q65
-  contact into a dummy load with the setting on.
-- **In an FT8/FT4 contest, Tx6 and Call CQ send the CQ WSJT-X would.** In ARRL Field Day and the
-  ARRL VHF contests the Tx6 row reads that contest's own CQ (`CQ FD`, `CQ TEST`) and Tx 6 starts the
-  contest's Running, as Call CQ does. In the contests WSJT-X has no activity for, Tx6 stays yours,
-  and Tx 6 and Call CQ send what you typed there, a directed `CQ QP <call> <grid>` included, through
-  the contest's Running. Either is refused, with the reason, where the contest's exchange is not
-  filled in. Outside a contest, in a contest that bans the mode, on FT1, DX1 and FT2, with a
-  nonstandard call, and on the Remote page, Tx6 is as before. NEEDS-BENCH: Tx 6 and Call CQ in ARRL
-  Field Day, an ARRL VHF contest and a state QSO party.
-- **Running in ARRL Field Day on FT8 and FT4 answers the caller's RR73 with 73**, as WSJT-X does,
-  and then calls CQ FD again. FT1 and Winter Field Day close as before, without the 73.
-  NEEDS-BENCH: a contact with a station running WSJT-X in Field Day mode.
-- **In an FT8/FT4 contest, TX goes off after a contact you started with a double-click on a CQ**,
-  when Disable TX after sending 73 is on (it is by default), as WSJT-X does after a double-clicked
-  contact: once that contact's last over has gone out. You stay in the contest's S&P, listening,
-  and turn TX on to work the next station. A contact the contest's S&P starts by itself keeps TX
-  on, so it goes on to the next CQ, and Running is unchanged. NEEDS-BENCH: FT8 into a dummy load.
-- **A park clicked on the Needed board fills the log line instead of setting a hunt.** Clicking a
-  POTA or SOTA activator that works in Phone or CW, on the board in its own window or wherever it
-  shows, puts the station's call and the park in that cockpit's log line, and the contact you log
-  from it carries the park as before. Nothing waits at the top of the POTA / SOTA list, and the log
-  line's Clear clears it, so a station you never heard leaves nothing behind. HUNT on the POTA /
-  SOTA list sets a hunt as before. An FT8, FT4 or RTTY activator clicked on the board still sets
-  one, because the hunt is how its park reaches the contact.
-- **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU.** In
-  every contest, F1 is your CQ, F2 sends his call and your exchange, F3 `TU <your call>`, F4 your
-  call, F5 his call alone, F6 your exchange in search and pounce, F7 `<his call> QSO B4` and F8
-  AGN. In the Illinois QSO Party from Cook County, working K9AAA, F2 sends `K9AAA 5NN COOK` and F6
-  `TU 5NN COOK`; at Field Day they send your class and section, such as `K9AAA 3A WI`. Only F1
-  sends what it sent before, and AGN, which moved from F7 to F8. Your exchange now goes once,
-  without "DE <your call> … K", and your call goes out on F1, F3 and F4. Habit is the risk: F3
-  pressed for the exchange now sends TU, F4 pressed to confirm sends only your call, F5 pressed
-  for your call sends his, and F7 pressed for a repeat sends QSO B4.
-  The keys' captions say what each one sends, and the CW manual lists every text. Enter Sends
-  Message sends from these keys. The casual set, RTTY's and Phone's keys, and logging are
-  unchanged, and a macro profile of your own keeps the texts it has.
+- **The CW cockpit's contest and Field Day F-keys now follow N1MM's layout, so F3 is now TU, and the
+  exchange keys send your report.** In every contest, F1 is your CQ, F2 sends his call and your
+  exchange, F3 `TU <your call>`, F4 your call, F5 his call alone, F6 your exchange in search and
+  pounce, F7 `<his call> QSO B4` and F8 AGN. In the Illinois QSO Party from Cook County, working
+  K9AAA, F2 sends `K9AAA 5NN COOK` and F6 `TU 5NN COOK`; at Field Day they send your class and
+  section, such as `K9AAA 3A WI`. In a contest whose exchange includes a signal report (the
+  Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), F2 and F6 send 5NN
+  before your county, zone or serial, which the old keys sent without it (`K9AAA DE <your call> COOK
+  COOK K`); Sweepstakes, the California QSO Party and the ARRL VHF contests have no report in their
+  exchange, and no key sends one there, nor at Field Day. Only F1 sends what it sent before, and
+  AGN, which moved from F7 to F8. Your exchange now goes once, without "DE <your call> … K", and
+  your call goes out on F1, F3 and F4. Habit is the risk: F3 pressed for the exchange now sends TU,
+  F4 pressed to confirm sends only your call, F5 pressed for your call sends his, and F7 pressed for
+  a repeat sends QSO B4. The keys' captions say what each one sends, and the CW manual lists every
+  text. Enter Sends Message sends from these keys. The casual set, RTTY's and Phone's keys, and
+  logging are unchanged, and a macro profile of your own keeps the texts it has: if you copied the
+  old contest keys into one of your own, add `{RST}` before `{EXCH}` in its F3 and F4.
 - **AGN is now F8 in the Phone, CW, RTTY and PSK contest keys, as in N1MM's default message sets.**
   In the CW contest and Field Day sets and the RTTY and PSK Contest sets, AGN and B4 trade keys: F8
   asks for a repeat and F7 sends `<his call> QSO B4`. No other key moves. Habit is the risk: F7
   pressed for a repeat now sends QSO B4. Your own texts go with their messages: an RTTY or PSK
   Contest key you changed on F7 or F8 moves to the other key, and so does a step you mapped there
-  for Enter Sends Message; a CW macro profile of your own keeps its keys. In Phone the voice keyer has a new slot, F8 AGN,
-  which Enter Sends Message plays when you need a repeat, and F5 is yours: on CW F5 sends his
-  call, and a recording cannot say one. If you ran Enter Sends Message in Phone in a test build,
-  where AGN was on F5, F5 keeps whatever you recorded there and F8 starts with a copy of it, so
-  every key plays what it played before, in a contest or out of one; record a real AGN in F8
-  whenever you like, and F5 keeps its own.
-
-- **Field Day mode is now Contest mode: one switch for whichever contest is picked.** It always
-  started the contest picked in Settings ▸ Contesting ▸ Contest, a QSO party or CQ WW as much as Field
-  Day, and the contest log strip (its dupe check, Super Check Partial, call history, Enter Sends
-  Message and Ctrl+D), the operator box, the Contest screen and the exports work in every contest it
-  starts, as club sync does in every contest it can run. Now its name says so, at the top of the
-  Contest screen and in Settings ▸ Contesting, and it names the contest: "Enable Contest mode:
-  Illinois QSO Party". Its Settings section is called Contest mode, no
-  line shown for another contest says Field Day, and ARRL Field Day's power multiplier shows only
-  when ARRL Field Day is picked. Your saved setting carries over as it is. The exported files are named for
-  the contest too (`ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`) rather than `fd-…`; a QSO party
-  shows your side in words (in-state, out-of-state, W/VE or DX) in Settings and beside Sending on the
-  log strip, never `in_state`; while a contest runs, Settings says beside the picker which contest it
-  is and that saving a different pick switches at once; the upload switch under the
-  merge button reads "Upload merged contacts to:"; and the N3FJP and N1MM settings, the Club Board
-  window and the Remote page's contest view describe whichever contest is running.
+  for Enter Sends Message; a CW macro profile of your own keeps its keys. In Phone the voice keyer
+  has a new slot, F8 AGN, which Enter Sends Message plays when you need a repeat, and F5 is yours:
+  on CW F5 sends his call, and a recording cannot say one. F5 keeps whatever you recorded there, and
+  F8 is empty until you record an AGN in it.
+- **Field Day mode is now Contest mode: one switch for whichever contest is picked, and the left bar
+  calls its screen Contest.** It always started the contest picked in Settings ▸ Contesting ▸
+  Contest, a QSO party or CQ WW as much as Field Day, and the contest log strip (its dupe check,
+  Super Check Partial, call history, Enter Sends Message and Ctrl+D), the operator box, the Contest
+  screen and the exports work in every contest it starts, as club sync does in every contest it can
+  run. Now its name says so, and it names the contest: "Enable Contest mode: Illinois QSO Party".
+  The switch is at the top of the Contest screen, beside the picked contest and when it runs (its
+  dates in UTC and the countdown), and in Settings ▸ Contesting ▸ Contest, under the picker, where a
+  Settings search for "contest mode" goes; it is no longer in Settings ▸ Appearance ▸ Features. Your
+  saved setting carries over as it is. The tent item in the left bar now reads **Contest**, and its
+  tooltip names the contest you picked (for example "Contest — Illinois QSO Party"); it keeps its
+  place in your bar order and stays on the bar with the mode off, and the scoreboard's own window
+  and the main window's title read Contest too. The switch on the Contest screen saves at once, and
+  opening the screen with the mode off does not start the contest. If the contest cannot start yet,
+  the switch stays off and the screen says what is missing (your Class and Section for Field Day, or
+  the field a QSO party needs), with a button to that place in Settings. With the mode on, the
+  screen says which contest's rules apply, the modes it does not permit, and during Winter Field Day
+  that no spots are posted over the internet. With club sync on it says that turning the mode off
+  keeps this station in the club event, sends no contacts until the mode is back on, and loses
+  nothing from the log. No line shown for another contest says Field Day, ARRL Field Day's power
+  multiplier shows only when ARRL Field Day is picked, and ARRL Field Day and Winter Field Day keep
+  their names. The exported files are named for the contest too (`ilqp-log-<date>.cbr`,
+  `arrlfd-summary-<date>.txt`) rather than `fd-…`; a QSO party shows your side in words (in-state,
+  out-of-state, W/VE or DX) in Settings and beside Sending on the log strip, never `in_state`; while
+  a contest runs, Settings says beside the picker which contest it is and that saving a different
+  pick switches at once; the upload switch under the merge button reads "Upload merged contacts
+  to:"; and the N3FJP and N1MM settings, the Club Board window and the Remote page's contest view
+  describe whichever contest is running.
 - **A contest picked while Contest mode is on starts when you save it.** Saving a different contest
   in Settings ▸ Contesting ▸ Contest ends the running one and starts the new one at once, exactly as
   turning Contest mode off and on did: the new contest starts in Search-and-Pounce and never calls
@@ -507,9 +476,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contest that ended. Saving anything else keeps the running contest as it is. When the new contest
   cannot start yet (a QSO party's county, say), the old one still ends and the Contest screen says
   what is missing.
-- **The Contest mode switch is no longer in Settings ▸ Appearance ▸ Features.** It stays at the top
-  of the Contest screen and in Settings ▸ Contesting ▸ Contest, under the picker, and a Settings
-  search for "contest mode" goes there. Your setting is unchanged.
 - **Settings ▸ Contesting is in the order you set up an entry.** First the contest, with the Contest
   mode switch and Check for rules updates; then Your station data, what you send; then **Your
   entry**, what your log declares: Entry category, Power category, Spotting assistance, Station
@@ -521,27 +487,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Station tab's State and the contest's State or province now say which is which: the first is what
   your everyday macros send, the second where your station is for the contest, which can differ
   when you operate away from home.
-- **The Rotor box in the dashboard rail shows everything without scrolling.** Beside a cockpit, the
-  Rotor box now draws a smaller compass rose beside the antenna's bearing and the bearing and
-  elevation boxes, with the line for the call in your log entry under them, so the bearing (and
-  elevation), ■ STOP and that line with **Point** all show in the stock rail on a 1366×768 screen and
-  larger, where STOP used to be a scroll down inside the box. In a rail narrowed toward its minimum on
-  a 1366×768 or 1600×900 screen the call's line can still be a short scroll down: drag the divider
-  under the box to give it room. The Rotor pane on Conditions and in a cockpit's own columns is
-  unchanged.
-- **The Rotor and Amplifier boxes draw their readings bigger.** In the dashboard rail the Rotor box
-  now uses the room it is given: the compass rose, the bearing and the elevation grow with the box and
-  stand in its middle, and in a box about as tall as it is wide the bearing and elevation boxes and
-  ■ STOP move under the rose. A short box keeps the tight layout, with everything in view as before. The
-  Amplifier box shows power out and SWR as large readings that follow the box's width, like the
-  Clock's digits, and PA temperature, volts and current a size larger, wherever the box stands.
+- **A contest log line says what each exchange box is for.** The box for the other station's
+  county was captioned QTH, which reads as anything but "their county". Each box now says what it
+  holds for your role in the contest you picked: **County / State** inside a QSO party's state and
+  **IL county** (or NY, OH, TN, TX, CA) outside it, **State** in CQ WW RTTY, **Serial** in CQ WPX
+  and the California QSO Party, **Grid** in the VHF contests, and Serial, Precedence, Call, Check
+  and Section in Sweepstakes. Field Day's Class and Section and CQ WW's Zone are unchanged. While
+  empty, a county box shows a county from its own list as an example (`COOK`), and a state or
+  section box shows `WI`. The logger window, the Contest screen's log table and the edit of a
+  logged contact use the same words. What is logged, sent and scored is unchanged.
+- **The Contest screen's operator box is at the top, and the screen below it uses the whole
+  window.** While a contest runs, the Operator box sits on the log line's title line beside
+  Sending and I moved, in the main window and in the Logger window, and Ctrl+O puts the cursor
+  there; the scoreboard below no longer has a second one (with no contest running it keeps its box,
+  as the torn-off scoreboard does). It saves the operator as it always did, the top bar's operator
+  follows it, and Enter there never logs a contact. Under the log line and the last contacts, which
+  keep their size, the contest controls, club board, score, sections and log now use the full width
+  of a wide window: Logger window, the exports, Summary and Dupe sheet sit in one row, with the
+  merge and its upload switch beside them where there is room, and the longer sentences keep a
+  width you can read. On a small window the upload boxes no longer run off the right edge: at
+  1024 × 768, WRL (and Cloudlog in the Logger window) could not be reached.
+- **In an FT8/FT4 contest, Call CQ and Tx 6 call the contest's CQ, as WSJT-X would.** Call CQ on the
+  FT cockpit used to start a plain FT8 CQ outside the contest, and opening the Contest screen then
+  put you back in S&P. While a contest runs it is now the contest's Running, the same as the Contest
+  screen's button, and the run keeps going while you check the score. In ARRL Field Day and the ARRL
+  VHF contests the Tx6 row reads that contest's own CQ (`CQ FD`, `CQ TEST`) and Tx 6 starts the
+  contest's Running, as Call CQ does. In the contests WSJT-X has no activity for, Tx6 stays yours,
+  and Tx 6 and Call CQ send what you typed there, a directed `CQ QP <call> <grid>` included, through
+  the contest's Running. Either is refused, with the reason, where the contest's exchange is not
+  filled in. Outside a contest, in a contest that bans the mode, on FT1, DX1 and FT2, with a
+  nonstandard call, and on the Remote page, Tx6 is as before. NEEDS-BENCH: Tx 6 and Call CQ in ARRL
+  Field Day, an ARRL VHF contest and a state QSO party, on FT8 into a dummy load.
+- **Running in ARRL Field Day on FT8 and FT4 answers the caller's RR73 with 73**, as WSJT-X does,
+  and then calls CQ FD again. FT1 and Winter Field Day close as before, without the 73.
+  NEEDS-BENCH: a contact with a station running WSJT-X in Field Day mode.
+- **No CW ID after an FT8 or FT4 contact, as in WSJT-X.** With CW ID after 73 on, Nexus no longer
+  keys your call in CW after its final 73 in FT8, FT4, FT2, TempoFast or TempoDeep, so Disable TX
+  after sending 73 now leaves TX off after those contacts (the ID turned it back on). Q65, FST4 and
+  MSK144 send the ID as before, and the setting keeps its value. NEEDS-BENCH: an FT8 and a Q65
+  contact into a dummy load with the setting on.
+- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says, and waits
+  for it, for a second radio and a Remote selection too.** With Rig Model NET rigctl and a Network
+  Address on this computer (127.0.0.1 or localhost) where a rigctld answers, wfview's for one, Nexus
+  now talks to that rigctld itself, as it already did when rigctld TCP Port was set to the same
+  port. With any other port it started a rigctld of its own between them, and in front of wfview
+  that one refused every command, PTT included, whenever wfview reported the radio switched off.
+  When nothing answers at the address yet, Nexus starts nothing in between either: the CAT status
+  says "Nothing is answering at 127.0.0.1:4533 — start wfview (or your rigctld)", with your address,
+  and Nexus asks again on its own (after 10 seconds, then less often, at most 5 minutes apart) and
+  connects once it answers. Test CAT asks again at once. So wfview and Nexus can start in either
+  order. Follow the wfview steps in the Icom guide and leave rigctld TCP Port as it is. When the
+  rigctld Nexus shares this way goes away, Test CAT names its address rather than rigctld TCP Port.
+  The radio you are not operating, kept connected in the radio switcher, now talks to wfview's
+  rigctld (or yours) itself, as the operated radio does, and so does a Remote selection of it:
+  neither starts a rigctld of its own in front of it any more, and while nothing answers at the
+  address, Nexus starts nothing there and asks again on its own. A Network Address on Nexus's own
+  Share this radio port is never taken for a radio. NEEDS-BENCH: wfview's rigctld on a real radio,
+  with rigctld TCP Port left at 4534, should connect, follow the dial and key PTT, Rear/Data keying
+  the DATA input, with wfview started before Nexus and after it; and two radios, one on wfview's
+  rigctld, switched between and selected from the Remote.
+- **Winter Field Day runs on the sponsor's 2027 rules, on 23 and 24 January.** The rules data now
+  says 2027, so a station that has it is no longer told in January to check for rules updates. The
+  2027 rules put the event on the fourth full weekend of January, and Nexus still used the last full
+  weekend from the 2025 rules, so it counted down to 30 January, a week late. Installed copies pick
+  the date up from the rules file once it is published (Settings ▸ Contesting ▸ Contest ▸ Check for
+  rules updates), at the next launch. Winter Field Day no longer carries a copy of ARRL Field Day's
+  bonus list: those bonuses are not part of Winter Field Day, and one ticked there now scores
+  nothing.
+- **Winter Field Day's Cabrillo header is the one in the sponsor's example.** It carries
+  `X-EXCHANGE` (your class and category, such as `3O`) and, when your Power category is QRP or LOW,
+  `CATEGORY-POWER`, and the lines the sponsor's example log has: your name (Settings ▸ Station), the
+  email for contest logs, the club and the other operators (Settings ▸ Contesting ▸ Your entry),
+  each where you have set it. Winter Field Day's limit is 100 W PEP and it has no high-power entry,
+  so a Power category left at HIGH writes no CATEGORY-POWER line; Settings says so beside the
+  picker. A club's file carries the same lines as a position's, and its OPERATORS line now names the
+  operators the positions logged under as well as the ones you typed.
+- **A satellite contact counts for nothing at Winter Field Day.** The sponsor's 2027 rules say
+  cross-band and relayed contacts do not count. A contact made through a satellite is still logged
+  and kept, and reaches your logbook and LoTW when you merge the contest log, but it scores nothing,
+  is left out of the Winter Field Day Cabrillo and ADIF files, and does not make the same station
+  worked on the same band without the satellite a duplicate. A log of satellite contacts alone is
+  saved too. ARRL Field Day, which counts satellite contacts, is unchanged.
+- **No spots over the internet while Winter Field Day runs.** The sponsor's 2027 rules say "You may
+  spot yourself and others only via amateur RF." So while the event runs, a station with Winter
+  Field Day switched on sends no PSK Reporter reports, posts no DX cluster spot and sends no POTA
+  self-spot, from the desktop or from Nexus Remote. The contest screen says why, the Spot and Spot
+  me buttons say so if you press them, and Settings says so beside PSK Reporter. Receiving cluster
+  and skimmer spots carries on, your PSK Reporter setting is not changed, and everything goes back
+  to normal when the event ends.
+- **Winter Field Day's words follow the 2027 rules, FT2 is on its banned-mode list, and the manual
+  has its checklist.** In Settings ▸ Contesting ▸ Field Day the class box is **WFD Class and
+  Category**: the number of transmitters, then H, I, O or M, as the sponsor now names them, and the
+  contest log puts the H/I/M/O note on that column. FT2 is on the banned-mode list, as the sponsor's
+  2027 list has it; the warning is advisory, as before: the log strip warns and nothing is refused.
+  Settings ▸ Contesting ▸ Field Day Club Sync names the firewall ports a club event uses. The Field
+  Day manual has a Winter Field Day 2027 checklist (the rules update and restart, class and
+  category, LOW or QRP, the bands, the banned modes, direct contacts only, spotting only over RF,
+  the firewall and the clocks for a club, rehearsal files, and the 1 March deadline), and its
+  scoring, bonus and export sections now describe the objectives and the sponsor's submission.
+- **A park clicked on the Needed board fills the log line instead of setting a hunt.** Clicking a
+  POTA or SOTA activator that works in Phone or CW, on the board in its own window or wherever it
+  shows, puts the station's call and the park in that cockpit's log line, and the contact you log
+  from it carries the park as before. Nothing waits at the top of the POTA / SOTA list, and the log
+  line's Clear clears it, so a station you never heard leaves nothing behind. HUNT on the POTA /
+  SOTA list sets a hunt as before. An FT8, FT4 or RTTY activator clicked on the board still sets
+  one, because the hunt is how its park reaches the contact.
+- **The Rotor box in the dashboard rail shows everything without scrolling, and the Rotor and
+  Amplifier boxes draw their readings bigger.** Beside a cockpit, a short Rotor box, as in the stock
+  rail, draws a small compass rose beside the antenna's bearing and the bearing and elevation boxes,
+  with the line for the call in your log entry under them, so the bearing (and elevation), ■ STOP
+  and that line with **Point** all show on a 1366×768 screen and larger, where STOP used to be a
+  scroll down inside the box. In a rail narrowed toward its minimum on a 1366×768 or 1600×900 screen
+  the call's line can still be a short scroll down: drag the divider under the box to give it room.
+  A taller or wider Rotor box in the rail uses the room it is given: the compass rose, the bearing
+  and the elevation grow with the box and stand in its middle, and in a box about as tall as it is
+  wide the bearing and elevation boxes and ■ STOP move under the rose. The Rotor pane on Conditions
+  and in a cockpit's own columns is unchanged. The Amplifier box shows power out and SWR as large
+  readings that follow the box's width, like the Clock's digits, and PA temperature, volts and
+  current a size larger, wherever the box stands.
 - **The dashboard rail keeps its own boxes for each cockpit.** The rail beside FT can show different
   boxes from the rail beside Phone: a box picked, closed or resized in one cockpit's rail stays in
   that cockpit's, and the rail's Reset resets that cockpit's rail only. After the update, each
   cockpit's rail starts as the rail you had.
-- **A pane shows once across a cockpit and its dashboard rail.** While the rail shows a pane, a box in
-  the cockpit that holds the same pane shows another. Picking a pane that is already showing, in the
-  rail or in a box, moves it there, and the other side takes what it showed.
 - **On a small window the dashboard rail's boxes move into the cockpit.** Beside FT, Phone, CW and
   JS8, on a window too small for the rail, its boxes now stand at the foot of the cockpit's columns
   (FT's side rail, the first column in the others) instead of disappearing, and go back into the
@@ -550,82 +617,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Conditions box and the dashboard rail's box each fetched pota.app and SOTAwatch once a minute for
   themselves. They now share one fetch and show the same list, **Refresh** in any of them updates all
   of them, and a failed fetch says so once.
-- **Winter Field Day runs on the sponsor's 2027 rules.** The rules data now says 2027, so a station
-  that has it is no longer told in January to check for rules updates. Winter Field Day no longer
-  carries a copy of ARRL Field Day's bonus list: those bonuses are not part of Winter Field Day,
-  and one ticked there now scores nothing. Its Cabrillo file gains the lines the sponsor's example
-  log has: your name (Settings ▸ Station), the email for contest logs, the club and the other
-  operators (Settings ▸ Contesting ▸ Your entry), each where you have set it.
-- **Winter Field Day's Cabrillo header is the one in the sponsor's example.** It carries
-  `X-EXCHANGE` (your class and category, such as `3O`) and, when your Power category is QRP or LOW,
-  `CATEGORY-POWER`. Winter Field Day's limit is 100 W PEP and it has no high-power entry, so a
-  Power category left at HIGH writes no CATEGORY-POWER line; Settings says so beside the picker. A
-  club's file carries the same lines as a position's, and its OPERATORS line now names the
-  operators the positions logged under as well as the ones you typed.
-- **A satellite contact counts for nothing at Winter Field Day.** The sponsor's 2027 rules say
-  cross-band and relayed contacts do not count. A contact made through a satellite is still logged
-  and kept, and reaches your logbook and LoTW when you merge the contest log, but it scores
-  nothing, is left out of the Winter Field Day Cabrillo and ADIF files, and does not make the
-  same station worked on the same band without the satellite a duplicate. ARRL Field Day, which
-  counts satellite contacts, is unchanged.
-- **No spots over the internet while Winter Field Day runs.** The sponsor's 2027 rules say "You may
-  spot yourself and others only via amateur RF." So while the event runs, a station with Winter
-  Field Day switched on sends no PSK Reporter reports, posts no DX cluster spot and sends no POTA
-  self-spot, from the desktop or from Nexus Remote. The contest screen says why, the Spot and Spot
-  me buttons say so if you press them, and Settings says so beside PSK Reporter. Receiving cluster
-  and skimmer spots carries on, your PSK Reporter setting is not changed, and everything goes back
-  to normal when the event ends.
-- **Winter Field Day's words follow the 2027 rules, and the manual has its checklist.** The Field
-  Day Setup box is **WFD Class and Category**: the number of transmitters, then H, I, O or M, as the
-  sponsor now names them, and the contest log puts the H/I/M/O note on that column. Settings ▸
-  Contesting ▸ Field Day Club Sync names the firewall ports a club event uses. The Field Day manual
-  has a Winter Field Day 2027 checklist (the rules update and restart, class and category, LOW or
-  QRP, the bands, the banned modes, direct contacts only, spotting only over RF, the firewall and
-  the clocks for a club, rehearsal files, and the 1 March deadline), and its scoring, bonus and
-  export sections now describe the objectives and the sponsor's submission.
-- **NET rigctl uses a rigctld on this computer directly, whatever rigctld TCP Port says, and
-  waits for it.** With Rig Model NET rigctl and a Network Address on this computer (127.0.0.1 or
-  localhost) where a rigctld answers, wfview's for one, Nexus now talks to that rigctld itself, as
-  it already did when rigctld TCP Port was set to the same port. With any other port it started a
-  rigctld of its own between them, and in front of wfview that one refused every command, PTT
-  included, whenever wfview reported the radio switched off. When nothing answers at the address
-  yet, Nexus starts nothing in between either: the CAT status says "Nothing is answering at
-  127.0.0.1:4533 — start wfview (or your rigctld)", with your address, and Nexus asks again on its
-  own (after 10 seconds, then less often, at most 5 minutes apart) and connects once it answers.
-  Test CAT asks again at once. So wfview and Nexus can start in either order. Follow the wfview
-  steps in the Icom guide and leave rigctld TCP Port as it is. When the rigctld Nexus shares this
-  way goes away, Test CAT names its address rather than rigctld TCP Port. NEEDS-BENCH: wfview's
-  rigctld on a real radio, with rigctld TCP Port left at 4534, should connect, follow the dial and
-  key PTT, Rear/Data keying the DATA input, with wfview started before Nexus and after it.
-- **A second radio on NET rigctl, and a Remote selection of it, use a rigctld on this computer
-  directly too.** The radio you are not operating, kept connected in the radio switcher, now talks
-  to wfview's rigctld (or yours) itself, as the operated radio does, and so does a Remote selection
-  of it. Neither starts a rigctld of its own in front of it any more; in front of wfview that one
-  refused every command, PTT included, whenever wfview reported the radio switched off. While
-  nothing answers at the address, Nexus starts nothing there and asks again on its own. A Network
-  Address on Nexus's own Share this radio port is never taken for a radio. NEEDS-BENCH: two radios,
-  one on wfview's rigctld, switched between and selected from the Remote, with wfview started
-  before Nexus and after it.
 
 ### Fixed
 
-- **Closing the torn-off waterfall's window puts the waterfall back, and Alt+F4 closes the contest
-  logger window.** Closing the window of a popped-out waterfall left the re-dock bar in its place on
-  the Operate screen, and the waterfall came back only when you clicked the bar. Closing the window
-  any way now brings it back, whichever screen you are on, and the re-dock bar still works. The
-  contest logger window held every F-key, Alt+F4 among them; with Alt, Ctrl or Cmd held a key is now
-  the system's there, as on the main window's Contest screen, so Alt+F4 closes it. Its F-keys alone
-  still do nothing, so F5 cannot reload it.
-- **In a contest, the report follows the mode when you move between Phone and CW or RTTY.** After a
-  contact, a move from Phone to CW left 59 in the log line's received report, and back on Phone it
-  left 599, so a CW contact could go into the log, the Cabrillo file and the ADIF with 59. This
-  happened with the contest logger window open, in both windows. A report you have not typed is now
-  the mode's own: 59 on Phone, 599 on CW, RTTY and the keyboard modes. A report you typed stays
-  with that contact, across a move; the next contact, and the line after Clear, start on the mode's
-  own (Clear used to keep a typed report in the box). With the logger
-  window open, a report typed for one contact could also stay in the box for the next one; it no
-  longer does. On Phone, the Sending line and the Give line beside PTT now read 59, the report a
-  phone contact is logged with, where they read the session's 599.
 - **After Stop TX, TX stays off until you turn it back on, whichever screens you visit.** A trip
   to the Contest screen, the Map or the Logbook and back to Phone, CW, RTTY or PSK turned TX back
   on after Stop TX, Esc, TX Off or the watchdog. With Enter Sends Message on, the next Enter then
@@ -636,22 +630,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stopped it, at launch or coming from FT8 with no Halt; after a Halt in FT8, your first PTT press
   in Phone turns TX on instead of keying. Stop TX and Esc now also end an RTTY Auto run, and so do
   a band change and a radio switch: start a new run with Auto CQ.
-
-- **With the contest logger window open, a contact's county no longer carries into the next one.**
-  Depending on when each window's next update landed against the log, the county of the contact
-  you had just logged (or any box but the report) could stay in both windows, and then stayed for
-  good: a plain Enter on the next call logged that county again, for the new station. The boxes now
-  start the next contact empty in both windows whichever way those updates land, as they always did
-  with the logger window closed. A box the other window typed for the next contact is kept, and
-  Field Day still keeps the class and section you logged. In the window you log from, the boxes now
-  empty as the contact is logged rather than a moment later.
-
-- **Phone's F-keys play the voice keyer from the log line, as CW's do.** With the cursor in the Call
-  box or any other box of the log line, a slot's F-key played nothing until you clicked out of the
-  box. Now it plays from anywhere on the Phone screen, and F1–F12 never reach the window there, so F5
-  cannot reload the app, even while you record; with Alt, Ctrl or Cmd held an F-key is left to the
-  system, so Alt+F4 still closes the window.
-
 - **A dupe is now logged as a dupe for 0 points in every contest, the way N1MM does.** Field Day,
   Winter Field Day and the Tennessee, Ohio, California, Texas and Illinois QSO parties refused a
   station you had already worked: Enter in the CW, Phone or RTTY log strip said it "is a dupe on this
@@ -663,54 +641,190 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file still keeps the earliest contact only). The Dupe warning still shows while you type, S&P
   still passes a station you have worked, and nothing more is sent on the air; with Enter Sends
   Message on, Enter on a dupe still sends nothing, and the Log button logs it.
-- **With a compound or nonstandard call (PJ4/K1ABC, K1ABC/QRP), the contest's CQ is WSJT-X's plain
-  `CQ <call>`.** Call CQ and the Contest screen's Running sent the contest's CQ with your grid,
-  `CQ FD PJ4/K1ABC FN42`, which FT8 cannot carry and sent as another station's call, `CQ FD K1ABC
-  FN42`. The Tx6 row already sends the plain CQ. NEEDS-BENCH: Call CQ with a compound call in ARRL
-  Field Day.
-- **With a compound or nonstandard call, the rest of a contest contact carries your call too, as
-  WSJT-X writes it.** The answer to a CQ, the reports, RR73 and 73 went out with the base call
-  (`W9XYZ K1ABC FN42`), another station's. They now send your call hashed beside a grid or report
-  (`W9XYZ <PJ4/K1ABC> FN42`) and whole in RR73 and 73 (`<W9XYZ> PJ4/K1ABC RR73`); a reply to your
-  hashed call moves the contact on, and the log records the other station's call without the
-  `< >`. NEEDS-BENCH: a contest contact with a compound call, as S&P and as Running.
-- **A contest picked in Settings no longer stops FT8 QSO mode and Chat.** With a contest picked
-  whose exchange was not filled in (the Texas QSO Party with no county or state, say), switching to
-  FT8 QSO mode, to call CQ or to search and pounce, or to Chat was refused with that contest's
-  complaint even with Contest mode off, and the FT cockpit's Call CQ did nothing at all. With
-  Contest mode off they always work now. Only the contest's own Running and S&P need its exchange,
-  and they still say what is missing.
-- **Reset to defaults on a CW macro profile now clears the keys you mapped to Enter Sends Message's
-  steps, with the profile's own keys.** It kept them where Settings could neither show nor clear
-  them, and in a contest Enter went on sending those keys of the built-in sets: AGN mapped to F7
-  sent QSO B4. A profile on the built-in sets now sends their steps, as Settings ▸ Contesting
-  shows them, even one reset in a test build, and Customize starts with no steps mapped.
+- **A contest's log now holds every contact of that contest, however long ago it was logged.** It
+  loaded only its last four days, so a QSO party opened a week later held none of the party's
+  contacts: its Cabrillo and ADIF exports, its score and its dupe check had none of them, and
+  sponsors take logs for weeks. The Contest screen, both exports and the dupe check now see the
+  whole contest, so a log exported a week or a month later is complete. Another contest's
+  contacts, and the same contest's next year, still stay out of it.
+- **A contest contact you never merged into your logbook is no longer lost four days later.** The
+  contest log keeps its contacts for four days, and the first contact logged after that wrote the
+  older ones out of this computer's contest journal, merged or not: a contact never merged was then
+  in no file Nexus keeps. The journal now keeps every contact until it is in your logbook, and the
+  Contest screen says how many, from which contest and when they were logged, with a button that
+  merges them. Pressing it twice adds nothing twice. Contacts already merged leave the journal as
+  before, and a contact you took back stays taken back.
+- **A contest contact logged more than four days after the first ones is merged into your
+  logbook.** The contest log keeps its contacts for four days, and the number it gives each
+  contact (not the serial you send) went with them: the next contact got number 1 again,
+  **Merge into my logbook** took it for the first contact and left it out as already in your
+  logbook, and a club host would have taken it for a contact it already had. A contest's contact
+  numbers are no longer given out twice in the same year, however long after the contest a
+  contact is logged.
+- **Merging a contest into your logbook again never adds a contact twice.** After **I moved**,
+  or a County or section changed in Settings, a restart (or leaving the contest and coming back)
+  made a second **Merge into my logbook** add every contact already merged again, as duplicates,
+  and a logbook edit or delete of one of them no longer reached the contest log. Each merged
+  contact is now named by its contest and the year it was made, not by where you were, so the
+  merge can be pressed any number of times. Contacts merged by an earlier version keep their
+  names and are recognised: merging again after this update adds only contacts never merged, and
+  never removes or rewrites one already in your logbook. A contact an earlier version already
+  added twice stays twice until you delete one; deleting one of the two leaves the contest log as
+  it is, and deleting the last copy takes the contact out of the contest log, as any delete does.
+  The same contest a year later, from the same county, is merged too; before, its contacts were
+  taken for last year's and left out.
+- **Changing your County in Settings no longer changes it on contacts already logged.** In a QSO
+  party, a County changed in Settings (rather than with **I moved**) was put on every contact
+  already in the contest log the next time the contest was opened or Nexus was started, and the
+  Cabrillo file then sent the sponsor the new county for contacts made from the old one. A Field
+  Day class or section, or anything else you send that Settings holds, did the same. Each contact
+  now keeps the exchange it was sent with, whatever Settings say later and in whichever order the
+  change, I moved and a restart come. Contacts logged with an earlier version may not have saved
+  it: they take what Settings say the first time this version opens their contest, and keep it
+  from then on.
+- **I moved works in the QSO parties, and takes a county by its name.** In the Illinois, New York,
+  California, Ohio, Tennessee and Texas QSO parties, saving a new county with **I moved** on the log
+  strip failed with an error, so a mobile or rover went on sending the county it had left. The move
+  is now accepted: the next contact sends and logs the new county, a station you worked from the old
+  county is a new contact again, the score counts it, the Cabrillo file carries each contact's own
+  county, and the new county becomes your County in Settings, so a restart keeps it. A station
+  outside the state moves to another state or province the same way. I moved reads a county the way
+  the county box does, by its code or, in the Illinois and New York parties, by its name (`DuPage`,
+  `Monroe`), which goes out as its code (DUPG in Illinois, MON in New York), and in Field Day a
+  section's full name goes out as its code too. A county that shares its name with a state or
+  province (Washington, and in New York also Delaware, Ontario and Wyoming) is the county when you
+  are in the state, and the state or province when you are outside it. I moved still says no, and
+  why, to a name that is no county, a county across the state line (that is a separate entry), a
+  county line (send both counties yourself and log each contact once per county), a serial number or
+  a report, a contest whose exchange has no county, state or province of yours, and CQ WW RTTY,
+  whose rules have no provision for a station that moves.
+- **The upload ticks under the merge name the services.** Under "Upload merged contacts to:" on the
+  Contest screen, the ticks showed the services' internal ids (`qrz`, `clublog`, `eqsl`…); they now
+  show their names: QRZ, Club Log, eQSL, HRDLog, N3FJP, Cloudlog and WRL.
 - **Restoring a settings backup that turns Contest mode on, or picks another contest while one
   runs, now checks your logbook for dupes as a save does.** The contest it started did not know
   the contacts your logbook already held from the contest's start, so a station you had already
   worked there was not marked worked or dupe. When the logbook is too busy to read at that moment
   (a big import, another window, a sync), the restore tries again for a few seconds, as a save
   does, then says the logbook was busy and restores nothing, so trying again in a moment works.
-- **Nexus Remote says "Station data unavailable" after every loss of the station's data.** When the
-  readings stopped at the moment a background read of the decode history also gave up, the workspace
-  stopped trusting the readings and refused its controls, as it should, but it never faded and never
-  showed "Station data unavailable", however long the loss lasted. It now does, five seconds into
-  every loss, as it already did in every other case.
-- **A joined laptop no longer shows Offline and "Lost the host" after the contest changes.**
-  Changing the contest restarts this laptop's link to the club host, and the old link's last
-  report, that it had gone down, could arrive after the new link was up: the chip read Offline and
-  the line said the host was lost while contacts were syncing. A replaced link's reports are now
-  ignored.
-- **Giving a club position to another laptop takes the old laptop's contacts out of every
-  laptop's club dupe warning at once.** Those contacts left the club's file at the Give, but every
-  laptop, the one given the position included, kept showing them as club dupes, and a Field Day
-  club line kept counting their sections, until a contact was next taken back or restored
-  somewhere in the club; restarting the host did not clear them.
-- **A position turned away for logging another contest is told both contests by the names the
-  contest picker uses.** The host's refusal named the club's contest by its Cabrillo id ("this club
-  is running ARRL-FIELD-DAY, and this Nexus is logging IL QSO Party"). It now reads "this club is
-  running ARRL Field Day, and this Nexus is logging Illinois QSO Party. Pick ARRL Field Day as the
-  contest…", the words of the menu it asks you to pick from.
+- **In a contest, Clear starts the report over, and Phone's Sending and Give lines read the 59 a
+  phone contact is logged with.** A report you typed stays with that contact; the next contact, and
+  the line after Clear, start on the mode's own report, 59 on Phone and 599 on CW, RTTY and the
+  keyboard modes, where Clear used to keep a typed report in the box. On Phone, the Sending line and
+  the Give line beside PTT now read 59, the report a phone contact is logged with, where they read
+  the session's 599.
+- **In CW, the call in the log strip is the call the F-keys send.** A call typed only into the
+  log strip was not the one the keys sent: they sent the call in His Call, which was the last
+  station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
+  pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
+  field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
+  in a contest and out of one, and logging a contact empties both. Until you work a station or
+  type a call, the decoder's best guess still fills the strip, and now His Call too: it is shown
+  unconfirmed, as before, and the F-keys send it unless you correct it first. Clicking a decoded
+  call's chip puts that call in both.
+- **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
+  too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
+  sent its macro, Alt+F4 (which closes the window) included. One press is now
+  one send, however long you hold the key, and a key with Ctrl, Alt or Cmd held is left to the
+  system, as on the RTTY and PSK screens. Esc and Stop TX stop exactly as before.
+- **Phone's F-keys play the voice keyer from the log line, as CW's do.** With the cursor in the Call
+  box or any other box of the log line, a slot's F-key played nothing until you clicked out of the
+  box. Now it plays from anywhere on the Phone screen, and F1–F12 never reach the window there, so F5
+  cannot reload the app, even while you record; with Alt, Ctrl or Cmd held an F-key is left to the
+  system, so Alt+F4 still closes the window.
+- **FT8 and FT4 in a contest send that contest's own messages, as WSJT-X does.** Running and S&P
+  on the Contest screen sent Field Day's messages whatever contest was picked: `CQ FD` and a class
+  and section, so in any other contest no FT8 contact could finish. In the ARRL January, June and
+  September VHF contests they now send what WSJT-X sends in its NA VHF Contest mode: `CQ TEST`,
+  your grid, `R` and your grid, RR73, and 73 from the station running. The other station's grid is
+  logged as its grid, so the contact scores and dupes like one you type. In Sweepstakes, CQ WW,
+  CQ WPX and the California, Ohio, Tennessee and Texas QSO parties, where WSJT-X has no contest
+  mode, they send the standard FT8 messages, and the contact is logged with the call alone, since
+  those messages carry nothing of the exchange. Both need your grid in Settings before they
+  transmit. Field Day, FT1, and the contests that ban FT8 and FT4 (Winter Field Day, Illinois and
+  New York) are unchanged. NEEDS-BENCH: each contest on FT8 into a dummy load, and a contact with a
+  station running WSJT-X in NA VHF Contest mode.
+- **A double-click on a CQ during an FT8/FT4 contest works the station in the contest.** It used to
+  leave the contest and answer with the standard FT8 messages, which a station in WSJT-X's Field Day
+  or NA VHF Contest mode never answers, and the contact went to your own log. It now sends the
+  contest's exchange (your grid in the ARRL VHF contests and in the contests WSJT-X has no mode
+  for), logs to the contest log and leaves you in the contest's S&P, as the Field Day manual says;
+  with TX on, that S&P answers the next CQ it hears. With Disable TX after sending 73 on (it is by
+  default), TX goes off once that contact's last over has gone out, as WSJT-X does after a
+  double-clicked contact, so you stay in the contest's S&P, listening, and turn TX on to work the
+  next station. A contact the contest's S&P starts by itself keeps TX on, so it goes on to the next
+  CQ, and Running is unchanged. A double-click on a station calling you, a roster click, FT1 and
+  FT2, and the contests that ban FT8 and FT4 are unchanged. NEEDS-BENCH: FT8 into a dummy load, and
+  a contact with a station running WSJT-X in Field Day mode.
+- **A reply to a CQ from JTAlert or GridTracker, and S&P on the FT cockpit, work in an FT8/FT4
+  contest.** A reply to a CQ from JTAlert or GridTracker (WSJT-X's UDP Reply) answered with the
+  standard FT8 messages, outside the contest; it now works the station in the contest's S&P, as a
+  double-click on the CQ does and as WSJT-X does. The FT cockpit's S&P button is now the contest's
+  S&P while a contest runs, the same as the Contest screen's: with TX on it answers the next CQ it
+  hears. If the contest's exchange is not filled in, S&P says what is missing and changes nothing,
+  and a reply does nothing. With Contest mode off, on FT1, DX1 and FT2, and in the contests that
+  ban FT8 and FT4, both work as before. NEEDS-BENCH: JTAlert or GridTracker replying to a CQ during
+  ARRL Field Day on FT8 into a dummy load.
+- **The contest's S&P answers a CQ in the period opposite it.** It answered in whichever period
+  your Tx 1st setting said, so with that set to the CQ station's own period your answer went out
+  over that station's next CQ, every time, and the contact never happened. It now answers in the
+  period opposite the CQ's, as WSJT-X does when you answer a CQ and as a double-click already did.
+  NEEDS-BENCH: FT8 into a dummy load, Tx 1st set to the CQ station's period.
+- **JTAlert and GridTracker see the contest WSJT-X would report.** The WSJT-X UDP Status message
+  said Field Day for every contest. It now says Field Day in ARRL Field Day, NA VHF in the ARRL
+  VHF contests and none in the others, Winter Field Day included, as WSJT-X does. NEEDS-BENCH:
+  JTAlert or GridTracker reading Nexus in Field Day and in a VHF contest.
+- **With a compound or nonstandard call (PJ4/K1ABC, K1ABC/QRP), every over of a contest contact
+  carries your call as WSJT-X writes it.** Call CQ and the Contest screen's Running sent the
+  contest's CQ with your grid, `CQ FD PJ4/K1ABC FN42`, which FT8 cannot carry and sent as another
+  station's call, `CQ FD K1ABC FN42`; they now send WSJT-X's plain `CQ <call>`, as the Tx6 row
+  already did. The answer to a CQ, the reports, RR73 and 73 went out with the base call (`W9XYZ
+  K1ABC FN42`), another station's. They now send your call hashed beside a grid or report (`W9XYZ
+  <PJ4/K1ABC> FN42`) and whole in RR73 and 73 (`<W9XYZ> PJ4/K1ABC RR73`); a reply to your hashed
+  call moves the contact on, and the log records the other station's call without the `< >`.
+  NEEDS-BENCH: Call CQ with a compound call in ARRL Field Day, and a contest contact with a compound
+  call, as S&P and as Running.
+- **Checking the score no longer stops an FT8/FT4 contest run.** Opening the Contest screen put the
+  FT8/FT4 sequencer back in S&P every time, so a station running CQ stopped calling CQ, and a
+  contact being worked in S&P was dropped. A station already in the contest, running or in S&P, now
+  stays as it was; coming from another mode, the screen still starts the contest in S&P and never
+  calls CQ.
+- **A contest picked in Settings no longer stops FT8 QSO mode and Chat.** With a contest picked
+  whose exchange was not filled in (the Texas QSO Party with no county or state, say), switching to
+  FT8 QSO mode, to call CQ or to search and pounce, or to Chat was refused with that contest's
+  complaint even with Contest mode off, and the FT cockpit's Call CQ did nothing at all. With
+  Contest mode off they always work now. Only the contest's own Running and S&P need its exchange,
+  and they still say what is missing.
+- **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or joining
+  one, with the Illinois QSO Party (or any contest other than the two Field Days) selected built an
+  ARRL Field Day club log: counties dropped, CW and RTTY with one station counted as two contacts, a
+  mobile's new county counted as a dupe, and a club file headed `CONTEST: ARRL-FD`. The club log now
+  runs the host's contest under its own rules: its exchange, what counts as a dupe (CW and digital
+  are one mode at the Illinois QSO Party, and a mobile in a new county is a new contact), its
+  multipliers and bonus stations, and its own Cabrillo file, with the Entry class, Club and
+  Operators lines. At a QSO party the log strip warns while you type when another position, or this
+  one, has already worked the station from that county. Every position must pick the host's contest:
+  a position logging another one, or running a Nexus too old to say which, is refused when it joins,
+  and its club chip names both contests by the names the contest picker uses ("this club is running
+  ARRL Field Day, and this Nexus is logging Illinois QSO Party"). The two Field Days count as
+  different contests here too. At a QSO party a laptop with another state in Your station data would
+  send its state instead of the club's county on every contact: the host refuses it when it joins,
+  and both that laptop's club block and the host's say which exchange each sends and where to set
+  it. Two kinds of contest are refused, with the reason on the contest screen, the club board window
+  and in Settings ▸ Contesting ▸ Field Day Club Sync: one with a serial number in the exchange
+  (Sweepstakes, CQ WPX, the California QSO Party), and CQ World-Wide, whose log must say which
+  transmitter made each contact. Nor does club sync run a contest the rules file Nexus loaded does
+  not have, and it says so by the contest's name, with where to check for a rules update; the host's
+  log line names the contest the same way. Try a club on two of your own PCs before the party; the
+  Field Day manual has a checklist.
+- **A rehearsal's contacts no longer come back into the contest's log.** The contest journal on
+  each laptop holds whatever contest it last ran, and entering Field Day mode used to load every
+  contact of the last four days into the session starting: a club that rehearsed on the Wednesday
+  began Sunday's QSO party with the rehearsal's contacts in every position's log, and in the
+  club's log once the positions sent them. Now only the contest you are entering is loaded, and
+  only its contacts from 24 hours before it starts onwards; a quit, a crash or the next day's
+  export still brings back every one of them. The rest stay in the journal untouched, and the
+  Contest screen says how many it kept out and why. Nothing is deleted.
 - **A laptop joining a club event now says whether it is in.** After Find club events or a host
   address typed into Join event at, a joining laptop said nothing about its join unless Field Day
   mode was on and a club block appeared. Settings ▸ Contesting, under Join event at, and the
@@ -744,61 +858,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listens for 5 seconds instead of 2, and when it hears nothing it says to check that the host has
   Host a club event on, that both laptops are on the same network, and that Windows Firewall on
   this laptop lets Nexus hear the host. NEEDS-BENCH: two Windows laptops on the club's own network.
+- **A club position on another callsign is turned away, by name.** Every laptop of one club
+  entry sends the club's call, but a laptop still set to its owner's call sent that call on the
+  air while the club's file claimed its contacts under the host's. The host now refuses it when
+  it joins, and both that laptop's club block and the host's name the two calls and where to set
+  it: Callsign on the air, under Who's who at this event on the Contesting tab. ARRL Field Day
+  is the exception,
+  because its GOTA station must use a call of its own: there a position on any call joins as
+  before.
+- **Club sync takes each club position only from the laptop that first joined as it.** Each laptop's
+  Nexus now makes a key of its own the first time it starts, and every time it joins a club it
+  proves its position with it. Another laptop naming the same position is turned away by name, on
+  its screen and the host's, and nothing it sends reaches the club's log; so is a laptop whose whole
+  settings folder was copied from one connected, which is told how to get a position of its own. The
+  host's own laptop holds its own position from the moment it starts hosting. Every laptop's club
+  block shows its own club code, and the host shows the code of each laptop it turned away, beside
+  the name and call that laptop gave. Two positions with one name read apart on every board, the TV
+  and Remote. The host keeps each position for the rest of the event, through a restart; a new Event
+  name starts afresh. Every laptop of a club needs this version: the host turns away an older Nexus
+  by name, saying to update Nexus on that laptop, and an older host turns this one away the same
+  way.
+- **Club sync takes a laptop's contacts only as that laptop, and only ones the club's file can
+  hold.** The host turns away, by name, a laptop whose Callsign on the air is not a call sign, at
+  ARRL Field Day too, and one whose club position id Nexus did not make. It keeps out of the club's
+  log a contact whose call is not a call sign, or that holds something the club's Cabrillo or ADIF
+  file cannot carry, and lists it on its own screen, with the laptop that sent it, for the rest of
+  the event and through a restart; the contact stays in that laptop's own log. A laptop can no longer send contacts as
+  another one. Names, calls and contest names another laptop sent show as plain text on the
+  host's screen, the club board, the TV and Remote, with a ? where a character cannot be shown,
+  and the diagnostic log keeps every entry on its own line. Every other club file is unchanged.
+- **ARRL Field Day: the club's Cabrillo writes the GOTA station's contacts under its own call.**
+  The GOTA station must use a callsign of its own (ARRL Field Day rule 4.1.1.1), and its laptop
+  joins the club on that call, but the club's file wrote every contact under the host's call, so
+  each GOTA contact read as one the main station made. Each of them now carries the GOTA laptop's
+  Callsign on the air, and every other contact the club's call as before. The host keeps that call
+  with each contact, so the file is the same after the host restarts, even once the GOTA laptop
+  has gone. The header, the club ADIF and the score are unchanged, and so is the club file of
+  every other contest.
+- **A contact queued while a club position was offline keeps the operator who logged it.** The
+  operator was read when the contact was sent rather than when it was logged, so after an outage
+  the contacts still waiting went up under whoever had sat down since, on the club board and in
+  the club file's operators.
+- **A big club no longer locks every position out of club sync.** The first line of the club
+  state a position is sent carried the whole board, every section and 50 worked stations, and
+  somewhere past 27 to 38 positions, by the contest and the length of the names, it grew longer
+  than the 8 KB line every Nexus reads: each position
+  dropped the connection on it and reconnected into the same line, with nothing on screen to say
+  why. The sections and worked stations now go out over as many lines as they need, so a club of
+  about 59 positions fits. The host's
+  club block warns before one more position might not fit, naming how many it has; past that,
+  each position's board leaves out the positions heard from least recently, while contacts, dupe
+  warnings and the score still sync.
 - **The Needed board in its own window keeps to your New grid bands.** That window, which opens at
   launch, and the dashboard window's Needed box listed a station whose only reason was a new grid on
   every band, even with Settings ▸ Spots & Alerts ▸ New grid at VHF+ (6 m and up), so HF stations
   showed for their grid alone. Both now follow that setting, as the docked board always has: an HF
   station with another reason keeps that reason without GRID, and rare squares follow the Rare grid
   💎 setting. The need-type chips work as before.
-- **Illinois QSO Party: a county line typed with `+` (`COOK+WILL`, the way N3FJP takes it) logs
-  one contact per county, exactly as `COOK/WILL` does.** It was logged as a single contact whose
-  county was the text `COOK+WILL`, and a stray `+` was dropped (`COOK+` logged as Cook) where a
-  stray `/` is refused; the two marks now give the same counties, dupes, score and Cabrillo lines.
-- **FT8 and FT4 in a contest send that contest's own messages, as WSJT-X does.** Running and S&P
-  on the Contest screen sent Field Day's messages whatever contest was picked: `CQ FD` and a class
-  and section, so in any other contest no FT8 contact could finish. In the ARRL January, June and
-  September VHF contests they now send what WSJT-X sends in its NA VHF Contest mode: `CQ TEST`,
-  your grid, `R` and your grid, RR73, and 73 from the station running. The other station's grid is
-  logged as its grid, so the contact scores and dupes like one you type. In Sweepstakes, CQ WW,
-  CQ WPX and the California, Ohio, Tennessee and Texas QSO parties, where WSJT-X has no contest
-  mode, they send the standard FT8 messages, and the contact is logged with the call alone, since
-  those messages carry nothing of the exchange. Both need your grid in Settings before they
-  transmit. Field Day, FT1, and the contests that ban FT8 and FT4 (Winter Field Day, Illinois and
-  New York) are unchanged. NEEDS-BENCH: each contest on FT8 into a dummy load, and a contact with a
-  station running WSJT-X in NA VHF Contest mode.
-- **A double-click on a CQ during an FT8/FT4 contest works the station in the contest.** It used to
-  leave the contest and answer with the standard FT8 messages, which a station in WSJT-X's Field Day
-  or NA VHF Contest mode never answers, and the contact went to your own log. It now sends the
-  contest's exchange (your grid in the ARRL VHF contests and in the contests WSJT-X has no mode
-  for), logs to the contest log and leaves you in the contest's S&P, as the Field Day manual says;
-  with TX on, that S&P answers the next CQ it hears. A double-click on a station calling you, a
-  roster click, FT1 and FT2, and the contests that ban FT8 and FT4 are unchanged. NEEDS-BENCH: FT8
-  into a dummy load, and a contact with a station running WSJT-X in Field Day mode.
-- **Call CQ on the FT cockpit calls the contest's CQ while a contest runs.** It used to start a
-  plain FT8 CQ outside the contest, and opening the Contest screen then put you back in S&P. It is
-  now the contest's Running, the same as the Contest screen's button: `CQ FD`, `CQ TEST` in the
-  ARRL VHF contests, or the plain CQ where WSJT-X has no contest mode, and the run keeps going
-  while you check the score. If the contest's exchange is not filled in, Call CQ says what is
-  missing and calls nothing. The Tx6 row still sends the CQ it shows. NEEDS-BENCH: FT8 into a
-  dummy load.
-- **JTAlert and GridTracker see the contest WSJT-X would report.** The WSJT-X UDP Status message
-  said Field Day for every contest. It now says Field Day in ARRL Field Day, NA VHF in the ARRL
-  VHF contests and none in the others, Winter Field Day included, as WSJT-X does. NEEDS-BENCH:
-  JTAlert or GridTracker reading Nexus in Field Day and in a VHF contest.
-- **The contest's S&P answers a CQ in the period opposite it.** It answered in whichever period
-  your Tx 1st setting said, so with that set to the CQ station's own period your answer went out
-  over that station's next CQ, every time, and the contact never happened. It now answers in the
-  period opposite the CQ's, as WSJT-X does when you answer a CQ and as a double-click already did.
-  NEEDS-BENCH: FT8 into a dummy load, Tx 1st set to the CQ station's period.
-- **A reply to a CQ from JTAlert or GridTracker, and S&P on the FT cockpit, work in an FT8/FT4
-  contest.** A reply to a CQ from JTAlert or GridTracker (WSJT-X's UDP Reply) answered with the
-  standard FT8 messages, outside the contest; it now works the station in the contest's S&P, as a
-  double-click on the CQ does and as WSJT-X does. The FT cockpit's S&P button is now the contest's
-  S&P while a contest runs, the same as the Contest screen's: with TX on it answers the next CQ it
-  hears. If the contest's exchange is not filled in, S&P says what is missing and changes nothing,
-  and a reply does nothing. With Contest mode off, on FT1, DX1 and FT2, and in the contests that
-  ban FT8 and FT4, both work as before. NEEDS-BENCH: JTAlert or GridTracker replying to a CQ during
-  ARRL Field Day on FT8 into a dummy load.
 - **Settings ▸ Spots & Alerts shows the band choices the Needed boards follow, and the new DXCC
   and grid alert has its own switch.** With that alert off, New DXCC, New grid and Rare grid 💎 all
   read Off, though the boards and the need icons went on following the choices saved underneath,
@@ -807,147 +923,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes only that one, and a switch of its own, New DXCC and grid alerts, turns the sound and
   the pop-up on and off without changing a menu. Settings and profiles saved by earlier versions
   load unchanged.
-- **Map labels read in the light theme.** On the APRS map, Connect's maps and the Globe, each call
-  sign, satellite name and DXpedition mark had a near-black outline under the light theme's dark
-  lettering, which made it a dark blot. The outline now follows the lettering: white under dark
-  letters, dark under light ones. The dark theme looks exactly as before.
-- **I moved works in the QSO parties.** In the Illinois, New York, California, Ohio, Tennessee
-  and Texas QSO parties, saving a new county with **I moved** on the log strip failed with an
-  error, so a mobile or rover went on sending the county it had left. The move is now accepted:
-  the next contact sends and logs the new county, a station you worked from the old county is a
-  new contact again, the score counts it, the Cabrillo file carries each contact's own county,
-  and the new county becomes your County in Settings, so a restart keeps it. A station outside
-  the state moves to another state or province the same way. I moved still says no, and why, to
-  a county across the state line (that is a separate entry), a county line (send both counties
-  yourself and log each contact once per county), a serial number or a report, a contest whose
-  exchange has no county, state or province of yours, and CQ WW RTTY, whose rules have no
-  provision for a station that moves.
-- **Merging a contest into your logbook again never adds a contact twice.** After **I moved**,
-  or a County or section changed in Settings, a restart (or leaving the contest and coming back)
-  made a second **Merge into my logbook** add every contact already merged again, as duplicates,
-  and a logbook edit or delete of one of them no longer reached the contest log. Each merged
-  contact is now named by its contest and the year it was made, not by where you were, so the
-  merge can be pressed any number of times. Contacts merged by an earlier version keep their
-  names and are recognised: merging again after this update adds only contacts never merged, and
-  never removes or rewrites one already in your logbook. A contact an earlier version already
-  added twice stays twice until you delete one; deleting one of the two leaves the contest log as
-  it is, and deleting the last copy takes the contact out of the contest log, as any delete does.
-  The same contest a year later, from the same county, is merged too; before, its contacts were
-  taken for last year's and left out.
-- **I moved takes a county by its name, and the upload ticks name the services.** In the Illinois
-  and New York QSO parties, a county typed into **I moved** by its name (`DuPage`, `Monroe`) was
-  refused as not one of the contest's counties; only its code worked. I moved now reads a name
-  the way the QTH box does, so it goes out as its code (DUPG in Illinois, MON in New York), and in
-  Field Day a section's full name goes out as its code too. A county that shares its name with a
-  state or province (Washington, and in New York also Delaware, Ontario and Wyoming) is the
-  county when you are in the state, and the state or province when you are outside it. A name
-  that is no county is still refused, in the same words. Under "Upload merged contacts to:" on
-  the Contest screen, the ticks showed the services' internal ids (`qrz`, `clublog`, `eqsl`…);
-  they now show their names: QRZ, Club Log, eQSL, HRDLog, N3FJP, Cloudlog and WRL.
-- **Changing your County in Settings no longer changes it on contacts already logged.** In a QSO
-  party, a County changed in Settings (rather than with **I moved**) was put on every contact
-  already in the contest log the next time the contest was opened or Nexus was started, and the
-  Cabrillo file then sent the sponsor the new county for contacts made from the old one. A Field
-  Day class or section, or anything else you send that Settings holds, did the same. Each contact
-  now keeps the exchange it was sent with, whatever Settings say later and in whichever order the
-  change, I moved and a restart come. Contacts logged with an earlier version may not have saved
-  it: they take what Settings say the first time this version opens their contest, and keep it
-  from then on.
-- **A contest contact logged more than four days after the first ones is merged into your
-  logbook.** The contest log keeps its contacts for four days, and the number it gives each
-  contact (not the serial you send) went with them: the next contact got number 1 again,
-  **Merge into my logbook** took it for the first contact and left it out as already in your
-  logbook, and a club host would have taken it for a contact it already had. A contest's contact
-  numbers are no longer given out twice in the same year, however long after the contest a
-  contact is logged.
-- **A contest contact you never merged into your logbook is no longer lost four days later.** The
-  contest log keeps its contacts for four days, and the first contact logged after that wrote the
-  older ones out of this computer's contest journal, merged or not: a contact never merged was then
-  in no file Nexus keeps. The journal now keeps every contact until it is in your logbook, and the
-  Contest screen says how many, from which contest and when they were logged, with a button that
-  merges them. Pressing it twice adds nothing twice. Contacts already merged leave the journal as
-  before, and a contact you took back stays taken back.
-- **A contest's log now holds every contact of that contest, however long ago it was logged.** It
-  loaded only its last four days, so a QSO party opened a week later held none of the party's
-  contacts: its Cabrillo and ADIF exports, its score and its dupe check had none of them, and
-  sponsors take logs for weeks. The Contest screen, both exports and the dupe check now see the
-  whole contest, so a log exported a week or a month later is complete. Another contest's
-  contacts, and the same contest's next year, still stay out of it.
-- **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
-  new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
-  contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
-  the FETCH — check your Logbook API key" every five minutes, and the last pull time stopped
-  moving. A pull that finds nothing new is now a pull that worked. The same answer is read the same
-  way everywhere else: Sync from QRZ on an empty QRZ logbook reports no new contacts, Check
-  confirmations says that logbook holds no contacts and checks nothing, and Correct at QRZ, for a
-  call QRZ holds no contact with, says QRZ has no matching record.
-- **Repair clock no longer comes back every few minutes on a clock that is right.** Since 1.17.0
-  the button under the clock chip could reappear at every clock check, about every ten minutes, on
-  Windows PCs whose clock was fine: on any Windows not set to English, whose time service report
-  Nexus could not read; whenever the Windows Time service's latest check had not taken although it
-  had synchronised; and after the clock stepped, including the step a repair itself makes. For
-  those it now shows only while the clock is more than a second off UTC, which is when the clock
-  chip turns amber. A stopped Windows Time service, or one that has never synchronised, still gets
-  the button whatever the clock reads.
-- **A clock repair that Windows refuses part-way says so.** Repair clock said "Clock repaired"
-  whenever the administrator prompt was accepted, even when Windows then refused a step of the
-  repair, so the button went away and came back at the next clock check. It now says the clock
-  was not repaired and stays, so you can press it again.
-- **Fake It split puts the dial back after an over, and the dial no longer walks off FT8.** With
-  Split Operation set to Fake It, Nexus moves the radio to its TX frequency for an over and back
-  after it. When the radio did not take the move back, Nexus never sent it again, and then took the
-  TX frequency it read for your own QSY, so the dial walked 500 Hz off the FT8 channel (the band
-  readout said "custom") and every later over walked with it. Nexus now moves the radio back 100 ms
-  after the unkey, as WSJT-X does, sends it again up to three times if the radio does not take it,
-  and no longer takes that over's TX frequency for a QSY, except in one case: if you change
-  frequency during an over, Nexus can still take it for a moment from a radio slow to answer, and
-  keeps it if the radio refuses the change. If the radio still has not gone back, the CAT status
-  says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300 MK2
-  in Fake It.
-- **Rig split on Nexus's own Icom CI-V puts the TX VFO in USB with DATA for FT8.** With Split
-  Operation set to Rig on an Icom that uses Nexus's own CI-V, the transmit VFO was never put in a
-  data mode, so FT8 went out in whatever mode that VFO was left in. Nexus now sets it to USB with
-  the radio's DATA mode before each over (D1, D2 or D3 on an IC-7610, as Settings' Data mode says),
-  as it already did through Hamlib. NEEDS-BENCH: an IC-7610 in Rig split.
-- **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
-  sends connection checks to an address a browser names on the shack itself, on the local link
-  (such as a cloud's metadata address) or for a whole group of computers, and it tries at most 16
-  of one browser's addresses and takes at most 64 in all. A browser on your own network or on
-  Tailscale still connects directly.
-- **Another radio's rigctld can no longer land on wfview's port.** With a radio on NET rigctl at a
-  rigctld on this computer (wfview's, or one you run), Nexus could give a second radio's rigctld
-  that same port, when it moved two radios off a port they shared or picked the port for a radio
-  you added. The two radios then read, and could command, each other's radio. Nexus now keeps
-  every rigctld of its own, and the Share this radio port, off a NET rigctl radio's Network Address
-  on this computer. Save refuses a change that would put one there and says which port to change.
-  A setup an earlier version saved that way is kept as it is, and the status bar names it until you
-  change it. A rotator's port there is moved for you, since Settings has no control for it.
-- **A port an earlier version left clashing is refused until you change it.** A radio on NET rigctl
-  whose address on this computer an earlier version gave to another radio's rigctld, or to Share
-  this radio with other programs, read and could key that other radio, or Nexus itself. Nexus now
-  never opens that address, for the radio you operate, one in the radio switcher or one picked from
-  the Remote: nothing is sent there, a key included, and the CAT status names the radio or the
-  Share this radio port to change. Changing it connects at once. Test CAT and Auto-test now show
-  why Settings refused their save, as Save does, rather than "Could not run the CAT test."
-  NEEDS-BENCH: wfview's rigctld on a real radio, with a settings file from 1.17.0 where another
-  radio's rigctld TCP Port is wfview's port: CAT stays off with that message until the port is
-  changed, then follows the dial and keys through wfview.
-- **CAT that could not connect as Nexus started is tried again on its own.** When the first attempt
-  opened no connection at all (your own rigctld not started yet, a port something else holds,
-  Hamlib's rigctld missing, OmniRig not starting), Nexus waited for Test CAT or a Save. It now
-  tries again after 10 seconds, then less often, at most 5 minutes apart, and each time says what
-  that attempt found. A retry never cuts an over on the air: it waits for the over to end. Nor does
-  it turn transmit off in the digital modes any more, which a retry after a failed reconnect used to
-  do. NEEDS-BENCH: a radio keyed by VOX, its CAT not answering, transmitting FT8 across a retry.
-- **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
-  sound card that failed, a headphone monitor that was held off and every other notice on that line
-  all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
-  and CAT worked. Each now says what it is: PTT NOT ACCEPTED, SOUND CARD FAILED, NO RECEIVE AUDIO,
-  NO FLEX AUDIO, HEADPHONE MONITOR OFF, VOICE MIC FAILED, RECORDING FAILED and so on, and RADIO
-  ENGINE STOPPED only when Nexus's radio engine itself has stopped and needs a restart. Only what
-  stops receiving or transmitting flashes. A notice the radio keeps working through (the headphone
-  monitor, the voice mic, Flex native audio falling back to the sound card, a recording that could
-  not start) shows as a warning. Hovering the chip still shows the full message.
+- **A Needed row opens its own mode's screen.** A row heard in JS8 opened the FT screen, and so did
+  one heard in PSK31, PSK63, PSK125 or QPSK31. A click on a row now opens the screen of the mode it
+  was heard in: a JS8 row the JS8 screen, a PSK31, PSK63, PSK125 or QPSK31 row the PSK screen
+  (switched to PSK31 or QPSK31 when the row is one of those), and an FT4 row the FT screen on FT4.
 - **The bearings shown beside a call are the ones the antenna turns to.** The Chase box's heading
   next to its ↗ was always worked out to the centre of the station's country, while ↗ turns the
   antenna to the station's own grid or callbook position whenever Nexus knows one: about 20° apart
@@ -959,278 +938,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Remote, → CALL now turns the antenna to the same bearing the desktop does (it went to the centre of
   the station's country); the browser's Chase box and recall card show no bearing, because only the
   station can work it out.
-- **Nexus Remote shows a contest log that holds a duplicate.** In Sweepstakes, CQ WW, CQ WPX,
-  the ARRL VHF contests and the New York QSO Party a repeat contact is logged and scored zero, as
-  the sponsors ask. One such repeat in the log left the Contest screen on Nexus Remote blank, with
-  "Station data unavailable. Refresh or reconnect." however often you refreshed. It now shows the
-  log, the repeat marked, with the QSO count the shack shows; and a log that its repeats take past
-  what the browser can show says it is too large, rather than unavailable.
-- **A Winter Field Day log holding only satellite contacts is saved.** Winter Field Day gives a
-  satellite contact no credit, and the contest journal was skipped for a log whose scored count
-  was zero, so a log of satellite contacts alone was never written to disk and a restart or a
-  Run/S&P switch lost them.
-- **A rehearsal's contacts no longer come back into the contest's log.** The contest journal on
-  each laptop holds whatever contest it last ran, and entering Field Day mode used to load every
-  contact of the last four days into the session starting: a club that rehearsed on the Wednesday
-  began Sunday's QSO party with the rehearsal's contacts in every position's log, and in the
-  club's log once the positions sent them. Now only the contest you are entering is loaded, and
-  only its contacts from 24 hours before it starts onwards; a quit, a crash or the next day's
-  export still brings back every one of them. The rest stay in the journal untouched, and the
-  Contest screen says how many it kept out and why. Nothing is deleted.
-- **A club position set up on the wrong side of the state line is turned away, by name.** At a
-  QSO party a laptop with another state in Your station data sends its state instead of the
-  club's county on every contact. The host now refuses it when it joins, and both that laptop's
-  club block and the host's say which exchange each sends and where to set it.
-- **A club position on another callsign is turned away, by name.** Every laptop of one club
-  entry sends the club's call, but a laptop still set to its owner's call sent that call on the
-  air while the club's file claimed its contacts under the host's. The host now refuses it when
-  it joins, and both that laptop's club block and the host's name the two calls and where to set
-  it: Callsign on the air, under Who's who at this event on the Contesting tab. ARRL Field Day
-  is the exception,
-  because its GOTA station must use a call of its own: there a position on any call joins as
-  before.
-- **ARRL Field Day: the club's Cabrillo writes the GOTA station's contacts under its own call.**
-  The GOTA station must use a callsign of its own (ARRL Field Day rule 4.1.1.1), and its laptop
-  joins the club on that call, but the club's file wrote every contact under the host's call, so
-  each GOTA contact read as one the main station made. Each of them now carries the GOTA laptop's
-  Callsign on the air, and every other contact the club's call as before. The host keeps that call
-  with each contact, so the file is the same after the host restarts, even once the GOTA laptop
-  has gone. The header, the club ADIF and the score are unchanged, and so is the club file of
-  every other contest.
-- **Club sync takes a laptop's contacts only as that laptop, and only ones the club's file can
-  hold.** The host turns away, by name, a laptop whose Callsign on the air is not a call sign, at
-  ARRL Field Day too, and one whose club position id Nexus did not make. It keeps out of the club's
-  log a contact whose call is not a call sign, or that holds something the club's Cabrillo or ADIF
-  file cannot carry, and lists it on its own screen, with the laptop that sent it, for the rest of
-  the event and through a restart; the contact stays in that laptop's own log. A laptop can no longer send contacts as
-  another one. Names, calls and contest names another laptop sent show as plain text on the
-  host's screen, the club board, the TV and Remote, with a ? where a character cannot be shown,
-  and the diagnostic log keeps every entry on its own line. Every other club file is unchanged.
-- **Club sync takes each club position only from the laptop that first joined as it.** Each
-  laptop's Nexus now makes a key of its own the first time it starts, and every time it joins a
-  club it proves its position with it. Another laptop naming the same position is turned away by
-  name, on its screen and the host's, and nothing it sends reaches the club's log. The host keeps
-  each position for the rest of the event, through a restart; a new Event name starts afresh.
-  Every laptop of a club needs this version: the host turns away an older Nexus by name, saying to
-  update Nexus on that laptop, and an older host turns this one away the same way.
-- **Club sync: the host gives a club position only to the laptop whose club code it checked.**
-  Every laptop's club block now shows its own club code, and the host shows the code of each
-  laptop it turned away, beside the name and call that laptop gave, which any laptop can give.
-  **Give this laptop its position** first shows the code and asks the host to check it against the
-  one on that laptop's own Contest screen. A laptop whose whole settings folder was copied from
-  one connected now is turned away by name and told how to get a position of its own, the host's
-  own laptop holds its own position from the moment it starts hosting, two positions with one name
-  read apart on every board, the TV and Remote, and a contest contact can no longer be removed
-  through the Remote stream.
-- **Through the Remote stream, the Contest screen no longer exports anything, restores a removed
-  contact or merges contacts into your logbook.** A press of **Export Cabrillo**, **Export ADIF**,
-  **Summary**, **Dupe sheet**, **Club Cabrillo**, **Club ADIF**, **Restore** or **Merge … into my
-  logbook** that comes through the stream does nothing and says so ("Only at the station: …"), as
-  Remove already does. The same press at the station works as before.
-- **Club sync says why it will not run a contest the downloaded rules left out.** If the rules
-  file Nexus loaded does not have the contest you picked, club sync does not run, and now the
-  Contest screen, the club board window and Settings say so, by the contest's name, with where to
-  check for a rules update. The host's log line names the contest the same way instead of an
-  internal id.
-- **A big club no longer locks every position out of club sync.** The first line of the club
-  state a position is sent carried the whole board, every section and 50 worked stations, and
-  somewhere past 27 to 38 positions, by the contest and the length of the names, it grew longer
-  than the 8 KB line every Nexus reads: each position
-  dropped the connection on it and reconnected into the same line, with nothing on screen to say
-  why. The sections and worked stations now go out over as many lines as they need, so a club of
-  about 59 positions fits. The host's
-  club block warns before one more position might not fit, naming how many it has; past that,
-  each position's board leaves out the positions heard from least recently, while contacts, dupe
-  warnings and the score still sync.
+- **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
+  Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
+  list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
+  what it is waiting for, as the other boxes do: where to set up a rotator or an amplifier, that no
+  needed station is being heard yet, or that the contest calendar appears once Nexus is online.
+- **Closing the torn-off waterfall's window puts the waterfall back.** Closing the window of a
+  popped-out waterfall left the re-dock bar in its place on the Operate screen, and the waterfall
+  came back only when you clicked the bar. Closing the window any way now brings it back, whichever
+  screen you are on, and the re-dock bar still works. Not yet tried on Windows.
 - **Solar wind (Bz, Bt, speed and density) updates again.** NOAA retired the two solar-wind feeds
   Nexus read, so the Space Wx gauges and the solar-wind warnings in the insight feed had stopped
   updating. Nexus now reads NOAA's real-time solar-wind feeds, and only the spacecraft NOAA marks
   as the current one: those feeds carry more than one, and a second spacecraft's readings are
   never mixed in. Reported by KB0UZT (#404).
-- **On a slow disk, the needs, awards, statistics, Journey and confirmation diagnostics never
-  leave out the contact you just logged.** Each waits up to two seconds for that contact to reach
-  the logbook database first. When saving took longer than that, they answered without it: the
-  station you had just worked could stay marked as needed and the counts were one short, with
-  nothing to say so. Now, while the contact is still being saved, they give no answer rather than
-  a short one, and the next look includes it.
-- **On a slow disk, a contact you just logged shows up within seconds in the Logbook list, the
-  Needed board, Awards, Journey and Statistics.** When saving it took more than two seconds, the
-  Logbook list left it out until you logged another contact, and the Needed board kept the
-  station you had just worked marked as needed until its next half-minute refresh. Nexus now asks
-  again each second, up to three times, and shows the contact as soon as it is saved.
-- **The Logbook no longer says your log is empty while it is still reading it.** Opening it showed
-  "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each time,
-  and longer on a slow disk. It now shows "Reading the logbook…" until they are in. On the Remote
-  page, a search that matches nothing now says so, where it said the log was empty.
-- **The Logbook globe no longer says "0 grid squares worked" while it is still counting them.**
-  Opening the Logbook with its globe, or picking a band on the globe, could show "0 grid squares
-  worked" (or "0 grid squares on 20m") until your squares came in: for a moment, and longer on a
-  slow disk. The globe now shows its count once the squares are counted.
-- **The Logbook says when it couldn't read your log, with a Retry button.** When a read of the
-  logbook failed, on a database error for example, the Logbook kept saying "Reading the logbook…"
-  until your next contact, and closing and reopening it did not try again. It now says "Couldn't
-  read the logbook" with the reason and a Retry button, and reopening the Logbook tries again. While
-  a change is still being saved, the Logbook keeps saying "Reading the logbook…" as before, and
-  reopening it now tries again there too. A count from before your latest change says "Out of
-  date" in its tooltip, and an empty log no longer says "No logged contacts yet." while your first
-  contact is being counted.
-- **JS8's ✓ marks and the band map's struck-through calls no longer blink when a new station is
-  heard.** Each station newly heard in JS8, and each new call on the band-map window, cleared every
-  ✓, name and comment in the JS8 station list, and every strike-through on the band map, until the
-  log answered: for a moment, and longer on a slow disk. Every row now keeps its marks, and only
-  the new call shows "—" until the log has answered for it.
-- **A CW F-key sends once per press, and never with Ctrl, Alt or Cmd held.** Holding F3 a moment
-  too long sent the exchange again on every key repeat, and Ctrl, Alt or Cmd with an F-key still
-  sent its macro, Alt+F4 (which closes the window) included. One press is now
-  one send, however long you hold the key, and a key with Ctrl, Alt or Cmd held is left to the
-  system, as on the RTTY and PSK screens. Esc and Stop TX stop exactly as before.
-- **In CW, the call in the log strip is the call the F-keys send.** A call typed only into the
-  log strip was not the one the keys sent: they sent the call in His Call, which was the last
-  station you worked or no call at all, so in the Illinois QSO Party typing K9AAA in the strip and
-  pressing F3 sent the previous station's call. The strip's callsign and His Call are now one
-  field, as on the RTTY screen: a call typed in either shows in both and is what every key sends,
-  in a contest and out of one, and logging a contact empties both. Until you work a station or
-  type a call, the decoder's best guess still fills the strip, and now His Call too: it is shown
-  unconfirmed, as before, and the F-keys send it unless you correct it first. Clicking a decoded
-  call's chip puts that call in both.
-- **CW contest keys send your report.** In a contest whose exchange includes a signal report
-  (the Illinois, Tennessee, Ohio, Texas and New York QSO Parties, CQ WW and CQ WPX), the CW
-  cockpit's built-in exchange keys sent your county, zone or serial without the 5NN: in the
-  Illinois QSO Party, F3 to K9AAA from Cook County sent `K9AAA DE <your call> COOK COOK K`. The
-  keys that send your exchange, F2 and F6 in the new layout, now send 5NN before it.
-  Sweepstakes, the California QSO Party and the ARRL VHF contests have no report in their
-  exchange, and no key sends one there, nor at Field Day. Macro profiles you saved are never
-  changed: if you copied the old contest keys into one of your own, add `{RST}` before `{EXCH}`
-  in its F3 and F4.
-- **A TV showing the spectator scoreboard on a position, or on a host running the Illinois QSO
-  Party, got a grey "served from the host station" overlay.** A position now shows the host's
-  board, from the host it joined (turn on Spectator scoreboard on the host too, on the same port),
-  and a host shows its club whatever contest it runs. If the host can't be reached, the TV says so
-  in plain words, keeps the last board it had and comes back by itself. A station with no club
-  says so, with what to do. Settings ▸ Contesting ▸ Field Day Club Sync says the same beside the
-  scoreboard's address.
-- **Club sync runs the contest you picked, not ARRL Field Day.** Hosting a club event, or
-  joining one, with the Illinois QSO Party (or any contest other than the two Field Days)
-  selected built an ARRL Field Day club log: counties dropped, CW and RTTY with one station
-  counted as two contacts, a mobile's new county counted as a dupe, and a club file headed
-  `CONTEST: ARRL-FD`. The club log now runs the host's contest under its own rules: its
-  exchange, what counts as a dupe (CW and digital are one mode at the Illinois QSO Party, and a
-  mobile in a new county is a new contact), its multipliers and bonus stations, and its own
-  Cabrillo file, with the Entry class, Club and Operators lines. At a QSO party the log strip
-  warns while you type when another position, or this one, has already worked the station from
-  that county. Every position must pick the host's contest: a position logging another one,
-  or running a Nexus too old to say which, is refused when it joins, and its club chip names
-  both contests. The two Field Days count as different contests here too. Two kinds of contest
-  are refused, with the reason on the contest screen, the club board window and in Settings ▸
-  Contesting ▸ Field Day Club Sync: one with a serial number in the exchange (Sweepstakes, CQ
-  WPX, the California QSO Party), and CQ World-Wide, whose log must say which transmitter made
-  each contact. Try a club on two of your own PCs
-  before the party; the Field Day manual has a checklist.
-- **A contact queued while a club position was offline keeps the operator who logged it.** The
-  operator was read when the contact was sent rather than when it was logged, so after an outage
-  the contacts still waiting went up under whoever had sat down since, on the club board and in
-  the club file's operators.
-- **Winter Field Day 2027 is on 23 and 24 January.** The sponsor's 2027 rules put the event on
-  the fourth full weekend of January, and Nexus still used the last full weekend from the 2025
-  rules, so it counted down to 30 January, a week late. Installed copies pick the fix up from
-  the rules file once it is published (Settings ▸ Contesting ▸ Field Day Setup ▸ Check for rules
-  updates), at the next launch.
-- **FT2 is on Winter Field Day's banned-mode list**, as the sponsor's 2027 list has it. The
-  warning is advisory, as before: the log strip warns and nothing is refused.
-- **The Data mode picker (D1/D2/D3) is offered only on the Icoms that have D2 and D3, and the
-  IC-9700, IC-705 and IC-905 are always sent their one DATA mode.** Settings ▸ Radio ▸ Rig & CAT
-  offered the picker on
-  the IC-9700, IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put
-  a value Icom does not define for those radios into the command that sets their DATA mode for the
-  digital modes. On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA
-  mode ON whatever was picked; a D2 or D3 you picked stays in your settings but is not sent. The
-  IC-7610 still gets the D1, D2 or D3 you choose. NEEDS-BENCH on an IC-9700, IC-705 or IC-905 that
-  had D2 or D3 picked: a digital mode should put the radio in USB-D, with its transmit audio from
-  the DATA MOD source.
-- **The Connection help no longer sends RS-BA1 users to NET rigctl.** For an Icom on its LAN port,
-  the help under Connection in Settings ▸ Radio ▸ Rig & CAT said to point Nexus at a rigctld
-  server with Rig Model NET rigctl, whether the program in between was wfview or RS-BA1. RS-BA1
-  runs no rigctld server, so an RS-BA1 user who followed it found nothing to connect to. It now
-  says: with RS-BA1, choose Serial, your Icom's model and the virtual COM port RS-BA1 creates. With
-  wfview, turn on its rigctld server and use Network and NET rigctl, as before.
-- **The setup wizard describes Network the way Settings does.** On the wizard's Rig step, Network
-  read "FlexRadio / remote rigctld", although it is also how Nexus reaches an SDR program on the same
-  computer, such as Thetis for a Hermes Lite 2. It now reads "SDR software, or a remote rig", the
-  words of the Connection choice in Settings ▸ Radio ▸ Rig & CAT, and the wizard's picture in Help ▸
-  Getting started says the same. The German, Spanish, French and Japanese text uses each language's
-  own words for that Connection choice.
-- **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
-  CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
-  0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full
-  height, so the strongest signals on the band all looked the same. The IC-7610 is now read on its
-  own scale; the other radios are unchanged. NEEDS-BENCH on an IC-7610: a strong carrier should no
-  longer sit flat against the top, and heights should follow the radio's own scope.
-- **An Icom panadapter whose lower edge is below 0 Hz is drawn over the right span.** In the Fixed
-  and Scroll-F scope modes the radio sends Nexus's own CI-V connection the scope's two edges, and
-  marks a lower edge below 0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a
-  span the radio was not showing. That edge is now read as negative. It only happens with the
-  scope's lower edge below 0 Hz, at the very bottom of the radio's range. Not yet seen on a radio.
-- **IC-905 on 10 GHz: the panadapter is drawn where the radio is.** On its 10 GHz band the
-  IC-905 sends its scope's frequencies with two more digits than on its other bands, and Nexus's
-  own CI-V connection read them as the usual ten: a Center-mode sweep at 10368 MHz was drawn
-  around 368 MHz, and a Fixed or Scroll-F sweep was thrown away as out of range. Nexus now reads
-  the longer form there, over USB and over the Icom network connection, as Icom's CI-V reference
-  for the IC-905 describes it. Its other bands are unchanged. NEEDS-BENCH: not yet tried on an
-  IC-905 on 10 GHz.
-- **IC-905 on 10 GHz: the dial, a QSY and the log are on the frequency the radio is on.** On its
-  10 GHz band the IC-905 sends and takes its frequency with two more digits than on its other
-  bands, and Nexus's own CI-V connection read and wrote the usual ten. With the radio on 10368.150
-  MHz the dial read 368.150 MHz, a contact logged there went in at 368.150 MHz with no band, and a
-  QSY to 10368.150 MHz (or a split's transmit frequency there) sent the radio to 368.150 MHz.
-  Transmit stayed locked, because 368 MHz is outside every amateur band. Nexus now reads and
-  writes the longer form on 10 GHz, over USB and over the Icom network connection, as Icom's CI-V
-  reference for the IC-905 describes it: the dial reads 10368.150 MHz, the log gets 3 cm, and the
-  check against your licence privileges judges 3 cm, as it does every other band. Its other bands,
-  and every other radio, are unchanged. NEEDS-BENCH: not yet tried on an IC-905 on 10 GHz (the
-  dial, a QSY and a logged contact, receiving or into a dummy load).
-- **A native CI-V Icom is no longer refused a frequency that Nexus only guessed it cannot reach.**
-  On Nexus's own CI-V connection (USB or the Icom network connection), Nexus took 135.7 kHz to
-  1.3 GHz as the range the radio receives. That range is part of what the CAT broker tells WSJT-X
-  so that WSJT-X will set any frequency, and it was never the radio's own. So an IC-905 was
-  refused a satellite downlink on 2.4, 5.7 or 10 GHz with "This radio doesn't cover…" before the
-  radio was asked (a QO-100 pick on 10489.5 MHz among them), and an IC-7300 was taken to receive
-  2 m. Nexus now treats a native CI-V radio's range as unknown and refuses nothing up front: the
-  frequency goes to the radio, and if the radio cannot tune it, the CAT status and the satellite
-  rail say that the radio refused it. What WSJT-X and other programs read through the CAT broker
-  is unchanged, and so is the check against your licence privileges. NEEDS-BENCH: a QO-100 pick
-  on an IC-905, and a 2 m QSY on an IC-7300, which should report that the radio refused it.
-- **A native CI-V Icom that does not answer a frequency change is no longer reported as refusing
-  it.** On Nexus's own CI-V connection (USB or the Icom network connection), a frequency change
-  the radio did not answer at all was counted as a refusal: after three, the CAT status said "the
-  radio refused … — it does not cover that frequency", the dial went back to where the radio was,
-  and Nexus stopped asking until you picked the frequency again. A radio that answers NG to a
-  frequency it cannot tune is still reported as refusing it. One that says nothing (switched off
-  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig
-  (1/3)", the words Nexus already used for a radio on Hamlib's rigctld. After three tries, as
-  before, Nexus stops asking and shows the frequency the radio is on: "… MHz not sent — no reply
-  from the rig after 3 tries; still on …". Pick the frequency again to retry. A radio on Hamlib's
-  rigctld that does not answer a frequency change now gets the same three tries: Nexus used to send
-  it again on every pass of the radio loop until CAT dropped, and never stopped for a radio that
-  still answered reads, each try holding up the loop, and with it a transmission due to start, for
-  as long as the reply could take. NEEDS-BENCH: an Icom that stops answering during a QSY
-  (switched off, or its CI-V lead pulled) should say no reply from the rig, never that it refused
-  the frequency, stop after three tries, and take the frequency when you pick it again with the
-  radio answering.
-- **Nexus's own FlexRadio and OmniRig connections no longer give the radio a frequency range it
-  does not have.** Both reported 135.7 kHz to 1.3 GHz as the radio's receive range: the range the
-  CAT broker gives WSJT-X so that it will set any frequency, never the radio's own. So a FLEX-6400
-  was taken to receive 2 m, and a frequency above 1.3 GHz (a satellite downlink or a transverter's
-  band) was refused with "This radio doesn't cover…" before the radio was asked. Nexus now treats
-  their range as unknown, as it does a native CI-V radio's: the frequency goes to the radio, which
-  answers for itself. What WSJT-X and other programs read through the CAT broker is unchanged, and
-  so is the check against your licence privileges. NEEDS-BENCH: a FLEX radio, and a radio on
-  OmniRig, asked for a frequency it cannot tune should say that the radio refused it.
-- **The CAT status no longer says a frequency was not sent once the radio has taken it.** When a
-  frequency change went unanswered, or was refused once, and the next try went through, the CAT
-  status kept its note ("… MHz not sent — no reply from the rig", or "… MHz refused by the rig
-  (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
-  rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
-  is on the line by then.
+- **Map labels read in the light theme.** On the APRS map, Connect's maps and the Globe, each call
+  sign, satellite name and DXpedition mark had a near-black outline under the light theme's dark
+  lettering, which made it a dark blot. The outline now follows the lettering: white under dark
+  letters, dark under light ones. The dark theme looks exactly as before.
+- **The status bar names the problem instead of "RADIO STOPPED".** A PTT the rig did not accept, a
+  sound card that failed, a headphone monitor that was held off and every other notice on that line
+  all showed the same flashing RADIO STOPPED, so a refused PTT read as a dead radio while the dial
+  and CAT worked. Each now says what it is: PTT NOT ACCEPTED, SOUND CARD FAILED, NO RECEIVE AUDIO,
+  NO FLEX AUDIO, HEADPHONE MONITOR OFF, VOICE MIC FAILED, RECORDING FAILED and so on, and RADIO
+  ENGINE STOPPED only when Nexus's radio engine itself has stopped and needs a restart. Only what
+  stops receiving or transmitting flashes. A notice the radio keeps working through (the headphone
+  monitor, the voice mic, Flex native audio falling back to the sound card, a recording that could
+  not start) shows as a warning. Hovering the chip still shows the full message.
+- **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
+  (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
+  wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus
+  refused the port: wfview answers Nexus's check with "ChkVFO: 0", which Nexus took for some other
+  program ("answered, but not as a rigctld"). Past that, the frequency wfview reports
+  ("14074000.000000") read as no frequency at all, so CAT never connected. Both are read now, and
+  Nexus connects through wfview's rigctld, follows the radio, tunes it and keys it, Rear/Data
+  included; a frequency in that form from any other rigctld server is read too. Nexus now shares
+  wfview's rigctld this way whatever rigctld TCP Port says (see Changed). NEEDS-BENCH:
+  wfview's rigctld on a real radio, shared this way, should connect, follow the dial, and key PTT
+  (Rear/Data keying the DATA input).
+- **Another radio's rigctld can no longer land on wfview's port, and a port an earlier version left
+  clashing is refused until you change it.** With a radio on NET rigctl at a rigctld on this
+  computer (wfview's, or one you run), Nexus could give a second radio's rigctld that same port,
+  when it moved two radios off a port they shared or picked the port for a radio you added. The two
+  radios then read, and could command, each other's radio. Nexus now keeps every rigctld of its own,
+  and the Share this radio port, off a NET rigctl radio's Network Address on this computer. Save
+  refuses a change that would put one there and says which port to change, and Test CAT and
+  Auto-test now show why Settings refused their save, as Save does, rather than "Could not run the
+  CAT test." A rotator's port there is moved for you, since Settings has no control for it. A radio
+  on NET rigctl whose address on this computer an earlier version gave to another radio's rigctld,
+  or to Share this radio with other programs, read and could key that other radio, or Nexus itself.
+  Nexus now never opens that address, for the radio you operate, one in the radio switcher or one
+  picked from the Remote: nothing is sent there, a key included, and the CAT status names the radio
+  or the Share this radio port to change. Changing it connects at once. NEEDS-BENCH: wfview's
+  rigctld on a real radio, with a settings file from 1.17.0 where another radio's rigctld TCP Port
+  is wfview's port: CAT stays off with that message until the port is changed, then follows the dial
+  and keys through wfview.
+- **CAT that could not connect as Nexus started is tried again on its own.** When the first attempt
+  opened no connection at all (your own rigctld not started yet, a port something else holds,
+  Hamlib's rigctld missing, OmniRig not starting), Nexus waited for Test CAT or a Save. It now
+  tries again after 10 seconds, then less often, at most 5 minutes apart, and each time says what
+  that attempt found. A retry never cuts an over on the air: it waits for the over to end. Nor does
+  it turn transmit off in the digital modes any more, which a retry after a failed reconnect used to
+  do. NEEDS-BENCH: a radio keyed by VOX, its CAT not answering, transmitting FT8 across a retry.
 - **A radio that does not answer a mode or frequency change is no longer reported as refusing it,
   on native CI-V, OmniRig and Nexus's own FlexRadio client.** On a native CI-V Icom, a mode change
   the radio did not answer (switched off, or a reply lost on the CI-V bus) read "rig rejected
@@ -1250,6 +1019,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. NEEDS-BENCH: an Icom on native CI-V switched off during a mode change, a radio
   switched off while OmniRig drives it, and a FLEX radio switched off or unplugged from the network
   during a QSY should each say no reply from the rig, never that it refused.
+- **A native CI-V Icom that does not answer a frequency change is no longer reported as refusing
+  it.** On Nexus's own CI-V connection (USB or the Icom network connection), a frequency change
+  the radio did not answer at all was counted as a refusal: after three, the CAT status said "the
+  radio refused … — it does not cover that frequency", the dial went back to where the radio was,
+  and Nexus stopped asking until you picked the frequency again. A radio that answers NG to a
+  frequency it cannot tune is still reported as refusing it. One that says nothing (switched off
+  mid-QSY, or a reply lost on the CI-V bus) now reads "… MHz not sent — no reply from the rig
+  (1/3)", the words Nexus already used for a radio on Hamlib's rigctld. After three tries, as
+  before, Nexus stops asking and shows the frequency the radio is on: "… MHz not sent — no reply
+  from the rig after 3 tries; still on …". Pick the frequency again to retry. A radio on Hamlib's
+  rigctld that does not answer a frequency change now gets the same three tries: Nexus used to send
+  it again on every pass of the radio loop until CAT dropped, and never stopped for a radio that
+  still answered reads, each try holding up the loop, and with it a transmission due to start, for
+  as long as the reply could take. NEEDS-BENCH: an Icom that stops answering during a QSY
+  (switched off, or its CI-V lead pulled) should say no reply from the rig, never that it refused
+  the frequency, stop after three tries, and take the frequency when you pick it again with the
+  radio answering.
+- **A FlexRadio that does not answer a mode, filter, power, AF, CW speed or noise switch, and a
+  radio that does not answer a split, are no longer reported as refusing it.** On Nexus's own
+  FlexRadio client each of these read as a refusal when the radio did not answer within half a
+  second: RF power said "couldn't set RF power — the rig didn't take it", and a mode change said
+  "rig refused". They now say there was no reply from the rig, and a mode change the radio never
+  answers gets no plain-mode fallback at its give-up. A split that goes unanswered (on native CI-V,
+  OmniRig, or a rigctld reporting the rig did not answer) now reads "no reply from the rig — split
+  not set; work the pile-up manually", not "rig rejected split". Each is tried as many times as
+  before, and an OmniRig server that does not answer Nexus at all is still read as a refusal.
+  NEEDS-BENCH: a FLEX radio unplugged from the network during a power or mode change, and a radio
+  switched off during a split, should each say no reply from the rig.
 - **A filter width the radio does not answer is sent three times, then given up, as a frequency
   is, on every connection.** When the radio answered everything but a filter-width change (the
   scope's filter edge, or the bandwidth control), Nexus on Hamlib's rigctld and on native CI-V sent
@@ -1276,34 +1073,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is not answering, and both go out as soon as it answers again. NEEDS-BENCH: an Icom on
   native CI-V switched off during a mode change should get no more mode commands while it is off,
   and take the mode once it is back on.
-- **A FlexRadio that does not answer a mode, filter, power, AF, CW speed or noise switch, and a
-  radio that does not answer a split, are no longer reported as refusing it.** On Nexus's own
-  FlexRadio client each of these read as a refusal when the radio did not answer within half a
-  second: RF power said "couldn't set RF power — the rig didn't take it", and a mode change said
-  "rig refused". They now say there was no reply from the rig, and a mode change the radio never
-  answers gets no plain-mode fallback at its give-up. A split that goes unanswered (on native CI-V,
-  OmniRig, or a rigctld reporting the rig did not answer) now reads "no reply from the rig — split
-  not set; work the pile-up manually", not "rig rejected split". Each is tried as many times as
-  before, and an OmniRig server that does not answer Nexus at all is still read as a refusal.
-  NEEDS-BENCH: a FLEX radio unplugged from the network during a power or mode change, and a radio
-  switched off during a split, should each say no reply from the rig.
-- **Nexus can share wfview's rigctld.** With wfview's rigctld server on and Nexus pointed at it
-  (Connection Network, Rig Model NET rigctl, Network Address and rigctld TCP Port both set to
-  wfview's port, and Share this radio with other programs off or on a different Sharing port), Nexus
-  refused the port: wfview answers Nexus's check with "ChkVFO: 0", which Nexus took for some other
-  program ("answered, but not as a rigctld"). Past that, the frequency wfview reports
-  ("14074000.000000") read as no frequency at all, so CAT never connected. Both are read now, and
-  Nexus connects through wfview's rigctld, follows the radio, tunes it and keys it, Rear/Data
-  included; a frequency in that form from any other rigctld server is read too. Nexus now shares
-  wfview's rigctld this way whatever rigctld TCP Port says (see Changed). NEEDS-BENCH:
-  wfview's rigctld on a real radio, shared this way, should connect, follow the dial, and key PTT
-  (Rear/Data keying the DATA input).
-- **An Icom panadapter in the Scroll-C scope mode is drawn over the span the radio shows.** In
-  Scroll-C an Icom sends Nexus's own CI-V connection the scope's two edges, as it does in Fixed
-  and Scroll-F, and Nexus read them as a center and a span: a 144.0 to 144.5 MHz sweep was drawn
-  from below 0 Hz to about 288 MHz. Scroll-C sweeps are now read as two edges, as every Icom CI-V
-  reference says. Center, Fixed and Scroll-F are unchanged. NEEDS-BENCH: not yet tried on a radio
-  in Scroll-C.
+- **The CAT status no longer says a frequency was not sent once the radio has taken it.** When a
+  frequency change went unanswered, or was refused once, and the next try went through, the CAT
+  status kept its note ("… MHz not sent — no reply from the rig", or "… MHz refused by the rig
+  (1/3)") with the radio already on the new frequency. The note now gives way to "CAT confirmed —
+  rig accepted a command" as the frequency lands, unless something newer, a Test CAT result say,
+  is on the line by then.
+- **Nexus no longer refuses a frequency it only guessed the radio cannot reach, on native CI-V,
+  OmniRig and its own FlexRadio client.** On Nexus's own CI-V connection (USB or the Icom network
+  connection), on OmniRig and on Nexus's own FlexRadio client, Nexus took 135.7 kHz to 1.3 GHz as
+  the range the radio receives. That range is part of what the CAT broker tells WSJT-X so that
+  WSJT-X will set any frequency, and it was never the radio's own. So an IC-905 was refused a
+  satellite downlink on 2.4, 5.7 or 10 GHz with "This radio doesn't cover…" before the radio was
+  asked (a QO-100 pick on 10489.5 MHz among them), a frequency above 1.3 GHz (a satellite downlink
+  or a transverter's band) was refused the same way on a FlexRadio or through OmniRig, and an
+  IC-7300 or a FLEX-6400 was taken to receive 2 m. Nexus now treats the radio's range as unknown and
+  refuses nothing up front: the frequency goes to the radio, which answers for itself, and on native
+  CI-V, if the radio cannot tune it, the CAT status and the satellite rail say that the radio
+  refused it. What WSJT-X and other programs read through the CAT broker is unchanged, and so is the
+  check against your licence privileges. NEEDS-BENCH: a QO-100 pick on an IC-905, and a 2 m QSY on
+  an IC-7300, which should report that the radio refused it; a FLEX radio, and a radio on OmniRig,
+  asked for a frequency it cannot tune should say that the radio refused it.
+- **IC-905 on 10 GHz: the dial, a QSY, the log and the panadapter are on the frequency the radio is
+  on.** On its 10 GHz band the IC-905 sends and takes its frequency, and sends its scope's, with two
+  more digits than on its other bands, and Nexus's own CI-V connection read and wrote the usual ten.
+  With the radio on 10368.150 MHz the dial read 368.150 MHz, a contact logged there went in at
+  368.150 MHz with no band, and a QSY to 10368.150 MHz (or a split's transmit frequency there) sent
+  the radio to 368.150 MHz. Transmit stayed locked, because 368 MHz is outside every amateur band. A
+  Center-mode sweep at 10368 MHz was drawn around 368 MHz, and a Fixed or Scroll-F sweep was thrown
+  away as out of range. Nexus now reads and writes the longer form on 10 GHz, over USB and over the
+  Icom network connection, as Icom's CI-V reference for the IC-905 describes it: the dial reads
+  10368.150 MHz, the log gets 3 cm, the check against your licence privileges judges 3 cm, as it
+  does every other band, and the panadapter is drawn where the radio is. Its other bands, and every
+  other radio, are unchanged. NEEDS-BENCH: not yet tried on an IC-905 on 10 GHz (the dial, a QSY, a
+  logged contact and the panadapter, receiving or into a dummy load).
+- **The IC-7610's panadapter shows its strongest signals at their real height.** On Nexus's own
+  CI-V connection, an IC-7610 sends its scope on a scale of 0 to 200, and Nexus read it on the
+  0 to 160 of the IC-7300, IC-9700, IC-705 and IC-905. Everything above 160 was drawn at full
+  height, so the strongest signals on the band all looked the same. The IC-7610 is now read on its
+  own scale; the other radios are unchanged. NEEDS-BENCH on an IC-7610: a strong carrier should no
+  longer sit flat against the top, and heights should follow the radio's own scope.
+- **An Icom panadapter is drawn over the span the radio shows, in the Scroll-C scope mode and with a
+  lower edge below 0 Hz.** In the Fixed, Scroll-F and Scroll-C scope modes an Icom sends Nexus's own
+  CI-V connection the scope's two edges. In Scroll-C Nexus read them as a center and a span: a 144.0
+  to 144.5 MHz sweep was drawn from below 0 Hz to about 288 MHz. Scroll-C sweeps are now read as two
+  edges, as every Icom CI-V reference says. In Fixed and Scroll-F the radio marks a lower edge below
+  0 Hz with an F that Nexus read as a 0, so the sweep was drawn over a span the radio was not
+  showing; that edge is now read as negative. It only happens with the scope's lower edge below
+  0 Hz, at the very bottom of the radio's range, and has not yet been seen on a radio. Center is
+  unchanged. NEEDS-BENCH: not yet tried on a radio in Scroll-C.
+- **The Data mode picker (D1/D2/D3) is offered only on the Icoms that have D2 and D3, and greyed
+  where it cannot reach the radio.** Settings ▸ Radio ▸ Rig & CAT offered the picker on the IC-9700,
+  IC-705 and IC-905 too, which have one DATA mode each, so a D2 or D3 picked there put a value Icom
+  does not define for those radios into the command that sets their DATA mode for the digital modes.
+  On Nexus's own CI-V connection those three, and the IC-7300, are now sent DATA mode ON whatever
+  was picked; a D2 or D3 you picked stays in your settings but is not sent. The IC-7610 still gets
+  the D1, D2 or D3 you choose. On an IC-7610 connected over Network or through OmniRig with Native
+  Icom CI-V left on, Settings ▸ Radio ▸ Rig & CAT ▸ Advanced offered the picker and said the radio
+  is put into the mode you pick, but the pick was never sent: Nexus's own CI-V connection does not
+  run there. The picker is now greyed there, as the Native Icom CI-V switch above it is, and says it
+  needs that connection. NEEDS-BENCH on an IC-9700, IC-705 or IC-905 that had D2 or D3 picked: a
+  digital mode should put the radio in USB-D, with its transmit audio from the DATA MOD source.
+- **Fake It split puts the dial back after an over, and the dial no longer walks off FT8.** With
+  Split Operation set to Fake It, Nexus moves the radio to its TX frequency for an over and back
+  after it. When the radio did not take the move back, Nexus never sent it again, and then took the
+  TX frequency it read for your own QSY, so the dial walked 500 Hz off the FT8 channel (the band
+  readout said "custom") and every later over walked with it. Nexus now moves the radio back 100 ms
+  after the unkey, as WSJT-X does, sends it again up to three times if the radio does not take it,
+  and no longer takes that over's TX frequency for a QSY, except in one case: if you change
+  frequency during an over, Nexus can still take it for a moment from a radio slow to answer, and
+  keeps it if the radio refuses the change. If the radio still has not gone back, the CAT status
+  says so. Turning the radio's knob is still followed. NEEDS-BENCH: an IC-7300 or an IC-7300 MK2
+  in Fake It.
+- **Rig split on Nexus's own Icom CI-V puts the TX VFO in USB with DATA for FT8.** With Split
+  Operation set to Rig on an Icom that uses Nexus's own CI-V, the transmit VFO was never put in a
+  data mode, so FT8 went out in whatever mode that VFO was left in. Nexus now sets it to USB with
+  the radio's DATA mode before each over (D1, D2 or D3 on an IC-7610, as Settings' Data mode says),
+  as it already did through Hamlib. NEEDS-BENCH: an IC-7610 in Rig split.
+- **The shared radio address says the radio is transmitting however it was keyed (#398).** With
+  Share this radio with other programs on, a program asking the shared address whether the radio is
+  transmitting (rigctld's `t`) heard yes only during Nexus's own digital overs, such as FT8. Phone
+  PTT in Nexus, Tune, a CW, RTTY or SSTV over, a program's own key through the shared address and
+  the radio keyed at its own microphone all read as receive, so a script that mutes the computer's
+  audio while you transmit never fired on SSB. All of them now read as transmit; keyed at the radio,
+  within about a second, because Nexus reads the radio's PTT once a second. One gap is left: while
+  Nexus plays a recorded voice message or an APRS packet, and during the last word of a CW message,
+  the shared address still reads receive.
+- **The Connection help no longer sends RS-BA1 users to NET rigctl.** For an Icom on its LAN port,
+  the help under Connection in Settings ▸ Radio ▸ Rig & CAT said to point Nexus at a rigctld
+  server with Rig Model NET rigctl, whether the program in between was wfview or RS-BA1. RS-BA1
+  runs no rigctld server, so an RS-BA1 user who followed it found nothing to connect to. It now
+  says: with RS-BA1, choose Serial, your Icom's model and the virtual COM port RS-BA1 creates. With
+  wfview, turn on its rigctld server and use Network and NET rigctl, as before.
+- **The setup wizard describes Network the way Settings does.** On the wizard's Rig step, Network
+  read "FlexRadio / remote rigctld", although it is also how Nexus reaches an SDR program on the same
+  computer, such as Thetis for a Hermes Lite 2. It now reads "SDR software, or a remote rig", the
+  words of the Connection choice in Settings ▸ Radio ▸ Rig & CAT, and the wizard's picture in Help ▸
+  Getting started says the same. The German, Spanish, French and Japanese text uses each language's
+  own words for that Connection choice.
 - **The CI-V bus diagnostic log is offered on every radio Nexus's own CI-V connection drives.**
   Settings ▸ Radio ▸ Rig & CAT ▸ Advanced offered the log by what the radio's model name looked
   like, so an IC-7610 saved as "Icom 7610", as "IC-7610M" or with no name could turn on Native
@@ -1312,55 +1179,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any radio on the Icom network connection. It is no longer offered through OmniRig, or on a
   radio that is only named like one of those, where Nexus's own CI-V never runs and the log
   would have nothing to record.
-- **The Data mode picker (D1/D2/D3) is greyed where it cannot reach the radio.** On an IC-7610
-  connected over Network or through OmniRig with Native Icom CI-V left on, Settings ▸ Radio ▸
-  Rig & CAT ▸ Advanced offered the picker and said the radio is put into the mode you pick, but
-  the pick was never sent: Nexus's own CI-V connection does not run there. The picker is now
-  greyed there, as the Native Icom CI-V switch above it is, and says it needs that connection.
-- **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
-  client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
-  when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
-  a radio that way, for every program on it. Nexus then refused every FT8 or other digital over and
-  turned TX off. It now opens its transmit stream whatever that setting already is, and the overs
-  go out over DAX. The setting itself is left as Nexus found it. NEEDS-BENCH on a FLEX radio.
-- **FlexRadio: the status lane says why Nexus held back an over.** With the Flex native client
-  (Beta) and Flex native DAX audio on, Nexus does not key an FT8 or other digital over while the
-  radio is not yet taking its transmit audio from Nexus over DAX, and turns TX off. The lane said
-  only that the radio did not accept PTT (`RPRT -1`) and told you to check your PTT method and CAT
-  port, which had nothing to do with it. It now says that Nexus did not key the over, and why.
-  NEEDS-BENCH on a FLEX radio.
-- **FlexRadio: no silent over after Flex native DAX audio goes off.** With the Flex native client
-  (Beta), Flex native DAX audio turned off within about a second before an FT8 or other digital
-  over (by you, or by Nexus when no DAX audio was arriving) sent that over to the sound card while
-  the radio still took its transmit audio from DAX, as Nexus had set it, so the radio keyed with no
-  audio. Nexus now holds that over back, turns TX off and says why in the status lane, then puts
-  the radio back on its mic input within a moment. The Phone screen's "mic off (DAX)" now stays up
-  until the radio has its mic back. NEEDS-BENCH on a FLEX radio.
-- **FlexRadio: an over whose Flex native DAX audio goes off part way through ends there.** With
-  the Flex native client (Beta), Flex native DAX audio turned off in the middle of an FT8 or other
-  digital over (by you, or by Nexus when no DAX audio was arriving) stopped the over's audio at
-  once but left the radio keyed with nothing to send until the over's own end, ten seconds or more
-  of dead air. Nexus now ends the over at once, turns TX off and says why in the status lane; turn
-  TX on again to carry on. NEEDS-BENCH on a FLEX radio.
-- **FlexRadio: no silent Phone over right after a digital mode.** With the Flex native client
-  (Beta), PTT pressed as you switched from FT8 or another digital mode to Phone, or held through
-  the switch, keyed the radio while it still took its transmit audio from DAX, as Nexus had set it
-  for the digital mode, and not from your mic: the whole over went out silent. The same went for
-  PTT pressed as Flex native DAX audio went off. Nexus now holds that key back and says why in the
-  status lane; let go of PTT, and the radio has its mic back within a moment. NEEDS-BENCH on a
-  FLEX radio.
-- **FlexRadio: an amplifier in line no longer turns an over's end into an alarm.** With the Flex
-  native client (Beta), the radio can name the amplifier it is waiting on while an over keys (a
-  PowerGenius XL shows as `AMP:PG-XL`). Nexus took any such name as a sign the transmitter might
-  not be its own, so on a station with that amplifier an over could end in "the radio did not
-  confirm the unkey" and a dropped connection. An amplifier's name alone now counts as the radio's
-  ordinary report; anything else the radio names there still stops the over and warns you.
-  NEEDS-BENCH on a FLEX radio with an amplifier in line.
-- **FlexRadio: the CW screen says why the Flex native client sent no CW.** With the Flex native
-  client (Beta), the client does not send CW yet, and the CW screen's warning line said instead
-  that the rig did not accept Hamlib's CW keying and to try another keyer. It now says that the
-  client does not send CW yet, and that SmartSDR CAT does: turn the client off for CW, or use the
-  WinKeyer or Soundcard keyer.
+- **The note in Nexus's Hamlib folder says what is in it.** The README.txt installed beside Hamlib
+  said Linux used the system Hamlib and told AppImage users to install libhamlib-utils, but every
+  download has carried its own Hamlib since 1.9.0, on Linux and macOS as on Windows. It now says what
+  each download carries, that Nexus starts that copy first, and when it falls back to a Hamlib
+  installed on the computer.
 - **Decode (F6) no longer holds up the radio while it decodes.** Decode on the FT8 and FT4 screen
   re-runs the decoder over the last period, which takes from a fraction of a second to a few
   seconds with the band, the decode depth and the computer. Until now the radio loop, the part of
@@ -1390,86 +1213,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hidden for one and a half periods after any band or mode change, FT8 to FT4 and back on one band
   included, because they can be left over from the band or mode you left.
 - **Switching mode in the middle of a QSO turns TX off when the dial moves away from your Tx
-  frequency, as WSJT-X does.** FT8 to FT4 on 20 m moves the dial from 14.074 to 14.080, and until
-  now TX stayed on, so the next over went out in FT4 to a station still on FT8. Now, when a switch
-  between the WSJT-X modes leaves the frequency you were transmitting on off the waterfall at the
-  new dial (200 to 3000 Hz above it), the over on the air stops and TX turns off. The QSO stays
-  where it was; turn TX on again to carry on in the new mode. A switch that leaves your Tx
-  frequency on the waterfall, a switch into WSPR, and a turn of the VFO knob leave TX as it was.
-- **Switching into or out of FT2, Tempo Fast (FT1) or Tempo Deep (DX1) in the middle of a QSO
-  turns TX off too when the dial moves away from your Tx frequency.** FT8 to FT2 on 20 m moves the
-  dial from 14.074 to 14.084, and until now TX stayed on, so the next over went out in FT2 to a
-  station still on FT8. FT8 to Tempo Fast and back did the same. These switches now follow the same
-  rule as FT8 to FT4: when the frequency you were transmitting on is off the waterfall at the new
-  dial, the over on the air stops and TX turns off. The QSO stays where it was; turn TX on again to
-  carry on in the new mode. A switch that leaves your Tx frequency on the waterfall, Tempo Fast to
-  Tempo Deep (they share one channel), and a switch into WSPR leave TX as it was.
+  frequency, as WSJT-X does, FT2, Tempo Fast (FT1) and Tempo Deep (DX1) included.** FT8 to FT4 on
+  20 m moves the dial from 14.074 to 14.080, and FT8 to FT2 to 14.084, and until now TX stayed on,
+  so the next over went out in FT4 or FT2 to a station still on FT8; FT8 to Tempo Fast and back did
+  the same. Now, when a switch between the WSJT-X modes, or into or out of FT2, Tempo Fast or Tempo
+  Deep, leaves the frequency you were transmitting on off the waterfall at the new dial (200 to
+  3000 Hz above it), the over on the air stops and TX turns off. The QSO stays where it was; turn TX
+  on again to carry on in the new mode. A switch that leaves your Tx frequency on the waterfall,
+  Tempo Fast to Tempo Deep (they share one channel), a switch into WSPR, and a turn of the VFO knob
+  leave TX as it was.
 - **FST4 and FST4W no longer write past the end of the audio they make for an over.** Making the
   audio for every FST4 or FST4W transmission wrote one value just past the space Nexus had set
   aside for it. On Linux, where it was measured, that did no harm. On Windows and macOS it could
   damage the memory beside it and crash Nexus later, at some unrelated moment. The audio sent is
   unchanged, sample for sample, at every period. NEEDS-BENCH: an FST4 and an FST4W transmit on
   Windows into a dummy load.
-- **A downloaded confirmation goes on the contact it confirms (#400).** If you worked a station
-  twice on one band in a UTC day, a LoTW, eQSL or QRZ confirmation of the later contact could be
-  put on the earlier one, where it stayed and counted toward awards. Each confirmation now goes on
-  the contact nearest its time, and only on one within 30 minutes of it, the window LoTW itself
-  matches in. A confirmation more than 30 minutes from every contact you logged with that station
-  on that band is left out and counted as unmatched, as a confirmation of a contact missing from
-  your log always was; a QRZ download adds it to your log as a contact you did not have. Two
-  confirmations never go on one contact. A contact imported with no time of day still takes its
-  confirmation by its date. Confirmations that earlier versions put on the wrong contact stay
-  where they are until you run Logbook ▸ Check confirmations (above).
-- **The first LoTW download brings your whole confirmation history (#399).** With no earlier
-  download on record (the first sync, or after you changed the LoTW username or cleared the log),
-  Nexus asked LoTW for confirmations without saying from when, and LoTW then sends only what it
-  matched since your account's last download by any program. The older confirmations never
-  arrived, and the syncs after it carried on from there. Nexus now asks for everything from
-  1900-01-01 in that case.
+- **JS8's ✓ marks and the band map's struck-through calls no longer blink when a new station is
+  heard.** Each station newly heard in JS8, and each new call on the band-map window, cleared every
+  ✓, name and comment in the JS8 station list, and every strike-through on the band map, until the
+  log answered: for a moment, and longer on a slow disk. Every row now keeps its marks, and only
+  the new call shows "—" until the log has answered for it.
+- **Repair clock no longer comes back every few minutes on a clock that is right, and says when
+  Windows refused a repair.** Since 1.17.0 the button under the clock chip could reappear at every
+  clock check, about every ten minutes, on Windows PCs whose clock was fine: on any Windows not set
+  to English, whose time service report Nexus could not read; whenever the Windows Time service's
+  latest check had not taken although it had synchronised; and after the clock stepped, including
+  the step a repair itself makes. For those it now shows only while the clock is more than a second
+  off UTC, which is when the clock chip turns amber. A stopped Windows Time service, or one that has
+  never synchronised, still gets the button whatever the clock reads. Repair clock said "Clock
+  repaired" whenever the administrator prompt was accepted, even when Windows then refused a step of
+  the repair, so the button went away and came back at the next clock check. It now says the clock
+  was not repaired and stays, so you can press it again. Not yet checked with the Windows
+  administrator prompt accepted and declined.
+- **FlexRadio: native DAX audio now transmits on a radio already set to DAX.** With the Flex native
+  client (Beta) and Flex native DAX audio on, a radio whose transmit audio was already set to DAX
+  when Nexus connected never got Nexus's own DAX transmit stream. SmartSDR's own DAX switch leaves
+  a radio that way, for every program on it. Nexus then refused every FT8 or other digital over and
+  turned TX off. It now opens its transmit stream whatever that setting already is, and the overs
+  go out over DAX. The setting itself is left as Nexus found it. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: the status lane says why Nexus held back an over.** With the Flex native client
+  (Beta) and Flex native DAX audio on, Nexus does not key an FT8 or other digital over while the
+  radio is not yet taking its transmit audio from Nexus over DAX, and turns TX off. The lane said
+  only that the radio did not accept PTT (`RPRT -1`) and told you to check your PTT method and CAT
+  port, which had nothing to do with it. It now says that Nexus did not key the over, and why.
+  NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: no silent over when Flex native DAX audio goes off just before or during it.** With
+  the Flex native client (Beta), Flex native DAX audio turned off within about a second before an
+  FT8 or other digital over (by you, or by Nexus when no DAX audio was arriving) sent that over to
+  the sound card while the radio still took its transmit audio from DAX, as Nexus had set it, so the
+  radio keyed with no audio. Nexus now holds that over back, turns TX off and says why in the status
+  lane, then puts the radio back on its mic input within a moment. The Phone screen's "mic off
+  (DAX)" now stays up until the radio has its mic back. Turned off in the middle of an over, DAX
+  audio stopped the over's audio at once but left the radio keyed with nothing to send until the
+  over's own end, ten seconds or more of dead air. Nexus now ends the over at once, turns TX off and
+  says why in the status lane; turn TX on again to carry on. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: no silent Phone over right after a digital mode.** With the Flex native client
+  (Beta), PTT pressed as you switched from FT8 or another digital mode to Phone, or held through
+  the switch, keyed the radio while it still took its transmit audio from DAX, as Nexus had set it
+  for the digital mode, and not from your mic: the whole over went out silent. The same went for
+  PTT pressed as Flex native DAX audio went off. Nexus now holds that key back and says why in the
+  status lane; let go of PTT, and the radio has its mic back within a moment. NEEDS-BENCH on a
+  FLEX radio.
+- **FlexRadio: an amplifier in line no longer turns an over's end into an alarm.** With the Flex
+  native client (Beta), the radio can name the amplifier it is waiting on while an over keys (a
+  PowerGenius XL shows as `AMP:PG-XL`). Nexus took any such name as a sign the transmitter might
+  not be its own, so on a station with that amplifier an over could end in "the radio did not
+  confirm the unkey" and a dropped connection. An amplifier's name alone now counts as the radio's
+  ordinary report; anything else the radio names there still stops the over and warns you.
+  NEEDS-BENCH on a FLEX radio with an amplifier in line.
+- **FlexRadio: the CW screen says why the Flex native client sent no CW.** With the Flex native
+  client (Beta), the client does not send CW yet, and the CW screen's warning line said instead
+  that the rig did not accept Hamlib's CW keying and to try another keyer. It now says that the
+  client does not send CW yet, and that SmartSDR CAT does: turn the client off for CW, or use the
+  WinKeyer or Soundcard keyer.
+- **The first LoTW download brings your whole confirmation history, and every download recognises
+  every upload LoTW holds (#399).** With no earlier download on record (the first sync, or after you
+  changed the LoTW username or cleared the log), Nexus asked LoTW for confirmations without saying
+  from when, and LoTW then sends only what it matched since your account's last download by any
+  program. The older confirmations never arrived, and the syncs after it carried on from there.
+  Nexus now asks for everything from 1900-01-01 in that case. Besides confirmations, a LoTW download
+  asks LoTW which of your uploads it holds, so those contacts read as waiting on the other operator;
+  there too Nexus did not say from when, and LoTW then lists only the uploads it received since your
+  account's last such download by any program, such as another logger's LoTW sync. Contacts uploaded
+  before that went on waiting for LoTW to take them. Nexus now asks for every upload LoTW received,
+  back to your oldest contact still waiting.
+- **A downloaded confirmation goes on the contact it confirms, and LoTW's upload mark on the contact
+  uploaded (#400).** If you worked a station twice on one band in a UTC day, a LoTW, eQSL or QRZ
+  confirmation of the later contact could be put on the earlier one, where it stayed and counted
+  toward awards. Each confirmation now goes on the contact nearest its time, and only on one within
+  30 minutes of it, the window LoTW itself matches in. A confirmation more than 30 minutes from
+  every contact you logged with that station on that band is left out and counted as unmatched, as a
+  confirmation of a contact missing from your log always was; a QRZ download adds it to your log as
+  a contact you did not have. Two confirmations never go on one contact. A contact imported with no
+  time of day still takes its confirmation by its date. A LoTW download also reads back the uploads
+  LoTW holds and marks those contacts accepted, waiting on the other station, and the later
+  contact's upload could mark the earlier one instead: that contact then no longer looked due for
+  upload, so it was never sent to LoTW and could never be confirmed. Each upload now marks only the
+  contact nearest its time, and only one within 30 minutes of it, the same match a confirmation
+  uses. Confirmations that earlier versions put on the wrong contact stay where they are until you
+  run Logbook ▸ Check confirmations (above).
 - **The first eQSL download asks for your whole InBox.** With no earlier download on record (the
   first sync, or after you changed the eQSL username or cleared the log), Nexus asked eQSL for your
   InBox without saying from when, and eQSL's documentation does not say what it sends then. Nexus
   now asks for every card received from 1900 on, as Logbook ▸ Check confirmations does. Later
   downloads carry on from the last one, as before.
-- **Sync from QRZ takes only QRZ's own confirmation.** Your QRZ logbook also repeats what LoTW,
-  eQSL and paper cards say about a contact, and Sync from QRZ took those copies as the services'
-  own: a contact could gain a LoTW, eQSL or paper-card confirmation from QRZ's copy, with the award
-  credit a LoTW or card confirmation brings, and a confirmation Logbook ▸ Check confirmations took
-  off could come back with the next sync. Sync from QRZ and Pull confirmations automatically now
-  mark a contact confirmed only where QRZ itself confirms it, on the contacts in your log and on the
-  ones they add; LoTW and eQSL confirmations come from those services' own downloads. If LoTW or
-  eQSL confirmed a contact before a QRZ sync added it to your log, Logbook ▸ Check confirmations
-  adds that confirmation. Confirmations already in your log are not changed.
-- **Sync from QRZ no longer marks a contact as uploaded to LoTW.** Your QRZ logbook can also say
-  that a contact was sent to LoTW, and Sync from QRZ took that as LoTW's word: a contact could come
-  out of a sync marked as already on file at LoTW, including one whose mark Logbook ▸ Check
-  confirmations had just taken off, and Nexus then never uploaded it. Sync from QRZ and Pull
-  confirmations automatically now leave a contact's LoTW upload mark as it was, and a contact a
-  sync adds to your log starts without one. LoTW's own list of your uploads still marks them. The
-  contacts this affects go in your next LoTW upload; one LoTW already holds is a duplicate there
-  and changes nothing. Marks already in your log are not changed, and nothing changes in what goes
-  to QRZ, Club Log or eQSL.
-- **An upload LoTW holds marks the right contact as accepted.** A LoTW download also reads back
-  the uploads LoTW holds and marks those contacts accepted, waiting on the other station. If you
-  worked a station twice on one band in a UTC day, the later contact's upload could mark the
-  earlier one instead. That contact then no longer looked due for upload, so it was never sent to
-  LoTW and could never be confirmed. Each upload now marks only the contact nearest its time, and
-  only one within 30 minutes of it, the same match a confirmation uses.
-- **A LoTW download recognises every upload LoTW holds.** Besides confirmations, a LoTW download
-  asks LoTW which of your uploads it holds, so those contacts read as waiting on the other
-  operator. Nexus did not say from when, and LoTW then lists only the uploads it received since
-  your account's last such download by any program, such as another logger's LoTW sync. Contacts
-  uploaded before that went on waiting for LoTW to take them. Nexus now asks for every upload LoTW
-  received, back to your oldest contact still waiting.
-- **The shared radio address says the radio is transmitting however it was keyed (#398).** With
-  Share this radio with other programs on, a program asking the shared address whether the radio is
-  transmitting (rigctld's `t`) heard yes only during Nexus's own digital overs, such as FT8. Phone
-  PTT in Nexus, Tune, a CW, RTTY or SSTV over, a program's own key through the shared address and
-  the radio keyed at its own microphone all read as receive, so a script that mutes the computer's
-  audio while you transmit never fired on SSB. All of them now read as transmit; keyed at the radio,
-  within about a second, because Nexus reads the radio's PTT once a second. One gap is left: while
-  Nexus plays a recorded voice message or an APRS packet, and during the last word of a CW message,
-  the shared address still reads receive.
+- **Sync from QRZ takes only QRZ's own confirmation, and no longer marks a contact as uploaded to
+  LoTW.** Your QRZ logbook also repeats what LoTW, eQSL and paper cards say about a contact, and
+  whether it was sent to LoTW, and Sync from QRZ took those copies as the services' own: a contact
+  could gain a LoTW, eQSL or paper-card confirmation from QRZ's copy, with the award credit a LoTW
+  or card confirmation brings, or come out of a sync marked as already on file at LoTW, and Nexus
+  then never uploaded it; a confirmation or a mark Logbook ▸ Check confirmations took off could come
+  back with the next sync. Sync from QRZ and Pull confirmations automatically now mark a contact
+  confirmed only where QRZ itself confirms it, on the contacts in your log and on the ones they add,
+  and leave a contact's LoTW upload mark as it was; a contact a sync adds to your log starts without
+  one. LoTW and eQSL confirmations come from those services' own downloads, and LoTW's own list of
+  your uploads still marks them. If LoTW or eQSL confirmed a contact before a QRZ sync added it to
+  your log, Logbook ▸ Check confirmations adds that confirmation. The contacts the upload mark
+  affects go in your next LoTW upload; one LoTW already holds is a duplicate there and changes
+  nothing. Confirmations and marks already in your log are not changed, and nothing changes in what
+  goes to QRZ, Club Log or eQSL.
+- **Pull confirmations automatically no longer blames your QRZ Logbook API key when nothing is
+  new.** When nothing in your QRZ logbook had changed since the last pull, QRZ answers that no
+  contact matched, and Nexus read that answer as a refusal: the connection log said "QRZ rejected
+  the FETCH — check your Logbook API key" every five minutes, and the last pull time stopped moving.
+  A pull that finds nothing new is now a pull that worked. The same answer is read the same way
+  everywhere else: Sync from QRZ on an empty QRZ logbook reports no new contacts, Check
+  confirmations says that logbook holds no contacts and checks nothing, and Correct at QRZ, for a
+  call QRZ holds no contact with, says QRZ has no matching record. Not yet checked against a live
+  QRZ account.
 - **Loading a profile no longer switches your logbook uploads back on, or off (#396).** A profile
   (Settings ▸ Radio ▸ Profiles) carried the automatic upload switches for QRZ, ClubLog, eQSL,
   HRDLog.net, World Radio League, Cloudlog/Wavelog and LoTW. Load one saved while QRZ upload was on
@@ -1482,43 +1353,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ClubLog uploads work in the Linux and Raspberry Pi packages (#388).** The .deb, AppImage and
   Raspberry Pi packages were built without the ClubLog application key the Windows and Mac
   installers carry, so ClubLog uploads failed with "This build has no ClubLog application key", and
-  ClubLog's Most Wanted ranking was missing from the DXpedition list's order. They now carry the
-  key too, so your ClubLog email and Application Password are all you need, on every platform.
-- **"New mode" counts each mode on its own, on every screen.** The callsign card treated FT8,
-  FT4, RTTY, PSK31 and the other modes as separate modes, while the Call Roster, Band Activity, the
+  ClubLog's Most Wanted ranking was missing from the DXpedition list's order. They now carry the key
+  too, so your ClubLog email and Application Password are all you need, on every platform. Not yet
+  checked: only the release build's packages can show it.
+- **"New mode" counts each mode on its own, on every screen.** The callsign card treated FT8, FT4,
+  RTTY, PSK31 and the other modes as separate modes, while the Call Roster, Band Activity, the
   Needed board and the need alerts only asked whether you had worked a country in CW, phone or any
-  digital mode. So a country you had worked on FT4 but never on FT8 showed "New mode-slot" on the
-  card and nothing on the roster beside it. Now they all count each mode separately, as the card
-  does: a country worked on FT4 lights up as a new mode on FT8, so expect more mode needs than
-  before, and the need goes out once a contact in that mode is in your log. The roster and Band
-  Activity show a mode need only while you are on that mode, and the Needed board names it, as in
-  "New mode — FT8 The Gambia (any band)". USB and LSB still count as one mode, SSB. A DX cluster
-  spot that Nexus can only place as phone or digital from its frequency is still a new mode only
-  when you have never worked that country in any mode of that kind. The DXCC award totals still
-  count CW, Phone and Digital, as ARRL does.
-- **New mode no longer lists WSPR beacons and other stations you cannot log in their mode.** With
-  New mode on, the Needed board listed a new mode for almost every station PSK Reporter heard near
-  you in WSPR, VarAC, JTTY or FreeDV, most of them in the United States and Canada, as "New mode —
-  WSPR United States (any band)". The rows read Digital and a click took you to FT8, so they looked
-  like FT8 needs for countries you have worked hundreds of times in FT8. Nobody works a WSPR beacon
-  and no contact is logged under those other names, so those needs could never go out. The radio's
-  own WSPR and FST4W decodes did the same on the roster and in Band Activity. A station heard in
-  one of them is now a new mode only when you have never worked its country in any mode of that
-  kind. FT8, FT4, JS8, Q65, FST4, RTTY, PSK31 and the other modes a contact is logged in still count
-  on their own, and a click on such a row now opens that mode's screen: a JS8 row the JS8 screen, a
-  PSK31, PSK63, PSK125 or QPSK31 row the PSK screen (switched to PSK31 or QPSK31 when the row is one
-  of those), and an FT4 row the FT screen on FT4.
-- **A contact imported from JS8Call keeps JS8 as its mode.** JS8Call logs JS8 as MFSK with JS8 as
-  the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
-  those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same
-  file again does not add them twice.
-- **A contact imported from fldigi keeps its PSK mode.** fldigi logs PSK31 as PSK with PSK31 as
-  the submode, and the same for PSK63, QPSK31 and its other PSK modes. Nexus kept only the PSK, so
-  a PSK31 station read as a new mode against a log full of PSK31 contacts. The logbook and the
-  "new mode" need now see PSK31, PSK63, QPSK31 and the rest. Each contact is still written back,
-  in your exports and in what goes to LoTW, QRZ and the other services, exactly as fldigi wrote
-  it. Contacts logged on the PSK screen are written as before. Contacts imported before this
-  release keep PSK, and importing the same file again does not add them twice.
+  digital mode, and so did a POTA or SOTA activator's own row on the Needed board; a DXpedition card
+  treated every operation as digital, whatever modes it announced. So a country you had worked on
+  FT4 but never on FT8 showed "New mode-slot" on the card and nothing on the roster beside it. Now
+  they all count each mode separately, as the card does: a country worked on FT4 lights up as a new
+  mode on FT8, so expect more mode needs than before, and the need goes out once a contact in that
+  mode is in your log. The roster and Band Activity show a mode need only while you are on that
+  mode, and the Needed board names it, as in "New mode — FT8 The Gambia (any band)". An activator's
+  row judges the mode the spot names ("New mode — FT8 … (any band) · POTA …"), and a DXpedition card
+  is a new mode while any mode the operation announced is one you have never worked that country in.
+  USB and LSB still count as one mode, SSB. A DX cluster spot that Nexus can only place as phone or
+  digital from its frequency, a POTA or SOTA spot that names only data, phone or digital, or no mode
+  at all, and an operation that announced no mode or only "PSK" are still a new mode only when you
+  have never worked that country in any mode of that kind. So is a station heard in WSPR, VarAC,
+  JTTY or FreeDV, modes no contact is logged in, whether PSK Reporter heard it or it is one of the
+  radio's own WSPR and FST4W decodes. The DXCC award totals still count CW, Phone and Digital, as
+  ARRL does.
+- **A contact imported from JS8Call or fldigi keeps its mode.** JS8Call logs JS8 as MFSK with JS8 as
+  the submode, and fldigi logs PSK31 as PSK with PSK31 as the submode, and the same for PSK63,
+  QPSK31 and its other PSK modes. Nexus kept only the MFSK or the PSK, so the logbook and the "new
+  mode" need could not tell those contacts were JS8, and a PSK31 station read as a new mode against
+  a log full of PSK31 contacts. The logbook and the "new mode" need now see JS8, PSK31, PSK63,
+  QPSK31 and the rest. Each fldigi contact is still written back, in your exports and in what goes
+  to LoTW, QRZ and the other services, exactly as fldigi wrote it, and contacts logged on the PSK
+  screen are written as before. Contacts imported before this release keep MFSK or PSK, and
+  importing the same file again does not add them twice.
 - **Changing the mode of an imported contact no longer leaves its old submode behind.** A contact
   imported from another logger can carry a submode Nexus keeps exactly as it was written, such as
   fldigi's PSK31 or Log4OM's USB. Changing that contact's mode in the Logbook kept the old submode,
@@ -1526,37 +1391,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   submode. Now a mode edit drops a submode the new mode does not have, and a PSK contact moved to
   another PSK mode takes the new one with it (corrected to PSK63, it is written as PSK with PSK63,
   as fldigi writes it). Editing any other field leaves the submode as it was.
-- **POTA and SOTA activators, and the DXpeditions cards, now count each mode on its own as well.**
-  An activator's own row on the Needed board still asked only whether you had worked the country in
-  CW, phone or any digital mode, and a DXpedition card treated every operation as digital, whatever
-  modes it announced. So an activator or a DXpedition on FT8 in a country you had worked only on
-  FT4 showed no new mode there, while the same station decoded by your radio did. The activator row
-  now judges the mode the spot names ("New mode — FT8 … (any band) · POTA …"), and a DXpedition card
-  is a new mode while any mode the operation announced is one you have never worked that country
-  in. A spot that names only data, phone or digital, or no mode at all, and an operation that
-  announced no mode or only "PSK", keep the old rule: a new mode only when you have never worked
-  that country in any mode of that kind.
-- **Seven boxes no longer stand empty when they have nothing to show.** Openings Log, Chase, Chase
-  Feed, Satellite Passes, Contests, Rotor and Amplifier drew a blank box until they had something to
-  list, on Conditions, in the dashboard window and in the dashboard rail. Each now says in one line
-  what it is waiting for, as the other boxes do: where to set up a rotator or an amplifier, that no
-  needed station is being heard yet, or that the contest calendar appears once Nexus is online.
-- **The note in Nexus's Hamlib folder says what is in it.** The README.txt installed beside Hamlib
-  said Linux used the system Hamlib and told AppImage users to install libhamlib-utils, but every
-  download has carried its own Hamlib since 1.9.0, on Linux and macOS as on Windows. It now says what
-  each download carries, that Nexus starts that copy first, and when it falls back to a Hamlib
-  installed on the computer.
-- **FT keeps the sort, filter and search you set in its panes when the window gets too narrow for
-  the dashboard rail, and wide again.** With the rail on, a window below that size moves the rail's
-  boxes into FT's side rail, and FT redrew its panes each time it crossed that line: the Call Roster
-  went back to sorting by Need, Band Activity to Time, and the Stations list to All with its search
-  cleared. They now stay as you set them, both ways. They still start from those defaults when Nexus
-  starts.
-- **Checking the score no longer stops an FT8/FT4 contest run.** Opening the Contest screen put the
-  FT8/FT4 sequencer back in S&P every time, so a station running CQ stopped calling CQ, and a
-  contact being worked in S&P was dropped. A station already in the contest, running or in S&P, now
-  stays as it was; coming from another mode, the screen still starts the contest in S&P and never
-  calls CQ.
+- **On a slow disk, a contact you just logged shows up within seconds in the Logbook list, the
+  Needed board, Awards, Journey and Statistics, and nothing answers without it.** The needs, awards,
+  statistics, Journey and confirmation diagnostics each wait up to two seconds for that contact to
+  reach the logbook database first. When saving took longer than that, they answered without it: the
+  station you had just worked could stay marked as needed and the counts were one short, with
+  nothing to say so, the Logbook list left the contact out until you logged another, and the Needed
+  board kept the station marked as needed until its next half-minute refresh. Now, while the contact
+  is still being saved, they give no answer rather than a short one, and Nexus asks again each
+  second, up to three times, and shows the contact as soon as it is saved.
+- **The Logbook says when it is still reading your log, and when it could not read it.** Opening it
+  showed "No logged contacts yet." and a count of 0 until your contacts came in: for a moment each
+  time, and longer on a slow disk. It now shows "Reading the logbook…" until they are in, and an
+  empty log no longer says "No logged contacts yet." while your first contact is being counted. The
+  Logbook globe, opened or with a band picked on it, could likewise show "0 grid squares worked" (or
+  "0 grid squares on 20m") until your squares came in; it now shows its count once the squares are
+  counted. When a read of the logbook failed, on a database error for example, the Logbook did not
+  say so, and closing and reopening it did not try again. It now says "Couldn't read the logbook"
+  with the reason and a Retry button, and reopening the Logbook tries again. While a change is still
+  being saved, the Logbook says "Reading the logbook…", and reopening it tries again there too. A
+  count from before your latest change says "Out of date" in its tooltip. On the Remote page, a
+  search that matches nothing now says so, where it said the log was empty.
+- **Nexus Remote's stream only tries addresses a viewer could really be at.** The shack no longer
+  sends connection checks to an address a browser names on the shack itself, on the local link (such
+  as a cloud's metadata address) or for a whole group of computers, and it tries at most 16 of one
+  browser's addresses and takes at most 64 in all. A browser on your own network or on Tailscale
+  still connects directly. Not yet tried with a real browser against a station.
+- **Through the Remote stream, the Contest screen no longer exports anything, restores a removed
+  contact or merges contacts into your logbook.** A press of **Export Cabrillo**, **Export ADIF**,
+  **Summary**, **Dupe sheet**, **Club Cabrillo**, **Club ADIF**, **Restore** or **Merge … into my
+  logbook** that comes through the stream does nothing and says so ("Only at the station: …"), as
+  Remove already does. The same press at the station works as before. Not yet tried through a real
+  stream.
+- **Nexus Remote says "Station data unavailable" after every loss of the station's data.** When the
+  readings stopped at the moment a background read of the decode history also gave up, the workspace
+  stopped trusting the readings and refused its controls, as it should, but it never faded and never
+  showed "Station data unavailable", however long the loss lasted. It now does, five seconds into
+  every loss, as it already did in every other case.
+- **Nexus Remote shows a contest log that holds a duplicate.** In Sweepstakes, CQ WW, CQ WPX,
+  the ARRL VHF contests and the New York QSO Party a repeat contact is logged and scored zero, as
+  the sponsors ask. One such repeat in the log left the Contest screen on Nexus Remote blank, with
+  "Station data unavailable. Refresh or reconnect." however often you refreshed. It now shows the
+  log, the repeat marked, with the QSO count the shack shows; and a log that its repeats take past
+  what the browser can show says it is too large, rather than unavailable.
 
 ## [1.17.0] — 2026-10-07
 
