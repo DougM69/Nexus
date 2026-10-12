@@ -100,12 +100,10 @@ keying cable is involved.
 
 - **The keyer speed follows the WPM control** in the CW screen — Nexus sends it
   to the radio before each word.
-- **Below 10 MHz Nexus asks for CW-L**, which the SmartSDR CAT profile does not
-  offer under that name. Nexus notices the refusal and puts the radio in plain
-  **CW** instead. It is the same signal on the same frequency — CW-reverse only
-  changes which side of the carrier *you* listen on — so nothing about your
-  transmission changes. (Before this was fixed, the radio was left in whatever
-  mode it had been in while the keyer went on sending.)
+- **Nexus asks for plain CW on every band**, unless you turn on **Reverse CW
+  (CW-R)** in Nexus's CW settings. It is the same signal on the same frequency
+  either way — reverse only changes which side of the carrier *you* listen on —
+  so nothing about your transmission changes.
 - **Stop TX** clears everything Nexus has not sent yet. Words are handed over one
   at a time for exactly this reason, so the most that can still go out is the
   word already inside the radio.
