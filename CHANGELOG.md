@@ -572,6 +572,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in Phone turns TX on instead of keying. Stop TX and Esc now also end an RTTY Auto run, and so do
   a band change and a radio switch: start a new run with Auto CQ.
 
+- **With the contest logger window open, a contact's county no longer carries into the next one.**
+  Depending on when each window's next update landed against the log, the county of the contact
+  you had just logged (or any box but the report) could stay in both windows, and then stayed for
+  good: a plain Enter on the next call logged that county again, for the new station. The boxes now
+  start the next contact empty in both windows whichever way those updates land, as they always did
+  with the logger window closed. A box the other window typed for the next contact is kept, and
+  Field Day still keeps the class and section you logged. In the window you log from, the boxes now
+  empty as the contact is logged rather than a moment later.
+
 - **Phone's F-keys play the voice keyer from the log line, as CW's do.** With the cursor in the Call
   box or any other box of the log line, a slot's F-key played nothing until you clicked out of the
   box. Now it plays from anywhere on the Phone screen, and F1–F12 never reach the window there, so F5
