@@ -222,7 +222,7 @@ async function pollsSettle() {
 const inWindow = (w: Win) => within(screen.getByTestId(w))
 const callIn = (w: Win) => inWindow(w).getByPlaceholderText('W1AW') as HTMLInputElement
 const rstIn = (w: Win) => inWindow(w).getByLabelText('RST') as HTMLInputElement
-const qthIn = (w: Win) => inWindow(w).getByLabelText('QTH') as HTMLInputElement
+const qthIn = (w: Win) => inWindow(w).getByLabelText('County / State') as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const enter = (w: Win) => fireEvent.keyDown(callIn(w), { key: 'Enter' })
 const loggedAs = (call: string) => engine.rows.filter((r) => r.call === call).map((r) => r.ex)
