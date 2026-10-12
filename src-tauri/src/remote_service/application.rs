@@ -1312,6 +1312,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **Remote's snapshot is sent nothing new for the club-wide board**: its sections board is
+    /// the station's own, as before, with no list of what the club worked. CONTROL: the host's own
+    /// snapshot carries the list (`host_whose_tent_worked_a_section`).
+    #[test]
+    fn remotes_snapshot_carries_no_club_board_list() {
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-snapshot-board-club-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let e =
+            crate::remote_service::query::field_day::tests::host_whose_tent_worked_a_section(&dir);
+        let engine = Arc::new(Mutex::new(e));
+        let sent = Publisher::default()
+            .read(&engine, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let value: Value = serde_json::from_str(&sent).unwrap();
+        let board = value["data"]["fieldDay"]["boards"][0]
+            .as_object()
+            .expect("the sections board is in Remote's snapshot");
+        let mut keys: Vec<&str> = board.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["domain", "id", "scope", "slot", "worked"],
+            "{board:?}"
+        );
+        assert_eq!(board["worked"], serde_json::json!(["WI"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The radio loop holds the Engine across blocking CAT, so a `try_lock` miss is routine. It
     /// used to answer `applicationBusy`, which the browser turned into a deleted snapshot and
     /// every station control disabled at once. A miss now serves the cached sample with its true

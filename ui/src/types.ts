@@ -3477,6 +3477,11 @@ export interface ContestBoard {
   scope: string
   /** The distinct values worked, sorted. */
   worked: string[]
+  /** ⭐ The distinct values the CLUB has worked, sorted — every position's contacts, this laptop's
+   *  included (the host's club log, or what the host sent a position). The board lights each and
+   *  marks this laptop's own (`worked`) apart. Absent without club sync, from a host older than the
+   *  list, and on Remote, which is sent nothing new: the board is then this laptop's own. */
+  club?: string[]
 }
 
 /** The per-session upload control: what the end-of-contest merge queues, and where.

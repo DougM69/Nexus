@@ -3,13 +3,13 @@
 //!
 //! One club "position" (a Nexus instance) holds one TCP connection to the host
 //! and streams `(position id, seq)`-identified QSO rows up; the host merges
-//! them idempotently and pushes compact club state (dupe keys, sections,
-//! score, band board) back down the same socket. The host's own contacts
-//! enter through an identical loopback connection, so a host is just another
-//! position. This module owns ONLY the wire: framing, the message vocabulary,
-//! the accept loop and the position-side pump. Policy (the club log, the
-//! journal, dupe semantics) lives behind the [`ClubBackend`] /
-//! [`PositionSync`] traits in the caller — the aprsis split.
+//! them idempotently and pushes compact club state (dupe keys, sections, the
+//! multiplier values worked, score, band board) back down the same socket.
+//! The host's own contacts enter through an identical loopback connection, so
+//! a host is just another position. This module owns ONLY the wire: framing,
+//! the message vocabulary, the accept loop and the position-side pump. Policy
+//! (the club log, the journal, dupe semantics) lives behind the
+//! [`ClubBackend`] / [`PositionSync`] traits in the caller — the aprsis split.
 //!
 //! ## SAFETY — the inbound surface is DATA-PLANE ONLY
 //!
@@ -286,6 +286,16 @@ pub struct WireBoardRow {
     /// Merged rows in the trailing 60 min (the contest rate meter).
     pub rate: u64,
     pub age: u64,
+    /// ⭐ **The host's operator removed this position from the event** (`ClubLog::remove`). Its
+    /// contacts stay in the club's log and on its line; every laptop's board says it was removed
+    /// with the next club line, where it used to learn only from the line going quiet, a ⚠ 15 s
+    /// (`DEAD_SECS`) and a heartbeat later.
+    ///
+    /// Additive, so no version bump: never written while false, which is every row an older
+    /// host writes and every row but a removed position's, and an older position ignores it
+    /// (its line goes quiet as before).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub removed: bool,
 }
 
 /// Club state pushed host→position in `snap` (full, on join) and `club`
@@ -319,6 +329,19 @@ pub struct ClubState {
     /// ARRL/RAC sections newly worked club-wide.
     #[serde(default)]
     pub sections: Vec<String>,
+    /// ⭐ **The multiplier values newly worked club-wide**, `(slot, value)`: every value a
+    /// multiplier board shows (an Illinois county, a state, an ARRL section) that a contact the
+    /// club counts brought in, whichever position logged it — so every laptop's board lights it.
+    ///
+    /// Append-only like [`sections`](Self::sections), and past the DUPE cursor: a value first
+    /// comes in with the contact that brings a new dupe key (`ClubLog`'s rule), so the delta that
+    /// carries the key carries the value, and a take-back rebuilds both under a new generation.
+    ///
+    /// Additive, so no version bump in either direction: absent when empty, which is every line
+    /// an older host writes, and a position reading none shows its own board as before; an older
+    /// position ignores it, as it ignores every field it does not know.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mults: Vec<(String, String)>,
     /// Claimed club total (host's power multiplier + bonuses).
     #[serde(default)]
     pub score: u32,
@@ -652,6 +675,11 @@ fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
+/// `skip_serializing_if` for a board row's flags: a row without one is the bytes it always was.
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// The bytes one value adds to a JSON array: its own, and the comma before it unless it is
 /// the array's first.
 fn grows_by<T: Serialize>(value: &T, first: bool) -> usize {
@@ -716,14 +744,16 @@ pub fn board_fit(board: &[WireBoardRow]) -> BoardFit {
 ///
 /// The FIRST line carries the scalars and the board, the whole board and on that line
 /// only — or, when even the board alone would not fit, the rows of it that do
-/// ([`board_fit`]). The key lists and the sections then fill that line and as many more
-/// as it takes, each line taking what fits, at most [`SNAP_DUPES_PER_LINE`] key pairs a
-/// line. Every mirror since club sync shipped (1.10) unions both lists and clears them only
-/// on a snapshot's first chunk, so where an entry lands changes no state — and a club that
-/// fit before writes exactly the bytes it always did. The first line used to carry every
-/// section whatever its size, which put a Field Day club of about 38 positions, or a QSO
-/// party that had worked every QTH, past the cap: each position dropped the connection on
-/// that line and reconnected into the same one.
+/// ([`board_fit`]). The key lists, the sections and then the multiplier values fill that
+/// line and as many more as it takes, each line taking what fits, at most
+/// [`SNAP_DUPES_PER_LINE`] key pairs a line. Every mirror since club sync shipped (1.10)
+/// unions its lists and clears them only on a snapshot's first chunk, so where an entry
+/// lands changes no state — and a club that fit before, with no multiplier values to send,
+/// writes exactly the bytes it always did. A line an older position reads with only
+/// multiplier values on it changes nothing there: its scalars are the ones it already holds.
+/// The first line used to carry every section whatever its size, which put a Field Day club
+/// of about 38 positions, or a QSO party that had worked every QTH, past the cap: each
+/// position dropped the connection on that line and reconnected into the same one.
 ///
 /// ⚠️ The two key lists are chunked by the SAME index range, because the host
 /// builds them index-parallel — entry `n` of `dupes` and entry `n` of `dkeys`
@@ -746,6 +776,7 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
         dupes,
         dkeys,
         sections,
+        mults,
         score,
         qsos,
         board,
@@ -775,8 +806,21 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
         .iter()
         .filter(|s| fits_alone(grows_by(s, true)))
         .collect();
+    // The multiplier list is left off a line while it is empty, so its first value brings the
+    // key with it: what that costs, measured off the encoder rather than counted by hand.
+    let mults_key = line(ClubState {
+        mults: vec![Default::default()],
+        ..Default::default()
+    })
+    .len()
+        - line(ClubState::default()).len()
+        - grows_by(&<(String, String)>::default(), true);
+    let mults: Vec<&(String, String)> = mults
+        .iter()
+        .filter(|m| fits_alone(mults_key + grows_by(m, true)))
+        .collect();
     let board = board_fit(&board).rows;
-    let (mut next_pair, mut next_section) = (0usize, 0usize);
+    let (mut next_pair, mut next_section, mut next_mult) = (0usize, 0usize, 0usize);
     let mut first = true;
     loop {
         let mut part = ClubState {
@@ -810,9 +854,22 @@ fn write_club_state(w: &mut impl Write, st: ClubState, snap: bool) -> std::io::R
             used += grow;
             next_section += 1;
         }
+        while let Some(m) = mults.get(next_mult) {
+            let grow = if part.mults.is_empty() {
+                mults_key + grows_by(m, true)
+            } else {
+                grows_by(m, false)
+            };
+            if used + grow > MAX_LINE_BYTES {
+                break;
+            }
+            part.mults.push((*m).clone());
+            used += grow;
+            next_mult += 1;
+        }
         w.write_all(line(part).as_bytes())?;
         first = false;
-        if next_pair >= pairs.len() && next_section >= sections.len() {
+        if next_pair >= pairs.len() && next_section >= sections.len() && next_mult >= mults.len() {
             return Ok(());
         }
     }
@@ -1955,19 +2012,31 @@ mod tests {
                 dupes: vec![("W1AW".into(), "20m".into(), "DIG".into())],
                 dkeys: vec![vec!["W1AW".into(), "20M".into(), "DIG".into()]],
                 sections: vec!["CT".into()],
+                mults: vec![("SECTION".into(), "CT".into())],
                 score: 1234,
                 qsos: 312,
-                board: vec![WireBoardRow {
-                    pos: "a1b2c3d4".into(),
-                    name: "CW tent".into(),
-                    band: "20m".into(),
-                    mode: "CW".into(),
-                    op: "KD9TAW".into(),
-                    qsos: 57,
-                    uniq: 55,
-                    rate: 23,
-                    age: 2,
-                }],
+                board: vec![
+                    WireBoardRow {
+                        pos: "a1b2c3d4".into(),
+                        name: "CW tent".into(),
+                        band: "20m".into(),
+                        mode: "CW".into(),
+                        op: "KD9TAW".into(),
+                        qsos: 57,
+                        uniq: 55,
+                        rate: 23,
+                        age: 2,
+                        removed: false,
+                    },
+                    WireBoardRow {
+                        pos: "b1b2c3d4".into(),
+                        name: "SSB tent".into(),
+                        qsos: 9,
+                        age: 40,
+                        removed: true,
+                        ..Default::default()
+                    },
+                ],
             }),
             Msg::Club(ClubState::default()),
             Msg::Ping { t0: 0 },
@@ -2321,6 +2390,7 @@ mod tests {
                 dupes: dupes.into_iter().skip(dupes_from).collect(),
                 dkeys: dkeys.into_iter().skip(dupes_from).collect(),
                 sections: Vec::new(),
+                mults: Vec::new(),
                 score: 0,
                 qsos: m.len() as u64,
                 board: Vec::new(),
@@ -2994,6 +3064,7 @@ mod tests {
             dupes: dupes.clone(),
             dkeys: dkeys.clone(),
             sections: vec!["WI".into()],
+            mults: Vec::new(),
             score: 7,
             qsos: 120,
             board: Vec::new(),
@@ -4167,6 +4238,7 @@ mod tests {
             uniq: 1234,
             rate: 1234,
             age,
+            removed: false,
         }
     }
 
@@ -4200,6 +4272,7 @@ mod tests {
             } else {
                 (0..165).map(|i| format!("Q{i:03}")).collect()
             },
+            mults: Vec::new(),
             score: 12_345,
             qsos: 4_321,
             board: (0..rows).map(|i| long_row(i, 12_345)).collect(),
@@ -4246,6 +4319,8 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                // No release before this one sent a multiplier value.
+                mults: Vec::new(),
                 score: st.score,
                 qsos: st.qsos,
                 board: if first { st.board.clone() } else { Vec::new() },
@@ -4363,6 +4438,184 @@ mod tests {
                     "{rows} positions, field day {field_day}, snap {snap}"
                 );
             }
+        }
+    }
+
+    /// `n` multiplier values worked club-wide, as an Illinois QSO Party club sends them: an
+    /// in-state club that has worked every county and state holds 165 of `QTH`.
+    fn mult_values(n: usize) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| ("QTH".to_string(), format!("Q{i:03}")))
+            .collect()
+    }
+
+    /// The multiplier values a run of lines carries, in the order they came.
+    fn mults_read(lines: &[String]) -> Vec<(String, String)> {
+        lines
+            .iter()
+            .flat_map(|line| match decode_line(line) {
+                Some(Msg::Snap(st)) | Some(Msg::Club(st)) => st.mults,
+                _ => panic!("a club-state line: {line}"),
+            })
+            .collect()
+    }
+
+    /// ⭐ **The club's multiplier values reach every position whole, every line inside the
+    /// cap** — beside a board as big as one line carries, in a join snapshot and a heartbeat
+    /// alike: they fill what the key lists and the sections leave on a line, then lines of their
+    /// own. And the rest of the state is the one the same club sends without them.
+    #[test]
+    fn the_clubs_multiplier_values_reach_every_position_inside_the_cap() {
+        for (rows, field_day) in [(40, true), (40, false), (0, true)] {
+            let without = big_club(rows, field_day);
+            let mut with = without.clone();
+            with.mults = mult_values(600);
+            for snap in [true, false] {
+                let lines = lines_of(with.clone(), snap);
+                assert_eq!(
+                    mults_read(&lines),
+                    with.mults,
+                    "{rows} positions, field day {field_day}, snap {snap}: every value, in order"
+                );
+                // `mirror_of` panics on a line past the cap.
+                assert_eq!(
+                    mirror_of(&lines),
+                    mirror_of(&lines_of(without.clone(), snap)),
+                    "the board, the keys, the sections and the counters are as without them"
+                );
+            }
+        }
+    }
+
+    /// ⭐ **An older position reads the lines carrying the club's multiplier values, and a removed
+    /// position's flag, exactly as it reads them without.** The shapes below are `ClubState` and
+    /// `WireBoardRow` as every release before the two declares them, decoded by serde's own rule
+    /// for a field a type does not name (dropped): a position built on them folds every line as
+    /// it always did — the lists unioned, a snapshot's first chunk clearing them, the scalars
+    /// overwritten, the board replaced by a chunk that has rows — and holds the same state either
+    /// way. A line that carries only multiplier values carries the scalars it already holds.
+    /// CONTROL: the lines do carry the list and the flag.
+    #[test]
+    fn an_older_position_reads_the_multiplier_values_lines_as_it_read_them_without() {
+        #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+        struct OldRow {
+            pos: String,
+            name: String,
+            band: String,
+            mode: String,
+            op: String,
+            qsos: u64,
+            #[serde(default)]
+            uniq: u64,
+            rate: u64,
+            age: u64,
+        }
+        #[derive(Deserialize, Debug, Default)]
+        struct OldState {
+            #[serde(default)]
+            reset: bool,
+            #[serde(default)]
+            dupes: Vec<(String, String, String)>,
+            #[serde(default)]
+            dkeys: Vec<Vec<String>>,
+            #[serde(default)]
+            sections: Vec<String>,
+            #[serde(default)]
+            score: u32,
+            #[serde(default)]
+            qsos: u64,
+            #[serde(default)]
+            board: Vec<OldRow>,
+        }
+        #[derive(Deserialize, Debug)]
+        #[serde(tag = "t", rename_all = "lowercase")]
+        enum OldMsg {
+            Snap(OldState),
+            Club(OldState),
+            #[serde(other)]
+            Unknown,
+        }
+        type Held = (
+            std::collections::BTreeSet<(String, String, String)>,
+            std::collections::BTreeSet<Vec<String>>,
+            std::collections::BTreeSet<String>,
+            u32,
+            u64,
+            Vec<OldRow>,
+        );
+        let fold = |lines: &[String]| -> Held {
+            let mut held = Held::default();
+            for line in lines {
+                let st = match serde_json::from_str::<OldMsg>(line.trim())
+                    .unwrap_or_else(|e| panic!("an older position cannot decode {line}: {e}"))
+                {
+                    OldMsg::Snap(st) | OldMsg::Club(st) => st,
+                    OldMsg::Unknown => panic!("read as a message it does not know: {line}"),
+                };
+                if st.reset {
+                    held.0.clear();
+                    held.1.clear();
+                    held.2.clear();
+                }
+                held.0.extend(st.dupes);
+                held.1.extend(st.dkeys);
+                held.2.extend(st.sections);
+                held.3 = st.score;
+                held.4 = st.qsos;
+                if !st.board.is_empty() || st.reset {
+                    held.5 = st.board;
+                }
+            }
+            held
+        };
+        for (rows, field_day) in [(10, true), (10, false), (40, true), (0, false)] {
+            let without = big_club(rows, field_day);
+            let mut with = without.clone();
+            with.mults = mult_values(165);
+            if rows > 1 {
+                with.board[1].removed = true;
+            }
+            for snap in [true, false] {
+                let new = lines_of(with.clone(), snap);
+                assert!(
+                    new.iter()
+                        .any(|l| l.contains("\"mults\":[[\"QTH\",\"Q000\"]")),
+                    "CONTROL: the lines carry the list"
+                );
+                assert_eq!(
+                    new.iter().any(|l| l.contains("\"removed\":true")),
+                    rows > 1,
+                    "CONTROL: and the flag, on the removed position's line only"
+                );
+                let old = lines_of(without.clone(), snap);
+                assert_eq!(
+                    fold(&new),
+                    fold(&old),
+                    "{rows} positions, field day {field_day}, snap {snap}"
+                );
+                assert!(!fold(&new).5.is_empty() || rows == 0, "the board was read");
+            }
+        }
+    }
+
+    /// ⭐ **A position reading an older host's lines holds no multiplier values**, so its board is
+    /// its own, as it always was (`club_board_loopback.rs` holds the screen to that). The lines are
+    /// the bytes a host built before the list writes (`old_lines`). CONTROL: the same club from a
+    /// host that sends the list.
+    #[test]
+    fn an_older_hosts_lines_carry_no_multiplier_values() {
+        for (rows, field_day) in [(10, true), (10, false)] {
+            let st = big_club(rows, field_day);
+            for snap in [true, false] {
+                assert!(mults_read(&old_lines(&st, snap)).is_empty());
+            }
+            let mut with = st.clone();
+            with.mults = mult_values(3);
+            assert_eq!(
+                mults_read(&lines_of(with.clone(), true)),
+                with.mults,
+                "CONTROL"
+            );
         }
     }
 

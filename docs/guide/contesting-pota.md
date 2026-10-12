@@ -291,8 +291,17 @@ a club sync worked.*
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not
   a lock (N3FJP semantics); your own log's dupes still refuse.
+- Every laptop's **county or sections board** shows what the whole club has
+  worked, so everyone sees what the club still needs: a county, state or
+  section another position logs turns green with a ✓ on the host's board and
+  on every other laptop's within a second, and this laptop's own are marked ⌂
+  in the colour its name has in the grid below, with a legend over the board
+  and both counts ("34/102 worked · 12 on this laptop"). A laptop or host on an
+  earlier release shows only its own, as before.
 - A live **band board** shows where every position is (band, mode, operator,
-  rate), stale-marked the moment one goes quiet. Above it a grid puts each
+  rate), stale-marked the moment one goes quiet; a position the host removes
+  reads **Removed** after its name on every laptop's board within a heartbeat
+  (5 seconds). Above it a grid puts each
   position's name in the cell of its band and mode, coloured on the host by its
   link (green Connected, amber Reconnecting, red Lost), so a band and mode
   nobody is on is an empty cell. It has its own **Club Board**

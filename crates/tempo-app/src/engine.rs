@@ -13353,7 +13353,7 @@ impl Engine {
         // is sent. On the HOST each row also says where that position's link stands now, read from
         // its live club log (`fdevent::PositionLink`), by the reading its hosting line counts
         // connected positions by; a position holds only the rows the host sent it, which carry
-        // none.
+        // none but a removed position's flag.
         let now = now_unix_secs();
         let own = self.settings.fd_position_id.as_str();
         let rows = self.fd_club_board_rows(now);
@@ -13371,14 +13371,21 @@ impl Engine {
                 // The HOST's column: each position's clock as it reported it to this host's
                 // club log. A position holds only the rows the host sent, which carry none.
                 clock_ms: self.fd_club.as_ref().and_then(|c| c.clock_ms(&r.pos)),
-                link: self.fd_club.as_ref().map(|c| {
-                    if r.pos == own {
-                        "host"
-                    } else {
-                        c.link(&r.pos, now).code()
-                    }
-                    .to_string()
-                }),
+                link: match self.fd_club.as_ref() {
+                    Some(c) => Some(
+                        if r.pos == own {
+                            "host"
+                        } else {
+                            c.link(&r.pos, now).code()
+                        }
+                        .to_string(),
+                    ),
+                    // A position's board has one link word, the one its host sends: a position
+                    // the host's operator removed (`WireBoardRow::removed`).
+                    None => r
+                        .removed
+                        .then(|| crate::fdevent::PositionLink::Removed.code().to_string()),
+                },
                 heard_secs: self
                     .fd_club
                     .as_ref()
@@ -44875,6 +44882,10 @@ mod tests {
                     vec!["N0XYZ".into(), "40M".into(), "DIG".into()],
                 ],
                 sections: vec!["EMA".into(), "MN".into()],
+                mults: vec![
+                    ("SECTION".into(), "EMA".into()),
+                    ("SECTION".into(), "MN".into()),
+                ],
                 score: 42,
                 qsos: 7,
                 board: vec![tempo_net::fdsync::WireBoardRow {
@@ -44887,6 +44898,7 @@ mod tests {
                     uniq: 5,
                     rate: 12,
                     age: 3,
+                    removed: false,
                 }],
             });
         }
@@ -44898,6 +44910,12 @@ mod tests {
             "own-log keys are subtracted; club-only keys ship"
         );
         assert_eq!((club.score, club.qsos, club.sections), (42, 7, 2));
+        // ⭐ The sections board lights what the club worked, Minnesota another position's, and
+        // keeps this laptop's own apart.
+        let boards = e.snapshot().field_day.unwrap().boards;
+        assert_eq!(boards[0].slot, "SECTION");
+        assert_eq!(boards[0].worked, ["EMA"], "this laptop's own");
+        assert_eq!(boards[0].club, ["EMA", "MN"], "the club's");
         assert_eq!(club.skew_secs, 3);
         assert_eq!(club.board.len(), 1);
         assert_eq!(club.board[0].pos_name, "SSB tent");

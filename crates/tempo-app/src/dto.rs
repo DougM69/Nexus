@@ -2745,6 +2745,15 @@ pub struct FdBoardDto {
     pub scope: String,
     /// The distinct values worked, sorted.
     pub worked: Vec<String>,
+    /// ⭐ **The distinct values the CLUB has worked**, sorted — every position's contacts, this
+    /// laptop's included: on the host from its club log, on a position from what the host sent
+    /// (`ClubMirror::mults`). The board lights each, and marks this laptop's own (`worked`) apart.
+    ///
+    /// Empty, and not serialised, without club sync and from a host older than the list (the
+    /// board is then this laptop's own, as it always was) — and on everything Remote reads, which
+    /// is sent nothing new (`leave_out_the_hosts_own` in the shell empties it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub club: Vec<String>,
 }
 
 /// The per-session upload control (§18.1).
@@ -2802,13 +2811,14 @@ pub struct FdClubBoardRow {
     pub clock_ms: Option<i64>,
     /// ⭐ **Where this position's link stands, as the HOST's own screen says it**
     /// (`fdevent::PositionLink`): "connected" | "reconnecting" | "lost" | "removed", and "host" for
-    /// the host's own position. Filled on the HOST's board only, from its live club log; `None` on
-    /// a position's.
+    /// the host's own position. Filled on the HOST's board from its live club log; on a
+    /// position's, only "removed", for a position the host's line says its operator removed
+    /// (`fdsync::WireBoardRow::removed`), and `None` otherwise.
     ///
-    /// ⛔ The host's own screen only: the Remote capture and Remote's snapshot leave it out
+    /// ⛔ This Nexus's own screens only: the Remote capture and Remote's snapshot leave it out
     /// (`remote_service::query::field_day::leave_out_the_hosts_own`), so the hosted page's Field
     /// Day check, which refuses a board key it does not know, never meets it; the board every
-    /// position and the TV are sent never carried it.
+    /// position and the TV are sent never carried it (a position's word comes from a flag).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
     /// Seconds since the host last HEARD this position on its own socket (`ClubLog::heard_secs`),

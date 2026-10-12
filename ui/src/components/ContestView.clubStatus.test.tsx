@@ -147,6 +147,39 @@ describe("the host's board says where each position's link stands", () => {
   })
 })
 
+describe('a position’s board names the position its host removed', () => {
+  // A position's copy of the board carries no link words but this one, which its host's line
+  // sends for a position its operator removed: the laptops learn it with the next club line, where
+  // they used to learn only from the line going quiet, a ⚠ 15 s and a heartbeat later.
+  const POSITION: FdClubStatus = {
+    ...HOST,
+    hosting: false,
+    board: [
+      row('aaaa0001', 'Host table', {}),
+      row('bbbb0002', 'CW tent', {}),
+      row('eeee0005', 'VHF tent', { link: 'removed' }),
+    ],
+  }
+
+  it('after its name, its line dimmed and kept, with no Status column and no ⚠', () => {
+    render(<FdClubSection club={POSITION} />)
+    const rows = grid()
+    expect(rows[0]).not.toContain('Status')
+    expect(rows.slice(1).map((r) => r[0])).toEqual(['Host table', 'CW tent', 'VHF tent · Removed'])
+    expect(rowOf('VHF tent').every((c) => c.style.opacity === '0.45')).toBe(true)
+    expect(rowOf('VHF tent').map((c) => c.textContent)).toContain('10')
+    expect(rowOf('CW tent').some((c) => c.style.opacity !== '')).toBe(false)
+    expect(rowOf('VHF tent').some((c) => (c.textContent ?? '').includes('⚠'))).toBe(false)
+  })
+
+  it('leaves it out of the band × mode grid, as the host’s own grid does', () => {
+    render(<FdClubSection club={POSITION} />)
+    const names = [...document.querySelectorAll('.club-grid-name')].map((n) => n.textContent)
+    expect(names).toContain('CW tent')
+    expect(names).not.toContain('VHF tent')
+  })
+})
+
 describe('the host removes a position from its own contest screen, and lets it back', () => {
   const host = () => (
     <FdClubSection club={HOST} onRemovePosition={remove} onAllowBack={allowBack} />
