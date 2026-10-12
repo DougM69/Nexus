@@ -3943,6 +3943,16 @@ export const EN = {
   // The same bar over the same log line at the top of the main window's Contest screen
   // (ContestLargeEntry, App.tsx): the screen's name for it.
   'contestScreen.entry.title': 'Log a contact',
+  // The Contest screen in a window of its own (ContestScreenWindow.tsx): its Pop out, on the banner in
+  // the main window — shown as `fieldDay.popOut.label`, and named for the screen, because the
+  // scoreboard's own Pop out further down tears off the scoreboard alone — and, while the window is
+  // open, the one line left where the screen was, with the button that closes the window.
+  'contestScreen.popOut.aria': 'Pop out the Contest screen',
+  'contestScreen.popOut.title':
+    'Open the Contest screen in its own window, to put on another monitor: the contest switch, the controls, the club board, the score, the sections, the bonuses and the log. While a contest runs, its log line and your last contacts stay here.',
+  'contestScreen.away.text': 'The rest of the Contest screen is in its own window.',
+  'contestScreen.away.back': 'Bring it back',
+  'contestScreen.away.title': 'Close that window and show it here again',
 
   'fieldDay.score.qsos': 'QSOs',
   'fieldDay.score.sections': 'Sections',

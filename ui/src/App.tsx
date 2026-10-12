@@ -196,6 +196,7 @@ import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
 import { ContestLargeEntry } from './components/ContestLogger'
+import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
 import { useContestSwitch } from './contestSwitch'
 import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
@@ -2827,6 +2828,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // ⭐ A contest switched by a saved pick, for the Contest screen to say so (`contestSwitch.ts`):
   // kept here, because the pick is saved in Settings, where that screen is not mounted.
   const contestSwitch = useContestSwitch(snap?.fieldDay)
+  // ⭐ …and whether the Contest screen below its log line is out in a window of its own: kept here too,
+  // so the window's close brings it back whichever screen the operator is on (ContestScreenWindow.tsx).
+  const contestScreen = useContestScreenWindow(handleSettingsSaved)
 
   if (!snap) {
     return (
@@ -3254,6 +3258,18 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // screen's root IS a `.panel`, so `.layout.single > .panel` still gives it the definite
       // height, the deficit valve and the measure it needs (styles.css; computed in
       // layout-single-deficit.test.tsx and fdDashboardShell.test.tsx).
+      //
+      // THE OPERATOR BOX goes with the entry, onto its title line beside Sending and I moved (the
+      // operator, 2026-10-12: "I want to move the field to change operators up near the top"), and
+      // the screen below draws none while it is there. It saves through `handleSetOperator`, the
+      // same narrow write the top bar's operator chip uses, so the chip follows what is typed.
+      //
+      // THE SCREEN BELOW THE ENTRY POPS OUT to a window of its own (the operator, 2026-10-12: "that
+      // whole window needs to pop out"; the pick: "While it's open, the main Contest screen shows just
+      // the big entry and last contacts; closing the window brings the section back"). Its Pop out is
+      // on its banner, here and nowhere else (not the logger window's copy, nor the Remote page's);
+      // while the window is open, one line stands where the screen was, with Bring it back, and the
+      // entry, its operator box and Ctrl+O stay this window's. ContestScreenWindow.tsx has the rest.
       workspace = remote ? <RemoteFieldDay tier={tier} /> : (
         <div className="contest-screen">
           {snap.fieldDay && (
@@ -3263,23 +3279,33 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
               title={t('contestScreen.entry.title')}
-            />
-          )}
-          <main className="layout single">
-            <ContestView
-              fieldDay={snap.fieldDay}
-              clubLink={snap.clubLink}
-              onSetMode={handleSetMode}
-              fdActive={settings?.fdActive ?? false}
-              fdRuleset={fdRuleset}
-              tier={tier}
-              section={snap.radio.operatingMode}
-              onOpenSettings={openSettingsAt}
-              onSettingsSaved={handleSettingsSaved}
-              contestSwitch={contestSwitch}
+              operator={settings ? (settings.fdOperator ?? '') : null}
+              onSaveOperator={handleSetOperator}
               operatorAsk={operatorAsk}
               onOperatorFocused={() => setOperatorAsk(0)}
             />
+          )}
+          <main className="layout single">
+            {contestScreen.out ? (
+              <ContestScreenAway onBringBack={contestScreen.bringBack} />
+            ) : (
+              <ContestView
+                fieldDay={snap.fieldDay}
+                clubLink={snap.clubLink}
+                onSetMode={handleSetMode}
+                fdActive={settings?.fdActive ?? false}
+                fdRuleset={fdRuleset}
+                tier={tier}
+                section={snap.radio.operatingMode}
+                onOpenSettings={openSettingsAt}
+                onSettingsSaved={handleSettingsSaved}
+                contestSwitch={contestSwitch}
+                operatorAsk={operatorAsk}
+                onOperatorFocused={() => setOperatorAsk(0)}
+                operatorBoxAbove={snap.fieldDay != null}
+                onPopOut={contestScreen.popOut}
+              />
+            )}
           </main>
         </div>
       )

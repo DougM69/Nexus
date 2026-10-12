@@ -93,11 +93,13 @@ declare global {
       core?: { invoke?: InvokeFn; Channel?: new <T>() => { onmessage: (message: T) => void } }
       invoke?: InvokeFn
       /** Tauri's event bridge (exposed by `withGlobalTauri`). Used by usePounce for the app's
-       * one PUSH channel — everything else here polls. */
+       * one PUSH channel — everything else here polls — and by `useContestScreenWindow`, which
+       * hears one window's close (`target` names the window). */
       event?: {
         listen?: <T>(
           event: string,
           handler: (e: { payload: T }) => void,
+          options?: { target?: string | { kind: string; label?: string } },
         ) => Promise<() => void>
       }
     }

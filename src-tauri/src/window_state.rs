@@ -200,14 +200,15 @@ pub fn capture_now(app: &tauri::AppHandle) {
 
 // ---- The Connect dashboard pop-out ---------------------------------------------------------
 
-/// Which pop-outs remember their window: the Connect dashboard and the contest logger. The
-/// dashboard is the one a station leaves up all day, on a second monitor or full screen behind
-/// Nexus, and "it comes back where I put it" is half of what makes it a dashboard; the logger
-/// lives on the second monitor its logger sits at, and opens there again. The band map
-/// remembers through its own dock-aware path (`load_bandmap_window` in `lib.rs`); every other
+/// Which pop-outs remember their window: the Connect dashboard, the contest logger and the
+/// contest screen. The dashboard is the one a station leaves up all day, on a second monitor or
+/// full screen behind Nexus, and "it comes back where I put it" is half of what makes it a
+/// dashboard; the logger lives on the second monitor its logger sits at, and opens there again;
+/// the contest screen is popped out to put it on another monitor, and goes back there. The band
+/// map remembers through its own dock-aware path (`load_bandmap_window` in `lib.rs`); every other
 /// pop-out opens at its fixed default, as it always has.
 pub(crate) fn remembers(slug: &str) -> bool {
-    slug == "connect" || slug == crate::CONTEST_LOGGER_SLUG
+    slug == "connect" || slug == crate::CONTEST_LOGGER_SLUG || slug == crate::CONTEST_SCREEN_SLUG
 }
 
 /// A remembered pop-out's record: its box — the main window's own shape, restored and
@@ -536,6 +537,8 @@ mod tests {
     fn the_connect_dashboard_and_the_contest_logger_remember_their_windows() {
         assert!(remembers("connect"));
         assert!(remembers("contestlog"));
+        // …and the contest screen window, which goes to a monitor of its own as the logger does.
+        assert!(remembers("contestscreen"));
         // The band map remembers through its own dock-aware file; the rest keep their defaults,
         // the contest scoreboard beside the logger among them.
         for other in [

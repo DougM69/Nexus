@@ -264,6 +264,10 @@ const SHARED = [
   // so clicking a second thumbnail re-points the window that is already open instead of
   // opening another. Per-surface, the two documents would never see each other's writes.
   'nexus.sstv.viewer.path',
+  // The contest screen window's "I saved the settings" (its contest switch). SHARED on purpose, and it
+  // is the whole mechanism, as the viewer's path above is: the window writes it and the main window's
+  // `storage` listener reads its settings again. Per-surface, the main window would never hear it.
+  'nexus.contestScreen.saved',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',

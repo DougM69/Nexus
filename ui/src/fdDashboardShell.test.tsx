@@ -197,3 +197,170 @@ describe('the shell gives the scoreboard more room than the centre column did, n
     }
   })
 })
+
+// ── THE LOWER SECTION USES THE WHOLE WINDOW (operator, 2026-10-12) ─────────────────────────────
+// Looking at the Contest screen with a contest running on a wide window: "the logging is now the
+// right size … everything on the bottom seems narrow in the center, cant this bottom section be
+// widened to fit more information on the screen?" The pick: the contest controls, the club board
+// and the scoreboard use the whole window, the five buttons sit in one row, and the entry and the
+// last contacts stay the size they are.
+//
+// So the screen's panel loses its 1600px cap at md/lg/xl, as Settings and Repeaters did, and the
+// entry's three blocks keep theirs. The prose the cap used to bound gets a measure of its own, on
+// lg/xl only: md ends below 1600 effective px, so there the old cap never bound and nothing in the
+// panel can be wider than it was, which keeps the 1024×768 floor (85 % zoom, md) as it was.
+
+/** The value `prop` resolves to on `el` when it is `var(--x, fallback)`: the nearest declaring
+ *  element's value, `el` itself first, as custom properties inherit; else the fallback. */
+function resolveVar(el: Element, value: string): string {
+  const m = /^var\(\s*(--[\w-]+)\s*,\s*(.+)\)$/.exec(value.trim())
+  if (!m) return value
+  for (let n: Element | null = el; n; n = n.parentElement) {
+    const d = applied(n, m[1])
+    if (d !== null) return d
+  }
+  return m[2].trim()
+}
+
+/** The Contest screen as its two windows build it: the entry's bar and log line, the last
+ *  contacts, and the screen's panel with `inner` in it. */
+function contestScreen(tier: string, host: 'main' | 'logger', inner = ''): HTMLElement {
+  document.documentElement.setAttribute('data-viewport', tier)
+  const blocks =
+    '<section class="contest-logger-entry"><div class="contest-logger-bar"></div>' +
+    '<div class="contest-logger-scaled"><div class="log-entry log-entry-fd"></div></div></section>' +
+    '<section class="contest-logger-recent"><div class="contest-logger-recent-body"></div></section>' +
+    `<main class="layout single"><section class="${FIELDDAY}">${inner}</section></main>`
+  document.body.innerHTML =
+    host === 'main'
+      ? `<div class="app"><div class="contest-screen">${blocks}</div></div>`
+      : `<div class="app detached contest-logger">${blocks}</div>`
+  return document.body
+}
+
+describe('the lower section uses the whole window, and the entry keeps its size', () => {
+  it('the screen’s panel has no cap at md, lg and xl — 1920 is lg, the window the report came from', () => {
+    const capped = WIDE.map((t) => `[data-viewport='${t}'] → ${maxWidth(panel(FIELDDAY, t))}`).filter(
+      (line) => !line.endsWith('→ none'),
+    )
+    expect(
+      capped,
+      'The Contest screen’s lower section is still held to a measure, so a wide window draws it as ' +
+        `a centred column with empty gutters, the shape the operator asked to be rid of:\n  ${capped.join('\n  ')}\n`,
+    ).toEqual([])
+  })
+
+  it('the entry’s bar, its log line and the last contacts keep 1600px, centred, at every tier in both windows', () => {
+    const wrong: string[] = []
+    for (const host of ['main', 'logger'] as const) {
+      for (const t of TIERS) {
+        const root = contestScreen(t, host)
+        for (const sel of ['.contest-logger-bar', '.contest-logger-scaled > .log-entry-fd', '.contest-logger-recent-body']) {
+          const el = root.querySelector(sel)!
+          const got = `${maxWidth(el)} / ${applied(el, 'margin-inline') ?? 'unset'}`
+          if (got !== '1600px / auto') wrong.push(`${host} [data-viewport='${t}'] ${sel} → ${got}`)
+        }
+      }
+    }
+    expect(wrong, `the entry or the last contacts changed size:\n  ${wrong.join('\n  ')}\n`).toEqual([])
+  })
+})
+
+describe('the control row is a row that wraps, never a crushed column', () => {
+  const header = (t: string) =>
+    contestScreen(t, 'main', '<div class="panel-header fd-header"><div class="fd-export"></div><div class="fd-upload"></div></div>')
+
+  it('the header row wraps at every tier, so no block in it can squeeze the five buttons to a column', () => {
+    // THE MECHANISM BEHIND THE STACKED BUTTONS. `.panel-header` does not wrap, and the merge and
+    // upload block asked for a whole line (`flex: 1 0 100%`, which cannot shrink). On one line that
+    // took 100 % of the row beside the buttons, so the buttons shrank to one word wide, and the
+    // block itself ran past the panel's edge, where the clip cut off the last upload boxes.
+    const wrong = TIERS.map((t) => `[data-viewport='${t}'] → ${applied(header(t).querySelector('.fd-header')!, 'flex-wrap')}`).filter(
+      (line) => !line.endsWith('→ wrap'),
+    )
+    expect(wrong, `the control row cannot wrap:\n  ${wrong.join('\n  ')}\n`).toEqual([])
+  })
+
+  it('the merge and its upload switch claim no line of their own, so they share one where there is room', () => {
+    for (const t of TIERS) {
+      const flex = applied(header(t).querySelector('.fd-upload')!, 'flex') ?? 'unset'
+      expect(flex.split(/\s+/), `[data-viewport='${t}'] .fd-upload { flex: ${flex} }`).not.toContain('100%')
+    }
+  })
+})
+
+describe('the operator box stays beside Sending when the entry’s title line wraps', () => {
+  // The large entry's title line wraps rather than squeezing (A+ at 160 %, Larger text in a 1024 px
+  // logger window). The score chip takes the first line's room, so a wrapped line packs to the
+  // right, and the box and Sending pack as a pair: neither carries an auto margin that would split
+  // the room between them or leave Sending at the far left of the next line. Where the line breaks
+  // is a real browser's to say; this computes the three declarations that keep the pair together.
+  const titleLine = (scaled: boolean) => {
+    document.documentElement.setAttribute('data-viewport', 'md')
+    document.body.innerHTML =
+      `<div class="${scaled ? 'contest-logger-scaled' : 'pane-body'}"><div class="log-entry log-entry-fd"><div class="le-fd-header">` +
+      '<span class="le-fd-score"></span>' +
+      (scaled ? '<label class="le-fd-operator"></label>' : '') +
+      '<div class="le-fd-sent"></div></div></div></div>'
+    const q = (s: string) => document.body.querySelector(s)
+    return {
+      header: applied(q('.le-fd-header')!, 'justify-content') ?? 'normal',
+      box: scaled ? (applied(q('.le-fd-operator')!, 'margin-left') ?? '0') : null,
+      sent: applied(q('.le-fd-sent')!, 'margin-left') ?? '0',
+    }
+  }
+
+  it('the large entry: the line packs right, and neither the box nor Sending pushes away from the other', () => {
+    expect(titleLine(true)).toEqual({ header: 'flex-end', box: '0', sent: '0' })
+  })
+
+  it('control: a cockpit’s strip, with no box, keeps Sending pushed to the end as it always has', () => {
+    expect(titleLine(false)).toEqual({ header: 'normal', box: null, sent: 'auto' })
+  })
+})
+
+describe('prose inside keeps a measure of its own where the panel outgrew the old cap', () => {
+  const PROSE =
+    '<div class="fd-mode-status"><p class="fd-mode-line">x</p></div><p class="fd-score-note">x</p>' +
+    '<div class="fd-removed"><p class="fd-removed-note">x</p><p class="fd-removed-hint">x</p></div>'
+  const measures = (t: string): string[] => {
+    const root = contestScreen(t, 'main', PROSE)
+    return ['.fd-mode-line', '.fd-score-note', '.fd-removed-note', '.fd-removed-hint'].map(
+      (sel) => `${sel} → ${resolveVar(root.querySelector(sel)!, maxWidth(root.querySelector(sel)!))}`,
+    )
+  }
+
+  it('lg and xl: every sentence block is held to 90ch, the measure Repeaters’ notes got when that page went full width', () => {
+    for (const t of ['lg', 'xl'] as const) {
+      expect(measures(t), `[data-viewport='${t}']`).toEqual([
+        '.fd-mode-line → 90ch',
+        '.fd-score-note → 90ch',
+        '.fd-removed-note → 90ch',
+        '.fd-removed-hint → 90ch',
+      ])
+    }
+  })
+
+  it('xs, sm and md: none, as before — the panel there is never wider than it was', () => {
+    for (const t of ['xs', 'sm', 'md'] as const) {
+      expect(measures(t), `[data-viewport='${t}']`).toEqual([
+        '.fd-mode-line → none',
+        '.fd-score-note → none',
+        '.fd-removed-note → none',
+        '.fd-removed-hint → none',
+      ])
+    }
+  })
+
+  it('the panel hands the club section and the scoreboard’s lone operator box their measures on lg/xl only', () => {
+    // Those two are styled inline in ContestView.tsx (theme tokens kept out of this sheet), so they
+    // read their measures through these two properties; ContestView.measure.test.tsx renders them.
+    for (const t of TIERS) {
+      const p = contestScreen(t, 'main').querySelector('.fieldday')!
+      const wide = t === 'lg' || t === 'xl'
+      expect([applied(p, '--fd-prose-measure'), applied(p, '--fd-control-measure')], `[data-viewport='${t}']`).toEqual(
+        wide ? ['90ch', '520px'] : [null, null],
+      )
+    }
+  })
+})

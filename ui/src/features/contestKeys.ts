@@ -6,11 +6,12 @@
 //   second Alt+W right after puts it back (`LogEntry` keeps the line it wiped);
 //   "Ctrl+O = Set operator call" — Ctrl+O takes the caret to the operator box.
 //
-// THE OPERATOR BOX IS NOT THE STRIP'S. It is the Contest screen's (`FieldDayScoreboard`), so the
-// strip only ASKS, by a window event, and the window that holds the strip answers: the main window
-// shows its Contest screen, and the contest logger window has one under its entry. Nothing here
-// keys, stops or holds back a transmission, and asking changes no mode: the station's FT role is
-// what it was.
+// THE OPERATOR BOX IS NOT THE STRIP'S. It is the Contest screen's — on the title line of its large
+// log line while a contest runs (`ContestLargeEntry`), else in its scoreboard (`FieldDayScoreboard`)
+// — so the strip only ASKS, by a window event, and the window that holds the strip answers: the main
+// window shows its Contest screen, and the contest logger window has its own on its entry. Nothing
+// here keys, stops or holds back a transmission, and asking changes no mode: the station's FT role
+// is what it was.
 import { useEffect, useRef } from 'react'
 
 /** The window event a strip's Ctrl+O fires (`askForOperatorBox`). */

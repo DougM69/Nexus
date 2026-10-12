@@ -149,15 +149,18 @@ keyboard and mouse at a second monitor (MouseMux gives each of them their own). 
 and drag the window to the logger's monitor. It opens on that monitor again next time.
 
 - **The log line comes first, in large type.** The call and exchange boxes are across the top of
-  the window, with the dupe warning right under them. Under that are the last five contacts,
-  newest first, and the whole Contest screen (operator, sections, score) is below, scrolling on
-  its own.
+  the window, with the dupe warning right under them, and the **Operator** box is on the log line's
+  title line, beside Sending and I moved: Ctrl+O puts the cursor there, and Enter saves it. Under
+  that are the last five contacts, newest first, and the whole Contest screen (club board, score,
+  sections, log) is below, scrolling on its own.
 - **A− and A+** at the top right make the log line and the last contacts smaller or larger, from
   80 to 160 %, on top of your Text size setting. That computer remembers the size for the logger
   window; until you size it there, it opens at the size of the Contest screen's own log line.
 - **The same log line tops the Contest screen** in the main window while a contest runs, with its
-  own A− and A+, so the operator can type contacts there too. Nothing on it transmits either, but
-  in the main window Esc stops TX, as the top bar's Stop TX does, and leaves the boxes as they are.
+  own A− and A+ and the Operator box on its title line, so the operator can type contacts there
+  too; the rest of the screen below it uses the whole width of the window. Nothing on it transmits
+  either, but in the main window Esc stops TX, as the top bar's Stop TX does, and leaves the boxes
+  as they are.
 
 - **One contact, two windows.** The logger's line and your own contest log strip (a cockpit's LOG
   pane, or the log line at the top of the Contest screen) are the same contact: whatever either of you types shows in both as it is typed, with the same dupe warning,
@@ -171,6 +174,25 @@ and drag the window to the logger's monitor. It opens on that monitor again next
 - It logs as this computer's own position, under the mode you are operating (phone, CW, RTTY or
   digital), so club sync, N3FJP and your exports see one station. A Remote viewer sees only the
   main window.
+
+### The Contest screen on another monitor
+
+**⧉ Pop out**, at the right end of the Contest screen's top line (the one with the Contest mode
+switch), opens everything below the log line in a window of its own: the Contest mode switch,
+Running / S&P, the exports and the merge, the club board, the score, the county or sections board,
+the bonuses and the log. Each works there as it does on the main screen. Drag the window to another
+monitor; it opens there again next time, fitted to the monitors you have then.
+
+- **The main window keeps the log line.** While the window is open, the Contest screen in the main
+  window shows the log line, with the Operator box on its title line (Ctrl+O still puts the cursor
+  there), and the last contacts. Where the rest was, one line says it is in its own window, with
+  **Bring it back**, which closes the window.
+- **Closing the window brings it back.** Its close button, Alt+F4 or Bring it back all put the
+  screen back under the log line, and so does restarting Nexus: the window does not reopen with it.
+- **The window's keys.** Its F-keys do nothing, so F5 cannot reload it in the middle of a contest.
+  Its Esc is not a stop: stop a transmission with Esc or Stop TX in the main window.
+- Turning Contest mode on or off in the window is the same save as on the main screen, and the main
+  window follows it.
 
 ### Export and club interop
 

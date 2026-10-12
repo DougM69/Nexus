@@ -206,6 +206,14 @@ interface Props {
    *  it can be typed in, and `onOperatorFocused` says it did. */
   operatorAsk?: number
   onOperatorFocused?: () => void
+  /** The operator box is on the log line above this screen (`ContestLargeEntry`'s title line, while
+   *  a contest runs in the main window and the logger window): the scoreboard draws none of its own,
+   *  so the screen has one. Absent, the scoreboard keeps its box, as with no contest running, in the
+   *  torn-off scoreboard and on the Remote page. */
+  operatorBoxAbove?: boolean
+  /** Opens this screen in a window of its own (App's, in the main window only — never the logger
+   *  window's copy, the window itself or the Remote page): its Pop out, at the end of the banner. */
+  onPopOut?: () => void
 }
 
 /**
@@ -1123,13 +1131,17 @@ const CLUB_COL_HEAD: CSSProperties = {
 function colHead(big: boolean): CSSProperties {
   return big ? { ...CLUB_COL_HEAD, fontSize: textPx(13) } : CLUB_COL_HEAD
 }
+/** A club sentence keeps a measure of its own where the screen is wider than its old 1600px cap:
+ *  the panel sets `--fd-prose-measure` on lg/xl (styles.css), and elsewhere it is unset. */
 const CLUB_WARN: CSSProperties = {
   fontSize: textPx(12),
   color: 'var(--status-new-entity)',
+  maxWidth: 'var(--fd-prose-measure, none)',
 }
 const CLUB_NOTE: CSSProperties = {
   fontSize: textPx(12),
   color: 'var(--text-dim)',
+  maxWidth: 'var(--fd-prose-measure, none)',
 }
 /** A club code, in a box of its own: set apart from the names and calls the laptops send, so no
  *  name can pass for one. */
@@ -2099,6 +2111,9 @@ const OP_FIELD: CSSProperties = {
   gap: 8,
   flex: '1 1 auto',
   minWidth: 0,
+  // A lone control: on a screen wider than its old 1600px cap it stops at a field's width
+  // (`--fd-control-measure`, set by the panel on lg/xl) rather than crossing the window.
+  maxWidth: 'var(--fd-control-measure, none)',
 }
 const OP_LABEL: CSSProperties = {
   fontSize: textPx(10),
@@ -2220,10 +2235,95 @@ export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: numbe
 }
 
 /**
+ * ⭐ THE OPERATOR BOX — who is at the key. One component wherever it is drawn, so the places cannot
+ * drift: the scoreboard's row (`FieldDayScoreboard`: the torn-off scoreboard, the Remote page's
+ * read-only copy, and the Contest screen while no contest runs) and, while a contest runs, the large
+ * log line's title line beside Sending and I moved (`ContestLargeEntry`, in the main window and the
+ * logger window — the operator, 2026-10-12: "I want to move the field to change operators up near
+ * the top").
+ *
+ * A local draft so typing is smooth, uppercase as it is typed, committed on blur / Enter: a
+ * per-keystroke save would fire the heavyweight apply repeatedly. `onSave` is the host's NARROW write
+ * (`setFdOperator`), never the whole-settings save, which a seat swap must not run mid-contact (#54).
+ * Enter only blurs the box, so on a log line it never reaches the line's own Enter and logs nothing.
+ * A save that fails puts the stored operator back in the box.
+ */
+export function OperatorBox({
+  value,
+  onSave,
+  readOnly = false,
+  operatorAsk,
+  onOperatorFocused,
+  onLogLine = false,
+}: {
+  /** The operator as stored (`fdOperator`), or null until the host has read its settings: until
+   *  then the box waits, disabled. */
+  value: string | null
+  onSave: (call: string) => void | Promise<unknown>
+  readOnly?: boolean
+  /** Ctrl+O from a contest strip: the asks the box has not answered (its host's). */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
+  /** Drawn on the log line's title line (styles.css `.le-fd-operator`), not in the scoreboard's row. */
+  onLogLine?: boolean
+}) {
+  const [draft, setDraft] = useState(value ?? '')
+  useEffect(() => {
+    setDraft(value ?? '')
+  }, [value])
+  const commit = () => {
+    if (readOnly) return
+    const v = draft.trim()
+    if (v === (value ?? '')) return
+    void Promise.resolve(onSave(v)).catch(() => setDraft(value ?? ''))
+  }
+  // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): at each ask the box takes the caret
+  // as soon as it can be typed in — its settings read — and says so, so an ask is answered once.
+  // A read-only box never takes it.
+  const box = useRef<HTMLInputElement>(null)
+  const typable = value !== null && !readOnly
+  useEffect(() => {
+    const el = box.current
+    if (!operatorAsk || !typable || !el) return
+    el.focus({ preventScroll: true })
+    el.scrollIntoView?.({ block: 'nearest' })
+    el.select()
+    onOperatorFocused?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operatorAsk, typable])
+  return (
+    <label className={onLogLine ? 'le-fd-operator' : undefined} style={onLogLine ? undefined : OP_FIELD}>
+      <span className={onLogLine ? 'le-fd-operator-cap' : undefined} style={onLogLine ? undefined : OP_LABEL}>
+        {t('fieldDay.operator.label')}
+      </span>
+      <input
+        ref={box}
+        className={onLogLine ? 'settings-input mono le-fd-operator-input' : undefined}
+        style={onLogLine ? undefined : OP_INPUT}
+        value={draft}
+        disabled={value === null}
+        readOnly={readOnly}
+        onChange={(e) => { if (!readOnly) setDraft(e.target.value.toUpperCase()) }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+        }}
+        placeholder={t('fieldDay.operator.placeholder')}
+        aria-label={t('fieldDay.operator.aria')}
+        spellCheck={false}
+        autoCapitalize="characters"
+      />
+    </label>
+  )
+}
+
+/**
  * The reusable Field Day scoreboard: the settable operator, the score tiles, and the
  * worked-sections board. `onSaveOperator` persists the operator (optimistic, parent-
  * owned) so a torn-off window and the docked view can't clobber each other's writes.
- * `detached` hides the pop-out button in the already-torn-off window.
+ * `detached` hides the pop-out button in the already-torn-off window. `operatorBox` false: the
+ * box is on the log line above this scoreboard (ContestView's `operatorBoxAbove`), so its row
+ * holds the buttons alone and the screen has one box.
  */
 export function FieldDayScoreboard({
   fieldDay,
@@ -2231,6 +2331,7 @@ export function FieldDayScoreboard({
   onSaveOperator,
   detached = false,
   readOnly = false,
+  operatorBox = true,
   operatorAsk,
   onOperatorFocused,
 }: {
@@ -2239,6 +2340,7 @@ export function FieldDayScoreboard({
   onSaveOperator: (call: string) => void
   detached?: boolean
   readOnly?: boolean
+  operatorBox?: boolean
   /** Ctrl+O from a contest strip: the asks the operator box has not answered (ContestView's). */
   operatorAsk?: number
   onOperatorFocused?: () => void
@@ -2253,56 +2355,19 @@ export function FieldDayScoreboard({
     settings,
   )
 
-  // Local draft so typing is smooth; commit (persist) on blur / Enter — a per-keystroke
-  // setSettings would fire the heavyweight apply repeatedly.
-  const [opDraft, setOpDraft] = useState(settings?.fdOperator ?? '')
-  useEffect(() => {
-    setOpDraft(settings?.fdOperator ?? '')
-  }, [settings?.fdOperator])
-  const commitOp = () => {
-    if (readOnly) return
-    const v = opDraft.trim()
-    if (v === (settings?.fdOperator ?? '')) return
-    onSaveOperator(v)
-  }
-  // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): at each ask the box takes the caret
-  // as soon as it can be typed in — its settings read — and says so, so an ask is answered once.
-  // A read-only box never takes it.
-  const opBox = useRef<HTMLInputElement>(null)
-  const opTypable = settings != null && !readOnly
-  useEffect(() => {
-    const box = opBox.current
-    if (!operatorAsk || !opTypable || !box) return
-    box.focus({ preventScroll: true })
-    box.scrollIntoView?.({ block: 'nearest' })
-    box.select()
-    onOperatorFocused?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operatorAsk, opTypable])
-
   return (
     <>
-      {/* OPERATOR + POP-OUT */}
-      <div style={SCOREBOARD_HEADER}>
-        <label style={OP_FIELD}>
-          <span style={OP_LABEL}>{t('fieldDay.operator.label')}</span>
-          <input
-            ref={opBox}
-            style={OP_INPUT}
-            value={opDraft}
-            disabled={!settings}
+      {/* OPERATOR + POP-OUT — the buttons stay at the row's end when the box is on the log line. */}
+      <div style={operatorBox ? SCOREBOARD_HEADER : { ...SCOREBOARD_HEADER, justifyContent: 'flex-end' }}>
+        {operatorBox && (
+          <OperatorBox
+            value={settings ? (settings.fdOperator ?? '') : null}
+            onSave={onSaveOperator}
             readOnly={readOnly}
-            onChange={(e) => { if (!readOnly) setOpDraft(e.target.value.toUpperCase()) }}
-            onBlur={commitOp}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-            }}
-            placeholder={t('fieldDay.operator.placeholder')}
-            aria-label={t('fieldDay.operator.aria')}
-            spellCheck={false}
-            autoCapitalize="characters"
+            operatorAsk={operatorAsk}
+            onOperatorFocused={onOperatorFocused}
           />
-        </label>
+        )}
         {!detached && !readOnly && (
           <button
             type="button"
@@ -2456,6 +2521,8 @@ export function ContestView({
   contestSwitch = null,
   operatorAsk,
   onOperatorFocused,
+  operatorBoxAbove = false,
+  onPopOut,
 }: Props) {
   const observed = observation !== undefined
   // The mode the banned-mode chip names: the station's own, given its section.
@@ -3069,6 +3136,20 @@ export function ContestView({
             })}
           </span>
         ) : null}
+        {/* ⭐ THIS SCREEN IN A WINDOW OF ITS OWN, for another monitor (App's, in the main window). The
+            scoreboard's own ⧉ Pop out, lower down, tears off the scoreboard alone, so this one is
+            named for the screen to a screen reader. */}
+        {onPopOut && (
+          <button
+            type="button"
+            className="fd-screen-popout"
+            onClick={onPopOut}
+            title={t('contestScreen.popOut.title')}
+            aria-label={t('contestScreen.popOut.aria')}
+          >
+            {t('fieldDay.popOut.label')}
+          </button>
+        )}
       </div>
       {(blocker || modeLines.length > 0 || cabrilloMissing.length > 0) && (
         <div className="fd-mode-status">
@@ -3363,6 +3444,7 @@ export function ContestView({
         settings={settings}
         onSaveOperator={saveOperator}
         readOnly={observed}
+        operatorBox={!operatorBoxAbove}
         operatorAsk={operatorAsk}
         onOperatorFocused={onOperatorFocused}
       />

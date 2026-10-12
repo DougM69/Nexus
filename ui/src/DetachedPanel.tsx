@@ -88,6 +88,7 @@ import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
 import { ContestLogger } from './components/ContestLogger'
+import { ContestScreenWindow } from './components/ContestScreenWindow'
 import { clubSyncRefusal, clubSyncRefusalText, contestName, isFieldDay } from './fdEvent'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
@@ -238,12 +239,12 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // the same grid square and the same sun as the main window.
   useNight(snap?.mygrid ?? '')
   const [settings, setSettings] = useState<Settings | null>(null)
-  // The club board's window and the contest logger's: the station's preview of the picked contest,
-  // which says whether the rules it loaded carry it (`rulesCarry`) — so a refused club says why
-  // here too — and which rules the contest screen's lines and advisories read.
+  // The club board's window, the contest logger's and the contest screen's: the station's preview of
+  // the picked contest, which says whether the rules it loaded carry it (`rulesCarry`) — so a refused
+  // club says why here too — and which rules the contest screen's lines and advisories read.
   const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
   useEffect(() => {
-    if (panel !== 'fdclub' && panel !== 'contestlog') return
+    if (panel !== 'fdclub' && panel !== 'contestlog' && panel !== 'contestscreen') return
     let live = true
     getFdRuleset()
       .then((r) => live && setFdRuleset(r))
@@ -790,6 +791,16 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     )
   }
 
+  /** The operator box's save, in the torn-off scoreboard and in the logger window's entry. */
+  const saveFdOperator = (call: string) => {
+    if (!settings) return
+    const op = call.trim().toUpperCase()
+    setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
+    // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
+    // definition and the heavyweight path would end it (#54).
+    apply(setFdOperator(op)) // persist + mirror the returned snapshot
+  }
+
   if (panel === 'fieldday') {
     const fd = snap?.fieldDay ?? null
     return (
@@ -799,14 +810,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             fieldDay={fd}
             settings={settings}
             detached
-            onSaveOperator={(call) => {
-              if (!settings) return
-              const op = call.trim().toUpperCase()
-              setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
-              // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
-              // definition and the heavyweight path would end it (#54).
-              apply(setFdOperator(op)) // persist + mirror the returned snapshot
-            }}
+            onSaveOperator={saveFdOperator}
           />
         ) : (
           <div className="app loading">
@@ -829,7 +833,37 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     return (
       <DetachedShell className="contest-logger">
         {snap ? (
-          <ContestLogger snap={snap} fdActive={settings?.fdActive ?? false} fdRuleset={fdRuleset} />
+          <ContestLogger
+            snap={snap}
+            fdActive={settings?.fdActive ?? false}
+            fdRuleset={fdRuleset}
+            operator={settings ? (settings.fdOperator ?? '') : null}
+            onSaveOperator={saveFdOperator}
+          />
+        ) : (
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        )}
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'contestscreen') {
+    // THE CONTEST SCREEN WINDOW: the main window's Contest screen below its log line, popped out to a
+    // monitor of its own. The main window keeps the log line and takes the rest back when this window
+    // closes — see ContestScreenWindow.tsx. After its contest switch saves, this window reads its own
+    // settings again rather than wait for the poll; the snapshot follows on its own 300 ms.
+    return (
+      <DetachedShell>
+        {snap ? (
+          <ContestScreenWindow
+            snap={snap}
+            fdActive={settings?.fdActive ?? false}
+            fdRuleset={fdRuleset}
+            onSnap={setSnap}
+            onSettingsSaved={() => void getSettings().then(setSettings).catch(() => {})}
+          />
         ) : (
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
