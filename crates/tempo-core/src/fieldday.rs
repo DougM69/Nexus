@@ -2496,6 +2496,19 @@ impl FieldDayLog {
                     .to_string()
             })
             .filter(|v| !v.is_empty());
+        // ⭐ A MULTI-OPERATOR ENTRY'S CLASS (`CATEGORY-TRANSMITTER`): written only for a MULTI-OP
+        // entry — Cabrillo's "The category-transmitter is required for multi-operator entries" —
+        // and only when it is one of this sponsor's own, so a class left over from another
+        // contest, or from a weekend as a multi-operator, claims nothing.
+        let transmitter =
+            if self.session.entry_category == crate::contest::OperatorCategory::MultiOp {
+                rs.cabrillo_transmitter_categories
+                    .iter()
+                    .find(|c| c.eq_ignore_ascii_case(entrant.transmitter.trim()))
+                    .map_or_else(String::new, |c| c.to_string())
+            } else {
+                String::new()
+            };
         let headers = crate::contest::CabrilloHeaders {
             // ⭐ …then translated out of ADIF's namespace into Cabrillo's. The id
             // above is an ADIF `CONTEST_ID` enumeration value, which is NOT the
@@ -2642,10 +2655,17 @@ impl FieldDayLog {
                     .find(|c| c.eq_ignore_ascii_case(entrant.entry_class.trim()))
                     .map_or_else(String::new, |c| c.to_string()),
             ),
-            operators: declared_entry(
-                "OPERATORS",
-                cabrillo_operators(&self.qsos, &entrant.operators),
-            ),
+            // …and for a multi-operator entry whose class this sponsor takes, because every
+            // sponsor that takes one asks such an entry for its operators (CQ WW: "If you select
+            // a multi-operator category and do not enter operator callsigns in this field, the
+            // robot will reject your log").
+            operators: if rs.cabrillo_entry_headers.contains(&"OPERATORS")
+                || !transmitter.is_empty()
+            {
+                cabrillo_operators(&self.qsos, &entrant.operators)
+            } else {
+                String::new()
+            },
             // The sponsor's QRP certification follows the power the entry DECLARED, read
             // when the session started like CATEGORY-POWER; anything else claims nothing.
             qrp_competition: declared_entry(
@@ -2656,6 +2676,22 @@ impl FieldDayLog {
                     String::new()
                 },
             ),
+            // ⭐ THE DECLARATIONS A SPONSOR'S TEMPLATE NAMES, from the entrant's own settings and
+            // only where this ruleset lists them: an overlay only when it is one this sponsor
+            // scores, the address in the headers its template carries, the soapbox only where
+            // it has one. A pick made for another contest claims nothing here.
+            category_transmitter: transmitter,
+            category_overlay: rs
+                .cabrillo_overlay_categories
+                .iter()
+                .find(|c| c.eq_ignore_ascii_case(entrant.overlay.trim()))
+                .map_or_else(String::new, |c| c.to_string()),
+            address: crate::contest::address_lines(&entrant.address, rs.cabrillo_address_headers),
+            soapbox: if rs.cabrillo_soapbox {
+                crate::contest::soapbox_lines(&entrant.soapbox)
+            } else {
+                Vec::new()
+            },
         };
         let mut s = headers.render();
         for q in self.submitted() {

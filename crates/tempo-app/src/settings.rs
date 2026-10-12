@@ -1060,6 +1060,39 @@ pub struct Settings {
     /// stamped on each contact as it is logged), then these. Read at EXPORT.
     #[serde(default)]
     pub contest_operators: String,
+    /// Cabrillo `CATEGORY-TRANSMITTER` — a multi-operator entry's class, one of the values the
+    /// selected contest's rules declare (`ONE`, `TWO`, `UNLIMITED`…); empty is undeclared. Read
+    /// at EXPORT, and written only for a MULTI-OP entry and only when it is one of that contest's
+    /// own, with the OPERATORS line such an entry needs.
+    #[serde(default)]
+    pub contest_category_transmitter: String,
+    /// Cabrillo `CATEGORY-OVERLAY` — one of the selected contest's overlays (`ROOKIE`…); empty is
+    /// undeclared. Read at EXPORT, and written only when it is one of that contest's own.
+    #[serde(default)]
+    pub contest_category_overlay: String,
+    /// The mailing address a contest's Cabrillo `ADDRESS` lines carry, for a contest whose
+    /// template names them: the street lines, one per line. The city, state or province, postal
+    /// code and country are the four fields below it. Read at EXPORT, and never sent to Remote
+    /// (it is on no exposed list).
+    #[serde(default)]
+    pub contest_address: String,
+    /// The mailing address's city (`ADDRESS-CITY`).
+    #[serde(default)]
+    pub contest_address_city: String,
+    /// The mailing address's state or province (`ADDRESS-STATE-PROVINCE`) — where the mail goes,
+    /// which need not be [`Self::contest_qth_state`], where the station operates.
+    #[serde(default)]
+    pub contest_address_state: String,
+    /// The mailing address's postal code (`ADDRESS-POSTALCODE`).
+    #[serde(default)]
+    pub contest_address_postalcode: String,
+    /// The mailing address's country (`ADDRESS-COUNTRY`).
+    #[serde(default)]
+    pub contest_address_country: String,
+    /// Cabrillo `SOAPBOX` — the entrant's comments, as typed, for a contest whose template
+    /// carries them. Read at EXPORT.
+    #[serde(default)]
+    pub contest_soapbox: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -4691,6 +4724,14 @@ impl Default for Settings {
             contest_club: String::new(),
             contest_entry_class: String::new(),
             contest_operators: String::new(),
+            contest_category_transmitter: String::new(),
+            contest_category_overlay: String::new(),
+            contest_address: String::new(),
+            contest_address_city: String::new(),
+            contest_address_state: String::new(),
+            contest_address_postalcode: String::new(),
+            contest_address_country: String::new(),
+            contest_soapbox: String::new(),
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.
@@ -8967,6 +9008,38 @@ mod tests {
         assert!(
             json.contains("\"catRtsState\":\"low\""),
             "control: neighbouring keys serialise"
+        );
+    }
+
+    /// The contest entry's Cabrillo declarations, on the exact wire keys `ui/src/types.ts` writes
+    /// (`contestAddressPostalcode`, not `contestAddressPostalCode`, is the one the container's
+    /// `camelCase` rule makes), each empty by default: nothing is declared until the operator
+    /// declares it.
+    #[test]
+    fn the_cabrillo_declarations_use_the_exact_wire_keys_the_ui_writes() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "contestCategoryTransmitter",
+            "contestCategoryOverlay",
+            "contestAddress",
+            "contestAddressCity",
+            "contestAddressState",
+            "contestAddressPostalcode",
+            "contestAddressCountry",
+            "contestSoapbox",
+        ] {
+            assert!(json.contains(&format!("\"{key}\":\"\"")), "{key}");
+        }
+        // CONTROL: the camel-cased spelling a hand-written TS key would reach for is absent.
+        assert!(!json.contains("contestAddressPostalCode"));
+        // …and a stored file without them loads them empty, as every file before them is.
+        let old: Settings = serde_json::from_str("{\"mycall\":\"K1ABC\"}").unwrap();
+        assert_eq!(
+            (
+                old.contest_category_transmitter.as_str(),
+                old.contest_soapbox.as_str()
+            ),
+            ("", "")
         );
     }
 

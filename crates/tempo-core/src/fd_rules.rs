@@ -369,6 +369,30 @@ pub struct FdRuleset {
     /// ⚠️ Never CATEGORY-POWER in `cabrillo_headers` for such a contest: 1.17.0 reads that
     /// list and would write `HIGH` for a picker left at HIGH.
     pub cabrillo_power_categories: &'static [&'static str],
+    /// ⭐ **The sponsor's multi-operator classes, as its `CATEGORY-TRANSMITTER` values**, in its
+    /// order — CQ WW's *"The category-transmitter is required for multi-operator entries and
+    /// must be one of the following. ONE TWO UNLIMITED"* (Multi-Single, Multi-Two, Multi-Multi).
+    /// Empty for every contest whose sponsor names none, which writes none. Written only for a
+    /// `MULTI-OP` entry that declared one of these, and with it the `OPERATORS` line every such
+    /// sponsor asks a multi-operator entry for (CQ WW: *"If you select a multi-operator category
+    /// and do not enter operator callsigns in this field, the robot will reject your log"*).
+    ///
+    /// ⚠️ **A key of its own, as are the three below.** The builds that read
+    /// [`cabrillo_entry_headers`](Self::cabrillo_entry_headers) refuse the whole rules file over
+    /// one name that list does not know, exactly as 1.17.0 does over
+    /// [`cabrillo_headers`](Self::cabrillo_headers); every build ignores a key it does not know.
+    pub cabrillo_transmitter_categories: &'static [&'static str],
+    /// ⭐ **The overlay categories the sponsor scores**, as its `CATEGORY-OVERLAY` values, in its
+    /// order (CQ WW's `CLASSIC`, `ROOKIE` and `YOUTH`). Empty writes none.
+    pub cabrillo_overlay_categories: &'static [&'static str],
+    /// ⭐ **The `ADDRESS` headers the sponsor's template names**, in Cabrillo 3.0's order: every
+    /// one of the five for CQ WW, `ADDRESS` alone for an ARRL template, whose city, state and
+    /// postal code ride a second `ADDRESS` line (*"ADDRESS: Newington, CT 06111"*). Empty writes
+    /// no address. See [`address_lines`](crate::contest::address_lines).
+    pub cabrillo_address_headers: &'static [&'static str],
+    /// ⭐ **The sponsor's template carries `SOAPBOX` lines** — the entrant's comments, and where
+    /// CQ WW asks a Rookie for the date first licensed.
+    pub cabrillo_soapbox: bool,
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
     /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
     pub cabrillo_location: &'static [(&'static str, &'static str)],
@@ -1101,6 +1125,22 @@ struct CabrilloSpec {
     /// state, which is what every contest before this key writes.
     #[serde(default)]
     location_slot: String,
+    /// The `CATEGORY-TRANSMITTER` values the sponsor takes, in its order; `[]` = none is
+    /// written. This and the three keys under it are keys of their own, never names in
+    /// `headers` or `entry_headers`, so a build that predates them still loads this file (see
+    /// [`FdRuleset::cabrillo_transmitter_categories`]).
+    #[serde(default)]
+    transmitter_categories: Vec<String>,
+    /// The `CATEGORY-OVERLAY` values the sponsor scores, in its order; `[]` = none.
+    #[serde(default)]
+    overlay_categories: Vec<String>,
+    /// The `ADDRESS` headers the sponsor's template names, from
+    /// [`CABRILLO_ADDRESS_HEADERS`](crate::contest::CABRILLO_ADDRESS_HEADERS); `[]` = no address.
+    #[serde(default)]
+    address: Vec<String>,
+    /// The sponsor's template carries `SOAPBOX` lines.
+    #[serde(default)]
+    soapbox: bool,
 }
 
 /// One column of [`CabrilloSpec`].
@@ -1140,6 +1180,11 @@ const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
 /// every installed Nexus would stop receiving rules updates. An unknown KEY is ignored (the
 /// additive rule in the module header), which is why these travel under one.
 const CABRILLO_ENTRY_HEADERS: &[&str] = &["CLUB", "ENTRY-CLASS", "OPERATORS", "QRP-COMPETITION"];
+
+/// Cabrillo 3.0's `CATEGORY-TRANSMITTER` values (WWROF, *"The category-transmitter is required
+/// for multi-operator entries and must be one of the following. ONE TWO LIMITED UNLIMITED
+/// SWL"*), the only ones `cabrillo.transmitter_categories` may name.
+const CABRILLO_TRANSMITTER_CATEGORIES: &[&str] = &["ONE", "TWO", "LIMITED", "UNLIMITED", "SWL"];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -2397,6 +2442,63 @@ mode class ({})",
                     ));
                 }
             }
+            // ⭐ The entry declarations a sponsor's template names. A value refused here is a
+            // line that would ship wrong: a transmitter class Cabrillo does not have, an overlay
+            // no robot could read as one word, an address part with no ADDRESS to belong to.
+            let mut transmitters: Vec<&str> = Vec::new();
+            for c in &r.cabrillo.transmitter_categories {
+                if !CABRILLO_TRANSMITTER_CATEGORIES.contains(&c.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo transmitter category {c:?} is not ONE, TWO, LIMITED, \
+                         UNLIMITED or SWL"
+                    ));
+                }
+                if transmitters.contains(&c.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo transmitter category {c:?} is listed twice"
+                    ));
+                }
+                transmitters.push(c);
+            }
+            let mut overlays: Vec<&str> = Vec::new();
+            for c in &r.cabrillo.overlay_categories {
+                let shaped = !c.is_empty()
+                    && c.len() <= 32
+                    && c.bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
+                if !shaped {
+                    return Err(format!(
+                        "{tag}: cabrillo overlay category {c:?} is not uppercase letters, \
+                         digits or hyphens"
+                    ));
+                }
+                if overlays.contains(&c.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo overlay category {c:?} is listed twice"
+                    ));
+                }
+                overlays.push(c);
+            }
+            let mut address: Vec<&str> = Vec::new();
+            for h in &r.cabrillo.address {
+                if !crate::contest::CABRILLO_ADDRESS_HEADERS.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo address header {h:?} is not one this build can write"
+                    ));
+                }
+                if address.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo address header {h:?} is listed twice"
+                    ));
+                }
+                address.push(h);
+            }
+            if !address.is_empty() && !address.contains(&"ADDRESS") {
+                return Err(format!(
+                    "{tag}: cabrillo names address parts but not ADDRESS, which they are \
+                     details of"
+                ));
+            }
         }
         // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
         // lists — otherwise it silently selects nothing — and it must not re-point a code
@@ -3073,6 +3175,10 @@ fn build(spec: FileSpec) -> RulesTable {
                         .into_boxed_slice(),
                 ),
                 cabrillo_power_categories: leak_keys(r.cabrillo.power_categories),
+                cabrillo_transmitter_categories: leak_keys(r.cabrillo.transmitter_categories),
+                cabrillo_overlay_categories: leak_keys(r.cabrillo.overlay_categories),
+                cabrillo_address_headers: leak_keys(r.cabrillo.address),
+                cabrillo_soapbox: r.cabrillo.soapbox,
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location
@@ -4566,6 +4672,123 @@ mod tests {
             .all(|h| !CABRILLO_ENTRY_HEADERS.contains(h)));
     }
 
+    /// ⭐ The entry declarations ride keys of their own and never a name in either list an
+    /// installed build checks: 1.17.0 refuses the whole rules file over a `headers` name it
+    /// cannot write, every build since over an `entry_headers` one, and every build ignores a
+    /// key it does not know. So no declaration header is in either list, and a file naming one
+    /// there is refused here too, by name — the mistake that would stop every installed Nexus
+    /// receiving rules updates never gets as far as a published file.
+    #[test]
+    fn the_declarations_never_reach_a_list_an_installed_build_checks() {
+        let names = ["CATEGORY-TRANSMITTER", "CATEGORY-OVERLAY", "SOAPBOX"]
+            .into_iter()
+            .chain(crate::contest::CABRILLO_ADDRESS_HEADERS.iter().copied());
+        for h in names {
+            assert!(!CABRILLO_OPTIONAL_HEADERS.contains(&h), "{h} in headers");
+            assert!(!CABRILLO_ENTRY_HEADERS.contains(&h), "{h} in entry_headers");
+            for list in ["headers", "entry_headers"] {
+                let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+                v["rulesets"][0]["cabrillo"] = serde_json::json!({ list: [h] });
+                let e = parse_spec(&v.to_string()).expect_err("refused");
+                assert!(
+                    e.contains(&format!("{h:?} is not one this build can write")),
+                    "{e}"
+                );
+            }
+        }
+        // POSITIVE CONTROL: the same names on their own keys load, and the seed carries them.
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["cabrillo"] = serde_json::json!({
+            "transmitter_categories": ["ONE"],
+            "overlay_categories": ["ROOKIE"],
+            "address": crate::contest::CABRILLO_ADDRESS_HEADERS,
+            "soapbox": true,
+        });
+        let table = build(parse_spec(&v.to_string()).expect("the keys load"));
+        assert_eq!(table.rulesets[0].cabrillo_transmitter_categories, ["ONE"]);
+        assert!(table.rulesets[0].cabrillo_soapbox);
+    }
+
+    /// ⭐ **Every contest's declarations, as its sponsor names them** — the table the rules
+    /// file's `cabrillo_declarations` note quotes, by value, so a seed edit that drops or adds
+    /// one is a red here and a sentence in its commit.
+    #[test]
+    fn every_contest_declares_what_its_sponsor_names_and_nothing_else() {
+        type Row = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+            &'static [&'static str],
+            bool,
+        );
+        const ALL5: &[&str] = crate::contest::CABRILLO_ADDRESS_HEADERS;
+        const CQ: &[&str] = &["ONE", "TWO", "UNLIMITED"];
+        const VHF: &[&str] = &["ONE", "LIMITED", "UNLIMITED"];
+        const NONE: &[&str] = &[];
+        let table: [Row; 18] = [
+            ("arrlfd", NONE, NONE, NONE, false),
+            ("wfd", NONE, NONE, NONE, false),
+            ("tnqp", NONE, NONE, &["ADDRESS"], false),
+            ("ohqp", NONE, NONE, NONE, false),
+            ("cqp", NONE, NONE, NONE, true),
+            ("txqp", NONE, NONE, NONE, false),
+            (
+                "ilqp",
+                NONE,
+                NONE,
+                &[
+                    "ADDRESS",
+                    "ADDRESS-CITY",
+                    "ADDRESS-STATE-PROVINCE",
+                    "ADDRESS-POSTALCODE",
+                ],
+                true,
+            ),
+            (
+                "nyqp",
+                &["ONE", "UNLIMITED"],
+                &["ROOKIE", "YOUTH12", "YOUTH17", "YL"],
+                ALL5,
+                false,
+            ),
+            ("arrlss_cw", &["ONE"], NONE, &["ADDRESS"], false),
+            ("arrlss_ssb", &["ONE"], NONE, &["ADDRESS"], false),
+            ("cqww_cw", CQ, &["CLASSIC", "ROOKIE", "YOUTH"], ALL5, true),
+            ("cqww_ssb", CQ, &["CLASSIC", "ROOKIE", "YOUTH"], ALL5, true),
+            ("cqww_rtty", CQ, &["CLASSIC", "ROOKIE"], ALL5, true),
+            (
+                "cqwpx_cw",
+                CQ,
+                &["CLASSIC", "ROOKIE", "TB-WIRES", "YOUTH"],
+                ALL5,
+                true,
+            ),
+            (
+                "cqwpx_ssb",
+                CQ,
+                &["CLASSIC", "ROOKIE", "TB-WIRES", "YOUTH"],
+                ALL5,
+                true,
+            ),
+            ("arrlvhf_jan", VHF, NONE, &["ADDRESS"], true),
+            ("arrlvhf_jun", VHF, NONE, &["ADDRESS"], true),
+            ("arrlvhf_sep", VHF, NONE, &["ADDRESS"], true),
+        ];
+        let shipped = build(parse_spec(SEED).expect("the seed parses"));
+        assert_eq!(
+            shipped.rulesets.len(),
+            table.len(),
+            "a row for every shipped contest"
+        );
+        for (id, transmitters, overlays, address, soapbox) in table {
+            let rs = ruleset_by_id(id, CURRENT_RULES_YEAR).expect("shipped");
+            assert_eq!(rs.cabrillo_transmitter_categories, transmitters, "{id}");
+            assert_eq!(rs.cabrillo_overlay_categories, overlays, "{id}");
+            assert_eq!(rs.cabrillo_address_headers, address, "{id}");
+            assert_eq!(rs.cabrillo_soapbox, soapbox, "{id}");
+        }
+    }
+
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
     /// `Option` field silently even with no `#[serde(default)]` attribute, which
     /// is exactly why nothing in the new blocks is optional.
@@ -5732,6 +5955,22 @@ mod tests {
             assert_eq!(
                 x.cabrillo_location_slot, y.cabrillo_location_slot,
                 "{}: location slot",
+                x.event
+            );
+            assert_eq!(
+                (
+                    x.cabrillo_transmitter_categories,
+                    x.cabrillo_overlay_categories,
+                    x.cabrillo_address_headers,
+                    x.cabrillo_soapbox
+                ),
+                (
+                    y.cabrillo_transmitter_categories,
+                    y.cabrillo_overlay_categories,
+                    y.cabrillo_address_headers,
+                    y.cabrillo_soapbox
+                ),
+                "{}: declarations",
                 x.event
             );
             assert_eq!(x.bands, y.bands, "{}: bands", x.event);

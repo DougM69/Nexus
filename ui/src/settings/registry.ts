@@ -526,9 +526,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'sweepstakes', 'my county', 'my state', 'station data', 'what i send'],
   },
   // What the entry's Cabrillo log declares: the category, the power, the assistance, the station
-  // type, the email, the sponsor's entry class, the club and the other operators — and the
-  // Unassisted switch, the other half of "assisted", which turns the aids below off. It was
-  // "Contest Category" while it held that switch alone; the id is a public name and stays.
+  // type, the email, the sponsor's entry class, the club and the other operators, a multi-operator
+  // entry's class, the overlay, the mailing address and the soapbox — and the Unassisted switch,
+  // the other half of "assisted", which turns the aids below off. It was "Contest Category" while
+  // it held that switch alone; the id is a public name and stays.
   {
     id: 'contest-category',
     label: 'Your entry',
@@ -538,7 +539,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'low power', 'high power', 'assisted', 'unassisted', 'spotting assistance',
       'assistance record', 'station type', 'school', 'operators', 'email', 'e-mail',
       'cabrillo email', 'entry class', 'entry-class', 'unlimited', 'club', 'contest club',
-      'qrp-competition'],
+      'qrp-competition', 'transmitter', 'category-transmitter', 'multi-one', 'multi-two',
+      'multi-multi', 'multi-single', 'overlay', 'category-overlay', 'rookie', 'classic', 'youth',
+      'address', 'mailing address', 'soapbox'],
   },
   // The contest strip's two aids: the Super Check Partial list Nexus downloads and the
   // call-history file the operator imports. After Your entry, whose Unassisted switch turns

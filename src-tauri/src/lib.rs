@@ -8531,6 +8531,19 @@ struct FdRulesetDto {
     /// key it does not know, so a capture must stay the shape every published page accepts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     entry_classes: Vec<String>,
+    /// ⭐ **The entry declarations the picked contest's sponsor names**, for Settings to offer
+    /// only where they are written: its multi-operator classes (Cabrillo `CATEGORY-TRANSMITTER`,
+    /// CQ WW's `ONE`/`TWO`/`UNLIMITED`), its overlays, the `ADDRESS` headers its template carries
+    /// and whether it has a `SOAPBOX`. Filled by the PREVIEW only and absent when empty, for the
+    /// reason `entry_classes` is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    transmitter_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    overlay_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    address_headers: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    soapbox: bool,
     /// ⭐ **When the picked contest runs** — its running-or-next window (Unix UTC), from the
     /// rules data by the same `next_or_running` the session's own banner reads. The contest
     /// screen shows it beside the Field Day mode switch before any session exists: with the
@@ -8568,6 +8581,10 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         problem: String::new(),
         location_warning: None,
         entry_classes: Vec::new(),
+        transmitter_categories: Vec::new(),
+        overlay_categories: Vec::new(),
+        address_headers: Vec::new(),
+        soapbox: false,
         event_start_unix: None,
         event_end_unix: None,
     }
@@ -8596,6 +8613,12 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
     ) {
         // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
         dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
+        // …and the declarations its template names, each offered only where it is written.
+        let owned = |list: &[&str]| list.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+        dto.transmitter_categories = owned(rs.cabrillo_transmitter_categories);
+        dto.overlay_categories = owned(rs.cabrillo_overlay_categories);
+        dto.address_headers = owned(rs.cabrillo_address_headers);
+        dto.soapbox = rs.cabrillo_soapbox;
         // When it runs, by the computation the session's banner reads — so the contest screen
         // says the same thing before the session exists as during it.
         let window = rs.next_or_running(now_unix().max(0) as u64);
@@ -37790,6 +37813,52 @@ mod tests {
             .entry_classes
             .is_empty()
         );
+    }
+
+    /// ⭐ **Settings is offered the entry declarations the picked contest's sponsor names**, by
+    /// value — CQ WPX's multi-operator classes, its four overlays, all five address headers and
+    /// its soapbox — and Field Day none of them; the Remote capture carries none either, its
+    /// hosted page refusing a key it does not know.
+    #[test]
+    fn the_preview_offers_the_declarations_the_sponsor_names() {
+        let preview = |event: &str| {
+            let s = tempo_app::settings::Settings {
+                fd_event: event.into(),
+                ..Default::default()
+            };
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let wpx = preview("cqwpx_cw");
+        assert_eq!(wpx.transmitter_categories, ["ONE", "TWO", "UNLIMITED"]);
+        assert_eq!(
+            wpx.overlay_categories,
+            ["CLASSIC", "ROOKIE", "TB-WIRES", "YOUTH"]
+        );
+        assert_eq!(
+            wpx.address_headers,
+            tempo_core::contest::CABRILLO_ADDRESS_HEADERS
+        );
+        assert!(wpx.soapbox);
+        let json = serde_json::to_value(&wpx).unwrap();
+        assert_eq!(json["transmitterCategories"][1], "TWO", "{json}");
+        assert_eq!(json["soapbox"], true, "{json}");
+        // CONTROL: Field Day's preview names none and sends none of the keys.
+        let fd = serde_json::to_value(preview("arrlfd")).unwrap();
+        for key in [
+            "transmitterCategories",
+            "overlayCategories",
+            "addressHeaders",
+            "soapbox",
+        ] {
+            assert!(fd.get(key).is_none(), "{key}: {fd}");
+            assert!(
+                serde_json::to_value(super::fd_ruleset_dto("cqwpx_cw"))
+                    .unwrap()
+                    .get(key)
+                    .is_none(),
+                "the Remote capture never carries {key}"
+            );
+        }
     }
 
     /// ⭐ **The contest screen can say when the picked contest runs before any session

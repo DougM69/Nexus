@@ -2077,6 +2077,31 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   **Operator at the key** when they logged a contact. Type anyone else here, as
   callsigns separated by spaces or commas. All three are read when you export the
   log, so you can fill them in after the contest.
+- **Multi-operator class.** Shown for a `MULTI-OP` entry in a contest whose
+  sponsor scores multi-operator classes, with that sponsor's own: `ONE`, `TWO` or
+  `UNLIMITED` in the CQ contests (Multi-One or Multi-Single, Multi-Two,
+  Multi-Multi), `ONE` in Sweepstakes, `ONE`, `LIMITED` or `UNLIMITED` in the ARRL
+  VHF contests, `ONE` or `UNLIMITED` in the New York QSO Party. It goes on the
+  CATEGORY-TRANSMITTER line, with the OPERATORS line these sponsors require of a
+  multi-operator entry. Nexus marks every contact as transmitter 0, so add the
+  second transmitter's contacts to a Multi-Two log before you send it.
+- **Overlay.** Shown for a contest that scores overlay categories, with its own:
+  CQ WW's Classic, Rookie and Youth (CQ WPX adds TB-WIRES, CQ WW RTTY has Classic
+  and Rookie) and the New York QSO Party's Rookie, Youth12, Youth17 and YL. It goes
+  on the CATEGORY-OVERLAY line.
+- **Mailing address**, then its city, state or province, postal code and country.
+  Shown for a contest whose Cabrillo template has ADDRESS lines (the CQ contests,
+  Sweepstakes, the ARRL VHF contests and the New York, Illinois and Tennessee QSO
+  Parties), so the sponsor can mail a certificate or plaque. A part the template has
+  no line for goes on one more ADDRESS line, the way its own template writes it.
+  Remote never sees it.
+- **Soapbox.** Your comments, for the SOAPBOX lines of a contest whose template has
+  them (the CQ contests, the ARRL VHF contests and the Illinois and California QSO
+  Parties); a long line is wrapped to fit. The California QSO Party asks for its
+  award lines here (YL, YOUTH, MOBILE, NEW CONTESTER…).
+
+  All four are read when you export the log, and none is written until you set
+  it: a log you declare none of them for exports the file it always did.
 
 ![The Contest Category group: Unassisted entry switched off, an ASSISTED badge on a line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since 23:18Z, and below it an Assistance record of eight timestamped rows.](../img/manual/settings-contest-category.webp)
 

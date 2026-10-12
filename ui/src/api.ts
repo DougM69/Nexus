@@ -498,6 +498,15 @@ export interface FdRulesetDto {
    *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
    *  tokens: the sponsor's names, never translated. */
   entryClasses?: string[]
+  /** ⭐ The entry declarations the picked contest's sponsor names, each absent when it names
+   *  none: its multi-operator classes (Cabrillo `CATEGORY-TRANSMITTER`), its overlays
+   *  (`CATEGORY-OVERLAY`), the `ADDRESS` headers its template carries, and whether it has a
+   *  `SOAPBOX`. Settings offers each only where it is written. Invariant tokens, never
+   *  translated. */
+  transmitterCategories?: string[]
+  overlayCategories?: string[]
+  addressHeaders?: string[]
+  soapbox?: boolean
   /** ⭐ When the picked contest runs: its running-or-next window (Unix UTC), from the same
    *  rules data the session's banner reads, so the contest screen can show it before any
    *  session exists. Filled by the preview only; absent from the Remote capture. */

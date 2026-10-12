@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for byte what it was. A QSO party, Sweepstakes or CQ WW CW/SSB contact still reaches N3FJP without
   its exchange: N3FJP does not publish which boxes those programs use, so Nexus fills none rather
   than guess. NEEDS-BENCH: N3FJP's CQ WPX, CQ WW RTTY and VHF programs running on Windows.
+- **The rest of a contest entry's Cabrillo declarations, and a band-by-mode table in the
+  Summary.** Settings ▸ Contesting ▸ Your entry now offers what a sponsor's Cabrillo template
+  asks for beyond the entry category, each only for a contest whose sponsor has it: a multi-operator
+  entry's class (`ONE`, `TWO` or `UNLIMITED` in the CQ contests, `LIMITED` or `UNLIMITED` in the
+  ARRL VHF contests, Multi-One or Multi-Multi in the New York QSO Party), written with the
+  OPERATORS line such an entry must carry; an overlay (Classic, Rookie and Youth in CQ WW,
+  Tribander/Single Element too in CQ WPX, Rookie, Youth and YL in New York); your mailing
+  address, for the CQ contests, Sweepstakes, the VHF contests and the New York, Illinois and
+  Tennessee QSO Parties; and a soapbox. Nothing is written until you set it, so every contest's
+  file is exactly what it was. The Score Summary also lists QSOs by band and mode, for ARRL Field
+  Day exactly as item 18 of ARRL's summary sheet lays them out (CW, Digital and Phone; 160 m to
+  70 cm, Other and Satellite), and for every other contest in its own modes.
 - **Allow Nexus through Windows Firewall, for club sync.** On Windows, the club section of Settings
   ▸ Contesting has a button that asks for administrator rights once, the way Repair clock does, and
   adds three inbound rules for Nexus itself on Private and Public networks: the Host port (TCP 42073

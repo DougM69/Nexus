@@ -12343,18 +12343,29 @@ impl Engine {
         ContestSession::for_ruleset(club.ruleset(), &self.contest_station_data())
     }
 
-    /// The entrant's own Cabrillo lines — `NAME`, `EMAIL`, `CLUB`, `ENTRY-CLASS` and the
-    /// typed `OPERATORS` — read from Settings at export, so a corrected typo reaches the
-    /// next file. One builder for both files that carry them: a position's own and the
-    /// club's.
+    /// The entrant's own Cabrillo lines — `NAME`, `EMAIL`, `CLUB`, `ENTRY-CLASS`, the typed
+    /// `OPERATORS`, the multi-operator class, the overlay, the mailing address and the soapbox —
+    /// read from Settings at export, so a corrected typo reaches the next file. One builder for
+    /// both files that carry them: a position's own and the club's.
     fn contest_entrant(&self) -> tempo_core::contest::CabrilloEntrant {
+        let s = &self.settings;
         tempo_core::contest::CabrilloEntrant {
-            name: self.settings.op_name.trim().to_string(),
-            email: self.settings.contest_email.trim().to_string(),
-            club: self.settings.contest_club.trim().to_string(),
-            entry_class: self.settings.contest_entry_class.trim().to_string(),
-            operators: self.settings.contest_operators.trim().to_string(),
-            objectives: self.settings.fd_objectives.clone(),
+            name: s.op_name.trim().to_string(),
+            email: s.contest_email.trim().to_string(),
+            club: s.contest_club.trim().to_string(),
+            entry_class: s.contest_entry_class.trim().to_string(),
+            operators: s.contest_operators.trim().to_string(),
+            objectives: s.fd_objectives.clone(),
+            transmitter: s.contest_category_transmitter.trim().to_string(),
+            overlay: s.contest_category_overlay.trim().to_string(),
+            address: tempo_core::contest::CabrilloAddress {
+                street: s.contest_address.clone(),
+                city: s.contest_address_city.trim().to_string(),
+                state_province: s.contest_address_state.trim().to_string(),
+                postal_code: s.contest_address_postalcode.trim().to_string(),
+                country: s.contest_address_country.trim().to_string(),
+            },
+            soapbox: s.contest_soapbox.clone(),
         }
     }
 
@@ -26289,10 +26300,11 @@ contact yourself."
                     // The file the entry submits: a satellite contact the contest gives
                     // no credit is left out (the journal keeps it).
                     "adif" => Ok(station.log.submission_adif()),
-                    // NAME and EMAIL, CLUB, ENTRY-CLASS and the typed OPERATORS are the
-                    // entrant's own settings, read at export so a corrected typo reaches the
-                    // next file; the log writes each only where the contest's rules list that
-                    // header (never for Field Day).
+                    // NAME and EMAIL, CLUB, ENTRY-CLASS, the typed OPERATORS, the multi-operator
+                    // class, the overlay, the mailing address and the soapbox are the entrant's
+                    // own settings, read at export so a corrected typo reaches the next file;
+                    // the log writes each only where the contest's rules list that header (never
+                    // for Field Day).
                     _ => station.log.cabrillo_with(freq_khz, &self.contest_entrant()),
                 }
             }
@@ -45934,6 +45946,91 @@ mod tests {
         assert_eq!(accept.host_call, "W9ABC");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The entry's declarations reach the file from Settings, read at export** — set after
+    /// the contest started, each lands where the sponsor's template puts it: a New York
+    /// multi-operator entry's class with the operators it needs, its overlay and all five address
+    /// headers; an Illinois entry's soapbox. With none set, the same entry's file carries none.
+    #[test]
+    fn the_cabrillo_declarations_are_read_from_settings_at_export() {
+        let mut e = Engine::new("W2XYZ", "FN32", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "nyqp".into();
+        s.contest_qth_state = "NY".into();
+        s.contest_qth_county = "ALB".into();
+        s.contest_category_operator = "MULTI-OP".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-sp")
+            .expect("the New York QSO Party runs");
+        let declared = |file: &str| -> Vec<String> {
+            file.lines()
+                .filter(|l| {
+                    [
+                        "CATEGORY-TRANSMITTER",
+                        "CATEGORY-OVERLAY",
+                        "ADDRESS",
+                        "OPERATORS",
+                        "SOAPBOX",
+                    ]
+                    .iter()
+                    .any(|t| l.starts_with(t))
+                })
+                .map(String::from)
+                .collect()
+        };
+        let bare = e.export_log("cabrillo").expect("exports");
+        assert!(bare.contains("CONTEST: NY-QSO-PARTY\n"), "{bare}");
+        assert_eq!(
+            declared(&bare),
+            Vec::<String>::new(),
+            "nothing declared, nothing written"
+        );
+        let mut s = e.settings().clone();
+        s.contest_category_transmitter = "unlimited".into();
+        s.contest_category_overlay = "rookie".into();
+        s.contest_address = "1 Example Rd\nApt 2".into();
+        s.contest_address_city = "Albany".into();
+        s.contest_address_state = "NY".into();
+        s.contest_address_postalcode = "12207".into();
+        s.contest_address_country = "USA".into();
+        s.contest_soapbox = "A fine party.".into();
+        s.contest_operators = "W2DEF".into();
+        e.apply_settings(s);
+        assert_eq!(
+            declared(&e.export_log("cabrillo").expect("exports")),
+            [
+                "CATEGORY-TRANSMITTER: UNLIMITED",
+                "CATEGORY-OVERLAY: ROOKIE",
+                "ADDRESS: 1 Example Rd",
+                "ADDRESS: Apt 2",
+                "ADDRESS-CITY: Albany",
+                "ADDRESS-STATE-PROVINCE: NY",
+                "ADDRESS-POSTALCODE: 12207",
+                "ADDRESS-COUNTRY: USA",
+                "OPERATORS: W2DEF",
+            ],
+            "New York has no SOAPBOX line"
+        );
+        // The Illinois QSO Party's sample carries the soapbox, and no ADDRESS-COUNTRY.
+        let mut il = ilqp_engine("COOK", "");
+        let mut s = il.settings().clone();
+        s.contest_soapbox = "A fine party.\nBack next year.".into();
+        s.contest_address_country = "USA".into();
+        il.apply_settings(s);
+        let file = il.export_log("cabrillo").expect("exports");
+        assert_eq!(
+            declared(&file)
+                .into_iter()
+                .filter(|l| !l.starts_with("OPERATORS"))
+                .collect::<Vec<_>>(),
+            [
+                "ADDRESS: USA",
+                "SOAPBOX: A fine party.",
+                "SOAPBOX: Back next year."
+            ]
+        );
     }
 
     /// An Illinois QSO Party engine in Field Day mode, at an Illinois county, with the

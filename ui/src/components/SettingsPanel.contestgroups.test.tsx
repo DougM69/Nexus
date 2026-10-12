@@ -21,9 +21,9 @@ import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import { CONTESTS, CONTESTS_SENDING_POWER, isFieldDay } from '../fdEvent'
 import defaultSettings from './__fixtures__/defaultSettings.json'
-// ⭐ A whole settings file as this release's Rust `Settings` serialises it (every key, 326 of
-// them), with every Contesting value set away from its default and the Station tab's State set
-// to a ragchew QTH. Made by serialising `Settings` with those values; nothing in it is typed by
+// ⭐ A whole settings file as this release's Rust `Settings` serialises it (every key, 334 of
+// them), with every Contesting value set away from its default (the Cabrillo declarations
+// included) and the Station tab's State set to a ragchew QTH. Made by serialising `Settings` with those values; nothing in it is typed by
 // hand but the two ESM step maps, whose keys the Rust side keeps as written.
 import storedFile from './__fixtures__/settings-contesting-stored.json'
 
@@ -138,6 +138,24 @@ const chipFor = (contest: string) =>
     name: contest,
   })
 
+// The Cabrillo declarations each contest's rules data gives the preview, as the seed has them:
+// CQ WW CW has all four, the Illinois QSO Party the mailing address and the soapbox, and the two
+// Field Days none. The class is offered to a MULTI-OP entry only.
+const DECLARES: Record<string, Record<string, unknown>> = {
+  cqww_cw: {
+    transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
+    overlayCategories: ['CLASSIC', 'ROOKIE', 'YOUTH'],
+    addressHeaders: ['ADDRESS', 'ADDRESS-CITY', 'ADDRESS-STATE-PROVINCE', 'ADDRESS-POSTALCODE', 'ADDRESS-COUNTRY'],
+    soapbox: true,
+  },
+  ilqp: {
+    addressHeaders: ['ADDRESS', 'ADDRESS-CITY', 'ADDRESS-STATE-PROVINCE', 'ADDRESS-POSTALCODE'],
+    soapbox: true,
+  },
+}
+const CLASS = 'Which multi-operator class you are entering'
+const OVERLAY = 'Which overlay category you are also entering'
+
 const LEGENDS = [
   'Contest',
   'Your station data',
@@ -247,6 +265,27 @@ describe('the groups, in the order an entry is set up', () => {
     await waitFor(() => expect(boxLabelled('Entry class')).not.toBeNull())
     expect(groupOf(boxLabelled('Entry class'))).toBe('Your entry')
   })
+
+  it('a multi-operator class, an overlay, the mailing address and the soapbox sit with the rest of the entry', async () => {
+    station = { ...station, fdEvent: 'cqww_cw', contestCategoryOperator: 'MULTI-OP' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'cqww_cw', ...DECLARES.cqww_cw } as never),
+    )
+    renderPanel()
+    await openTab('Contesting')
+    const where: Record<string, Element | null> = {
+      'Multi-operator class': await screen.findByRole('group', { name: CLASS }),
+      Overlay: screen.getByRole('group', { name: OVERLAY }),
+      'Mailing address': fieldLabelled('Mailing address'),
+      'Mailing city': fieldLabelled('Mailing city'),
+      'Mailing state or province': fieldLabelled('Mailing state or province'),
+      'Postal code': fieldLabelled('Postal code'),
+      'Mailing country': fieldLabelled('Mailing country'),
+      Soapbox: fieldLabelled('Soapbox'),
+    }
+    const placed = Object.fromEntries(Object.entries(where).map(([name, el]) => [name, groupOf(el)]))
+    expect(placed).toEqual(Object.fromEntries(Object.keys(where).map((name) => [name, 'Your entry'])))
+  })
 })
 
 // Each contest's own answer, read off the panel as the operator picks it: the chips change the
@@ -304,6 +343,8 @@ describe('a stored settings file, every Contesting value set', () => {
     const checked = (name: string | RegExp) =>
       screen.queryByRole('switch', { name })?.getAttribute('aria-checked') ?? null
     const value = (label: string) => boxLabelled(label)?.value ?? null
+    const text = (label: string) =>
+      (fieldLabelled(label)?.querySelector('textarea') as HTMLTextAreaElement | null)?.value ?? null
     const esmKey = (cockpit: string) =>
       (document.querySelector(
         `[data-esm-cockpit="${cockpit}"] [data-esm-role="again"] select`,
@@ -326,6 +367,14 @@ describe('a stored settings file, every Contesting value set', () => {
       'Entry class': value('Entry class'),
       Club: value('Club'),
       'Other operators': value('Other operators'),
+      'Multi-operator class': screen.queryByRole('group', { name: CLASS }) ? pressedIn(CLASS) : null,
+      Overlay: screen.queryByRole('group', { name: OVERLAY }) ? pressedIn(OVERLAY) : null,
+      'Mailing address': text('Mailing address'),
+      'Mailing city': value('Mailing city'),
+      'Mailing state or province': value('Mailing state or province'),
+      'Postal code': value('Postal code'),
+      'Mailing country': value('Mailing country'),
+      Soapbox: text('Soapbox'),
       'Super Check Partial': checked('Super Check Partial'),
       'Check for a newer list once a day': checked('Check for a newer list once a day'),
       'Fill the exchange from call history': checked('Fill the exchange from call history'),
@@ -355,6 +404,8 @@ describe('a stored settings file, every Contesting value set', () => {
   /** What `storedFile` holds, as each control shows it for `pick`. */
   function stored(pick: string): Record<string, string | null> {
     const fd = isFieldDay(pick)
+    const declares = DECLARES[pick] ?? {}
+    const address = declares.addressHeaders !== undefined
     return {
       contest: CONTESTS.find((c) => c.id === pick)!.name,
       'Contest mode': 'true',
@@ -374,6 +425,15 @@ describe('a stored settings file, every Contesting value set', () => {
       'Entry class': pick === 'ilqp' ? 'ILLINOIS MOBILE' : null,
       Club: 'Example Radio Club',
       'Other operators': 'KB9QRS N0AAA',
+      // Kept in the file whatever is picked, shown where the contest's rules data offers it.
+      'Multi-operator class': declares.transmitterCategories ? 'UNLIMITED' : null,
+      Overlay: declares.overlayCategories ? 'ROOKIE' : null,
+      'Mailing address': address ? '1 Example Road\nUnit 2' : null,
+      'Mailing city': address ? 'Springfield' : null,
+      'Mailing state or province': address ? 'IL' : null,
+      'Postal code': address ? '62701' : null,
+      'Mailing country': address ? 'USA' : null,
+      Soapbox: declares.soapbox ? 'A fine weekend.\nFirst licensed 2024.' : null,
       'Super Check Partial': 'false',
       'Check for a newer list once a day': 'false',
       'Fill the exchange from call history': 'false',
@@ -398,16 +458,21 @@ describe('a stored settings file, every Contesting value set', () => {
     }
   }
 
-  it.each(['ilqp', 'arrlfd', 'wfd'])('%s: every control shows its stored value, and Save writes the file back', async (pick) => {
+  it.each(['ilqp', 'arrlfd', 'wfd', 'cqww_cw'])('%s: every control shows its stored value, and Save writes the file back', async (pick) => {
     const file = { ...structuredClone(storedFile), fdEvent: pick } as Record<string, unknown>
     station = structuredClone(file)
     api.get('getFdRuleset').mockImplementation(() =>
-      Promise.resolve({ event: pick, entryClasses: pick === 'ilqp' ? ILQP_CLASSES : [] } as never),
+      Promise.resolve({
+        event: pick,
+        entryClasses: pick === 'ilqp' ? ILQP_CLASSES : [],
+        ...DECLARES[pick],
+      } as never),
     )
     renderPanel()
     await openTab('Contesting')
     await screen.findByRole('group', { name: 'Which contest you are entering' })
     if (pick === 'ilqp') await waitFor(() => expect(boxLabelled('Entry class')).not.toBeNull())
+    if (pick === 'cqww_cw') await screen.findByRole('group', { name: CLASS })
     expect(shown()).toEqual(stored(pick))
     // The Station tab's State is the other box, holding the ragchew QTH it was given.
     await openTab('Station')
