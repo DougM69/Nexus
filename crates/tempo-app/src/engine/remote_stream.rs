@@ -281,7 +281,9 @@ mod tests {
         // The Stop stops at once, not at the presence deadline: nothing waits on presence.
         stopped(&mut e, Kind::Ft);
         assert!(e.remote_presence_live(t0), "a stop ended presence");
-        // The operator starts again, and the heartbeats stop.
+        // The operator starts again, and the heartbeats stop. A stop holds TX off until the
+        // operator's own act: in Phone the first PTT press turns it back on.
+        e.set_tx_enabled_by_operator(true);
         start(&mut e, Kind::PhonePtt);
         assert!(e.poll_remote_transmit(t0 + PRESENCE));
         stopped(&mut e, Kind::PhonePtt);

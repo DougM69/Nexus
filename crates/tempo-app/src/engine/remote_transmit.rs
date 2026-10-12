@@ -375,8 +375,9 @@ impl Engine {
         } else {
             // TX Off must work during our pending retune or current FT over.
             // Native semantics finish that over; they do not invoke Stop TX.
+            // It is the operator's TX Off, so it holds as the desktop's does.
             self.require_remote_ft_owner(&permit)?;
-            self.set_tx_enabled(false);
+            self.set_tx_enabled_by_operator(false);
         }
         Ok(())
     }

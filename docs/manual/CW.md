@@ -49,7 +49,7 @@ Entering the CW section commands the rig via CAT before any transmit:
 - **CAT and WinKeyer back-ends** → rig mode set to `CW`.
 - **Soundcard back-end** → rig mode set to `USB` (≥10 MHz) or `LSB` (<10 MHz).
 
-The mode is re-asserted on section entry even if the frequency has not changed. You do not need a separate mode button. TX is armed automatically on CW section entry (`tx_enabled = true`), consistent with a live-key rig. The FT8 auto-sequencer never applies to CW.
+The mode is re-asserted on section entry even if the frequency has not changed. You do not need a separate mode button. TX is armed automatically on CW section entry (`tx_enabled = true`), consistent with a live-key rig, unless you stopped it: after Stop TX, Esc, TX Off or the watchdog, TX stays off, here and on every other screen, until you turn it back on yourself by sending with an F-key or typed text, or with TX On. The FT8 auto-sequencer never applies to CW.
 
 A prominent **band picker** in the cockpit header shows and selects your band. It is a large, bold control colored by the active band (matching the Conditions map's per-band spot colors), so your operating band reads at a glance. Selecting a band parks the VFO at the **start of your licensed CW segment** on that band and lists only bands your license class permits for CW. A **🔒 TX locked** chip appears when the current frequency/mode is outside your privileges.
 

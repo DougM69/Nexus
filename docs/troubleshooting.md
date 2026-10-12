@@ -379,7 +379,10 @@ Full setup guide: [Antenna rotator setup](rigs/rotators.md).
 
 - **The arm latch** — like WSJT-X, Nexus requires you to arm TX explicitly
   (Enable TX in the Operate cockpit) before any transmission. Digital does not
-  auto-arm on section entry; Phone and CW do.
+  auto-arm on section entry; Phone, CW, RTTY and PSK do, unless you stopped TX
+  (Stop TX, Esc, TX Off or the watchdog). Then TX stays off, whichever screens
+  you visit, until you turn it back on yourself: TX On, a CW F-key, or your
+  first PTT press in Phone.
 - **License-class lockout** — if the dial is outside your declared license
   segment, the TX button shows a lock and every TX path independently refuses to
   key. Check Settings ▸ Station (default **Open**, no lockout).

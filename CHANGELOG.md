@@ -532,6 +532,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **After Stop TX, TX stays off until you turn it back on, whichever screens you visit.** A trip
+  to the Contest screen, the Map or the Logbook and back to Phone, CW, RTTY or PSK turned TX back
+  on after Stop TX, Esc, TX Off or the watchdog. With Enter Sends Message on, the next Enter then
+  transmitted; an RTTY Auto CQ run, or a program keying through Nexus's CAT share (WSJT-X, N1MM),
+  could transmit with no press; and the watchdog's trip was cleared. Now only your own act turns
+  TX back on: TX On, a CW F-key or typed send, RTTY's TX button, or your first PTT press in Phone,
+  which turns TX on and keys on the next press. Entering a cockpit still turns TX on when nothing
+  stopped it, at launch or coming from FT8 with no Halt; after a Halt in FT8, your first PTT press
+  in Phone turns TX on instead of keying. Stop TX and Esc now also end an RTTY Auto run, and so do
+  a band change and a radio switch: start a new run with Auto CQ.
+
 - **Phone's F-keys play the voice keyer from the log line, as CW's do.** With the cursor in the Call
   box or any other box of the log line, a slot's F-key played nothing until you clicked out of the
   box. Now it plays from anywhere on the Phone screen, and F1–F12 never reach the window there, so F5

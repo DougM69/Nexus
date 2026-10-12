@@ -1144,7 +1144,7 @@ pub fn execute(
                 .map_err(|_| Reason::StationBusy)?;
         }
         Action::Disarm {} => {
-            engine.set_tx_enabled(false);
+            engine.set_tx_enabled_by_operator(false);
             let result = Completion::default();
             result.finish(Outcome::Applied {
                 evidence: Evidence::StationState,

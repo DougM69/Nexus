@@ -496,10 +496,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // launch and PERSISTED that over the operator's real saved mode (set_operating_mode saves
     // settings), so a station parked on 40m LSB for a net came up in DATA-L, unrecoverable by
     // relaunching. It would also ARM TRANSMIT, since set_operating_mode arms TX for the manual
-    // modes (engine.rs). SF ticket #3.
+    // modes (engine.rs) wherever no stop holds it off. SF ticket #3.
     //
     // This is a MOUNT guard, NOT the same-value guard the comment below rightly forbids —
-    // every subsequent view change still re-asserts unconditionally.
+    // every subsequent view change still re-asserts unconditionally. A re-assert after Stop TX,
+    // Esc, TX Off or the watchdog leaves TX off: the engine arms only where nothing stopped it.
     if (!didMountOpMode.current) {
       didMountOpMode.current = true
       return

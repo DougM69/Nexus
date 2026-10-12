@@ -83,7 +83,7 @@ CAT frequency/mode commands are independent of PTT method — a VOX rig still re
 Below the PTT row are two utility buttons:
 
 - **Tune** keys a steady, unmodulated carrier so you can tune an antenna tuner (ATU) or set an amplifier. It shows **TUNING…** while the carrier is on; click it again to stop. The Transmit Watchdog also drops it automatically, and it's disabled when the current frequency/mode is outside your license privileges.
-- **Stop TX** immediately unkeys everything — PTT, the tune carrier, and any voice-keyer playback — a one-click panic stop.
+- **Stop TX** immediately unkeys everything — PTT, the tune carrier, and any voice-keyer playback — a one-click panic stop. TX then stays off, even if you leave Phone and come back, until you turn it on yourself: your next PTT press does that and says so, and the press after it keys. The same goes after TX Off, Esc, the watchdog, or a Halt in FT8.
 
 ## RF Power
 

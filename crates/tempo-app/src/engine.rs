@@ -81,6 +81,8 @@ mod restore_session_tests;
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
 pub mod slices;
+#[cfg(test)]
+mod stop_hold_tests;
 pub mod sub_controls;
 mod tx_alarms;
 #[cfg(test)]
@@ -2813,6 +2815,16 @@ pub struct Engine {
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
+    /// ⛔ **A STOP HOLDS** until the operator's own act turns TX back on (the operator,
+    /// 2026-10-11: "After Stop TX, Esc or the watchdog, TX stays off until your own act").
+    /// Set by every halt ([`Engine::halt_tx`]: Stop TX, Esc, an FT Halt, WSJT-X's HaltTx, the
+    /// Remote's Stop, a rig or SWR failure) and by the operator's TX Off
+    /// ([`Engine::set_tx_enabled_by_operator`]). A tripped watchdog holds by its own flag, and
+    /// keeps holding through a watchdog restart that is not an arm ([`Engine::reset_tx_watchdog`]).
+    /// Every arm clears it ([`Engine::set_tx_enabled`], and [`Engine::send_cw`]'s own). Read in
+    /// one place: entering Phone, CW, RTTY or PSK arms TX only while nothing holds it. It keys,
+    /// refuses and stops nothing itself. Runtime only, never persisted.
+    tx_stop_hold: bool,
     /// One-shot "cut the shared TX hold NOW" — armed by [`Engine::halt_tx`] (Stop TX /
     /// UDP HaltTx / CAT-failure halts), by every TX-watchdog trip, and by the cockpit
     /// Stop buttons ([`Engine::stop_cw`] / [`Engine::rtty_stop`] / [`Engine::sstv_stop`],
@@ -5496,6 +5508,8 @@ impl Engine {
             // station / arming Monitor all set it true explicitly. (Fixes the reported
             // unsolicited call on open.)
             tx_enabled: false,
+            // …and nothing has stopped it yet, so the first manual-mode entry arms as always.
+            tx_stop_hold: false,
             slot_tx_abort: false,
             skip_tx1: false,
             tuning: false,
@@ -8521,6 +8535,15 @@ impl Engine {
         // still waits for an explicit operator send. (Digital is NOT auto-armed: the FT8
         // slot TX stays behind the Monitor / double-click / Call-CQ gate, so the app
         // never auto-keys FT8 on launch — the safety invariant.)
+        //
+        // ⛔ …BUT NEVER BEHIND A STOP (the operator, 2026-10-11: "Stop holds"). After Stop TX,
+        // Esc, TX Off, an FT Halt or the watchdog, TX stays off until the operator's own act
+        // turns it back on: TX On, a CW F-key, the first PTT press, RTTY's TX button, or an FT
+        // arm (`tx_stop_hold`). Entry is not one of those, and the UI re-asserts the section on
+        // every view change, so this arm used to undo a stop on a trip to the Contest screen and
+        // back: ESM's Enter then sent against its rule 5, a program on the CAT share could key,
+        // and the watchdog's trip was cleared. With nothing held (at launch, or coming from FT8
+        // with no Halt) entry arms as it always has.
         if matches!(
             om,
             OperatingMode::Phone
@@ -8528,7 +8551,7 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         ) {
-            if arm_manual {
+            if arm_manual && !self.tx_stop_hold && !self.tx_watchdog {
                 self.set_tx_enabled(true);
             }
         } else if left_a_manual_mode {
@@ -9725,14 +9748,19 @@ impl Engine {
         }
         if !expanded.trim().is_empty() {
             // A deliberate CW send (F-key macro or typed text) IS the transmit action, so RE-ARM
-            // TX — exactly like entering a manual mode arms it (`set_operating_mode`). Without this,
-            // a prior Stop TX / halt_tx (which disables tx_enabled to stop the FT8 auto-sequencer)
-            // leaves `poll_cw_one` gated off, so the next F-key silently queues but never keys until
-            // the operator re-enters the mode (a band/contact switch). CW is manual keying: hitting
-            // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
-            // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
+            // TX. Without this, a prior Stop TX / halt_tx (which disables tx_enabled to stop the
+            // FT8 auto-sequencer) leaves `poll_cw_one` gated off, so the next F-key silently queues
+            // but never keys. CW is manual keying: hitting the key must always transmit (privilege
+            // permitting — tx_allowed still gates). FT8 is unaffected: it never calls send_cw and
+            // keeps its Monitor/double-click keying gate.
+            //
+            // It is the operator's own act, so it ends a stop's hold, a watchdog trip's included,
+            // as TX On does (`tx_stop_hold`): entering a cockpit after it arms again. Entry alone
+            // never re-arms behind a stop; this does.
             tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
+            self.tx_stop_hold = false;
+            self.tx_watchdog = false;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
             // radio loop's mid-over cut. `send_cw` is the only self-re-arming transmit
             // action, so it is the one path where a Stop TX the loop has not consumed yet
@@ -15924,6 +15952,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             tempo_core::applog::info("tx", "transmit disarmed by halt");
         }
         self.tx_enabled = false;
+        // …and it HOLDS: entering a cockpit leaves TX off until the operator's own act turns it
+        // back on (`tx_stop_hold`). A context change halts through here too, and keeps whatever
+        // hold there was ([`Self::halt_tx_for_context_change`]): it is not a stop.
+        self.tx_stop_hold = true;
         // Halt is the IMMEDIATE kill: arm the one-shot the radio loop consumes to
         // cut a slot over in flight (drop PTT + flush). A plain TX-disable
         // (`set_tx_enabled(false)`) deliberately does NOT arm this — operator
@@ -15982,6 +16014,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // invariant 7). `slot_tx_abort` above cuts a JS8 frame in flight exactly as it
         // cuts an FT8 over.
         self.js8_halt_clear();
+        // …and an RTTY Auto run, the same way (the operator, 2026-10-11: "Like JS8's schedule: a
+        // halt is total. The run must be restarted on purpose."). Left running, it called CQ again
+        // at the end of its listen window, and that CQ keyed the moment TX was back on, with no
+        // press. Ended as its own Abort ends it ([`Self::rtty_auto_abort`]; its queue and the over
+        // in flight went above). Auto stays on, and Auto CQ starts a new run.
+        if let Some(seq) = self.rtty_seq.as_mut() {
+            if !matches!(
+                seq.state(),
+                tempo_core::rtty::SeqState::Idle | tempo_core::rtty::SeqState::Done
+            ) {
+                tempo_core::applog::info("tx", "RTTY auto run ended by the halt");
+            }
+            seq.abort();
+        }
+        self.rtty_auto_over = false;
         // A halt ends the one over still owed to a partner the run has left (#170, #153):
         // it is a queued transmission like any other, and this is the universal stop. It
         // matters most on the path that is NOT an operator press — `halt_tx_for_context_change`
@@ -16039,8 +16086,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///   that never asked for this band an immediate grant. `broker_context_hold` holds it to
     ///   the next operator arm — the surface it had before this method existed.
     ///
-    /// Net effect versus [`Self::halt_tx`]: exactly one bit of state differs, `tx_enabled`,
-    /// and it is the OPERATOR's.
+    /// - **Not a stop.** A stop holds TX off on the next cockpit entry (`tx_stop_hold`); a
+    ///   context change keeps whatever hold there was, neither setting one (a band change in
+    ///   FT8 must not take Phone's mic away) nor letting one go.
+    ///
+    /// Net effect versus [`Self::halt_tx`]: exactly the OPERATOR's state differs: `tx_enabled`,
+    /// and the stop's hold.
     ///
     /// ⚠️ THE LOOP MUST STILL REFUSE TO KEY THE WRONG RADIO. Keeping the latch up means the
     /// engine now says "key" during windows where the radio loop is holding a `Rig` that is
@@ -16064,10 +16115,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             );
         // A context halt is not a Stop TX: it neither asks the loop for a voice-memory stop nor
         // drops one the operator's own halt asked for a moment ago (see `voice_mem_halt`).
-        let (retune, watchdog_start, voice_mem_halt) = (
+        let (retune, watchdog_start, voice_mem_halt, stop_hold) = (
             self.immediate_retune,
             self.tx_watchdog_start,
             self.voice_mem_halt,
+            self.tx_stop_hold,
         );
         // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
         // before the `if restore` below, so a context change still printed TWO lines — the
@@ -16093,6 +16145,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // the arm above, which clears it.
             self.broker_context_hold = true;
         }
+        // Not a stop: the halt above set the hold and the restore cleared it; put back what was.
+        self.tx_stop_hold = stop_hold;
         self.quiet_tx_log = false;
     }
 
@@ -16421,8 +16475,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.pending_tx_disable = false;
             // An operator arm is the consent a foreign broker key waits for after the station
             // moved band/radio under it (see `broker_context_hold`). Cleared HERE and only
-            // here, so every arm path — the TX button, section entry, Call CQ, a UDP Reply —
-            // releases it, and nothing else can.
+            // here, so every arm path — the TX button, section entry where no stop holds TX
+            // off (`tx_stop_hold`), Call CQ, a UDP Reply — releases it, and nothing else can.
             self.broker_context_hold = false;
         }
         self.tx_enabled = on;
@@ -16431,6 +16485,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
             self.tx_watchdog_start = None;
+            // …and a stop's hold. Every arm here is the operator's own act but section entry,
+            // which arms only where nothing holds (`tx_stop_hold`).
+            self.tx_stop_hold = false;
             // …and a refused slot key's halt: turning TX on again is the operator's answer to it.
             self.slot_key_refused = None;
             // …and a failed slot unkey's, the same way.
@@ -16494,6 +16551,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Slot while it drains (no other keying source may grab the rig).
             // plan_tx stamps it false at the next boundary, where the down latch
             // refuses the over.
+        }
+    }
+
+    /// The operator's TX On/Off: every cockpit's TX strip, Operate's Enable TX, Phone's first
+    /// PTT press (which turns TX back on instead of keying), RTTY's TX button, and the Remote's TX
+    /// On/Off and Disarm. TX On is an arm like any other. TX Off is a STOP: it holds, so entering
+    /// a cockpit after it leaves TX off until the operator turns it back on (`tx_stop_hold`). The
+    /// engine's own disarms (FT's "Disable Tx after sending 73") go straight to
+    /// [`Self::set_tx_enabled`] and hold nothing.
+    #[track_caller]
+    pub fn set_tx_enabled_by_operator(&mut self, on: bool) {
+        self.set_tx_enabled(on);
+        if !on {
+            self.tx_stop_hold = true;
         }
     }
 
@@ -22655,7 +22726,15 @@ contact yourself."
 
     /// Reset the transmit-watchdog: clear the tripped flag and restart the wall-clock
     /// timer on the next over. Called on any operator-initiated action.
+    ///
+    /// A trip still standing with TX off is a stop nobody has answered. It holds TX off on the
+    /// next cockpit entry by its own flag, and that flag comes down here without an arm too (the
+    /// Contest screen's `set_mode`, an FT sequence step), so the trip becomes the stop's hold
+    /// (`tx_stop_hold`), which only an arm lets go.
     fn reset_tx_watchdog(&mut self) {
+        if self.tx_watchdog && !self.tx_enabled {
+            self.tx_stop_hold = true;
+        }
         self.tx_watchdog = false;
         self.tx_watchdog_start = None;
     }
@@ -31966,8 +32045,9 @@ mod tests {
         assert!(!e.sstv_sending());
         assert!(!e.tx_enabled(), "halt_tx also disarms TX");
 
-        // TX disarm (Monitor off).
-        e.set_operating_mode("phone", false); // re-arm
+        // TX disarm (Monitor off). After the halt, TX stays off until the operator turns it
+        // back on: entering Phone does not re-arm behind a stop.
+        e.set_tx_enabled_by_operator(true);
         e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
         e.set_tx_enabled(false);
         assert!(e.take_sstv_abort(), "disarm aborts the image in flight");
@@ -35714,10 +35794,13 @@ mod tests {
         //
         // It was never a guard, because the only surface with a PTT button is an operating
         // section, and ENTERING one arms transmit (`set_operating_mode`, the manual-mode arm
-        // — a rig's live mic). So the shipped path "pick a bird → open Phone → press PTT"
-        // ends with an armed mic on the downlink whatever the halt did. Proven the strong
-        // way: force the latch DOWN with a full `halt_tx` (harder than the old halt) and
-        // walk the operator's real path anyway.
+        // — a rig's live mic) wherever no stop holds it off. A pick is not a stop: its halt is
+        // a context change, which keeps the operator's latch and holds nothing
+        // (`halt_tx_for_context_change`). So the shipped path "pick a bird → open Phone →
+        // press PTT" ends with an armed mic on the downlink. Proven the strong way: force the
+        // latch DOWN the hardest way that is not a stop (leaving Phone for FT8 disarms it) and
+        // walk the operator's real path anyway. Only the operator's own Stop TX, Esc or TX Off,
+        // or a watchdog trip, keeps the mic off on entry, until the next PTT press turns it on.
         //
         // Refusing the mic under a pass instead is an OPERATOR's ruling, not a quiet one:
         // SSB satellite work IS the mic, and on a rig put into satellite mode by hand there
@@ -35733,7 +35816,7 @@ mod tests {
             "scene guard: the pick parked the rig on the DOWNLINK, got {}",
             e.settings().dial_mhz
         );
-        e.halt_tx(); // the pre-fix context halt, and then some
+        e.set_operating_mode("digital", false); // the latch down, and not by a stop
         assert!(!e.tx_enabled(), "scene guard: the latch is down");
 
         e.set_operating_mode("phone", false); // the operator opens the Phone cockpit
@@ -37298,7 +37381,8 @@ mod tests {
     /// armed anything.
     ///
     /// Digital now disarms on entry, so FT8 is armed only by its own three gates: Monitor,
-    /// a double-click, or Call CQ.
+    /// a double-click, or Call CQ. (And the manual-mode arm no longer runs behind a stop: after
+    /// Stop TX, Esc, TX Off, an FT Halt or the watchdog it leaves TX off, `stop_hold_tests`.)
     #[test]
     fn returning_to_digital_from_a_manual_mode_disarms_transmit() {
         use crate::settings::OperatingMode;
@@ -37312,7 +37396,8 @@ mod tests {
             e.set_operating_mode(wire, false);
             assert!(
                 e.tx_enabled(),
-                "{manual:?}: control — a manual mode still arms on entry (it is a live key)"
+                "{manual:?}: control — with nothing stopped, a manual mode still arms on entry \
+                 (it is a live key)"
             );
             e.set_operating_mode("digital", false);
             assert!(
