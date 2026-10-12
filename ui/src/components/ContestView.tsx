@@ -27,7 +27,7 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
-import { composingSlot, composingText } from '../features/contestExchange'
+import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { stationMode, usePskName } from '../features/contestMode'
@@ -244,6 +244,23 @@ function fieldLabel(f: 'class' | 'category' | 'section'): string {
   if (f === 'class') return t('settings.fieldDay.class.label')
   if (f === 'category') return t('settings.fieldDay.category.label')
   return t('settings.fieldDay.section.label')
+}
+
+/** The Cabrillo lines a running session reads as it starts, so a declaration made while it runs
+ *  reaches the file only after Contest mode is turned off and on. */
+const READ_AS_THE_SESSION_STARTS = ['CATEGORY-ASSISTED', 'CATEGORY-POWER']
+
+/** One Cabrillo line the export would leave out, in words: the Settings control that fills it and
+ *  the line itself (an invariant token). A line no control fills is named by itself. */
+function cabrilloLineWords(line: string): string {
+  const control: Record<string, string> = {
+    'CATEGORY-ASSISTED': t('settings.contestPick.assisted.label'),
+    'CATEGORY-BAND': t('settings.contestPick.band.label'),
+    'CATEGORY-POWER': t('settings.contestPick.power.label'),
+    'CATEGORY-TRANSMITTER': t('settings.contestPick.transmitter.label'),
+    OPERATORS: t('settings.contestPick.operators.label'),
+  }
+  return control[line] ? `${control[line]} (${line})` : line
 }
 
 function blockerText(b: StartBlocker, contest: string): string {
@@ -2680,9 +2697,11 @@ export function ContestView({
                   om: wfdOm,
                   done: WFD_OBJECTIVES.filter((o) => wfdEarnedIds(settings?.fdObjectives ?? []).has(o.id)),
                 },
+          // What the station sends, as it renders it: the issued serial, never the composing
+          // vector's "0" placeholder, which a serial contest's summary used to print.
           contest: fdEventIsFieldDay
             ? undefined
-            : { sending: composingText(fieldDay?.composing), multCount: fieldDay?.multCount ?? null },
+            : { sending: fieldDay?.composingText ?? '', multCount: fieldDay?.multCount ?? null },
           dupeRule: fieldDay?.dupeRule,
           fieldDaySheet: fdEventIsFieldDay && !isWfd,
         })
@@ -2778,6 +2797,14 @@ export function ContestView({
   if (clubOn) modeLines.push({ key: 'club', text: t('fieldDay.mode.club') })
   // In the logger window: where the controls that are read-only here are.
   if (logger) modeLines.push({ key: 'logger', text: t('fieldDay.logger.note') })
+  // ⭐ WHAT THE SPONSOR REQUIRES AND THE ENTRY HAS LEFT OUT, named before the export: the running
+  // session's list (the header its export writes now), else the preview's for a session started
+  // from the saved settings, so a declaration the session reads as it starts is made in time. Rust
+  // names the lines; each is worded here as the Settings control that fills it. Not on a Remote
+  // view, which exports nothing.
+  const cabrilloMissing = observed
+    ? []
+    : ((fieldDay ? fieldDay.cabrilloMissing : fdRuleset?.cabrilloMissing) ?? [])
   // Running / S&P with nothing to switch between and the master off: see the buttons.
   const roleLocked = !fieldDay && !modeOn
 
@@ -2834,7 +2861,7 @@ export function ContestView({
           </span>
         ) : null}
       </div>
-      {(blocker || modeLines.length > 0) && (
+      {(blocker || modeLines.length > 0 || cabrilloMissing.length > 0) && (
         <div className="fd-mode-status">
           {blocker && (
             <p className="fd-mode-line warn" role={refusal ? 'alert' : 'status'}>
@@ -2846,6 +2873,29 @@ export function ContestView({
                     type="button"
                     className="settings-linkbtn"
                     onClick={() => onOpenSettings(blockerTarget(blocker))}
+                  >
+                    {t('fieldDay.mode.needs.open')}
+                  </button>
+                </>
+              )}
+            </p>
+          )}
+          {cabrilloMissing.length > 0 && (
+            <p className="fd-mode-line warn" role="status">
+              {t('fieldDay.cabrillo.missing', {
+                contest: eventName,
+                lines: cabrilloMissing.map(cabrilloLineWords).join(', '),
+              })}
+              {fieldDay && cabrilloMissing.some((l) => READ_AS_THE_SESSION_STARTS.includes(l))
+                ? ` ${t('fieldDay.cabrillo.restart')}`
+                : ''}
+              {onOpenSettings && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => onOpenSettings('contest-category')}
                   >
                     {t('fieldDay.mode.needs.open')}
                   </button>

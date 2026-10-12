@@ -1093,6 +1093,17 @@ pub struct Settings {
     /// carries them. Read at EXPORT.
     #[serde(default)]
     pub contest_soapbox: String,
+    /// Cabrillo `CATEGORY-BAND` — `ALL`, or the one band a single-band entry is entered on, one of
+    /// the selected contest's own bands (CQ WW's `ALL 160M 80M 40M 20M 15M 10M`); empty is
+    /// undeclared, which writes no line. Read at EXPORT, and written only when it is one of that
+    /// contest's bands, so a band picked for another contest claims nothing.
+    ///
+    /// ⚠️ A DECLARATION, never read off the log: a single-band entrant must log every contact,
+    /// other bands included (CQ: *"Single band entrants are required to include all contacts made
+    /// during the contest period, even if made on other bands"*), so the log cannot say which band
+    /// the entry is.
+    #[serde(default)]
+    pub contest_category_band: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -4732,6 +4743,7 @@ impl Default for Settings {
             contest_address_postalcode: String::new(),
             contest_address_country: String::new(),
             contest_soapbox: String::new(),
+            contest_category_band: String::new(),
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.
@@ -9040,6 +9052,51 @@ mod tests {
                 old.contest_soapbox.as_str()
             ),
             ("", "")
+        );
+    }
+
+    /// ⭐ **The band category round-trips through a stored settings file**: its exact wire key,
+    /// empty by default and in a file written before it existed (nothing declared), and a stored
+    /// band that comes back from a load and a save as it went in, through the real file path. The
+    /// TS mirror is read out of `types.ts` itself.
+    #[test]
+    fn the_band_category_round_trips_through_a_stored_settings_file() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"contestCategoryBand\":\"\""), "{json}");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"K1ABC"}"#).unwrap();
+        assert_eq!(
+            (old.mycall.as_str(), old.contest_category_band.as_str()),
+            ("K1ABC", ""),
+            "a file from before the field declares nothing"
+        );
+        let dir = scratch_dir("contest_category_band");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            br#"{"mycall":"W9XYZ","fdEvent":"cqww_ssb","contestCategoryBand":"20M"}"#,
+        )
+        .unwrap();
+        let stored = Settings::load(&path);
+        assert_eq!(
+            (
+                stored.mycall.as_str(),
+                stored.contest_category_band.as_str()
+            ),
+            ("W9XYZ", "20M"),
+            "the stored band loads"
+        );
+        stored.save(&path).unwrap();
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back["contestCategoryBand"], "20M", "a save writes it back");
+        assert_eq!(Settings::load(&path).contest_category_band, "20M");
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("contestCategoryBand?: string"),
+            "ui/src/types.ts types the key"
         );
     }
 

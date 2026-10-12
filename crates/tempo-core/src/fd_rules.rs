@@ -393,6 +393,28 @@ pub struct FdRuleset {
     /// ⭐ **The sponsor's template carries `SOAPBOX` lines** — the entrant's comments, and where
     /// CQ WW asks a Rookie for the date first licensed.
     pub cabrillo_soapbox: bool,
+    /// ⭐ **The `CATEGORY-BAND` values an entry may declare**, in the sponsor's order — CQ WW's
+    /// *"If you are entering an all band category, use ALL, otherwise select one of the individual
+    /// bands shown"*: `ALL 160M 80M 40M 20M 15M 10M`. The declared band is written only when it is
+    /// one of them. Empty for every contest whose sponsor names none, where `CATEGORY-BAND` in
+    /// [`cabrillo_headers`](Self::cabrillo_headers) still means the band read off the log — which
+    /// is also what a contest with both writes for an entry that declares none (CQ WW RTTY).
+    ///
+    /// ⚠️ A key of its own, as are the two below: every build ignores a key it does not know.
+    pub cabrillo_band_categories: &'static [&'static str],
+    /// ⭐ **The contest's own `CATEGORY-MODE`** (`CW` for CQ WW CW), written for every entry in it:
+    /// a single-mode contest's entries are all in its mode, so it is a fact about the contest the
+    /// entry picked and never a reading of its rows. `""` writes what `CATEGORY-MODE` in
+    /// [`cabrillo_headers`](Self::cabrillo_headers) says (the log's mode), or none.
+    pub cabrillo_mode_category: &'static str,
+    /// ⭐ **The header lines the sponsor requires**, from
+    /// [`CABRILLO_REQUIRABLE`]: what the Contest screen names when the entry has left one out,
+    /// before the export (CQ's rules: *"Failure to fill out the header correctly may result in the
+    /// entry being placed in the wrong category or reclassified as a Checklog"*). Never a refusal:
+    /// the file is the entrant's to send. `CATEGORY-TRANSMITTER` and `OPERATORS` are required of a
+    /// `MULTI-OP` entry only, and nothing of a `CHECKLOG`
+    /// ([`FieldDayLog::cabrillo_missing`](crate::fieldday::FieldDayLog::cabrillo_missing)).
+    pub cabrillo_required: &'static [&'static str],
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
     /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
     pub cabrillo_location: &'static [(&'static str, &'static str)],
@@ -1141,6 +1163,18 @@ struct CabrilloSpec {
     /// The sponsor's template carries `SOAPBOX` lines.
     #[serde(default)]
     soapbox: bool,
+    /// The `CATEGORY-BAND` values an entry may declare, from [`CABRILLO_BAND_CATEGORIES`], in the
+    /// sponsor's order; `[]` = none is declared. This and the two keys under it are keys of their
+    /// own, so a build that predates them still loads this file.
+    #[serde(default)]
+    band_categories: Vec<String>,
+    /// The contest's own `CATEGORY-MODE`, from [`CABRILLO_MODE_CATEGORIES`]; `""` = none.
+    #[serde(default)]
+    mode_category: String,
+    /// The header lines the sponsor requires, from [`CABRILLO_REQUIRABLE`]; each one this ruleset
+    /// writes.
+    #[serde(default)]
+    required: Vec<String>,
 }
 
 /// One column of [`CabrilloSpec`].
@@ -1185,6 +1219,57 @@ const CABRILLO_ENTRY_HEADERS: &[&str] = &["CLUB", "ENTRY-CLASS", "OPERATORS", "Q
 /// for multi-operator entries and must be one of the following. ONE TWO LIMITED UNLIMITED
 /// SWL"*), the only ones `cabrillo.transmitter_categories` may name.
 const CABRILLO_TRANSMITTER_CATEGORIES: &[&str] = &["ONE", "TWO", "LIMITED", "UNLIMITED", "SWL"];
+
+/// Cabrillo 3.0's `CATEGORY-BAND` values (WWROF, *"The category-band must be one of the following.
+/// If you are entering an all band category, use ALL, otherwise select one of the individual bands
+/// shown"*, with `VHF-3-BAND` and `VHF-FM-ONLY` *"(ARRL VHF Contests only)"*), the only ones
+/// `cabrillo.band_categories` may name.
+const CABRILLO_BAND_CATEGORIES: &[&str] = &[
+    "ALL",
+    "160M",
+    "80M",
+    "40M",
+    "20M",
+    "15M",
+    "10M",
+    "6M",
+    "4M",
+    "2M",
+    "222",
+    "432",
+    "902",
+    "1.2G",
+    "2.3G",
+    "3.4G",
+    "5.7G",
+    "10G",
+    "24G",
+    "47G",
+    "75G",
+    "122G",
+    "134G",
+    "241G",
+    "Light",
+    "VHF-3-BAND",
+    "VHF-FM-ONLY",
+];
+
+/// Cabrillo 3.0's `CATEGORY-MODE` values (WWROF, *"The category-mode must be one of the following.
+/// CW DIGI FM RTTY SSB MIXED"*), the only ones `cabrillo.mode_category` may be.
+const CABRILLO_MODE_CATEGORIES: &[&str] = &["CW", "DIGI", "FM", "RTTY", "SSB", "MIXED"];
+
+/// ⭐ **The header lines a ruleset's `cabrillo.required` may name**: the CATEGORY lines a sponsor
+/// places an entry by, and the two a multi-operator entry adds. Each is one this build writes from
+/// the entry's own declarations, so the Contest screen can say which setting fills it; a line
+/// outside this list is refused rather than named in a sentence nothing could act on.
+pub const CABRILLO_REQUIRABLE: &[&str] = &[
+    "CATEGORY-ASSISTED",
+    "CATEGORY-BAND",
+    "CATEGORY-MODE",
+    "CATEGORY-POWER",
+    "CATEGORY-TRANSMITTER",
+    "OPERATORS",
+];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -2499,6 +2584,57 @@ mode class ({})",
                      details of"
                 ));
             }
+            // ⭐ The CATEGORY lines a sponsor places an entry by. Each refusal is a line that would
+            // ship wrong, or a Contest-screen sentence nothing could clear: a band or a mode no
+            // Cabrillo robot reads, a required line this build cannot name, or one this ruleset
+            // never writes.
+            let mut bands: Vec<&str> = Vec::new();
+            for b in &r.cabrillo.band_categories {
+                if !CABRILLO_BAND_CATEGORIES.contains(&b.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo band category {b:?} is not a Cabrillo CATEGORY-BAND value"
+                    ));
+                }
+                if bands.contains(&b.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo band category {b:?} is listed twice"
+                    ));
+                }
+                bands.push(b);
+            }
+            let mode = r.cabrillo.mode_category.as_str();
+            if !mode.is_empty() && !CABRILLO_MODE_CATEGORIES.contains(&mode) {
+                return Err(format!(
+                    "{tag}: cabrillo mode category {mode:?} is not CW, DIGI, FM, RTTY, SSB or MIXED"
+                ));
+            }
+            let listed = |list: &[String], h: &str| list.iter().any(|x| x == h);
+            let mut required: Vec<&str> = Vec::new();
+            for h in &r.cabrillo.required {
+                if !CABRILLO_REQUIRABLE.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo required line {h:?} is not one this build can name as \
+                         missing"
+                    ));
+                }
+                let written = match h.as_str() {
+                    "CATEGORY-BAND" => !bands.is_empty() || listed(&r.cabrillo.headers, h),
+                    "CATEGORY-MODE" => !mode.is_empty() || listed(&r.cabrillo.headers, h),
+                    "CATEGORY-POWER" => !powers.is_empty() || listed(&r.cabrillo.headers, h),
+                    "CATEGORY-TRANSMITTER" => !transmitters.is_empty(),
+                    "OPERATORS" => !transmitters.is_empty() || listed(&r.cabrillo.entry_headers, h),
+                    _ => listed(&r.cabrillo.headers, h),
+                };
+                if !written {
+                    return Err(format!(
+                        "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
+                    ));
+                }
+                if required.contains(&h.as_str()) {
+                    return Err(format!("{tag}: cabrillo requires {h:?} twice"));
+                }
+                required.push(h);
+            }
         }
         // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
         // lists — otherwise it silently selects nothing — and it must not re-point a code
@@ -3179,6 +3315,9 @@ fn build(spec: FileSpec) -> RulesTable {
                 cabrillo_overlay_categories: leak_keys(r.cabrillo.overlay_categories),
                 cabrillo_address_headers: leak_keys(r.cabrillo.address),
                 cabrillo_soapbox: r.cabrillo.soapbox,
+                cabrillo_band_categories: leak_keys(r.cabrillo.band_categories),
+                cabrillo_mode_category: leak_str(r.cabrillo.mode_category),
+                cabrillo_required: leak_keys(r.cabrillo.required),
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location
@@ -4789,6 +4928,142 @@ mod tests {
         }
     }
 
+    /// ⭐ **The CQ contests' CATEGORY lines, as their sponsors name them, and no other contest's** —
+    /// the table the rules file's `cabrillo_category_lines` note quotes, by value: the headers every
+    /// installed build writes from a declaration, CLUB, the bands an entry may declare, the
+    /// contest's own mode and the lines the Contest screen names when one is left out. Every other
+    /// contest keeps the lists it had, so its file cannot move.
+    #[test]
+    fn the_cq_contests_declare_their_category_lines_and_no_other_contest_does() {
+        const BANDS: &[&str] = &["ALL", "160M", "80M", "40M", "20M", "15M", "10M"];
+        const REQUIRED: &[&str] = &[
+            "CATEGORY-ASSISTED",
+            "CATEGORY-BAND",
+            "CATEGORY-MODE",
+            "CATEGORY-POWER",
+            "CATEGORY-TRANSMITTER",
+            "OPERATORS",
+        ];
+        const WRITTEN: &[&str] = &["CATEGORY-ASSISTED", "CATEGORY-POWER", "EMAIL", "NAME"];
+        let shipped = build(parse_spec(SEED).expect("the seed parses"));
+        let mut cq = 0;
+        for rs in shipped.rulesets {
+            let got = (
+                rs.cabrillo_band_categories,
+                rs.cabrillo_mode_category,
+                rs.cabrillo_required,
+            );
+            let mode = match rs.event {
+                "cqww_cw" | "cqwpx_cw" => "CW",
+                "cqww_ssb" | "cqwpx_ssb" => "SSB",
+                "cqww_rtty" => {
+                    let rtty: &[&str] = &["ALL", "80M", "40M", "20M", "15M", "10M"];
+                    assert_eq!(got, (rtty, "RTTY", REQUIRED), "cqww_rtty");
+                    // Its headers stay the ones it has written since it shipped (its band and
+                    // mode read off the log in a build that knows neither key above).
+                    assert_eq!(
+                        rs.cabrillo_headers,
+                        [
+                            "CATEGORY-ASSISTED",
+                            "CATEGORY-BAND",
+                            "CATEGORY-MODE",
+                            "CATEGORY-POWER",
+                            "CLAIMED-SCORE",
+                            "EMAIL",
+                            "NAME"
+                        ]
+                    );
+                    assert_eq!(rs.cabrillo_entry_headers, ["CLUB"]);
+                    cq += 1;
+                    continue;
+                }
+                _ => {
+                    let none: &[&str] = &[];
+                    assert_eq!(got, (none, "", none), "{}", rs.event);
+                    continue;
+                }
+            };
+            assert_eq!(got, (BANDS, mode, REQUIRED), "{}", rs.event);
+            assert_eq!(rs.cabrillo_headers, WRITTEN, "{}", rs.event);
+            assert_eq!(rs.cabrillo_entry_headers, ["CLUB"], "{}", rs.event);
+            cq += 1;
+        }
+        assert_eq!(cq, 5, "CQ WW CW, SSB and RTTY, CQ WPX CW and SSB");
+        // The names in `headers` are ones every installed build can write: 1.14.0 (the oldest the
+        // publish workflow checks) and 1.17.0 list exactly these eight.
+        for rs in shipped.rulesets {
+            for h in rs.cabrillo_headers {
+                assert!(
+                    [
+                        "CATEGORY-ASSISTED",
+                        "CATEGORY-BAND",
+                        "CATEGORY-MODE",
+                        "CATEGORY-POWER",
+                        "CLAIMED-SCORE",
+                        "EMAIL",
+                        "IL-COUNTY",
+                        "NAME"
+                    ]
+                    .contains(h),
+                    "{}: {h}",
+                    rs.event
+                );
+            }
+        }
+    }
+
+    /// ⭐ The three keys refuse what would ship wrong — a band or a mode Cabrillo has no value for, a
+    /// band twice, a required line this build cannot name or this ruleset never writes, one twice —
+    /// each by name. CONTROL: the same keys with values the sponsor uses load.
+    #[test]
+    fn the_category_line_keys_refuse_what_would_ship_wrong() {
+        let with = |cabrillo: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["cabrillo"] = cabrillo;
+            parse_spec(&v.to_string())
+        };
+        let refused = |cabrillo: serde_json::Value| with(cabrillo).expect_err("refused");
+        assert!(with(serde_json::json!({
+            "headers": ["CATEGORY-ASSISTED", "CATEGORY-POWER"],
+            "transmitter_categories": ["ONE"],
+            "band_categories": ["ALL", "20M", "VHF-3-BAND", "Light"],
+            "mode_category": "SSB",
+            "required": ["CATEGORY-ASSISTED", "CATEGORY-BAND", "CATEGORY-MODE", "CATEGORY-POWER",
+                         "CATEGORY-TRANSMITTER", "OPERATORS"],
+        }))
+        .is_ok());
+        assert!(refused(serde_json::json!({"band_categories": ["20m"]}))
+            .contains("cabrillo band category \"20m\" is not a Cabrillo CATEGORY-BAND value"));
+        assert!(
+            refused(serde_json::json!({"band_categories": ["20M", "20M"]}))
+                .contains("cabrillo band category \"20M\" is listed twice")
+        );
+        assert!(refused(serde_json::json!({"mode_category": "PH"}))
+            .contains("cabrillo mode category \"PH\" is not CW, DIGI, FM, RTTY, SSB or MIXED"));
+        assert!(
+            refused(serde_json::json!({"soapbox": true, "required": ["SOAPBOX"]})).contains(
+                "cabrillo required line \"SOAPBOX\" is not one this build can name as missing"
+            )
+        );
+        assert!(refused(serde_json::json!({"required": ["CATEGORY-BAND"]}))
+            .contains("cabrillo requires \"CATEGORY-BAND\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({"required": ["OPERATORS"]}))
+            .contains("cabrillo requires \"OPERATORS\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({
+            "headers": ["CATEGORY-POWER"],
+            "required": ["CATEGORY-POWER", "CATEGORY-POWER"]
+        }))
+        .contains("cabrillo requires \"CATEGORY-POWER\" twice"));
+        // A band, a mode or a power from the log's own header names counts as written.
+        assert!(with(serde_json::json!({
+            "headers": ["CATEGORY-BAND", "CATEGORY-MODE"],
+            "power_categories": ["QRP", "LOW"],
+            "entry_headers": ["OPERATORS"],
+            "required": ["CATEGORY-BAND", "CATEGORY-MODE", "CATEGORY-POWER", "OPERATORS"]
+        }))
+        .is_ok());
+    }
+
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
     /// `Option` field silently even with no `#[serde(default)]` attribute, which
     /// is exactly why nothing in the new blocks is optional.
@@ -5971,6 +6246,20 @@ mod tests {
                     y.cabrillo_soapbox
                 ),
                 "{}: declarations",
+                x.event
+            );
+            assert_eq!(
+                (
+                    x.cabrillo_band_categories,
+                    x.cabrillo_mode_category,
+                    x.cabrillo_required
+                ),
+                (
+                    y.cabrillo_band_categories,
+                    y.cabrillo_mode_category,
+                    y.cabrillo_required
+                ),
+                "{}: category lines",
                 x.event
             );
             assert_eq!(x.bands, y.bands, "{}: bands", x.event);

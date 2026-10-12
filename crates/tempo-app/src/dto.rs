@@ -2488,6 +2488,18 @@ pub struct FieldDayStatus {
     /// back to `composing_text`, as it always read.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub composing_text_phone: String,
+    /// ⭐ **The Cabrillo header lines this contest's sponsor requires that the file exported now
+    /// would leave out** (`"CATEGORY-POWER"`, `"CATEGORY-BAND"`…), in the ruleset's order —
+    /// `FieldDayLog::cabrillo_missing` against the entrant's Settings, the same header the export
+    /// writes. Data, not prose: the Contest screen names each one in words, with where it is
+    /// set, before the export. Empty for every contest whose sponsor's requirements this build
+    /// does not read (all but the CQ contests), for a `CHECKLOG`, and when nothing is missing.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `composing_text_phone`'s reason: the hosted page refuses a
+    /// key it does not list, so `leave_out_the_hosts_own` empties it and an empty one is not
+    /// serialised. The export it is about runs only at the station.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cabrillo_missing: Vec<String>,
     /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
     /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
     /// ruleset names none, which is every contest before CQ WW RTTY.

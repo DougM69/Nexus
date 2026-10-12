@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file is exactly what it was. The Score Summary also lists QSOs by band and mode, for ARRL Field
   Day exactly as item 18 of ARRL's summary sheet lays them out (CW, Digital and Phone; 160 m to
   70 cm, Other and Satellite), and for every other contest in its own modes.
+- **CQ WW and CQ WPX Cabrillo files carry the category, club, name and email lines CQ asks for.**
+  The header now has CATEGORY-ASSISTED, CATEGORY-BAND, CATEGORY-MODE, CATEGORY-POWER, CLUB, EMAIL
+  and NAME, as the sponsors' own Cabrillo pages show them, each from your Settings and never
+  guessed: a line you leave blank is left out. Settings ▸ Contesting ▸ Your entry has a **Band
+  category** for the CQ contests (ALL, or the one band of a single-band entry), and CQ WW RTTY
+  takes it and the CLUB line too. When CQ requires a line you have not set, the Contest screen
+  names it before you export, with a button to Your entry. A serial-number contest's Score Summary
+  shows the serial being sent instead of 0. Every other contest's Cabrillo file is unchanged.
 - **Fix a contest contact in place: Ctrl+Y, or Edit on the Contest screen.** Ctrl+Y in the contest
   log strip opens your newest contact for edit, and every row of the Contest screen's log has
   **Edit**: change the call, what they sent, the band or the mode, then press Enter. The contact

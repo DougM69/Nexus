@@ -12406,9 +12406,12 @@ impl Engine {
     }
 
     /// The entrant's own Cabrillo lines — `NAME`, `EMAIL`, `CLUB`, `ENTRY-CLASS`, the typed
-    /// `OPERATORS`, the multi-operator class, the overlay, the mailing address and the soapbox —
-    /// read from Settings at export, so a corrected typo reaches the next file. One builder for
-    /// both files that carry them: a position's own and the club's.
+    /// `OPERATORS`, the multi-operator class, the overlay, the mailing address, the soapbox and the
+    /// band category — read from Settings at export, so a corrected typo reaches the next file. One
+    /// builder for both files that carry them, a position's own and the club's, and for the lines
+    /// the Contest screen names as missing ([`FieldDayStatus::cabrillo_missing`]).
+    ///
+    /// [`FieldDayStatus::cabrillo_missing`]: crate::dto::FieldDayStatus::cabrillo_missing
     fn contest_entrant(&self) -> tempo_core::contest::CabrilloEntrant {
         let s = &self.settings;
         tempo_core::contest::CabrilloEntrant {
@@ -12428,7 +12431,23 @@ impl Engine {
                 country: s.contest_address_country.trim().to_string(),
             },
             soapbox: s.contest_soapbox.clone(),
+            band: s.contest_category_band.trim().to_string(),
         }
+    }
+
+    /// ⭐ **The Cabrillo lines a contest started as `session` would leave out**, named on the
+    /// Contest screen before Contest mode turns on, so a declaration the session reads as it
+    /// starts (power, assistance) is made in time. Read the way the running log's are
+    /// ([`FieldDayStatus::cabrillo_missing`]): the header an empty log of `session` writes for the
+    /// entrant's Settings, with the operator at the key among its operators, because every contact
+    /// this station logs will carry that call ([`Self::fd_row_operator`]).
+    ///
+    /// [`FieldDayStatus::cabrillo_missing`]: crate::dto::FieldDayStatus::cabrillo_missing
+    pub fn cabrillo_missing_at_start(&self, session: ContestSession) -> Vec<&'static str> {
+        let mut entrant = self.contest_entrant();
+        entrant.operators = format!("{} {}", entrant.operators, self.fd_row_operator());
+        tempo_core::fieldday::FieldDayLog::new(&self.settings.mycall, session, &self.settings.band)
+            .cabrillo_missing(&entrant)
     }
 
     /// Start hosting: build the club log for the configured contest and replay

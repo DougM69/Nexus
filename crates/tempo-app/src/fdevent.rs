@@ -4934,6 +4934,7 @@ mod tests {
                         country: "USA".into(),
                     },
                     soapbox: "A fine weekend.".into(),
+                    band: "20M".into(),
                 },
             )
             .unwrap(),

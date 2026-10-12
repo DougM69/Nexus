@@ -2047,8 +2047,10 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   a session already running keeps the declaration it started with.
 - **Power category**, **Spotting assistance** and **Station type** — the rest of
   what your Cabrillo log declares about the entry. Sweepstakes sends these on the
-  air as its precedence letter, and a CQ WW RTTY log carries the power category and
-  the assistance as header lines. Winter Field Day takes only `QRP` or `LOW` (its limit is
+  air as its precedence letter, and every CQ log (CQ WW, CQ WPX, CQ WW RTTY)
+  carries the power category and the assistance as its CATEGORY-POWER and
+  CATEGORY-ASSISTED lines. A contest reads them when Contest mode turns on, so set
+  them before it starts. Winter Field Day takes only `QRP` or `LOW` (its limit is
   100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
   This is the one power your log declares: **Power sent** is what an exchange carries,
   and Field Day's power multiplier is its score.
@@ -2061,7 +2063,7 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
 - **Email for contest logs** — goes on the EMAIL line of the Cabrillo log you
-  export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you
+  export for a contest whose log has one (the CQ contests), so the sponsor can reach you
   about your entry. The NAME line is your operator name from the
   [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
   not your ClubLog account email, and Remote never sees it.
@@ -2071,12 +2073,20 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   transmitter at once in the Illinois QSO Party enters `UNLIMITED`. For a QRP
   entry, set **Power category** to QRP too, which writes `QRP-COMPETITION: YES`.
 - **Club.** Your contest club, for the CLUB line of the Cabrillo log when the
-  contest's rules have one (the Illinois QSO Party). Leave it blank to leave the
-  line out.
+  contest's rules have one (the CQ contests, the Illinois QSO Party). Spell out the
+  club's full name, as CQ asks. Leave it blank to leave the line out.
 - **Other operators.** The OPERATORS line lists everyone who was set as
   **Operator at the key** when they logged a contact. Type anyone else here, as
   callsigns separated by spaces or commas. All three are read when you export the
   log, so you can fill them in after the contest.
+- **Band category.** Shown for a contest whose sponsor lists the bands an entry is
+  entered on: `ALL` or one of `160M`, `80M`, `40M`, `20M`, `15M` and `10M` in CQ WW
+  and CQ WPX, and the same without `160M` in CQ WW RTTY. It goes on the
+  CATEGORY-BAND line. Pick the one band of a single-band entry: you still log every
+  contact, other bands included, and the sponsor scores only that band. A
+  multi-operator entry in the CQ contests is `ALL`. Unset, CQ WW and CQ WPX write no
+  CATEGORY-BAND line, and CQ WW RTTY writes the band its log holds (`ALL` for more
+  than one), as it always did.
 - **Multi-operator class.** Shown for a `MULTI-OP` entry in a contest whose
   sponsor scores multi-operator classes, with that sponsor's own: `ONE`, `TWO` or
   `UNLIMITED` in the CQ contests (Multi-One or Multi-Single, Multi-Two,
@@ -2100,8 +2110,13 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   Parties); a long line is wrapped to fit. The California QSO Party asks for its
   award lines here (YL, YOUTH, MOBILE, NEW CONTESTER…).
 
-  All four are read when you export the log, and none is written until you set
+  All five are read when you export the log, and none is written until you set
   it: a log you declare none of them for exports the file it always did.
+
+  When a CQ contest's Cabrillo file would leave out a line its sponsor requires
+  (the power, the assistance, the band, and for a multi-operator entry its class and
+  operators), the Contest screen names each one before you export, with a button to
+  this section. Nothing is ever filled in for you.
 
 ![The Contest Category group: Unassisted entry switched off, an ASSISTED badge on a line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since 23:18Z, and below it an Assistance record of eight timestamped rows.](../img/manual/settings-contest-category.webp)
 
