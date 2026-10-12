@@ -29,16 +29,27 @@ function readInitial(): FeatureState {
 
 /** Read the persisted enabled operating-mode flags WITHOUT the hook — for standalone
  * surfaces (e.g. the popped-out Needed panel) that fetch needs on their own
- * cadence and must gate CW/Phone rows the same way the docked Needed board does. Falls
- * back to the default state (everything-except-Field-Day → CW/Phone on) if unreadable. */
-export function readEnabledModes(): { cw: boolean; phone: boolean } {
+ * cadence and must gate CW/Phone rows the same way the docked Needed board does, and open a
+ * JS8 or PSK row's own screen only while it is on. Falls back to the default state
+ * (everything-except-Field-Day → all four on) if unreadable. */
+export function readEnabledModes(): { cw: boolean; phone: boolean; psk: boolean; js8: boolean } {
   try {
     const raw = durableGet(STORAGE_KEY)
     const state = raw != null ? normalizeState(JSON.parse(raw)) : defaultState()
-    return { cw: state.enabled.cw !== false, phone: state.enabled.phone !== false }
+    return {
+      cw: state.enabled.cw !== false,
+      phone: state.enabled.phone !== false,
+      psk: state.enabled.psk !== false,
+      js8: state.enabled.js8 !== false,
+    }
   } catch {
     const d = defaultState()
-    return { cw: d.enabled.cw !== false, phone: d.enabled.phone !== false }
+    return {
+      cw: d.enabled.cw !== false,
+      phone: d.enabled.phone !== false,
+      psk: d.enabled.psk !== false,
+      js8: d.enabled.js8 !== false,
+    }
   }
 }
 

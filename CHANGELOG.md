@@ -1463,7 +1463,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own WSPR and FST4W decodes did the same on the roster and in Band Activity. A station heard in
   one of them is now a new mode only when you have never worked its country in any mode of that
   kind. FT8, FT4, JS8, Q65, FST4, RTTY, PSK31 and the other modes a contact is logged in still count
-  on their own.
+  on their own, and a click on such a row now opens that mode's screen: a JS8 row the JS8 screen, a
+  PSK31, PSK63, PSK125 or QPSK31 row the PSK screen (switched to PSK31 or QPSK31 when the row is one
+  of those), and an FT4 row the FT screen on FT4.
 - **A contact imported from JS8Call keeps JS8 as its mode.** JS8Call logs JS8 as MFSK with JS8 as
   the submode, and Nexus kept only the MFSK, so the logbook and the "new mode" need could not tell
   those contacts were JS8. Contacts imported before this release keep MFSK, and importing the same

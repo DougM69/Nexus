@@ -2213,13 +2213,15 @@ export async function setOperatingMode(
 
 /** Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
  * exact frequency atomically — one round-trip, so the rig can't end up in the new mode at the
- * old dial and the UI never sees a half-applied state. */
+ * old dial and the UI never sees a half-applied state. `mode` is the section, and comes back as
+ * the snapshot's `workView`: 'keyboard' is PSK's, and 'js8' is Digital named for the JS8 screen
+ * (`WORK_SECTION`, features/needs.ts). */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8',
   freqMhz: number,
   band: string,
   call?: string,
-  tier?: 'FT8' | 'FT4',
+  tier?: 'FT8' | 'FT4' | 'JS8',
   park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and

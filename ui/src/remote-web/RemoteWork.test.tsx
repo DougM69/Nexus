@@ -59,6 +59,18 @@ it('admits CW and Phone under workSpot and only FT8/FT4 under workDigitalSpot', 
   expect(spotNeed(spot({ mode: 'CW', submode: undefined })).mode).toBe('CW')
 })
 
+// A row names its own mode beside its label: a POTA activation heard in FT4 reads "Digital" and carries FT4
+// (operator ruling 2026-10-12, "FT4 the FT screen on FT4"). JS8 and the PSK modes open screens of their own
+// on the desktop; a browser has no Work for either, as before.
+it('names the tier of a row’s own mode, and still has no Work for JS8 or PSK', () => {
+  const pota = need({ mode: 'Digital', exactMode: 'FT4', freqMhz: 14.0815 })
+  expect(remoteWorkTier(pota)).toBe('FT4')
+  expect(remoteWorkable(pota, [], grants())).toBe(true)
+  expect(remoteWorkable(pota, [], grants({ workDigitalSpot: false }))).toBe(false)
+  for (const exactMode of ['JS8', 'PSK31', 'QPSK31'])
+    expect(remoteWorkable(need({ mode: 'Digital', exactMode, freqMhz: 14.078 }), [], grants()), exactMode).toBe(false)
+})
+
 it('works a Spots row from a browser only when the station would admit it', () => {
   const work = vi.fn()
   const view = (canWork?: (s: SpotRow) => boolean) => browser(

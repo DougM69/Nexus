@@ -43,6 +43,9 @@ import {
   archiveConversation,
   setFrequency,
   workSpot,
+  getLicensedBandPlan,
+  getPskState,
+  pskSetMode,
   setHuntTarget,
   subscribeSnapshot,
   callStation,
@@ -92,7 +95,7 @@ import { clubSyncRefusal, clubSyncRefusalText, contestName, isFieldDay } from '.
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
-import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall, ownScreen, workTier, pskSubmode, WORK_SECTION, type OwnScreen } from './features/needs'
 import { spotNeed } from './remote-web/remote-work'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
@@ -430,8 +433,22 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Full work path from the pop-out: the atomic workSpot switches the rig's MODE + exact
   // frequency (a bare QSY left CW clicks in DATA-U).
   const workNeed = async (a: NeedAlert) => {
+    // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
+    // switched on, at the row's own frequency or that screen's channel for the band, as from the
+    // docked board: the main window follows this Work's hint there.
+    const modes = readEnabledModes()
+    const screen = ownScreen(a)
+    let own: OwnScreen | null = null
+    if (screen && modes[screen]) {
+      const plan = await withErrorToast(
+        () => getLicensedBandPlan(screen),
+        t('shell.work.failed.cat', { call: a.call }),
+      )
+      if (!plan) return
+      own = { view: screen, plan }
+    }
     // `target`, not `t` — `t` is the translator in this file (App.tsx's own idiom).
-    const target = workTarget(a, bandPlan)
+    const target = workTarget(a, bandPlan, own)
     if (!target) {
       qsyBand(a.band, a.freqMhz ?? undefined)
       return
@@ -444,7 +461,6 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // AFTER the bail-out above and AWAITED — handleWorkNeeded spells out why, and here
     // the bail-out is the harder no-op of the two: `workTarget` is null only when the
     // band has no plan channel, and `qsyBand` then silently moves nothing at all.
-    const modes = readEnabledModes()
     const fillsLogLine = (target.view === 'cw' && modes.cw) || (target.view === 'phone' && modes.phone)
     if (a.park && !fillsLogLine) {
       const park = a.park
@@ -461,18 +477,31 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       qsyBand(a.band, a.freqMhz ?? undefined)
       return
     }
-    const opMode = target.view === 'operate' ? 'digital' : target.view
-    // A digital spot's FT8/FT4 protocol rides the same atomic call (the engine
-    // no-ops on a same-tier request) — the pop-out used to not switch the tier at
+    // The section the Work tells `work_spot`, which comes back as the main window's hint
+    // (WORK_SECTION): PSK's is 'keyboard', JS8's is 'js8'.
+    const section = WORK_SECTION[target.view]
+    // A digital spot's FT8/FT4 protocol (its own mode, `workTier`) rides the same atomic call
+    // (the engine no-ops on a same-tier request) — the pop-out used to not switch the tier at
     // all, leaving an FT4 click decoding FT8, and doing it as a second call would
-    // recreate the main window's default-dial-first double retune.
-    const m = a.mode?.toUpperCase()
-    const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
-    apply(
+    // recreate the main window's default-dial-first double retune. JS8's screen rides it as
+    // the JS8 tier.
+    const spotTier = target.view === 'js8' ? 'JS8' : target.view === 'operate' ? (workTier(a) ?? undefined) : undefined
+    const work =
       a.park && fillsLogLine
-        ? workSpot(opMode, target.freqMhz, target.band, target.call, spotTier, a.park)
-        : workSpot(opMode, target.freqMhz, target.band, target.call, spotTier),
-    )
+        ? workSpot(section, target.freqMhz, target.band, target.call, spotTier, a.park)
+        : workSpot(section, target.freqMhz, target.band, target.call, spotTier)
+    apply(work)
+    // The PSK screen opens on the row's own sub-mode where it has it (`pskSubmode`), its Rev
+    // setting kept: after the Work, so one the station refused changes nothing.
+    const slug = target.view === 'psk' ? pskSubmode(a) : null
+    if (slug) {
+      void work.then(async () => {
+        const psk = await withErrorToast(() => getPskState(), t('psk.mode.failed'))
+        if (psk && psk.mode !== slug) {
+          await withErrorToast(() => pskSetMode(slug, psk.reverse === true), t('psk.mode.failed'))
+        }
+      }, () => {})
+    }
   }
   // The POTA/SOTA board has already called setHuntTarget itself (and handed us the fresh
   // snapshot via onSnap); this half is the QSY + rig-mode switch — the same atomic workSpot
