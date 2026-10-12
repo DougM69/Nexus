@@ -211,6 +211,9 @@ interface Props {
    *  so the screen has one. Absent, the scoreboard keeps its box, as with no contest running, in the
    *  torn-off scoreboard and on the Remote page. */
   operatorBoxAbove?: boolean
+  /** Opens this screen in a window of its own (App's, in the main window only — never the logger
+   *  window's copy, the window itself or the Remote page): its Pop out, at the end of the banner. */
+  onPopOut?: () => void
 }
 
 /**
@@ -2519,6 +2522,7 @@ export function ContestView({
   operatorAsk,
   onOperatorFocused,
   operatorBoxAbove = false,
+  onPopOut,
 }: Props) {
   const observed = observation !== undefined
   // The mode the banned-mode chip names: the station's own, given its section.
@@ -3132,6 +3136,20 @@ export function ContestView({
             })}
           </span>
         ) : null}
+        {/* ⭐ THIS SCREEN IN A WINDOW OF ITS OWN, for another monitor (App's, in the main window). The
+            scoreboard's own ⧉ Pop out, lower down, tears off the scoreboard alone, so this one is
+            named for the screen to a screen reader. */}
+        {onPopOut && (
+          <button
+            type="button"
+            className="fd-screen-popout"
+            onClick={onPopOut}
+            title={t('contestScreen.popOut.title')}
+            aria-label={t('contestScreen.popOut.aria')}
+          >
+            {t('fieldDay.popOut.label')}
+          </button>
+        )}
       </div>
       {(blocker || modeLines.length > 0 || cabrilloMissing.length > 0) && (
         <div className="fd-mode-status">

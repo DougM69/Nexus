@@ -19527,6 +19527,12 @@ fn set_psk_macros(
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
 
+/// The contest screen window's panel slug: the main window's Contest screen below its log line
+/// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
+/// popped out to a monitor of its own. The main window keeps the log line and the last contacts
+/// while it is open, and takes the rest back when it closes (`tauri://destroyed`, in the UI).
+pub(crate) const CONTEST_SCREEN_SLUG: &str = "contestscreen";
+
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
 /// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
 /// Activity + roster) needs more room than the narrower insight panels; the band map is
@@ -19559,6 +19565,9 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // (class/section, Running/S&P, four exports) on one line, tall enough for the scoreboard
         // and the log line without scrolling at a 1080p desk.
         "contestlog" => (1100.0, 860.0),
+        // The contest screen window: the logger window's screen without its log line, so the
+        // same width for the header strip, and the height the screen had under the line.
+        "contestscreen" => (1100.0, 860.0),
         // The club band board is set in glance type (it is watched across the tent, not
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
@@ -19583,6 +19592,8 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         "fdclub" => (560.0, 400.0),
         // The log line's boxes and its Log button in a row, and a look at the screen above it.
         "contestlog" => (640.0, 480.0),
+        // The contest switch and the controls row, which wraps, and a look at the board under them.
+        "contestscreen" => (640.0, 480.0),
         // The picture scales to fit, so the viewer drags smaller than most pop-outs —
         // but not below what its details strip and its three buttons need in a row.
         "sstvviewer" => (420.0, 320.0),
@@ -19641,6 +19652,7 @@ async fn open_panel_window(
         "fieldday" => "Nexus — Contest".to_string(),
         "fdclub" => "Nexus — Club band board".to_string(),
         "contestlog" => "Nexus — Contest logger".to_string(),
+        "contestscreen" => "Nexus — Contest screen".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),

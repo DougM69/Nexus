@@ -107,7 +107,7 @@ The **Now-Bar** runs across the top from every section: UTC clock, current band,
 TX/RX state, and the "is the band open / am I getting out / what do I need"
 answer, with feed-health pills that tell "connected but quiet" apart from "down."
 
-Thirteen panels tear off into their own OS window — see
+Fourteen panels tear off into their own OS window — see
 [Windows you can tear off](#windows-you-can-tear-off) below.
 
 ## The sections
@@ -264,7 +264,7 @@ Phone's voice-keyer `F1`–`F6` are bound.
 
 ## Windows you can tear off
 
-Thirteen panels open in their own OS window for a multi-monitor shack. The
+Fourteen panels open in their own OS window for a multi-monitor shack. The
 control sits on the panel's own header — **⧉ Pop out** in most places, **↗ Pop
 out** on Memories, **⧉ Pop out board** on the club band board, and a bare **⧉**
 on Operate and Satellites. Where a panel has no such control, it does not
@@ -275,7 +275,7 @@ SSTV, APRS and JS8 cockpits.
 | Panel | Control | Notes |
 |---|---|---|
 | Operate cockpit | ⧉ in the cockpit header | The full cockpit, keyboard shortcuts included. |
-| Waterfall | ⧉ on the waterfall pane head, in Operate | The only pop-out that vacates its slot in the main window; closing it re-docks the pane. There is also a manual re-dock control if it does not. |
+| Waterfall | ⧉ on the waterfall pane head, in Operate | One of two pop-outs that vacate their place in the main window (the Contest screen is the other); closing it re-docks the pane. There is also a manual re-dock control if it does not. |
 | Map | **Map** in the Operate header | Opens with the Parks layer on, independent of the Conditions map's layer picks. |
 | Conditions | ⧉ Pop out, Conditions header | The globe with its own pane grid. |
 | Needed board | ⧉ Pop out, Needed header | A header checkbox, **open at launch**, force-opens it every start. |
@@ -283,12 +283,13 @@ SSTV, APRS and JS8 cockpits.
 | Satellites | ⧉ in the Satellites header | |
 | Memories | ↗ Pop out, Memories toolbar | |
 | POTA / SOTA | POTA/SOTA header | |
-| Contest scoreboard | ⧉ Pop out, Contest screen | |
+| Contest scoreboard | ⧉ Pop out, over the Contest screen's score tiles | |
+| Contest screen | ⧉ Pop out, at the end of the Contest screen's top line | Everything below the log line. The main window keeps the log line and the last contacts; closing the window brings the rest back. Opens where it was last put. |
 | Club band board | ⧉ Pop out board on the Contest screen, and Club Board under Contest in the left bar | Opens wider and shorter, set in glance type: it is read across a tent. |
 | Band map (Phone) | ⧉ on the band-map pane head, in Phone | Docks to a screen edge as a full-height strip; size, position and dock survive a restart. |
 | Band map (CW) | ⧉ on the band-map pane head, in CW | Same. |
 
-The POTA/SOTA, Field Day and club-board buttons hide themselves inside the
+The POTA/SOTA, Field Day, Contest screen and club-board buttons hide themselves inside the
 window they already opened, so you cannot stack a second copy.
 
 How they behave:

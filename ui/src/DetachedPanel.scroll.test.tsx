@@ -386,7 +386,7 @@ describe('every pop-out the shell can host', () => {
   // because one arm was reasoned about in isolation.
   const PANELS = [
     'needed', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub', 'contestlog',
-    'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
+    'contestscreen', 'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
   ]
 
   it('never clips its content with no scroller interposed', async () => {

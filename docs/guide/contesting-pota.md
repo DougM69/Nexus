@@ -175,6 +175,25 @@ and drag the window to the logger's monitor. It opens on that monitor again next
   digital), so club sync, N3FJP and your exports see one station. A Remote viewer sees only the
   main window.
 
+### The Contest screen on another monitor
+
+**⧉ Pop out**, at the right end of the Contest screen's top line (the one with the Contest mode
+switch), opens everything below the log line in a window of its own: the Contest mode switch,
+Running / S&P, the exports and the merge, the club board, the score, the county or sections board,
+the bonuses and the log. Each works there as it does on the main screen. Drag the window to another
+monitor; it opens there again next time, fitted to the monitors you have then.
+
+- **The main window keeps the log line.** While the window is open, the Contest screen in the main
+  window shows the log line, with the Operator box on its title line (Ctrl+O still puts the cursor
+  there), and the last contacts. Where the rest was, one line says it is in its own window, with
+  **Bring it back**, which closes the window.
+- **Closing the window brings it back.** Its close button, Alt+F4 or Bring it back all put the
+  screen back under the log line, and so does restarting Nexus: the window does not reopen with it.
+- **The window's keys.** Its F-keys do nothing, so F5 cannot reload it in the middle of a contest.
+  Its Esc is not a stop: stop a transmission with Esc or Stop TX in the main window.
+- Turning Contest mode on or off in the window is the same save as on the main screen, and the main
+  window follows it.
+
 ### Export and club interop
 
 Exports are submittable: **Cabrillo 3.0** with real per-QSO UTC timestamps and

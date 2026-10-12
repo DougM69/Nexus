@@ -12536,6 +12536,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* The screen's Pop out (main window only) ends the banner, at its right edge like every header's: on its
+   own auto margin, or right after the rules line, which already took the row's free space. */
+.fd-event-rules + .fd-screen-popout {
+  margin-left: 0;
+}
 /* The Field Day mode switch, first in the banner, beside the contest's name and window. The
    switch is the shared `.toggle`; this only sets its label beside it. */
 .fd-mode-switch {
@@ -19059,12 +19064,13 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers (multi-monitor
-   tear-off). */
+/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers and the Contest screen's
+   banner (multi-monitor tear-off). */
 .connect-popout,
 .dxped-popout,
 .pota-popout,
-.cockpit-popout {
+.cockpit-popout,
+.fd-screen-popout {
   margin-left: auto;
   font-size: 0.75rem;
   font-weight: 700;
@@ -19078,7 +19084,8 @@ button.cq-skiptx1.on {
 }
 .connect-popout:hover,
 .dxped-popout:hover,
-.pota-popout:hover {
+.pota-popout:hover,
+.fd-screen-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -19372,6 +19379,24 @@ button.cq-skiptx1.on {
 .contest-screen > .contest-logger-recent + .layout.single {
   min-height: min(9em, 30%);
   border-top: 1px solid var(--border-soft);
+}
+/* …AND WITH THE SCREEN OUT IN A WINDOW OF ITS OWN (ContestScreenWindow.tsx), one line where it was, in the
+   same `.layout.single`: what went, and Bring it back, which closes the window. On the entry's 1600 px
+   measure, so it lines up under the bar, the boxes and the last contacts. Content height; the column
+   below it stays empty, the room the screen took now being on the other monitor. */
+.contest-screen-away {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  max-width: 1600px;
+  margin-inline: auto;
+  padding: var(--space-2) var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-size: var(--fs-body);
 }
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor

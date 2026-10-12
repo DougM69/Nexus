@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tune; Esc there stops TX, as the top bar's Stop TX does, and leaves the boxes as they are. On a
   mode the contest does not permit the line says so, and the warning in the screen's header now
   shows only then: at the Illinois QSO Party it said FT8 was not permitted while you were on phone.
+- **The Contest screen pops out to a window of its own.** ⧉ Pop out, at the right end of the line
+  with the Contest mode switch, opens everything below the log line in its own window, to put on
+  another monitor: the Contest mode switch, Running / S&P, the exports and the merge, the club board,
+  the score, the county or sections board, the bonuses and the log, all working there as they do on
+  the main screen. While it is open, the main window's Contest screen keeps the log line with its
+  Operator box (Ctrl+O still lands there) and the last contacts, and one line where the rest was, with
+  **Bring it back**. Closing the window any way brings it back too, and so does restarting Nexus. The
+  window opens where you last put it, fitted to the monitors you have then. Its F-keys do nothing, so
+  F5 cannot reload it, and its Esc is not a stop: Esc and Stop TX in the main window are.
 - **The club host sees where each position's link stands.** The host's club board, on the Contest
   screen and in its pop-out, has a Status column: Connected while a position has been heard in the
   last 10 seconds (each one sends a heartbeat every 5), Reconnecting once it misses its heartbeats,
