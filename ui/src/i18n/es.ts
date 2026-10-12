@@ -1850,6 +1850,8 @@ export const ES: PartialCatalog = {
   "fieldDay.club.board.link.removed": "Retirado",
   "fieldDay.club.board.heard": "(oído {{ago}})",
   "fieldDay.club.board.heard.never": "(sin oírse desde que arrancó este Nexus)",
+  "fieldDay.club.grid.caption": "Posiciones por banda y modo",
+  "fieldDay.club.grid.noBand": "Aún sin banda:",
   "fieldDay.club.remove.label": "Retirar",
   "fieldDay.club.remove.title": "Desconecta esta posición y la rechaza cuando vuelve a intentarlo, hasta que pulse Readmitir. Los contactos que ya envió siguen en el log del club, en su puntuación y en los archivos del club.",
   "fieldDay.club.remove.confirm.aria": "¿Retirar esta posición?",

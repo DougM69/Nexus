@@ -2887,6 +2887,8 @@ export const JA: PartialCatalog = {
   "fieldDay.club.board.link.removed": "除外",
   "fieldDay.club.board.heard": "（最終受信 {{ago}}）",
   "fieldDay.club.board.heard.never": "（このNexusの起動後は未受信）",
+  "fieldDay.club.grid.caption": "バンド・モード別のポジション",
+  "fieldDay.club.grid.noBand": "バンド未設定:",
   "fieldDay.club.remove.label": "除外",
   "fieldDay.club.remove.title": "このポジションを切断し、「復帰を許可」を押すまで再接続を拒否します。すでに送られた交信はクラブのログ、得点、クラブのファイルに残ります。",
   "fieldDay.club.remove.confirm.aria": "このポジションを除外しますか？",

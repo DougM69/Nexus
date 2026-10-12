@@ -98,7 +98,7 @@ describe('ContestView club sync section', () => {
     expect(screen.getByText('W9ABC Field Day · host W9ABC')).toBeTruthy()
     // Both positions on the board; only the silent one is stale-marked, and
     // the mark carries WHEN it was last heard (never silently stale).
-    expect(screen.getByText('CW tent')).toBeTruthy()
+    expect(within(document.querySelector<HTMLElement>('[data-club-board]')!).getByText('CW tent')).toBeTruthy()
     const stale = screen.getByTitle('Last heard 44 s ago')
     expect(stale.textContent).toContain('SSB tent')
     expect(screen.getByTitle('Last heard 44 s ago')).toBeTruthy()

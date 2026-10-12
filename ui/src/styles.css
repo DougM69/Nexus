@@ -13221,6 +13221,141 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-style: italic;
 }
 
+/* THE CLUB BOARD'S BAND × MODE GRID (ContestView.tsx `ClubBandModeGrid`): who is on which band and
+   mode, above the board's table. The contest's bands across, its mode classes down, each position's
+   name in its cell, read across a room, so the names are bigger than the table's and a state is a
+   COLOUR, a MARK and a WORD. On the host's own screen a name's edge and a tint of its face carry its
+   link (green Connected, amber Reconnecting, red Lost; this laptop's own in the accent) and the name
+   stays in ink: the state colours lettered on the page miss 4.5:1 in the light themes. Tokens only,
+   each in both themes. The colours are computed in every mode in ContestView.clubGrid.contrast.test.tsx
+   and the layout rules in ContestView.clubGrid.cascade.test.tsx.
+
+   EVERY BAND GETS THE SAME COLUMN, so an empty one reads as free at a glance: a fixed layout, each
+   band's head 6.75em wide at least and the spare width shared out (the floor holds a seven-letter
+   name on a line of its own, and Field Day's ten bands still fit a 1024 window without scrolling),
+   where the automatic layout handed it to whichever bands held names (20m four times as wide as 2m at
+   1920). A name is inline text after its mark and a space, so it wraps between its words like a
+   sentence, the whole word dropping under the mark, and breaks inside one only past its column,
+   rather than spill into the next band: as a flex row, or with no space after the mark, the line had
+   no break point but inside the word, and "Digital" and "GOTA" broke in two at 1024.
+
+   IT SCROLLS INSIDE ITSELF. A column per band does not fit every window (the New York QSO Party runs
+   seventeen), so `.club-grid` is the one sideways scroller and the page never is: as wide as the club
+   block and no wider, with the table filling it and widening only the scroller past its columns'
+   floor. The mode heads stay in view while it scrolls, on an opaque face that is the window's own
+   (the panel, or the pop-out's page). A band head never wraps.
+
+   Each name is the containing block for the word a screen reader hears (`.sr-only` is absolutely
+   positioned) and the scroller is the caption's: placed against the page instead, outside every
+   scroller, such a word once lengthened the hosted page by a whole list (`.pota-spot-state`). */
+.club-grid-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.club-grid {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.club-grid-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: calc(16px * var(--text-scale));
+}
+.club-grid-block[data-glance] .club-grid-table {
+  font-size: calc(20px * var(--text-scale));
+}
+.club-grid-band,
+.club-grid-mode {
+  padding: var(--space-1) 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-soft);
+}
+.club-grid-band {
+  width: 6.75em;
+  text-align: center;
+  border-right: 1px solid var(--border-soft);
+}
+.club-grid-mode {
+  width: 5em;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+.app.detached .club-grid-mode {
+  background: var(--bg);
+}
+.club-grid-cell {
+  height: 2.4em;
+  padding: 2px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-soft);
+  border-right: 1px solid var(--border-soft);
+}
+.club-grid-pos {
+  position: relative;
+  display: inline-block;
+  padding: 2px var(--space-1);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.club-grid-cell > .club-grid-pos {
+  display: block;
+}
+.club-grid-cell > .club-grid-pos + .club-grid-pos {
+  margin-top: var(--space-1);
+}
+.club-grid-pos.link-connected {
+  border-color: var(--status-confirmed);
+  background: color-mix(in srgb, var(--status-confirmed) 18%, transparent);
+}
+.club-grid-pos.link-reconnecting {
+  border-color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 18%, transparent);
+}
+.club-grid-pos.link-lost {
+  border-color: var(--alert-critical);
+  background: color-mix(in srgb, var(--alert-critical) 18%, transparent);
+}
+.club-grid-pos.link-self {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.club-grid-waiting,
+.club-grid-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: calc(13px * var(--text-scale));
+}
+.club-grid-block[data-glance] .club-grid-waiting,
+.club-grid-block[data-glance] .club-grid-legend {
+  font-size: calc(16px * var(--text-scale));
+}
+.club-grid-waiting-label {
+  color: var(--text-dim);
+}
+
 /* ===========================================================================
    Log view (full-width screen)
    =========================================================================== */

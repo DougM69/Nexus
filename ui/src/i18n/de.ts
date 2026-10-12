@@ -4666,6 +4666,8 @@ export const DE: PartialCatalog = {
   "fieldDay.club.board.link.removed": "Entfernt",
   "fieldDay.club.board.heard": "(gehört {{ago}})",
   "fieldDay.club.board.heard.never": "(seit dem Start dieses Nexus nicht gehört)",
+  "fieldDay.club.grid.caption": "Positionen nach Band und Modus",
+  "fieldDay.club.grid.noBand": "Noch kein Band:",
   "fieldDay.club.remove.label": "Entfernen",
   "fieldDay.club.remove.title": "Trennt diese Position und weist sie bei jedem neuen Versuch ab, bis Sie „Wieder zulassen“ drücken. Die Kontakte, die sie schon geschickt hat, bleiben im Log des Clubs, in seiner Punktzahl und in den Dateien des Clubs.",
   "fieldDay.club.remove.confirm.aria": "Diese Position entfernen?",

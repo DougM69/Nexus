@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteFieldDay } from './RemoteFieldDay'
 import { RemoteCollections, RemoteCollectionsContext } from './collections'
 import type { ApplicationClient } from './application-client'
 import { StationDataContext } from '../stationAccess'
 import { installApplicationTransport } from '../applicationTransport'
 import { fieldDayPage } from './__fixtures__/field-day-page'
+import { parseFieldDay } from './field-day'
 import { t } from '../i18n'
 
 // THE BUDGET (2026-10-09). The slowest case here, "uses the real event boards and disclosures without…", takes 0.34 s
@@ -25,7 +26,7 @@ it('uses the real event boards and disclosures without native loaders or station
  const uninstall=installApplicationTransport({kind:'remote',invoke:forbidden})
  try {
   const test=setup();await screen.findByText('K1ABC')
-  expect(screen.getByText('CW tent')).toBeTruthy()
+  expect(within(test.container.querySelector<HTMLElement>('[data-club-board]')!).getByText('CW tent')).toBeTruthy()
   expect(test.container.querySelector('.fd-score-math')?.textContent).toContain('106')
   const op=screen.getByRole('textbox',{name:t('fieldDay.operator.aria')}) as HTMLInputElement
   await waitFor(()=>expect(op.value).toBe('W1AW'));expect(op.readOnly).toBe(true)
@@ -79,6 +80,30 @@ it('ages club presence evidence and expires the whole captured event',async()=>{
  await act(async()=>{vi.advanceTimersByTime(60000)})
  expect(test.container.textContent).not.toContain('K1ABC')
  expect(test.container.textContent).not.toContain('CW tent')
+})
+// THE CLUB BOARD'S GRID ON THE HOSTED PAGE. The station leaves the host's link words out of what Remote reads
+// (`leave_out_the_hosts_own`), so the page's grid places each position in the cell of its band and mode and colours none:
+// no link class, no mark, no word, no legend. It is drawn from the capture the page is sent today, and the page still
+// refuses a board line that carries a link, so the grid cannot bring one to it.
+it('places each club position in the grid with no link colour, from the capture it is sent today',async()=>{
+ const test=setup();await screen.findByText('K1ABC')
+ const table=screen.getByRole('table',{name:t('fieldDay.club.grid.caption')})
+ const [head,...rows]=within(table).getAllByRole('row')
+ const cols=within(head).getAllByRole('columnheader').map(c=>c.textContent)
+ const cw=rows.find(r=>within(r).getByRole('rowheader').textContent==='CW')!
+ const cell=within(cw).getAllByRole('cell')[cols.indexOf('20m')-1]
+ expect(cell.textContent).toBe('CW tent')
+ const chip=cell.querySelector('.club-grid-pos')!
+ expect([...chip.classList]).toEqual(['club-grid-pos'])
+ expect(chip.querySelector('.club-grid-mark,.sr-only')).toBeNull()
+ expect(chip.getAttribute('title')).toBeNull()
+ expect(test.container.querySelector('.club-grid-legend')).toBeNull()
+ // CONTROL: a board line carrying the host's link word is refused whole, so this page is never sent one.
+ const page=fieldDayPage()
+ const club=(page.meta as unknown as {source:{fieldDay:{club:{board:Record<string,unknown>[]}}}}).source.fieldDay.club
+ expect(parseFieldDay(page).fieldDay?.club?.board).toHaveLength(1)
+ club.board[0].link='connected'
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
 })
 // Sweepstakes LOGS a duplicate and scores it zero, so the station counts one contact fewer than its log holds. The page
 // refused that capture whole: its status line said the station was unavailable, and no contest view was drawn.

@@ -483,9 +483,10 @@ const SHEET_CLASS_NAMES: Record<string, string> = { CW: 'CW', DIG: 'Digital', PH
  * Digital, Phone): each class its own column where the contest counts it apart, the classes its
  * dupe rule counts as one in one column (the Illinois QSO Party's "CW/Digital"), and for a contest
  * that counts no mode class at all (CQ WW, Sweepstakes, the VHF contests) the classes its log
- * holds. No rule (an older build) means the three, which is what such a build counted.
+ * holds. No rule (an older build) means the three, which is what such a build counted. The club
+ * board's grid passes its positions' classes as `log`, so its rows are these same classes.
  */
-export function modeColumns(rule: DupeRule | undefined, log: FieldDayQso[]): ModeColumn[] {
+export function modeColumns(rule: DupeRule | undefined, log: readonly Pick<FieldDayQso, 'mode'>[]): ModeColumn[] {
   const split = rule?.byModeClass ?? true
   const held = SHEET_CLASSES.filter((c) => log.some((q) => q.mode === c))
   const classes: string[] = split || held.length === 0 ? [...SHEET_CLASSES] : held
@@ -1093,13 +1094,14 @@ function clubBoardColumns(link: boolean, manage: boolean): string {
   const [position, ...rest] = CLUB_BOARD_COLUMNS_HOST.split(' ')
   return [position, ...(link ? ['minmax(0,1.7fr)'] : []), ...rest, ...(manage ? ['auto'] : [])].join(' ')
 }
-/** Each link word's ink, from the sync chip's own three (both themes carry them): the host's own
+/** Each link word's ink, the grid's own three (both themes carry them): green, the warning amber,
+ *  and Lost in the alert red, which the sync chip's orange is not in the dark theme. The host's own
  *  row and a removed one read in the dim ink, as no alarm. */
 const CLUB_LINK_INK: Record<NonNullable<FdClubBoardRow['link']>, string> = {
   host: 'var(--text-dim)',
   connected: 'var(--status-confirmed)',
-  reconnecting: 'var(--status-new-band)',
-  lost: 'var(--status-new-entity)',
+  reconnecting: 'var(--alert-warning)',
+  lost: 'var(--alert-critical)',
   removed: 'var(--text-dim)',
 }
 /** Each half of a link cell keeps to one line, and the cell wraps between them; a half wider than
@@ -1185,28 +1187,34 @@ function boardName(row: FdClubBoardRow): string {
   return row.posName || row.operator || t('fieldDay.club.board.unnamed')
 }
 
+/** A host board row's link, in the Status column's word. */
+function linkWord(link: NonNullable<FdClubBoardRow['link']>): string {
+  return link === 'host'
+    ? t('fieldDay.club.board.link.host')
+    : link === 'connected'
+      ? t('fieldDay.club.board.link.connected')
+      : link === 'reconnecting'
+        ? t('fieldDay.club.board.link.reconnecting')
+        : link === 'lost'
+          ? t('fieldDay.club.board.link.lost')
+          : t('fieldDay.club.board.link.removed')
+}
+
+/** When the host last heard a position, as the Status column says it after the word. */
+function heardWords(row: FdClubBoardRow): string {
+  return row.heardSecs == null
+    ? t('fieldDay.club.board.heard.never')
+    : t('fieldDay.club.board.heard', { ago: heardAgo(row.heardSecs) })
+}
+
 /** A host board row's link word and when the host last heard the position, as one cell: on one
  *  line where the column has room, and the heard part on a line of its own where it has not (a
  *  1024-wide window), never cut. */
 function LinkCell({ row }: { row: FdClubBoardRow }) {
   const link = row.link
   if (!link) return <span />
-  const word =
-    link === 'host'
-      ? t('fieldDay.club.board.link.host')
-      : link === 'connected'
-        ? t('fieldDay.club.board.link.connected')
-        : link === 'reconnecting'
-          ? t('fieldDay.club.board.link.reconnecting')
-          : link === 'lost'
-            ? t('fieldDay.club.board.link.lost')
-            : t('fieldDay.club.board.link.removed')
-  const heard =
-    link === 'host'
-      ? ''
-      : row.heardSecs == null
-        ? t('fieldDay.club.board.heard.never')
-        : t('fieldDay.club.board.heard', { ago: heardAgo(row.heardSecs) })
+  const word = linkWord(link)
+  const heard = link === 'host' ? '' : heardWords(row)
   return (
     <span data-club-row={row.posid} style={{ minWidth: 0 }} title={heard ? `${word} ${heard}` : word}>
       <span style={{ ...LINK_CHUNK, color: CLUB_LINK_INK[link], fontWeight: 600 }}>{word}</span>
@@ -1459,6 +1467,160 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
   )
 }
 
+/** Each link's mark beside its colour in the grid, so no state is told by colour alone; the legend
+ *  says what each is. A mark rather than the word: the word in every name would double each name's
+ *  width in a grid that has a column for every band. */
+const GRID_MARK = { connected: '✓', reconnecting: '↻', lost: '✕', self: '⌂' } as const
+type GridLook = keyof typeof GRID_MARK
+
+/** The grid's columns: the bands the contest runs on, from its rules data, or Field Day's own for
+ *  the two Field Days (their rules name none), then any band a position is on that the list leaves
+ *  out, in a column of its own, as the band occupancy board does: a station on the air never hides. */
+function gridBands(named: string[] | undefined, fieldDay: boolean, rows: FdClubBoardRow[]): string[] {
+  const listed = named?.length ? named : fieldDay ? FD_BOARD_BANDS : []
+  const extra = [...new Set(rows.map((r) => r.band.trim()))]
+    .filter((b) => b !== '' && !listed.includes(b))
+    .sort((a, b) => bandRank(a) - bandRank(b) || a.localeCompare(b))
+  return [...listed, ...extra]
+}
+
+/** One position in the grid: its name, coloured by its link where the board says one (the host's
+ *  own screen), with the link's mark and, for a screen reader, its word; this laptop's own marked as
+ *  this laptop. A board without the host's link words (a position's, Remote's) colours nothing. */
+function GridPos({ row, self }: { row: FdClubBoardRow; self: boolean }) {
+  const link = row.link === 'connected' || row.link === 'reconnecting' || row.link === 'lost' ? row.link : undefined
+  const look: GridLook | undefined = self ? 'self' : link
+  const word = look === 'self' ? linkWord('host') : link ? linkWord(link) : ''
+  return (
+    <span
+      className={look ? `club-grid-pos link-${look}` : 'club-grid-pos'}
+      title={look === 'self' ? word : link ? `${word} ${heardWords(row)}` : undefined}
+    >
+      {/* The space is the line's break point: the name drops under its mark whole, where a mark
+          joined to it made one word the line could only cut in two. */}
+      {look && (
+        <span className="club-grid-mark" aria-hidden="true">
+          {`${GRID_MARK[look]} `}
+        </span>
+      )}
+      <span className="club-grid-name">{boardName(row)}</span>
+      {word && <span className="sr-only">{word}</span>}
+    </span>
+  )
+}
+
+/**
+ * ⭐ **WHERE EVERY POSITION IS, AT A GLANCE** — the club board as a band × mode grid, above its table:
+ * the contest's bands across, its own mode classes down, each position's name in the cell of its
+ * band and class. Two on one band and class are both in that cell, which at a club is a split pool
+ * of contacts or a deliberate pair, and the operator is the one who can tell which.
+ *
+ * The rows are the Summary's idea of the contest's classes ([`modeColumns`]), not a second one: the
+ * Illinois QSO Party's CW/DIG and PH, Field Day's CW, DIG and PH, and for a contest that counts no
+ * class the ones its positions are on. Each name sits in the class its mode scores in
+ * ([`fdModeClass`]), the only mode a position's report carries.
+ *
+ * On the host's own screen, where the board carries its link words, each name is coloured by its
+ * link — green Connected, amber Reconnecting, red Lost — with a mark beside the colour and the word
+ * for a reader, never the colour alone, and the legend under the grid says what each is. A position
+ * the host removed is not in the grid (its line in the table keeps Allow back); one with no band yet
+ * is named on a line under it. A position's board and Remote's carry no link words (Remote's capture
+ * leaves them out), so there the grid places every name and colours none.
+ */
+function ClubBandModeGrid({
+  board,
+  bands: named,
+  dupeRule,
+  fieldDay,
+  linked,
+  ownPosid,
+  big,
+}: {
+  board: FdClubBoardRow[]
+  bands?: string[]
+  dupeRule?: DupeRule
+  fieldDay: boolean
+  /** The board carries the host's link words, so the legend says what their colours are. */
+  linked: boolean
+  ownPosid?: string
+  big: boolean
+}) {
+  const shown = board.filter((r) => r.link !== 'removed')
+  const placed = shown.filter((r) => r.band.trim() !== '')
+  const waiting = shown.filter((r) => r.band.trim() === '')
+  const bands = gridBands(named, fieldDay, placed)
+  const modes = modeColumns(dupeRule, placed.map((r) => ({ mode: fdModeClass(r.mode) })))
+  const isSelf = (r: FdClubBoardRow) => r.link === 'host' || (!!ownPosid && r.posid === ownPosid)
+  const legend: GridLook[] = [
+    ...(linked ? (['connected', 'reconnecting', 'lost'] as const) : []),
+    ...(shown.some(isSelf) ? (['self'] as const) : []),
+  ]
+  if (shown.length === 0) return null
+  return (
+    <div className="club-grid-block" data-glance={big ? '' : undefined}>
+      {bands.length > 0 && (
+        <div className="club-grid">
+          <table className="club-grid-table">
+            <caption className="sr-only">{t('fieldDay.club.grid.caption')}</caption>
+            <thead>
+              <tr>
+                <th scope="col" className="club-grid-mode">
+                  {t('fieldDay.club.board.column.mode')}
+                </th>
+                {bands.map((b) => (
+                  <th scope="col" key={b} className="club-grid-band">
+                    {b}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {modes.map((m) => {
+                const label = m.classes.join('/')
+                return (
+                  <tr key={label}>
+                    <th scope="row" className="club-grid-mode">
+                      {label}
+                    </th>
+                    {bands.map((b) => (
+                      <td key={b} className="club-grid-cell">
+                        {placed
+                          .filter((r) => r.band.trim() === b && m.classes.includes(fdModeClass(r.mode)))
+                          .map((r) => (
+                            <GridPos key={r.posid} row={r} self={isSelf(r)} />
+                          ))}
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {waiting.length > 0 && (
+        <div className="club-grid-waiting">
+          <span className="club-grid-waiting-label">{t('fieldDay.club.grid.noBand')}</span>
+          {waiting.map((r) => (
+            <GridPos key={r.posid} row={r} self={isSelf(r)} />
+          ))}
+        </div>
+      )}
+      {legend.length > 0 && (
+        // For the eye: every name already says its word to a screen reader.
+        <div className="club-grid-legend" aria-hidden="true">
+          {legend.map((look) => (
+            <span key={look} className={`club-grid-pos link-${look}`}>
+              <span className="club-grid-mark">{`${GRID_MARK[look]} `}</span>
+              {look === 'self' ? linkWord('host') : linkWord(look)}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function FdClubSection({
   club,
   onExport,
@@ -1471,6 +1633,9 @@ export function FdClubSection({
   fieldDay = true,
   keepsDupes = false,
   link = null,
+  bands,
+  dupeRule,
+  ownPosid,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
@@ -1496,6 +1661,13 @@ export function FdClubSection({
   /** This laptop's club link: the lines the block does not already say. The contest screen's
    *  own block only, never the pop-out or Remote. */
   link?: ClubLink | null
+  /** The running contest's bands and dupe rule (`FieldDayStatus.bands`, `.dupeRule`): the grid's
+   *  columns and its mode classes. */
+  bands?: string[]
+  dupeRule?: DupeRule
+  /** This laptop's own position id (`Settings.fdPositionId`), whose name the grid marks as this
+   *  laptop on a position's board. Not on Remote, which is no laptop of the club's. */
+  ownPosid?: string
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
@@ -1810,6 +1982,16 @@ export function FdClubSection({
             : t('fieldDay.club.boardFull', { positions: club.boardFull.positions })}
         </div>
       )}
+      {/* Who is on which band and mode, at a glance, above the table that details each position. */}
+      <ClubBandModeGrid
+        board={club.board}
+        bands={bands}
+        dupeRule={dupeRule}
+        fieldDay={fieldDay}
+        linked={showLink}
+        ownPosid={ownPosid}
+        big={big}
+      />
       {club.board.length === 0 ? (
         // Sync IS on here (the block only rides the snapshot when it is), so this
         // says what it is waiting for and never sends anyone to Settings — the
@@ -3333,6 +3515,9 @@ export function ContestView({
           fieldDay={fdEventIsFieldDay}
           keepsDupes={fieldDay.dupeRule?.logDupes === true}
           link={observed ? null : clubLink}
+          bands={fieldDay.bands}
+          dupeRule={fieldDay.dupeRule}
+          ownPosid={observed ? undefined : nativeSettings?.fdPositionId}
         />
       )}
       {/* …or, with the Field Day mode off, where this laptop's club link stands: club sync

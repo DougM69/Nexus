@@ -270,7 +270,10 @@ a club sync worked.*
   the county you have typed), you're told before you call. It's a warning, not
   a lock (N3FJP semantics); your own log's dupes still refuse.
 - A live **band board** shows where every position is (band, mode, operator,
-  rate), stale-marked the moment one goes quiet. It has its own **Club Board**
+  rate), stale-marked the moment one goes quiet. Above it a grid puts each
+  position's name in the cell of its band and mode, coloured on the host by its
+  link (green Connected, amber Reconnecting, red Lost), so a band and mode
+  nobody is on is an empty cell. It has its own **Club Board**
   button in the left rail under Contest, and its own window — one click, on a
   second monitor or a corner of the big one, in bigger type than the dashboard
   copy because it is watched from across the tent. **Pop out board** in the club
