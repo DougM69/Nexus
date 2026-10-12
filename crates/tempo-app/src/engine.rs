@@ -13244,16 +13244,15 @@ impl Engine {
             .cloned()
             .collect();
         dupes.sort();
-        // ⭐ The HOST's own board is read from its live club log, as of now: every position it
-        // knows, with where each one's link stands (`fdevent::PositionLink`), by the reading its
-        // hosting line counts connected positions by (`Self::fd_club_link`), so the two agree. A
-        // position holds only the board the host last sent it, which carries no link words.
+        // ⭐ The rows are the board the club sends, the host's included (its own loopback
+        // position's copy, cut to what one club line carries), which is what the Remote capture's
+        // bound measures (`bounded_field_day_status`). On the HOST each row also says where that
+        // position's link stands now, read from its live club log (`fdevent::PositionLink`); a
+        // position holds only the rows the host sent, which carry none.
         let now = now_unix_secs();
         let own = self.settings.fd_position_id.as_str();
-        let live = self.fd_club.as_ref().map(|club| club.board_rows(now));
-        let mut board: Vec<crate::dto::FdClubBoardRow> = live
-            .as_deref()
-            .unwrap_or(&m.board)
+        let mut board: Vec<crate::dto::FdClubBoardRow> = m
+            .board
             .iter()
             .map(|r| crate::dto::FdClubBoardRow {
                 posid: r.pos.clone(),

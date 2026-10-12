@@ -416,6 +416,43 @@ mod tests {
         }
     }
 
+    /// ⭐ **A host's capture carries the board its bound measured**: the host's board rows are the
+    /// board the club sends (its own loopback position's copy, cut to what one club line carries),
+    /// whatever its own club log has heard of, so a host whose log knows more positions than the
+    /// hosted page takes (128) still ships a capture the page reads. Each row says where its link
+    /// stands, from the live club log. CONTROL: the club log does know every one of them.
+    #[test]
+    fn a_hosts_capture_carries_the_board_its_bound_measured() {
+        let dir = std::env::temp_dir().join(format!("fdd-host-bound-{}", std::process::id()));
+        let mut e = engine("arrlfd", 0);
+        e.settings.fd_host_enable = true;
+        e.settings.fd_position_id = "aaaa0001".into();
+        e.fd_host_start(dir.join("fd_event_bound.jsonl")).unwrap();
+        let now = crate::engine::now_unix_secs();
+        let club = e.fd_club.as_mut().unwrap();
+        for i in 0..130u32 {
+            let id = format!("{:08x}", 0xb000_0000u32 + i);
+            club.join(&id, "", "W1AW", now);
+            club.open_link(&id);
+        }
+        // What one club line carries of them, as the host's own position was last sent it.
+        e.fd_mirror.board = club.board_rows(now)[..59].to_vec();
+        e.fd_mirror.connected = true;
+        assert_eq!(
+            e.fd_club.as_ref().unwrap().positions().len(),
+            130,
+            "CONTROL"
+        );
+        let value = e.bounded_field_day_status().unwrap().unwrap();
+        let board = value.club.unwrap().board;
+        assert_eq!(board.len(), 59, "the board the bound measured");
+        assert!(
+            board.iter().all(|r| r.link.as_deref() == Some("connected")),
+            "each row's link, from the live club log: {board:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn club_capture_preserves_native_rows_and_ignores_a_disabled_mirror() {
         let mut e = engine("arrlfd", 2);

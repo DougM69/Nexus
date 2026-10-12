@@ -237,6 +237,12 @@ describe('the host removes a position from its own contest screen, and lets it b
     cleanup()
     render(<ContestView fieldDay={fd({ ...HOST, hosting: false })} onSetMode={() => {}} />)
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+    cleanup()
+    // A read-only block shows no button, whatever it is handed.
+    render(<FdClubSection club={HOST} onRemovePosition={remove} onAllowBack={allowBack} readOnly />)
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Allow back' })).toBeNull()
+    expect(grid()[2][1], 'the words stay').toBe('Connected (heard 3 s ago)')
   })
 
   describe('through a stream', () => {
