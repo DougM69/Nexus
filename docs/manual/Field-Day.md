@@ -294,7 +294,7 @@ His exchange counts as complete only with what you gave for this contact: what y
    - If your set has no step mapped at all, ESM steps aside: Enter logs as it does with ESM off.
 4. Enter sends only when TX is already on, the dial is inside your license privileges, and no clock repair is running. In Phone it also needs you not to be holding PTT, the keyer not to be recording, and the radio not to have the mic. Otherwise Enter sends nothing and logs nothing, and the strip says why.
    - While the RTTY auto sequence runs or Continuous TX is latched, or while the Phone voice keyer is hidden, ESM steps aside: Enter logs as it does with ESM off, and says why.
-5. Enter never turns TX on. After Stop TX, Esc or the watchdog, Enter is refused until you turn TX back on yourself: in CW by sending with an F-key, in RTTY with the TX button, in Phone with PTT.
+5. Enter never turns TX on. After Stop TX, Esc or the watchdog, Enter is refused until you turn TX back on yourself: in CW by sending with an F-key, in RTTY with the TX button, in Phone with PTT. Going to another screen and back does not turn it on either.
 6. One press, one message. Holding Enter sends once. Alt+Enter logs without sending anything.
 7. The call it sends is the call in the strip.
 8. The contact logs the moment you press Enter for its last step, as N1MM does: TU when you are running, your exchange in S&P, and for a dupe that called your run, the press after its QSO B4. It logs only a complete exchange, and only once that last message has started. An Enter that is refused logs nothing.

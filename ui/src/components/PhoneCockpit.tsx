@@ -1120,10 +1120,11 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     // TX pill is display-only here (CockpitHeader arms only when it is passed onSetTxEnabled,
     // which Phone deliberately does not: doing so would replace the ▲ TX on-air pill with an
     // arm button mid-over, since `transmitting` is the FT slot flag alone) — so a message that
-    // named a switch would name one that is not there, and he would stay stuck until he
-    // navigated out of Phone and back. Arming keys NOTHING by itself, and it is no more than
-    // entering Phone already does (`set_operating_mode` arms TX for the manual modes); the
-    // rig keys on the NEXT press, through the ordinary path below.
+    // named a switch would name one that is not there, and the operator would stay stuck:
+    // after a stop, leaving Phone and coming back leaves TX off too (`set_operating_mode` arms
+    // the manual modes only where nothing stopped TX). Arming keys NOTHING by itself, and this
+    // press is the operator's own act that a stop waits for; the rig keys on the NEXT press,
+    // through the ordinary path below.
     //
     // ⚠️ THE ENGINE'S GATE IS UNTOUCHED. This is what the operator is TOLD, not what he is
     // allowed: set_ptt still refuses while tx_enabled is false, and TX is still only ever

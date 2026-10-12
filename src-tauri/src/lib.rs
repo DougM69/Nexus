@@ -17406,7 +17406,9 @@ fn b64_encode(data: &[u8]) -> String {
 /// Enable/disable normal slot transmit ("Monitor"). `false` lowers the latch:
 /// nothing new keys and queued frames drop, but an over already in flight
 /// completes (WSJT-X Enable-Tx; `halt_tx` is the immediate stop). `true`
-/// re-enables it and clears a tripped watchdog.
+/// re-enables it and clears a tripped watchdog. `false` is the operator's own
+/// stop, so it holds: entering a cockpit after it leaves TX off until TX is
+/// turned back on (`Engine::set_tx_enabled_by_operator`).
 ///
 /// `(async)` per the RTTY hang sweep: a sync command takes the engine mutex on
 /// the Windows message-pump thread, so a CAT stall inside the radio loop's tick
@@ -17415,7 +17417,7 @@ fn b64_encode(data: &[u8]) -> String {
 #[tauri::command(async)]
 fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_tx_enabled(enabled);
+    eng.set_tx_enabled_by_operator(enabled);
     // TX On refused because a clock repair holds transmit: say so, rather than leave a button
     // that did nothing (`Engine::hold_tx_for_clock_repair`).
     if enabled && !eng.tx_enabled() && eng.clock_repair_holds_tx() {
