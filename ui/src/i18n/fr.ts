@@ -5774,8 +5774,8 @@ export const FR: PartialCatalog = {
   "settings.fdClub.discover.action": "Trouver les événements du club",
   "settings.fdClub.discover.busy": "Écoute…",
   "settings.fdClub.discover.empty": "Rien entendu en {{secs}} s. Vérifiez que l'hôte a « Héberger un événement de club » activé, que les deux portables sont sur le même réseau (certains Wi-Fi isolent les portables les uns des autres) et, sous Windows, que le pare-feu de ce portable laisse Nexus entendre l'hôte : cliquez sur « Autoriser Nexus dans le Pare-feu Windows », plus haut. Ou saisissez dans « Rejoindre l'événement à » l'adresse que l'hôte affiche après « Les positions rejoignent à ».",
-  "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
-  "settings.fdClub.discover.pick.title": "Utiliser {{host}} comme adresse de connexion",
+  "settings.fdClub.discover.pick.label": "Rejoindre {{event}} — {{host}}",
+  "settings.fdClub.discover.pick.title": "Rejoindre maintenant l'événement à {{host}}. Seule l'adresse de connexion est enregistrée ; les autres modifications ici attendent toujours « Enregistrer ».",
   "settings.betaUpdates.legend": "Mises à jour de l'application",
   "settings.betaUpdates.label": "Recevoir les mises à jour bêta (préversions)",
   "settings.betaUpdates.hint":

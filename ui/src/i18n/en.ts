@@ -4606,8 +4606,8 @@ export const EN = {
   'settings.fdClub.discover.action': 'Find club events',
   'settings.fdClub.discover.busy': 'Listening…',
   'settings.fdClub.discover.empty': 'Nothing heard in {{secs}} s. Check that the host has Host a club event on, that both laptops are on the same network (some Wi-Fi keeps laptops apart), and, on Windows, that this laptop\'s firewall lets Nexus hear the host: press Allow Nexus through Windows Firewall, above. Or type the address the host shows after “Positions join at” into Join event at.',
-  'settings.fdClub.discover.pick.label': '{{event}} — {{host}}',
-  'settings.fdClub.discover.pick.title': 'Use {{host}} as the join address',
+  'settings.fdClub.discover.pick.label': 'Join {{event}} — {{host}}',
+  'settings.fdClub.discover.pick.title': 'Join the event at {{host}} now. This saves only the join address; other changes here still need Save.',
   // ---- Connect on the TV (the read-only LAN page). The toggle IS the LAN opt-in,
   // so the copy has to name what it exposes and to whom — its threat model is not the
   // Field Day scoreboard's, which is defensible partly because a contest log is

@@ -3096,8 +3096,8 @@ export const JA: PartialCatalog = {
   "settings.fdClub.discover.action": "クラブイベントを探す",
   "settings.fdClub.discover.busy": "受信中…",
   "settings.fdClub.discover.empty": "{{secs}}秒間何も受信できませんでした。ホストで「クラブイベントをホスト」がオンになっているか、両方のノートPCが同じネットワークにあるか（Wi-Fi によってはノートPC同士を隔離します）、Windows では、このノートPCのファイアウォールが Nexus にホストを受信させているかを確認してください。上の「Windows ファイアウォールで Nexus を許可」を押します。または、ホストの「ポジションの参加先」の後に表示されるアドレスを「参加先」に入力してください。",
-  "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
-  "settings.fdClub.discover.pick.title": "{{host}} を参加アドレスとして使用",
+  "settings.fdClub.discover.pick.label": "{{event}} に参加 — {{host}}",
+  "settings.fdClub.discover.pick.title": "{{host}} のイベントに今すぐ参加します。保存されるのは参加アドレスだけで、ここでのほかの変更は「保存」を押すまで保存されません。",
   "settings.betaUpdates.legend": "アプリの更新",
   "settings.betaUpdates.label": "ベータ版（プレリリース）の更新を受け取る",
   "settings.betaUpdates.hint":
