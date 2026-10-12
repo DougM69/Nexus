@@ -3674,6 +3674,41 @@ export interface FdClubStatus {
   clubCode?: string
 }
 
+/** The host's club log, as its own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
+ *  many contacts the club holds, and the newest of them, newest first. The HOST's alone, and its
+ *  own screens': nothing of it rides the snapshot, so Remote is sent none of it. */
+export interface FdClubLog {
+  /** Every contact in the club's log, duplicates included: the count the club line says. */
+  total: number
+  /** The newest of them, at most a hundred, newest first. */
+  rows: FdClubLogRow[]
+}
+
+/** One contact of the club log: the contest log table's columns, read as `FieldDayQso`'s are,
+ *  and the position that logged it. */
+export interface FdClubLogRow {
+  call: string
+  class: string
+  section: string
+  /** One value per received slot of the club's contest, in `FieldDayStatus.receives` order;
+   *  absent for Field Day, whose two ride `class` and `section`. */
+  rcvd?: string[]
+  band: string
+  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
+  mode: string
+  submode: string
+  whenUnix: number
+  /** The position that logged it, by id: the key of its line on the host's board, never shown. */
+  posid: string
+  /** Its seq at that position: `(posid, seq)` is the row's identity in the club's log. Never shown. */
+  seq: number
+  /** …and by the name the host's board shows it under; empty for a position with none. */
+  posName: string
+  /** A later contact of a key the club already holds, by the earliest-wins dedupe the club's files
+   *  are written by. Absent means false. */
+  dupe?: boolean
+}
+
 /** One club event heard on the LAN (the "Find club events" scan). */
 export interface FdEventBeacon {
   event: string

@@ -33,6 +33,7 @@ import type {
   FdEventBeacon,
   ClubFirewall,
   ClubFirewallPress,
+  FdClubLog,
   FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
@@ -1059,6 +1060,13 @@ export async function clubFirewallPress(action: 'allow' | 'remove'): Promise<Clu
  * Rejects when this instance is not hosting. */
 export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string> {
   return invoke<string>('fd_club_export', { format })
+}
+
+/** The host's club log for its own screen: the newest contacts its club merged, newest first,
+ *  each with the position that logged it, and how many the club holds. `null` when this instance
+ *  is not hosting. A read; never on Remote. */
+export async function fdClubLogNewest(): Promise<FdClubLog | null> {
+  return invoke<FdClubLog | null>('fd_club_log_newest')
 }
 
 /** What the host's Give button did: the position given, or why nothing changed. */
