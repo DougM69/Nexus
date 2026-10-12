@@ -288,14 +288,19 @@ fn a_positions_link_reads_connected_reconnecting_lost_and_connected_again_at_bot
         (word, mine, line)
     };
     let show = || format!("{:?}", seen.lock().unwrap());
+    // The host's own row is on its board only once its own loopback JOIN has been served. The
+    // serve loop polls accept every 200 ms and serves each connection on a thread of its own, so
+    // the three JOINs can be served in any order, and the row can come in after both tents: it is
+    // waited for with them, before the CONTROLS read it.
     wait_showing(
-        "both tents connected, on the host's board and the CW tent's own line",
+        "both tents connected, on the host's board and the CW tent's own line, and the host's row",
         10,
         || {
             let (word, mine, line) = sample();
             word.as_deref() == Some("connected")
                 && mine.as_deref() == Some("connected")
                 && line == 2
+                && board_link(&host_screen(&host).0, "aaaa0001").0.as_deref() == Some("host")
         },
         show,
     );
