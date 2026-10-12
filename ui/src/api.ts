@@ -1362,6 +1362,9 @@ export interface ConfirmationCheck {
   /** How many records the service's download held (LoTW's confirmations, eQSL's cards, QRZ's
    *  book), as the Connections log says them. */
   records: number
+  /** LoTW only: how many of its confirmations are for a call the log holds no contact under (a
+   *  club call on the account, say). They change nothing. */
+  otherCallRecords: number
   lines: ConfirmationLine[]
   /** The contacts the service confirms that lack its confirmation: Apply adds it. */
   gainIds: string[]

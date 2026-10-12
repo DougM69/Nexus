@@ -899,6 +899,7 @@ export const JA: PartialCatalog = {
   "logbook.confirmations.outOfScope": "{{service}}コンファームのある{{count}}件の交信は、設定のコールサインとは別のコールサインで記録されています。この確認では変更しません。",
   "logbook.confirmations.uploadsUnreached": "アップロード済みとされている{{count}}件の交信には、LoTWが前後1日以内に一覧にしているアップロードがありません。この確認では変更しません。",
   "logbook.confirmations.uploadsOutOfScope": "アップロード済みとされている{{count}}件の交信は、設定のコールサインとは別のコールサインで記録されています。この確認では変更しません。",
+  "logbook.confirmations.otherCalls": "{{count}}件のLoTWの記録は、ログに交信のないコールサイン（LoTWアカウント上のクラブのコールサインなど）のものです。この確認では変更しません。",
   "logbook.confirmations.cancel": "キャンセル",
   "logbook.confirmations.apply": "{{count}}件の交信を変更",
   "logbook.confirmations.done.confirmations": "{{count}}件の交信から{{service}}コンファームを取り除きました。",

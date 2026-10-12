@@ -904,9 +904,10 @@ pub struct ServiceCheck {
     /// download pairs with it, which Apply's merge adds.
     pub gains: Vec<RecordId>,
     /// LoTW's confirmations for a call the log holds no contact under (each contact under its
-    /// STATION_CALLSIGN, else the call in Settings, `tempo_core::reconcile::lotw_own_call`): a club
-    /// call on the account, say. They change nothing. None for eQSL or QRZ, whose rows the merge
-    /// pairs without a call.
+    /// STATION_CALLSIGN, else the call in Settings, compared as LoTW's pairing compares them, a
+    /// portable suffix taken off: `tempo_core::reconcile::lotw_pairing_call`): a club call on the
+    /// account, say. They change nothing. None for eQSL or QRZ, whose rows the merge pairs without
+    /// a call.
     pub other_call_records: usize,
 }
 
@@ -928,7 +929,7 @@ fn check_downloaded(
     use tempo_core::logbook::sqlite::{call_norm_of, Order, Scope};
     use tempo_core::logbook::UploadOutcome;
     use tempo_core::reconcile::check::{check_report, Channel};
-    use tempo_core::reconcile::lotw_own_call;
+    use tempo_core::reconcile::lotw_pairing_call;
     let calls: std::collections::BTreeSet<String> = rows
         .iter()
         .chain(own_rows)
@@ -944,10 +945,11 @@ fn check_downloaded(
                         .as_ref()
                         .is_some_and(|s| s.outcome == UploadOutcome::Accepted)))
     };
-    // The calls the log's contacts were made under, as LoTW holds them: read for LoTW alone.
+    // The calls the log's contacts were made under, as LoTW's pairing compares them: read for LoTW
+    // alone.
     let made_under = |r: &QsoRecord| {
         (channel == Channel::Lotw)
-            .then(|| lotw_own_call(r, own_call))
+            .then(|| lotw_pairing_call(r, own_call))
             .flatten()
     };
     let mut held: HashSet<String> = HashSet::new();

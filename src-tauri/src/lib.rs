@@ -21869,8 +21869,8 @@ struct ConfirmationCheckDto {
     /// count.
     records: usize,
     /// LoTW only: how many of its confirmations are for a call the log holds no contact under (a
-    /// club call on the account, say). They change nothing. Said in the Connections log with
-    /// `records`.
+    /// club call on the account, say). They change nothing. Said in the dialog, and in the
+    /// Connections log with `records`.
     other_call_records: usize,
     /// Newest first; a contact's confirmation line before its upload line.
     lines: Vec<ConfirmationLineDto>,

@@ -3630,3 +3630,99 @@ fn check_confirmations_counts_the_records_of_a_call_the_log_does_not_hold() {
         "each call's row gains its own contact; W1CLUB's never gains K2DEF's at 14:00"
     );
 }
+
+/// ★ A portable suffix is no other call: the operator's contact imported as K2DEF/P, which the
+/// program that logged it signed to LoTW under K2DEF, takes K2DEF's confirmation and its WAS.
+/// N2OLD's row in the same second, listed first, takes N2OLD's contact, never this one.
+#[test]
+fn a_portable_contact_takes_its_base_call_s_lotw_confirmation() {
+    let d = Dir::new("lotw-portable");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under("K2DEF/P", "120000", ""),
+            w1aw_under("N2OLD", "120000", ""),
+        ]),
+    );
+    lotw_synced(&engine, &both_calls_confirmed());
+    for (own, credit) in [("K2DEF/P", "WAS"), ("N2OLD", "DXCC")] {
+        let r = made_under(&engine, Some(own));
+        assert_eq!(
+            (r.qsl_rcvd.lotw, r.credit_granted),
+            (true, vec![credit.to_string()]),
+            "{own}'s contact takes {credit} alone"
+        );
+    }
+}
+
+/// The rows 1.17.0 downloaded were the Settings call's as LoTW holds it, so a row LoTW holds under
+/// K2DEF/QRP was never one of them, though it pairs as K2DEF's: it never explains a mark. K2DEF's
+/// contact at 06:00 holds a LoTW confirmation and its DXCC that no row supports, and K2DEF/QRP's
+/// row at 18:00 (its own contact's) is the oldest-first matcher's for 06:00 on that day. Replayed
+/// over it, the line would start ticked and take a confirmation off on the strength of a row
+/// 1.17.0 never saw, so the mark is counted, not listed.
+#[test]
+fn the_check_never_explains_a_mark_with_a_suffixed_call_s_row() {
+    let d = Dir::new("lotw-check-suffix-replay");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under(
+                "K2DEF",
+                "060000",
+                "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            w1aw_under("K2DEF/QRP", "180000", ""),
+        ]),
+    );
+    let report = lotw_answer(&[w1aw_under(
+        "K2DEF/QRP",
+        "180000",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let check = check_of(&engine, &report, &lotw_answer(&[]));
+    assert!(check.lines.is_empty(), "no line: {:#?}", check.lines);
+    assert_eq!((check.flags.unreached, check.flags.out_of_scope), (1, 0));
+    assert_eq!(
+        check.gains.len(),
+        1,
+        "K2DEF/QRP's contact gains its own row"
+    );
+}
+
+/// Check confirmations counts LoTW's records for a call the log holds no contact under as its
+/// pairing compares calls: a portable suffix is its base call's, a prefix another call. The log
+/// holds K2DEF only as K2DEF/P, and N2OLD. K2DEF's row and K2DEF/QRP's are K2DEF's, which the
+/// log holds (K2DEF's lands on K2DEF/P's contact; K2DEF/QRP's at 16:00 finds none near it); the
+/// records counted are FG/K2DEF's, though at 12:00 and listed first, and the club call W1CLUB's.
+#[test]
+fn check_confirmations_counts_a_portable_call_as_its_base_call() {
+    let d = Dir::new("lotw-check-portable-count");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under("K2DEF/P", "120000", ""),
+            w1aw_under("N2OLD", "120000", ""),
+        ]),
+    );
+    let report = lotw_answer(&[
+        w1aw_under("FG/K2DEF", "120000", "<QSL_RCVD:1>Y"),
+        w1aw_under("K2DEF", "120000", "<QSL_RCVD:1>Y"),
+        w1aw_under("K2DEF/QRP", "160000", "<QSL_RCVD:1>Y"),
+        w1aw_under("W1CLUB", "140000", "<QSL_RCVD:1>Y"),
+        w1aw_under("N2OLD", "120000", "<QSL_RCVD:1>Y"),
+    ]);
+    let found = station::check_lotw_confirmations(
+        &crate::engine::log_plan(&engine),
+        &report,
+        &lotw_answer(&[]),
+        Some("K2DEF"),
+    )
+    .expect("the check reads the log");
+    assert_eq!(found.other_call_records, 2, "FG/K2DEF's and W1CLUB's");
+    let gains: HashSet<RecordId> = found.gains.iter().copied().collect();
+    let own: HashSet<RecordId> = ["K2DEF/P", "N2OLD"]
+        .map(|own| made_under(&engine, Some(own)).id.unwrap())
+        .into();
+    assert_eq!((found.gains.len(), gains), (2, own));
+}

@@ -617,10 +617,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that names none, the call in Settings, which is the call Nexus uploads it under. Two of your calls
   that worked the same station on the same band in the same minute each get their own
   confirmation, and a contact is marked as on file at LoTW only by an upload made under its own
-  call. A confirmation for a call your log has no contacts under, such as a club call on the same
-  account, changes nothing, and Check confirmations counts those in the Connections log. The first
-  download after this update asks LoTW for your whole confirmation history, so it takes longer than
-  usual; you do not need to press Download everything again.
+  call. A portable suffix (/P, /M, /MM, /AM or /QRP) counts as the call without it, so a contact
+  logged as portable still takes the confirmation of a QSO uploaded under your plain call, and the
+  other way round. A prefix such as FG/ and any other suffix, such as a call area's /9, stay a
+  different call, as LoTW keeps them. A confirmation for a call your log has no contacts under,
+  such as a club call on the same account, changes nothing, and Check confirmations says how many
+  there were, in its window and in the Connections log. The first download after this update asks
+  LoTW for your whole confirmation history, so it takes longer than usual; you do not need to press
+  Download everything again.
 - **Closing the torn-off waterfall's window puts the waterfall back, and Alt+F4 closes the contest
   logger window.** Closing the window of a popped-out waterfall left the re-dock bar in its place on
   the Operate screen, and the waterfall came back only when you clicked the bar. Closing the window

@@ -26,8 +26,8 @@ pub const LOTW_REPORT_URL: &str = "https://lotw.arrl.org/lotwuser/lotwreport.adi
 /// There is no `qso_owncall` ("Returns only records whose 'own' call sign matches"): both
 /// downloads ask for every call on the account, so an operator who changed calls gets the old
 /// call's confirmations too. `qso_withown=yes` puts on each row the call its QSO was made under
-/// (`STATION_CALLSIGN`), and a row confirms only a contact made under that call
-/// ([`crate::reconcile::lotw_own_call`]).
+/// (`STATION_CALLSIGN`), and a row confirms only a contact made under that call, a portable
+/// suffix aside ([`crate::reconcile::lotw_pairing_call`]).
 ///
 /// `Debug` is implemented manually to **redact the password** — it must never
 /// reach a log, error string, or the UI.
