@@ -614,7 +614,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address and nothing else, so other changes on the page still wait for Save, and the line saying
   where the join stands shows right under the list: looking for the host, then joined, turned away
   or cannot reach it. A laptop hosting a club event cannot join one, and the list says so. As Save
-  does, the click asks for a position name first when none is saved.
+  does, the click asks for a position name first when none is saved. For a contest club sync cannot
+  run, the click still saves the address, and the sentence saying why, which opens the club
+  section, also shows right under the list.
 - **The host of a club event shows where to join it.** With Host a club event on, the host's
   Contest screen and Settings ▸ Contesting say that it is hosting, on which port, at which of its
   network addresses (each with its adapter's name: the address the other laptops type into Join
