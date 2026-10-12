@@ -414,6 +414,14 @@ interface Props {
    * column whose header row has no room left (`ContestScoreChip`).
    */
   scoreChip?: boolean
+  /**
+   * CONTEST STRIP ONLY — the Contest screen's operator box, drawn in this strip's header row right
+   * beside Sending and I moved (ContestView's `OperatorBox`). Only the large log line passes it
+   * (`ContestLargeEntry`: the top of the main window's Contest screen and of the logger window);
+   * every cockpit's strip is as it was. It sits above the boxes, so the contact's Tab order (Call,
+   * the report, the exchange, Log) does not pass through it, and its Enter is its own.
+   */
+  operatorBox?: React.ReactNode
 }
 
 /**
@@ -450,6 +458,7 @@ export function LogEntry({
   esm,
   sharedEntry,
   scoreChip = true,
+  operatorBox,
 }: Props) {
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
@@ -2326,6 +2335,8 @@ export function LogEntry({
           {/* ⭐ THE SCORE CHIP — the Contest screen's own numbers at a glance, in the room the
               row has left: a zero-cost slot, so nothing else in this header moves for it. */}
           {fieldDay && scoreChip && <ContestScoreChip fieldDay={fieldDay} />}
+          {/* The operator box, right beside the sent side (only the large log line passes one). */}
+          {operatorBox}
 
           {/* ⭐ THE SENT SIDE, READ-ONLY (§9) — what is going on the air right now.
               It is the SESSION's composing exchange, never a row's: a row already

@@ -149,15 +149,18 @@ keyboard and mouse at a second monitor (MouseMux gives each of them their own). 
 and drag the window to the logger's monitor. It opens on that monitor again next time.
 
 - **The log line comes first, in large type.** The call and exchange boxes are across the top of
-  the window, with the dupe warning right under them. Under that are the last five contacts,
-  newest first, and the whole Contest screen (operator, sections, score) is below, scrolling on
-  its own.
+  the window, with the dupe warning right under them, and the **Operator** box is on the log line's
+  title line, beside Sending and I moved: Ctrl+O puts the cursor there, and Enter saves it. Under
+  that are the last five contacts, newest first, and the whole Contest screen (club board, score,
+  sections, log) is below, scrolling on its own.
 - **A− and A+** at the top right make the log line and the last contacts smaller or larger, from
   80 to 160 %, on top of your Text size setting. That computer remembers the size for the logger
   window; until you size it there, it opens at the size of the Contest screen's own log line.
 - **The same log line tops the Contest screen** in the main window while a contest runs, with its
-  own A− and A+, so the operator can type contacts there too. Nothing on it transmits either, but
-  in the main window Esc stops TX, as the top bar's Stop TX does, and leaves the boxes as they are.
+  own A− and A+ and the Operator box on its title line, so the operator can type contacts there
+  too; the rest of the screen below it uses the whole width of the window. Nothing on it transmits
+  either, but in the main window Esc stops TX, as the top bar's Stop TX does, and leaves the boxes
+  as they are.
 
 - **One contact, two windows.** The logger's line and your own contest log strip (a cockpit's LOG
   pane, or the log line at the top of the Contest screen) are the same contact: whatever either of you types shows in both as it is typed, with the same dupe warning,

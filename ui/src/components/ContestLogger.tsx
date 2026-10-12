@@ -9,9 +9,15 @@
 // ⭐ THE ENTRY FIRST, AND LARGE (the operator's layout, 2026-10-11). For the person at this window
 // the call and the exchange are the job, so they are the top of the window, in large text, with the
 // dupe warning right under the boxes; the last contacts come next, newest first, at the same size;
-// and the contest screen (operator, band board, score) scrolls below. A− / A+ in the bar over the
+// and the contest screen (band board, score, log) scrolls below. A− / A+ in the bar over the
 // entry sizes the entry and the last contacts together, and this computer remembers it for this
 // window. The sizes are styles.css's, scoped to the entry: the cockpits' log lines are untouched.
+//
+// ⭐ THE OPERATOR BOX IS ON THE ENTRY'S TITLE LINE, beside Sending and I moved (the operator,
+// 2026-10-12: "I want to move the field to change operators up near the top"), in both windows, and
+// the screen below draws none, so there is one. Ctrl+O from the log line lands in it. It writes the
+// operator through the host's narrow save, never the whole-settings one, and its Enter is its own:
+// it logs nothing.
 //
 // ⭐ AND THE SAME ENTRY TOPS THE MAIN WINDOW'S CONTEST SCREEN (the operator's pick, 2026-10-11: "The
 // Logger window's large Call / RST / County boxes, dupe warning and last contacts at the top of the
@@ -47,7 +53,7 @@ import type { AppSnapshot, FieldDayStatus } from '../types'
 import { useContestSwitch } from '../contestSwitch'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
-import { annotate, ContestLogHead, ContestLogRow, ContestView } from './ContestView'
+import { annotate, ContestLogHead, ContestLogRow, ContestView, OperatorBox } from './ContestView'
 import { FdAdvisories } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
 
@@ -122,6 +128,10 @@ export function ContestLargeEntry({
   fdRuleset,
   title,
   sharedEntry,
+  operator,
+  onSaveOperator,
+  operatorAsk,
+  onOperatorFocused,
 }: {
   snap: AppSnapshot
   fieldDay: FieldDayStatus
@@ -130,6 +140,14 @@ export function ContestLargeEntry({
   /** The bar's name for the entry: the window's own in the logger window, the screen's in the main. */
   title: string
   sharedEntry?: 'logger'
+  /** The operator at the key as this window's settings hold it (`fdOperator`), or null until they
+   *  are read. The box on the title line shows it. */
+  operator: string | null
+  /** The window's narrow operator write (`setFdOperator`), never the whole-settings save. */
+  onSaveOperator: (call: string) => void | Promise<unknown>
+  /** Ctrl+O: the asks the operator box has not answered (`features/contestKeys.ts`). */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
 }) {
   const section = snap.radio.operatingMode
   const pskName = usePskName(section)
@@ -187,6 +205,15 @@ export function ContestLargeEntry({
             fdMode={m.fdMode}
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
+            operatorBox={
+              <OperatorBox
+                onLogLine
+                value={operator}
+                onSave={onSaveOperator}
+                operatorAsk={operatorAsk}
+                onOperatorFocused={onOperatorFocused}
+              />
+            }
           />
         </div>
       </section>
@@ -199,10 +226,15 @@ export function ContestLogger({
   snap,
   fdActive,
   fdRuleset,
+  operator,
+  onSaveOperator,
 }: {
   snap: AppSnapshot
   fdActive: boolean
   fdRuleset: FdRulesetDto | null
+  /** This window's operator at the key and its narrow write (DetachedPanel's): the entry's box. */
+  operator: string | null
+  onSaveOperator: (call: string) => void | Promise<unknown>
 }) {
   // THE F-KEYS DO NOTHING HERE. In the main window they send messages; in this one they are not
   // bound to anything, and the webview's own F-key actions (F5 reloads the page) are held too.
@@ -214,8 +246,8 @@ export function ContestLogger({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const fd = snap.fieldDay ?? null
-  // CTRL+O FROM THE LOG LINE (`features/contestKeys.ts`): the operator box is this window's own, in
-  // its copy of the Contest screen below.
+  // CTRL+O FROM THE LOG LINE (`features/contestKeys.ts`): the operator box is this window's own, on
+  // the entry's title line while a contest runs, else in its copy of the Contest screen below.
   const [operatorAsk, setOperatorAsk] = useState(0)
   useOperatorBoxAsk(() => setOperatorAsk((n) => n + 1))
   // A contest switched by a pick saved in the main window: this copy of the Contest screen says
@@ -231,6 +263,10 @@ export function ContestLogger({
           fdRuleset={fdRuleset}
           title={t('contestLogger.title')}
           sharedEntry="logger"
+          operator={operator}
+          onSaveOperator={onSaveOperator}
+          operatorAsk={operatorAsk}
+          onOperatorFocused={() => setOperatorAsk(0)}
         />
       )}
       <main className="layout single">
@@ -244,6 +280,7 @@ export function ContestLogger({
           contestSwitch={contestSwitch}
           operatorAsk={operatorAsk}
           onOperatorFocused={() => setOperatorAsk(0)}
+          operatorBoxAbove={fd != null}
         />
       </main>
     </>

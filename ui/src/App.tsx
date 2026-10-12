@@ -3254,6 +3254,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // screen's root IS a `.panel`, so `.layout.single > .panel` still gives it the definite
       // height, the deficit valve and the measure it needs (styles.css; computed in
       // layout-single-deficit.test.tsx and fdDashboardShell.test.tsx).
+      //
+      // THE OPERATOR BOX goes with the entry, onto its title line beside Sending and I moved (the
+      // operator, 2026-10-12: "I want to move the field to change operators up near the top"), and
+      // the screen below draws none while it is there. It saves through `handleSetOperator`, the
+      // same narrow write the top bar's operator chip uses, so the chip follows what is typed.
       workspace = remote ? <RemoteFieldDay tier={tier} /> : (
         <div className="contest-screen">
           {snap.fieldDay && (
@@ -3263,6 +3268,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
               title={t('contestScreen.entry.title')}
+              operator={settings ? (settings.fdOperator ?? '') : null}
+              onSaveOperator={handleSetOperator}
+              operatorAsk={operatorAsk}
+              onOperatorFocused={() => setOperatorAsk(0)}
             />
           )}
           <main className="layout single">
@@ -3279,6 +3288,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               contestSwitch={contestSwitch}
               operatorAsk={operatorAsk}
               onOperatorFocused={() => setOperatorAsk(0)}
+              operatorBoxAbove={snap.fieldDay != null}
             />
           </main>
         </div>

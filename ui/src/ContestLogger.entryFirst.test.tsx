@@ -407,11 +407,12 @@ describe('A− / A+ sizes the entry and the last contacts', () => {
 })
 
 // ⭐ CTRL+O IN THE LOGGER WINDOW (N1MM's "Ctrl+O = Set operator call"): the operator box is this
-// window's own, in the contest screen under the entry, so the caret goes straight to it.
+// window's own, on its entry's title line beside Sending, so the caret goes straight to it.
 describe('Ctrl+O in the logger window', () => {
   it('puts the caret in the window’s own operator box, from the log line', async () => {
     await mountLogger()
     const operator = screen.getByLabelText(t('fieldDay.operator.aria')) as HTMLInputElement
+    expect(operator.closest('.contest-logger-entry .le-fd-header'), 'the box is on the entry’s title line').not.toBeNull()
     callBox().focus()
     expect(document.activeElement).toBe(callBox())
     await act(async () => {

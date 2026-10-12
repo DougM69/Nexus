@@ -104,6 +104,8 @@ describe('Ctrl+O in the app', () => {
     expect(free, 'Ctrl+O is the strip’s: the webview’s Open never runs').toBe(false)
     const box = await operatorBox()
     await waitFor(() => expect(document.activeElement).toBe(box), WAIT)
+    // With a contest running the box is at the top: on the entry's title line, beside Sending.
+    expect(box.closest('.contest-screen .contest-logger-entry .le-fd-header'), 'the caret is not in the top box').not.toBeNull()
     expect(document.querySelector('main.cw-cockpit'), 'the Contest screen is the one on show').toBeNull()
     expect(vi.mocked(api.setMode), 'the FT role is left as it was').not.toHaveBeenCalled()
   })

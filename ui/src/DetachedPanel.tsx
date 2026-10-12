@@ -790,6 +790,16 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     )
   }
 
+  /** The operator box's save, in the torn-off scoreboard and in the logger window's entry. */
+  const saveFdOperator = (call: string) => {
+    if (!settings) return
+    const op = call.trim().toUpperCase()
+    setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
+    // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
+    // definition and the heavyweight path would end it (#54).
+    apply(setFdOperator(op)) // persist + mirror the returned snapshot
+  }
+
   if (panel === 'fieldday') {
     const fd = snap?.fieldDay ?? null
     return (
@@ -799,14 +809,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             fieldDay={fd}
             settings={settings}
             detached
-            onSaveOperator={(call) => {
-              if (!settings) return
-              const op = call.trim().toUpperCase()
-              setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
-              // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
-              // definition and the heavyweight path would end it (#54).
-              apply(setFdOperator(op)) // persist + mirror the returned snapshot
-            }}
+            onSaveOperator={saveFdOperator}
           />
         ) : (
           <div className="app loading">
@@ -829,7 +832,13 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     return (
       <DetachedShell className="contest-logger">
         {snap ? (
-          <ContestLogger snap={snap} fdActive={settings?.fdActive ?? false} fdRuleset={fdRuleset} />
+          <ContestLogger
+            snap={snap}
+            fdActive={settings?.fdActive ?? false}
+            fdRuleset={fdRuleset}
+            operator={settings ? (settings.fdOperator ?? '') : null}
+            onSaveOperator={saveFdOperator}
+          />
         ) : (
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
