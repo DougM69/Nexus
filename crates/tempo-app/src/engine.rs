@@ -13221,13 +13221,26 @@ impl Engine {
         )
     }
 
-    /// ⭐ **The club board's rows as this laptop's screens show them, and as its Remote capture
-    /// carries them and is bounded by** (`bounded_field_day_status`): on the HOST, the board its club
-    /// sends every position now ([`tempo_net::fdsync::board_fit`] of its live club log, cut to the
-    /// positions heard from most recently when one club line cannot carry them all), so the host's
-    /// own board is current from the moment a position joins, with or without its own loopback
-    /// position in, and is cut as every position's is; on a position, the board the host last sent.
+    /// ⭐ **The club board's rows as this laptop's own screens show them**: on the HOST, every
+    /// position its live club log knows, removed ones included, however many, so the host's own
+    /// board is current from the moment a position joins, with or without its own loopback position
+    /// in, and every joined position has its line there with its Remove or Allow back. The board
+    /// every position is sent, and Remote, are cut ([`Self::fd_club_board_sent`]); a position left
+    /// out of that cut (one gone quiet while the club is full) must still be one the host can see
+    /// and remove. On a position, the board the host last sent.
     pub(crate) fn fd_club_board_rows(&self, now: u64) -> Vec<tempo_net::fdsync::WireBoardRow> {
+        match &self.fd_club {
+            Some(club) => club.board_rows(now),
+            None => self.fd_mirror.board.clone(),
+        }
+    }
+
+    /// ⭐ **The club board as every position is sent it, and as Remote carries it**: on the HOST,
+    /// [`tempo_net::fdsync::board_fit`] of its live club log, cut to the positions heard from most
+    /// recently when one club line cannot carry them all, which is the board its club sends every
+    /// position now; on a position, the board the host last sent, as it came. What the Remote
+    /// capture's bound measures and what it ships (`bounded_field_day_status`).
+    pub(crate) fn fd_club_board_sent(&self, now: u64) -> Vec<tempo_net::fdsync::WireBoardRow> {
         match &self.fd_club {
             Some(club) => tempo_net::fdsync::board_fit(&club.board_rows(now)).rows,
             None => self.fd_mirror.board.clone(),
@@ -13258,11 +13271,12 @@ impl Engine {
             .cloned()
             .collect();
         dupes.sort();
-        // ⭐ The rows are the board the club sends (`Self::fd_club_board_rows`), which is what the
-        // Remote capture's bound measures. On the HOST each row also says where that position's
-        // link stands now, read from its live club log (`fdevent::PositionLink`), by the reading
-        // its hosting line counts connected positions by; a position holds only the rows the host
-        // sent it, which carry none.
+        // ⭐ The rows are this laptop's own board (`Self::fd_club_board_rows`): on the HOST every
+        // position its club knows, uncut; the Remote capture cuts them to the board every position
+        // is sent. On the HOST each row also says where that position's link stands now, read from
+        // its live club log (`fdevent::PositionLink`), by the reading its hosting line counts
+        // connected positions by; a position holds only the rows the host sent it, which carry
+        // none.
         let now = now_unix_secs();
         let own = self.settings.fd_position_id.as_str();
         let rows = self.fd_club_board_rows(now);

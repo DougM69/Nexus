@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The club host can remove a position, and let it back.** Remove, on each other position's line
   of the host's club board, asks first and then closes that laptop's link and turns it away each
   time it tries again, until the host presses Allow back; the laptop's own screen says the host
-  removed it. The contacts it already sent stay in the club's log, score, Cabrillo and ADIF exactly
+  removed it. Every position that has joined has its line there, however many: once the club has
+  more positions than each position's own board can show, the host's board still lists them all.
+  The contacts it already sent stay in the club's log, score, Cabrillo and ADIF exactly
   as they were, the ones it logs meanwhile go up when it is let back, and a removal is kept through
   a restart of the host. Club sync is still v4, so a laptop on an earlier v4 build is turned away
   the same way, in the same words.
