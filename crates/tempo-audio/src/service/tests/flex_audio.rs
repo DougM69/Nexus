@@ -1962,21 +1962,30 @@ fn on_dax_without_receive_audio() -> FlexScene {
 /// deadline.
 type When = fn(f64, f64) -> f64;
 
-/// An over on DAX, keyed at an even boundary, whose audio route goes at the virtual time
-/// `when(key, deadline)` names: the operator turns native audio off, or (`floor`) the receive
-/// floor gives up on DAX. Read by value: whether it keyed and its audio reached the radio as DAX,
-/// whether any DAX audio reached the radio 100 ms or more after the route went, when it unkeyed
-/// (`tick+N`: N loop ticks after the first tick that ran with the route gone; `own end`: at its
-/// own deadline, keyed until then), whether TX is on, what the status lane got (as the UI receives
-/// it), and whether the receive floor's banner is up.
-fn route_gone_mid_over(floor: bool, when: When) -> String {
+/// The over [`route_gone_mid_over`] puts on DAX: a CQ in a slot mode, keyed at an even boundary,
+/// or an APRS position beacon, an over that is neither a slot over nor a voice-keyer message.
+#[derive(Clone, Copy)]
+enum OverOnDax {
+    Cq(Tier),
+    Beacon,
+}
+
+/// An over on DAX (`over`), whose audio route goes at the virtual time `when(key, deadline)`
+/// names: the operator turns native audio off, or (`floor`) the receive floor gives up on DAX.
+/// Read by value: whether it keyed and its audio reached the radio as DAX, whether any DAX audio
+/// reached the radio 100 ms or more after the route went, when it unkeyed (`tick+N`: N loop ticks
+/// after the first tick that ran with the route gone; `own end`: at its own deadline, keyed until
+/// then), whether TX is on, what the status lane got (as the UI receives it), and whether the
+/// receive floor's banner is up.
+fn route_gone_mid_over(over: OverOnDax, floor: bool, when: When) -> String {
     let mut s = if floor {
         on_dax_without_receive_audio()
     } else {
         on_dax()
     };
-    {
+    if let OverOnDax::Cq(tier) = over {
         let mut e = s.engine.lock().unwrap();
+        e.set_tier(tier);
         e.broadcast("CQ TEST W9XYZ EN37");
         // The boundary path, as every over after the first in a run keys.
         let _ = e.take_immediate_tx();
@@ -1989,8 +1998,16 @@ fn route_gone_mid_over(floor: bool, when: When) -> String {
     let mut deadline = 0.0;
     let mut gone: Option<(usize, Instant, f64)> = None;
     let mut unkeyed: Option<(usize, f64)> = None;
+    // A beacon goes in once the loop has run on this clock: the first tick on it can take most of
+    // a second, and a packet keyed there has played out, by the deadline it was given, before
+    // the tick returns.
+    let mut beacon_due = matches!(over, OverOnDax::Beacon);
     for tick in 0.. {
         let v = start_v + w0.elapsed().as_secs_f64() * 1000.0;
+        if beacon_due && v >= start_v + 500.0 {
+            beacon_due = false;
+            beacon(&s);
+        }
         if gone.is_none() {
             if keyed.is_some_and(|k| v >= when(k, deadline)) {
                 gone = Some((tick, Instant::now(), v));
@@ -2007,7 +2024,8 @@ fn route_gone_mid_over(floor: bool, when: When) -> String {
         if keyed.is_none() && s.state.tx_until_ms.is_some() {
             // From the key on the wire: the boundary's tick can take a while to return.
             keyed = Some(start_v + w0.elapsed().as_secs_f64() * 1000.0);
-            deadline = s.state.slot_tx_until_ms;
+            // A slot over's is its slot deadline too: the two are stamped together at its key.
+            deadline = s.state.tx_until_ms.unwrap_or(0.0);
         } else if keyed.is_some() && unkeyed.is_none() && s.state.tx_until_ms.is_none() {
             unkeyed = Some((tick, v));
         }
@@ -2020,6 +2038,16 @@ fn route_gone_mid_over(floor: bool, when: When) -> String {
         std::thread::sleep(Duration::from_millis(20));
     }
     let (gone_tick, gone_at, _) = gone.expect("the over keyed and its route went");
+    if let OverOnDax::Cq(tier) = over {
+        // The premise: the over keyed was that tier's, inside one of its slots.
+        let e = s.engine.lock().unwrap();
+        let keyed_ms = deadline - keyed.unwrap_or(deadline);
+        assert!(
+            e.tier() == tier && keyed_ms < e.active_slot_secs() * 1000.0,
+            "premise: a {tier:?} over; keyed {keyed_ms} ms in {:?}",
+            e.tier()
+        );
+    }
     let log = s.log();
     let dax: Vec<Instant> = log
         .iter()
@@ -2063,7 +2091,10 @@ fn native_audio_off_mid_over_ends_the_over() {
     ];
     let got: Vec<String> = trials
         .iter()
-        .map(|(name, floor, when)| format!("{name}: {}", route_gone_mid_over(*floor, *when)))
+        .map(|(name, floor, when)| {
+            let got = route_gone_mid_over(OverOnDax::Cq(Tier::Ft8), *floor, *when);
+            format!("{name}: {got}")
+        })
         .collect();
     let want: Vec<String> = trials
         .iter()
@@ -2086,7 +2117,8 @@ fn native_audio_off_mid_over_ends_the_over() {
 #[test]
 fn native_audio_off_in_an_overs_tail_changes_nothing() {
     assert_eq!(
-        route_gone_mid_over(false, |_, deadline| deadline - crate::slot::TX_TAIL_MS
+        route_gone_mid_over(OverOnDax::Cq(Tier::Ft8), false, |_, deadline| deadline
+            - crate::slot::TX_TAIL_MS
             + 100.0),
         "xmit1=1 audio_on_dax=true dax_audio_after=false unkey=own end tx_enabled=true \
          lane=none floor_banner=false"
@@ -2094,29 +2126,33 @@ fn native_audio_off_in_an_overs_tail_changes_nothing() {
 }
 
 /// The rule above ends a SLOT over (FT8, FT4, JS8 and the other timed-slot modes), as the
-/// refused-key and failed-unkey halts are a slot over's. Another over Nexus plays over DAX, here a
-/// recorded message, is left as it was when native audio goes off under it: TX stays on and the
-/// lane gets nothing. Halting TX there would leave the Phone screen, where the voice keyer lives,
-/// with no TX switch to turn it back on.
+/// refused-key and failed-unkey halts are a slot over's, and a voice-keyer message ends as the
+/// keyer's own Stop ends it, in Phone or on a digital slice (`voice_keyer`). The control: any other
+/// over keeps what it had before the voice keyer's rule. An FT8 and an FT4 over end as above, with
+/// TX off and the lane; an APRS packet, neither a slot over nor a message, stays keyed to its own
+/// end, with TX on and nothing on the lane.
 #[test]
-fn native_audio_off_mid_message_leaves_the_voice_keyer_as_it_was() {
-    let mut s = on_dax();
-    s.engine.lock().unwrap().send_voice(message()).unwrap();
-    run_until(&mut s, "the message never keyed", |s| keys(s) == 1);
-    s.run(300);
-    assert!(
-        s.log()
-            .iter()
-            .any(|(_, e)| matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1)),
-        "premise: the message went out as DAX"
-    );
-    s.set_native_audio(false);
-    s.run(1_500);
-    let e = s.engine.lock().unwrap();
-    let lane = serde_json::to_value(e.snapshot()).unwrap()["radio"]["slotAudioLost"].is_object();
+fn native_audio_off_mid_over_changes_nothing_but_a_voice_message() {
+    let trials: [(&str, OverOnDax, When); 3] = [
+        ("FT8 +2000", OverOnDax::Cq(Tier::Ft8), |k, _| k + 2_000.0),
+        ("FT4 +2000", OverOnDax::Cq(Tier::Ft4), |k, _| k + 2_000.0),
+        // Half way through the packet's audio.
+        ("APRS", OverOnDax::Beacon, |k, d| {
+            k + (d - crate::slot::TX_TAIL_MS - k) / 2.0
+        }),
+    ];
+    let got: Vec<String> = trials
+        .iter()
+        .map(|(name, over, when)| format!("{name}: {}", route_gone_mid_over(*over, false, *when)))
+        .collect();
     assert_eq!(
-        format!("tx_enabled={} lane={lane}", e.tx_enabled()),
-        "tx_enabled=true lane=false"
+        got.join("\n"),
+        "FT8 +2000: xmit1=1 audio_on_dax=true dax_audio_after=false unkey=tick+1 \
+         tx_enabled=false lane=slotAudioLost floor_banner=false\n\
+         FT4 +2000: xmit1=1 audio_on_dax=true dax_audio_after=false unkey=tick+1 \
+         tx_enabled=false lane=slotAudioLost floor_banner=false\n\
+         APRS: xmit1=1 audio_on_dax=true dax_audio_after=false unkey=own end tx_enabled=true \
+         lane=none floor_banner=false"
     );
 }
 

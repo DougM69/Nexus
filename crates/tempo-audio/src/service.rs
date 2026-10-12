@@ -3358,6 +3358,12 @@ struct RadioLoop {
     /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
     /// operator's voice. Matches `tx_until_ms` only while that over is the one held.
     flex_voice_until_ms: Option<f64>,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last handed
+    /// whole to the DAX tee of Nexus's Flex client at its key: through the switch to DAX in Phone
+    /// (`flex_voice_until_ms`), or over the DAX a digital slice already takes. The tee going takes
+    /// the rest of it, and the tee sync then ends it. Matches `tx_until_ms` only while that over is
+    /// the one held.
+    voice_tee_until_ms: Option<f64>,
     tuning_keyed: bool,
     /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
     /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
@@ -4145,6 +4151,7 @@ impl RadioLoop {
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
             flex_voice_until_ms: None,
+            voice_tee_until_ms: None,
             tuning_keyed: false,
             tune_native: false,
             tune_was_data: false,
@@ -6397,13 +6404,15 @@ impl RadioLoop {
             {
                 engine_lock(engine).halt_tx_for_lost_slot_audio();
             }
-            // …and a voice-keyer message through the client's switch to DAX, which hands its
-            // whole waveform to the tee at its key in the same way: it ends as the keyer's own
-            // Stop ends it, the rest dropped and the radio unkeyed in this same tick (the voice
-            // block below), with TX On left as it was (operator ruling, 2026-10-12, "End the
-            // message and unkey"). Only while its audio is still going out, as for a slot over.
+            // …and a voice-keyer message the tee carries, through the client's switch to DAX in
+            // Phone or over the DAX a digital slice already takes, which hands its whole waveform
+            // to the tee at its key in the same way: it ends as the keyer's own Stop ends it, the
+            // rest dropped and the radio unkeyed in this same tick (the voice block below), with
+            // TX On left as it was (operator rulings, 2026-10-12, "End the message and unkey" and,
+            // for a digital slice, "Yes, end it the same way"). Only while its audio is still
+            // going out, as for a slot over. Any other over on DAX is left as it was.
             if self.dax_tee_id.is_some()
-                && self.flex_voice_until_ms.is_some_and(|t| {
+                && self.voice_tee_until_ms.is_some_and(|t| {
                     self.tx_until_ms == Some(t) && now < t - crate::slot::TX_TAIL_MS
                 })
             {
@@ -10765,6 +10774,11 @@ impl RadioLoop {
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         if dax {
                             self.flex_voice_until_ms = self.tx_until_ms;
+                        }
+                        // Handed whole to the client's DAX tee (the switch's, or a digital slice's
+                        // own DAX): the tee going ends it (the tee sync above).
+                        if self.dax_tee_id.is_some() {
+                            self.voice_tee_until_ms = self.tx_until_ms;
                         }
                     }
                     if let KeyUp::Refused(why) = &key {

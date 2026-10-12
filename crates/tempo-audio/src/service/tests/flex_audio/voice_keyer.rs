@@ -512,14 +512,12 @@ fn stop_tx_mid_message_unkeys_and_drops_the_rest_before_the_mic_comes_back() {
     }
 }
 
-/// ⭐ NATIVE AUDIO OFF MID-MESSAGE ENDS IT AT ONCE (operator ruling, 2026-10-12, "End the message
-/// and unkey", and the line the signed text gained for it). The message's audio goes with the DAX
-/// route, so the over ends as the keyer's own Stop ends it: the unkey within a few ticks of the
-/// switch, never at the message's own end; nothing of the rest reaches the radio; and the mic comes
-/// back after the radio has let go. TX On stays as it was: the latch on, no lane, no alarm.
-#[test]
-fn native_audio_off_mid_message_ends_it_and_unkeys_with_tx_on_as_it_was() {
-    let mut s = phone();
+/// A 3 s message on the settled station `s`, with native audio switched off once 20 of its DAX
+/// packets have reached the radio, read by value once the radio is back on its mic: whether the
+/// unkey went within 500 ms of the switch, whether any DAX reached the radio 30 ms or more after
+/// the unkey, whether less than a second of it went out, TX On, the voice keyer's and the slot
+/// over's lanes, the CAT alarm, and the wire. With the time from the switch to the unkey.
+fn message_with_native_audio_off_mid_way(mut s: FlexScene) -> (String, Duration) {
     let since = Instant::now();
     s.engine
         .lock()
@@ -550,7 +548,7 @@ fn native_audio_off_mid_message_ends_it_and_unkeys_with_tx_on_as_it_was() {
     let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
     let tx_enabled = s.engine.lock().unwrap().tx_enabled();
     let alarm = names_an_alarm(&cat_status(&s).1);
-    assert_eq!(
+    (
         format!(
             "unkey_within_500ms={} late_dax={} frames_under_a_second={} tx_enabled={tx_enabled} \
              dropped={} slot_lane={} alarm={alarm} wire={:?}",
@@ -561,12 +559,171 @@ fn native_audio_off_mid_message_ends_it_and_unkeys_with_tx_on_as_it_was() {
             snap["radio"]["slotAudioLost"],
             voice_trace(&s, since)
         ),
+        unkey.duration_since(off),
+    )
+}
+
+/// ⭐ NATIVE AUDIO OFF MID-MESSAGE ENDS IT AT ONCE (operator ruling, 2026-10-12, "End the message
+/// and unkey", and the line the signed text gained for it). The message's audio goes with the DAX
+/// route, so the over ends as the keyer's own Stop ends it: the unkey within a few ticks of the
+/// switch, never at the message's own end; nothing of the rest reaches the radio; and the mic comes
+/// back after the radio has let go. TX On stays as it was: the latch on, no lane, no alarm.
+#[test]
+fn native_audio_off_mid_message_ends_it_and_unkeys_with_tx_on_as_it_was() {
+    let (got, after) = message_with_native_audio_off_mid_way(phone());
+    assert_eq!(
+        got,
         "unkey_within_500ms=true late_dax=false frames_under_a_second=true tx_enabled=true \
          dropped=null slot_lane=null alarm=false wire=[\"stream create type=dax_tx\", \
          \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\", \"transmit \
          set dax=0\", \"radio dax=0\"]",
-        "the unkey {:?} after native audio went off",
-        unkey.duration_since(off)
+        "the unkey {after:?} after native audio went off"
+    );
+}
+
+/// …and on a digital slice (operator ruling, 2026-10-12, "Yes, end it the same way", and the same
+/// line of the signed text): the TX slice in DIGU, the radio on DAX for its mode, a message plays
+/// over that DAX with no switch around it, and its audio goes with the route just the same. It
+/// ends the same way, read the same way: the unkey within a few ticks of the switch, nothing of the
+/// rest on the radio, TX On as it was, no lane, no alarm, and the radio back on its mic once it has
+/// let go. Every other over on DAX keeps its own rule, FT8 and FT4 included
+/// (`native_audio_off_mid_over_changes_nothing_but_a_voice_message`).
+#[test]
+fn native_audio_off_mid_message_on_a_digital_slice_ends_it_the_same_way() {
+    let (got, after) = message_with_native_audio_off_mid_way(on_dax());
+    assert_eq!(
+        got,
+        "unkey_within_500ms=true late_dax=false frames_under_a_second=true tx_enabled=true \
+         dropped=null slot_lane=null alarm=false wire=[\"xmit 1\", \"xmit 0\", \"idle\", \
+         \"transmit set dax=0\", \"radio dax=0\"]",
+        "the unkey {after:?} after native audio went off"
+    );
+}
+
+/// The rule follows the route the message's audio took, not the toggle: a message keyed with
+/// native audio off went to the sound card, and native audio coming on under it and going off
+/// again (the DAX tee in and out with none of the message in it) leaves it to its own end.
+#[test]
+fn a_message_on_the_sound_card_keeps_its_own_end_when_native_audio_comes_and_goes() {
+    let mut s = on_dax();
+    s.set_native_audio(false);
+    run_until(&mut s, "the radio never had its mic back", |s| {
+        s.backend.tee.lock().unwrap().is_none()
+            && !s.engine.lock().unwrap().snapshot().radio.flex_dax_tx
+    });
+    s.engine
+        .lock()
+        .unwrap()
+        .send_voice(message_of(6.0))
+        .unwrap();
+    run_until(&mut s, "the message never keyed", |s| keys(s) == 1);
+    let deadline = s.state.tx_until_ms.expect("the message's over");
+    let sound_card = s.backend.tee.lock().unwrap().is_none();
+    s.set_native_audio(true);
+    run_until(&mut s, "the tee never went in", |s| {
+        s.backend.tee.lock().unwrap().is_some()
+    });
+    let tee_in_mid_message = s.state.tx_until_ms == Some(deadline);
+    s.set_native_audio(false);
+    let unkeyed = step_until_unkeyed(&mut s);
+    assert_eq!(
+        format!(
+            "sound_card={sound_card} tee_in_mid_message={tee_in_mid_message} tee_out={} \
+             unkey_at_own_end={}",
+            s.backend.tee.lock().unwrap().is_none(),
+            unkeyed >= deadline
+        ),
+        "sound_card=true tee_in_mid_message=true tee_out=true unkey_at_own_end=true",
+        "the unkey {} ms from the message's own end",
+        unkeyed - deadline
+    );
+}
+
+/// Run the loop a tick at a time until the over it holds ends, and return the tick's time then.
+fn step_until_unkeyed(s: &mut FlexScene) -> f64 {
+    let stop = Instant::now() + Duration::from_secs(10);
+    loop {
+        let now = now_unix_ms();
+        s.step(now);
+        if s.state.tx_until_ms.is_none() {
+            return now;
+        }
+        assert!(Instant::now() < stop, "the over never ended");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// …and only while the message's audio is still going out: native audio off 100 ms into the PTT
+/// tail after it, in Phone or on a digital slice, changes nothing. The message is whole, and its
+/// over ends at its own end, as a slot over's does in its tail.
+#[test]
+fn native_audio_off_in_a_messages_tail_lets_it_end_on_its_own() {
+    let mut got = Vec::new();
+    let mut from_own_end = Vec::new();
+    for (name, scene) in [("phone", phone as fn() -> FlexScene), ("digital", on_dax)] {
+        let mut s = scene();
+        s.engine.lock().unwrap().send_voice(message()).unwrap();
+        run_until(&mut s, "the message never keyed", |s| {
+            s.state.tx_until_ms.is_some()
+        });
+        let deadline = s.state.tx_until_ms.expect("the message's over");
+        while now_unix_ms() < deadline - crate::slot::TX_TAIL_MS + 100.0 {
+            s.step(now_unix_ms());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        s.set_native_audio(false);
+        let unkeyed = step_until_unkeyed(&mut s);
+        got.push(format!("{name}: unkey_at_own_end={}", unkeyed >= deadline));
+        from_own_end.push(unkeyed - deadline);
+    }
+    assert_eq!(
+        got.join(", "),
+        "phone: unkey_at_own_end=true, digital: unkey_at_own_end=true",
+        "the unkeys {from_own_end:?} ms from their own ends"
+    );
+}
+
+/// A message the keyer's Stop ended part way leaves nothing behind for the next over: an APRS
+/// packet keyed straight after it on the same digital slice, inside the time the message would
+/// have run, keeps its own end when native audio goes off under it, as any over that is not a
+/// message does.
+#[test]
+fn a_packet_right_after_a_stopped_message_keeps_its_own_end() {
+    let mut s = on_dax();
+    let since = Instant::now();
+    s.engine
+        .lock()
+        .unwrap()
+        .send_voice(message_of(3.0))
+        .unwrap();
+    run_until(&mut s, "the message never keyed", |s| {
+        s.state.tx_until_ms.is_some()
+    });
+    let message_end = s.state.tx_until_ms.expect("the message's over");
+    run_until(&mut s, "the message never went out as DAX", |s| {
+        dax_in(s, since).len() >= 20
+    });
+    s.engine.lock().unwrap().stop_voice();
+    run_until(&mut s, "the message's over never ended", idle);
+    beacon(&s);
+    let stop = Instant::now() + Duration::from_secs(10);
+    while s.state.tx_until_ms.is_none() {
+        assert!(Instant::now() < stop, "the packet never keyed");
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let packet_end = s.state.tx_until_ms.expect("the packet's over");
+    s.set_native_audio(false);
+    let unkeyed = step_until_unkeyed(&mut s);
+    assert_eq!(
+        format!(
+            "inside_the_message={} unkey_at_own_end={}",
+            packet_end < message_end - crate::slot::TX_TAIL_MS,
+            unkeyed >= packet_end
+        ),
+        "inside_the_message=true unkey_at_own_end=true",
+        "the unkey {} ms from the packet's own end",
+        unkeyed - packet_end
     );
 }
 

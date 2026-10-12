@@ -413,7 +413,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds, or that something else keys first, is dropped, never played later, and the status bar
   says why; a message longer than 20 seconds, or one sent while something else is transmitting, is
   refused with the reason. Stop TX ends a message at once, and so does turning native DAX audio off
-  while it plays: the rest is dropped and the radio unkeyed, and TX On stays as it was. Right after
+  while it plays, in Phone or on a digital slice: the rest is dropped and the radio unkeyed, and
+  TX On stays as it was. Right after
   a message Nexus's own PTT can be refused for a moment, until the mic is back; the mic's own PTT
   works throughout, and a message plays with the radio's VOX on. Pressing the mic's PTT during a
   message still gets the amber alarm and a reconnect, as before, until a tester's bench shows what
