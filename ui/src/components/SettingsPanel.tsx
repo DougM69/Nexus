@@ -1064,6 +1064,22 @@ const ISS_SSTV_MHZ = 145.8
 const SERIAL_LINE_RTS = 'RTS'
 const UNIT_HZ = 'Hz'
 
+/**
+ * THE POSITION-NAME RULE, for each save that can turn club sync on: Save, and the click that joins
+ * a found club event. True when the save turns club sync on, or takes away a name that was there,
+ * and leaves no position name. `saved` is what is saved before it, `next` what it leaves saved. It
+ * asks about the CHANGE, never the state; `handleSubmit` says why.
+ */
+function positionNameMissing(saved: Settings | null, next: Settings): boolean {
+  const wasHosting = saved?.fdHostEnable === true
+  const hadJoin = (saved?.fdJoinAddr ?? '').trim() !== ''
+  const hadName = (saved?.fdPositionName ?? '').trim() !== ''
+  const turningClubSyncOn =
+    (next.fdHostEnable && !wasHosting) || ((next.fdJoinAddr ?? '').trim() !== '' && !hadJoin)
+  const clearingTheName = hadName && (next.fdPositionName ?? '').trim() === ''
+  return (turningClubSyncOn || clearingTheName) && (next.fdPositionName ?? '').trim() === ''
+}
+
 export function SettingsPanel({
   fieldDay,
   clubLink,
@@ -2540,6 +2556,45 @@ export function SettingsPanel({
       () => setLaunchAtLoginError(t('settings.launchAtLogin.unsupported')),
     )
   }
+  // --- Joining a club event that Find club events found: on the click. The click used to fill in
+  // Join event at and nothing more, so nothing joined until Save, and on two laptops at a rehearsal
+  // it looked dead. It saves the join address alone over the settings the backend holds now,
+  // through the patch seam the Contest screen's switch saves through, so this form's other edits
+  // are neither saved nor lost. Save's position-name rule holds for it, asked of what is saved: a
+  // name typed here and not saved is not the one the host would be told. Where the join then stands
+  // shows under the list, from the station's snapshot. While this laptop hosts, the backend ignores
+  // a join address (`Engine::fd_sync_targets`), so the list's buttons are disabled (`hostingHere`).
+  const [fdJoinNote, setFdJoinNote] = useState<string | null>(null)
+  // The line a joining click starts is brought into view once, when it shows ('nearest', so a line
+  // already on screen moves nothing): with the list at the panel's bottom edge it would otherwise
+  // land just out of sight, and the click would look dead again. Later lines never scroll.
+  const revealJoinLine = useRef(false)
+  const joinLineRef = useRef<HTMLParagraphElement | null>(null)
+  useEffect(() => {
+    if (!revealJoinLine.current || !joinLineRef.current) return
+    revealJoinLine.current = false
+    joinLineRef.current.scrollIntoView?.({ block: 'nearest' })
+  }, [clubLink])
+  const joinFoundEvent = async (host: string) => {
+    setFdJoinNote(null)
+    try {
+      const live = await getSettings()
+      if (positionNameMissing(live, { ...live, fdJoinAddr: host })) {
+        setFdJoinNote(t('settings.save.fdPositionName'))
+        setPosNameInvalid(true)
+        return
+      }
+      await patchSettings(() => ({ fdJoinAddr: host }))
+      // Saved, so it is not an edit of this form's: a later Save leaves it to whoever holds it then.
+      setForm((prev) => (prev ? { ...prev, fdJoinAddr: host } : prev))
+      if (savedRef.current) savedRef.current = { ...savedRef.current, fdJoinAddr: host }
+      revealJoinLine.current = true
+      onSaved?.()
+    } catch (err) {
+      const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
+      setFdJoinNote(msg || t('settings.save.failed'))
+    }
+  }
   const handleAddRule = () => {
     const first = form?.radios?.[0]?.id ?? 0
     mutateRules([...(form?.routingRules ?? []), { bands: [], mode: null, radio: first }])
@@ -3407,16 +3462,7 @@ export function SettingsPanel({
     // by its callsign on the wire. So this asks only whether THIS save turns club sync on, or
     // takes away a name that was already there. (The shipped settings reference described this
     // narrower rule all along; the code was the half that overreached.)
-    const wasHosting = savedRef.current?.fdHostEnable === true
-    const hadJoin = (savedRef.current?.fdJoinAddr ?? '').trim() !== ''
-    const hadName = (savedRef.current?.fdPositionName ?? '').trim() !== ''
-    const turningClubSyncOn =
-      (form.fdHostEnable && !wasHosting) || ((form.fdJoinAddr ?? '').trim() !== '' && !hadJoin)
-    const clearingTheName = hadName && (form.fdPositionName ?? '').trim() === ''
-    if (
-      (turningClubSyncOn || clearingTheName) &&
-      (form.fdPositionName ?? '').trim() === ''
-    ) {
+    if (positionNameMissing(savedRef.current, form)) {
       setTab('contesting')
       setError(t('settings.save.fdPositionName'))
       setPosNameInvalid(true)
@@ -3674,6 +3720,10 @@ export function SettingsPanel({
   // is the saved one.
   const previewHere = (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null
   const clubRefusalHere = contestClubRefusal(form.fdEvent, previewHere)
+  // Whether this laptop hosts a club event, so cannot join a found one: hosting is on in this form
+  // (Join event at's own rule) or in what is saved (what the backend reads: a join address saved
+  // while hosting is ignored until a Save turns hosting off).
+  const hostingHere = !!form.fdHostEnable || savedRef.current?.fdHostEnable === true
   // The contest Contest mode starts, by its sponsor's name: the switch names it wherever it is
   // offered. A blank pick is ARRL Field Day, the contest a blank pick runs.
   const pickedContest = contestName(form.fdEvent?.trim() || 'arrlfd')
@@ -13202,6 +13252,7 @@ export function SettingsPanel({
                   value={form.fdPositionName ?? ''}
                   onChange={(e) => {
                     setPosNameInvalid(false)
+                    setFdJoinNote(null)
                     update('fdPositionName', e.target.value)
                   }}
                   placeholder={t('settings.fdWho.position.placeholder')}
@@ -13360,13 +13411,67 @@ export function SettingsPanel({
                 </span>
               </div>
             </div>
+            <div className="settings-field">
+              <button
+                type="button"
+                className="settings-test-btn"
+                disabled={remote || (fdScanBusy)}
+                onClick={() => {
+                  setFdScanBusy(true)
+                  setFdJoinNote(null)
+                  fdDiscoverEvents()
+                    .then(setFdScan)
+                    .catch(() => setFdScan([]))
+                    .finally(() => setFdScanBusy(false))
+                }}
+              >
+                {fdScanBusy
+                  ? t('settings.fdClub.discover.busy')
+                  : t('settings.fdClub.discover.action')}
+              </button>
+              {fdScan !== null && fdScan.length === 0 && !fdScanBusy && (
+                <span className="settings-hint">
+                  {t('settings.fdClub.discover.empty', { secs: FIND_CLUB_EVENTS_SECS })}
+                </span>
+              )}
+              {(fdScan ?? []).map((b) => (
+                <button disabled={remote || hostingHere}
+                  key={b.host}
+                  type="button"
+                  className="settings-test-btn"
+                  onClick={() => void joinFoundEvent(b.host)}
+                  title={
+                    hostingHere
+                      ? t('settings.fdClub.join.hostingHint')
+                      : t('settings.fdClub.discover.pick.title', { host: b.host })
+                  }
+                >
+                  {t('settings.fdClub.discover.pick.label', {
+                    event: b.event || b.call,
+                    host: b.host,
+                  })}
+                </button>
+              ))}
+              {/* A hosting laptop joins only its own event: why the buttons above are off. */}
+              {hostingHere && (fdScan ?? []).length > 0 && (
+                <span className="settings-hint">{t('settings.fdClub.join.hostingHint')}</span>
+              )}
+              {fdJoinNote && (
+                <p className="settings-note settings-warn" role="alert" data-club-join="">
+                  {fdJoinNote}
+                </p>
+              )}
+            </div>
             {/* Where this laptop's club link stands, as saved (`features/clubLink.ts`): the host's
-                line with the addresses to type, or this laptop's join. Said here, where the
-                address is typed, whatever the Field Day mode switch says. */}
+                line with the addresses to type, or this laptop's join. Said under Join event at,
+                where an address is typed, and right under the list, where a found event is
+                joined, so the line a click starts shows beside it; whatever the Field Day mode
+                switch says. */}
             {clubLink &&
               clubLinkLines(clubLink).map((l) => (
                 <p
                   key={l.key}
+                  ref={l.key === 'link' ? joinLineRef : undefined}
                   className={l.alert ? 'settings-note settings-warn' : 'settings-note'}
                   role={l.alert ? 'alert' : 'status'}
                   data-club-link={l.key}
@@ -13386,43 +13491,6 @@ export function SettingsPanel({
                   )}
                 </p>
               ))}
-            <div className="settings-field">
-              <button
-                type="button"
-                className="settings-test-btn"
-                disabled={remote || (fdScanBusy)}
-                onClick={() => {
-                  setFdScanBusy(true)
-                  fdDiscoverEvents()
-                    .then(setFdScan)
-                    .catch(() => setFdScan([]))
-                    .finally(() => setFdScanBusy(false))
-                }}
-              >
-                {fdScanBusy
-                  ? t('settings.fdClub.discover.busy')
-                  : t('settings.fdClub.discover.action')}
-              </button>
-              {fdScan !== null && fdScan.length === 0 && !fdScanBusy && (
-                <span className="settings-hint">
-                  {t('settings.fdClub.discover.empty', { secs: FIND_CLUB_EVENTS_SECS })}
-                </span>
-              )}
-              {(fdScan ?? []).map((b) => (
-                <button disabled={remote}
-                  key={b.host}
-                  type="button"
-                  className="settings-test-btn"
-                  onClick={() => update('fdJoinAddr', b.host)}
-                  title={t('settings.fdClub.discover.pick.title', { host: b.host })}
-                >
-                  {t('settings.fdClub.discover.pick.label', {
-                    event: b.event || b.call,
-                    host: b.host,
-                  })}
-                </button>
-              ))}
-            </div>
             {/* The spectator scoreboard: a read-only page of the club score for
                 a TV/projector on the site LAN, served by the HOST position
                 (tempo_app::fd_scoreboard — GET/HEAD only; the toggle is the

@@ -608,6 +608,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows Firewall on the host letting Nexus in); or the host lost, and Nexus
   trying again. An address typed without a port, such as 192.168.1.10, now joins port 42073; it
   used to be retried in silence and never joined.
+- **Clicking a club event that Find club events found joins it.** The click only put the host's
+  address into Join event at, and nothing joined until Settings was saved, so the click looked as
+  if it did nothing. The button now reads "Join <event> — <host>" and joins at once: it saves that
+  address and nothing else, so other changes on the page still wait for Save, and the line saying
+  where the join stands shows right under the list: looking for the host, then joined, turned away
+  or cannot reach it. A laptop hosting a club event cannot join one, and the list says so. As Save
+  does, the click asks for a position name first when none is saved.
 - **The host of a club event shows where to join it.** With Host a club event on, the host's
   Contest screen and Settings ▸ Contesting say that it is hosting, on which port, at which of its
   network addresses (each with its adapter's name: the address the other laptops type into Join

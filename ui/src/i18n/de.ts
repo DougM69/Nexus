@@ -890,8 +890,8 @@ export const DE: PartialCatalog = {
   "settings.fdClub.discover.action": "Club-Events suchen",
   "settings.fdClub.discover.busy": "Höre…",
   "settings.fdClub.discover.empty": "In {{secs}} s nichts gehört. Prüfen Sie, ob der Host „Club-Event hosten“ eingeschaltet hat, ob beide Laptops im selben Netzwerk sind (manche WLANs trennen Laptops voneinander) und, unter Windows, ob die Firewall dieses Laptops Nexus den Host hören lässt: Klicken Sie oben auf „Nexus durch die Windows-Firewall zulassen“. Oder geben Sie unter „Event beitreten unter“ die Adresse ein, die der Host hinter „Positionen treten bei unter“ zeigt.",
-  "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
-  "settings.fdClub.discover.pick.title": "{{host}} als Beitrittsadresse übernehmen",
+  "settings.fdClub.discover.pick.label": "{{event}} beitreten — {{host}}",
+  "settings.fdClub.discover.pick.title": "Dem Event unter {{host}} jetzt beitreten. Gespeichert wird nur die Beitrittsadresse; andere Änderungen hier brauchen weiterhin „Speichern“.",
   "settings.betaUpdates.legend": "App-Updates",
   "settings.betaUpdates.label": "Beta-Updates (Vorabversionen) erhalten",
   "settings.betaUpdates.hint":

@@ -225,8 +225,9 @@ here — nothing is listening on the network until you turn it on.*
 
 If every position runs Nexus, you don't need a third-party master log at all.
 One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
-Host a club event**; every other position presses **Find club events** (or
-types the host's address) and joins.
+Host a club event**; every other position presses **Find club events** and
+clicks the event it finds, which joins it at once and saves only the join
+address (or types the host's address into **Join event at** and saves).
 
 - **The host says where to join it.** Its Contest screen, and the club section
   of Settings, say that it is hosting, on which port, and at which of its

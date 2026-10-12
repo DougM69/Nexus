@@ -13,7 +13,7 @@
 // that never joins a club event owes nobody a tent name, and a save it does not need must not be
 // blocked by a field it will never use.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -101,10 +101,11 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel(clubLink?: ClubLink) {
-  return render(
+function panel(clubLink?: ClubLink, onSaved?: () => void) {
+  return (
     <SettingsPanel
       clubLink={clubLink}
+      onSaved={onSaved}
       activeRadioId={0}
       scale={1 as never}
       scaleMode={'auto' as never}
@@ -115,8 +116,12 @@ function renderPanel(clubLink?: ClubLink) {
       onDensityChange={() => {}}
       onResetLayout={() => {}}
       features={features}
-    />,
+    />
   )
+}
+
+function renderPanel(clubLink?: ClubLink, onSaved?: () => void) {
+  return render(panel(clubLink, onSaved))
 }
 
 beforeEach(() => {
@@ -388,5 +393,290 @@ describe('the club section says where the club link stands', () => {
     await openContesting()
     await screen.findByRole('button', { name: 'Find club events' })
     expect(screen.queryByText(/the host at/)).toBeNull()
+  })
+})
+
+// ⭐ A FOUND CLUB EVENT IS JOINED ON THE CLICK (2026-10-11). Two laptops on one network: the joining
+// one found the host, and clicking it, "I can't tell if it's doing anything". The click only filled
+// in Join event at, and nothing joined until Settings' Save. Now the click joins: it saves the join
+// address alone, through the patch seam the Contest screen's switch saves through, and where the
+// join stands shows right under the list.
+describe('clicking a found club event joins it', () => {
+  const HOST = '192.168.1.20:42073'
+  const FOUND = [{ event: 'ILQP rehearsal', call: 'W9ABC', host: HOST }]
+  const HOSTING_REASON = 'Hosting — this position joins its own event automatically.'
+
+  async function openContesting() {
+    fireEvent.click(await screen.findByRole('tab', { name: /contesting/i }))
+  }
+  /** The backend's settings, as the shell keeps them: get_settings reads them, set_settings
+   *  replaces them. `elsewhere` is another writer (Remote's settings, say). */
+  function backend(initial: Record<string, unknown>) {
+    let stored = { ...initial }
+    api.get('getSettings').mockImplementation(() => Promise.resolve({ ...stored }))
+    api.get('setSettings').mockImplementation((s: Record<string, unknown>) => {
+      stored = { ...s }
+      return Promise.resolve(null)
+    })
+    return {
+      now: () => stored,
+      elsewhere: (patch: Record<string, unknown>) => {
+        stored = { ...stored, ...patch }
+      },
+    }
+  }
+  /** Find club events, answered with FOUND; the found event's button. */
+  async function findEvents() {
+    api.get('fdDiscoverEvents').mockImplementation(() => Promise.resolve(FOUND))
+    fireEvent.click(await screen.findByRole('button', { name: 'Find club events' }))
+    return (await screen.findByRole('button', {
+      name: /ILQP rehearsal — 192\.168\.1\.20:42073/,
+    })) as HTMLButtonElement
+  }
+  /** The block holding Find club events and what it found. */
+  const findBlock = () =>
+    screen.getByRole('button', { name: 'Find club events' }).closest('.settings-field') as HTMLElement
+  const joinBox = () => screen.getByPlaceholderText('192.168.1.10:42073') as HTMLInputElement
+  const saves = () => api.get('setSettings').mock.calls.map((c) => c[0] as Record<string, unknown>)
+  const link = (over: Partial<ClubLink>): ClubLink => ({
+    role: 'position',
+    addr: HOST,
+    state: 'looking',
+    downSinceUnix: 0,
+    event: '',
+    hostCall: '',
+    position: 'SSB tent',
+    clubCode: '',
+    ...over,
+  })
+
+  it('says what it does: "Join <event> — <host>", and what the click saves', async () => {
+    backend(settingsFixture({ fdPositionName: 'SSB tent' }))
+    renderPanel()
+    await openContesting()
+    const join = await findEvents()
+    expect(join.textContent).toBe('Join ILQP rehearsal — 192.168.1.20:42073')
+    expect(join.title).toBe(
+      'Join the event at 192.168.1.20:42073 now. This saves only the join address; other changes here still need Save.',
+    )
+  })
+
+  for (const fdActive of [false, true]) {
+    it(`saves the join address at once, and nothing else, with Contest mode ${fdActive ? 'on' : 'off'}`, async () => {
+      const live = settingsFixture({ fdActive, fdJoinAddr: '', fdPositionName: 'SSB tent' }) as Record<string, unknown>
+      const station = backend(live)
+      const onSaved = vi.fn()
+      renderPanel(undefined, onSaved)
+      await openContesting()
+      fireEvent.click(await findEvents())
+
+      await waitFor(() => expect(saves()).toHaveLength(1))
+      // By value: the settings the backend held, with the join address and nothing else changed.
+      expect(station.now()).toEqual({ ...live, fdJoinAddr: HOST })
+      // The box shows what was saved, and the shell is told to read the station again (the line).
+      await waitFor(() => expect(joinBox().value).toBe(HOST))
+      expect(onSaved).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  it('shows where the join stands right under the list: looking, then joined, turned away or not reached', async () => {
+    backend(settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+    const onSaved = vi.fn()
+    const { rerender } = renderPanel(undefined, onSaved)
+    await openContesting()
+    fireEvent.click(await findEvents())
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+
+    // The shell's next snapshots, as the link moves. Each line is the one under the list.
+    const states: [Partial<ClubLink>, string][] = [
+      [{ state: 'looking' }, 'Looking for the host at 192.168.1.20:42073…'],
+      [
+        { state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9ABC' },
+        'Joined ILQP rehearsal, hosted by W9ABC, as SSB tent.',
+      ],
+      [
+        { state: 'turnedAway', told: 'Pick Illinois QSO Party as the contest.' },
+        'Turned away by the host at 192.168.1.20:42073: Pick Illinois QSO Party as the contest.',
+      ],
+      [{ state: 'unreachable', why: 'noAnswer' }, 'Cannot reach the host at 192.168.1.20:42073. Trying again.'],
+    ]
+    for (const [over, line] of states) {
+      rerender(panel(link(over), onSaved))
+      expect(findBlock().nextElementSibling?.textContent).toBe(line)
+    }
+  })
+
+  /** Stand-in for the browser's scrollIntoView (jsdom has none): the elements it was asked to show. */
+  function stubReveal() {
+    const reveal = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = reveal
+    return {
+      lines: () =>
+        reveal.mock.contexts
+          .map((el, i) => ({ el: el as Element, args: reveal.mock.calls[i] }))
+          .filter((c) => c.el.matches?.('[data-club-link="link"]')),
+      restore: () => {
+        Element.prototype.scrollIntoView = original
+      },
+    }
+  }
+
+  it('brings the line the click starts into view once, and later lines never scroll the panel', async () => {
+    // Measured in Chrome at 1024×768: with the found event at the panel's bottom edge, the line
+    // lands 11 px under it, out of sight. 'nearest' brings it in and moves nothing when it shows.
+    const reveal = stubReveal()
+    try {
+      backend(settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+      const onSaved = vi.fn()
+      const { rerender } = renderPanel(undefined, onSaved)
+      await openContesting()
+      fireEvent.click(await findEvents())
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
+      rerender(panel(link({ state: 'looking' }), onSaved))
+      expect(reveal.lines().map((c) => [c.el.textContent, c.args])).toEqual([
+        ['Looking for the host at 192.168.1.20:42073…', [{ block: 'nearest' }]],
+      ])
+      // The shell's next snapshots move the line on; the panel stays where the operator puts it.
+      rerender(panel(link({ state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9ABC' }), onSaved))
+      expect(reveal.lines()).toHaveLength(1)
+    } finally {
+      reveal.restore()
+    }
+  })
+
+  it('CONTROL: a line that shows without a click is not brought into view', async () => {
+    const reveal = stubReveal()
+    try {
+      backend(settingsFixture({ fdJoinAddr: HOST, fdPositionName: 'SSB tent' }))
+      const { rerender } = renderPanel(link({ state: 'looking' }))
+      await openContesting()
+      await screen.findByText('Looking for the host at 192.168.1.20:42073…')
+      rerender(panel(link({ state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9ABC' })))
+      expect(reveal.lines()).toHaveLength(0)
+    } finally {
+      reveal.restore()
+    }
+  })
+
+  it('CONTROL: other unsaved edits are not saved by the click, and are not lost', async () => {
+    const station = backend(
+      settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent', fdEventName: 'Club party' }),
+    )
+    renderPanel()
+    await openContesting()
+    const eventName = (await screen.findByPlaceholderText('W9ABC Field Day')) as HTMLInputElement
+    fireEvent.change(eventName, { target: { value: 'Unsaved edit' } })
+    fireEvent.click(await findEvents())
+
+    await waitFor(() => expect(station.now().fdJoinAddr).toBe(HOST))
+    expect(station.now().fdEventName).toBe('Club party')
+    expect(eventName.value).toBe('Unsaved edit')
+    // …and Save still saves it, beside the join the click saved.
+    await clickSave()
+    await waitFor(() => expect(station.now().fdEventName).toBe('Unsaved edit'))
+    expect(station.now().fdJoinAddr).toBe(HOST)
+  })
+
+  it('CONTROL: the click leaves no unsaved edit behind, so a later Save does not put its address back', async () => {
+    const station = backend(
+      settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent', fdEventName: 'Club party' }),
+    )
+    renderPanel()
+    await openContesting()
+    fireEvent.click(await findEvents())
+    await waitFor(() => expect(station.now().fdJoinAddr).toBe(HOST))
+    // The laptop leaves the event from elsewhere, then the operator saves an edit of their own here.
+    station.elsewhere({ fdJoinAddr: '' })
+    fireEvent.change(await screen.findByPlaceholderText('W9ABC Field Day'), { target: { value: 'Unsaved edit' } })
+    await clickSave()
+    await waitFor(() => expect(station.now().fdEventName).toBe('Unsaved edit'))
+    expect(station.now().fdJoinAddr).toBe('')
+  })
+
+  it('a laptop that is hosting cannot join one: the button is disabled, and says why beside the list', async () => {
+    backend(settingsFixture({ fdHostEnable: true, fdPositionName: 'HQ' }))
+    renderPanel()
+    await openContesting()
+    const join = await findEvents()
+    expect(join.disabled).toBe(true)
+    expect(within(findBlock()).getByText(HOSTING_REASON)).toBeTruthy()
+    fireEvent.click(join)
+    await Promise.resolve()
+    expect(saves()).toHaveLength(0)
+  })
+
+  it('…and while hosting is still saved, with its switch turned off but not saved', async () => {
+    // The backend ignores a join address while hosting is on (`Engine::fd_sync_targets`), so a
+    // click that saved one now would join nothing until a Save turned hosting off.
+    backend(settingsFixture({ fdHostEnable: true, fdPositionName: 'HQ' }))
+    renderPanel(
+      link({
+        role: 'host',
+        addr: '127.0.0.1:42073',
+        state: 'joined',
+        hosting: { up: true, port: 42073, addrs: [], connected: 0 },
+      }),
+    )
+    await openContesting()
+    fireEvent.click(await screen.findByRole('switch', { name: 'Disable club event hosting' }))
+    expect(joinBox().disabled).toBe(false)
+    const join = await findEvents()
+    expect(join.disabled).toBe(true)
+    expect(within(findBlock()).getByText(HOSTING_REASON)).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: a laptop that is not hosting has the button enabled and no hosting reason', async () => {
+    backend(settingsFixture({ fdHostEnable: false, fdPositionName: 'SSB tent' }))
+    renderPanel()
+    await openContesting()
+    const join = await findEvents()
+    expect(join.disabled).toBe(false)
+    expect(within(findBlock()).queryByText(HOSTING_REASON)).toBeNull()
+  })
+
+  it('CONTROL: an address typed by hand and saved still joins as before', async () => {
+    const station = backend(settingsFixture({ fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+    renderPanel()
+    await openContesting()
+    fireEvent.change(await screen.findByPlaceholderText('192.168.1.10:42073'), {
+      target: { value: '192.168.1.20' },
+    })
+    await Promise.resolve()
+    expect(saves()).toHaveLength(0)
+    await clickSave()
+    await waitFor(() => expect(station.now().fdJoinAddr).toBe('192.168.1.20'))
+  })
+
+  it('a click with no position name saved is refused, as Save refuses it, and saves nothing', async () => {
+    backend(settingsFixture({ fdJoinAddr: '', fdPositionName: '' }))
+    renderPanel()
+    await openContesting()
+    fireEvent.click(await findEvents())
+    expect(await within(findBlock()).findByText(/^Name this position on the Contesting tab/)).toBeTruthy()
+    expect(saves()).toHaveLength(0)
+    const box = screen.getByLabelText(/Position name/) as HTMLInputElement
+    expect(box.getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('…the name it joins under is the saved one: a name typed and not saved is refused too', async () => {
+    backend(settingsFixture({ fdJoinAddr: '', fdPositionName: '' }))
+    renderPanel()
+    await openContesting()
+    fireEvent.change(await screen.findByLabelText(/Position name/), { target: { value: 'SSB tent' } })
+    fireEvent.click(await findEvents())
+    expect(await within(findBlock()).findByText(/^Name this position on the Contesting tab/)).toBeTruthy()
+    expect(saves()).toHaveLength(0)
+  })
+
+  it('POSITIVE CONTROL: a laptop already joined elsewhere, with no name, moves to the found event', async () => {
+    // The rule reads the change, never the state: club sync is already on here, so the click
+    // turns nothing on, exactly as a Save of a new address would not be refused.
+    const station = backend(settingsFixture({ fdJoinAddr: '192.168.1.30:42073', fdPositionName: '' }))
+    renderPanel()
+    await openContesting()
+    fireEvent.click(await findEvents())
+    await waitFor(() => expect(station.now().fdJoinAddr).toBe(HOST))
+    expect(within(findBlock()).queryByText(/^Name this position/)).toBeNull()
   })
 })

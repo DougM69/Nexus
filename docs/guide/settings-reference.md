@@ -2253,11 +2253,14 @@ Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
 port on the site LAN, and only while the toggle is on — the spectator scoreboard
 below and [Conditions on a TV](#conditions-on-a-tv) are the other two things that
 listen beyond the local computer); every other position joins it with **Find
-club events** or by typing the host's address into **Join event at**: the host
-shows it after **Positions join at**, and an address typed without a port joins
-port 42073. Under **Join event at** each laptop says where its join stands, and
-the host says where it is hosting and how many other positions are connected
-(the Contest screen says the same, with Contest mode on or off). On Windows,
+club events**, where clicking a found event joins it at once (that saves the
+join address alone; the rest of the page still waits for Save), or by typing the
+host's address into **Join event at** and saving: the host shows it after
+**Positions join at**, and an address typed without a port joins port 42073. A
+laptop that hosts cannot join another event, and the list says so. Under **Join
+event at**, right under what Find club events found, each laptop says where its
+join stands, and the host says where it is hosting and how many other
+positions are connected (the Contest screen says the same, with Contest mode on or off). On Windows,
 **Allow Nexus through Windows Firewall** adds Nexus's three rules for club sync
 (the Host port, Find club events' UDP 42074 and the scoreboard's port) on
 Private and Public networks through one administrator prompt; the line beside

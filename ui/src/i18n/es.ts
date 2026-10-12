@@ -5777,8 +5777,8 @@ export const ES: PartialCatalog = {
   "settings.fdClub.discover.action": "Buscar eventos de club",
   "settings.fdClub.discover.busy": "Escuchando…",
   "settings.fdClub.discover.empty": "Nada oído en {{secs}} s. Compruebe que el anfitrión tiene activado «Alojar un evento de club», que los dos portátiles están en la misma red (algunas Wi-Fi aíslan los portátiles entre sí) y, en Windows, que el firewall de este portátil deja que Nexus oiga al anfitrión: pulse «Permitir Nexus a través del Firewall de Windows», más arriba. O escriba en «Unirse al evento en» la dirección que muestra el anfitrión tras «Las posiciones se unen en».",
-  "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
-  "settings.fdClub.discover.pick.title": "Usar {{host}} como dirección de unión",
+  "settings.fdClub.discover.pick.label": "Unirse a {{event}} — {{host}}",
+  "settings.fdClub.discover.pick.title": "Unirse ahora al evento en {{host}}. Solo se guarda la dirección de unión; los demás cambios de aquí siguen necesitando «Guardar».",
   "settings.betaUpdates.legend": "Actualizaciones de la app",
   "settings.betaUpdates.label": "Recibir actualizaciones beta (versiones preliminares)",
   "settings.betaUpdates.hint":
