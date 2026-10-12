@@ -340,8 +340,8 @@ If you never turn Contest mode on, these are the differences you will meet.
   unchanged, and the logger window, the Contest screen's log and an edit use the same words. What
   is logged, sent and scored is unchanged.
 - **The report follows the mode.** After a contact, a move between Phone and CW or RTTY shows the
-  new mode's own report, 59 on Phone and 599 on CW, RTTY and the keyboard modes, in both windows,
-  so a CW contact no longer goes into the log with 59. A report you typed stays with that contact,
+  new mode's own report, 59 on Phone and 599 on CW, RTTY and the keyboard modes, in both windows.
+  A report you typed stays with that contact,
   and the next contact, and the line after Clear, start on the mode's own. On Phone the Sending line
   and the Give line beside PTT read 59, the report a phone contact is logged with.
 - **The CW contest F-keys follow N1MM's layout** (see Upgrading). With a report in the exchange, F2
@@ -508,8 +508,8 @@ If you never turn Contest mode on, these are the differences you will meet.
   name, and how many positions are connected, or why it cannot host. Find club events listens for 5
   seconds and finds a host with more than one network adapter, and a click on an event it found
   joins it at once, saving that address and nothing else, with the line saying where the join
-  stands right under the list (or, for a contest club sync cannot run, the reason). A contest change
-  no longer leaves a joined laptop showing Offline. Not yet tried on two Windows laptops.
+  stands right under the list (or, for a contest club sync cannot run, the reason). Not yet tried on
+  two Windows laptops.
 - **Allow Nexus through Windows Firewall.** On Windows, the club section of Settings ▸ Contesting
   has a button that asks for administrator rights once, as Repair clock does, and adds three
   inbound rules for Nexus itself on Private and Public networks: the Host port (TCP 42073 unless
@@ -799,8 +799,6 @@ If you never turn Contest mode on, these are the differences you will meet.
 - **FST4 and FST4W** no longer write past the end of the audio they make for an over, which could
   crash Nexus later on Windows and macOS. The audio sent is unchanged. Not yet checked: an FST4 and
   an FST4W transmit on Windows into a dummy load.
-- **FT keeps your sort, filter and search** when the window narrows past the dashboard rail and
-  widens again.
 - **JS8's ✓ marks and the band map's struck-through calls** no longer blink when a new station is
   heard.
 - **Repair clock no longer comes back every few minutes on a clock that is right** (Windows). The
