@@ -32,7 +32,8 @@
     "ilqp": "The Illinois QSO Party ships as ONE ruleset, ilqp, written from the sponsoring club's own pages, all read 2026-09-17: https://w9awe.org/ilqp/ (the Western Illinois Amateur Radio Club), its rules PDF \"Announcing the 2025 Illinois QSO Party\", its ILQP COUNTIES CHART PDF (footed \"N9CDX 10-18-2014\"), its Sample_Excel_Log workbook and its county/state/province/country score-records PDF (\"updated 2025\"). WINDOW. The sponsor publishes a DATE for the running -- \"Date/Time: 1700 UTC October 19, 2025 to 0100 UTC October 20, 2025\" -- and its own page states the rule those dates follow: Sunday of the third full weekend of October, eight hours. Carried as month 10, nth_full n=3, start_hour_utc 41 (Saturday + 41 h = Sunday 1700Z), duration 8. That reading reproduces every year the sponsor's records list; it is still this build's reading of a rule the sponsor states in prose, so re-read it each year. The sponsor's 2026 rules PDF (\"Announcing the 2026 Illinois QSO Party\", dated 2026-09-03, https://w9awe.org/download/91/2026/2230/announcing-the-2026-illinois-qso-party, read 2026-10-08) agrees with that reading: \"Date/Time: 1700 UTC October 18, 2026 to 0100 UTC October 19, 2026\". It also publishes the 2026 LOG DEADLINE: \"Logs sent by e-mail must be received by the sponsor, and paper logs postmarked by midnight Central Time November 4, 2026\", Cabrillo only (\"Please do NOT send .adi nor .adif files!\"). Nothing in this build reads a deadline; the manual states it. BANDS. \"Bands: 160 through 2 meters, excluding WARC bands (60, 30, 17 and 12 meters)\" -- carried as the advisory `bands` list (160, 80, 40, 20, 15, 10, 6 and 2 m). Nothing scores or dupes off it. EXCHANGE. \"Exchange: IL stations give RS/T and county; others give RS/T and state, province or country\". ⭐ THE LAST WORD IS THE DIVERGENCE FROM EVERY OTHER PARTY THIS BUILD SHIPS: a DX entrant sends their COUNTRY, where OhQP's sends the literal \"DX\". That is why the QTH slot is sourced `derived:my_location_or_typed` rather than `derived:my_location`, and why its third arm is free text -- the sponsor publishes no country list. POINTS and DUPES. \"Scoring: Phone QSO: 1 point; CW/digital QSO 2 points. No repeater QSOs. ... Stations may be worked once per band and mode (phone and CW/digital) and once per band/mode/county for IL Mobile and Rover stations.\" ⚠️ The parenthesis is two modes where this build counts three, so the dupe rule carries mode_class_groups [[\"CW\", \"DIG\"]]: CW then RTTY with the same station on one band is a DUPE here and two contacts everywhere else. The county half is by_fields/by_sent_fields QTH, the same shape the other parties use for their mobile rule. ⚠️ \"Contacts with/by stations at the border of 2/3/4 counties count as 2/3/4 counties and 2/3/4 QSOs\" is an OPERATOR action, not a computed one: the operator logs the contact once per county and the county-keyed dupe rule admits each. Nothing in this build multiplies a single row. \"No repeater QSOs\" is likewise not enforced. MULTIPLIERS. \"IL stations multiply points by the sum of IL counties, US states, VE provinces and DXCC countries (maximum 5) worked. Canada, KH6 and KL7 do not count as DX entities. Additional DX contacts count for points but not multipliers. Non-IL stations multiply points by the number of IL counties worked.\" Carried as three rules, all per_log: county (il_counties, every role), mult (il_mults, in_state only) and dxcc (DxccEntity, in_state only, cap 5). The cap is the reason MultiplierRule grew a `cap` field. The four excluded entity strings are cty.dat's own spellings (United States / Canada / Alaska / Hawaii), the same four TNQP and TXQP already exclude. BONUS STATIONS. \"NEW FOR 2025: BONUS STATIONS!! The sponsoring club of ILQP is the Western Illinois ARC, which is authorized to use two callsigns: W9AWE (the historical call) and W9OAB (the call of a long-time member and benefactor). Both of these calls will be used during the 2025 event, and any entrant contacting these stations will have a 100 point bonus added to the final score. Total of 200 points possible. W9AWE will be primarily CW, W9OAB will be primarily phone.\" ⚠️ These are EARNED from the log, not ticked on a menu, so they are `bonus_stations` rather than `bonuses` and they are in the score on screen and in the Cabrillo CLAIMED-SCORE. ILQP therefore carries NO score_note_key: unlike TNQP and TXQP, nothing this sponsor adds to the score is missing from the number. COUNTIES. il_counties is the sponsor's own chart, PARSED and counted rather than read off a stated total: 102 codes, which is exactly Illinois' county count, with one THREE-letter code (LEE) among 101 four-letter ones. The names are the chart's own spellings, including \"JoDaviess\" closed up and \"St. Clair\" with the period. STATES AND PROVINCES. ⚠️ THE SPONSOR PUBLISHES NO EXCHANGE CODE LIST for the other half of the exchange; what it publishes is a records table, and the codes IN it are the evidence: 49 US states (Illinois absent, as it must be) plus DC, and AB BC LAB MB NB NF NS NU ON PEI QC SK YT for Canada. il_mults carries those, plus NT (Northwest Territories, absent from the records only because nobody has ever submitted from there) and NL and PE (the modern Canada Post codes many loggers send for Newfoundland-and-Labrador and Prince Edward Island, beside the sponsor's own NF/LAB/PEI). A VE station sending either spelling therefore counts; a spelling nobody sends costs nothing. CABRILLO. ⚠️ THREE REGISTRIES DISAGREE about the CONTEST token, each read on 2026-09-17 and each named here so the next reader sees the disagreement rather than inheriting a choice: (1) ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\") lists \"IL QSO Party\" -- spaces and mixed case, an outlier among its hyphenated neighbours, so nobody may \"tidy\" it; (2) WA7BNM's Cabrillo name master list (https://www.contestcalendar.com/cabnames.php) carries \"IL-QSO-PARTY\"; (3) the SPONSOR's own Sample_Excel_Log (https://w9awe.org/ilqp/) generates \"CONTEST: ILLINOIS QSO PARTY\". The contest is judged by its sponsor from an emailed file, so the file carries the SPONSOR's spelling and the ADIF export carries ADIF's. The sample log's header block also carries IL-COUNTY (\"IL-COUNTY: ADAMS\" -- the county's NAME, beside QSO lines carrying its four-letter code), which this build writes for an Illinois entry; ENTRY-CLASS, QRP-COMPETITION, CLUB and OPERATORS (sample: \"ENTRY-CLASS: ILLINOIS FIXED\", \"QRP-COMPETITION: NO\", \"CLUB: WESTERN ILL AMATEUR RADIO CLUB\", \"OPERATORS: W9XYZ, AA9XYZ\"), which it writes from the entry's own declarations; and ADDRESS* and SOAPBOX, which it does NOT: nothing in Nexus can source them, and a header nobody set is a claim nobody made. The 2026 rules say why the four matter: \"make sure entry class, personal information, call sign, station location, and club affiliation are correctly shown. The header information is automatically pulled and used by the processing software.\" ⚠️ They are listed under cabrillo.entry_headers, NOT cabrillo.headers: 1.17.0's loader refuses a cabrillo.headers value it cannot write and the whole file with it (measured 2026-10-08: \"ruleset ilqp/2026: cabrillo header \\\"ENTRY-CLASS\\\" is not one this build can write\"), while it ignores a key it does not know, so an installed build keeps receiving rules updates. ENTRY CLASSES (cabrillo.entry_classes), from the same 2026 PDF: \"Entry Classes: IL Fixed Station, High Power. Permanent station location, single county, transmitter power exceeding 100 watts PEP. (Note change…was 200 watts PEP)\"; \"IL Fixed Station, Low Power ... not to exceed 100 watts PEP\"; \"Illinois Portable\"; \"Illinois Mobile\"; \"Illinois Rover\"; \"Outside Illinois, High Power ... exceeding 100 watts PEP\"; \"Outside Illinois, Low Power ... not exceeding 100 watts PEP\"; and \"Unlimited: (New category) Stations wishing to employ multiple transmitted signals simultaneously at a single site may enter as \\\"Unlimited\\\".\" (\"All stations are limited to one transmitted signal at a time. (But see new \\\"Unlimited\\\" category below)\"), so a club running several positions at once under one call enters UNLIMITED. ⚠️ THE SPONSOR PUBLISHES NO LIST OF HEADER TOKENS: these are the rules' own class names in the sample log's header spelling (uppercase, ILLINOIS spelled out, as its \"ILLINOIS FIXED\"). That is this build's reading; ask the sponsor if the processing software wants another spelling. QRP: \"A QRP entrant shall certify that the operation was with transmitter power at all times not exceeding 5 watts CW/DIGITAL or 10 watts SSB by indicating QRP in the entry class in the Cabrillo file or checking the QRP box on the summary sheet.\" The sample log carries it as its own header, so QRP-COMPETITION: YES is written when the entry declared CATEGORY-POWER QRP, and nothing otherwise. Its QSO line is the structural one (freq mo date time, then each side's call RST county), so no column template is needed. ASSISTANCE. \"Spotting: Spotting of stations worked, especially mobile and rover stations, is encouraged. All categories of entrants are allowed to self-spot.\" -- spotting and cluster both allowed, with no note. DIGITAL. \"Note on digital modes: NEW....NOTE!! Due to the complexity of creating a log entry conforming to ILQP log submission rules, FT4 and FT8 contacts will receive no contact credit. Other digital modes are encouraged.\" -- banned_modes FT8 and FT4, which is advisory (the strip warns; nothing is refused or removed).",
     "nyqp": "The New York QSO Party ships as ONE ruleset, nyqp, written from the NYQP committee's own pages, all read 2026-09-29: https://nyqp.org/wordpress/ (the home page), https://nyqp.org/wordpress/nyqp-rules/ and the rules PDF it serves, \"2026 New York QSO Party Rules v1.1 2026-09-25\" (v1.1 differs from the v1.0 of 2026-09-15 that the home page still links only in its version stamps and its New York club definition -- no scoring, exchange or log rule moved), the county checklist PDF and CSV at https://nyqp.org/wordpress/counties/nyqp-county-checklist/, the sponsor's log robot https://nyqp.contesting.com/nyqpsubmitlog.php, and the 2025 Official Results PDF (for the 2026 announcement). THE 2026 RULES ARE PUBLISHED, so nothing here is carried over from an earlier year. WINDOW. \"Third Saturday in October: October 17, 2026 1400 UTC (10 AM Eastern) 12 Hours\" and \"12-hour Contest Period: October 17, 2026, from 14:00 UTC through 01:59 UTC.\" Carried as month 10, nth_full n=3, start_hour_utc 14, duration 12. The sponsor says third SATURDAY and the rule here says third FULL weekend: they are the same day in every year, because a month's first Saturday always has its Sunday in the month (tests/nyqp.rs pins one year for each weekday October can start on). The 2025 results close with the same instants: \"14Z to 02Z on Saturday (local), October 17, 2026\". LOG DEADLINE. \"All logs must be received within 14 days of the end of the NY QSO Party: November 1, 2026, at 0200 UTC\", submitted \"via the webform at https://nyqp.contesting.com/nyqpsubmitlog.php\". Nothing in this build reads a deadline. BANDS. \"All FCC allocated amateur frequencies (excluding the 30, 17, and 12 meter bands) are available for QSO credit.\" Carried as the advisory `bands` list of every band in this build's band table that 47 CFR 97.301 allocates (eCFR, read 2026-09-29): 160 through 10 m less the three the sponsor excludes, 60 m INCLUDED (ILQP excludes it; NYQP does not), and 6 m, 2 m, 1.25 m, 70 cm, 33 cm, 23 cm, 13 cm, the 5.7 GHz band (6cm here), 3 cm and 1.25 cm. Not 4 m and not 9 cm: 97.301 allocates neither. The sponsor's own sample log works 50, 144, 222, 432, 902, 1.2G and 10G. Nothing scores or dupes off the list. EXCHANGE. \"New York stations send signal report and three-letter county abbreviation.\" \"Stations outside of New York send signal report plus state or Canadian province (see list below). For those outside the US and Canada, send signal report and \\\"DX.\\\"\" So the QTH slot is `derived:my_location` (county in state, the state or province W/VE, the literal DX for DX) -- the OhQP sentence, not ILQP's, whose DX entrants send a country. Three roles: in_state (NY), w_ve (the 49 other states and 13 provinces below) and dx. The received slot is one_of ny_counties / ny_mults / dx_literal, the CQP shape, so a DX station's DX is legal and counts for nothing. COUNTY LINES. \"Stations operating on a county line shall transmit both county names (phone) or three-letter designators (CW, digital modes)\", \"Contacts with these stations can be used as credit for two counties\", \"If the portable or mobile station is operating from the intersection of three or more NY counties, only two counties at a time may be counted for the same contact\", \"CW and digital operators should use a \\\"/\\\" to separate county names in the exchange. County line exchanges should be logged as two separate QSOs.\" -- an OPERATOR action, exactly as ILQP's border rule: the operator logs the contact once per county and the QTH-keyed dupe rule admits each; nothing multiplies a row, splits a typed DUT/PUT, or counts a third county. POINTS and DUPES. \"Each complete, non-duplicate Phone contact is worth 1 point per band. Each complete, non-duplicate CW contact is worth 2 points per band. Each complete, non-duplicate RTTY (or other valid digital mode) contact is worth 3 points per band.\" -> PH 1, CW 2, DIG 3. \"You may contact each station once on each band and mode, for a maximum of three contacts per station, i.e. Phone, CW, and RTTY/digital–one QSO on each mode, per band.\" and \"All RTTY/digital modes are considered to be the same mode.\" -> call + band + mode class with NO mode_class_groups (three modes, where ILQP counts two). \"New York stations that change counties are considered to be a new station and may be contacted again for points and multiplier credit.\" and, for mobiles and portables, \"With each county change, the station may again make up to three mode contacts per band\" -> by_fields and by_sent_fields QTH, the shape every party here uses (like ILQP's, it also admits a W/VE station that changed state, which the sponsor does not mention; the checker removes what it does not credit). \"Do not remove duplicates from your log before submission. They are used for cross-checking other logs.\" -> log_dupes TRUE, the first party whose sponsor says so. \"No credit is awarded for cross-mode or cross-band contacts.\" needs nothing: a row is one band and one mode. MULTIPLIERS. New York stations: \"Count US states (50), New York Counties (62) and Canadian provinces (13): AB, BC, MB, NB, NL, NT, NS, NU, ON, PE, QC, SK, YT. Maximum of 125 multipliers. (DX counts as QSO points but not multipliers.)\" and \"The first valid New York county logged will count as the multiplier for New York.\" Everyone else: \"Count New York counties for a maximum of 62 multipliers.\" Scoring: \"The total score is the total number of QSO points multiplied by the total number of multipliers. (NY= 125, Non-NY= 62 maximum)\". Carried as three per_log rules: county (ny_counties, every role), ny (ny_counties, in_state only, cap 1 -- New York is one of the 50 states, New York stations send counties and never NY, so it is earned by the first county and by no later one) and mult (ny_mults, in_state only). 62 + 1 + 49 + 13 = 125, the sponsor's maximum. The multiplier boards are one per UNIVERSE, so the ny rule draws no second county grid. ⭐ THE SPONSOR'S OWN SAMPLE LOG IS THE ORACLE: its 44 QSO lines claim \"CLAIMED-SCORE: 1560\", which is 78 QSO points (26 CW, 14 phone of which 4 FM, 4 RTTY) times 20 multipliers (9 counties, New York, 9 states, Ontario; three DX stations send DX). Without the ny rule it is 1482, with DX as a multiplier 1638, with RTTY at 2 points 1480 -- tests/nyqp.rs scores that log and requires 1560. No bonus of any kind is named, so the score is complete and carries no score_note_key. COUNTIES. ny_counties is the rules PDF's \"New York County List\", PARSED and counted: 62 three-letter codes, identical code for code to the county checklist PDF and to its CSV (NYQP-Counties-Sheet1.csv), in the rules' alphabetical order. Names are the rules' own spellings (\"St. Lawrence\" with the period, where the checklist writes \"St Lawrence\"). A first-three-letters rule gets several wrong (BRM Broome, BRX Bronx, CGO Chenango, MTG Montgomery, SCH Schenectady, SCO Schoharie, SCU Schuyler), which is why the codes are the sponsor's and not derived. STATES AND PROVINCES. \"New York stations must log other US States with the commonly accepted Postal Service two-letter abbreviation, Canadian provinces with the abbreviations as defined by the Canada Post list (see Canadian Multiplier List below)\". ny_mults is the log robot's own Location list -- DX, 50 states and the same 13 provinces -- less DX and less New York (whose stations send a county), in the robot's order, the provinces under the rules' names. It declares STATE / MY_STATE because every one of its 62 codes is also in cqp_states, whose codes were verified as ADIF Primary Administrative Subdivision codes. ⚠️ The sponsor lists no DC: a Washington, DC entrant is outside every universe here and falls to the dx role, where the location warning names it; the rules do not say what such a station sends. CABRILLO. The CONTEST token is the one place three sources AGREE, each read 2026-09-29: ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\") lists NY-QSO-PARTY \"New York QSO Party\"; WA7BNM's master list (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026) carries NY-QSO-PARTY at id 473; and both sample headers in the sponsor's rules print \"CONTEST: NY-QSO-PARTY\". LOCATION is the sponsor's own rule: \"For fixed stations outside New York, use your state abbreviation, Canadian province abbreviation, or DX. For fixed stations in New York, use your NYQP-approved three-letter county abbreviation. For mobile and portable stations in New York, use the NYQP-approved three-letter county abbreviation of any county activated during the contest.\" -- role by role what the entry sends in QTH, so cabrillo.location_slot is QTH, read off the first row that sent one (a county a contact was actually made from). The optional headers are the ones in the sponsor's sample header block that this build can source: CATEGORY-ASSISTED and CATEGORY-POWER (the entry's own declarations, and \"High Power: greater than 100 watts output / Low Power: greater than 5 watts and up to 100 watts output / QRP: up to 5 watts output\" is Cabrillo's HIGH/LOW/QRP), CLAIMED-SCORE, NAME and EMAIL. NOT CATEGORY-BAND or CATEGORY-MODE: read off the log they can name a category NYQP does not have (a one-band log's 20M, an FM-only log's FM, an RTTY-only log's RTTY -- its generator offers MIXED, CW, SSB and DIGI, and the robot asks the categories on its own form). CLUB, OPERATORS, ADDRESS*, CATEGORY-STATION, CATEGORY-TRANSMITTER and CATEGORY-OVERLAY have no source here and are not written. QSO lines: \"Modes permitted in Cabrillo file: FM, PH, CW, RY, DG / RY = RTTY / DG = all other digital modes / PH and FM (only) are valid modes for Phone\", which is what the structural writer emits (PH for FM rows, which the same sentence allows); the column order is the structural one (freq mo date time, then each side's call RST QTH), and tests/nyqp.rs writes the sponsor's own 44 sample lines back token for token. DIGITAL. \"Only digital modes that natively support the NYQP exchange are permitted for contest credit.\" and \"Digital modes that do not natively support the NYQP exchange may not be used in NYQP.\" The sponsor names no mode, so banned_modes FT8 and FT4 is this build's reading, taken from WSJT-X's own packer rather than assumed: the one FT8/FT4 message carrying a contest exchange (i3=3, libtempo/vendor/wsjtx/lib/77bit/packjt77.f90) holds a report and one entry of a fixed table of states, provinces and serials, and no New York county code is in it. Advisory, as ILQP's: the strip warns; nothing is refused. ASSISTANCE. \"All stations are encouraged to spot other NYQP stations.\" -- spotting and cluster allowed. \"Self-spotting is not permitted. Exception: Stations in the Mobile and Portable entry classes may use self-spotting.\" is NOT enforced or shown: this build has no contest self-spot surface to gate. Also not enforced, and each is a rule about the ENTRY rather than a contact: \"Automated operation is not permitted in any entry class\", \"RTTY and digital modes are permitted in the Mixed category only\", the club rules, the overlays (CATEGORY-OVERLAY Rookie / Youth12 / Youth17 / YL) and \"a log must have a minimum of 50 contacts\" for awards. ⚠️ ONE READING TO CONFIRM: a contact between two stations outside New York earns its QSO points here, as ILQP's does -- the QSO POINTS section restricts nothing, and only the OBJECTIVE bullet (\"Stations outside of New York State: Work as many New York stations and as many New York counties as possible\") suggests otherwise.",
     "wfd_cabrillo": "The sponsor's example Cabrillo log (2027 rules PDF p.10, https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08) heads \"CLUB:\", \"CATEGORY-POWER: QRP (≤5W DIG/CW or ≤10W PH) or LOW (≤100W)\", \"CLAIMED-SCORE: 1312 (your calculated total score including multipliers)\", \"OPERATORS: KY4LV, W4OPS, W0MET, etc.\", \"NAME:\", \"X-EXCHANGE: 3O\" and \"EMAIL:\"; p.8: \"All stations are limited to a maximum of 100 Watts PEP at the final transmitter.\" So X-EXCHANGE is the sent CLASS slot (cabrillo.x_headers) and CATEGORY-POWER is written only as QRP or LOW (cabrillo.power_categories), both on keys 1.14 to 1.17 ignore: CATEGORY-POWER in cabrillo.headers would make 1.17.0 write HIGH for a station left at HIGH, and an X- name there would make it refuse the whole file. OPERATORS is space-separated as Cabrillo 3.0 lists them where the example uses commas, a reading worth confirming with the sponsor.",
-    "wfd_satellites": "The sponsor's 2027 rules PDF (https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08), p.5: \"You may only claim credit for contacts that are on one band, one mode, simplex, and made directly to the receiving station. Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do not count. Do not log any such contacts.\"; p.3: \"Satellite objectives are gone\". A satellite contact is cross-band and relayed, so wfd.scoring.satellite_credit is false: such a contact is kept in the log (and reaches the general log and LoTW at the merge), scores nothing, enters no dupe index and is left out of the WFD Cabrillo and contest ADIF. The key is new (1.14 to 1.17 ignore it) and absent means true, the credit every ruleset before it gives and ARRL Field Day's rule 7.3.8 states."
+    "wfd_satellites": "The sponsor's 2027 rules PDF (https://winterfieldday.org/downloads/2027-rules-v3.pdf, read 2026-10-08), p.5: \"You may only claim credit for contacts that are on one band, one mode, simplex, and made directly to the receiving station. Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do not count. Do not log any such contacts.\"; p.3: \"Satellite objectives are gone\". A satellite contact is cross-band and relayed, so wfd.scoring.satellite_credit is false: such a contact is kept in the log (and reaches the general log and LoTW at the merge), scores nothing, enters no dupe index and is left out of the WFD Cabrillo and contest ADIF. The key is new (1.14 to 1.17 ignore it) and absent means true, the credit every ruleset before it gives and ARRL Field Day's rule 7.3.8 states.",
+    "cabrillo_declarations": "THE ENTRY DECLARATIONS A SPONSOR'S CABRILLO TEMPLATE NAMES: cabrillo.transmitter_categories (CATEGORY-TRANSMITTER, a multi-operator entry's class), cabrillo.overlay_categories (CATEGORY-OVERLAY), cabrillo.address (the ADDRESS headers) and cabrillo.soapbox (SOAPBOX). Each is written from the entrant's own declaration in Settings, only for a contest listed here, and only when it holds a value: a header nobody set is a claim nobody made, so a log with none of them set exports the file it always did (tests/cabrillo_declarations.rs holds all eighteen contests to the bytes the writer produced before these keys existed). Every source below was read 2026-10-11 unless it says otherwise. ⚠️ KEYS OF THEIR OWN, NEVER NAMES IN cabrillo.headers OR cabrillo.entry_headers: 1.17.0 refuses the whole rules file over a cabrillo.headers name it cannot write, every build since does the same over cabrillo.entry_headers (the refuse fixture cabrillo-entry-header-unknown pins SOAPBOX there as refused), and every build ignores a key it does not know. THE SPECIFICATION, WWROF's Cabrillo V3 header page (https://wwrof.org/cabrillo/cabrillo-v3-header/, \"Last update: 5 June 2025\"): \"CATEGORY-TRANSMITTER: The category-transmitter is required for multi-operator entries and must be one of the following. ONE TWO LIMITED UNLIMITED SWL\"; \"ADDRESS: text Mailing address. Each line should be a maximum of 45 characters long. Up to 6 address lines are permitted.\" with ADDRESS-CITY, ADDRESS-STATE-PROVINCE, ADDRESS-POSTALCODE and ADDRESS-COUNTRY as \"Optional fields for providing mailing address details.\"; \"SOAPBOX: text Soapbox comments. Enter as many lines of soapbox text as you wish. Each line is a maximum of 75 characters long and must begin with SOAPBOX: followed by a space.\" So a transmitter class is written only for a MULTI-OP entry, and with it the OPERATORS line, because every sponsor here that takes one asks a multi-operator entry for its operators: CQ WW and CQ WPX \"If you select a multi-operator category and do not enter operator callsigns in this field, the robot will reject your log\", ARRL's Sweepstakes and VHF rules \"ELOG.4. Multioperator logs must include the complete list of operators in the Cabrillo OPERATORS: field\", and the CQ WW RTTY and NYQP sample headers carry the line. A part of the address a sponsor's template does not name rides an ADDRESS line, as its own template writes it. PER CONTEST. CQ WW CW and SSB (https://www.cqww.com/cabrillo.htm): \"The category-transmitter is required for multi-operator entries and must be one of the following. ONE TWO UNLIMITED\", the rules' Multi-Single, Multi-Two and Multi-Multi; \"If you are entering an Overlay category, you must also provide CATEGORY-OVERLAY information\" with \"For CLASSIC, enter: CATEGORY-OVERLAY: CLASSIC\", \"For ROOKIE, enter: CATEGORY-OVERLAY: ROOKIE\" and \"For YOUTH , enter: CATEGORY-OVERLAY: YOUTH\" (https://www.cqww.com/rules/ V.B: \"Any Single Operator entrant who meets the requirements may ALSO enter one of the categories shown below by adding the appropriate CATEGORY-OVERLAY line in the Cabrillo log file header\", and of Rookie \"Indicate the date first licensed in the SOAPBOX field\", of Youth \"Indicate the birth year in the SOAPBOX field\"); all five ADDRESS headers (\"ADDRESS-COUNTRY: US Postal Service name for the country of your mailing address. Only required for mailing addresses outside of the United States.\"); SOAPBOX. CQ WPX CW and SSB (https://cqwpx.com/cabrillo.htm): the same, with the overlays CLASSIC, ROOKIE, TB-WIRES (\"For TRIBANDER/SINGLE ELEMENT , enter: CATEGORY-OVERLAY: TB-WIRES\") and YOUTH. CQ WW RTTY (https://cqwwrtty.com/cabrillo.htm): ONE TWO UNLIMITED; \"If you are entering the \"Classic\" or \"Rookie\" Overlay categories, you must also provide CATEGORY-OVERLAY information\" (CLASSIC, ROOKIE); all five ADDRESS headers, though its own sample writes two ADDRESS lines; SOAPBOX. ⚠️ Multi-Distributed is offered for none of the CQ contests: \"The Cabrillo log header must include the following lines: CATEGORY-OPERATOR: MULTI-OP, CATEGORY-STATION: DISTRIBUTED\", and this build writes no CATEGORY-STATION. ⚠️ The transmitter column of a QSO line stays 0 for every contact this build logs (one position), so a Multi-Two log needs its second transmitter's contacts added before it goes in. ARRL Sweepstakes CW and Phone (the sponsor's own templates, https://www.arrl.org/cabrillo-format-tutorial): every template, the Multioperator one included, carries \"CATEGORY-TRANSMITTER: ONE\" (the rules' only multi-operator category is \"Multioperator, Single-Transmitter\"), and \"ADDRESS: 225 Main St.\" over \"ADDRESS: Newington, CT 06111\": ADDRESS alone, so the city, state and postal code ride one more ADDRESS line exactly as there. No SOAPBOX and no overlay line. ⚠️ The rules' \"Limited Antennas Overlay\" has no token the sponsor names: the WA7BNM form ARRL points to (https://www.b4h.net/cabforms/arrlsscw_cab3.php) writes LIMITED-ANT, which is not one of the specification's overlays, so it is not offered; that form also offers TWO, which no Sweepstakes category has. ARRL January, June and September VHF (https://www.arrl.org/january-vhf, https://www.arrl.org/june-vhf and https://www.arrl.org/september-vhf, \"Cabrillo Templates for the new SO3B and SOFM Categories\"): \"CATEGORY-TRANSMITTER: ONE\", \"SOAPBOX:\" twice and \"ADDRESS: 225 Main St\" over \"ADDRESS: Newington, CT 06111\". The rules' multioperator categories, \"3.3.1 Unlimited Multioperator (UM)\" and \"3.3.2 Limited Multioperator (LM)\", are the specification's UNLIMITED and LIMITED, which the converter those pages point to (\"visit www.b4h.net/cabforms/ and select the event of interest\") writes for these contests (https://www.b4h.net/cabforms/arrlvhfjan_cab3.php: ONE, LIMITED, UNLIMITED); so ONE, LIMITED, UNLIMITED. New York QSO Party (the 2026 rules v1.1, \"Sample Cabrillo header\"): \"CATEGORY-TRANSMITTER: ONE\", \"CATEGORY-OVERLAY: ROOKIE\", and ADDRESS, ADDRESS-CITY, ADDRESS-STATE-PROVINCE, ADDRESS-POSTALCODE and ADDRESS-COUNTRY; \"For CATEGORY-OVERLAY, use the applicable overlay designators if you are entering in one of the overlay categories. The Overlay table above lists the valid overlays. Only these values are valid in the Overlay field: Rookie, Youth12, Youth17, YL\", written in the sample's capitals. Its classes Multi-One (\"Multiple operators with only a single transmitted signal at a time\") and Multi-Multi (\"Multiple operators, multiple transmitters at same time\") are ONE and UNLIMITED, the two values of the generator the rules link (\"Please use the Cabrillo generator at https://b4h.net/cabforms/nyqp_cab3.php if you need to generate a Cabrillo file\"); that generator spells the youth overlays YOUTH-13 and YOUTH-17, and the rules' own list wins. The sample carries no SOAPBOX line. Illinois QSO Party (Sample_Excel_Log, https://w9awe.org/ilqp/): ADDRESS, ADDRESS-CITY, ADDRESS-STATE-PROVINCE, \"ADDRESS-POTALCODE\" (the sample's spelling of the specification's ADDRESS-POSTALCODE, which is written as the specification spells it, a reading worth confirming with the sponsor) and three SOAPBOX lines; no ADDRESS-COUNTRY, so a country rides an ADDRESS line. ILQP's entry for several transmitters is its ENTRY-CLASS UNLIMITED, not a CATEGORY-TRANSMITTER. California QSO Party (https://www.cqp.org/Rules.html, \"Last Update: 19-July-2026\"): \"Please indicate if any of these award categories applied to you by using a text editor to insert any of these lines in your Cabrillo log file header: SOAPBOX : EXPEDITION / SOAPBOX: COUNTY-LINE EXPEDITION / SOAPBOX: ONE-DAY EXPEDITION / SOAPBOX: MOBILE / SOAPBOX: YL / SOAPBOX : YOUTH / SOAPBOX: NEW CONTESTER\": SOAPBOX only; its Multi-Single, Multi-Two and Multi-Multi are picked on the robot's form. Tennessee QSO Party (the 2026 rules PDF): \"make sure entry class, personal information, call sign, station location (state, province or DXCC entity, NOT ARRL section), and email address are correctly shown. The header information is used by the processing software and must be complete and accurate\" and \"Don't forget your mailing address - you might win something!\": the mailing address as ADDRESS lines, a reading, because the sponsor names the address and no header. NOTHING NEW for ARRL Field Day (its 2026 rules 8.7: \"Cabrillo format log files are NOT required for Field Day entries, but they will be accepted in lieu of the dupe sheets\"; the entry is the web app's summary sheet), Winter Field Day (2027 rules p.10: \"The main body must follow this format or we will reject your log\", and that format carries none of these), the Ohio QSO Party (\"OhQP does NOT use Cabrillo header info as it has been found over the years to be incorrect\", read 2026-09-09) or the Texas QSO Party (its rules name only \"The club name and call sign\" for the header)."
   },
   "rulesets": [
     {
@@ -988,7 +989,12 @@
       },
       "enforcement": "warn",
       "objectives": [],
-      "score_note_key": "settings.contestScore.incomplete"
+      "score_note_key": "settings.contestScore.incomplete",
+      "cabrillo": {
+        "address": [
+          "ADDRESS"
+        ]
+      }
     },
     {
       "event": "ohqp",
@@ -2505,7 +2511,10 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "soapbox": true
+      }
     },
     {
       "event": "txqp",
@@ -4687,7 +4696,14 @@
           "OUTSIDE ILLINOIS HIGH POWER",
           "OUTSIDE ILLINOIS LOW POWER",
           "UNLIMITED"
-        ]
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE"
+        ],
+        "soapbox": true
       },
       "bands": [
         "160m",
@@ -5486,7 +5502,24 @@
           "EMAIL",
           "NAME"
         ],
-        "location_slot": "QTH"
+        "location_slot": "QTH",
+        "transmitter_categories": [
+          "ONE",
+          "UNLIMITED"
+        ],
+        "overlay_categories": [
+          "ROOKIE",
+          "YOUTH12",
+          "YOUTH17",
+          "YL"
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE",
+          "ADDRESS-COUNTRY"
+        ]
       },
       "bands": [
         "160m",
@@ -6012,7 +6045,15 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE"
+        ],
+        "address": [
+          "ADDRESS"
+        ]
+      }
     },
     {
       "event": "arrlss_ssb",
@@ -6518,7 +6559,15 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE"
+        ],
+        "address": [
+          "ADDRESS"
+        ]
+      }
     },
     {
       "event": "cqww_cw",
@@ -6652,7 +6701,27 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "TWO",
+          "UNLIMITED"
+        ],
+        "overlay_categories": [
+          "CLASSIC",
+          "ROOKIE",
+          "YOUTH"
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE",
+          "ADDRESS-COUNTRY"
+        ],
+        "soapbox": true
+      }
     },
     {
       "event": "cqww_ssb",
@@ -6786,7 +6855,27 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "TWO",
+          "UNLIMITED"
+        ],
+        "overlay_categories": [
+          "CLASSIC",
+          "ROOKIE",
+          "YOUTH"
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE",
+          "ADDRESS-COUNTRY"
+        ],
+        "soapbox": true
+      }
     },
     {
       "event": "cqww_rtty",
@@ -7321,7 +7410,24 @@
           "NF": "NL",
           "NWT": "NT",
           "PEI": "PE"
-        }
+        },
+        "transmitter_categories": [
+          "ONE",
+          "TWO",
+          "UNLIMITED"
+        ],
+        "overlay_categories": [
+          "CLASSIC",
+          "ROOKIE"
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE",
+          "ADDRESS-COUNTRY"
+        ],
+        "soapbox": true
       },
       "bands": [
         "80m",
@@ -7494,7 +7600,28 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "TWO",
+          "UNLIMITED"
+        ],
+        "overlay_categories": [
+          "CLASSIC",
+          "ROOKIE",
+          "TB-WIRES",
+          "YOUTH"
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE",
+          "ADDRESS-COUNTRY"
+        ],
+        "soapbox": true
+      }
     },
     {
       "event": "cqwpx_ssb",
@@ -7655,7 +7782,28 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "TWO",
+          "UNLIMITED"
+        ],
+        "overlay_categories": [
+          "CLASSIC",
+          "ROOKIE",
+          "TB-WIRES",
+          "YOUTH"
+        ],
+        "address": [
+          "ADDRESS",
+          "ADDRESS-CITY",
+          "ADDRESS-STATE-PROVINCE",
+          "ADDRESS-POSTALCODE",
+          "ADDRESS-COUNTRY"
+        ],
+        "soapbox": true
+      }
     },
     {
       "event": "arrlvhf_jan",
@@ -7777,7 +7925,18 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "LIMITED",
+          "UNLIMITED"
+        ],
+        "address": [
+          "ADDRESS"
+        ],
+        "soapbox": true
+      }
     },
     {
       "event": "arrlvhf_jun",
@@ -7899,7 +8058,18 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "LIMITED",
+          "UNLIMITED"
+        ],
+        "address": [
+          "ADDRESS"
+        ],
+        "soapbox": true
+      }
     },
     {
       "event": "arrlvhf_sep",
@@ -8021,7 +8191,18 @@
         "assistance_note_key": ""
       },
       "enforcement": "warn",
-      "objectives": []
+      "objectives": [],
+      "cabrillo": {
+        "transmitter_categories": [
+          "ONE",
+          "LIMITED",
+          "UNLIMITED"
+        ],
+        "address": [
+          "ADDRESS"
+        ],
+        "soapbox": true
+      }
     }
   ],
   "sections": [

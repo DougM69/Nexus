@@ -27,6 +27,13 @@
 //! entrant's own list, and `QRP-COMPETITION` follows the declared power. A field nothing
 //! fills is a field that ships empty, and an emitted header nobody set is the defect above
 //! written a second time.
+//!
+//! ⭐ **The declarations N1MM's Cabrillo dialog offers** — `CATEGORY-TRANSMITTER` (a
+//! multi-operator entry's class), `CATEGORY-OVERLAY`, the mailing address and `SOAPBOX` — are
+//! the entrant's settings too, written only for a contest whose sponsor's template names them
+//! (the ruleset's `cabrillo.transmitter_categories`, `overlay_categories`, `address` and
+//! `soapbox`) and only when they hold a value. Left unset, every contest's file is the one it
+//! was before they existed, byte for byte (`tests/cabrillo_declarations.rs`).
 
 /// Cabrillo's `CATEGORY-OPERATOR` — who operated the entry.
 ///
@@ -99,6 +106,12 @@ pub struct CabrilloHeaders {
     /// `CATEGORY-POWER` — `HIGH` / `LOW` / `QRP`, as the entry declared it. Optional:
     /// `""` writes no line.
     pub category_power: String,
+    /// `CATEGORY-TRANSMITTER` — a multi-operator entry's class (`ONE`, `TWO`, `UNLIMITED`…),
+    /// as the entry declared it. Optional: `""` writes no line.
+    pub category_transmitter: String,
+    /// `CATEGORY-OVERLAY` — the overlay the entry declared (`ROOKIE`, `CLASSIC`…). Optional:
+    /// `""` writes no line.
+    pub category_overlay: String,
     /// `LOCATION` — the ENTRY's declared location, once. A mobile's per-contact
     /// truth is on the QSO lines and is not this value.
     pub location: String,
@@ -111,6 +124,9 @@ pub struct CabrilloHeaders {
     pub email: String,
     /// `NAME` — the entrant's name. Optional: `""` writes no line.
     pub name: String,
+    /// The mailing address, `(header, value)` in the order written ([`address_lines`]). Empty
+    /// writes none.
+    pub address: Vec<(&'static str, String)>,
     /// ⭐ **`IL-COUNTY`** — the Illinois QSO Party's own header, the NAME of the county
     /// an Illinois entry was operated from (`Adams`), beside QSO lines that carry its
     /// code. Optional: `""` writes no line, which is what every other contest and every
@@ -135,6 +151,9 @@ pub struct CabrilloHeaders {
     /// `QRP-COMPETITION` — `YES` for an entry that declared QRP power, the Illinois QSO
     /// Party's own certification line. Optional: `""` writes no line.
     pub qrp_competition: String,
+    /// `SOAPBOX` lines, each within Cabrillo's 75 characters ([`soapbox_lines`]). Empty writes
+    /// none.
+    pub soapbox: Vec<String>,
     /// `X-` headers, emitted last in the order given. Cabrillo-legal and ignored by
     /// robots; `X-NEXUS-RULES-YEAR` says which rules data scored the entry.
     pub x_headers: Vec<(String, String)>,
@@ -161,6 +180,8 @@ impl CabrilloHeaders {
         optional(&mut s, "CATEGORY-BAND", &self.category_band);
         optional(&mut s, "CATEGORY-MODE", &self.category_mode);
         optional(&mut s, "CATEGORY-POWER", &self.category_power);
+        optional(&mut s, "CATEGORY-TRANSMITTER", &self.category_transmitter);
+        optional(&mut s, "CATEGORY-OVERLAY", &self.category_overlay);
         s.push_str(&format!("LOCATION: {}\n", one_line(&self.location)));
         if let Some(score) = self.claimed_score {
             s.push_str(&format!("CLAIMED-SCORE: {score}\n"));
@@ -169,10 +190,16 @@ impl CabrilloHeaders {
         s.push_str(&format!("CREATED-BY: {}\n", one_line(&self.created_by)));
         optional(&mut s, "EMAIL", &self.email);
         optional(&mut s, "NAME", &self.name);
+        for (tag, val) in &self.address {
+            optional(&mut s, tag, val);
+        }
         optional(&mut s, "OPERATORS", &self.operators);
         optional(&mut s, "IL-COUNTY", &self.il_county);
         optional(&mut s, "ENTRY-CLASS", &self.entry_class);
         optional(&mut s, "QRP-COMPETITION", &self.qrp_competition);
+        for line in &self.soapbox {
+            optional(&mut s, "SOAPBOX", line);
+        }
         for (tag, val) in &self.x_headers {
             s.push_str(&format!("{}: {}\n", one_line(tag), one_line(val)));
         }
@@ -218,6 +245,145 @@ pub struct CabrilloEntrant {
     /// The objectives ticked, for a contest that scores by them: what its `CLAIMED-SCORE`
     /// multiplies by.
     pub objectives: Vec<String>,
+    /// `CATEGORY-TRANSMITTER`, as picked. Written only for a `MULTI-OP` entry, and only when it
+    /// is one of the contest's own values, so a class picked for another contest claims nothing.
+    pub transmitter: String,
+    /// `CATEGORY-OVERLAY`, as picked. Written only when it is one of the contest's own overlays.
+    pub overlay: String,
+    /// The mailing address, for a contest whose template names one.
+    pub address: CabrilloAddress,
+    /// `SOAPBOX`, as typed — any number of lines — for a contest whose template carries it.
+    pub soapbox: String,
+}
+
+/// ⭐ **The entrant's mailing address, as typed**: the street lines, then the parts a sponsor
+/// may ask for on headers of their own. Every part is optional and none is ever guessed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CabrilloAddress {
+    /// The street lines, one per line typed.
+    pub street: String,
+    /// `ADDRESS-CITY`.
+    pub city: String,
+    /// `ADDRESS-STATE-PROVINCE`.
+    pub state_province: String,
+    /// `ADDRESS-POSTALCODE`.
+    pub postal_code: String,
+    /// `ADDRESS-COUNTRY`.
+    pub country: String,
+}
+
+/// Cabrillo 3.0's mailing-address headers, in its order: *"ADDRESS: text — Mailing address.
+/// Each line should be a maximum of 45 characters long. Up to 6 address lines are permitted"*,
+/// and four *"Optional fields for providing mailing address details"*. A ruleset's
+/// `cabrillo.address` names those of them its sponsor's template carries.
+pub const CABRILLO_ADDRESS_HEADERS: &[&str] = &[
+    "ADDRESS",
+    "ADDRESS-CITY",
+    "ADDRESS-STATE-PROVINCE",
+    "ADDRESS-POSTALCODE",
+    "ADDRESS-COUNTRY",
+];
+
+/// ⭐ **The address lines one sponsor's template asks for**, `(header, value)` in the order they
+/// are written: each street line as `ADDRESS`, then the parts the sponsor does not name folded
+/// into `ADDRESS` lines the way its own template writes them, then each part it does name on its
+/// own header.
+///
+/// An ARRL template names `ADDRESS` alone, and heads W1AW's entry *"ADDRESS: 225 Main St."* over
+/// *"ADDRESS: Newington, CT 06111"* — so for it the city, state and postal code become that one
+/// line, and a country its own line after it. CQ WW names all five and gets each part on its own
+/// header. A blank part writes nothing, nothing typed is left out, and `named` empty writes no
+/// address at all.
+pub fn address_lines(a: &CabrilloAddress, named: &[&str]) -> Vec<(&'static str, String)> {
+    if !named.contains(&"ADDRESS") {
+        return Vec::new();
+    }
+    let unless_named = |tag: &str, v: &str| -> String {
+        if named.contains(&tag) {
+            String::new()
+        } else {
+            v.trim().to_string()
+        }
+    };
+    let mut lines: Vec<(&'static str, String)> = a
+        .street
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| ("ADDRESS", l.to_string()))
+        .collect();
+    // "Newington, CT 06111": the city, then the state and postal code after a comma.
+    let region = [
+        unless_named("ADDRESS-STATE-PROVINCE", &a.state_province),
+        unless_named("ADDRESS-POSTALCODE", &a.postal_code),
+    ]
+    .into_iter()
+    .filter(|v| !v.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
+    let locality = [unless_named("ADDRESS-CITY", &a.city), region]
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !locality.is_empty() {
+        lines.push(("ADDRESS", locality));
+    }
+    let country = unless_named("ADDRESS-COUNTRY", &a.country);
+    if !country.is_empty() {
+        lines.push(("ADDRESS", country));
+    }
+    for (tag, part) in [
+        ("ADDRESS-CITY", &a.city),
+        ("ADDRESS-STATE-PROVINCE", &a.state_province),
+        ("ADDRESS-POSTALCODE", &a.postal_code),
+        ("ADDRESS-COUNTRY", &a.country),
+    ] {
+        if named.contains(&tag) && !part.trim().is_empty() {
+            lines.push((tag, part.trim().to_string()));
+        }
+    }
+    lines
+}
+
+/// The longest `SOAPBOX` line Cabrillo allows, its tag included: *"Each line is a maximum of 75
+/// characters long and must begin with SOAPBOX: followed by a space."*
+pub const SOAPBOX_LINE_MAX: usize = 75;
+
+/// ⭐ **`SOAPBOX` lines from the text the entrant typed**: a line per line typed, blank lines
+/// left out, and a typed line too long for one Cabrillo line wrapped at a space into more, so no
+/// line of the file is longer than [`SOAPBOX_LINE_MAX`]. A word longer than a whole line is
+/// split. Nothing typed is dropped.
+pub fn soapbox_lines(text: &str) -> Vec<String> {
+    let room = SOAPBOX_LINE_MAX - "SOAPBOX: ".len();
+    let mut out = Vec::new();
+    for typed in text.lines() {
+        let typed = one_line(typed);
+        let mut line = String::new();
+        for word in typed.split_whitespace() {
+            let mut word: Vec<char> = word.chars().collect();
+            while !word.is_empty() {
+                let used = line.chars().count();
+                let gap = usize::from(used > 0);
+                if used + gap + word.len() <= room {
+                    if gap == 1 {
+                        line.push(' ');
+                    }
+                    line.extend(word.drain(..));
+                } else if used > 0 {
+                    out.push(std::mem::take(&mut line));
+                } else {
+                    // A word longer than a whole line: as much of it as fits, the rest after.
+                    line.extend(word.drain(..room));
+                    out.push(std::mem::take(&mut line));
+                }
+            }
+        }
+        if !line.is_empty() {
+            out.push(line);
+        }
+    }
+    out
 }
 
 /// ⭐ **One column of a sponsor's own Cabrillo exchange template**, where its QSO line is
@@ -686,6 +852,161 @@ mod tests {
              CATEGORY-OPERATOR: SINGLE-OP\n\
              LOCATION: IL\n\
              CREATED-BY: Nexus\n"
+        );
+    }
+
+    fn an_address() -> CabrilloAddress {
+        CabrilloAddress {
+            street: " 225 Main St.\n\nSuite 4 ".into(),
+            city: "Newington".into(),
+            state_province: "CT".into(),
+            postal_code: "06111".into(),
+            country: "USA".into(),
+        }
+    }
+
+    /// ⭐ An ARRL template names `ADDRESS` alone and writes the city, state and postal code as
+    /// one more `ADDRESS` line — *"ADDRESS: 225 Main St."* over *"ADDRESS: Newington, CT
+    /// 06111"* — so the parts it does not name are folded exactly so, the country last.
+    #[test]
+    fn the_parts_a_template_does_not_name_ride_address_lines() {
+        assert_eq!(
+            address_lines(&an_address(), &["ADDRESS"]),
+            [
+                ("ADDRESS", "225 Main St.".to_string()),
+                ("ADDRESS", "Suite 4".to_string()),
+                ("ADDRESS", "Newington, CT 06111".to_string()),
+                ("ADDRESS", "USA".to_string()),
+            ]
+        );
+        // Blank parts write nothing, and a lone part writes itself.
+        let only_city = CabrilloAddress {
+            city: "Newington".into(),
+            ..CabrilloAddress::default()
+        };
+        assert_eq!(
+            address_lines(&only_city, &["ADDRESS"]),
+            [("ADDRESS", "Newington".to_string())]
+        );
+        let no_city = CabrilloAddress {
+            state_province: "CT".into(),
+            postal_code: "06111".into(),
+            ..CabrilloAddress::default()
+        };
+        assert_eq!(
+            address_lines(&no_city, &["ADDRESS"]),
+            [("ADDRESS", "CT 06111".to_string())]
+        );
+    }
+
+    /// Each part a template names gets its own header, in Cabrillo's order, and only the parts
+    /// it does not name are folded (the Illinois sample names every part but the country).
+    #[test]
+    fn the_parts_a_template_names_get_their_own_headers() {
+        assert_eq!(
+            address_lines(&an_address(), CABRILLO_ADDRESS_HEADERS),
+            [
+                ("ADDRESS", "225 Main St.".to_string()),
+                ("ADDRESS", "Suite 4".to_string()),
+                ("ADDRESS-CITY", "Newington".to_string()),
+                ("ADDRESS-STATE-PROVINCE", "CT".to_string()),
+                ("ADDRESS-POSTALCODE", "06111".to_string()),
+                ("ADDRESS-COUNTRY", "USA".to_string()),
+            ]
+        );
+        assert_eq!(
+            address_lines(&an_address(), &CABRILLO_ADDRESS_HEADERS[..4]),
+            [
+                ("ADDRESS", "225 Main St.".to_string()),
+                ("ADDRESS", "Suite 4".to_string()),
+                ("ADDRESS", "USA".to_string()),
+                ("ADDRESS-CITY", "Newington".to_string()),
+                ("ADDRESS-STATE-PROVINCE", "CT".to_string()),
+                ("ADDRESS-POSTALCODE", "06111".to_string()),
+            ]
+        );
+        // A template that names no ADDRESS writes no address at all.
+        assert_eq!(address_lines(&an_address(), &[]), []);
+    }
+
+    /// ⭐ *"Each line is a maximum of 75 characters long and must begin with SOAPBOX: followed by
+    /// a space"*: a long line wraps at a space, a word longer than a line is split, blank lines
+    /// are left out, and nothing typed is lost.
+    #[test]
+    fn soapbox_lines_fit_cabrillos_line() {
+        assert_eq!(
+            soapbox_lines("  Great fun.\n\n\nBack next year. "),
+            ["Great fun.", "Back next year."]
+        );
+        let long = "word ".repeat(30);
+        let lines = soapbox_lines(&long);
+        assert!(lines
+            .iter()
+            .all(|l| l.chars().count() + "SOAPBOX: ".len() <= SOAPBOX_LINE_MAX));
+        assert_eq!(lines.join(" "), long.trim(), "every word, in order");
+        assert_eq!(
+            lines[0].chars().count(),
+            64,
+            "thirteen four-letter words and their spaces: 64 of the 66"
+        );
+        let unbroken = "X".repeat(70);
+        assert_eq!(soapbox_lines(&unbroken), ["X".repeat(66), "X".repeat(4)]);
+        assert_eq!(soapbox_lines(""), Vec::<String>::new());
+    }
+
+    /// The four declarations in their places: the classes with the other CATEGORY lines, the
+    /// address after NAME, the soapbox last before the X- lines — and none when unset.
+    #[test]
+    fn the_declarations_render_in_their_places() {
+        let full = CabrilloHeaders {
+            contest: "CQ-WW-CW".into(),
+            callsign: "W9XYZ".into(),
+            category_operator: OperatorCategory::MultiOp,
+            category_power: "LOW".into(),
+            category_transmitter: "TWO".into(),
+            category_overlay: "CLASSIC".into(),
+            location: "IL".into(),
+            created_by: "Nexus".into(),
+            name: "A NAME".into(),
+            address: address_lines(&an_address(), &["ADDRESS"]),
+            operators: "K1ABC W2DEF".into(),
+            soapbox: soapbox_lines("Great fun."),
+            x_headers: vec![("X-NEXUS-RULES-YEAR".into(), "2026".into())],
+            ..Default::default()
+        };
+        assert_eq!(
+            full.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: CQ-WW-CW\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: MULTI-OP\n\
+             CATEGORY-POWER: LOW\n\
+             CATEGORY-TRANSMITTER: TWO\n\
+             CATEGORY-OVERLAY: CLASSIC\n\
+             LOCATION: IL\n\
+             CREATED-BY: Nexus\n\
+             NAME: A NAME\n\
+             ADDRESS: 225 Main St.\n\
+             ADDRESS: Suite 4\n\
+             ADDRESS: Newington, CT 06111\n\
+             ADDRESS: USA\n\
+             OPERATORS: K1ABC W2DEF\n\
+             SOAPBOX: Great fun.\n\
+             X-NEXUS-RULES-YEAR: 2026\n"
+        );
+        // CONTROL: unset, they write nothing and the block is the one before them.
+        let bare = CabrilloHeaders {
+            category_transmitter: String::new(),
+            category_overlay: String::new(),
+            address: Vec::new(),
+            soapbox: Vec::new(),
+            ..full.clone()
+        };
+        assert!(!bare.render().contains("TRANSMITTER"));
+        assert_eq!(
+            bare.render().lines().count(),
+            full.render().lines().count() - 7,
+            "two classes, four address lines and a soapbox line fewer"
         );
     }
 

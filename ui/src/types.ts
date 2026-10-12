@@ -4237,6 +4237,22 @@ export interface Settings {
   /** More Cabrillo `OPERATORS`, typed (calls separated by spaces or commas). The header lists
    *  the operators the contacts were stamped with (`fdOperator`), then these. */
   contestOperators?: string
+  /** Cabrillo `CATEGORY-TRANSMITTER`, a multi-operator entry's class: one of the selected
+   *  contest's own (`FdRulesetDto.transmitterCategories`), '' = undeclared. Written only for a
+   *  MULTI-OP entry, with the OPERATORS line. */
+  contestCategoryTransmitter?: string
+  /** Cabrillo `CATEGORY-OVERLAY`: one of the selected contest's own overlays
+   *  (`FdRulesetDto.overlayCategories`), '' = undeclared. */
+  contestCategoryOverlay?: string
+  /** The mailing address the Cabrillo ADDRESS lines carry, for a contest whose template names
+   *  them: the street lines, one per line, then its four parts. Withheld from Remote. */
+  contestAddress?: string
+  contestAddressCity?: string
+  contestAddressState?: string
+  contestAddressPostalcode?: string
+  contestAddressCountry?: string
+  /** Cabrillo `SOAPBOX`, as typed, for a contest whose template has one. */
+  contestSoapbox?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else

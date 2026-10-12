@@ -12357,6 +12357,111 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.contestPick.operators.hint')}</span>
               </label>
+              {/* ⭐ THE REST OF WHAT A SPONSOR'S TEMPLATE DECLARES: a multi-operator entry's class,
+                  an overlay, the mailing address and the soapbox. Each is offered only for a
+                  contest whose sponsor writes it, from the rules data and never from a list kept
+                  here, and the class only for a MULTI-OP entry, the only one it is written for.
+                  The tokens are the sponsor's and are never translated; a saved one this contest
+                  does not have shows as unset, which is also what the export does with it. All
+                  are read when the log is exported. */}
+              {(form.contestCategoryOperator ?? '') === 'MULTI-OP' &&
+              rulesetPreview?.transmitterCategories?.length ? (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.transmitter.label')}</span>
+                  <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.transmitter.aria')}>
+                    {['', ...rulesetPreview.transmitterCategories].map((c) => {
+                      const picked = (form.contestCategoryTransmitter ?? '').toUpperCase()
+                      const on = (rulesetPreview.transmitterCategories ?? []).includes(picked) ? picked : ''
+                      return (
+                        <button
+                          key={c || 'unset'}
+                          type="button"
+                          className={`theme-chip${on === c ? ' active' : ''}`}
+                          aria-pressed={on === c}
+                          disabled={locked('contestCategoryTransmitter')}
+                          onClick={() => update('contestCategoryTransmitter', c)}
+                        >
+                          {c || t('settings.contestPick.entryAxes.unset')}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <span className="settings-hint">{t('settings.contestPick.transmitter.hint')}</span>
+                </div>
+              ) : null}
+              {rulesetPreview?.overlayCategories?.length ? (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.overlay.label')}</span>
+                  <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.overlay.aria')}>
+                    {['', ...rulesetPreview.overlayCategories].map((c) => {
+                      const picked = (form.contestCategoryOverlay ?? '').toUpperCase()
+                      const on = (rulesetPreview.overlayCategories ?? []).includes(picked) ? picked : ''
+                      return (
+                        <button
+                          key={c || 'unset'}
+                          type="button"
+                          className={`theme-chip${on === c ? ' active' : ''}`}
+                          aria-pressed={on === c}
+                          disabled={locked('contestCategoryOverlay')}
+                          onClick={() => update('contestCategoryOverlay', c)}
+                        >
+                          {c || t('settings.contestPick.entryAxes.unset')}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <span className="settings-hint">{t('settings.contestPick.overlay.hint')}</span>
+                </div>
+              ) : null}
+              {rulesetPreview?.addressHeaders?.length ? (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.contestPick.address.label')}</span>
+                    <textarea
+                      disabled={locked('contestAddress')}
+                      className="settings-input le-notes"
+                      rows={2}
+                      value={form.contestAddress ?? ''}
+                      onChange={(e) => update('contestAddress', e.target.value)}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">{t('settings.contestPick.address.hint')}</span>
+                  </label>
+                  <div className="settings-grid">
+                    {([
+                      ['contestAddressCity', t('settings.contestPick.address.city')],
+                      ['contestAddressState', t('settings.contestPick.address.state')],
+                      ['contestAddressPostalcode', t('settings.contestPick.address.postalCode')],
+                      ['contestAddressCountry', t('settings.contestPick.address.country')],
+                    ] as const).map(([field, label]) => (
+                      <label className="settings-field" key={field}>
+                        <span className="settings-label">{label}</span>
+                        <input
+                          disabled={locked(field)}
+                          className="settings-input"
+                          type="text"
+                          value={form[field] ?? ''}
+                          onChange={(e) => update(field, e.target.value)}
+                          autoComplete="off"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+              {rulesetPreview?.soapbox ? (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.soapbox.label')}</span>
+                  <textarea
+                    disabled={locked('contestSoapbox')}
+                    className="settings-input le-notes"
+                    rows={3}
+                    value={form.contestSoapbox ?? ''}
+                    onChange={(e) => update('contestSoapbox', e.target.value)}
+                  />
+                  <span className="settings-hint">{t('settings.contestPick.soapbox.hint')}</span>
+                </label>
+              ) : null}
             </fieldset>
           )}
 

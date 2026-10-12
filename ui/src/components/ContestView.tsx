@@ -4,6 +4,7 @@ import type {
   ClubLink,
   ContestBoard,
   ContestFieldSpec,
+  DupeRule,
   FdClubStatus,
   FdMergeReport,
   FieldDayQso,
@@ -434,6 +435,91 @@ function bandCounts(log: FieldDayQso[]): { band: string; n: number }[] {
     .sort((a, b) => bandRank(a.band) - bandRank(b.band) || a.band.localeCompare(b.band))
 }
 
+/** One column of the band × mode grid: the scoring classes it counts, and its heading. */
+export interface ModeColumn {
+  classes: string[]
+  label: string
+}
+
+/** The scoring classes in the order ARRL's Field Day summary sheet lists them, and its names. */
+const SHEET_CLASSES = ['CW', 'DIG', 'PH'] as const
+const SHEET_CLASS_NAMES: Record<string, string> = { CW: 'CW', DIG: 'Digital', PH: 'Phone' }
+
+/**
+ * ⭐ **A contest's own mode classes, as the grid's columns**, in the summary sheet's order (CW,
+ * Digital, Phone): each class its own column where the contest counts it apart, the classes its
+ * dupe rule counts as one in one column (the Illinois QSO Party's "CW/Digital"), and for a contest
+ * that counts no mode class at all (CQ WW, Sweepstakes, the VHF contests) the classes its log
+ * holds. No rule (an older build) means the three, which is what such a build counted.
+ */
+export function modeColumns(rule: DupeRule | undefined, log: FieldDayQso[]): ModeColumn[] {
+  const split = rule?.byModeClass ?? true
+  const held = SHEET_CLASSES.filter((c) => log.some((q) => q.mode === c))
+  const classes: string[] = split || held.length === 0 ? [...SHEET_CLASSES] : held
+  const groups = split ? (rule?.modeClassGroups ?? []) : []
+  const columns: ModeColumn[] = []
+  for (const c of classes) {
+    if (columns.some((col) => col.classes.includes(c))) continue
+    const group = groups.find((g) => g.includes(c))
+    const together = group ? classes.filter((x) => group.includes(x)) : [c]
+    columns.push({ classes: together, label: together.map((x) => SHEET_CLASS_NAMES[x]).join('/') })
+  }
+  return columns
+}
+
+/** ARRL Field Day's summary sheet, item 18: its band rows, in its order and spelling. */
+const SHEET_BANDS: [string, string][] = [
+  ['160m', '160 M'],
+  ['80m', '80 M'],
+  ['40m', '40 M'],
+  ['20m', '20 M'],
+  ['15m', '15 M'],
+  ['10m', '10 M'],
+  ['6m', '6 M'],
+  ['2m', '2 M'],
+  ['1.25m', '1.25 M'],
+  ['70cm', '70 CM'],
+]
+
+/**
+ * ⭐ **The Summary's band × mode grid** — contacts per band and mode, laid out as ARRL's Field
+ * Day summary sheet lays out its item 18 (2026 Summary Sheet, page 2): columns "CW Digital
+ * Phone", rows "160 M, 80 M, 40 M, 20 M, 15 M, 10 M, 6 M, 2 M, 1.25 M, 70 CM, Other, Satellite,
+ * GOTA" over "TOTALS", whose CW, Digital and Phone the sheet carries to its lines 8, 9 and 10.
+ *
+ * With `sheet` (ARRL Field Day) the rows are the sheet's own: a band it has no row for counts
+ * under Other, and a contact made through a satellite under Satellite, which the rules (7.3.7)
+ * list "separately on the summary sheet as a separate band". Its GOTA row is the GOTA station's,
+ * which this laptop's log does not tell apart from its own, so it reads "—": that station's own
+ * summary has its contacts. Every other contest gets the same grid in its own mode classes
+ * ([`modeColumns`]), one row per band its log holds. Every contact the log holds is counted,
+ * a duplicate logged at zero points included, as the QSO total above it counts it.
+ */
+export function bandModeGrid(log: FieldDayQso[], columns: ModeColumn[], sheet: boolean): string[] {
+  const NOT_TRACKED = '—'
+  const rowOf = (q: FieldDayQso): string => {
+    if (!sheet) return q.band
+    if (q.sat) return 'Satellite'
+    return SHEET_BANDS.find(([band]) => band === q.band)?.[1] ?? 'Other'
+  }
+  const rows: string[] = sheet
+    ? [...SHEET_BANDS.map(([, label]) => label), 'Other', 'Satellite', 'GOTA']
+    : bandCounts(log).map((b) => b.band)
+  const count = (row: string, col: ModeColumn) =>
+    log.filter((q) => rowOf(q) === row && col.classes.includes(q.mode ?? '')).length
+  const labelWidth = Math.max('TOTALS'.length, ...rows.map((r) => r.length)) + 2
+  const width = (col: ModeColumn) => Math.max(col.label.length, 5) + 2
+  const line = (label: string, cells: string[]) =>
+    '  ' + label.padEnd(labelWidth) + cells.map((c, i) => c.padStart(width(columns[i]))).join('')
+  const L: string[] = []
+  L.push(line('Band', columns.map((c) => c.label)))
+  for (const row of rows) {
+    L.push(line(row, columns.map((c) => (sheet && row === 'GOTA' ? NOT_TRACKED : String(count(row, c))))))
+  }
+  L.push(line('TOTALS', columns.map((c) => String(log.filter((q) => c.classes.includes(q.mode ?? '')).length))))
+  return L
+}
+
 interface SummaryArgs {
   eventName: string
   isWfd: boolean
@@ -459,6 +545,11 @@ interface SummaryArgs {
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
   contest?: { sending: string; multCount: number | null }
+  /** The running contest's dupe rule, whose mode classes are the grid's columns
+   *  ([`modeColumns`]); absent on an older build, which counted the three. */
+  dupeRule?: DupeRule
+  /** ARRL Field Day: lay the grid out as its summary sheet's item 18, rows and all. */
+  fieldDaySheet?: boolean
 }
 
 /**
@@ -487,6 +578,15 @@ export function buildSummaryText(a: SummaryArgs): string {
   L.push(`  By mode:  DIG ${a.modes.dig}   CW ${a.modes.cw}   PH ${a.modes.ph}`)
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
+  L.push('')
+  // ⭐ The same contacts by band AND mode, as ARRL's Field Day summary sheet asks for them.
+  L.push(a.fieldDaySheet ? 'QSOs BY BAND AND MODE (ARRL summary sheet, item 18)' : 'QSOs BY BAND AND MODE')
+  L.push(...bandModeGrid(a.log, modeColumns(a.dupeRule, a.log), a.fieldDaySheet === true))
+  if (a.fieldDaySheet) L.push("  GOTA: on the GOTA station's own summary.")
+  const dupes = a.log.filter((q) => q.dupe === true).length
+  if (dupes > 0) {
+    L.push(`  Counted above: ${dupes} duplicate contact${dupes === 1 ? '' : 's'} logged at zero points.`)
+  }
   L.push('')
   if (a.contest) {
     // The score the engine computed: QSO points × multipliers, with no power tier and no
@@ -2511,6 +2611,8 @@ export function ContestView({
           contest: fdEventIsFieldDay
             ? undefined
             : { sending: composingText(fieldDay?.composing), multCount: fieldDay?.multCount ?? null },
+          dupeRule: fieldDay?.dupeRule,
+          fieldDaySheet: fdEventIsFieldDay && !isWfd,
         })
       } else if (format === 'dupesheet') {
         text = buildDupeSheetText(rows, fdEventIsFieldDay ? undefined : eventName)

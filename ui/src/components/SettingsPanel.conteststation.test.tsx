@@ -284,3 +284,90 @@ describe('the entry class, club and other operators', () => {
     expect(screen.queryByText('Entry class', { selector: '.settings-label' })).toBeNull()
   })
 })
+
+// ⭐ THE REST OF WHAT A SPONSOR'S TEMPLATE DECLARES: a multi-operator entry's class
+// (CATEGORY-TRANSMITTER), an overlay, the mailing address and the soapbox. Each comes from the
+// contest's rules data through the ruleset preview and is offered only where the sponsor writes
+// it; the class only for a MULTI-OP entry, the only one it is written for.
+describe('the multi-operator class, overlay, mailing address and soapbox', () => {
+  const WPX = {
+    event: 'cqwpx_cw',
+    transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
+    overlayCategories: ['CLASSIC', 'ROOKIE', 'TB-WIRES', 'YOUTH'],
+    addressHeaders: ['ADDRESS', 'ADDRESS-CITY', 'ADDRESS-STATE-PROVINCE', 'ADDRESS-POSTALCODE', 'ADDRESS-COUNTRY'],
+    soapbox: true,
+  }
+  const chips = async (group: string) =>
+    Array.from((await screen.findByRole('group', { name: group })).querySelectorAll('button'))
+  const textareaFor = async (label: string) =>
+    (await screen.findByText(label, { selector: '.settings-label' }))
+      .closest('.settings-field')!
+      .querySelector('textarea') as HTMLTextAreaElement
+  const CLASS = 'Which multi-operator class you are entering'
+  const OVERLAY = 'Which overlay category you are also entering'
+
+  it('offers the contest\'s own classes and overlays, and saves every declaration', async () => {
+    stored = { ...stored, fdEvent: 'cqwpx_cw', contestCategoryOperator: 'MULTI-OP' }
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(WPX as never))
+    renderPanel()
+    await openContesting()
+    const classes = await chips(CLASS)
+    expect(classes.map((b) => b.textContent)).toEqual(['Not set', 'ONE', 'TWO', 'UNLIMITED'])
+    expect(classes[0].getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(classes[2])
+    const overlays = await chips(OVERLAY)
+    expect(overlays.map((b) => b.textContent)).toEqual(['Not set', 'CLASSIC', 'ROOKIE', 'TB-WIRES', 'YOUTH'])
+    fireEvent.click(overlays[3])
+    fireEvent.change(await textareaFor('Mailing address'), { target: { value: '1 Example Rd\nApt 2' } })
+    fireEvent.change(await inputFor('Mailing city'), { target: { value: 'Springfield' } })
+    fireEvent.change(await inputFor('Mailing state or province'), { target: { value: 'IL' } })
+    fireEvent.change(await inputFor('Postal code'), { target: { value: '62701' } })
+    fireEvent.change(await inputFor('Mailing country'), { target: { value: 'USA' } })
+    fireEvent.change(await textareaFor('Soapbox'), { target: { value: 'A fine weekend.\nFirst licensed 2024.' } })
+    await save()
+    await waitFor(() => expect(lastSaved()?.contestCategoryTransmitter).toBe('TWO'))
+    const saved = lastSaved()!
+    expect([
+      saved.contestCategoryOverlay,
+      saved.contestAddress,
+      saved.contestAddressCity,
+      saved.contestAddressState,
+      saved.contestAddressPostalcode,
+      saved.contestAddressCountry,
+      saved.contestSoapbox,
+    ]).toEqual(['TB-WIRES', '1 Example Rd\nApt 2', 'Springfield', 'IL', '62701', 'USA', 'A fine weekend.\nFirst licensed 2024.'])
+  })
+
+  it('offers no class to a single operator, and shows a class this contest lacks as not set', async () => {
+    stored = { ...stored, fdEvent: 'cqwpx_cw', contestCategoryOperator: 'SINGLE-OP' }
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(WPX as never))
+    const view = renderPanel()
+    await openContesting()
+    expect(await chips(OVERLAY)).toHaveLength(5)
+    expect(screen.queryByRole('group', { name: CLASS })).toBeNull()
+    view.unmount()
+    // CONTROL: the same contest, a multi-operator entry holding a class it does not have
+    // (ARRL VHF's LIMITED): the picker is there, and that class reads as not set.
+    stored = { ...stored, contestCategoryOperator: 'MULTI-OP', contestCategoryTransmitter: 'LIMITED' }
+    renderPanel()
+    await openContesting()
+    const classes = await chips(CLASS)
+    expect(classes.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)).toEqual([
+      'Not set',
+    ])
+  })
+
+  it('POSITIVE CONTROL: a contest whose sponsor names none of them offers none of them', async () => {
+    stored = { ...stored, contestCategoryOperator: 'MULTI-OP' }
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd' } as never))
+    renderPanel()
+    await openContesting()
+    expect(await inputFor('Club')).toBeTruthy()
+    await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole('group', { name: CLASS })).toBeNull()
+    expect(screen.queryByRole('group', { name: OVERLAY })).toBeNull()
+    expect(screen.queryByText('Mailing address', { selector: '.settings-label' })).toBeNull()
+    expect(screen.queryByText('Soapbox', { selector: '.settings-label' })).toBeNull()
+  })
+})

@@ -4892,6 +4892,16 @@ mod tests {
                     entry_class: "UNLIMITED".into(),
                     operators: "W9OP1".into(),
                     objectives: vec!["wfd-qrp".into()],
+                    transmitter: "ONE".into(),
+                    overlay: "ROOKIE".into(),
+                    address: tempo_core::contest::CabrilloAddress {
+                        street: "1 Example Rd".into(),
+                        city: "Springfield".into(),
+                        state_province: "IL".into(),
+                        postal_code: "62701".into(),
+                        country: "USA".into(),
+                    },
+                    soapbox: "A fine weekend.".into(),
                 },
             )
             .unwrap(),
