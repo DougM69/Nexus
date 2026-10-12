@@ -17,7 +17,7 @@ sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 | `NewState` — new state (WAS) | 60 |
 | `NewGrid` — new Maidenhead square | 55 |
 | `NewBand` — new band-slot | 50 |
-| `NewMode` — new mode for the entity, any band; each mode counts on its own (FT8 and FT4 apart, USB and LSB both SSB) | 30 |
+| `NewMode` — new mode for the entity, any band; each mode counts on its own (FT8 and FT4 apart, USB and LSB both SSB). A station heard in a mode no contact is logged in (a WSPR beacon, VarAC) counts by its class | 30 |
 | `NewPark` — a park or summit not yet worked in the activation running now | 20 |
 | `Confirm` — confirmation opportunity | 10 |
 | `Dxped` — active DXpedition chip | 0 |
@@ -115,7 +115,11 @@ What happens after the click depends on the mode:
 
 - **CW row** — rig QSYs, the CW cockpit opens, the callsign is prefilled in the log strip and the cursor lands on the RST field.
 - **Phone row** — rig QSYs, the Phone cockpit opens, the callsign is prefilled.
-- **Digital row** — rig QSYs, the Operate cockpit opens without prefill; you work the station by double-clicking their decode line in the normal FT8/FT4 flow.
+- **Digital row** — rig QSYs, the Operate cockpit opens without prefill (on FT8 or FT4 when the row was heard in one of them); you work the station by double-clicking their decode line in the normal FT8/FT4 flow.
+- **JS8 row** — the JS8 screen opens on the JS8 tier, at the station's own frequency when the spot carries one, else at the band's JS8 frequency.
+- **PSK row** (PSK31, PSK63, PSK125, QPSK31) — the PSK screen opens at the station's own frequency, else at the band's PSK31 frequency, switched to PSK31 or QPSK31 when the row is one of those. PSK63 and PSK125 rows open on whichever of the two the screen is on.
+
+A JS8 or PSK row whose screen is switched off in Settings ▸ Features opens the Operate cockpit, as a Digital row does.
 
 ### Split/pile-up parsing
 

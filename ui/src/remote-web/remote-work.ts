@@ -1,17 +1,17 @@
 // Which needs and spots a browser may Work. CW and Phone ride the station's workSpot intent;
 // FT8/FT4 ride workDigitalSpot, which names its tier; RTTY rides workRttySpot. Work tunes the
 // station and sets its mode and tier; it never starts a QSO or enables transmit.
-import { workTarget } from '../features/needs'
+import { workTarget, workTier } from '../features/needs'
 import type { BandChannel, NeedAlert, SpotRow } from '../types'
 
 /** The station hints a browser Work needs, plus the cockpit switches the desktop Work obeys. */
 export type RemoteWorkGrants = { workSpot: boolean; workDigitalSpot: boolean; workRttySpot: boolean
   cwEnabled: boolean; phoneEnabled: boolean; rttyEnabled: boolean }
 
-/** The FT8/FT4 tier a need names, or null when it names none. */
-export function remoteWorkTier(alert: Pick<NeedAlert, 'mode'>): 'FT8' | 'FT4' | null {
-  const mode = alert.mode?.toUpperCase()
-  return mode === 'FT8' || mode === 'FT4' ? mode : null
+/** The FT8/FT4 tier a need names, or null when it names none: its own mode, as the desktop's Work
+ * reads it (`workTier`), so a POTA row heard in FT4 works on FT4 from a browser too. */
+export function remoteWorkTier(alert: Pick<NeedAlert, 'mode' | 'exactMode'>): 'FT8' | 'FT4' | null {
+  return workTier(alert)
 }
 
 export function remoteWorkable(alert: NeedAlert, bandPlan: BandChannel[], grants: RemoteWorkGrants): boolean {

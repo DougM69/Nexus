@@ -6,7 +6,7 @@ import { publishBandConditions } from './bandConditions'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
-import { rigModeTransition, type RigMode } from './rigModeForView'
+import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
   callStation as apiCallStation,
   overrideNextTx as apiOverrideNextTx,
@@ -85,7 +85,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
-import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, type OwnScreen } from './features/needs'
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
@@ -147,6 +147,9 @@ import {
   setOperatingMode,
   remoteRecallMemory,
   workSpot,
+  getLicensedBandPlan,
+  getPskState,
+  pskSetMode,
   setHuntTarget,
   setLicenseClass,
   stopQsoRecording,
@@ -1101,6 +1104,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const cwEnabled = features.isOn('cw')
   const phoneEnabled = features.isOn('phone')
   const rttyEnabled = features.isOn('rtty')
+  // A Needed row heard in JS8 or a PSK mode opens that screen only while it is on (`ownScreen`).
+  const pskEnabled = features.isOn('psk')
+  const js8Enabled = features.isOn('js8')
   // Work-a-spot navigation: whenever a spot is worked — from THIS window's
   // boards or a pop-out (which can't navigate the main window itself) — follow
   // to the matching cockpit (the operator's report: "if I click a contact, it
@@ -1118,22 +1124,25 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
     if (tick === workNavRef.current) return
     workNavRef.current = tick
-    const v = snap?.workView
-    const target: View =
-      v === 'cw' ? 'cw' : v === 'phone' ? 'phone' : v === 'rtty' ? 'rtty' : 'operate'
+    // The hint is the section the Work told `work_spot` (WORK_SECTION): 'keyboard' opens PSK and
+    // 'js8' JS8, the screens a Needed row of those modes works on.
+    const target: View = workHintView(snap?.workView)
     // Never navigate into a feature-disabled (hidden) cockpit — same gate as
     // handleWorkNeeded; the rig already switched, the view just stays put.
     if (
       (target === 'cw' && !cwEnabled) ||
       (target === 'phone' && !phoneEnabled) ||
-      (target === 'rtty' && !rttyEnabled)
+      (target === 'rtty' && !rttyEnabled) ||
+      (target === 'psk' && !pskEnabled) ||
+      (target === 'js8' && !js8Enabled)
     )
       return
     // Sync the rig-mode guard BEFORE navigating (same as handleWorkNeeded) —
     // otherwise the [view] effect sees a mode change and re-homes the dial to
     // the segment start, yanking the rig OFF the exact spot frequency the
-    // workSpot click just tuned (review-caught on the pop-out path).
-    lastOpModeRef.current = target === 'operate' ? 'digital' : target
+    // workSpot click just tuned (review-caught on the pop-out path). The guard
+    // holds the screen's RIG mode: PSK's is 'keyboard', JS8's is Digital's.
+    lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
     lastHomedModeRef.current = lastOpModeRef.current
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
@@ -1145,7 +1154,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, remote])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled, remote])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
@@ -2155,8 +2164,21 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
         return
       }
+      // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
+      // switched on, at the row's own frequency or that screen's channel for the band. A browser has
+      // no Work for either, so its rows keep the target they always had.
+      const screen = remote ? null : ownScreen(alert)
+      let own: OwnScreen | null = null
+      if (screen && (screen === 'js8' ? js8Enabled : pskEnabled)) {
+        const plan = await withErrorToast(
+          () => getLicensedBandPlan(screen),
+          t('shell.work.failed.cat', { call: alert.call }),
+        )
+        if (!plan) return
+        own = { view: screen, plan }
+      }
       // `target`, not `t` — `t` is the translator in this file.
-      const target = workTarget(alert, bandPlan)
+      const target = workTarget(alert, bandPlan, own)
       if (!target) {
         handleQsy(alert.band)
         return
@@ -2211,33 +2233,34 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         handleQsy(alert.band, target.freqMhz)
         return
       }
-      // 'operate' is the digital cockpit, so its operating mode is 'digital'. RTTY passes
-      // through as 'rtty' — the backend + [view] rig-mode effect apply the RTTY policy.
-      const opMode: 'digital' | 'phone' | 'cw' | 'rtty' =
-        target.view === 'operate' ? 'digital' : target.view
+      // The section `work_spot` is told (WORK_SECTION): 'operate' is the digital cockpit, so
+      // 'digital'; RTTY passes through as 'rtty' and PSK is 'keyboard', whose policies the backend
+      // + [view] rig-mode effect apply; JS8 is 'js8', Digital under its own name so the hint every
+      // window follows says JS8. The guards below hold the screen's rig mode.
+      const section = WORK_SECTION[target.view]
+      const rigMode: RigMode = RIG_MODE_BY_VIEW[target.view] ?? 'digital'
       void (async () => {
-        // A digital spot carries its protocol in alert.mode — the FT8/FT4 tier rides the
-        // SAME atomic workSpot call, else clicking an FT4 spot QSYs but leaves the decoder
-        // on FT8. It used to be a separate set_tier call first, and in the gap between the
-        // two the radio loop could command the tier's DEFAULT dial (FT8 14.074 → FT4
+        // A digital spot carries its protocol in its own mode (`workTier`) — the FT8/FT4 tier
+        // rides the SAME atomic workSpot call, else clicking an FT4 spot QSYs but leaves the
+        // decoder on FT8. It used to be a separate set_tier call first, and in the gap between
+        // the two the radio loop could command the tier's DEFAULT dial (FT8 14.074 → FT4
         // 14.080) to the rig before the spot's exact frequency — the "hits a default
         // first, then switches" double-retune, whose stale read-back could race the
         // correction on slow serial and leave the wrong dial standing (operator report,
         // 2026-08-09). tierRef syncs from the returned snapshot (setSnap → link.tier).
-        let tier: 'FT8' | 'FT4' | undefined
-        if (opMode === 'digital') {
-          const m = alert.mode?.toUpperCase()
-          // A browser always names the tier: its Work intent carries no implicit current tier.
-          if ((m === 'FT4' || m === 'FT8') && (remote || tierRef.current !== m)) tier = m
-        }
+        // JS8's screen rides the same call as the JS8 tier.
+        let tier: 'FT8' | 'FT4' | 'JS8' | undefined
+        const named = target.view === 'js8' ? 'JS8' : target.view === 'operate' ? workTier(alert) : null
+        // A browser always names the tier: its Work intent carries no implicit current tier.
+        if (named && (remote || tierRef.current !== named)) tier = named
         // The park rides the work too, so the work hint below says the same as this click, as it
         // does for a pop-out board's: the snapshot's echo of a park row must not hand the log line
         // the call alone.
         const s = await withErrorToast(
           () =>
             park && fillsLogLine
-              ? workSpot(opMode, target.freqMhz, target.band, target.call, tier, park)
-              : workSpot(opMode, target.freqMhz, target.band, target.call, tier),
+              ? workSpot(section, target.freqMhz, target.band, target.call, tier, park)
+              : workSpot(section, target.freqMhz, target.band, target.call, tier),
           t('shell.work.failed.cat', { call: target.call }),
         )
         // On failure DON'T navigate or poison the guard ref — the backend made no change
@@ -2246,8 +2269,17 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         setSnap(s)
         // Keep the rig-mode effect's guards in sync so it doesn't re-fire on the nav — and
         // the HOMED guard too, because this landed the dial on purpose (#143).
-        lastOpModeRef.current = opMode
-        lastHomedModeRef.current = opMode
+        lastOpModeRef.current = rigMode
+        lastHomedModeRef.current = rigMode
+        // The PSK screen opens on the row's own sub-mode where it has it (`pskSubmode`), its Rev
+        // setting kept. The engine refuses the switch while PSK is transmitting, and says why.
+        const slug = target.view === 'psk' ? pskSubmode(alert) : null
+        if (slug) {
+          const psk = await withErrorToast(() => getPskState(), t('psk.mode.failed'))
+          if (psk && psk.mode !== slug) {
+            await withErrorToast(() => pskSetMode(slug, psk.reverse === true), t('psk.mode.failed'))
+          }
+        }
         // CW/Phone log forms consume a prefill; the digital + RTTY cockpits don't (digital
         // auto-sequences on a decode double-click, RTTY has its own net picker) — just the QSY.
         if (target.view === 'cw' || target.view === 'phone') {
@@ -2261,7 +2293,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, remote, canRemoteWork],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled, remote, canRemoteWork],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed

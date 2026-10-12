@@ -4825,7 +4825,8 @@ export interface AppSnapshot {
   /** Bumped each time a spot is worked — App navigates to `workView`'s cockpit
    * on change (lets a pop-out window's click land the main window there). */
   workTick?: number
-  /** The last worked spot's mode: 'digital' | 'phone' | 'cw'. */
+  /** The section the last Work told `work_spot` ('digital', 'phone', 'cw', 'rtty', 'keyboard' for
+   *  PSK, 'js8'): App opens the screen it names (`workHintView`). */
   workView?: string | null
   /** The last worked spot's callsign — a pop-out window's click prefills the log Call from this. */
   workCall?: string | null
