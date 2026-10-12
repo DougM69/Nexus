@@ -57,6 +57,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   greyed with ⚠ after its name, as its line in the table is, and the legend says what ⚠ means.
   The table's Reconnecting and Lost now read in the grid's amber and red.
   When the bands do not fit the window the grid scrolls sideways by itself, never the page.
+- **The club host lists every position's contacts as they arrive.** Under the club board on the
+  host's Contest screen, in its pop-out, in the logger window and in the board's own pop-out, a Club
+  log lists the contacts the club's log holds, newest first: time, call, exchange, band, mode and the
+  position that logged each, named as on the board. A repeat of a contact another position made
+  first is marked the way your own log marks a dupe. These are the contacts Club ADIF and Club
+  Cabrillo are written from, read the same way, so the list and the files agree. It shows the newest
+  100 and how many the club holds, so a long contest does not slow the screen; every contact is in
+  the files. Only the host has it: a joined laptop has no merged log to show, and the list is not on
+  the Remote page.
 - **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
   set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
   page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial

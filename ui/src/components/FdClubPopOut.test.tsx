@@ -15,8 +15,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { DetachedPanel } from '../DetachedPanel'
 import { FdClubSection, FdBandOccupancy } from './ContestView'
-import { openPanelWindow, subscribeSnapshot, getSettings, getFdRuleset } from '../api'
-import type { AppSnapshot, FdClubStatus } from '../types'
+import { openPanelWindow, subscribeSnapshot, getSettings, getFdRuleset, fdClubLogNewest } from '../api'
+import type { AppSnapshot, FdClubLog, FdClubStatus } from '../types'
 import { BAND_COLOR } from '../bandColors'
 
 vi.mock('../api', () => ({
@@ -28,6 +28,8 @@ vi.mock('../api', () => ({
   getSettings: vi.fn(() => Promise.resolve(null)),
   getFdRuleset: vi.fn(() => Promise.resolve(null)),
   selectPeer: vi.fn(() => Promise.resolve(null)),
+  // The host's club log under the torn-off board: none, unless a case says otherwise.
+  fdClubLogNewest: vi.fn(() => Promise.resolve(null)),
 }))
 
 const CLUB: FdClubStatus = {
@@ -539,5 +541,43 @@ describe('the band board colours itself, and shouts when two positions collide',
     render(<DetachedPanel panel="fieldday" />)
     await settle()
     expect(document.querySelector('[data-band-clash]')?.getAttribute('data-band-clash')).toBe('20m')
+  })
+})
+
+describe("the torn-off board lists the host's club log too", () => {
+  const LOG: FdClubLog = {
+    total: 2,
+    rows: [
+      { call: 'W2DEF', class: '1E', section: 'ENY', band: '15m', mode: 'CW', submode: '', whenUnix: 1_782_583_501, posid: 'bbbb2222', seq: 1, posName: 'GOTA tent', dupe: true },
+      { call: 'W2DEF', class: '1E', section: 'ENY', band: '15m', mode: 'CW', submode: '', whenUnix: 1_782_583_260, posid: 'aaaa1111', seq: 1, posName: 'CW tent' },
+    ],
+  }
+
+  it('on the host, every position\'s contacts newest first, under the board, each with its position', async () => {
+    vi.mocked(fdClubLogNewest).mockResolvedValue(LOG)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb(snapWithClub(CLUB))
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    const list = screen.getByRole('region', { name: 'Club log' })
+    expect(screen.getByLabelText('Club sync').contains(list)).toBe(true)
+    const rows = Array.from(list.querySelectorAll('.fd-log-row'))
+    expect(rows.map((r) => r.querySelector('.fd-col.pos')?.textContent)).toEqual(['GOTA tent', 'CW tent'])
+    expect(rows.map((r) => r.classList.contains('dupe'))).toEqual([true, false])
+  })
+
+  it('on a joined laptop, none: it holds no rows, and never asks for them', async () => {
+    vi.mocked(fdClubLogNewest).mockClear()
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb(snapWithClub({ ...CLUB, hosting: false } as FdClubStatus))
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    expect(screen.getByLabelText('Club sync')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Club log' })).toBeNull()
+    expect(fdClubLogNewest).not.toHaveBeenCalled()
   })
 })
