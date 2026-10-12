@@ -1207,6 +1207,14 @@ function heardWords(row: FdClubBoardRow): string {
     : t('fieldDay.club.board.heard', { ago: heardAgo(row.heardSecs) })
 }
 
+/** A position the host has not heard lately, on a board with no link words to say so (a position's,
+ *  Remote's): last heard more than the club link's dead timeout ago (`fdsync::DEAD_SECS`). The table
+ *  dims its line and marks its name ⚠, and the grid greys its name and marks it ⚠, both by this. On
+ *  the host's own board every line carries its link word, which says it instead (Lost). */
+function notHeard(row: FdClubBoardRow): boolean {
+  return !row.link && row.lastSeenSecs > CLUB_DEAD_SECS
+}
+
 /** A host board row's link word and when the host last heard the position, as one cell: on one
  *  line where the column has room, and the heard part on a line of its own where it has not (a
  *  1024-wide window), never cut. */
@@ -1467,10 +1475,11 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
   )
 }
 
-/** Each link's mark beside its colour in the grid, so no state is told by colour alone; the legend
+/** Each link's mark beside its colour in the grid, so no state is told by colour alone, and the ⚠
+ *  after a name the host has not heard lately ([`notHeard`]), as the table marks its line; the legend
  *  says what each is. A mark rather than the word: the word in every name would double each name's
  *  width in a grid that has a column for every band. */
-const GRID_MARK = { connected: '✓', reconnecting: '↻', lost: '✕', self: '⌂' } as const
+const GRID_MARK = { connected: '✓', reconnecting: '↻', lost: '✕', stale: '⚠', self: '⌂' } as const
 type GridLook = keyof typeof GRID_MARK
 
 /** The grid's columns: the bands the contest runs on, from its rules data, or Field Day's own for
@@ -1486,15 +1495,26 @@ function gridBands(named: string[] | undefined, fieldDay: boolean, rows: FdClubB
 
 /** One position in the grid: its name, coloured by its link where the board says one (the host's
  *  own screen), with the link's mark and, for a screen reader, its word; this laptop's own marked as
- *  this laptop. A board without the host's link words (a position's, Remote's) colours nothing. */
+ *  this laptop. A board without the host's link words (a position's, Remote's) colours nothing, and
+ *  there a position the host has not heard lately is greyed with ⚠ after its name and its word, as
+ *  its line in the table is ([`notHeard`]); this laptop's own keeps its mark and edge as well. */
 function GridPos({ row, self }: { row: FdClubBoardRow; self: boolean }) {
   const link = row.link === 'connected' || row.link === 'reconnecting' || row.link === 'lost' ? row.link : undefined
   const look: GridLook | undefined = self ? 'self' : link
   const word = look === 'self' ? linkWord('host') : link ? linkWord(link) : ''
+  const stale = notHeard(row)
   return (
     <span
-      className={look ? `club-grid-pos link-${look}` : 'club-grid-pos'}
-      title={look === 'self' ? word : link ? `${word} ${heardWords(row)}` : undefined}
+      className={`club-grid-pos${look ? ` link-${look}` : ''}${stale ? ' stale' : ''}`}
+      title={
+        stale
+          ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
+          : look === 'self'
+            ? word
+            : link
+              ? `${word} ${heardWords(row)}`
+              : undefined
+      }
     >
       {/* The space is the line's break point: the name drops under its mark whole, where a mark
           joined to it made one word the line could only cut in two. */}
@@ -1504,7 +1524,14 @@ function GridPos({ row, self }: { row: FdClubBoardRow; self: boolean }) {
         </span>
       )}
       <span className="club-grid-name">{boardName(row)}</span>
+      {/* After the name, as the table puts it; the space lets it drop to a line of its own. */}
+      {stale && (
+        <span className="club-grid-mark" aria-hidden="true">
+          {` ${GRID_MARK.stale}`}
+        </span>
+      )}
       {word && <span className="sr-only">{word}</span>}
+      {stale && <span className="sr-only">{t('fieldDay.club.grid.notHeard', { secs: CLUB_DEAD_SECS })}</span>}
     </span>
   )
 }
@@ -1525,7 +1552,10 @@ function GridPos({ row, self }: { row: FdClubBoardRow; self: boolean }) {
  * for a reader, never the colour alone, and the legend under the grid says what each is. A position
  * the host removed is not in the grid (its line in the table keeps Allow back); one with no band yet
  * is named on a line under it. A position's board and Remote's carry no link words (Remote's capture
- * leaves them out), so there the grid places every name and colours none.
+ * leaves them out), so there the grid places every name and colours none, and a position the host
+ * has not heard lately is greyed and marked ⚠, exactly when its line in the table is ([`notHeard`]),
+ * with a key in the legend. The two never meet on one name: on the host's own screen the link word
+ * says it (Lost), and the table marks no line ⚠ there either.
  */
 function ClubBandModeGrid({
   board,
@@ -1540,7 +1570,8 @@ function ClubBandModeGrid({
   bands?: string[]
   dupeRule?: DupeRule
   fieldDay: boolean
-  /** The board carries the host's link words, so the legend says what their colours are. */
+  /** The board carries the host's link words, so the legend says what their colours are; without
+   *  them, what the ⚠ of a position not heard lately is, which only such a board shows. */
   linked: boolean
   ownPosid?: string
   big: boolean
@@ -1552,7 +1583,7 @@ function ClubBandModeGrid({
   const modes = modeColumns(dupeRule, placed.map((r) => ({ mode: fdModeClass(r.mode) })))
   const isSelf = (r: FdClubBoardRow) => r.link === 'host' || (!!ownPosid && r.posid === ownPosid)
   const legend: GridLook[] = [
-    ...(linked ? (['connected', 'reconnecting', 'lost'] as const) : []),
+    ...(linked ? (['connected', 'reconnecting', 'lost'] as const) : (['stale'] as const)),
     ...(shown.some(isSelf) ? (['self'] as const) : []),
   ]
   if (shown.length === 0) return null
@@ -1610,9 +1641,13 @@ function ClubBandModeGrid({
         // For the eye: every name already says its word to a screen reader.
         <div className="club-grid-legend" aria-hidden="true">
           {legend.map((look) => (
-            <span key={look} className={`club-grid-pos link-${look}`}>
+            <span key={look} className={look === 'stale' ? 'club-grid-pos stale' : `club-grid-pos link-${look}`}>
               <span className="club-grid-mark">{`${GRID_MARK[look]} `}</span>
-              {look === 'self' ? linkWord('host') : linkWord(look)}
+              {look === 'stale'
+                ? t('fieldDay.club.grid.notHeard', { secs: CLUB_DEAD_SECS })
+                : look === 'self'
+                  ? linkWord('host')
+                  : linkWord(look)}
             </span>
           ))}
         </div>
@@ -2041,7 +2076,7 @@ export function FdClubSection({
             // reading stays on screen but is never silently stale.
             const stale = row.link
               ? row.link === 'lost' || row.link === 'removed'
-              : row.lastSeenSecs > 15
+              : notHeard(row)
             const marked = stale && !row.link
             const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
             return (

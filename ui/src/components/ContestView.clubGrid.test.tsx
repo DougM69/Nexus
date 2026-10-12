@@ -4,8 +4,10 @@
 // classes down (the Summary's `modeColumns`), each position's name in the cell of its band and
 // class. On the host's own screen each name is coloured by its link, with a mark and a word beside
 // the colour, never the colour alone; this laptop is marked as such; a removed position is not in
-// the grid; one with no band yet is named on a line under it. Read here the way a screen reader
-// reads it, as a table with headers, on every host of the board but Remote (RemoteFieldDay.test.tsx).
+// the grid; one with no band yet is named on a line under it. On a board without link words, a
+// position the host has not heard lately is greyed and marked ⚠ in the grid exactly when its line in
+// the table is. Read here the way a screen reader reads it, as a table with headers, on every host of
+// the board but Remote (RemoteFieldDay.test.tsx).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, act, within } from '@testing-library/react'
 import { ContestView, FdClubSection } from './ContestView'
@@ -311,12 +313,12 @@ describe('the club board as a band × mode grid', () => {
       expect(linkOf(chipOf(name)), name).toEqual({ class: '', mark: '', markHidden: null, word: '', title: '' })
     }
     const legend = document.querySelector('.club-grid-legend') as HTMLElement
-    expect(legend.textContent).toBe('⌂ This laptop')
-    // CONTROL: with no id of this laptop's, no name is marked and there is nothing to explain.
+    expect(legend.textContent).toBe('⚠ Not heard for more than 15 s⌂ This laptop')
+    // CONTROL: with no id of this laptop's, no name is marked, and the legend says only what ⚠ is.
     cleanup()
     render(<FdClubSection club={POSITION} bands={ILQP_BANDS} dupeRule={ILQP_RULE} fieldDay={false} />)
     expect(document.querySelectorAll('.club-grid-block .link-self')).toHaveLength(0)
-    expect(document.querySelector('.club-grid-legend')).toBeNull()
+    expect(document.querySelector('.club-grid-legend')?.textContent).toBe('⚠ Not heard for more than 15 s')
     expect(placed().sort()).toEqual(['CW tent', 'Comms Trailer', 'Digital', 'GOTA'])
   })
 
@@ -343,6 +345,125 @@ describe('the club board as a band × mode grid', () => {
     render(<FdClubSection club={{ ...HOST, board: [] }} bands={ILQP_BANDS} dupeRule={ILQP_RULE} fieldDay={false} />)
     expect(screen.queryByRole('table')).toBeNull()
     expect(screen.getByText(/no positions heard yet/i)).toBeTruthy()
+  })
+})
+
+/** A position's board with the named positions last heard by the host that many seconds before it
+ *  sent the board. */
+const silentFor = (ages: Record<string, number>): FdClubStatus => ({
+  ...POSITION,
+  board: POSITION.board.map((r) => (r.posName in ages ? { ...r, lastSeenSecs: ages[r.posName] } : r)),
+})
+/** What a name says of the host not having heard it lately: whether it is greyed, the mark after it
+ *  (hidden from a reader, who gets the word), every word a reader hears, and what hovering it says. */
+function quietOf(chip: HTMLElement) {
+  const mark = chip.querySelector('.club-grid-name ~ .club-grid-mark')
+  return {
+    greyed: chip.classList.contains('stale'),
+    mark: mark?.textContent ?? '',
+    markHidden: mark?.getAttribute('aria-hidden') ?? null,
+    words: [...chip.querySelectorAll('.sr-only')].map((w) => w.textContent ?? ''),
+    title: chip.getAttribute('title') ?? '',
+  }
+}
+/** Whether the positions table marks a position's line as not heard: ⚠ after its name. */
+function tableMarks(posid: string): boolean {
+  const name = document.querySelector(`[data-club-board] [data-club-row="${posid}"]`) as HTMLElement
+  return name.textContent?.endsWith(' ⚠') ?? false
+}
+const NOT_HEARD = 'Not heard for more than 15 s'
+
+describe('a position the host has not heard lately, in the grid as in the table', () => {
+  it('on a position’s board greys its name and marks it ⚠, with its word for a reader; a fresh one not', () => {
+    render(
+      <FdClubSection
+        club={silentFor({ GOTA: 250, Digital: 16, 'CW tent': 15, Rover: 40 })}
+        bands={ILQP_BANDS}
+        dupeRule={ILQP_RULE}
+        fieldDay={false}
+      />,
+    )
+    for (const [name, secs] of [['GOTA', 250], ['Digital', 16]] as const)
+      expect(quietOf(chipOf(name)), name).toEqual({
+        greyed: true,
+        mark: ' ⚠',
+        markHidden: 'true',
+        words: [NOT_HEARD],
+        title: `Last heard ${secs} s ago`,
+      })
+    // Heard 15 s ago is not yet past it, as its line in the table says; nor is one heard a second ago.
+    for (const name of ['CW tent', 'Comms Trailer'])
+      expect(quietOf(chipOf(name)), name).toEqual({ greyed: false, mark: '', markHidden: null, words: [], title: '' })
+    // Greyed where it is, never moved: in its cell, and on the no-band line.
+    expect(cellAt('6m', 'PH')).toEqual(['GOTA'])
+    expect(cellAt('40m', 'CW/DIG')).toEqual(['CW tent', 'Digital'])
+    expect(quietOf(chipOf('Rover', document.querySelector('.club-grid-waiting')!)).greyed).toBe(true)
+  })
+
+  it('marks exactly the positions whose line the table marks, at every age', () => {
+    const seen = new Set<boolean>()
+    for (const secs of [0, 1, 14, 15, 16, 17, 60, 250, 3600]) {
+      render(<FdClubSection club={silentFor({ GOTA: secs })} bands={ILQP_BANDS} dupeRule={ILQP_RULE} fieldDay={false} />)
+      const table = tableMarks('dddd0004')
+      const grid = quietOf(chipOf('GOTA'))
+      expect({ secs, greyed: grid.greyed, marked: grid.mark === ' ⚠' }).toEqual({ secs, greyed: table, marked: table })
+      seen.add(table)
+      cleanup()
+    }
+    // CONTROL: the ages cross the table's threshold, so the grid was compared with both of its answers.
+    expect(seen).toEqual(new Set([true, false]))
+  })
+
+  it('on the host’s own screen the link word says it: no name greys or takes ⚠, and the link colours stay', () => {
+    // Every presence aged past the threshold: the host's board marks by each line's link instead.
+    render(
+      <FdClubSection
+        club={{ ...HOST, board: BOARD.map((r) => ({ ...r, lastSeenSecs: 250 })) }}
+        bands={ILQP_BANDS}
+        dupeRule={ILQP_RULE}
+        fieldDay={false}
+      />,
+    )
+    const block = document.querySelector('.club-grid-block') as HTMLElement
+    expect(block.querySelectorAll('.stale')).toHaveLength(0)
+    expect(block.textContent).not.toContain('⚠')
+    expect(linkOf(chipOf('GOTA'))).toEqual({ class: 'link-lost', mark: '✕', markHidden: 'true', word: 'Lost', title: 'Lost (heard 4 min ago)' })
+    expect(linkOf(chipOf('CW tent')).class).toBe('link-connected')
+    expect(linkOf(chipOf('Comms Trailer')).class).toBe('link-self')
+    // CONTROL: the table marks none of their lines ⚠ either.
+    expect(BOARD.map((r) => tableMarks(r.posid))).toEqual(BOARD.map(() => false))
+  })
+
+  it('this laptop not heard keeps its own mark and edge, greys and takes ⚠, and a reader hears both words', () => {
+    render(<FdClubSection club={silentFor({ GOTA: 250 })} bands={ILQP_BANDS} dupeRule={ILQP_RULE} fieldDay={false} ownPosid="dddd0004" />)
+    const chip = chipOf('GOTA')
+    expect(linkOf(chip).class).toBe('link-self')
+    expect([...chip.querySelectorAll('.club-grid-mark')].map((m) => m.textContent)).toEqual(['⌂ ', ' ⚠'])
+    expect(quietOf(chip)).toEqual({
+      greyed: true,
+      mark: ' ⚠',
+      markHidden: 'true',
+      words: ['This laptop', NOT_HEARD],
+      title: 'Last heard 250 s ago',
+    })
+  })
+
+  it('says what ⚠ is in the legend wherever a name can carry it, and never on the host’s own screen', () => {
+    const keys = () =>
+      [...document.querySelectorAll<HTMLElement>('.club-grid-legend .club-grid-pos')].map((k) => [k.className, k.textContent])
+    // A position's board, nobody unheard right now: the key is there all the same, as the host's
+    // link colours are.
+    render(<FdClubSection club={POSITION} bands={ILQP_BANDS} dupeRule={ILQP_RULE} fieldDay={false} />)
+    expect(keys()).toEqual([['club-grid-pos stale', `⚠ ${NOT_HEARD}`]])
+    // CONTROL: the host's own screen, where no name can carry it, keys its link colours and nothing more.
+    cleanup()
+    render(<FdClubSection club={{ ...HOST, board: BOARD.map((r) => ({ ...r, lastSeenSecs: 250 })) }} bands={ILQP_BANDS} dupeRule={ILQP_RULE} fieldDay={false} />)
+    expect(keys()).toEqual([
+      ['club-grid-pos link-connected', '✓ Connected'],
+      ['club-grid-pos link-reconnecting', '↻ Reconnecting'],
+      ['club-grid-pos link-lost', '✕ Lost'],
+      ['club-grid-pos link-self', '⌂ This laptop'],
+    ])
   })
 })
 

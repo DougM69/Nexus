@@ -44,7 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Reconnecting and red Lost, with ✓, ↻ or ✕ beside it and a legend under the grid, and a position
   the host removed is left out of the grid (its line in the table keeps Allow back). A joined
   laptop and Remote are not sent the host's link words, so there no name is coloured; each laptop
-  marks its own name ⌂. The table's Reconnecting and Lost now read in the grid's amber and red.
+  marks its own name ⌂. There, a position the host has not heard for more than 15 seconds is
+  greyed with ⚠ after its name, as its line in the table is, and the legend says what ⚠ means.
+  The table's Reconnecting and Lost now read in the grid's amber and red.
   When the bands do not fit the window the grid scrolls sideways by itself, never the page.
 - **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
   set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API

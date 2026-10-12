@@ -13226,7 +13226,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    name in its cell, read across a room, so the names are bigger than the table's and a state is a
    COLOUR, a MARK and a WORD. On the host's own screen a name's edge and a tint of its face carry its
    link (green Connected, amber Reconnecting, red Lost; this laptop's own in the accent) and the name
-   stays in ink: the state colours lettered on the page miss 4.5:1 in the light themes. Tokens only,
+   stays in ink: the state colours lettered on the page miss 4.5:1 in the light themes. On a board
+   without link words (a position's, Remote's), a name the host has not heard lately is greyed with ⚠
+   after it, as its line in the table is: greyed in the dim ink the heads use, which still reads 4.5:1,
+   and its edge and face stay as they were. Tokens only,
    each in both themes. The colours are computed in every mode in ContestView.clubGrid.contrast.test.tsx
    and the layout rules in ContestView.clubGrid.cascade.test.tsx.
 
@@ -13339,6 +13342,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .club-grid-pos.link-self {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.club-grid-pos.stale {
+  color: var(--text-dim);
 }
 .club-grid-waiting,
 .club-grid-legend {

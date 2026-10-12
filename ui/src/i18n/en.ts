@@ -4320,6 +4320,7 @@ export const EN = {
   'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
   'fieldDay.club.grid.caption': 'Positions by band and mode',
   'fieldDay.club.grid.noBand': 'No band yet:',
+  'fieldDay.club.grid.notHeard': 'Not heard for more than {{secs}} s',
   'fieldDay.club.remove.label': 'Remove',
   'fieldDay.club.remove.title':
     "Disconnects this position and turns it away when it tries again, until you press Allow back. The contacts it already sent stay in the club's log, its score and the club's files.",

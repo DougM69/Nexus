@@ -75,7 +75,15 @@ const HOST: FdClubStatus = {
     row('eeee0005', 'Rover', { band: '', mode: 'CW', link: 'connected', heardSecs: 1 }),
   ],
 }
-const POSITION: FdClubStatus = { ...HOST, hosting: false, board: HOST.board.map(({ link: _l, heardSecs: _h, ...r }) => r) }
+/** The same board as a position is sent it, with no link words, and three positions the host has not
+ *  heard lately: one in a cell, this laptop's own (`OWN`) and the one with no band yet. */
+const UNHEARD: Record<string, number> = { Digital: 16, GOTA: 250, Rover: 40 }
+const POSITION: FdClubStatus = {
+  ...HOST,
+  hosting: false,
+  board: HOST.board.map(({ link: _l, heardSecs: _h, ...r }) => ({ ...r, lastSeenSecs: UNHEARD[r.posName] ?? r.lastSeenSecs })),
+}
+const OWN = 'dddd0004'
 
 /** The two faces the board is drawn on: the Contest screen's panel and the pop-out window's. */
 const HOSTS = ['panel', 'popout'] as const
@@ -88,8 +96,8 @@ interface Word {
   chain: El[]
 }
 
-function wordsOn(host: (typeof HOSTS)[number], club: FdClubStatus, extra?: React.ReactNode): Word[] {
-  const board = <FdClubSection club={club} detached={host === 'popout'} />
+function wordsOn(host: (typeof HOSTS)[number], club: FdClubStatus, extra?: React.ReactNode, ownPosid?: string): Word[] {
+  const board = <FdClubSection club={club} detached={host === 'popout'} ownPosid={ownPosid} />
   const r = render(
     host === 'panel' ? (
       <section className="conversation panel fieldday">
@@ -185,11 +193,12 @@ const placeOf = (w: Word) =>
 describe('the club grid reads in every theme and mode', () => {
   it('every name, mark, key and head clears 4.5:1 on its face, in both windows, on the host’s board and a position’s', () => {
     const words: Word[] = []
-    for (const host of HOSTS) for (const club of [HOST, POSITION]) words.push(...wordsOn(host, club))
+    for (const host of HOSTS) words.push(...wordsOn(host, HOST), ...wordsOn(host, POSITION, undefined, OWN))
     // The census cannot silently empty out. On the host's board: 5 names (4 in cells, 1 on the
     // no-band line), 9 marks (theirs and the legend's), 4 legend keys, 10 band heads, the corner and
-    // 3 mode heads, the no-band label; on a position's board the names, heads and label alone.
-    expect(words.length, 'words found').toBe(2 * (5 + 9 + 4 + 10 + 4 + 1) + 2 * (5 + 10 + 4 + 1))
+    // 3 mode heads, the no-band label; on a position's board the names, 6 marks (⚠ after the three
+    // not heard, ⌂ before this laptop's, and the legend's two), 2 legend keys, the heads and the label.
+    expect(words.length, 'words found').toBe(2 * (5 + 9 + 4 + 10 + 4 + 1) + 2 * (5 + 6 + 2 + 10 + 4 + 1))
     expect(unreadable(RULES, distinct(words))).toEqual([])
   }, 120_000)
 
@@ -231,6 +240,48 @@ describe('the club grid reads in every theme and mode', () => {
       if (new Set(edges).size !== 4) same.push(`${mode}: ${[...byLink.keys()].map((k, i) => `${k} ${edges[i]}`).join(', ')}`)
     }
     expect(same).toEqual([])
+  }, 120_000)
+
+  it('greys a name the host has not heard lately, and its ⚠: the dim ink, where a fresh name is in the ink, in every mode', () => {
+    for (const host of HOSTS) {
+      const { container } = render(
+        host === 'panel' ? (
+          <section className="conversation panel fieldday">
+            <FdClubSection club={POSITION} ownPosid={OWN} />
+          </section>
+        ) : (
+          <div className="app detached">
+            <FdClubSection club={POSITION} ownPosid={OWN} detached />
+          </div>
+        ),
+      )
+      const named = (who: string) => [...container.querySelectorAll('.club-grid-name')].find((n) => n.textContent === who)!
+      const after = Object.keys(UNHEARD).map((who) => named(who).nextElementSibling)
+      expect(
+        after.map((e) => e?.className ?? null),
+        `${host}: control, the ⚠ after each name not heard`,
+      ).toEqual(Object.keys(UNHEARD).map(() => 'club-grid-mark'))
+      const unheard = Object.keys(UNHEARD).flatMap((who, i) => [named(who), after[i]!])
+      const fresh = named('CW tent')
+      const off: string[] = []
+      for (const mode of MODES) {
+        const inkOf = (el: Element) => {
+          const chain = chainOf(el)
+          const ink = nearest(RULES, mode, chain, 'color')
+          return ink ? hex(colourOf(RULES, mode, ink.at, ink.value, faceOf(RULES, mode, chain))) : 'no ink'
+        }
+        const token = (name: string) => hex(colourOf(RULES, mode, chainOf(fresh), `var(${name})`, [0, 0, 0]))
+        for (const e of unheard)
+          if (inkOf(e) !== token('--text-dim')) off.push(`${host} ${mode}: ${e.parentElement!.className} ${e.className} ${inkOf(e)}, the dim ink ${token('--text-dim')}`)
+        if (inkOf(fresh) !== token('--text')) off.push(`${host} ${mode}: a fresh name ${inkOf(fresh)}, the ink ${token('--text')}`)
+      }
+      expect(off).toEqual([])
+      cleanup()
+    }
+    // …and the grey shows: the standard themes' dim ink is not their ink.
+    const chain = chainOf(document.body)
+    for (const mode of ['dark', 'light'] as const)
+      expect(hex(colourOf(RULES, mode, chain, 'var(--text-dim)', [0, 0, 0])), mode).not.toBe(hex(colourOf(RULES, mode, chain, 'var(--text)', [0, 0, 0])))
   }, 120_000)
 
   it('FIRES: a name lettered in the amber state colour is caught in the light theme', () => {

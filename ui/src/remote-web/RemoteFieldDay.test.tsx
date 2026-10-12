@@ -76,15 +76,16 @@ it('ages club presence evidence and expires the whole captured event',async()=>{
  const test=setup();await act(async()=>{await Promise.resolve()})
  expect(screen.getByText('K1ABC')).toBeTruthy()
  await act(async()=>{vi.advanceTimersByTime(7000)})
- expect(screen.getByTitle(t('fieldDay.club.board.stale',{secs:17}))).toBeTruthy()
+ expect(within(test.container.querySelector<HTMLElement>('[data-club-board]')!).getByTitle(t('fieldDay.club.board.stale',{secs:17}))).toBeTruthy()
  await act(async()=>{vi.advanceTimersByTime(60000)})
  expect(test.container.textContent).not.toContain('K1ABC')
  expect(test.container.textContent).not.toContain('CW tent')
 })
 // THE CLUB BOARD'S GRID ON THE HOSTED PAGE. The station leaves the host's link words out of what Remote reads
 // (`leave_out_the_hosts_own`), so the page's grid places each position in the cell of its band and mode and colours none:
-// no link class, no mark, no word, no legend. It is drawn from the capture the page is sent today, and the page still
-// refuses a board line that carries a link, so the grid cannot bring one to it.
+// no link class, no mark, no word, and a legend that keys only the ⚠ of a position not heard lately. It is drawn from the
+// capture the page is sent today, and the page still refuses a board line that carries a link, so the grid cannot bring
+// one to it.
 it('places each club position in the grid with no link colour, from the capture it is sent today',async()=>{
  const test=setup();await screen.findByText('K1ABC')
  const table=screen.getByRole('table',{name:t('fieldDay.club.grid.caption')})
@@ -97,13 +98,36 @@ it('places each club position in the grid with no link colour, from the capture 
  expect([...chip.classList]).toEqual(['club-grid-pos'])
  expect(chip.querySelector('.club-grid-mark,.sr-only')).toBeNull()
  expect(chip.getAttribute('title')).toBeNull()
- expect(test.container.querySelector('.club-grid-legend')).toBeNull()
+ expect([...test.container.querySelectorAll('.club-grid-legend .club-grid-pos')].map(k=>[k.className,k.textContent])).toEqual([
+  ['club-grid-pos stale',`⚠ ${t('fieldDay.club.grid.notHeard',{secs:15})}`]])
  // CONTROL: a board line carrying the host's link word is refused whole, so this page is never sent one.
  const page=fieldDayPage()
  const club=(page.meta as unknown as {source:{fieldDay:{club:{board:Record<string,unknown>[]}}}}).source.fieldDay.club
  expect(parseFieldDay(page).fieldDay?.club?.board).toHaveLength(1)
  club.board[0].link='connected'
  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})
+// A position the station has not heard for more than 15 s by the page's own clock (the page ages the capture's presence by
+// the capture's age) is greyed and marked ⚠ in the grid the moment its line in the table is, from the same capture, and
+// still carries no link colour.
+it('greys a club position not heard lately in the grid and marks it ⚠ as its line in the table, with no link colour',async()=>{
+ vi.useFakeTimers({toFake:['setInterval','clearInterval','performance']})
+ const test=setup();await act(async()=>{await Promise.resolve()})
+ const chip=()=>test.container.querySelector<HTMLElement>('.club-grid-cell .club-grid-pos')!
+ const line=()=>test.container.querySelector<HTMLElement>('[data-club-board] [data-club-row]')!
+ // Heard 15 s before the page's clock: not yet, in either.
+ await act(async()=>{vi.advanceTimersByTime(5000)})
+ expect([...chip().classList]).toEqual(['club-grid-pos'])
+ expect(chip().textContent).toBe('CW tent')
+ expect(line().textContent).toBe('CW tent')
+ await act(async()=>{vi.advanceTimersByTime(1000)})
+ expect([...chip().classList]).toEqual(['club-grid-pos','stale'])
+ expect(chip().querySelector('.club-grid-name ~ .club-grid-mark')?.textContent).toBe(' ⚠')
+ expect([...chip().querySelectorAll('.sr-only')].map(w=>w.textContent)).toEqual([t('fieldDay.club.grid.notHeard',{secs:15})])
+ expect(chip().getAttribute('title')).toBe(t('fieldDay.club.board.stale',{secs:16}))
+ expect(line().textContent).toBe('CW tent ⚠')
+ expect([...test.container.querySelectorAll('.club-grid-legend .club-grid-pos')].map(k=>k.textContent)).toEqual([
+  `⚠ ${t('fieldDay.club.grid.notHeard',{secs:15})}`])
 })
 // Sweepstakes LOGS a duplicate and scores it zero, so the station counts one contact fewer than its log holds. The page
 // refused that capture whole: its status line said the station was unavailable, and no contest view was drawn.
