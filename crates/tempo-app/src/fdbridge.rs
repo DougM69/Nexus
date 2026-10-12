@@ -163,20 +163,38 @@ impl PositionSync for EnginePositionSync {
         // clocks are in hand: the club line's number until the first timed round
         // trip closes (`on_clock`). Shown, never adjusted (ids are clock-free and
         // FD has no time-window dupe rule).
-        let skew = now_unix() as i64 - host_now_unix as i64;
-        self.mirror(|m| m.on_welcome(acked, event, host_call, skew));
+        let now = now_unix();
+        let skew = now as i64 - host_now_unix as i64;
+        self.mirror(|m| {
+            m.on_welcome(acked, event, host_call, skew);
+            m.heard(now);
+        });
     }
 
+    // Every line from the host in the event is this laptop hearing it (`ClubMirror::heard`): the
+    // host sends a club line every heartbeat, so a live link is heard at least that often.
     fn on_ack(&self, seq: u64) {
-        self.mirror(|m| m.acked = m.acked.max(seq));
+        let now = now_unix();
+        self.mirror(|m| {
+            m.acked = m.acked.max(seq);
+            m.heard(now);
+        });
     }
 
     fn on_retracted(&self, seq: u64, gone: bool) {
-        self.mirror(|m| m.on_retracted(seq, gone));
+        let now = now_unix();
+        self.mirror(|m| {
+            m.on_retracted(seq, gone);
+            m.heard(now);
+        });
     }
 
     fn on_club(&self, _snap: bool, st: &ClubState) {
-        self.mirror(|m| m.apply(st));
+        let now = now_unix();
+        self.mirror(|m| {
+            m.apply(st);
+            m.heard(now);
+        });
     }
 
     fn on_error(&self, msg: &str) {
@@ -199,7 +217,11 @@ impl PositionSync for EnginePositionSync {
     fn on_clock(&self, sample: ClockSample) {
         // Into the mirror and nowhere else: what the club measures is shown, never applied
         // (FT's slot clock steers by the SNTP measurement alone).
-        self.mirror(|m| m.on_clock(sample));
+        let now = now_unix();
+        self.mirror(|m| {
+            m.on_clock(sample);
+            m.heard(now);
+        });
     }
 }
 

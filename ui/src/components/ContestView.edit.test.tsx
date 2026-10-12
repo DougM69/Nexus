@@ -23,6 +23,8 @@ vi.mock('../api', () => ({
   contestEdit: vi.fn(),
   // The club block's own commands, there while the screen shows a club.
   fdClubGivePosition: vi.fn(),
+  fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
   fdClubExport: vi.fn(),
 }))
 const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>

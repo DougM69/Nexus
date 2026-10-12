@@ -55,6 +55,8 @@ const ALLOWED = new Set([
   // a contact's edit, which writes the contest log and its journal and nothing else
   'contest_edit',
   'save_text_to_downloads', 'fd_merge_to_general', 'fd_set_upload', 'fd_club_export', 'fd_club_give_position',
+  // the host's Remove and Allow back on its club board: who is in the club, and nothing else
+  'fd_club_remove_position', 'fd_club_allow_back',
   // the journal's contacts the logbook does not hold: the read, and their merge into the logbook
   'contest_unmerged', 'contest_merge_unmerged',
   'open_panel_window',

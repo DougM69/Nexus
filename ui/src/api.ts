@@ -1066,6 +1066,25 @@ export async function fdClubGivePosition(handle: number): Promise<FdGiveAnswer> 
   return invoke<FdGiveAnswer>('fd_club_give_position', { handle })
 }
 
+/** What the host's Remove or Allow back did: done, or why nothing changed (`own`: the host's own
+ *  position, which it cannot remove; `stale`: no such position on the board now, or, for Allow
+ *  back, not removed). */
+export type FdRemoveAnswer =
+  | { outcome: 'done' }
+  | { outcome: 'refused'; refusal: 'notHosting' | 'own' | 'stale' }
+
+/** ⭐ **Remove a position from the club event** — the host's own board, by the position's id. Its
+ *  link is closed and it is turned away at every JOIN until the host lets it back
+ *  (`fdClubAllowBack`); the contacts it already sent stay in the club's log. Never on Remote. */
+export async function fdClubRemovePosition(posid: string): Promise<FdRemoveAnswer> {
+  return invoke<FdRemoveAnswer>('fd_club_remove_position', { posid })
+}
+
+/** Let a removed position back in: its next try joins, and it sends what it logged meanwhile. */
+export async function fdClubAllowBack(posid: string): Promise<FdRemoveAnswer> {
+  return invoke<FdRemoveAnswer>('fd_club_allow_back', { posid })
+}
+
 /** The spectator scoreboard's bound state, for the Settings row: running?,
  * the URL a TV on the LAN should open, the last bind error. */
 export interface FdScoreboardStatus {

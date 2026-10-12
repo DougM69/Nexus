@@ -12443,6 +12443,12 @@ impl Engine {
         let m = &self.fd_mirror;
         let state = m.link_state();
         let port = self.settings.fd_host_port;
+        let now = now_unix_secs();
+        // A position's link in the host board's words; the host's own loopback link is its
+        // hosting line's business.
+        let status = (!self.settings.fd_host_enable)
+            .then(|| m.status(now))
+            .flatten();
         let hosting = self
             .settings
             .fd_host_enable
@@ -12457,11 +12463,16 @@ impl Engine {
                         adapter: a.adapter.clone(),
                     })
                     .collect(),
+                // The positions the host's board says Connected (`fdevent::PositionLink`). Beside
+                // the board, the snapshot counts the board's own rows instead (`Self::snapshot`).
                 connected: self.fd_club.as_ref().map_or(0, |club| {
                     let own = self.settings.fd_position_id.as_str();
                     club.positions()
                         .keys()
-                        .filter(|pos| pos.as_str() != own && club.connected(pos))
+                        .filter(|pos| {
+                            pos.as_str() != own
+                                && club.link(pos, now) == crate::fdevent::PositionLink::Connected
+                        })
                         .count() as u32
                 }),
                 failed: self.fd_host_failure.as_ref().map(|f| f.code().to_string()),
@@ -12493,6 +12504,8 @@ impl Engine {
             host_call: m.host_call.clone(),
             position: self.fd_position_label(),
             club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
+            status: status.map(|s| s.code().to_string()),
+            heard_secs: status.and(m.heard_secs(now)),
             hosting,
         })
     }
@@ -12588,6 +12601,13 @@ impl Engine {
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
+        // ⭐ A position the host's operator removed is turned away before anything else is asked of
+        // its JOIN, under its position id, whatever its key, name or call: not listed among the
+        // turned-away laptops either, as its own line on the board says Removed, beside the host's
+        // Allow back.
+        if club.is_removed(pos) {
+            return Err(crate::fdevent::POSITION_REMOVED.to_string());
+        }
         let theirs = role.trim();
         let refusal = (!crate::fdevent::club_position_id(pos))
             .then(|| crate::fdevent::NOT_A_POSITION_ID.to_string())
@@ -12704,6 +12724,38 @@ impl Engine {
             .as_mut()
             .ok_or(crate::fdevent::GiveRefusal::NotHosting)?
             .give(handle, now)
+    }
+
+    /// ⭐ **Remove a position from the club event** — the Remove button on the host's own board, by
+    /// the position's id ([`crate::fdevent::ClubLog::remove`]): its connection is told why and
+    /// closed within a tick, and every JOIN under it is turned away until
+    /// [`Self::fd_club_allow_back`]. Its contacts stay in the club's log exactly as they were.
+    /// Refused when this Nexus is not hosting, for this station's own position, and for a position
+    /// the club does not know.
+    ///
+    /// ⛔ The host's own screen only, as Give is: no Remote operation reaches it. It transmits
+    /// nothing, touches no radio, and deletes or rewrites no contact.
+    pub fn fd_club_remove_position(
+        &mut self,
+        posid: &str,
+    ) -> Result<(), crate::fdevent::RemoveRefusal> {
+        let now = now_unix_secs();
+        let own = self.settings.fd_position_id.clone();
+        self.fd_club
+            .as_mut()
+            .ok_or(crate::fdevent::RemoveRefusal::NotHosting)?
+            .remove(posid, &own, now)
+    }
+
+    /// Let a removed position back in ([`crate::fdevent::ClubLog::allow_back`]): its next JOIN is
+    /// served, and it catches up as an offline laptop does. Refused when this Nexus is not hosting
+    /// and for a position that is not removed. The host's own screen only.
+    pub fn fd_club_allow_back(&mut self, posid: &str) -> Result<(), crate::fdevent::RemoveRefusal> {
+        let now = now_unix_secs();
+        self.fd_club
+            .as_mut()
+            .ok_or(crate::fdevent::RemoveRefusal::NotHosting)?
+            .allow_back(posid, now)
     }
 
     pub fn fd_club_counts(&self) -> (usize, usize) {
@@ -13192,8 +13244,16 @@ impl Engine {
             .cloned()
             .collect();
         dupes.sort();
-        let mut board: Vec<crate::dto::FdClubBoardRow> = m
-            .board
+        // ⭐ The HOST's own board is read from its live club log, as of now: every position it
+        // knows, with where each one's link stands (`fdevent::PositionLink`), by the reading its
+        // hosting line counts connected positions by (`Self::fd_club_link`), so the two agree. A
+        // position holds only the board the host last sent it, which carries no link words.
+        let now = now_unix_secs();
+        let own = self.settings.fd_position_id.as_str();
+        let live = self.fd_club.as_ref().map(|club| club.board_rows(now));
+        let mut board: Vec<crate::dto::FdClubBoardRow> = live
+            .as_deref()
+            .unwrap_or(&m.board)
             .iter()
             .map(|r| crate::dto::FdClubBoardRow {
                 posid: r.pos.clone(),
@@ -13207,6 +13267,19 @@ impl Engine {
                 // The HOST's column: each position's clock as it reported it to this host's
                 // club log. A position holds only the rows the host sent, which carry none.
                 clock_ms: self.fd_club.as_ref().and_then(|c| c.clock_ms(&r.pos)),
+                link: self.fd_club.as_ref().map(|c| {
+                    if r.pos == own {
+                        "host"
+                    } else {
+                        c.link(&r.pos, now).code()
+                    }
+                    .to_string()
+                }),
+                heard_secs: self
+                    .fd_club
+                    .as_ref()
+                    .filter(|_| r.pos != own)
+                    .and_then(|c| c.heard_secs(&r.pos, now)),
             })
             .collect();
         // Named positions first, alphabetically; unnamed ones after, in id order so
@@ -23344,6 +23417,21 @@ contact yourself."
         }
         // Outside the Field Day block, which exists only while the mode is on.
         s.club_link = self.fd_club_link();
+        // ⭐ Beside the host's board, its hosting line counts that board's Connected rows: one
+        // reading in one snapshot, so the line and the board agree even when the clock's second
+        // turns between the two reads.
+        if let (Some(hosting), Some(club)) = (
+            s.club_link.as_mut().and_then(|l| l.hosting.as_mut()),
+            s.field_day.as_ref().and_then(|f| f.club.as_ref()),
+        ) {
+            hosting.connected = club
+                .board
+                .iter()
+                .filter(|r| {
+                    r.link.as_deref() == Some(crate::fdevent::PositionLink::Connected.code())
+                })
+                .count() as u32;
+        }
 
         // #64, display side only: a DXpedition Fox packs two messages into one frame —
         // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it

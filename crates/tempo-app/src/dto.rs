@@ -2767,6 +2767,22 @@ pub struct FdClubBoardRow {
     /// older page takes; only a host's measured rows carry the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_ms: Option<i64>,
+    /// ⭐ **Where this position's link stands, as the HOST's own screen says it**
+    /// (`fdevent::PositionLink`): "connected" | "reconnecting" | "lost" | "removed", and "host" for
+    /// the host's own position. Filled on the HOST's board only, from its live club log; `None` on
+    /// a position's.
+    ///
+    /// ⛔ The host's own screen only: the Remote capture and Remote's snapshot leave it out
+    /// (`remote_service::query::field_day::leave_out_the_hosts_own`), so the hosted page's Field
+    /// Day check, which refuses a board key it does not know, never meets it; the board every
+    /// position and the TV are sent never carried it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// Seconds since the host last HEARD this position on its own socket (`ClubLog::heard_secs`),
+    /// beside [`link`](Self::link): `None` for one this run of the host has not heard, the host's
+    /// own, and on a position's board. Left out of Remote as `link` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard_secs: Option<u64>,
 }
 
 /// The club block on [`FieldDayStatus`]: sync honesty + the down-flowed club
@@ -2889,6 +2905,14 @@ pub struct ClubLinkDto {
     /// The host's alone: its hosting line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosting: Option<ClubHostingDto>,
+    /// ⭐ A position's link to its host in the host board's words (`fdevent::ClubMirror::status`):
+    /// "connected" | "reconnecting" | "lost", once it has been in the event at this address. `None`
+    /// before then, while the host turns it away (`told` says why), and on the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Seconds since this laptop last heard its host, beside [`status`](Self::status).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard_secs: Option<u64>,
 }
 
 /// [`ClubLinkDto::hosting`]: whether the club is open, where a position joins it, and who is in.
@@ -2901,7 +2925,9 @@ pub struct ClubHostingDto {
     /// Where a position joins: each of this laptop's network addresses with the port, and the
     /// adapter it is on.
     pub addrs: Vec<ClubLanAddrDto>,
-    /// Other positions connected now: this laptop's own, joined over loopback, is left out.
+    /// Other positions connected now: this laptop's own, joined over loopback, is left out. The
+    /// positions the host's board says Connected (`fdevent::PositionLink`), counted from the same
+    /// reading, so the line and the board agree.
     pub connected: u32,
     /// Why it is not up (`fdevent::HostFailure`): "start" | "portInUse" | "port".
     #[serde(default, skip_serializing_if = "Option::is_none")]

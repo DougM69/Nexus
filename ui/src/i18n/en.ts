@@ -4193,6 +4193,14 @@ export const EN = {
   'fieldDay.club.link.hosting': 'Hosting on port {{port}}. Positions join at:',
   'fieldDay.club.link.hostingNoAddress': 'Hosting on port {{port}}.',
   'fieldDay.club.link.connected': { one: '{{count}} other position connected.', other: '{{count}} other positions connected.' },
+  // A joined laptop's link in the host board's words, with when it last heard the host
+  // (`fieldDay.club.heard.*`); Reconnecting and Lost name the address it is trying.
+  'fieldDay.club.link.heard': 'Connected to the host, heard {{ago}}.',
+  'fieldDay.club.link.reconnecting': 'Reconnecting to the host at {{addr}}: last heard {{ago}}.',
+  'fieldDay.club.link.lostHeard': 'Lost the host at {{addr}}, last heard {{ago}}. Trying again.',
+  'fieldDay.club.heard.secs': '{{secs}} s ago',
+  'fieldDay.club.heard.mins': '{{mins}} min ago',
+  'fieldDay.club.heard.hours': '{{hours}} h ago',
   'fieldDay.club.link.opening': 'Opening port {{port}} for the club event…',
   'fieldDay.club.link.notHosting.portInUse': 'Not hosting: another program on this laptop is using port {{port}}. Close it, or set another Host port under Field Day Club Sync in Settings ▸ Contesting, and positions join at that port.',
   'fieldDay.club.link.notHosting.port': 'Not hosting: port {{port}} could not be opened ({{detail}}). Set another Host port under Field Day Club Sync in Settings ▸ Contesting.',
@@ -4265,6 +4273,40 @@ export const EN = {
   'fieldDay.club.board.clock.ahead': '{{secs}} s ahead',
   'fieldDay.club.board.clock.behind': '{{secs}} s behind',
   'fieldDay.club.board.clock.unknown': 'Not measured: that position runs an older Nexus, or has not answered yet',
+  // The host's board: where each position's link stands and when the host last heard it, and
+  // the host's own Remove and Allow back (`fdevent::PositionLink`, `ClubLog::remove`).
+  'fieldDay.club.board.column.link': 'Status',
+  'fieldDay.club.board.link.title':
+    "Each position's link as this host sees it. Connected: heard in the last {{window}} s (a position sends a heartbeat every {{beat}} s). Reconnecting: not heard for more than {{window}} s. Lost: not heard for more than {{dead}} s, when the host closes its link. Removed: turned away until you press Allow back.",
+  'fieldDay.club.board.link.host': 'This laptop',
+  'fieldDay.club.board.link.connected': 'Connected',
+  'fieldDay.club.board.link.reconnecting': 'Reconnecting',
+  'fieldDay.club.board.link.lost': 'Lost',
+  'fieldDay.club.board.link.removed': 'Removed',
+  'fieldDay.club.board.heard': '(heard {{ago}})',
+  'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
+  'fieldDay.club.remove.label': 'Remove',
+  'fieldDay.club.remove.title':
+    "Disconnects this position and turns it away when it tries again, until you press Allow back. The contacts it already sent stay in the club's log, its score and the club's files.",
+  'fieldDay.club.remove.confirm.aria': 'Remove this position?',
+  'fieldDay.club.remove.confirm.head': 'Remove {{name}} from the club event?',
+  'fieldDay.club.remove.confirm.body':
+    "It is disconnected now and turned away when it tries again, until you press Allow back on its line here. The contacts it already sent stay in the club's log, its score and the club's files. Contacts it logs meanwhile stay in its own log and come in when you let it back.",
+  'fieldDay.club.remove.confirm.yes': 'Remove it',
+  'fieldDay.club.remove.confirm.no': 'Cancel',
+  'fieldDay.club.remove.done':
+    "{{name}} is removed: its link is closed, and it is turned away until you press Allow back. Its contacts stay in the club's log.",
+  'fieldDay.club.allowBack.label': 'Allow back',
+  'fieldDay.club.allowBack.title':
+    'Lets this position join again: it rejoins by itself on its next try and sends the contacts it logged while it was out.',
+  'fieldDay.club.allowBack.done':
+    '{{name}} can rejoin: it is let in on its next try, within 15 seconds, and sends the contacts it logged meanwhile.',
+  'fieldDay.club.remove.refused.stale':
+    'Nothing changed: that position is no longer on this board as it was, or the club event restarted.',
+  'fieldDay.club.remove.refused.notHosting': 'Nothing changed: this Nexus is not hosting a club event.',
+  'fieldDay.club.remove.refused.own': "Nothing changed: that is this laptop's own position, which the host cannot remove.",
+  'fieldDay.club.remove.refused.remote': 'Only at the host: a press through Remote removes no position and lets none back.',
+  'fieldDay.club.remove.failed': 'Nothing changed: Nexus could not change the position. Press it again.',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time

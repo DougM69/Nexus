@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The club host sees where each position's link stands.** The host's club board, on the Contest
+  screen and in its pop-out, has a Status column: Connected while a position has been heard in the
+  last 10 seconds (each one sends a heartbeat every 5), Reconnecting once it misses its heartbeats,
+  and Lost once 15 seconds pass and the host closes its link, each with when the host last heard it
+  ("heard 12 s ago", "heard 4 min ago"). The host's "other positions connected" line counts the same
+  Connected lines, and a joined laptop's club line says the same of its link to the host.
+- **The club host can remove a position, and let it back.** Remove, on each other position's line
+  of the host's club board, asks first and then closes that laptop's link and turns it away each
+  time it tries again, until the host presses Allow back; the laptop's own screen says the host
+  removed it. The contacts it already sent stay in the club's log, score, Cabrillo and ADIF exactly
+  as they were, the ones it logs meanwhile go up when it is let back, and a removal is kept through
+  a restart of the host. Club sync is still v4, so a laptop on an earlier v4 build is turned away
+  the same way, in the same words.
 - **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
   set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
   page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial

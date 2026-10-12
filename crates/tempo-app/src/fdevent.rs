@@ -42,7 +42,10 @@
 //! laptop shows the club code its own screen shows ([`club_code`]): a name and a call are what a
 //! laptop says about itself. A second laptop with a position's key (a copied settings folder) is
 //! turned away while the first is connected ([`ClubLog::connected`]), and two positions with one
-//! name read apart on every board ([`ClubLog::shown_names`]). A row whose call is
+//! name read apart on every board ([`ClubLog::shown_names`]). A position the host's operator
+//! removed is turned away by its position id until the host lets it back ([`ClubLog::remove`]),
+//! its contacts untouched; the host's board says where each position's link stands
+//! ([`PositionLink`]), from what the host hears of it. A row whose call is
 //! not a call sign, or whose strings could end a line of the Cabrillo or ADIF, open another, or
 //! outgrow what the board and Remote carry, is kept out where it enters ([`ClubLog::merge`])
 //! and listed on the host's screen until the event ends; the writers in `tempo_core` guard
@@ -314,6 +317,15 @@ pub const NOT_A_POSITION_ID: &str = "this Nexus joined under a club position id 
      Nexus makes (eight characters, 0 to 9 and a to f). Quit Nexus on this laptop, set \
      \"fdPositionId\" in its settings.json to \"\", and start Nexus again: it makes a new id and \
      rejoins by itself. Contacts you log meanwhile stay in your own log.";
+
+/// ⭐ **The sentence for a position the host's operator removed** ([`ClubLog::remove`]): sent as
+/// its connection closes and at every JOIN after, until the host lets it back. Club sync v4's
+/// `error` line carries it, which every release since club sync began shows verbatim and answers
+/// by trying again on its backoff, so no build needs to know the sentence to say it.
+pub const POSITION_REMOVED: &str = "the host removed this laptop's position from the club event, \
+     so it is not syncing. The contacts it already sent stay in the club's log. Contacts you log \
+     now stay in this laptop's own log, and go up by themselves if the host lets this position \
+     back in (Allow back, on the host's Contest screen).";
 
 // ---------------------------------------------------------------------------
 // One reading of every string a peer sends
@@ -771,6 +783,12 @@ pub struct ClubPosition {
     pub last_qso_unix: u64,
     /// Host clock when this position was last heard from on its socket.
     pub last_seen_unix: u64,
+    /// ⭐ Host clock when this run of the host last HEARD this position: its JOIN, a contact, a
+    /// presence report, each of which only the position can send. Never stamped by the host's own
+    /// sends, as [`last_seen_unix`](Self::last_seen_unix) is ([`ClubLog::mark_seen`]), which is
+    /// what lets the host's board say a position missed its heartbeats. `0` until this run hears
+    /// it (a position replayed from the journal after a restart). [`ClubLog::link`] reads it.
+    pub heard_unix: u64,
     /// High-water acked seq (what `welcome` reports back on a rejoin).
     pub acked: u64,
     /// The position's clock minus this host's, in ms, as its last measured report said;
@@ -835,6 +853,29 @@ impl GiveRefusal {
         match self {
             GiveRefusal::NotHosting => "notHosting",
             GiveRefusal::Stale => "stale",
+        }
+    }
+}
+
+/// Why the host's Remove or Allow back changed nothing ([`ClubLog::remove`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveRefusal {
+    /// This Nexus is not hosting a club event.
+    NotHosting,
+    /// The host's own position: the host is in its own event for as long as it hosts it.
+    Own,
+    /// No such position in the club now (it was given to another laptop, or the club restarted),
+    /// or, for Allow back, one that is not removed.
+    Stale,
+}
+
+impl RemoveRefusal {
+    /// The refusal as the screen's catalog keys name it.
+    pub fn code(self) -> &'static str {
+        match self {
+            RemoveRefusal::NotHosting => "notHosting",
+            RemoveRefusal::Own => "own",
+            RemoveRefusal::Stale => "stale",
         }
     }
 }
@@ -904,6 +945,11 @@ enum JournalNote {
     TakeBack { pos: String, seq: u64, at: u64 },
     /// …and put it back ([`ClubLog::put_back`]).
     PutBack { pos: String, seq: u64, at: u64 },
+    /// ⭐ The host's operator removed a position ([`ClubLog::remove`]), so a restarted host still
+    /// turns it away. An older Nexus replaying this journal skips the line, as it skips a take-back.
+    Remove { pos: String, at: u64 },
+    /// …and let it back in ([`ClubLog::allow_back`]).
+    AllowBack { pos: String, at: u64 },
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -981,6 +1027,11 @@ pub struct ClubLog {
     /// ⭐ The connections open now, by link ([`open_link`](Self::open_link)): the position each
     /// one's JOIN was served as, and that JOIN's hold. In memory only: a restarted host has none.
     links: HashMap<u64, (String, u64)>,
+    /// ⭐ **The positions the host's operator removed** ([`remove`](Self::remove)), by position id,
+    /// with the host clock it was done at: each is turned away at every JOIN and its connection
+    /// closed within a tick, until [`allow_back`](Self::allow_back). Journaled, so a restarted host
+    /// still turns each away. Its contacts are untouched: removing a position is about its link.
+    removed: HashMap<String, u64>,
     /// How many positions this run has heard of ([`ClubPosition::heard`]).
     heard: u64,
     /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
@@ -1262,6 +1313,9 @@ impl ClubLog {
     /// Does a JOIN served with `hold` still hold `posid`? `Err` with [`POSITION_HELD`] once the
     /// host has given the position to another laptop ([`give`](Self::give)).
     pub fn held(&self, posid: &str, hold: u64) -> Result<(), String> {
+        if self.is_removed(posid) {
+            return Err(POSITION_REMOVED.to_string());
+        }
         if self.hold(posid) == hold {
             Ok(())
         } else {
@@ -1290,6 +1344,75 @@ impl ClubLog {
     pub fn connected(&self, posid: &str) -> bool {
         let hold = self.hold(posid);
         self.links.values().any(|(p, h)| p == posid && *h == hold)
+    }
+
+    /// Seconds since this run of the host last heard `posid` ([`ClubPosition::heard_unix`]), at
+    /// host clock `now`; `None` for a position this run has not heard.
+    pub fn heard_secs(&self, posid: &str, now: u64) -> Option<u64> {
+        let heard = self.positions.get(posid)?.heard_unix;
+        (heard > 0).then(|| now.saturating_sub(heard.min(now)))
+    }
+
+    /// ⭐ **Where `posid`'s link stands, as the host's board says it** ([`PositionLink`]): Removed
+    /// while the host's operator has it removed, else read from whether a laptop is connected as
+    /// it now and how long since the host heard it.
+    pub fn link(&self, posid: &str, now: u64) -> PositionLink {
+        if self.is_removed(posid) {
+            return PositionLink::Removed;
+        }
+        PositionLink::of(self.connected(posid), self.heard_secs(posid, now))
+    }
+
+    /// Has the host's operator removed `posid` ([`remove`](Self::remove))?
+    pub fn is_removed(&self, posid: &str) -> bool {
+        self.removed.contains_key(posid)
+    }
+
+    /// ⭐ **Remove position `posid` from the club event** — the host's own Remove button. Every
+    /// JOIN under the position is turned away with [`POSITION_REMOVED`] until
+    /// [`allow_back`](Self::allow_back), and the connection it has now is told so and closed within
+    /// a tick ([`held`](Self::held)), so nothing it sends after this is merged. `own` is the host's
+    /// own position id, which is refused ([`RemoveRefusal::Own`]); so is a position this club does
+    /// not know ([`RemoveRefusal::Stale`]). One journal line, so a restarted host still turns it
+    /// away; a second press changes nothing.
+    ///
+    /// ⚠️ **Nothing of its contacts changes**: they stay in the club's rows, keys, score, board and
+    /// files exactly as they were, and in its own log. It is neither a give (which starts the
+    /// position afresh) nor a take-back (which tombstones one contact).
+    pub fn remove(&mut self, posid: &str, own: &str, now: u64) -> Result<(), RemoveRefusal> {
+        if posid == own {
+            return Err(RemoveRefusal::Own);
+        }
+        if !self.positions.contains_key(posid) {
+            return Err(RemoveRefusal::Stale);
+        }
+        if self.removed.contains_key(posid) {
+            return Ok(());
+        }
+        self.removed.insert(posid.to_string(), now);
+        // The laptops turned away for it go from the host's list with it: a Give there would let
+        // one in as the position the host has just removed.
+        self.refused.retain(|(id, _), _| id != posid);
+        self.journal_note(&JournalNote::Remove {
+            pos: posid.to_string(),
+            at: now,
+        });
+        Ok(())
+    }
+
+    /// ⭐ **Let a removed position back in** — the host's Allow back. Its next JOIN is served as any
+    /// JOIN is, and it catches up as an offline laptop does: it sends every own contact past the
+    /// host's ack, the ones logged while it was out included. [`RemoveRefusal::Stale`] for one that
+    /// is not removed. One journal line.
+    pub fn allow_back(&mut self, posid: &str, now: u64) -> Result<(), RemoveRefusal> {
+        if self.removed.remove(posid).is_none() {
+            return Err(RemoveRefusal::Stale);
+        }
+        self.journal_note(&JournalNote::AllowBack {
+            pos: posid.to_string(),
+            at: now,
+        });
+        Ok(())
     }
 
     /// List one kept-out contact, unless it is listed already, is in the club's log after all,
@@ -1480,6 +1603,15 @@ impl ClubLog {
                             self.put_back(&pos, seq, at);
                         }
                         JournalNote::TakeBack { .. } | JournalNote::PutBack { .. } => {}
+                        // In journal order, as the host's operator pressed them; a previous
+                        // event's keeps nobody out of this one.
+                        JournalNote::Remove { pos, at } if at >= oldest_unix => {
+                            self.removed.insert(pos, at);
+                        }
+                        JournalNote::AllowBack { pos, at } if at >= oldest_unix => {
+                            self.removed.remove(&pos);
+                        }
+                        JournalNote::Remove { .. } | JournalNote::AllowBack { .. } => {}
                     }
                     continue;
                 }
@@ -1580,6 +1712,7 @@ impl ClubLog {
         pos.acked = pos.acked.max(row.seq);
         if now > 0 {
             pos.last_seen_unix = now;
+            pos.heard_unix = now;
         }
         self.journal_row(&row);
         // ⭐ A row its position took back before it came: merged, acked and journaled like any,
@@ -1691,6 +1824,7 @@ impl ClubLog {
         }
         pos.call = club_call(call).unwrap_or_default();
         pos.last_seen_unix = now;
+        pos.heard_unix = now;
         pos.acked
     }
 
@@ -1788,6 +1922,7 @@ impl ClubLog {
             pos.clock_ms = Some(ms);
         }
         pos.last_seen_unix = now;
+        pos.heard_unix = now;
     }
 
     /// A position's clock minus this host's, in ms, as its last measured report said —
@@ -2370,6 +2505,10 @@ pub struct ClubMirror {
     /// A welcome has come since the join address was set: a link down now is a host lost, not
     /// one never found.
     pub joined_before: bool,
+    /// ⭐ When this laptop last heard its host in the event, by this laptop's clock: a welcome, an
+    /// ack, a take-back's answer, a club line (the host sends one every heartbeat) or a pong
+    /// ([`Self::heard`]). `0` before any, and again after the join address changes.
+    pub heard_unix: u64,
 }
 
 impl ClubMirror {
@@ -2456,6 +2595,31 @@ impl ClubMirror {
         self.unreachable = None;
         self.welcomed = false;
         self.joined_before = false;
+        self.heard_unix = 0;
+    }
+
+    /// A line from the host in the event came in at `now` ([`Self::heard_unix`]).
+    pub fn heard(&mut self, now: u64) {
+        self.heard_unix = now;
+    }
+
+    /// ⭐ **This laptop's link to its host in the words the host's board uses** ([`PositionLink`]),
+    /// at this laptop's clock `now`: once it has been in the event at this address, and not while
+    /// the host turns it away (the host's own words say why, a removal included). `None` otherwise,
+    /// where [`LinkState`] says it all.
+    pub fn status(&self, now: u64) -> Option<PositionLink> {
+        if !self.joined_before || self.link_state() == LinkState::TurnedAway {
+            return None;
+        }
+        Some(PositionLink::of(
+            self.connected && self.welcomed,
+            self.heard_secs(now),
+        ))
+    }
+
+    /// Seconds since this laptop last heard its host ([`Self::heard_unix`]), `None` before it has.
+    pub fn heard_secs(&self, now: u64) -> Option<u64> {
+        (self.heard_unix > 0).then(|| now.saturating_sub(self.heard_unix.min(now)))
     }
 
     /// ⭐ **Where this laptop's link to its host stands** ([`LinkState`]). The newest fact
@@ -2516,6 +2680,54 @@ impl LinkState {
             LinkState::Unreachable(why) => Some(why),
             LinkState::Lost(why) => why,
             _ => None,
+        }
+    }
+}
+
+/// ⭐ **How long a position reads Connected on the host's board without a line from it**: two of
+/// its heartbeats ([`tempo_net::fdsync::PING_SECS`] each; each one carries a presence report), so
+/// one late or lost beat is not yet a missed link. Past it the position reads Reconnecting, and
+/// Lost past [`tempo_net::fdsync::DEAD_SECS`], when the host closes its link ([`PositionLink::of`]).
+pub const HEARD_WINDOW_SECS: u64 = 2 * tempo_net::fdsync::PING_SECS;
+
+/// ⭐ **Where a club position's link stands, in the words the host's board says it** — read from
+/// what the host already knows: whether a laptop is connected as the position now
+/// ([`ClubLog::connected`]) and how long since the host last heard it ([`ClubLog::heard_secs`]).
+/// A joined laptop says its own link to the host in the same words ([`ClubMirror::status`]). Words
+/// for the screen: nothing else reads them, and none rides the wire, the TV's board or Remote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionLink {
+    /// Its link is up and it was heard within [`HEARD_WINDOW_SECS`].
+    Connected,
+    /// Heard within `fdsync::DEAD_SECS`, but not lately: heartbeats missed on a link still open,
+    /// or a link that closed and is being tried again.
+    Reconnecting,
+    /// Not heard for longer than `fdsync::DEAD_SECS`, or not since this Nexus started.
+    Lost,
+    /// The host's operator removed it ([`ClubLog::remove`]): turned away until Allow back.
+    Removed,
+}
+
+impl PositionLink {
+    /// The words for a link that is up (`linked`: connected, and in the event) or not, last heard
+    /// `heard_secs` ago (`None`: not since this Nexus started). The thresholds are the club link's
+    /// own: Connected within [`HEARD_WINDOW_SECS`] on a link that is up, Reconnecting until
+    /// `fdsync::DEAD_SECS`, the silence after which either end drops the link, and Lost past it.
+    pub fn of(linked: bool, heard_secs: Option<u64>) -> Self {
+        match heard_secs {
+            Some(age) if linked && age <= HEARD_WINDOW_SECS => PositionLink::Connected,
+            Some(age) if age <= tempo_net::fdsync::DEAD_SECS => PositionLink::Reconnecting,
+            _ => PositionLink::Lost,
+        }
+    }
+
+    /// The DTO string the screens switch on.
+    pub fn code(self) -> &'static str {
+        match self {
+            PositionLink::Connected => "connected",
+            PositionLink::Reconnecting => "reconnecting",
+            PositionLink::Lost => "lost",
+            PositionLink::Removed => "removed",
         }
     }
 }
@@ -6259,5 +6471,370 @@ mod tests {
         next_event.attach_journal_since(&path, 1_004).unwrap();
         assert!(next_event.kept_out().is_empty(), "a previous event's");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- where each position's link stands, and the host's Remove ----------------------
+
+    /// ⭐ **The link words are the club link's own thresholds, by value**: Connected while heard
+    /// within two heartbeats on a link that is up, Reconnecting until the dead timeout (either on
+    /// a link still open or one that closed and is being tried again), Lost past it or when never
+    /// heard. CONTROL: the two constants they are made of are the wire's.
+    #[test]
+    fn the_link_words_are_the_heartbeat_window_and_the_dead_timeout() {
+        use PositionLink::*;
+        assert_eq!(
+            (
+                tempo_net::fdsync::PING_SECS,
+                HEARD_WINDOW_SECS,
+                tempo_net::fdsync::DEAD_SECS
+            ),
+            (5, 10, 15)
+        );
+        let cases = [
+            ((true, Some(0)), Connected),
+            ((true, Some(10)), Connected),
+            ((true, Some(11)), Reconnecting),
+            ((true, Some(15)), Reconnecting),
+            ((true, Some(16)), Lost),
+            ((false, Some(0)), Reconnecting),
+            ((false, Some(15)), Reconnecting),
+            ((false, Some(16)), Lost),
+            ((true, None), Lost),
+            ((false, None), Lost),
+        ];
+        for ((linked, heard), want) in cases {
+            assert_eq!(
+                PositionLink::of(linked, heard),
+                want,
+                "linked {linked}, heard {heard:?}"
+            );
+        }
+        assert_eq!(
+            [Connected, Reconnecting, Lost, Removed].map(PositionLink::code),
+            ["connected", "reconnecting", "lost", "removed"]
+        );
+    }
+
+    /// ⭐ **The host hears a position by what the position sends**: its JOIN, a contact and a
+    /// presence report each stamp it, and the host's own club line to it does not, though that
+    /// moves the board's last-seen (the control that tells the two apart). A position replayed from
+    /// the journal after a restart has not been heard by this run.
+    #[test]
+    fn the_host_hears_a_position_by_what_it_sends_never_by_what_it_is_sent() {
+        let dir = scratch("heard");
+        let path = dir.join("fd_event_heard.jsonl");
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        club.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(club.heard_secs("aaaa0001", 100), None, "nobody yet");
+        club.join("aaaa0001", "CW tent", "W9ABC", 100);
+        assert_eq!(club.heard_secs("aaaa0001", 130), Some(30), "its JOIN");
+        club.position_status("aaaa0001", &PosReport::default(), 140);
+        assert_eq!(
+            club.heard_secs("aaaa0001", 150),
+            Some(10),
+            "a presence report"
+        );
+        club.merge(
+            &wq("aaaa0001", 1, "K1ABC", "20m", "CW", "EMA", 1_782_583_300),
+            160,
+        );
+        assert_eq!(club.heard_secs("aaaa0001", 170), Some(10), "a contact");
+        club.mark_seen("aaaa0001", 175);
+        assert_eq!(
+            club.heard_secs("aaaa0001", 180),
+            Some(20),
+            "the host's own club line is not heard"
+        );
+        assert_eq!(
+            club.positions()["aaaa0001"].last_seen_unix,
+            175,
+            "CONTROL: the board's last-seen moved with it"
+        );
+        assert_eq!(club.heard_secs("aaaa0001", 150), Some(0), "never negative");
+        drop(club);
+        let mut restarted = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        restarted.attach_journal_since(&path, 0).unwrap();
+        assert!(restarted.positions().contains_key("aaaa0001"), "replayed");
+        assert_eq!(
+            restarted.heard_secs("aaaa0001", 200),
+            None,
+            "not heard by this run"
+        );
+        assert_eq!(restarted.link("aaaa0001", 200), PositionLink::Lost);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A position reads Connected, Reconnecting, then Lost as the host stops hearing it, and
+    /// Connected again when it is heard on an open link**: Connected needs a laptop connected as it
+    /// now, so a link that closed reads Reconnecting while the last word from it is fresh, and Lost
+    /// past the dead timeout. CONTROL: a position the club never heard reads Lost.
+    #[test]
+    fn a_position_reads_connected_reconnecting_then_lost_as_the_host_stops_hearing_it() {
+        use PositionLink::*;
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        club.join("bbbb0002", "SSB tent", "W9ABC", 100);
+        let link = club.open_link("bbbb0002");
+        let at = |c: &ClubLog, now: u64| c.link("bbbb0002", now);
+        assert_eq!(
+            [100, 110, 111, 115, 116].map(|now| at(&club, now)),
+            [Connected, Connected, Reconnecting, Reconnecting, Lost],
+            "an open link gone quiet"
+        );
+        club.position_status("bbbb0002", &PosReport::default(), 120);
+        assert_eq!(at(&club, 121), Connected, "heard again");
+        club.close_link(link);
+        assert_eq!(
+            [121, 135, 136].map(|now| at(&club, now)),
+            [Reconnecting, Reconnecting, Lost],
+            "a closed link"
+        );
+        let back = club.open_link("bbbb0002");
+        club.join("bbbb0002", "SSB tent", "W9ABC", 140);
+        assert_eq!(at(&club, 141), Connected, "reconnected");
+        club.close_link(back);
+        assert_eq!(club.link("cccc0003", 141), Lost, "CONTROL: never heard");
+    }
+
+    /// ⭐ **The host's Remove turns a position away until Allow back, and touches nothing else**:
+    /// its connection is told why at the next tick (`held`), it reads Removed, a second press
+    /// changes nothing, and Allow back serves it again. The host's own position and one this club
+    /// does not know are refused, and nothing changes. The laptops turned away for the position are
+    /// dropped from the host's list, so no Give can let one in as it. CONTROL: another position's
+    /// connection is untouched throughout.
+    #[test]
+    fn removing_a_position_turns_it_away_until_the_host_lets_it_back() {
+        let dir = scratch("remove");
+        let path = dir.join("fd_event_remove.jsonl");
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        club.attach_journal_since(&path, 0).unwrap();
+        for (pos, name) in [
+            ("aaaa0001", "Host"),
+            ("bbbb0002", "CW tent"),
+            ("cccc0003", "SSB tent"),
+        ] {
+            club.join(pos, name, "W9ABC", 100);
+            club.open_link(pos);
+        }
+        let (cw, ssb) = (club.hold("bbbb0002"), club.hold("cccc0003"));
+        club.note_refused(
+            "bbbb0002",
+            &throwaway_hash("a copy of the CW tent laptop"),
+            "CW tent",
+            "W9ABC",
+            POSITION_IN_USE,
+            100,
+        );
+        let lines = |p: &PathBuf| std::fs::read_to_string(p).unwrap().lines().count();
+        let before = lines(&path);
+        assert_eq!(
+            club.remove("dddd0004", "aaaa0001", 101),
+            Err(RemoveRefusal::Stale)
+        );
+        assert_eq!(
+            club.remove("aaaa0001", "aaaa0001", 101),
+            Err(RemoveRefusal::Own)
+        );
+        assert_eq!(lines(&path), before, "a refusal journals nothing");
+        assert!(!club.is_removed("aaaa0001"));
+        assert_eq!(club.remove("bbbb0002", "aaaa0001", 102), Ok(()));
+        assert!(club.is_removed("bbbb0002"));
+        assert_eq!(club.link("bbbb0002", 102), PositionLink::Removed);
+        assert_eq!(club.held("bbbb0002", cw), Err(POSITION_REMOVED.to_string()));
+        assert_eq!(
+            club.held("cccc0003", ssb),
+            Ok(()),
+            "CONTROL: another position"
+        );
+        assert_eq!(
+            club.link("cccc0003", 102),
+            PositionLink::Connected,
+            "CONTROL"
+        );
+        assert!(
+            club.refused(102).is_empty(),
+            "no laptop is listed for the removed position"
+        );
+        assert_eq!(lines(&path), before + 1, "one journal line");
+        assert_eq!(
+            club.remove("bbbb0002", "aaaa0001", 103),
+            Ok(()),
+            "a second press"
+        );
+        assert_eq!(lines(&path), before + 1, "changes nothing");
+        assert_eq!(
+            club.allow_back("cccc0003", 104),
+            Err(RemoveRefusal::Stale),
+            "not removed"
+        );
+        assert_eq!(club.allow_back("bbbb0002", 105), Ok(()));
+        assert!(!club.is_removed("bbbb0002"));
+        assert_eq!(club.held("bbbb0002", cw), Ok(()), "served again");
+        assert_eq!(club.link("bbbb0002", 105), PositionLink::Connected);
+        assert_eq!(
+            club.allow_back("bbbb0002", 106),
+            Err(RemoveRefusal::Stale),
+            "again"
+        );
+        assert_eq!(lines(&path), before + 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **Removing a position leaves every contact of it as it was, by value**: the club's rows,
+    /// its dupe keys and sections, the score, the position's board line and both club files are
+    /// the same bytes before the Remove, while it is removed, and after Allow back, and no fresh
+    /// snap is sent (the generation stands). A contact it sends while removed is not merged.
+    /// CONTROL: a contact from another position still is.
+    #[test]
+    fn removing_a_position_leaves_every_contact_of_it_byte_for_byte() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST");
+        club.join("bbbb0002", "CW tent", "W9ABC", 100);
+        club.join("cccc0003", "SSB tent", "W9ABC", 100);
+        club.merge(
+            &wq("bbbb0002", 1, "K1ABC", "20m", "CW", "EMA", 1_782_583_300),
+            101,
+        );
+        club.merge(
+            &wq("bbbb0002", 2, "W5XYZ", "40m", "CW", "STX", 1_782_583_400),
+            102,
+        );
+        club.merge(
+            &wq("cccc0003", 1, "K1ABC", "20m", "PH", "EMA", 1_782_583_500),
+            103,
+        );
+        let view = |c: &ClubLog| {
+            (
+                serde_json::to_string(c.rows()).unwrap(),
+                c.dkeys().to_vec(),
+                c.dupe_keys().to_vec(),
+                c.sections().to_vec(),
+                c.scored("W9ABC", "3A", "WI", 2, &[]),
+                c.export_cabrillo("W9ABC", "3A", "WI").unwrap(),
+                c.export_adif("W9ABC", "3A", "WI"),
+                c.board_rows(200)
+                    .into_iter()
+                    .map(|r| (r.pos, r.qsos, r.uniq, r.rate))
+                    .collect::<Vec<_>>(),
+                c.generation(),
+            )
+        };
+        let before = view(&club);
+        assert!(
+            before.5.contains("K1ABC") && before.6.contains("W5XYZ"),
+            "the files hold them"
+        );
+        club.remove("bbbb0002", "aaaa0001", 104).unwrap();
+        assert_eq!(view(&club), before, "while removed");
+        // What the socket loop asks before it merges a row: refused, so nothing more merges.
+        let hold = club.hold("bbbb0002");
+        assert!(club.held("bbbb0002", hold).is_err());
+        club.allow_back("bbbb0002", 105).unwrap();
+        assert_eq!(view(&club), before, "after Allow back");
+        club.merge(
+            &wq("cccc0003", 2, "N0XX", "15m", "PH", "MN", 1_782_583_600),
+            106,
+        );
+        assert_ne!(view(&club).0, before.0, "CONTROL: a contact still merges");
+    }
+
+    /// ⭐ **A removed position stays removed through a host restart**: the Remove and the Allow
+    /// back are journal lines replayed in order, so a restarted host turns the position away until
+    /// it was let back, and serves it after. A previous event's Remove keeps nobody out of this
+    /// one, and an older Nexus's replay reads neither line as a contact. CONTROL: the contacts
+    /// replay as they were.
+    #[test]
+    fn a_removed_position_stays_removed_through_a_host_restart() {
+        let dir = scratch("remove-restart");
+        let path = dir.join("fd_event_rr.jsonl");
+        let restart = |since: u64| {
+            let mut c = ClubLog::new(FdEvent::ArrlFd, "TEST");
+            c.attach_journal_since(&path, since).unwrap();
+            c
+        };
+        let mut club = restart(0);
+        club.join("bbbb0002", "CW tent", "W9ABC", 1_000);
+        club.merge(
+            &wq("bbbb0002", 1, "K1ABC", "20m", "CW", "EMA", 1_782_583_300),
+            1_001,
+        );
+        club.remove("bbbb0002", "aaaa0001", 1_002).unwrap();
+        drop(club);
+        let mut club = restart(0);
+        assert!(club.is_removed("bbbb0002"), "removed after the restart");
+        assert_eq!(club.link("bbbb0002", 1_100), PositionLink::Removed);
+        assert_eq!(club.rows().len(), 1, "CONTROL: its contact replayed");
+        club.allow_back("bbbb0002", 1_003).unwrap();
+        drop(club);
+        let club = restart(0);
+        assert!(!club.is_removed("bbbb0002"), "let back before the restart");
+        let next_event = restart(1_004);
+        assert!(!next_event.is_removed("bbbb0002"), "a previous event's");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let notes: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("{\"remove\"") || l.starts_with("{\"allow_back\""))
+            .collect();
+        assert_eq!(notes.len(), 2, "{text}");
+        for line in notes {
+            assert!(
+                serde_json::from_str::<MergedRow>(line).is_err(),
+                "an older Nexus reads no contact in {line}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A joined laptop says its own link in the host board's words**: Connected while it has
+    /// heard the host within two heartbeats, Reconnecting until the dead timeout (on a quiet link,
+    /// a link down, or a JOIN under way), Lost past it. Nothing before its first welcome at this
+    /// address, nothing while the host turns it away (the host's words say why), and nothing after
+    /// the address changes. CONTROL: the link state the screens already read is unchanged.
+    #[test]
+    fn a_joined_laptop_says_its_link_in_the_host_boards_words() {
+        use PositionLink::*;
+        let mut m = ClubMirror::default();
+        assert_eq!(m.status(100), None, "never in");
+        m.on_link(true, 100);
+        assert_eq!(m.status(100), None, "a first JOIN under way");
+        m.on_welcome(0, "ILQP", "W9AAA", 0);
+        m.heard(100);
+        assert_eq!(m.link_state(), LinkState::Joined, "CONTROL");
+        assert_eq!(m.heard_secs(103), Some(3));
+        assert_eq!(
+            [100, 110, 111, 115, 116].map(|now| m.status(now)),
+            [
+                Some(Connected),
+                Some(Connected),
+                Some(Reconnecting),
+                Some(Reconnecting),
+                Some(Lost)
+            ]
+        );
+        m.heard(120);
+        m.on_link(false, 121);
+        assert_eq!(m.link_state(), LinkState::Lost(None), "CONTROL");
+        assert_eq!(
+            [121, 135, 136].map(|now| m.status(now)),
+            [Some(Reconnecting), Some(Reconnecting), Some(Lost)]
+        );
+        m.on_link(true, 125);
+        assert_eq!(
+            m.status(125),
+            Some(Reconnecting),
+            "a JOIN under way after a drop"
+        );
+        m.last_error = Some(POSITION_REMOVED.to_string());
+        m.on_link(false, 126);
+        assert_eq!(m.link_state(), LinkState::TurnedAway, "CONTROL");
+        assert_eq!(m.status(126), None, "turned away: the host's words say it");
+        m.on_link(true, 130);
+        m.on_welcome(0, "ILQP", "W9AAA", 0);
+        m.heard(130);
+        assert_eq!(m.status(131), Some(Connected), "let back in");
+        m.forget_host();
+        assert_eq!(
+            (m.status(131), m.heard_secs(131)),
+            (None, None),
+            "another address"
+        );
     }
 }

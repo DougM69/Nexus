@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { clubLinkLines, FIND_CLUB_EVENTS_SECS, type ClubLinkLine } from './clubLink'
+import { CLUB_DEAD_SECS, CLUB_PING_SECS, clubLinkLines, FIND_CLUB_EVENTS_SECS, type ClubLinkLine } from './clubLink'
 import type { ClubHosting, ClubLink } from '../types'
 
 const JOINER: ClubLink = {
@@ -91,6 +91,56 @@ describe("a joining laptop's link", () => {
   })
 })
 
+describe("a joined laptop's link, in the words the host's board uses", () => {
+  const IN: ClubLink = { ...JOINER, state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9AAA' }
+
+  it('says Connected beside the position, with when the host was last heard', () => {
+    const connected: ClubLink = { ...IN, status: 'connected', heardSecs: 3 }
+    expect(said(connected, true)).toEqual([
+      ['This laptop is CW tent in this event.', false],
+      ['Connected to the host, heard 3 s ago.', false],
+    ])
+    expect(said(connected)).toEqual([
+      ['Joined ILQP rehearsal, hosted by W9AAA, as CW tent.', false, 'ABCD-EFGH'],
+      ['Connected to the host, heard 3 s ago.', false],
+    ])
+  })
+
+  it('says Reconnecting, not In, once the host has missed its heartbeats, and why an attempt failed', () => {
+    expect(said({ ...IN, status: 'reconnecting', heardSecs: 12 }, true)).toEqual([
+      ['Reconnecting to the host at 192.168.1.10:42073: last heard 12 s ago.', true],
+    ])
+    // The link went down and the next attempt is under way: the same words, not "Lost" yet.
+    expect(said({ ...IN, state: 'lost', why: 'noAnswer', status: 'reconnecting', heardSecs: 14 })).toEqual([
+      ['Reconnecting to the host at 192.168.1.10:42073: last heard 14 s ago.', true],
+      [NO_ANSWER, true],
+    ])
+    expect(said({ ...IN, state: 'looking', status: 'reconnecting', heardSecs: 9 })).toEqual([
+      ['Reconnecting to the host at 192.168.1.10:42073: last heard 9 s ago.', true],
+    ])
+  })
+
+  it('says Lost past the dead timeout, with when the host was last heard, in minutes and hours', () => {
+    expect(said({ ...IN, state: 'lost', status: 'lost', heardSecs: 16 }, true)).toEqual([
+      ['Lost the host at 192.168.1.10:42073, last heard 16 s ago. Trying again.', true],
+    ])
+    expect(said({ ...IN, state: 'lost', status: 'lost', heardSecs: 4 * 60 + 59 })[0]).toEqual([
+      'Lost the host at 192.168.1.10:42073, last heard 4 min ago. Trying again.',
+      true,
+    ])
+    expect(said({ ...IN, state: 'lost', status: 'lost', heardSecs: 2 * 3600 + 5 })[0]).toEqual([
+      'Lost the host at 192.168.1.10:42073, last heard 2 h ago. Trying again.',
+      true,
+    ])
+  })
+
+  it('CONTROL: turned away, the host’s own words stand alone, whatever was heard before', () => {
+    const away: ClubLink = { ...IN, state: 'turnedAway', told: 'the host removed this laptop' }
+    expect(said(away)).toEqual([['Turned away by the host at 192.168.1.10:42073: the host removed this laptop', true]])
+    expect(said(away, true)).toEqual([])
+  })
+})
+
 describe("the host's line", () => {
   it('says where a position joins, and how many others are in', () => {
     expect(said(HOST)).toEqual([
@@ -140,5 +190,18 @@ describe('Find club events', () => {
     const secs = /pub const DISCOVER_SECS: u64 = (\d+);/.exec(fdsync)?.[1]
     expect(secs, 'the search time in fdsync.rs').toBeDefined()
     expect(FIND_CLUB_EVENTS_SECS).toBe(Number(secs))
+  })
+})
+
+describe("the link words' thresholds", () => {
+  it('are the heartbeat and the dead timeout the club link runs on', () => {
+    const fdsync = readFileSync(
+      fileURLToPath(new URL('../../../crates/tempo-net/src/fdsync.rs', import.meta.url)),
+      'utf8',
+    )
+    const ping = /pub const PING_SECS: u64 = (\d+);/.exec(fdsync)?.[1]
+    const dead = /pub const DEAD_SECS: u64 = (\d+);/.exec(fdsync)?.[1]
+    expect([ping, dead], 'the two in fdsync.rs').not.toContain(undefined)
+    expect([CLUB_PING_SECS, CLUB_DEAD_SECS]).toEqual([Number(ping), Number(dead)])
   })
 })
