@@ -450,6 +450,34 @@ pub enum RemoveRefusal {
     WorkedAgain,
 }
 
+/// What a quick edit puts on a contact already in the log ([`FieldDayLog::edit_contact`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContactEdit {
+    /// The call, corrected.
+    pub call: String,
+    /// What they sent: one `(slot id, raw)` vector per row of the contact, in row order — what
+    /// [`FieldDayLog::log_fields_at`] takes for one row, so a county line gives one per county.
+    pub rows: Vec<Vec<(String, String)>>,
+    /// The band, as a row names it (`20m`).
+    pub band: String,
+    /// The mode on the air, as [`LoggedQso::recorded_mode`] names it (`CW`, `USB`, `FT8`); `""`
+    /// keeps the row's.
+    pub mode: String,
+}
+
+/// Why an edit changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditRefusal {
+    /// No live contact has that call and time: it was removed or edited since it was shown.
+    Changed,
+    /// The edit names no call, or a band no contest file can carry.
+    Incomplete,
+    /// The edit gives another number of rows than the contact has: a county line keeps its count.
+    Rows,
+    /// The contact was worked through a satellite, whose pass gave it its band.
+    Satellite,
+}
+
 /// A journal record's QSO_DATE (yyyymmdd) + TIME_ON (hhmmss) as Unix seconds. An
 /// unparseable one stamps 0 and falls to the age gate (never a panic on garbage input).
 fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
@@ -466,6 +494,92 @@ fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
     match (f.get("QSO_DATE"), f.get("TIME_ON")) {
         (Some(d), Some(t)) => parse_dt(d, t).unwrap_or(0),
         _ => 0,
+    }
+}
+
+/// ADIF `MODE` and `SUBMODE` → (mode class, actual mode): how the journal reads a row's mode back
+/// ([`FieldDayLog::restore_row`]) — the reverse of the map in [`adif`](FieldDayLog::adif), so keep
+/// the two in step — and how an edit reads the mode the operator picked ([`mode_of_recorded`]),
+/// so an edited row is the row its next restore reads. A digital MODE keeps its identity as the
+/// submode so RTTY/SSTV rows survive the round-trip.
+fn class_of_adif(mode: Option<&str>, submode: &str) -> (&'static str, String) {
+    // ⭐ **The PHONE family is three MODEs, not one, and that is why `SSB` cannot be
+    // the whole of it.** `adif` writes a phone row's recorded mode through
+    // `logbook::adif_submode`, which pairs `USB`/`LSB` as `<MODE:3>SSB` +
+    // `<SUBMODE>` and lets `FM` and `AM` ride as MODEs of their own. Reading `MODE`
+    // alone therefore dropped the sideband on every restart — and filed an FM
+    // contact as a `DIG` row, which is the wrong mode class, the wrong dupe bucket
+    // and TWO points instead of the one a phone QSO is worth.
+    //
+    // Only the two REGISTERED sideband spellings are adopted from `SUBMODE`: the
+    // value goes back out through that same cascade on the next export, so an
+    // unrecognised one would re-emit as a bare invalid `<MODE>` and be dropped.
+    let raw_submode = submode.trim().to_ascii_uppercase();
+    let sideband = if raw_submode == "USB" || raw_submode == "LSB" {
+        raw_submode.clone()
+    } else {
+        String::new()
+    };
+    // ⛔ **AND THE DIGITAL SUBMODES, which this dropped** (operator review of 1.15.0,
+    // findings A3 and L2 — reached independently by two lenses).
+    //
+    // `adif` writes a digital row through `logbook::adif_submode`, so a TempoFast
+    // contact journals as `<MODE:4>MFSK <SUBMODE:9>TEMPOFAST`. Reading `MODE` alone
+    // brought it back as bare "MFSK" after a mid-event restart — in the SUBMITTED Field
+    // Day file and in the merged lifetime record, so an operator filtering "worked on
+    // TempoFast", or a submode-sensitive award, never saw it. TEMPOFAST, TEMPODEEP, FT4,
+    // FT2, Q65, FST4 and FST4W were all lost this way.
+    //
+    // The narrow filter above was justified by "an unrecognised one would re-emit as a
+    // bare invalid MODE" — TRUE for a value ADIF has never heard of, and FALSE for
+    // exactly these, because `promoted_submode` IS the registry of values that re-emit
+    // correctly. It is the same function the general log uses for the same job, so the
+    // two readers cannot disagree about what a row was worked on.
+    //
+    // ⚠️ The round-trip test covers RTTY, which survives because RTTY is a real ADIF
+    // MODE and so never needed promoting — which is why the suite could not see this.
+    match mode.map(|m| m.to_ascii_uppercase()) {
+        Some(m) if m == "CW" => ("CW", String::new()),
+        Some(m) if m == "SSB" => ("PH", sideband),
+        Some(m) if m == "FM" || m == "AM" => ("PH", m),
+        Some(m) => (
+            "DIG",
+            crate::logbook::promoted_submode(&raw_submode)
+                .map_or(m, |promoted| promoted.to_ascii_uppercase()),
+        ),
+        None => ("DIG", String::new()),
+    }
+}
+
+/// The mode class and actual mode a row records for `mode`, the on-air mode as
+/// [`LoggedQso::recorded_mode`] names it (`CW`, `USB`, `FT4`): written as the ADIF the row would
+/// be ([`adif_submode`](crate::logbook::adif_submode)) and read back as the journal reads it.
+fn mode_of_recorded(mode: &str) -> (&'static str, String) {
+    match crate::logbook::adif_submode(mode) {
+        Some((parent, sub)) => class_of_adif(Some(parent), sub),
+        None => class_of_adif(Some(mode), ""),
+    }
+}
+
+/// `call` on `row` — and, when the call itself changed, the entity, continent and prefix resolved
+/// again from it.
+fn set_row_call(row: &mut LoggedQso, call: &str) {
+    let changed_call = !row.call.eq_ignore_ascii_case(call);
+    row.call = call.to_string();
+    if changed_call {
+        // ⚠️ **SCORING-GRADE, and the one place the "resolved once at log time"
+        // rule on those three fields does NOT apply.** That rule is about
+        // re-resolving a SHIPPED row against a country file that has since moved,
+        // which would rescore contacts already submitted. This is a different
+        // event: the callsign itself was wrong, so the entity, continent and prefix
+        // derived from it describe a station that was never worked. Left alone they
+        // would claim the busted call's country multiplier and its WPX prefix.
+        // `None` is a real answer here — a call the country file cannot place
+        // resolves to nothing, and must not keep the old station's.
+        let placed = crate::contest::resolve_call(call);
+        row.entity = placed.map(|p| p.entity.to_string());
+        row.continent = placed.map(|p| p.continent.to_string());
+        row.prefix = crate::contest::wpx_prefix(call);
     }
 }
 
@@ -984,29 +1098,99 @@ impl FieldDayLog {
         let Some(row) = self.qsos.iter_mut().find(|q| q.seq == seq) else {
             return false;
         };
-        let call = call.trim();
-        let changed_call = !row.call.eq_ignore_ascii_case(call);
-        row.call = call.to_string();
+        set_row_call(row, call.trim());
         row.band = band.trim().to_string();
-        if changed_call {
-            // ⚠️ **SCORING-GRADE, and the one place the "resolved once at log time"
-            // rule on those three fields does NOT apply.** That rule is about
-            // re-resolving a SHIPPED row against a country file that has since moved,
-            // which would rescore contacts already submitted. This is a different
-            // event: the callsign itself was wrong, so the entity, continent and prefix
-            // derived from it describe a station that was never worked. Left alone they
-            // would claim the busted call's country multiplier and its WPX prefix.
-            // `None` is a real answer here — a call the country file cannot place
-            // resolves to nothing, and must not keep the old station's.
-            let placed = crate::contest::resolve_call(call);
-            row.entity = placed.map(|p| p.entity.to_string());
-            row.continent = placed.map(|p| p.continent.to_string());
-            row.prefix = crate::contest::wpx_prefix(call);
-        }
         // The call and the band are both dupe-key components, so the correction can
         // move the mark on rows it did not touch. Rebuild rather than patch.
         self.rebuild_dupe_index();
         true
+    }
+
+    /// ⭐ **Edit a contact already in the log — its call, what they sent, its band and its
+    /// mode — and keep everything that makes it the contact it was**: its time, its seq, the
+    /// operator and the exchange it was sent with, the serial included. An edit never spends a
+    /// number, so the other station's copy of the serial still matches, and a journal restore
+    /// rebuilds the same numbers from the rows.
+    ///
+    /// The contact is the live rows with `call` (any case) and `when_unix` — what the screen
+    /// showed the operator, as for [`remove_last`](Self::remove_last) — one row, or one per
+    /// county for a county line, each taking its own vector of [`ContactEdit::rows`] in row
+    /// order. A row with no time (`0`, a legacy row) cannot be told from another of the same
+    /// call, so it is never named. Returns the rows as they were.
+    ///
+    /// ⚠️ **The rows are rebuilt, not patched.** The received side is resolved through the
+    /// running exchange as [`log_fields_at`](Self::log_fields_at) resolves it; a new call
+    /// resolves its entity, continent and prefix again ([`correct_row`](Self::correct_row) says
+    /// why that is right here); a new band drops the row's frequencies, which were read on the
+    /// old one and would put a 20 m frequency on a 40 m contact (unknown is the honest answer,
+    /// and both files then write the band); a new mode is read as the journal reads the ADIF the
+    /// row is written as, and a new mode class re-fits the RST it was sent
+    /// ([`ContestSession::fit_sent_rst`](crate::contest::ContestSession::fit_sent_rst)). The
+    /// dupe index and every row's mark are rebuilt, because an edit can make a later row a
+    /// duplicate, or stop it being one.
+    pub fn edit_contact(
+        &mut self,
+        call: &str,
+        when_unix: u64,
+        edit: &ContactEdit,
+    ) -> Result<Vec<LoggedQso>, EditRefusal> {
+        let at: Vec<usize> = self
+            .qsos
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| {
+                when_unix != 0
+                    && q.when_unix == when_unix
+                    && q.call.eq_ignore_ascii_case(call.trim())
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if at.is_empty() {
+            return Err(EditRefusal::Changed);
+        }
+        let call = edit.call.trim().to_ascii_uppercase();
+        let band = edit.band.trim().to_ascii_lowercase();
+        if call.is_empty() || band_to_cabrillo_freq(&band).is_none() {
+            return Err(EditRefusal::Incomplete);
+        }
+        if edit.rows.len() != at.len() {
+            return Err(EditRefusal::Rows);
+        }
+        // A pass gave a satellite contact its band, its frequency and its bird together: a band
+        // typed over it would leave a row worked through the bird on a band the bird is not on.
+        if at
+            .iter()
+            .any(|&i| self.qsos[i].sat.is_some() && !self.qsos[i].band.eq_ignore_ascii_case(&band))
+        {
+            return Err(EditRefusal::Satellite);
+        }
+        let mode = edit.mode.trim().to_ascii_uppercase();
+        let before: Vec<LoggedQso> = at.iter().map(|&i| self.qsos[i].clone()).collect();
+        let spec = self.session.exchange;
+        for (&i, fields) in at.iter().zip(&edit.rows) {
+            let row = &mut self.qsos[i];
+            set_row_call(row, &call);
+            row.rx = fields
+                .iter()
+                .filter_map(|(k, v)| spec.copied(k, v))
+                .collect();
+            if !row.band.eq_ignore_ascii_case(&band) {
+                row.band = band.clone();
+                row.freq_khz = 0;
+                row.on_air_hz = 0;
+                row.freq_rx_hz = None;
+            }
+            if !mode.is_empty() && mode != row.recorded_mode().to_ascii_uppercase() {
+                let (class, submode) = mode_of_recorded(&mode);
+                if class != row.mode {
+                    self.session.fit_sent_rst(&mut row.tx, class);
+                }
+                row.mode = class.to_string();
+                row.submode = submode;
+            }
+        }
+        self.rebuild_dupe_index();
+        Ok(before)
     }
 
     /// The newest contact in the live log: the trailing rows sharing the newest row's call
@@ -2125,59 +2309,10 @@ impl FieldDayLog {
         let Some(call) = f.get("CALL").filter(|c| !c.trim().is_empty()) else {
             return RowFate::NoCall;
         };
-        // ADIF MODE → (mode class, actual mode): the reverse of the map in
-        // [`adif`](Self::adif) — keep the two in step. A digital MODE keeps its
-        // identity as the submode so RTTY/SSTV rows survive the round-trip.
-        //
-        // ⭐ **The PHONE family is three MODEs, not one, and that is why `SSB` cannot be
-        // the whole of it.** `adif` writes a phone row's recorded mode through
-        // `logbook::adif_submode`, which pairs `USB`/`LSB` as `<MODE:3>SSB` +
-        // `<SUBMODE>` and lets `FM` and `AM` ride as MODEs of their own. Reading `MODE`
-        // alone therefore dropped the sideband on every restart — and filed an FM
-        // contact as a `DIG` row, which is the wrong mode class, the wrong dupe bucket
-        // and TWO points instead of the one a phone QSO is worth.
-        //
-        // Only the two REGISTERED sideband spellings are adopted from `SUBMODE`: the
-        // value goes back out through that same cascade on the next export, so an
-        // unrecognised one would re-emit as a bare invalid `<MODE>` and be dropped.
-        let raw_submode = f
-            .get("SUBMODE")
-            .map(|s| s.trim().to_ascii_uppercase())
-            .unwrap_or_default();
-        let sideband = if raw_submode == "USB" || raw_submode == "LSB" {
-            raw_submode.clone()
-        } else {
-            String::new()
-        };
-        // ⛔ **AND THE DIGITAL SUBMODES, which this dropped** (operator review of 1.15.0,
-        // findings A3 and L2 — reached independently by two lenses).
-        //
-        // `adif` writes a digital row through `logbook::adif_submode`, so a TempoFast
-        // contact journals as `<MODE:4>MFSK <SUBMODE:9>TEMPOFAST`. Reading `MODE` alone
-        // brought it back as bare "MFSK" after a mid-event restart — in the SUBMITTED Field
-        // Day file and in the merged lifetime record, so an operator filtering "worked on
-        // TempoFast", or a submode-sensitive award, never saw it. TEMPOFAST, TEMPODEEP, FT4,
-        // FT2, Q65, FST4 and FST4W were all lost this way.
-        //
-        // The narrow filter above was justified by "an unrecognised one would re-emit as a
-        // bare invalid MODE" — TRUE for a value ADIF has never heard of, and FALSE for
-        // exactly these, because `promoted_submode` IS the registry of values that re-emit
-        // correctly. It is the same function the general log uses for the same job, so the
-        // two readers cannot disagree about what a row was worked on.
-        //
-        // ⚠️ The round-trip test covers RTTY, which survives because RTTY is a real ADIF
-        // MODE and so never needed promoting — which is why the suite could not see this.
-        let (mode, submode) = match f.get("MODE").map(|m| m.to_ascii_uppercase()) {
-            Some(m) if m == "CW" => ("CW", String::new()),
-            Some(m) if m == "SSB" => ("PH", sideband),
-            Some(m) if m == "FM" || m == "AM" => ("PH", m),
-            Some(m) => (
-                "DIG",
-                crate::logbook::promoted_submode(&raw_submode)
-                    .map_or(m, |promoted| promoted.to_ascii_uppercase()),
-            ),
-            None => ("DIG", String::new()),
-        };
+        let (mode, submode) = class_of_adif(
+            f.get("MODE").map(String::as_str),
+            f.get("SUBMODE").map_or("", String::as_str),
+        );
         let when_unix = record_when(f);
         let removed_unix = f
             .get("APP_NEXUS_REMOVED")
@@ -6455,5 +6590,408 @@ mod cabrillo_header_tests {
         let records: Vec<&str> = adif.split_once("<EOH>\n").unwrap().1.lines().collect();
         assert_eq!(records.len(), 1, "{adif}");
         assert!(records[0].ends_with("<EOR>"), "{adif}");
+    }
+}
+
+#[cfg(test)]
+mod edit_tests {
+    //! Editing a contact already in the log ([`FieldDayLog::edit_contact`]), by value: the marks
+    //! and the score an edit moves, the numbers it keeps, and what the journal reads back.
+
+    use super::*;
+    use crate::contest::{ContestSession, StationData};
+
+    const T0: u64 = 1_792_000_000;
+
+    fn fd() -> FieldDayLog {
+        FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        )
+    }
+
+    fn contest(event: &str, state: &str, county: &str) -> FieldDayLog {
+        let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = StationData {
+            mycall: "W9XYZ".into(),
+            mygrid: "EN52".into(),
+            contest_qth_state: state.into(),
+            contest_qth_county: county.into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        FieldDayLog::new("W9XYZ", session, "20m")
+    }
+
+    /// ARRL Sweepstakes CW from Wisconsin: a serial on every contact, the section the
+    /// multiplier, and a station worked once whatever the band.
+    fn ss() -> FieldDayLog {
+        let rs = crate::fd_rules::ruleset_by_id("arrlss_cw", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = StationData {
+            mycall: "W9XYZ".into(),
+            fd_section: "WI".into(),
+            contest_check: "99".into(),
+            contest_category_power: "LOW".into(),
+            contest_category_assisted: "NON-ASSISTED".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        FieldDayLog::new("W9XYZ", session, "20m")
+    }
+
+    /// What a Sweepstakes station sends: its serial, A, its call, its check and section.
+    fn ss_rx<'a>(nr: &'a str, call: &'a str, sec: &'a str) -> [(&'a str, &'a str); 5] {
+        [
+            ("NR", nr),
+            ("PREC", "A"),
+            ("CALL", call),
+            ("CK", "99"),
+            ("SEC", sec),
+        ]
+    }
+
+    fn pairs(fields: &[(&str, &str)]) -> Vec<(String, String)> {
+        fields
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// One contact as the strip logs it: the peer bound to its serial, the row, the binding let go.
+    fn log(l: &mut FieldDayLog, call: &str, fields: &[(&str, &str)], when: u64) -> bool {
+        l.session.working(call, when);
+        let logged = l.log_fields_at(call, &pairs(fields), "CW", "", 0, when);
+        l.session.logged(call);
+        logged
+    }
+
+    fn edit(call: &str, rows: &[&[(&str, &str)]], band: &str, mode: &str) -> ContactEdit {
+        ContactEdit {
+            call: call.into(),
+            rows: rows.iter().map(|r| pairs(r)).collect(),
+            band: band.into(),
+            mode: mode.into(),
+        }
+    }
+
+    fn calls(l: &FieldDayLog) -> Vec<&str> {
+        l.qsos().iter().map(|q| q.call.as_str()).collect()
+    }
+
+    fn dupes(l: &FieldDayLog) -> Vec<bool> {
+        l.qsos().iter().map(|q| q.dupe).collect()
+    }
+
+    fn mults(l: &FieldDayLog) -> Option<u32> {
+        l.ruleset().scoring.score(l.score_rows(), 1).2
+    }
+
+    const IL: &[(&str, &str)] = &[("CLASS", "3A"), ("SECTION", "IL")];
+
+    /// ⭐ **A busted call edited into the station it was becomes the duplicate it was** — logged,
+    /// marked, worth nothing — and keeps its time and its number: nothing is spent.
+    #[test]
+    fn a_busted_call_edited_into_a_worked_station_is_marked_the_dupe_it_was() {
+        let mut l = fd();
+        assert!(log(&mut l, "K2DEF", IL, T0));
+        assert!(log(&mut l, "K2DEG", IL, T0 + 60));
+        assert_eq!(
+            (dupes(&l), l.qso_count(), l.qso_points()),
+            (vec![false, false], 2, 4),
+            "premise: two CW contacts"
+        );
+        let was = l
+            .edit_contact("k2deg", T0 + 60, &edit("K2DEF", &[IL], "20m", ""))
+            .expect("the contact is there");
+        assert_eq!(was[0].call, "K2DEG", "the answer is the row as it was");
+        assert_eq!(calls(&l), ["K2DEF", "K2DEF"]);
+        assert_eq!(
+            (dupes(&l), l.qso_count(), l.qso_points()),
+            (vec![false, true], 1, 2),
+            "the edited row is the dupe, worth nothing"
+        );
+        let numbers: Vec<(u64, u64)> = l.qsos().iter().map(|q| (q.seq, q.when_unix)).collect();
+        assert_eq!(
+            numbers,
+            [(1, T0), (2, T0 + 60)],
+            "the same numbers and times"
+        );
+        assert_eq!(l.max_seq(), 2, "no number spent");
+    }
+
+    /// ⭐ **An edit moves the mark on a LATER row it did not touch**: the busted first contact,
+    /// edited into the station worked after it, makes that later row the duplicate — and edited
+    /// into another station, makes it a contact again.
+    #[test]
+    fn an_edit_re_marks_every_later_row_it_affects() {
+        let mut l = fd();
+        assert!(log(&mut l, "K2DEG", IL, T0));
+        assert!(log(&mut l, "K2DEF", IL, T0 + 60));
+        assert_eq!(dupes(&l), [false, false], "premise");
+        l.edit_contact("K2DEG", T0, &edit("K2DEF", &[IL], "20m", ""))
+            .expect("edited");
+        assert_eq!(dupes(&l), [false, true], "the later row is the dupe now");
+        let mn = &[("CLASS", "1D"), ("SECTION", "MN")];
+        l.edit_contact("K2DEF", T0, &edit("N0ABC", &[mn], "20m", ""))
+            .expect("edited again");
+        assert_eq!(calls(&l), ["N0ABC", "K2DEF"]);
+        assert_eq!(dupes(&l), [false, false], "…and a contact again");
+        assert_eq!(l.worked_sections(), ["IL", "MN"]);
+    }
+
+    /// ⭐ **A dupe edited into the station it really was is a new multiplier** — Sweepstakes,
+    /// whose multiplier is the section — and the serial it was sent keeps its number, as does
+    /// the serial the next contact gets. The prefix is resolved again from the corrected call.
+    #[test]
+    fn a_dupe_edited_into_a_new_station_is_a_new_multiplier_and_keeps_its_serial() {
+        let mut l = ss();
+        assert!(log(&mut l, "K1ABC", &ss_rx("12", "K1ABC", "EMA"), T0));
+        assert!(log(&mut l, "K1ABC", &ss_rx("13", "K1ABC", "EMA"), T0 + 60));
+        assert_eq!(
+            (dupes(&l), mults(&l)),
+            (vec![false, true], Some(1)),
+            "premise"
+        );
+        let sent = |l: &FieldDayLog| -> Vec<String> {
+            l.qsos().iter().map(|q| q.sent("NR").to_string()).collect()
+        };
+        let (serials, next) = (sent(&l), l.session.next_serial);
+        assert_eq!(serials.len(), 2, "premise: each row carries its serial");
+        assert_ne!(serials[0], serials[1], "premise: two serials");
+        l.edit_contact(
+            "K1ABC",
+            T0 + 60,
+            &edit("W9AA", &[&ss_rx("13", "W9AA", "WI")], "20m", ""),
+        )
+        .expect("edited");
+        assert_eq!(calls(&l), ["K1ABC", "W9AA"]);
+        assert_eq!(
+            (dupes(&l), mults(&l)),
+            (vec![false, false], Some(2)),
+            "a contact again, and a new section"
+        );
+        assert_eq!(l.qsos()[1].prefix.as_deref(), Some("W9"));
+        assert_eq!(sent(&l), serials, "each row keeps the serial it was sent");
+        assert_eq!(
+            l.session.next_serial, next,
+            "and the next contact's is unchanged"
+        );
+    }
+
+    /// ⭐ **A county line is one contact**: an edit takes one vector per county in row order, every
+    /// row takes the new call, and a line edited into another number of counties is refused.
+    #[test]
+    fn a_county_line_is_edited_as_one_contact() {
+        let mut l = contest("ilqp", "IL", "KANE");
+        l.session.working("K9AAA", T0);
+        for county in ["COOK", "LAKE"] {
+            assert!(l.log_fields_at(
+                "K9AAA",
+                &pairs(&[("RST", "599"), ("QTH", county)]),
+                "CW",
+                "",
+                0,
+                T0
+            ));
+        }
+        l.session.logged("K9AAA");
+        let was = l.qsos().to_vec();
+        assert_eq!(
+            l.edit_contact(
+                "K9AAA",
+                T0,
+                &edit("K9AAB", &[&[("RST", "599"), ("QTH", "COOK")]], "20m", "")
+            ),
+            Err(EditRefusal::Rows)
+        );
+        assert_eq!(l.qsos(), &was[..], "a refusal changes nothing");
+        let line: &[&[(&str, &str)]] = &[
+            &[("RST", "599"), ("QTH", "COOK")],
+            &[("RST", "599"), ("QTH", "DUPG")],
+        ];
+        let before = l
+            .edit_contact("K9AAA", T0, &edit("K9AAB", line, "20m", ""))
+            .expect("edited");
+        assert_eq!(before.len(), 2, "both rows, as they were");
+        let rows: Vec<(&str, &str)> = l
+            .qsos()
+            .iter()
+            .map(|q| (q.call.as_str(), q.rcvd("QTH")))
+            .collect();
+        assert_eq!(rows, [("K9AAB", "COOK"), ("K9AAB", "DUPG")]);
+    }
+
+    /// A new band drops the frequencies read on the old one, and the same band keeps them. A new
+    /// mode is what the journal reads back for it, and a new mode class re-fits the RST it was
+    /// sent: 59 on phone, the session's 599 on CW and digital.
+    #[test]
+    fn a_band_or_mode_edit_leaves_the_row_the_journal_reads() {
+        let mut l = contest("ilqp", "IL", "KANE");
+        l.dial_khz = 14_025;
+        l.on_air_hz = 14_025_000;
+        assert!(log(&mut l, "K9AAA", &[("RST", "599"), ("QTH", "COOK")], T0));
+        let row = |l: &FieldDayLog| {
+            let q = &l.qsos()[0];
+            (
+                q.band.clone(),
+                q.mode.clone(),
+                q.submode.clone(),
+                q.sent("RST").to_string(),
+                q.freq_khz,
+                q.on_air_hz,
+            )
+        };
+        let rx: &[&[(&str, &str)]] = &[&[("RST", "59"), ("QTH", "COOK")]];
+        l.edit_contact("K9AAA", T0, &edit("K9AAA", rx, "20m", "USB"))
+            .expect("edited");
+        assert_eq!(
+            row(&l),
+            (
+                "20m".into(),
+                "PH".into(),
+                "USB".into(),
+                "59".into(),
+                14_025,
+                14_025_000
+            )
+        );
+        l.edit_contact("K9AAA", T0, &edit("K9AAA", rx, "40m", "CW"))
+            .expect("edited");
+        assert_eq!(
+            row(&l),
+            ("40m".into(), "CW".into(), String::new(), "599".into(), 0, 0)
+        );
+        l.edit_contact("K9AAA", T0, &edit("K9AAA", rx, "40m", "FT4"))
+            .expect("edited");
+        assert_eq!(
+            row(&l),
+            ("40m".into(), "DIG".into(), "FT4".into(), "599".into(), 0, 0)
+        );
+        // And the journal reads the row back exactly as the edit left it.
+        let mut back = contest("ilqp", "IL", "KANE");
+        back.restore_journal(&l.journal_adif(), 0, T0 + 60);
+        assert_eq!(back.qsos(), l.qsos());
+    }
+
+    /// ⭐ **The journal reads an edited log back as it was left** — every row, its mark, its
+    /// number and its serial — so a restart keeps the edit and the numbers run on as before.
+    #[test]
+    fn an_edited_log_reads_back_from_its_journal_as_it_was_left() {
+        let mut l = ss();
+        l.dial_khz = 14_025;
+        l.on_air_hz = 14_025_000;
+        assert!(log(&mut l, "K1ABC", &ss_rx("5", "K1ABC", "EMA"), T0));
+        assert!(log(&mut l, "K1ABD", &ss_rx("6", "K1ABD", "EMA"), T0 + 60));
+        assert!(log(&mut l, "W9AA", &ss_rx("7", "W9AA", "WI"), T0 + 120));
+        l.edit_contact(
+            "K1ABD",
+            T0 + 60,
+            &edit("K1ABC", &[&ss_rx("6", "K1ABC", "EMA")], "40m", ""),
+        )
+        .expect("edited");
+        assert_eq!(
+            dupes(&l),
+            [false, true, false],
+            "worked once, whatever the band"
+        );
+        let mut back = ss();
+        back.restore_journal(&l.journal_adif(), 0, T0 + 180);
+        assert_eq!(back.qsos(), l.qsos(), "every row as the edit left it");
+        assert_eq!(
+            (back.max_seq(), back.session.next_serial),
+            (l.max_seq(), l.session.next_serial),
+            "and the numbers run on from the same place"
+        );
+    }
+
+    /// What an edit refuses — a contact that is not there (or has no time to name it by), no
+    /// call, a band no file can carry, another number of rows, a satellite contact's band — and
+    /// that a refusal changes nothing.
+    #[test]
+    fn an_edit_that_cannot_apply_is_refused_and_changes_nothing() {
+        let mut l = fd();
+        assert!(log(&mut l, "K2DEF", IL, T0));
+        assert!(
+            l.log_at("W1AW", "1D", "CT", 0, 0),
+            "a legacy row, with no time"
+        );
+        let leg = SatLeg {
+            band: "70cm".into(),
+            down_hz: 435_000_000,
+            bird: "SO-50".into(),
+            single_channel_fm: true,
+            name: Some("SO-50".into()),
+        };
+        assert!(l.log_satellite_at("N0SAT", &pairs(IL), "PH", "FM", &leg, T0 + 60));
+        let was = l.qsos().to_vec();
+        for (call, when, e, refusal) in [
+            (
+                "K2DEF",
+                T0 + 1,
+                edit("K2DEF", &[IL], "20m", ""),
+                EditRefusal::Changed,
+            ),
+            (
+                "K2DEX",
+                T0,
+                edit("K2DEF", &[IL], "20m", ""),
+                EditRefusal::Changed,
+            ),
+            (
+                "W1AW",
+                0,
+                edit("W1AW", &[IL], "20m", ""),
+                EditRefusal::Changed,
+            ),
+            (
+                "K2DEF",
+                T0,
+                edit("  ", &[IL], "20m", ""),
+                EditRefusal::Incomplete,
+            ),
+            (
+                "K2DEF",
+                T0,
+                edit("K2DEF", &[IL], "21m", ""),
+                EditRefusal::Incomplete,
+            ),
+            (
+                "K2DEF",
+                T0,
+                edit("K2DEF", &[IL], "", ""),
+                EditRefusal::Incomplete,
+            ),
+            (
+                "K2DEF",
+                T0,
+                edit("K2DEF", &[IL, IL], "20m", ""),
+                EditRefusal::Rows,
+            ),
+            (
+                "N0SAT",
+                T0 + 60,
+                edit("N0SAT", &[IL], "2m", ""),
+                EditRefusal::Satellite,
+            ),
+        ] {
+            assert_eq!(
+                l.edit_contact(call, when, &e),
+                Err(refusal),
+                "{call} {when} {e:?}"
+            );
+            assert_eq!(l.qsos(), &was[..], "a refusal changes nothing: {e:?}");
+        }
+        // CONTROL: the satellite contact's own band, and the same edits on the contact named
+        // rightly, apply.
+        assert!(l
+            .edit_contact("N0SAT", T0 + 60, &edit("N0SAU", &[IL], "70CM", ""))
+            .is_ok());
+        assert!(l
+            .edit_contact("K2DEF", T0, &edit("K2DEG", &[IL], "20M", ""))
+            .is_ok());
+        assert_eq!(calls(&l), ["K2DEG", "W1AW", "N0SAU"]);
     }
 }

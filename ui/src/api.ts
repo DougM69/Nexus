@@ -824,6 +824,41 @@ export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
 }
 
+/** Why an edit changed nothing: the contact is no longer as it was shown; no call or no band;
+ *  another number of counties than a county line has; a satellite contact's band; club sync,
+ *  which cannot carry an edit to the club. */
+export type ContestEditRefusal = 'changed' | 'incomplete' | 'rows' | 'satellite' | 'club'
+
+/** What an edit came to: the contact as it was and as it is now (one row, or one per county),
+ *  and where it had already gone, which keeps what it said — or why nothing changed. */
+export type ContestEditAnswer =
+  | { outcome: 'edited'; before: FieldDayQso[]; after: FieldDayQso[]; sentTo: ContestSentTo }
+  | { outcome: 'refused'; refusal: ContestEditRefusal }
+
+/** What an edit puts on a contact: its call, what they sent (one `[slot, value]` vector per row,
+ *  as `contestLogManualRows` takes them), its band, and its mode on the air (`''` keeps it). */
+export interface ContestContactEdit {
+  call: string
+  rows: [string, string][][]
+  band: string
+  mode: string
+}
+
+/** ⭐ **Edit a contest contact in place** — when it is still the one named (`call` and
+ *  `whenUnix`, as the screen showed it), else `refused: changed`. It keeps its time, serial and
+ *  number; refused at a club (`club`). Answers once the contest journal holds the edit. Never
+ *  keys or stops TX. */
+export async function contestEdit(call: string, whenUnix: number, edit: ContestContactEdit): Promise<ContestEditAnswer> {
+  return invoke<ContestEditAnswer>('contest_edit', {
+    call,
+    whenUnix,
+    newCall: edit.call,
+    rows: edit.rows,
+    band: edit.band,
+    mode: edit.mode,
+  })
+}
+
 /** One contest's contacts that the contest journal keeps past its four days and the logbook does
  *  not hold: what the contest screen offers to merge. `event` is the contest's rules-file id;
  *  the times are Unix seconds. */

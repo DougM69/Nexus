@@ -24,8 +24,6 @@ import { useLogAnswer } from '../features/logSource'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
 import {
   domainSuggestions,
-  inDomain,
-  resolveDomainValue,
   type DomainValue,
 } from '../features/contestDomains'
 import {
@@ -33,17 +31,18 @@ import {
   isCountyLine,
   lastCountyPart,
   readCountyLine,
-  resolveCountyLine,
   withLastCountyPart,
 } from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
 import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
-import { slotCaption, slotTitle } from '../features/contestSlots'
+import { fdFieldOk, fdSlotValue, fdVerdict, slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
+import { isEditKey } from '../features/contestEdit'
+import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
 import { ENTRY_CHANGED, ENTRY_LOGGED, useSharedEntry, type StripContent } from '../features/contestEntryShare'
 import type { EsmHost } from '../features/esmHost'
@@ -99,75 +98,6 @@ function fdRcvd(row: FieldDayQso, key: string): string {
   if (key === 'CLASS') return row.class
   if (key === 'SECTION') return row.section
   return ''
-}
-
-/** Why this slot is not loggable yet — Field Day's own two sentences for Field Day's
- *  two slots, and a generic pair naming the field for anything else. */
-function fdVerdict(spec: ContestFieldSpec, raw: string, line?: string): string {
-  const v = raw.trim()
-  // A COUNTY LINE says which part stops it, because one bad part refuses the whole line.
-  if (line && isCountyLine(v)) {
-    const read = readCountyLine(line, v)
-    if (!read.ok) {
-      if (read.why === 'unknown') return t('logEntry.countyLine.unknown', { value: read.part })
-      if (read.why === 'repeated') return t('logEntry.countyLine.repeated', { value: read.part })
-      if (read.why === 'tooMany') return t('logEntry.countyLine.tooMany', { max: read.max })
-      return t('logEntry.countyLine.incomplete', { max: read.max })
-    }
-  }
-  // ⚠️ Field Day's two sentences, byte for byte, INCLUDING the em-dash placeholder a
-  // blank Section has always shown. "Section \"—\" isn't a known ARRL/RAC section" reads
-  // oddly and is what shipped; a strip that started saying something better here would
-  // be a change to what a Field Day operator reads, which this batch does not make.
-  if (spec.key === 'CLASS' && v === '') return t('logEntry.fd.needClass')
-  if (spec.key === 'SECTION') return t('logEntry.fd.badSection', { section: v || '—' })
-  // A bounded number with a value in it: say the range, which is what fixes it.
-  if (spec.kind === 'number' && v !== '' && spec.min != null && spec.max != null) {
-    return t('logEntry.fd.badNumber', { field: fdFieldLabel(spec.key), min: spec.min, max: spec.max })
-  }
-  return v === ''
-    ? t('logEntry.fd.needField', { field: fdFieldLabel(spec.key) })
-    : t('logEntry.fd.badField', { field: fdFieldLabel(spec.key), value: v })
-}
-
-/** Is this slot's typed value good enough to log?
- *
- *  Byte-for-byte Field Day's shipped rule, generalised by KIND and by nothing else:
- *  an `enum` slot must be a member of its domain, anything else required must be
- *  non-blank. A kind this build has no matcher for gets the non-blank test and no more
- *  — never an approximated verdict (the `Pattern` rule).
- *
- *  An OPTIONAL slot may be blank, whatever its kind: CQ WW RTTY's QTH is sent by W/VE
- *  stations only, and a DX contact has none to type. A value that IS typed still has to
- *  be legal. A `number` slot carrying its bounds (a CQ zone, 1–40) must be a whole number
- *  inside them. */
-/** ⭐ **What a box actually means** — the code, whether the operator typed the code or the
- *  NAME beside it in the contest's own list ("Cook" → COOK, "St. Clair" → SCLA).
- *
- *  A county exchange is four letters an operator has to know and the name is the part they
- *  do know, so both are accepted; a name that could mean several counties resolves to
- *  nothing and the box keeps exactly what was typed. It is ONE function because the
- *  verdict below, the suggestion list and the value that is logged must agree — a strip
- *  that shows a value good and logs a different one is the screen lying about what was
- *  written.
- *
- *  `line` is the county list this box takes a COUNTY LINE from (`features/countyLine`), when it
- *  takes one: a box holding `Cook/DuPage` then means `COOK/DUPG`, part by part. */
-function fdSlotValue(spec: ContestFieldSpec, raw: string, line?: string): string {
-  const v = raw.trim().toUpperCase()
-  if (line && isCountyLine(v)) return resolveCountyLine(line, v)
-  return resolveDomainValue(spec.domains, v) ?? v
-}
-
-function fdFieldOk(spec: ContestFieldSpec, raw: string, line?: string): boolean {
-  const v = fdSlotValue(spec, raw, line)
-  if (v === '') return !spec.required
-  if (line && isCountyLine(v)) return readCountyLine(line, v).ok
-  if (spec.kind === 'enum') return inDomain(spec.domain, v)
-  if (spec.kind === 'number' && spec.min != null && spec.max != null) {
-    return /^\d{1,3}$/.test(v) && Number(v) >= spec.min && Number(v) <= spec.max
-  }
-  return true
 }
 
 /** The report a contest strip offers before anything is typed: 59 on phone, 599 on CW and
@@ -770,6 +700,44 @@ export function LogEntry({
   }
   const pressRemoveRef = useRef(pressRemove)
   pressRemoveRef.current = pressRemove
+  // ⭐ CTRL+Y OPENS THE NEWEST CONTACT FOR EDIT (N1MM's key), in place of the entry boxes: its call,
+  // what they sent, its band and its mode (`ContestContactEdit`). Enter saves, Esc leaves it as it
+  // was, and the entry boxes come back as they were, with the caret in Call. The contact keeps its
+  // time, serial and number. Never through the Remote stream; and at a club the line says how a
+  // contact is fixed there today, because club sync cannot carry an edit to the other laptops.
+  const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
+  const editRows =
+    editing && fieldDay
+      ? fieldDay.log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
+      : []
+  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  useEffect(() => {
+    if (editing && editRows.length === 0) setEditing(null)
+  }, [editing, editRows.length])
+  const pressEdit = () => {
+    setRemoveArmed(null)
+    if (isStreamInput()) {
+      setRemoveNote({ text: t('contest.edit.remote'), alert: true })
+      return
+    }
+    if (!newest) {
+      setRemoveNote({ text: t('contest.edit.empty'), alert: false })
+      return
+    }
+    if (fieldDay?.club) {
+      setRemoveNote({ text: t('contest.edit.club'), alert: true })
+      return
+    }
+    setRemoveNote(null)
+    setEditing({ call: newest.call, whenUnix: newest.whenUnix })
+  }
+  const pressEditRef = useRef(pressEdit)
+  pressEditRef.current = pressEdit
+  const editDone = (note: EditNote | null) => {
+    setEditing(null)
+    if (note) setRemoveNote(note)
+    requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
+  }
   // The press window, from the moment of the first press.
   useEffect(() => {
     if (!removeArmed) return
@@ -807,6 +775,13 @@ export function LogEntry({
         setEsmLine(null)
         return
       }
+      if (isEditKey(e)) {
+        // Ctrl+Y is redo in a text box; while this strip shows it is N1MM's edit-last.
+        e.preventDefault()
+        if (!e.repeat) pressEditRef.current()
+        setEsmLine(null)
+        return
+      }
       if (isModifierKey(e)) return
       // Any other key lets a waiting press lapse, and retires the last answer — and an Enter
       // Sends Message line, except at the press that wrote it.
@@ -820,7 +795,9 @@ export function LogEntry({
   // ONE line in the verdict slot while a press waits or an answer shows: the strip does not grow.
   const removeLine = removeArmed
     ? t('logEntry.remove.armed', { contact: removeArmed.label })
-    : removeNote?.text
+    : editRows.length > 0
+      ? t('contest.edit.editing', { contact: contactLabel(editRows) })
+      : removeNote?.text
   // …and the same for an Enter Sends Message line, behind a removal's.
   const slotFree = removeLine == null && esmLine == null
 
@@ -1580,14 +1557,15 @@ export function LogEntry({
   // that window. Nothing in that window transmits, so its Esc has no over to stop, and a logger
   // clearing a typo never reaches the operator's. On every other strip Esc stays the cockpit's
   // (in CW, Operate, RTTY and PSK it stops TX), exactly as before. Left alone in the "I moved"
-  // editor, whose own Esc backs out of the edit, and while a dialog has the key.
+  // editor and a contact's edit, whose own Esc backs out of the edit, and while a dialog has the
+  // key.
   const resetRef = useRef(reset)
   resetRef.current = reset
   useEffect(() => {
     if (sharedEntry !== 'logger' || !fdActive) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.repeat || e.defaultPrevented) return
-      if (e.target instanceof Element && e.target.closest('.le-fd-sent, [role="dialog"]')) return
+      if (e.target instanceof Element && e.target.closest('.le-fd-sent, .contest-edit, [role="dialog"]')) return
       resetRef.current()
     }
     window.addEventListener('keydown', onKey)
@@ -2295,6 +2273,16 @@ export function LogEntry({
           </div>
         ) : null}
 
+        {editRows.length > 0 ? (
+          <ContestContactEdit
+            // One edit per contact: Ctrl+Y on another newest contact opens that one afresh.
+            key={`${editRows[0].call}|${editRows[0].whenUnix}`}
+            rows={editRows}
+            receives={fdReceives}
+            bands={fieldDay?.bands}
+            onDone={editDone}
+          />
+        ) : (
         <div className="le-fd-big">
           <label className="le-fd-field le-fd-field-call">
             <span className="le-fd-cap">{t('logEntry.fd.call.label')}</span>
@@ -2449,6 +2437,7 @@ export function LogEntry({
           )}
 
         </div>
+        )}
 
         {/* ⭐ SUPER CHECK PARTIAL — one line under the boxes, there whenever SCP is on so the
             strip does not grow and shrink as calls come and go (it is a `fit="content"` pane,

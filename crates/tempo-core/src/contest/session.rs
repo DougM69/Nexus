@@ -861,15 +861,30 @@ Fill it in on the Contesting tab in Settings."
         // actually exchanged, and rewriting one is what `FieldSpec`'s own header
         // forbids.
         if mode_class.eq_ignore_ascii_case("PH") {
-            for v in &mut tx {
-                if let Some(f) = self.exchange.field(v.key) {
-                    if f.source == "constant" && matches!(f.kind, super::FieldKind::Rst { .. }) {
-                        v.raw = "59".to_string();
-                    }
-                }
-            }
+            self.fit_sent_rst(&mut tx, mode_class);
         }
         tx
+    }
+
+    /// A row's sent RST at the digit count its mode class takes: a slot the ruleset declares
+    /// `Rst` and sources as a `"constant"` is `59` on a phone row and the session's own (the
+    /// 3-digit form) on any other. Every other slot is left as it is, for the reason
+    /// [`tx_for_row`](Self::tx_for_row) gives — and that is where the phone half is applied to
+    /// a contact being logged; a contact edited into another mode class is re-fitted here.
+    pub fn fit_sent_rst(&self, tx: &mut [FieldValue], mode_class: &str) {
+        for v in tx.iter_mut() {
+            let Some(f) = self.exchange.field(v.key) else {
+                continue;
+            };
+            if f.source != "constant" || !matches!(f.kind, super::FieldKind::Rst { .. }) {
+                continue;
+            }
+            if mode_class.eq_ignore_ascii_case("PH") {
+                v.raw = "59".to_string();
+            } else if let Some(own) = self.my_exchange.iter().find(|m| m.key == v.key) {
+                v.raw = own.raw.clone();
+            }
+        }
     }
 
     /// The contact is logged (or abandoned): nothing is in flight any more.

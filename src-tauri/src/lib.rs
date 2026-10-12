@@ -29020,6 +29020,75 @@ async fn contest_restore(
     })
 }
 
+/// What an edit came to: the contact as it was and as it is now, and where it had already gone,
+/// which the edit does not reach — or why nothing changed.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestEditDto {
+    #[serde(rename_all = "camelCase")]
+    Edited {
+        before: Vec<tempo_app::dto::FieldDayQso>,
+        after: Vec<tempo_app::dto::FieldDayQso>,
+        sent_to: ContestSentToDto,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Edit a contest contact in place** — the contest screen's Edit and the strip's Ctrl+Y — when
+/// it is still the contact named (`call`, `when_unix`): its call, what they sent (one field
+/// vector per row, as [`contest_log_manual_rows`] takes them), its band and its mode.
+///
+/// It keeps its time, serial and seq ([`tempo_app::engine::contest_edit`]); refused while club
+/// sync runs, which cannot carry an edit to the club. The answer names where it had already
+/// gone, which nothing here changes. Answers once the contest journal holds the edit; a merged
+/// copy is read with the engine lock released, on the blocking pool.
+///
+/// ⛔ Not one of Remote's operations: an edit is refused from afar, as a removal is.
+#[tauri::command]
+async fn contest_edit(
+    state: State<'_, SharedEngine>,
+    call: String,
+    when_unix: u64,
+    new_call: String,
+    rows: Vec<Vec<(String, String)>>,
+    band: String,
+    mode: String,
+) -> Result<ContestEditDto, String> {
+    let engine = Arc::clone(&state);
+    let edit = tempo_core::fieldday::ContactEdit {
+        call: new_call,
+        rows,
+        band,
+        mode,
+    };
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_edit::edit(&engine, &call, when_unix, &edit)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(match answer {
+        Ok(edited) => {
+            let sent = &edited.edit.sent;
+            ContestEditDto::Edited {
+                before: edited.edit.before.clone(),
+                after: edited.edit.after.clone(),
+                sent_to: ContestSentToDto {
+                    n3fjp: sent.n3fjp.clone(),
+                    n1mm: sent.n1mm.clone(),
+                    wsjtx: sent.wsjtx,
+                    logbook: edited.logbook.is_some(),
+                    uploaded: edited.logbook.clone().unwrap_or_default(),
+                },
+            }
+        }
+        Err(refusal) => ContestEditDto::Refused {
+            refusal: refusal.code(),
+        },
+    })
+}
+
 /// A removal's or restore's way to the club, as the screen words it.
 fn club_route(linked: Option<bool>) -> Option<&'static str> {
     linked.map(|now| if now { "linked" } else { "away" })
@@ -29065,6 +29134,34 @@ mod contest_club_route_tests {
         .unwrap();
         assert_eq!(removed["club"], "away");
         assert_eq!(removed["outcome"], "removed");
+    }
+
+    /// An edit's answer as the screen reads it: `outcome`, both sides of the contact, and
+    /// `sentTo` in the removal's shape; a refusal by its code alone.
+    #[test]
+    fn an_edit_answer_is_the_shape_the_screen_reads() {
+        let edited = serde_json::to_value(ContestEditDto::Edited {
+            before: Vec::new(),
+            after: Vec::new(),
+            sent_to: ContestSentToDto {
+                n3fjp: Some("192.168.1.20".into()),
+                n1mm: None,
+                wsjtx: true,
+                logbook: true,
+                uploaded: vec!["qrz"],
+            },
+        })
+        .unwrap();
+        assert_eq!(edited["outcome"], "edited");
+        assert!(edited["before"].is_array() && edited["after"].is_array());
+        assert_eq!(edited["sentTo"]["n3fjp"], "192.168.1.20");
+        assert!(edited["sentTo"].get("n1mm").is_none());
+        assert_eq!(edited["sentTo"]["uploaded"][0], "qrz");
+        let refused = serde_json::to_value(ContestEditDto::Refused { refusal: "club" }).unwrap();
+        assert_eq!(
+            refused,
+            serde_json::json!({ "outcome": "refused", "refusal": "club" })
+        );
     }
 }
 
@@ -35282,6 +35379,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_remove_last,
             contest_restore,
             contest_removed,
+            contest_edit,
             fd_merge_to_general,
             contest_unmerged,
             contest_merge_unmerged,
@@ -37271,10 +37369,11 @@ mod tests {
         );
     }
 
-    /// ⭐ Removing the newest contest contact reaches the app only if its three commands are
-    /// REGISTERED, and the two that change the contest log answer only once its journal holds
-    /// the change (the tempo-app functions that wait for it). And none of them is one of Remote's
-    /// operations: removal is refused from afar, so the Remote dispatcher must never name them.
+    /// ⭐ Removing the newest contest contact, and editing one, reach the app only if their
+    /// commands are REGISTERED, and the three that change the contest log answer only once its
+    /// journal holds the change (the tempo-app functions that wait for it). And none of them is
+    /// one of Remote's operations: removal and edit are refused from afar, so the Remote
+    /// dispatcher must never name them.
     #[test]
     fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
         let src = include_str!("lib.rs");
@@ -37289,6 +37388,7 @@ mod tests {
             ("contest_remove_last", Some("contest_removal::remove_last(")),
             ("contest_restore", Some("contest_removal::restore(")),
             ("contest_removed", None),
+            ("contest_edit", Some("contest_edit::edit(")),
         ] {
             assert!(
                 list.lines().any(|l| l.trim() == format!("{command},")),
@@ -37313,7 +37413,12 @@ mod tests {
             remote.contains("LogOp::Delete"),
             "the control: Remote's own delete is there"
         );
-        for name in ["contest_removal", "contest_remove_last", "contest_restore"] {
+        for name in [
+            "contest_removal",
+            "contest_remove_last",
+            "contest_restore",
+            "contest_edit",
+        ] {
             assert!(!remote.contains(name), "Remote must not reach {name}");
         }
     }
