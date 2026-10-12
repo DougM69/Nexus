@@ -532,6 +532,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **In a contest, the report follows the mode when you move between Phone and CW or RTTY.** After a
+  contact, a move from Phone to CW left 59 in the log line's received report, and back on Phone it
+  left 599, so a CW contact could go into the log, the Cabrillo file and the ADIF with 59. This
+  happened with the contest logger window open, in both windows. A report you have not typed is now
+  the mode's own: 59 on Phone, 599 on CW, RTTY and the keyboard modes. A report you typed stays
+  with that contact, across a move; the next contact, and the line after Clear, start on the mode's
+  own (Clear used to keep a typed report in the box). With the logger
+  window open, a report typed for one contact could also stay in the box for the next one; it no
+  longer does. On Phone, the Sending line and the Give line beside PTT now read 59, the report a
+  phone contact is logged with, where they read the session's 599.
+
 - **Phone's F-keys play the voice keyer from the log line, as CW's do.** With the cursor in the Call
   box or any other box of the log line, a slot's F-key played nothing until you clicked out of the
   box. Now it plays from anywhere on the Phone screen, and F1–F12 never reach the window there, so F5

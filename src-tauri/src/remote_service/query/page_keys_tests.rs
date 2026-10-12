@@ -1024,6 +1024,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         composing: Vec::new(),
         sent_exchange: "1D EMA".into(),
         composing_text: "1D EMA".into(),
+        composing_text_phone: "1D EMA".into(),
         bands: vec!["20m".into()],
         dupe_mode_groups: vec![vec!["CW".into(), "DIG".into()]],
         dupe_rule: DupeRuleDto {
@@ -1050,8 +1051,10 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     assert!(
         native["club"]["refused"][0]["handle"] == 7
             && native["club"]["refused"][0]["clubCode"] == "7KQ2-M9XD"
-            && native["club"]["clubCode"] == "3HV8-ZQ1P",
-        "CONTROL: the station's own snapshot carries the Give button's handle and the club codes"
+            && native["club"]["clubCode"] == "3HV8-ZQ1P"
+            && native["composingTextPhone"] == "1D EMA",
+        "CONTROL: the station's own snapshot carries the Give button's handle, the club codes and \
+         the phone form of the exchange"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.

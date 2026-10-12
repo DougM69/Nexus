@@ -2477,6 +2477,17 @@ pub struct FieldDayStatus {
     /// lose part of what a CQ WW RTTY operator actually says.
     #[serde(default)]
     pub composing_text: String,
+    /// ⭐ **The same exchange as a PHONE contact sends it** — the report at two digits (`59
+    /// MCHE` where [`composing_text`](Self::composing_text) reads `599 MCHE`), exactly as a
+    /// phone row is stamped. [`Engine::contest_composing_text_phone`] renders it. The phone
+    /// cockpit's Give line and a phone strip's Sending line read it, so what is said is what is
+    /// logged; CW and the keyboard modes read `composing_text`.
+    ///
+    /// ⚠️ **Never sent to Remote yet**: the hosted page refuses a key it does not list, so
+    /// `leave_out_the_hosts_own` empties it and an empty one is not serialised. The page falls
+    /// back to `composing_text`, as it always read.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub composing_text_phone: String,
     /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
     /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
     /// ruleset names none, which is every contest before CQ WW RTTY.

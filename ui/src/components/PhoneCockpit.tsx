@@ -1269,8 +1269,11 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
 
   // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
   // slot) — what the SESSION is composing, which is what the next contact will hear. Empty
-  // until FD setup fills it in.
-  const fdExchange = fieldDay?.composingText || composingText(fieldDay?.composing)
+  // until FD setup fills it in. As a PHONE contact sends it: the report at two digits (59), as
+  // the engine stamps a phone row, never the session's 599; a station that sends no phone form
+  // reads as it always did.
+  const fdExchange =
+    fieldDay?.composingTextPhone || fieldDay?.composingText || composingText(fieldDay?.composing)
 
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ─────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in
