@@ -852,10 +852,10 @@ export function OperateCockpit({
 
   // Waterfall pop-out: 'popped' unmounts the docked copy so the decode lists + roster
   // reclaim the space (that's the whole point of popping it out) and leaves the re-dock
-  // bar behind; 'removed' renders nothing at all. The torn-off window still signals its
-  // close through the app-global legacy flag (localStorage is shared across Tauri
-  // windows), so closing it re-docks automatically — but only a POPPED waterfall
-  // follows, or that signal would resurrect one the operator deleted.
+  // bar behind; 'removed' renders nothing at all. The torn-off window clears the
+  // app-global legacy flag in its `beforeunload` (localStorage is shared across Tauri
+  // windows), and closing it re-docks automatically (below) — but only a POPPED waterfall
+  // follows, or the close would resurrect one the operator deleted.
   const wfStateRef = useRef(wfState)
   wfStateRef.current = wfState
   useEffect(() => {
@@ -866,14 +866,43 @@ export function OperateCockpit({
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [setPanelState])
+  // A close does not run that `beforeunload`: on Windows wry closes the webview with WebView2's
+  // `Close`, which "is synchronous and won't trigger the beforeunload event", and on Linux the
+  // real app's close left the flag set too (2026-10-12). So the close is heard as Tauri's own
+  // `tauri://destroyed` for that window, which arrives however it went, as
+  // `useContestScreenWindow` hears its window. `panel-waterfall` is `open_panel_window`'s label
+  // for the slug (`chains::panel_label`).
+  useEffect(() => {
+    const listen = window.__TAURI__?.event?.listen
+    if (!listen) return
+    let alive = true
+    let unlisten: (() => void) | undefined
+    listen(
+      'tauri://destroyed',
+      () => {
+        if (wfStateRef.current === 'popped') setPanelState('waterfall', 'docked')
+      },
+      { target: { kind: 'WebviewWindow', label: 'panel-waterfall' } },
+    )
+      .then((un) => {
+        if (alive) unlisten = un
+        else un()
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+      unlisten?.()
+    }
+  }, [setPanelState])
   const popOutWaterfall = () => {
     setPanelState('waterfall', 'popped')
     void openPanelWindow('waterfall')
   }
   // #263: re-dock also closes the torn-off window. It used to flip the state only, so the
   // strip came back in the cockpit while the pop-out stayed up beside it — two waterfalls.
-  // The pop-out's own unmount then clears the detached flag; the storage listener above sees
-  // a waterfall that is already docked and does nothing.
+  // The window's close then reaches the listeners above (its flag where its webview fires
+  // `beforeunload`, and Tauri's destroyed event), which see a waterfall that is already docked
+  // and do nothing.
   const redockWaterfall = () => {
     setPanelState('waterfall', 'docked')
     void closePanelWindow('waterfall').catch(() => {})
