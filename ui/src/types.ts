@@ -1720,6 +1720,9 @@ export interface CwDecodeResult {
   sent: string[]
   /** A CW-keyer failure to surface (e.g. the rig rejected CAT keying), else null. */
   keyerError: string | null
+  /** The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+   *  (Nexus's Flex client): an information line until the next send. Absent from an older station. */
+  paddleTookOver?: boolean
   /** CW copilot: ranked worked-station callsign candidates from the decode (click to confirm). */
   candidates: { call: string; best: boolean }[]
   /** RST they sent us, read from the decode (e.g. "599"), else null. */

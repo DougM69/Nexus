@@ -76,6 +76,21 @@
 //! reason, two reasons, or an amplifier's reason on a release or idle report still fails, and the
 //! idle that ends an attempt still carries no reason. ⚠️ Unconfirmed until a tester's bench with
 //! an amplifier in line.
+//!
+//! **The operator's own key** is added for Nexus too, for a CWX operation only (operator ruling,
+//! 2026-10-12, "the paddle wins"): a whole keying report in the key's own signature
+//! ([`OPERATOR_KEY`]: a source none of Nexus's kinds nor the radio's other inputs key under, naming
+//! this connection or no client), transmit allowed, with no reason but an amplifier's, hands the
+//! open operation to the operator ([`Phase::Operator`]). The words Nexus thinks the radio still
+//! holds are dropped, the operator's keying and its release are theirs with no deadline over them,
+//! and the operation ends once the reply to a `cwx clear` ([`StopTracker::cleared`]) and the hold
+//! have passed with our CWX not keying. Our CWX keying after them fails the attempt, as any other
+//! source or handle does. ⚠️ No bench has shown what the radio reports for a paddle, so
+//! [`OPERATOR_KEY`] is empty and such a report fails the attempt as any unknown source does.
+//!
+//! **A failure is kept for the diagnostic log** ([`StopTracker::take_failure`]): the check that
+//! failed, and the radio's line that failed it, as it arrived, or for a missed deadline the last
+//! interlock line before it. Nothing reads it to decide anything.
 
 use std::num::NonZeroU64;
 
@@ -154,6 +169,65 @@ pub const ATU_RESULTS: [&str; 8] = [
     "TUNE_ABORTED",
     "TUNE_MANUAL_BYPASS",
 ];
+
+/// Whose handle the radio names while the operator's own key keys it ([`OperatorKey`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyHandle {
+    /// The client the radio assigned the transmitter to: this connection.
+    Ours,
+    /// No client (`tx_client_handle=0x00000000`).
+    NoClient,
+}
+
+/// What the radio reports while the operator's own paddle or key in its key jack keys it: the
+/// interlock's `source`, and whose handle it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperatorKey {
+    pub source: &'static str,
+    pub handle: KeyHandle,
+}
+
+impl OperatorKey {
+    /// Whether this report can be told apart from every source Nexus keys under and every other
+    /// keying input: a source of its own, never empty, `SW`, `TUNE`, the CWX or ATU profile's,
+    /// `MIC`, `ACC`, `RCA` or `DVK`. One that cannot is taken as no key at all: a paddle keying
+    /// under our CWX's source could not be told from our own CW, and a mic or a foot switch is not
+    /// the key jack.
+    pub fn distinct(&self) -> bool {
+        !self.source.is_empty()
+            && ![
+                KEY.source,
+                TUNE.source,
+                CWX.source,
+                ATU.source,
+                "MIC",
+                "ACC",
+                "RCA",
+                "DVK",
+            ]
+            .contains(&self.source)
+    }
+
+    /// Whether a sample keyed under `source` and naming `handle` is this key's, on a connection
+    /// whose handle is `ours`.
+    pub fn keys(&self, source: &str, handle: u32, ours: u32) -> bool {
+        source == self.source
+            && handle
+                == match self.handle {
+                    KeyHandle::Ours => ours,
+                    KeyHandle::NoClient => 0,
+                }
+    }
+}
+
+/// ⚠️ EMPTY UNTIL A TESTER'S BENCH SHOWS IT: the operator's own paddle or key in the radio's key
+/// jack, as the radio reports it while it keys. FlexRadio documents no interlock source for it
+/// (SmartSDR-Status-Responses names SW, MIC, ACC and RCA; the DVK page, DVK). This is the one value
+/// set from the bench, from the diagnostic line a paddle touch during Nexus's CW leaves: the source
+/// and whose handle the interlock named. Set, that touch hands the radio to the operator (the
+/// paddle wins: a `cwx clear`, no unkey, no alarm); empty, it fails the readback and alarms, as an
+/// unknown source does. A value [`OperatorKey::distinct`] refuses is never taken.
+pub const OPERATOR_KEY: Option<OperatorKey> = None;
 
 /// The longest a tune carrier may be held: the radio loop's own ceiling.
 pub const TUNE_HOLD_MAX_MS: u64 = 60_000;
@@ -252,6 +326,9 @@ pub enum Phase {
     AwaitTuneOff,
     /// A radio-ended start is under way: its window is open.
     Window,
+    /// Our CWX was handed to the operator's own key ([`OPERATOR_KEY`]): it ends once its clear's
+    /// reply and the hold have passed with our CWX not keying.
+    Operator,
     Confirmed,
     Failed,
     /// The radio refused an ATU start in its reply, before any sample: nothing keyed for it, and
@@ -272,6 +349,27 @@ pub enum Failure {
     Ownership,
     Identity,
     UnsupportedActivity,
+}
+
+/// What failed an attempt, for the diagnostic log ([`StopTracker::take_failure`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailureReport {
+    pub failure: Failure,
+    /// The radio's line that failed it, as it arrived, when a line did.
+    pub line: Option<String>,
+    /// Otherwise (a deadline passed, the hold passed with our CWX keying, a write failed), the
+    /// last interlock state line before it, as it arrived.
+    pub last_interlock: Option<String>,
+}
+
+/// `line` cut to [`MAX_LINE`] bytes on a character boundary: the longest the tracker takes, so a
+/// line that failed it for its length does not flood the diagnostic log.
+fn clip(line: &str) -> String {
+    let mut end = line.len().min(MAX_LINE);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end].to_string()
 }
 
 /// The readback for one connection.
@@ -310,6 +408,23 @@ pub struct StopTracker {
     idle_since_ms: Option<u64>,
     /// The window has seen an ATU result since the last `TUNE_IN_PROGRESS`.
     atu_result: bool,
+    /// The operator's own key as the radio reports it ([`OPERATOR_KEY`]), when it can be told
+    /// apart ([`OperatorKey::distinct`]).
+    operator_key: Option<OperatorKey>,
+    /// The open CWX operation was handed to the operator's own key ([`Phase::Operator`]).
+    handed_over: bool,
+    /// When the radio took a `cwx clear` of the open CWX operation (its reply).
+    cleared_ms: Option<u64>,
+    /// Since the hand-over: the last whole sample was our CWX keying.
+    ours_keying: bool,
+    /// Since the hand-over: the last whole sample was idle.
+    radio_idle: bool,
+    /// The last interlock state line, as it arrived: what a missed deadline is reported with.
+    last_interlock: Option<String>,
+    /// The line that failed the attempt, as it arrived, when a line did.
+    failed_line: Option<String>,
+    /// The failure has been handed out ([`StopTracker::take_failure`]).
+    failure_taken: bool,
 }
 
 impl Default for StopTracker {
@@ -372,6 +487,14 @@ impl StopTracker {
             window_deadline_ms: 0,
             idle_since_ms: None,
             atu_result: false,
+            operator_key: OPERATOR_KEY.filter(OperatorKey::distinct),
+            handed_over: false,
+            cleared_ms: None,
+            ours_keying: false,
+            radio_idle: false,
+            last_interlock: None,
+            failed_line: None,
+            failure_taken: false,
         }
     }
 
@@ -383,6 +506,49 @@ impl StopTracker {
         self.failure
     }
 
+    /// The operator's own key as this tracker takes it: [`OPERATOR_KEY`] when it can be told
+    /// apart, else none.
+    pub fn operator_key(&self) -> Option<OperatorKey> {
+        self.operator_key
+    }
+
+    /// This tracker, taking `key` as the operator's own key in place of [`OPERATOR_KEY`]: the
+    /// tests' way to run the hand-over before a bench has shown what the radio reports. A key that
+    /// cannot be told apart is taken as none. Not compiled outside tests (see
+    /// [`super::admission::BENCHED`]).
+    #[cfg(any(test, feature = "flex-unbenched"))]
+    pub fn with_operator_key(mut self, key: Option<OperatorKey>) -> StopTracker {
+        self.operator_key = key.filter(OperatorKey::distinct);
+        self
+    }
+
+    /// The open CWX operation has been handed to the operator's own key ([`Phase::Operator`]),
+    /// until its proof is taken.
+    pub fn handed_over(&self) -> bool {
+        self.handed_over
+    }
+
+    /// What failed the attempt, once, for the diagnostic log: the check, and the radio's line that
+    /// failed it, or when no line did, the last interlock line before it. `None` until a failure,
+    /// and after the first call.
+    pub fn take_failure(&mut self) -> Option<FailureReport> {
+        if self.phase != Phase::Failed || self.failure_taken {
+            return None;
+        }
+        self.failure_taken = true;
+        let line = self.failed_line.clone();
+        let last_interlock = if line.is_none() {
+            self.last_interlock.clone()
+        } else {
+            None
+        };
+        Some(FailureReport {
+            failure: self.failure,
+            line,
+            last_interlock,
+        })
+    }
+
     /// When the current transition must complete, or `0` for none.
     pub fn deadline_ms(&self) -> u64 {
         self.deadline_ms
@@ -392,8 +558,10 @@ impl StopTracker {
     pub fn disconnect(&mut self) {
         let highest = self.highest_session;
         let timeout = self.timeout_ms;
+        let key = self.operator_key;
         *self = StopTracker::new(timeout);
         self.highest_session = highest;
+        self.operator_key = key;
     }
 
     /// Start tracking a new transport session. `session` must be nonzero and higher than any
@@ -433,8 +601,19 @@ impl StopTracker {
 
     /// An open window, at the time of the last input: confirmed once the radio has settled (idle,
     /// no start awaiting its reply, and the ATU's result reported) for its hold past the expected
-    /// end; failed if it has not settled by the deadline.
+    /// end; failed if it has not settled by the deadline. Handed to the operator, our part is
+    /// confirmed once the clear's reply and the hold have passed with our CWX not keying, and our
+    /// CWX keying then fails it: our own CW still keying after its clear.
     fn settle_window(&mut self) {
+        if self.phase == Phase::Operator && self.past_hold() {
+            if self.ours_keying {
+                self.fail(Failure::State);
+            } else {
+                self.phase = Phase::Confirmed;
+                self.deadline_ms = self.last_ms.saturating_add(self.timeout_ms);
+            }
+            return;
+        }
         if self.phase != Phase::Window {
             return;
         }
@@ -543,15 +722,47 @@ impl StopTracker {
     /// open window no longer waits out the last word's expected end, only the radio holding idle
     /// for its hold, and has a transition's time from here to see it, as every stop does. A word
     /// still awaiting its reply keeps its own timing; outside an open window nothing changes.
+    /// Handed to the operator, or later, the hold counts from the first such reply.
     pub fn cleared(&mut self, now_ms: u64) {
-        if !self.advance_clock(now_ms) || self.phase != Phase::Window || !self.words.is_empty() {
+        if !self.advance_clock(now_ms) {
             return;
         }
-        self.expected_end_ms = self.expected_end_ms.min(now_ms);
-        self.window_deadline_ms = self
-            .window_deadline_ms
-            .max(now_ms.saturating_add(self.timeout_ms));
+        if matches!(self.phase, Phase::Window | Phase::Operator) {
+            self.cleared_ms.get_or_insert(now_ms);
+        }
+        if self.phase == Phase::Window && self.words.is_empty() {
+            self.expected_end_ms = self.expected_end_ms.min(now_ms);
+            self.window_deadline_ms = self
+                .window_deadline_ms
+                .max(now_ms.saturating_add(self.timeout_ms));
+        }
         self.settle_window();
+    }
+
+    /// Since the hand-over: the clear's reply and the hold have passed.
+    fn past_hold(&self) -> bool {
+        self.cleared_ms
+            .is_some_and(|at| self.last_ms >= at.saturating_add(self.window.hold_ms))
+    }
+
+    /// The open CWX operation was handed to the operator, and its proof is not yet taken.
+    fn after_hand_over(&self) -> bool {
+        self.handed_over && matches!(self.phase, Phase::Operator | Phase::Confirmed)
+    }
+
+    /// The operator's own key keys the radio during our CWX: from its first sample the radio is
+    /// theirs. The words Nexus thinks the radio still holds are dropped, and nothing puts a
+    /// deadline over the operator's keying: the session's stop (the clear it sends at once) bounds
+    /// what is ours.
+    fn hand_over(&mut self) {
+        if !self.handed_over {
+            self.handed_over = true;
+            self.phase = Phase::Operator;
+            self.deadline_ms = 0;
+            self.words.clear();
+        }
+        self.ours_keying = false;
+        self.radio_idle = false;
     }
 
     fn arm(
@@ -581,6 +792,8 @@ impl StopTracker {
         self.words.clear();
         self.idle_since_ms = None;
         self.atu_result = false;
+        self.handed_over = false;
+        self.cleared_ms = None;
         self.key_sequence = key_sequence;
         self.stop_sequence = 0;
         self.deadline_ms = now_ms + self.timeout_ms;
@@ -691,6 +904,11 @@ impl StopTracker {
         let result = rest.split_once('|').and_then(|(code, _)| number(code, 16));
         if self.phase == Phase::Window {
             self.word_reply(sequence, result == Some(0));
+            return;
+        }
+        // Handed to the operator: a word dropped with the hand-over may still be answered, and no
+        // reply proves anything now.
+        if self.after_hand_over() {
             return;
         }
         if sequence != self.key_sequence && sequence != self.stop_sequence {
@@ -847,7 +1065,7 @@ impl StopTracker {
         matches!(number(envelope, 16), Some(h) if h == 0 || h == self.client_handle)
     }
 
-    fn interlock(&mut self, body: &str) {
+    fn interlock(&mut self, raw: &str, body: &str) {
         let mut state = None;
         let mut source = None;
         let mut handle_text = None;
@@ -878,6 +1096,7 @@ impl StopTracker {
         if present == 0 {
             return; // timing configuration, not a state line
         }
+        self.last_interlock = Some(raw.to_string());
         let mut handle = 0;
         if let Some(text) = handle_text {
             match text
@@ -915,6 +1134,26 @@ impl StopTracker {
             self.fail(Failure::InvalidInput);
             return;
         }
+        let keying = matches!(state, "PTT_REQUESTED" | "TRANSMITTING");
+        // ⭐ THE OPERATOR'S OWN KEY ([`OPERATOR_KEY`]). During our CWX, from its start's write on, a
+        // whole keying sample in the key's own report, transmit allowed, with no reason but an
+        // amplifier's, is the operator's paddle: the radio is theirs from here ([`Self::hand_over`]).
+        // With no key named, there is none, and the sample fails the attempt below as any unknown
+        // source does.
+        let operator = keying
+            && allowed == "1"
+            && (reason.is_empty() || amplifier_only(reason))
+            && self
+                .operator_key
+                .is_some_and(|k| k.keys(source, handle, self.client_handle));
+        if operator
+            && self.profile == CWX
+            && (matches!(self.phase, Phase::AwaitKeyReply | Phase::Window)
+                || self.after_hand_over())
+        {
+            self.hand_over();
+            return;
+        }
         let keyed_by = self.profile.source;
         if (handle != 0 && handle != self.client_handle)
             || (!source.is_empty() && source != keyed_by)
@@ -925,12 +1164,34 @@ impl StopTracker {
         // A keying report whose only reason names an amplifier is ours when everything else is:
         // its source above, and its place in the order below. Any other reason, or one on any
         // other report, fails the attempt.
-        let keying = matches!(state, "PTT_REQUESTED" | "TRANSMITTING");
         if allowed != "1" || !(reason.is_empty() || (keying && amplifier_only(reason))) {
             self.fail(Failure::State);
             return;
         }
         let ours = handle == self.client_handle;
+        if self.after_hand_over() {
+            // The operator's: their keying is above, its release and the idle here. Our CWX may
+            // still finish the word or character going out until the clear's reply and the hold
+            // have passed; keying after them, it is our own CW still keying, and fails the attempt.
+            match state {
+                _ if idle => {
+                    self.ours_keying = false;
+                    self.radio_idle = true;
+                }
+                "PTT_REQUESTED" | "TRANSMITTING"
+                    if source == keyed_by && ours && !self.past_hold() =>
+                {
+                    self.ours_keying = true;
+                    self.radio_idle = false;
+                }
+                "UNKEY_REQUESTED" | "READY" if source.is_empty() && (ours || handle == 0) => {
+                    self.ours_keying = false;
+                    self.radio_idle = false;
+                }
+                _ => self.fail(Failure::State),
+            }
+            return;
+        }
         if self.phase == Phase::Window {
             // The radio keys and releases as it goes; every sample names us, keyed with the kind's
             // source and released with none, until it holds idle.
@@ -993,6 +1254,15 @@ impl StopTracker {
         if !self.accept(stamp, now_ms) {
             return;
         }
+        self.read(raw_line);
+        // The line failed the attempt itself (time had not, above): kept for the diagnostic log.
+        if self.phase == Phase::Failed {
+            self.failed_line = Some(clip(raw_line));
+        }
+        self.settle_window();
+    }
+
+    fn read(&mut self, raw_line: &str) {
         if raw_line.is_empty() || raw_line.len() > MAX_LINE || raw_line.contains(['\n', '\r', '\0'])
         {
             self.fail(Failure::InvalidInput);
@@ -1018,10 +1288,9 @@ impl StopTracker {
                     self.fail(Failure::Ownership);
                     return;
                 }
-                self.interlock(body);
+                self.interlock(raw_line, body);
             }
         }
-        self.settle_window();
     }
 
     /// Let time pass: a missed deadline fails the attempt.
@@ -1045,7 +1314,14 @@ impl StopTracker {
         if self.evidence(now_ms) != Some(request) {
             return false;
         }
-        self.phase = Phase::Idle;
+        // After a hand-over the operator's key may still be keying: ready again only once the
+        // radio is seen idle.
+        self.phase = if self.handed_over && !self.radio_idle {
+            Phase::AwaitIdle
+        } else {
+            Phase::Idle
+        };
+        self.handed_over = false;
         self.deadline_ms = 0;
         self.operation = None;
         self.stop = None;
@@ -1803,6 +2079,284 @@ mod tests {
         h.now += 1;
         h.tracker.poll(h.now);
         assert_eq!(h.tracker.failure(), Failure::Timeout);
+    }
+
+    // ── The operator's own key (Nexus's own) ─────────────────────────────────────────────────
+    //
+    // No bench has shown what the radio reports for a paddle, so these tests name a key of their
+    // own: `PADDLE` is invented, as the source the radio might report.
+
+    const PADDLE: OperatorKey = OperatorKey {
+        source: "PADDLE",
+        handle: KeyHandle::Ours,
+    };
+
+    /// An interlock sample in `state` keyed under `source`, naming `handle`.
+    fn sample(state: &str, source: &str, handle: u32) -> String {
+        format!(
+            "S0|interlock tx_client_handle=0x{handle:08X} state={state} reason= source={source} \
+             tx_allowed=1 amplifier="
+        )
+    }
+
+    impl Harness {
+        /// [`Harness::new`], on a tracker taking `key` as the operator's own.
+        fn with_key(key: Option<OperatorKey>) -> Harness {
+            let mut h = Harness::new();
+            h.tracker = std::mem::take(&mut h.tracker).with_operator_key(key);
+            h
+        }
+    }
+
+    /// ⭐ The operator's own key is a report of its own: never a source Nexus keys under, so a
+    /// bench's value cannot make our own CW the operator's (the radio would not tell them apart),
+    /// and never the mic, the accessory or foot-switch inputs or the radio's voice keyer. A key that
+    /// cannot be told apart is taken as none, whatever names it.
+    #[test]
+    fn the_operator_key_is_none_of_ours_and_no_ptt_input() {
+        assert!(
+            OPERATOR_KEY.is_none_or(|k| k.distinct()),
+            "{OPERATOR_KEY:?}"
+        );
+        for source in [
+            "",
+            KEY.source,
+            TUNE.source,
+            CWX.source,
+            ATU.source,
+            "SW",
+            "TUNE",
+            "MIC",
+            "ACC",
+            "RCA",
+            "DVK",
+        ] {
+            for handle in [KeyHandle::Ours, KeyHandle::NoClient] {
+                let key = OperatorKey { source, handle };
+                assert!(!key.distinct(), "{key:?}");
+                let taken = StopTracker::default().with_operator_key(Some(key));
+                assert_eq!(taken.operator_key(), None, "{key:?}");
+            }
+        }
+        assert!(PADDLE.distinct());
+        let taken = StopTracker::default().with_operator_key(Some(PADDLE));
+        assert_eq!(taken.operator_key(), Some(PADDLE));
+        // A reconnect keeps it.
+        let mut t = taken;
+        t.reset(7, 0x1234_5678);
+        assert_eq!(t.operator_key(), Some(PADDLE));
+    }
+
+    /// As it ships, no bench has named what the radio reports for a paddle, so no key is taken.
+    /// The bench's value goes in [`OPERATOR_KEY`], and this line goes with it.
+    #[test]
+    fn as_it_ships_no_operator_key_is_named() {
+        assert_eq!(OPERATOR_KEY, None);
+        assert_eq!(StopTracker::default().operator_key(), None);
+    }
+
+    /// ⭐ The operator's key during a CWX word: from its first sample the radio is theirs. Their
+    /// keying has no deadline; our part ends once the clear's reply and the hold have passed with
+    /// our CWX not keying, while the operator may still key; the tracker is ready again once the
+    /// radio is seen idle. PTT_REQUESTED counts as TRANSMITTING does, an amplifier's reason is no
+    /// bar, a touch before the word's reply counts, and under no client when the bench says so.
+    #[test]
+    fn the_operators_key_takes_a_cwx_window_over() {
+        let ours = 0x1234_5678;
+        let window = Window::cwx(1_000, 300);
+        let mut h = Harness::with_key(Some(PADDLE));
+        h.window_opened(CWX, window);
+        h.feed(REQUESTED);
+        h.feed(TRANSMITTING);
+        h.now += 200;
+        h.feed(&sample("TRANSMITTING", "PADDLE", ours));
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.handed_over()),
+            (Phase::Operator, true)
+        );
+        // No deadline over the operator's keying: ten seconds of it, far past the word's.
+        h.now += 10_000;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.phase(), Phase::Operator);
+        // The clear's reply, then the hold (the break-in delay, 300, and 300).
+        h.tracker.cleared(h.now);
+        let cleared = h.now;
+        h.now = cleared + 600 - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None, "inside the hold");
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop), "our part is over");
+        assert!(h.tracker.consume(h.stop, h.now));
+        assert_eq!(
+            h.tracker.phase(),
+            Phase::AwaitIdle,
+            "the operator still keys"
+        );
+        h.feed(&sample("UNKEY_REQUESTED", "", ours));
+        h.feed(READY_OWNED);
+        assert_eq!(h.tracker.phase(), Phase::AwaitIdle);
+        h.feed(IDLE);
+        assert_eq!(h.tracker.phase(), Phase::Idle);
+        assert!(
+            h.tracker
+                .begin_window(op(2), stop_of(op(2)), CWX, 102, window, h.now),
+            "the next word arms"
+        );
+
+        let no_client = OperatorKey {
+            handle: KeyHandle::NoClient,
+            ..PADDLE
+        };
+        for (key, handle) in [(PADDLE, ours), (no_client, 0)] {
+            // PTT_REQUESTED first, with an amplifier's reason.
+            let mut h = Harness::with_key(Some(key));
+            h.window_opened(CWX, window);
+            h.feed(&with_reason(
+                &sample("PTT_REQUESTED", "PADDLE", handle),
+                "AMP:PG-XL",
+            ));
+            assert_eq!(h.tracker.phase(), Phase::Operator, "{key:?}");
+            // Its release, under its own handle, and the idle.
+            h.feed(&sample("UNKEY_REQUESTED", "", handle));
+            h.feed(&sample("READY", "", handle));
+            h.feed(IDLE);
+            assert_eq!(h.tracker.phase(), Phase::Operator, "{key:?}");
+            h.tracker.cleared(h.now);
+            h.now += 600;
+            h.tracker.poll(h.now);
+            assert_eq!(h.evidence(), Some(h.stop), "{key:?}");
+            assert!(h.tracker.consume(h.stop, h.now));
+            assert_eq!(h.tracker.phase(), Phase::Idle, "{key:?}: seen idle");
+
+            // Before the word's reply.
+            let mut h = Harness::with_key(Some(key));
+            assert!(h
+                .tracker
+                .begin_window(h.operation, h.stop, CWX, 101, window, h.now));
+            h.written(101, true, true);
+            h.feed(&sample("TRANSMITTING", "PADDLE", handle));
+            assert_eq!(h.tracker.phase(), Phase::Operator, "{key:?}");
+            h.feed("R101|0|");
+            assert_eq!(h.tracker.phase(), Phase::Operator, "{key:?}: its reply");
+        }
+    }
+
+    /// ⭐ After the hand-over, our CWX keying is the word or character already going out only until
+    /// the clear's reply and the hold have passed: keying after them, or still keying when they
+    /// pass, is our own CW still keying, and fails the attempt. Every other source and handle fails
+    /// it as before the hand-over.
+    #[test]
+    fn after_the_hand_over_our_cw_still_keying_and_any_other_source_fail() {
+        let ours = 0x1234_5678;
+        let handed = || {
+            let mut h = Harness::with_key(Some(PADDLE));
+            h.window_opened(CWX, Window::cwx(1_000, 300));
+            h.feed(TRANSMITTING);
+            h.feed(&sample("TRANSMITTING", "PADDLE", ours));
+            assert_eq!(h.tracker.phase(), Phase::Operator);
+            h
+        };
+        // Inside the hold: the word going out...
+        let mut h = handed();
+        h.tracker.cleared(h.now);
+        h.now += 100;
+        h.feed(TRANSMITTING);
+        assert_eq!(h.tracker.phase(), Phase::Operator);
+        // ...still keying when the hold passes.
+        h.now += 500;
+        h.tracker.poll(h.now);
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.failure()),
+            (Phase::Failed, Failure::State)
+        );
+        // Keying again once the hold has passed, the proof not yet taken.
+        let mut h = handed();
+        h.tracker.cleared(h.now);
+        h.now += 600;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.phase(), Phase::Confirmed);
+        h.feed(TRANSMITTING);
+        assert_eq!(h.tracker.failure(), Failure::State);
+        assert_eq!(h.evidence(), None);
+        // Every other source and handle.
+        for line in [
+            sample("TRANSMITTING", "MIC", ours),
+            sample("TRANSMITTING", "TUNE", ours),
+            sample("TRANSMITTING", "PADDLE", 0x8765_4321),
+            sample("TRANSMITTING", "PADDLE", 0),
+            with_reason(&sample("TRANSMITTING", "PADDLE", ours), "PA_RANGE"),
+            "S0|interlock state=TRANSMITTING".to_string(),
+        ] {
+            let mut h = handed();
+            h.feed(&line);
+            assert_eq!(h.tracker.phase(), Phase::Failed, "{line}");
+        }
+    }
+
+    /// With no key named, the paddle's sample fails the window as any unknown source does: the rule
+    /// is inert until a bench names the key. A key named takes over only our CWX: during an over it
+    /// is an unknown source as before.
+    #[test]
+    fn with_no_key_named_the_paddle_fails_the_window() {
+        let ours = 0x1234_5678;
+        let mut h = Harness::with_key(None);
+        h.window_opened(CWX, Window::cwx(1_000, 300));
+        h.feed(TRANSMITTING);
+        h.feed(&sample("TRANSMITTING", "PADDLE", ours));
+        assert_eq!(h.tracker.failure(), Failure::Ownership);
+        assert!(!h.tracker.handed_over());
+        let mut h = Harness::with_key(Some(PADDLE));
+        h.start();
+        h.feed(&sample("TRANSMITTING", "PADDLE", ours));
+        assert_eq!(h.tracker.failure(), Failure::Ownership);
+        assert!(!h.tracker.handed_over());
+    }
+
+    /// ⭐ A failure keeps what the diagnostic log needs, once: the check and the radio's line that
+    /// failed it, as it arrived; for a missed deadline, no line and the last interlock line before
+    /// it. A line too long to take is cut to the longest the tracker takes.
+    #[test]
+    fn a_failure_keeps_the_check_and_the_radios_line_once() {
+        let mic = sample("TRANSMITTING", "MIC", 0x1234_5678);
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        h.feed(TRANSMITTING);
+        assert_eq!(h.tracker.take_failure(), None, "no failure yet");
+        h.feed(&mic);
+        assert_eq!(
+            h.tracker.take_failure(),
+            Some(FailureReport {
+                failure: Failure::Ownership,
+                line: Some(mic.clone()),
+                last_interlock: None
+            })
+        );
+        assert_eq!(h.tracker.take_failure(), None, "once");
+        // A missed deadline: the radio still keyed.
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        h.feed(TRANSMITTING);
+        h.now += 300 + 300 + 1_000;
+        h.tracker.poll(h.now);
+        assert_eq!(
+            h.tracker.take_failure(),
+            Some(FailureReport {
+                failure: Failure::Timeout,
+                line: None,
+                last_interlock: Some(TRANSMITTING.to_string())
+            })
+        );
+        // A line longer than the tracker takes.
+        let mut h = Harness::new();
+        h.window_opened(CWX, Window::cwx(300, 300));
+        let long = format!("S0|interlock {}", "x".repeat(MAX_LINE));
+        h.feed(&long);
+        let report = h.tracker.take_failure().expect("failed");
+        assert_eq!(
+            (report.failure, report.line.as_deref()),
+            (Failure::InvalidInput, Some(&long[..MAX_LINE]))
+        );
     }
 
     /// `line` with `reason` in place of its empty reason.

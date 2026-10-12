@@ -6116,6 +6116,7 @@ export const DE: PartialCatalog = {
   "cw.record.stop.aria": "Aufzeichnung dieses QSOs beenden",
   "cw.record.off.title": "Das Empfangsaudio als WAV in den Aufnahmeordner mitschneiden",
   "cw.record.on.title": "Zeichnet auf — klicken, um die Aufzeichnung dieses QSOs zu beenden",
+  "cw.paddleTookOver": "Ihr Paddle hat übernommen: Nexus hat seine Nachricht gestoppt.",
   "cw.record.startFailed": "Aufzeichnung konnte nicht gestartet werden",
   "cw.record.stopFailed": "Aufzeichnung konnte nicht beendet werden",
   "cw.scope.tuneHint": "Hier scrollen, um den VFO abzustimmen",

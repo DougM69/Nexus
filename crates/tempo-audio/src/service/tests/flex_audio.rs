@@ -3001,6 +3001,104 @@ fn stop_tx_mid_macro_clears_and_sends_nothing_after() {
     }
 }
 
+/// [`unbenched`] with the operator's own key named, as a bench's value names it. No bench has shown
+/// what the radio reports for a paddle, so `PADDLE` is invented.
+fn paddle_named() -> tempo_net::flex::session::Config {
+    let mut c = unbenched();
+    c.operator_key = Some(tempo_net::flex::ptt_evidence::OperatorKey {
+        source: "PADDLE",
+        handle: tempo_net::flex::ptt_evidence::KeyHandle::Ours,
+    });
+    c
+}
+
+/// The simulator's operator: their paddle keys 200 ms into `word`, under our handle, for 800 ms.
+fn paddle_during(word: &str) -> tempo_flexsim::Fault {
+    tempo_flexsim::Fault::OperatorKeys {
+        word: word.into(),
+        after: Duration::from_millis(200),
+        source: "PADDLE".into(),
+        handle: None,
+        hold: Duration::from_millis(800),
+    }
+}
+
+/// ⭐ THE PADDLE WINS, through the radio loop (operator ruling, 2026-10-12), with a key named as a
+/// bench would name it. The operator's paddle keys during the second word of a four-word message:
+/// the client clears the radio's CW buffer at once, the loop drops the two words left, and nothing
+/// else reaches the radio, no unkey above all. No alarm, no reconnect, TX still on, and the CW
+/// screen says the paddle took over, with no warning. The next F-key after the paddle goes out as
+/// usual and takes that line down.
+#[test]
+fn the_operators_paddle_takes_over_a_macro_with_no_alarm_and_drops_the_rest() {
+    let mut s = cw_scene(vec![paddle_during("TEST")], paddle_named());
+    s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+    run_until(&mut s, "the paddle's clear", |s| {
+        cw_wire(s).iter().any(|c| c == "cwx clear")
+    });
+    s.run(3_000);
+    assert_eq!(
+        cw_wire(&s),
+        ["cwx send \"CQ\" 1", "cwx send \"TEST\" 2", "cwx clear"]
+    );
+    assert_eq!(tx_alarms(&s), Vec::<(u64, String)>::new());
+    assert!(
+        s.state
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_some_and(FlexDaemon::is_alive),
+        "no reconnect"
+    );
+    {
+        let mut e = s.engine.lock().unwrap();
+        assert_eq!(
+            (
+                e.cw_paddle_took_over(),
+                e.cw_keyer_error(),
+                e.tx_enabled(),
+                e.poll_cw_one()
+            ),
+            (true, None, true, None),
+            "(the paddle's line, the warning line, TX on, a word left)"
+        );
+        e.send_cw("TEST");
+    }
+    run_until(&mut s, "the next F-key", |s| cw_wire(s).len() == 4);
+    assert_eq!(cw_wire(&s)[3], "cwx send \"TEST\" 3");
+    assert!(!s.engine.lock().unwrap().cw_paddle_took_over());
+    assert_eq!(tx_alarms(&s), Vec::<(u64, String)>::new());
+}
+
+/// The control, as it ships: with no key named, the same touch is an unknown keying source. The CW
+/// stops go out at once (`cwx clear`, then `xmit 0`), the operator is told the radio may still be
+/// transmitting, and the client is restarted: today's rule.
+#[test]
+fn with_no_key_named_a_paddle_touch_raises_todays_alarm() {
+    let mut s = cw_scene(vec![paddle_during("TEST")], unbenched());
+    s.replace_on_rebuild = true;
+    s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+    run_until(&mut s, "the unkey", |s| {
+        cw_wire(s).iter().any(|c| c == "xmit 0")
+    });
+    s.run(500);
+    assert_eq!(
+        cw_wire(&s)[..4],
+        [
+            "cwx send \"CQ\" 1",
+            "cwx send \"TEST\" 2",
+            "cwx clear",
+            "xmit 0"
+        ]
+    );
+    let alarms = tx_alarms(&s);
+    assert!(
+        alarms.iter().any(|(_, text)| text == UNCONFIRMED),
+        "{alarms:?}"
+    );
+    assert!(!s.engine.lock().unwrap().cw_paddle_took_over());
+}
+
 /// ⭐ The CW ID after an FT 73 stays unsent on a DIGU slice. It is queued from the FT section with
 /// the slice in DIGU (what the loop does once the 73 has left the air), the client refuses it
 /// there, nothing reaches the radio's keyer, and the CW line says why. That is today's outcome,

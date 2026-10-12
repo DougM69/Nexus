@@ -1397,6 +1397,7 @@ export const FR: PartialCatalog = {
   "cw.pitch.title": "Hauteur de la tonalité locale / du battement nul (Hz) — le marqueur pointillé du scope",
   "cw.record.off.title": "Enregistrer l'audio reçu dans un WAV du dossier des enregistrements",
   "cw.record.on.title": "Enregistrement — cliquez pour arrêter l'enregistrement de ce QSO",
+  "cw.paddleTookOver": "Votre manipulateur a pris la main : Nexus a arrêté son message.",
   "cw.record.start.aria": "Enregistrer l'audio du QSO",
   "cw.record.startFailed": "Impossible de démarrer l'enregistrement",
   "cw.record.stop.aria": "Arrêter l'enregistrement de ce QSO",

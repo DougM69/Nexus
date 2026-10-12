@@ -9402,8 +9402,20 @@ impl RadioLoop {
                     }
                 }
             }
+            // THE OPERATOR'S PADDLE TOOK OVER (Nexus's Flex client, once a tester's bench has named
+            // what the radio reports for it): the client has cleared the radio's CW buffer, and the
+            // rest of the message is dropped here, before another word is taken, never resent. Not
+            // Stop TX: nothing here stops anything, so no stop is aimed at the operator's keying.
+            let paddle = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(crate::flex::FlexDaemon::take_operator_break);
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
+                if paddle {
+                    eng.cw_operator_break();
+                }
                 (
                     eng.take_cw_abort(),
                     eng.cw_wpm(),
@@ -9416,6 +9428,9 @@ impl RadioLoop {
                     eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
+            if paddle {
+                self.cw_busy_until = 0.0; // the operator's next send keys as usual
+            }
             // ARM THE ZERO-BEAT MEASUREMENT at the operator's pitch while the CW section is
             // up, and disarm it everywhere else. The rx-dsp thread does the measuring (see
             // `rxdsp::measure_zero_beat`); this loop is simply the only thread that can see

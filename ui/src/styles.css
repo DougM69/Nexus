@@ -9708,6 +9708,14 @@ input.cw-pitch::-webkit-inner-spin-button {
   background: color-mix(in srgb, var(--alert-warning) 12%, transparent);
   border-color: var(--alert-warning);
 }
+/* The INFORMATION variant: something that happened and needs nothing from you (the operator's
+   paddle took over from Nexus's CW). Same box, the information colour, so it reads as neither
+   the error nor the caution. `--alert-info` is defined in both themes. */
+.cw-keyer-warn.info {
+  color: var(--alert-info);
+  background: color-mix(in srgb, var(--alert-info) 12%, transparent);
+  border-color: var(--alert-info);
+}
 /* CW copilot — decoded-call chips + (Guided) next-step prompt + the Guided/Expert toggle. */
 .cw-copilot {
   display: flex;

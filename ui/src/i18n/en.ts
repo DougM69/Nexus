@@ -10286,6 +10286,7 @@ export const EN = {
   'cw.record.stop.aria': 'Stop recording this QSO',
   'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
   'cw.record.on.title': 'Recording — click to stop recording this QSO',
+  'cw.paddleTookOver': 'Your paddle took over: Nexus stopped its message.',
   'cw.record.startFailed': 'Could not start recording',
   'cw.record.stopFailed': 'Could not stop recording',
 

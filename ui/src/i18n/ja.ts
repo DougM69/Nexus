@@ -6480,6 +6480,7 @@ export const JA: PartialCatalog = {
   "cw.record.stop.aria": "このQSOの録音を停止",
   "cw.record.off.title": "受信音声を録音フォルダー内のWAVファイルに録音します",
   "cw.record.on.title": "録音中 — クリックでこのQSOの録音を停止します",
+  "cw.paddleTookOver": "パドルが送信を引き継ぎました：Nexusはメッセージを止めました。",
   "cw.record.startFailed": "録音を開始できませんでした",
   "cw.record.stopFailed": "録音を停止できませんでした",
   "cw.scope.tuneHint": "ここでスクロールするとVFOを同調できます",

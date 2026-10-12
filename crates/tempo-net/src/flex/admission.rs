@@ -16,6 +16,9 @@
 //!   fitted; a tune, an ATU cycle or a CWX word never while the transmit slice's XIT is on, which
 //!   would put the radio's own carrier off the dial the engine judged. Nexus reads these settings
 //!   and never writes them;
+//! - the operator's own key in the radio's key jack is not keying the radio, as the interlock
+//!   reports it ([`super::ptt_evidence::OPERATOR_KEY`], named once a tester's bench has shown it):
+//!   the radio is the operator's then, so nothing of ours starts over it;
 //! - the interlock's last whole sample is `READY`, transmit allowed, no reason, no keying source
 //!   (no mic, ACC or RCA PTT), and names no transmitting client, or names us;
 //! - the unkey readback is idle: it has seen the radio idle on this connection, so the end of the
@@ -120,6 +123,9 @@ pub struct Facts {
     pub readback_idle: bool,
     /// Our own DAX transmit stream, from the reply to our create.
     pub dax_tx_stream: Option<u32>,
+    /// The operator's own key as the radio reports it, when one is named
+    /// ([`super::ptt_evidence::OPERATOR_KEY`]).
+    pub operator_key: Option<ptt_evidence::OperatorKey>,
 }
 
 /// Why a start was refused.
@@ -155,6 +161,9 @@ pub enum Refusal {
     TransmitterHeld {
         by: u32,
     },
+    /// The operator's own paddle or key is keying the radio, or has taken over our CW and our part
+    /// has not yet ended ([`super::ptt_evidence::OPERATOR_KEY`]).
+    OperatorKeying,
     /// The radio does not allow transmit here (`tx_allowed=0`, or a reason such as
     /// `OUT_OF_BAND`).
     TransmitNotAllowed {
@@ -214,6 +223,7 @@ impl fmt::Display for Refusal {
             Refusal::TransmitterHeld { by } => {
                 write!(f, "another client (0x{by:08X}) holds the transmitter")
             }
+            Refusal::OperatorKeying => f.write_str("your key or paddle is keying the radio"),
             Refusal::TransmitNotAllowed { reason } => {
                 write!(f, "the radio does not allow transmit ({reason})")
             }
@@ -280,6 +290,14 @@ fn admit_kinds(
         return Err(Refusal::ProtocolUnsupported);
     }
     let ours = facts.handle.ok_or(Refusal::NoHandle)?;
+    // The operator's own key keying the radio: theirs, so nothing of ours starts over it.
+    if let (Some(key), Some(sample)) = (facts.operator_key, model.interlock.sample.as_ref()) {
+        if matches!(sample.state.as_str(), "PTT_REQUESTED" | "TRANSMITTING")
+            && key.keys(&sample.source, sample.tx_client_handle, ours)
+        {
+            return Err(Refusal::OperatorKeying);
+        }
+    }
     // A CWX word while our own CWX operation is open joins it (see the module header).
     let append = kind == StartKind::Cwx && facts.open == Some(StartKind::Cwx);
     if facts.keyed && !append {
@@ -504,6 +522,7 @@ mod tests {
             open: None,
             readback_idle: true,
             dax_tx_stream: None,
+            operator_key: None,
         }
     }
 
@@ -718,6 +737,86 @@ mod tests {
             Refusal::NoReadback(StartKind::Cwx)
         );
         assert_eq!(BENCHED, &[StartKind::Key]);
+    }
+
+    /// ⭐ While the operator's own key keys the radio as the radio reports it (a key named; this
+    /// test's own, since no bench has named one), every start is refused with the operator's
+    /// reason, ahead of "already keyed": the radio is theirs. Under no client when the bench says
+    /// so. With no key named, the same sample refuses as any keying source does today; under
+    /// another client's handle, as another client's transmission; released, the key is admitted.
+    #[test]
+    fn the_operators_key_keying_refuses_every_start() {
+        use crate::flex::ptt_evidence::{KeyHandle, OperatorKey};
+        let paddle = OperatorKey {
+            source: "PADDLE",
+            handle: KeyHandle::Ours,
+        };
+        let keyed = |state: &str, handle: u32| {
+            format!(
+                "S0|interlock tx_client_handle=0x{handle:08X} state={state} reason= \
+                 source=PADDLE tx_allowed=1"
+            )
+        };
+        let cwx = || TxStart::CwxSend(CwxText::new("TEST").unwrap());
+        let named = |key| Facts {
+            operator_key: Some(key),
+            ..facts()
+        };
+        for (key, handle) in [
+            (paddle, OURS),
+            (
+                OperatorKey {
+                    handle: KeyHandle::NoClient,
+                    ..paddle
+                },
+                0,
+            ),
+        ] {
+            for state in ["PTT_REQUESTED", "TRANSMITTING"] {
+                let m = model(&[OUR_CW_SLICE, KEYER, ATU, &keyed(state, handle)]);
+                for start in [TxStart::Key, TxStart::TuneOn, TxStart::AtuStart, cwx()] {
+                    assert_eq!(
+                        admit_unbenched(&m, &named(key), start).unwrap_err(),
+                        Refusal::OperatorKeying,
+                        "{key:?} {state}"
+                    );
+                }
+                assert_eq!(
+                    admit(&m, &named(key), TxStart::Key).unwrap_err(),
+                    Refusal::OperatorKeying
+                );
+                // Inside our open CWX: the operator's, not "already keyed".
+                let open = Facts {
+                    keyed: true,
+                    open: Some(StartKind::Cwx),
+                    readback_idle: false,
+                    ..named(key)
+                };
+                assert_eq!(
+                    admit_unbenched(&m, &open, cwx()).unwrap_err(),
+                    Refusal::OperatorKeying
+                );
+            }
+        }
+        let m = model(&[OUR_CW_SLICE, KEYER, &keyed("TRANSMITTING", OURS)]);
+        assert_eq!(
+            admit(&m, &facts(), TxStart::Key).unwrap_err(),
+            Refusal::SourceActive {
+                source: "PADDLE".into()
+            },
+            "no key named: today's refusal"
+        );
+        let m = model(&[OUR_CW_SLICE, KEYER, &keyed("TRANSMITTING", 0x7A3C_0001)]);
+        assert_eq!(
+            admit(&m, &named(paddle), TxStart::Key).unwrap_err(),
+            Refusal::TransmitterHeld { by: 0x7A3C_0001 }
+        );
+        let m = model(&[OUR_CW_SLICE, KEYER, IDLE]);
+        assert!(admit(&m, &named(paddle), TxStart::Key).is_ok());
+        assert_eq!(
+            Refusal::OperatorKeying.to_string(),
+            "your key or paddle is keying the radio"
+        );
     }
 
     /// ⭐ A CWX word goes only to a transmit slice in CW, with the radio's break-in on and its Sync

@@ -61,6 +61,15 @@
 //! why a press started none ([`FlexDaemon::radio_atu`]); until then no ATU button is offered on
 //! this client.
 //!
+//! ## The operator's paddle, and what failed a readback
+//! A paddle touch during the client's CW is handed to the operator only once a tester's bench has
+//! named what the radio reports for it (`tempo_net::flex::ptt_evidence::OPERATOR_KEY`): the session
+//! clears the radio's CW buffer with no unkey and no alarm, and the radio loop drops the rest of the
+//! message ([`FlexDaemon::take_operator_break`]). Until then such a touch fails the readback and
+//! raises the alarm, as any keying the client does not know does. Every readback check that fails
+//! leaves one line in the diagnostic log, naming the check, the kind of start and the radio's own
+//! line ([`watch`]): what the bench sends back. It keys nothing.
+//!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
 
@@ -142,6 +151,9 @@ pub(crate) struct ClientState {
     /// ([`FlexDaemon::sync_tx_routing`]), and asked by the shim at `T 1` whether Nexus's own write
     /// leaves the radio on DAX ([`Routing::leaves_dax`]).
     pub(crate) routing: Mutex<Routing>,
+    /// The operator's own key took over our CW since the radio loop last asked
+    /// ([`FlexDaemon::take_operator_break`]).
+    pub(crate) operator_break: AtomicBool,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
@@ -552,6 +564,13 @@ impl FlexDaemon {
     /// switched on. Until then every word is refused, and says why.
     pub fn sends_cw(&self) -> bool {
         self.conn().switched_on(StartKind::Cwx)
+    }
+
+    /// Whether the operator's own paddle or key took over our CW since the last call: the session
+    /// has cleared the radio's CW buffer, and the radio loop drops the rest of the message
+    /// (`Engine::cw_operator_break`) before it takes another word. Each take-over once.
+    pub fn take_operator_break(&self) -> bool {
+        self.state.operator_break.swap(false, Ordering::Relaxed)
     }
 
     /// The radio's CW speed as it reports it (`transmit speed`), whoever set it. Cheap.
@@ -1058,8 +1077,14 @@ struct Alarm {
 }
 
 /// Drain the session's events, log the ones that matter, and keep what the operator must be told:
-/// the alarms, and why the radio started no ATU cycle for a press. Ends at the session's last
-/// event (`Closed`: nothing follows it), or when the daemon stops.
+/// the alarms, why the radio started no ATU cycle for a press, and the operator's paddle taking
+/// over our CW. Ends at the session's last event (`Closed`: nothing follows it), or when the
+/// daemon stops.
+///
+/// A readback check that failed is one WARN line in the diagnostic log (`nexus-diag.log`), for a
+/// tester's bench to send back: `Flex client (<radio>): readback check failed: <check> on a <kind>
+/// start, Nexus's handle 0x<handle>; the radio's line: <the line, as it arrived>`. It keys nothing
+/// and decides nothing.
 fn watch(
     conn: std::sync::Weak<Connection>,
     radio: SocketAddr,
@@ -1105,6 +1130,21 @@ fn watch(
                 "an earlier Nexus session (0x{handle:08X}) still holds the transmitter; Nexus \
                  will not key until it is released"
             )),
+            Event::ReadbackFailed(failure) => {
+                tempo_core::applog::warn("cat", &format!("Flex client ({radio}): {failure}"));
+            }
+            // The operator's own key took over our CW: no alarm. The radio loop drops the rest of
+            // the message.
+            Event::OperatorTookOver { .. } => {
+                tempo_core::applog::info(
+                    "cat",
+                    &format!(
+                        "Flex client ({radio}): the operator's key took over Nexus's CW; the \
+                         radio's CW buffer is cleared"
+                    ),
+                );
+                state.operator_break.store(true, Ordering::Relaxed);
+            }
             // The radio did not start a cycle for an ATU press and keyed nothing for it: no
             // alarm, the reason on the ATU line.
             Event::StartRefused {

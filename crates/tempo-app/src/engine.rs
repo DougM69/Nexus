@@ -3453,6 +3453,10 @@ pub struct Engine {
     /// every word it hands a keyer, so a word that keys clears a refusal; cleared too when the
     /// operator switches keyer back-end.
     cw_keyer_error: Option<String>,
+    /// The operator's own paddle took over from Nexus's CW and the rest of the message was
+    /// dropped ([`Self::cw_operator_break`]): the CW screen's information line, until the next
+    /// send.
+    cw_paddle_took_over: bool,
     /// Worked-station QRZ info for the `{HISNAME}`/`{HISSTATE}` CW-macro tokens, pushed by the
     /// frontend on a callbook lookup and keyed to the contact (`cw_peer_call`) so a stale
     /// lookup can't key the wrong name. All empty until a lookup resolves. See `set_cw_peer_info`.
@@ -5653,6 +5657,7 @@ impl Engine {
             cw_queue: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
+            cw_paddle_took_over: false,
             cw_peer_call: String::new(),
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
@@ -9860,6 +9865,8 @@ impl Engine {
     /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
     /// [`Self::send_cw_armed`], which have already decided it may go.
     fn queue_cw(&mut self, expanded: String) {
+        // A new send is the operator's next key: the paddle's line has been read.
+        self.cw_paddle_took_over = false;
         // TX echo: show the operator what actually went out (tokens resolved).
         self.cw_sent.push_back(expanded.clone());
         while self.cw_sent.len() > 50 {
@@ -9993,6 +10000,33 @@ impl Engine {
     /// Take + reset the one-shot CW abort flag (the loop calls `rig.stop_morse`).
     pub fn take_cw_abort(&mut self) -> bool {
         std::mem::take(&mut self.cw_abort)
+    }
+
+    /// The operator's own paddle or key took over from Nexus's CW: Nexus's Flex client saw the
+    /// radio report it keying during a message and cleared the radio's CW buffer (operator
+    /// ruling, 2026-10-12: the paddle wins). Every word still queued is dropped and never resent,
+    /// and the CW screen says so, in place of a warning.
+    ///
+    /// ⛔ NOT STOP TX. No halt, no stop hold, no TX off, no CW abort and no slot-TX abort: the
+    /// abort's `\stop_morse` and the hard stop's `T 0` are stops, and with nothing of ours left on
+    /// the air a stop is aimed at whatever the radio says is ours, which here is the operator's
+    /// own keying. The next send passes every gate [`Self::poll_cw_one`] holds, as always.
+    pub fn cw_operator_break(&mut self) {
+        if !self.cw_queue.is_empty() {
+            tempo_core::applog::info(
+                "tx",
+                "CW: the operator's paddle took over; the rest of the message is dropped",
+            );
+        }
+        self.cw_queue.clear();
+        self.cw_keyer_error = None;
+        self.cw_paddle_took_over = true;
+    }
+
+    /// Whether the CW screen shows that the operator's paddle took over from Nexus's CW
+    /// ([`Self::cw_operator_break`]), until the next send.
+    pub fn cw_paddle_took_over(&self) -> bool {
+        self.cw_paddle_took_over
     }
 
     /// The radio refused the key for the CW word the loop just took from [`Self::poll_cw_one`]
@@ -36523,6 +36557,56 @@ mod tests {
             e.cw_keyer_error().is_some(),
             "the next refusal is noticed again"
         );
+    }
+
+    /// ⭐ THE PADDLE'S STOP IS NOT STOP TX (operator ruling, 2026-10-12: the paddle wins). When the
+    /// operator's paddle takes over from Nexus's CW, the rest of the message is dropped and the CW
+    /// screen says so, in place of a warning, and nothing else moves: TX stays on with no stop hold,
+    /// and neither the CW abort nor the slot-TX abort is armed, each of which would put a stop on
+    /// the wire at the operator's own keying. The next send takes the line down and goes through
+    /// every gate as always: the TX latch and the licence's privileges.
+    #[test]
+    fn the_paddle_stop_is_not_stop_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.030, "40m", "CW");
+        assert!(e.tx_enabled(), "control: entering CW arms TX");
+        e.send_cw("CQ TEST DE KD9TAW");
+        assert_eq!(e.poll_cw_one().as_deref(), Some("CQ"));
+        e.set_cw_keyer_error(Some("an earlier refusal".into()));
+        e.cw_operator_break();
+        assert_eq!(
+            (e.poll_cw_one(), e.cw_paddle_took_over(), e.cw_keyer_error()),
+            (None, true, None),
+            "(the next word, the paddle's line, the warning line)"
+        );
+        assert_eq!(
+            (
+                e.tx_enabled(),
+                e.tx_stop_hold,
+                e.take_cw_abort(),
+                e.take_slot_tx_abort()
+            ),
+            (true, false, false, false),
+            "(TX on, the stop hold, the CW abort, the slot-TX abort)"
+        );
+        e.send_cw("TEST");
+        assert!(
+            !e.cw_paddle_took_over(),
+            "the next send takes the line down"
+        );
+        assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"));
+        // The latch: TX lowered after the send, the send keys nothing.
+        e.send_cw("TEST");
+        e.set_tx_enabled(false);
+        assert_eq!(e.poll_cw_one(), None);
+        // The privileges: 7.020 is not a General's.
+        e.set_license_class("general");
+        e.set_frequency(7.020, "40m", "CW");
+        e.send_cw("TEST");
+        assert_eq!(e.poll_cw_one(), None);
+        assert_eq!(e.cw_keyer_error().as_deref(), Some(CW_REFUSED_PRIVILEGES));
     }
 
     /// An Extra in the CW section on 40 m CW, TX on, working K9AAA: where Enter's CW is sent from.

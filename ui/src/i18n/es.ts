@@ -1397,6 +1397,7 @@ export const ES: PartialCatalog = {
   "cw.pitch.title": "Tono lateral / de batido cero (Hz) — el marcador discontinuo del scope",
   "cw.record.off.title": "Grabar el audio recibido en un WAV en la carpeta de grabaciones",
   "cw.record.on.title": "Grabando — pulsa para parar la grabación de este QSO",
+  "cw.paddleTookOver": "Tu manipulador tomó el control: Nexus detuvo su mensaje.",
   "cw.record.start.aria": "Grabar el audio del QSO",
   "cw.record.startFailed": "No se pudo iniciar la grabación",
   "cw.record.stop.aria": "Parar la grabación de este QSO",

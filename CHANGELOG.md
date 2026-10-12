@@ -362,6 +362,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that the radio may still be transmitting, and drops the connection. The ATU is also refused
   where the radio's carrier would fall outside your CW privileges. Until it is switched on, the
   Flex native client offers no ATU button, as before. NEEDS-BENCH on a FLEX radio.
+- **FlexRadio: your paddle wins over Nexus's CW on the Flex native client (Beta), built and off
+  until a tester has checked it on a radio.** Once a tester's bench has shown what the radio
+  reports for a paddle or key in its key jack, touching it while Nexus sends CW clears the radio's
+  CW buffer at once: the rest of the message is dropped and never resent, with no alarm, no
+  reconnect and no unkey sent against your paddle, and the CW screen says your paddle took over.
+  An F-key pressed while your paddle keys the radio is refused with that reason, and the next one
+  after it sends as usual. Any other keying during Nexus's CW (your mic's PTT, a foot switch, the
+  accessory jack, another program) still gets the amber alarm, and so does Nexus's own CW still
+  keying after its clear. The unkey that follows Stop TX's clear now goes out only while the radio
+  still shows Nexus's own CW transmitting. Until the bench has shown it, a paddle touch during
+  Nexus's CW gets the amber alarm and a reconnect, as now. Meanwhile each check the Flex native
+  client makes that a transmission ended, when it fails, writes one line to Nexus's diagnostic log
+  naming the check and the radio's own line, for the bench to send back; it changes nothing on the
+  air. NEEDS-BENCH on a FLEX radio.
 - **Club sync: the host can give a club position to the laptop it belongs to.** A laptop turned
   away because another laptop holds its position (one whose settings were copied from it, say,
   or a laptop that lost its club key file) has **Give this laptop its position** on its line in
