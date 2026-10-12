@@ -3591,16 +3591,24 @@ fn the_check_never_explains_a_mark_with_another_call_s_row() {
 }
 
 /// Check confirmations counts LoTW's confirmations for a call the log holds no contact under (a
-/// club call on the account, W1CLUB), and they change nothing: they gain no contact. The log holds
-/// K2DEF, through a contact naming no call (the Settings call's), and N2OLD, so their rows, and a
-/// row naming no call, are not counted, and each gains its own contact.
+/// club call on the account, W1CLUB), and they change nothing: W1CLUB's row at 14:00 gains no
+/// contact, though K2DEF's contact at 14:00, which no row of K2DEF's confirms, is the one contact
+/// near it. The log holds K2DEF, also through a contact naming no call (the Settings call's), and
+/// N2OLD, so their rows, and a row naming no call, are not counted, and each gains its own contact.
 #[test]
 fn check_confirmations_counts_the_records_of_a_call_the_log_does_not_hold() {
     let d = Dir::new("lotw-check-other-call");
-    let engine = two_calls(&d, false, None);
+    let engine = holding(
+        &d,
+        &contacts(&[
+            adif_row("W1AW", "20m", "FT8", "120000", ""),
+            w1aw_under("N2OLD", "120000", ""),
+            w1aw_under("K2DEF", "140000", ""),
+        ]),
+    );
     let report = lotw_answer(&[
-        w1aw_under("W1CLUB", "120000", "<QSL_RCVD:1>Y"),
-        w1aw_under("W1CLUB", "130000", "<QSL_RCVD:1>Y"),
+        w1aw_under("W1CLUB", "140000", "<QSL_RCVD:1>Y"),
+        w1aw_under("W1CLUB", "160000", "<QSL_RCVD:1>Y"),
         w1aw_under("N2OLD", "120000", "<QSL_RCVD:1>Y"),
         adif_row("W1AW", "20m", "FT8", "120000", "<QSL_RCVD:1>Y"),
     ]);
@@ -3619,6 +3627,6 @@ fn check_confirmations_counts_the_records_of_a_call_the_log_does_not_hold() {
     assert_eq!(
         (found.gains.len(), gains),
         (2, own),
-        "each call's row gains its own contact, W1CLUB's none"
+        "each call's row gains its own contact; W1CLUB's never gains K2DEF's at 14:00"
     );
 }
