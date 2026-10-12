@@ -2613,6 +2613,7 @@ export const JA: PartialCatalog = {
   "contestLogger.size.smaller": "文字を小さく",
   "contestLogger.size.larger": "文字を大きく",
   "contestLogger.recent.title": "Last contacts",
+  "contestScreen.entry.title": "交信を記録",
   "fieldDay.score.qsos": "QSO",
   "fieldDay.score.sections": "セクション",
   "fieldDay.score.mults": "マルチ",

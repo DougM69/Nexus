@@ -195,6 +195,7 @@ import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
+import { ContestLargeEntry } from './components/ContestLogger'
 import { useContestSwitch } from './contestSwitch'
 import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
@@ -2796,11 +2797,31 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // station: in a browser that button is the TX strip's remote stop, this same haltTx (their own
   // verbs have no remote route). App sends it while one of them, with its Stop TX, is on show. The
   // desktop is unchanged: there `remote` is unset and each binds its own.
+  // THE CONTEST SCREEN TOO, WHILE ITS ENTRY SHOWS (2026-10-11). With a contest running the screen
+  // takes contacts in the logger window's large entry (`ContestLargeEntry`, in the workspace switch
+  // below), a contest strip in this window, so its Esc is this window's: the halt, as in the Phone
+  // LOG pane, and the entry keeps what it holds (the logger window's own Esc clears, because nothing
+  // there transmits). With no contest running there is no entry, and Esc there is as it was. Not on
+  // the hosted page, whose Contest screen is an observation with no entry.
+  const contestEntryShown = !remote && effectiveView === 'fieldDay' && snap?.fieldDay != null
   useEscStop(
     ESC_HALT_VIEWS.has(effectiveView) ||
-      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)),
+      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)) ||
+      contestEntryShown,
     handleHaltTx,
   )
+  // …AND ITS F-KEYS DO NOTHING, as in the logger window: nothing on that entry sends a message, and
+  // the webview's own F-key actions are held too, so an F5 reached for out of habit cannot reload the
+  // window in the middle of a contact. With Alt, Ctrl or Cmd held a key is the system's (Alt+F4
+  // still closes the window), as the voice keyer leaves it.
+  useEffect(() => {
+    if (!contestEntryShown) return
+    const onKey = (e: KeyboardEvent) => {
+      if (/^F\d{1,2}$/.test(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [contestEntryShown])
 
   // ⭐ A contest switched by a saved pick, for the Contest screen to say so (`contestSwitch.ts`):
   // kept here, because the pick is saved in Settings, where that screen is not mounted.
@@ -3195,15 +3216,22 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   let workspace: JSX.Element | null
   switch (effectiveView) {
     case 'fieldDay':
-      // THE FIELD DAY SECTION IS SETUP, SCORE, SECTIONS, BONUSES, LOG AND THE CLUB BOARD.
-      // It is NOT an operating surface, and there is deliberately no second one: Field Day is
-      // a MODE the whole app enters (`Mode::FieldDay`), so the contacts are made in the
-      // primary sections — CW, Phone, RTTY, PSK and the digital Conversation view all take
-      // `fieldDay` and turn their log strips into FD entries with class/section and shared
-      // dupe checking. A parallel Field-Day-only cockpit shipped beside them for one build and
-      // was withdrawn: it was a weaker copy of surfaces that already exist (its digital pane
-      // was a read-only monitor), and it took the operator away from the mode's own features
-      // to get the exchange boxes those sections already draw.
+      // THE FIELD DAY SECTION IS SETUP, SCORE, SECTIONS, BONUSES, LOG AND THE CLUB BOARD — and,
+      // while a contest runs, a place to TYPE the contacts (the operator's pick, 2026-10-11,
+      // rehearsing the Illinois QSO Party: "The Logger window's large Call / RST / County boxes,
+      // dupe warning and last contacts at the top of the Contest screen. Same log line, so a
+      // contact logs once; it never transmits."). That entry is the logger window's own
+      // (`ContestLargeEntry`), mounted here as the main window's contest strip: the same
+      // `LogEntry`, the same shared contact as the cockpits' LOG panes, and no transmitter behind
+      // it — no PTT, no messages, no Enter Sends Message, no Tune — while Esc stays this window's
+      // stop (`useEscStop`, above). It is still NOT a cockpit, and there is deliberately no second
+      // one: Field Day is a MODE the whole app enters (`Mode::FieldDay`), the radio is worked in
+      // the primary sections — CW, Phone, RTTY, PSK and the digital Conversation view all take
+      // `fieldDay` and turn their log strips into FD entries with class/section and shared dupe
+      // checking. A parallel Field-Day-only cockpit shipped beside them for one build and was
+      // withdrawn: it was a weaker copy of surfaces that already exist (its digital pane was a
+      // read-only monitor), and it took the operator away from the mode's own features to get the
+      // exchange boxes those sections already draw.
       //
       // It does NOT go through `threePane`, and that helper is the reason: it is not a layout,
       // it is the digital OPERATING workspace, and it hardcodes its furniture. Until
@@ -3219,26 +3247,40 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // contacts are actually made; the stations rail is the Tempo mesh roster and
       // conversation picker, which this view never consulted.
       //
-      // No bespoke shell class, deliberately — this view's root IS a `.panel`, so
-      // `.layout.single > .panel` already gives it the definite height, the deficit valve and
-      // the measure it needs (styles.css; computed in layout-single-deficit.test.tsx and
-      // fdDashboardShell.test.tsx).
+      // ONE WRAPPER, `.contest-screen`: a column holding the entry over the screen, there whether
+      // or not the entry is, so a contest starting or ending never re-parents (and so never
+      // remounts) the screen; with no entry it lays the screen out exactly as before. The
+      // screen's root IS a `.panel`, so `.layout.single > .panel` still gives it the definite
+      // height, the deficit valve and the measure it needs (styles.css; computed in
+      // layout-single-deficit.test.tsx and fdDashboardShell.test.tsx).
       workspace = remote ? <RemoteFieldDay tier={tier} /> : (
-        <main className="layout single">
-          <ContestView
-            fieldDay={snap.fieldDay}
-            clubLink={snap.clubLink}
-            onSetMode={handleSetMode}
-            fdActive={settings?.fdActive ?? false}
-            fdRuleset={fdRuleset}
-            tier={tier}
-            onOpenSettings={openSettingsAt}
-            onSettingsSaved={handleSettingsSaved}
-            contestSwitch={contestSwitch}
-            operatorAsk={operatorAsk}
-            onOperatorFocused={() => setOperatorAsk(0)}
-          />
-        </main>
+        <div className="contest-screen">
+          {snap.fieldDay && (
+            <ContestLargeEntry
+              snap={snap}
+              fieldDay={snap.fieldDay}
+              fdActive={settings?.fdActive ?? false}
+              fdRuleset={fdRuleset}
+              title={t('contestScreen.entry.title')}
+            />
+          )}
+          <main className="layout single">
+            <ContestView
+              fieldDay={snap.fieldDay}
+              clubLink={snap.clubLink}
+              onSetMode={handleSetMode}
+              fdActive={settings?.fdActive ?? false}
+              fdRuleset={fdRuleset}
+              tier={tier}
+              section={snap.radio.operatingMode}
+              onOpenSettings={openSettingsAt}
+              onSettingsSaved={handleSettingsSaved}
+              contestSwitch={contestSwitch}
+              operatorAsk={operatorAsk}
+              onOperatorFocused={() => setOperatorAsk(0)}
+            />
+          </main>
+        </div>
       )
       break
     case 'logbook':

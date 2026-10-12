@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Contest screen takes your contacts.** With a contest running, the top of the Contest screen
+  is the logger window's large log line: the Call and exchange boxes in large type with the dupe
+  warning right under them, the last five contacts, and A− / A+, which this computer remembers for
+  the main window apart from the logger window's. It is the same log line as the cockpits' LOG
+  panes, so a contact typed there shows in the logger window too and logs once, under the mode you
+  are operating. Nothing on it transmits: no PTT, no F-key messages, no Enter Sends Message, no
+  Tune; Esc there stops TX, as the top bar's Stop TX does, and leaves the boxes as they are. On a
+  mode the contest does not permit the line says so, and the warning in the screen's header now
+  shows only then: at the Illinois QSO Party it said FT8 was not permitted while you were on phone.
 - **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
   set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
   page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial

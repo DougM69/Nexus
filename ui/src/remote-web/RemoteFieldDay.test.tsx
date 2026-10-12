@@ -101,3 +101,10 @@ it('keeps Winter Field Day raw-point scoring distinct from ARRL totals',async()=
  const math=test.container.querySelector('.fd-score-math')!.textContent!
  expect(math).toContain('3');expect(math).not.toContain('106');expect(math.toLowerCase()).not.toContain('power')
 })
+// The station's Contest screen takes contacts in its own window (its log line at the top, App.tsx); this page is an
+// observation of that screen and logs nothing, so none of that log line reaches it.
+it('shows no log line: no entry, no last contacts, no Call box',async()=>{
+ const test=setup();await screen.findByText('K1ABC')
+ expect(test.container.querySelector('.fd-event-banner'),'control: the contest screen is on the page').not.toBeNull()
+ expect(test.container.querySelector('.contest-logger-entry,.contest-logger-recent,.le-fd-input-call,.log-entry-fd')).toBeNull()
+})
