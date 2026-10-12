@@ -389,7 +389,10 @@ describe('every pop-out the shell can host', () => {
     'contestscreen', 'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
   ]
 
-  it('never clips its content with no scroller interposed', async () => {
+  // ONE TEST PER POP-OUT, each with its own time budget: one test that mounted all of them under a single 60 s budget
+  // grew past it under load as pop-outs were added. Every pop-out still runs and reports on its own, so a failure
+  // still names every offender, and the passes show everything that was already safe.
+  it.each(PANELS)('%s never clips its content with no scroller interposed', async (panel) => {
     // THE CONTRACT SENTENCE, applied to the detached host: an `overflow: hidden` ancestor may
     // never contain hard-floored descendants without an interposed scroller. A pop-out's
     // content root is the box that holds the whole surface, so if IT clips, whatever the
@@ -402,29 +405,24 @@ describe('every pop-out the shell can host', () => {
     // fixed frequency/canvas surfaces with nothing to scroll — and the check must not demand
     // one of them.
     //
-    // Collected, not asserted panel by panel, so a failure names EVERY offender and also
-    // everything that was already safe; a guard that stops at the first cannot show it is
-    // distinguishing anything.
     const trapped: string[] = []
-    for (const panel of PANELS) {
-      const { roots } = await mountPopout(panel)
-      for (const root of roots) {
-        if (escapes(overflowY(root))) continue
-        if (scrolls(overflowY(root))) continue
-        const inner = scrollOwners([root])
-        if (inner.length === 0) {
-          trapped.push(`${panel}: ${name(root)} {overflow-y:${overflowY(root)}} holds no scroller`)
-        }
+    const { roots } = await mountPopout(panel)
+    for (const root of roots) {
+      if (escapes(overflowY(root))) continue
+      if (scrolls(overflowY(root))) continue
+      const inner = scrollOwners([root])
+      if (inner.length === 0) {
+        trapped.push(`${panel}: ${name(root)} {overflow-y:${overflowY(root)}} holds no scroller`)
       }
-      cleanup()
     }
+    cleanup()
     expect(
       trapped,
       'These pop-outs clip their own content with nothing between the clip and the content. ' +
         'Whatever the surface cannot shrink is off the bottom of the window with no way to ' +
         `reach it:\n  ${trapped.join('\n  ')}\n`,
     ).toEqual([])
-  }, 60_000)
+  }, 30_000)
 })
 
 // ── 3. the contest logger window: the log line first and never scrolled, the rest giving way ──

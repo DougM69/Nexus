@@ -257,6 +257,17 @@ describe('the contest logger window transmits nothing', () => {
     }
   })
 
+  it('with Alt, Ctrl or Cmd held an F-key is the system\'s, so Alt+F4 closes the window; F5 alone is still held', async () => {
+    await mountLogger()
+    const call = screen.getByPlaceholderText('W1AW')
+    for (const [where, target] of [['the window', document.body], ['the call box', call]] as const) {
+      expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5' }), `${where}: F5 was left to the webview`).toBe(false)
+      expect(fireEvent.keyDown(target, { key: 'F4', code: 'F4', altKey: true }), `${where}: Alt+F4 was held`).toBe(true)
+      expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5', ctrlKey: true }), `${where}: Ctrl+F5 was held`).toBe(true)
+      expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5', metaKey: true }), `${where}: Cmd+F5 was held`).toBe(true)
+    }
+  })
+
   it('every button, switch, checkbox and disclosure reaches no command that transmits', async () => {
     await mountLogger()
     const from = bridgeCalls.length

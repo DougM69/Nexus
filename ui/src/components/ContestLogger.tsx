@@ -238,9 +238,11 @@ export function ContestLogger({
 }) {
   // THE F-KEYS DO NOTHING HERE. In the main window they send messages; in this one they are not
   // bound to anything, and the webview's own F-key actions (F5 reloads the page) are held too.
+  // With Alt, Ctrl or Cmd held a key is the system's (Alt+F4 still closes the window), as on the
+  // main window's Contest screen.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (/^F\d{1,2}$/.test(e.key)) e.preventDefault()
+      if (/^F\d{1,2}$/.test(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

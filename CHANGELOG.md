@@ -609,6 +609,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Closing the torn-off waterfall's window puts the waterfall back, and Alt+F4 closes the contest
+  logger window.** Closing the window of a popped-out waterfall left the re-dock bar in its place on
+  the Operate screen, and the waterfall came back only when you clicked the bar. Closing the window
+  any way now brings it back, whichever screen you are on, and the re-dock bar still works. The
+  contest logger window held every F-key, Alt+F4 among them; with Alt, Ctrl or Cmd held a key is now
+  the system's there, as on the main window's Contest screen, so Alt+F4 closes it. Its F-keys alone
+  still do nothing, so F5 cannot reload it.
 - **In a contest, the report follows the mode when you move between Phone and CW or RTTY.** After a
   contact, a move from Phone to CW left 59 in the log line's received report, and back on Phone it
   left 599, so a CW contact could go into the log, the Cabrillo file and the ADIF with 59. This
