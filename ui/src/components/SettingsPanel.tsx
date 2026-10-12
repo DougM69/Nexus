@@ -2575,6 +2575,17 @@ export function SettingsPanel({
     revealJoinLine.current = false
     joinLineRef.current.scrollIntoView?.({ block: 'nearest' })
   }, [clubLink])
+  // A join a click saved, for a contest club sync refuses: the station runs no club link then
+  // (`Engine::fd_club_link`), so no line comes under the list, and the section's refusal sentence
+  // comes there instead (`joinRefusalHere`). Counted, so each such click brings it into view as it
+  // would the line, and spends that reveal.
+  const [fdJoinsSaved, setFdJoinsSaved] = useState(0)
+  const joinRefusalRef = useRef<HTMLParagraphElement | null>(null)
+  useEffect(() => {
+    if (!revealJoinLine.current || !joinRefusalRef.current) return
+    revealJoinLine.current = false
+    joinRefusalRef.current.scrollIntoView?.({ block: 'nearest' })
+  }, [fdJoinsSaved])
   const joinFoundEvent = async (host: string) => {
     setFdJoinNote(null)
     try {
@@ -2589,6 +2600,7 @@ export function SettingsPanel({
       setForm((prev) => (prev ? { ...prev, fdJoinAddr: host } : prev))
       if (savedRef.current) savedRef.current = { ...savedRef.current, fdJoinAddr: host }
       revealJoinLine.current = true
+      setFdJoinsSaved((n) => n + 1)
       onSaved?.()
     } catch (err) {
       const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
@@ -3720,6 +3732,10 @@ export function SettingsPanel({
   // is the saved one.
   const previewHere = (savedRef.current?.fdEvent ?? '') === (form.fdEvent ?? '') ? rulesetPreview : null
   const clubRefusalHere = contestClubRefusal(form.fdEvent, previewHere)
+  // …and why the join a found event's click saved does not run, under the list after the click.
+  // The click saves the address alone, so the join runs under the SAVED contest, whatever the
+  // picker holds unsaved: asked of what is saved, as the click's name rule is.
+  const joinRefusalHere = fdJoinsSaved > 0 ? contestClubRefusal(savedRef.current?.fdEvent, rulesetPreview) : null
   // Whether this laptop hosts a club event, so cannot join a found one: hosting is on in this form
   // (Join event at's own rule) or in what is saved (what the backend reads: a join address saved
   // while hosting is ignored until a Save turns hosting off).
@@ -13462,6 +13478,13 @@ export function SettingsPanel({
                 </p>
               )}
             </div>
+            {/* The section's refusal sentence again, where a click's join line would be: the
+                station runs no club link for a contest it refuses (`joinRefusalHere`). */}
+            {joinRefusalHere && (
+              <p ref={joinRefusalRef} className="settings-note settings-warn" role="alert">
+                {clubSyncRefusalText(joinRefusalHere, contestName(savedRef.current?.fdEvent?.trim()))}
+              </p>
+            )}
             {/* Where this laptop's club link stands, as saved (`features/clubLink.ts`): the host's
                 line with the addresses to type, or this laptop's join. Said under Join event at,
                 where an address is typed, and right under the list, where a found event is

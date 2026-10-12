@@ -2257,7 +2257,9 @@ club events**, where clicking a found event joins it at once (that saves the
 join address alone; the rest of the page still waits for Save), or by typing the
 host's address into **Join event at** and saving: the host shows it after
 **Positions join at**, and an address typed without a port joins port 42073. A
-laptop that hosts cannot join another event, and the list says so. Under **Join
+laptop that hosts cannot join another event, and the list says so. For a contest
+club sync cannot run, a click still saves the address, and the sentence at the
+top of the section saying why also shows under the list. Under **Join
 event at**, right under what Find club events found, each laptop says where its
 join stands, and the host says where it is hosting and how many other
 positions are connected (the Contest screen says the same, with Contest mode on or off). On Windows,

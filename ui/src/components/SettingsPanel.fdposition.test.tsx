@@ -512,6 +512,7 @@ describe('clicking a found club event joins it', () => {
     const original = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = reveal
     return {
+      all: () => reveal.mock.contexts.map((el, i) => ({ el: el as Element, args: reveal.mock.calls[i] })),
       lines: () =>
         reveal.mock.contexts
           .map((el, i) => ({ el: el as Element, args: reveal.mock.calls[i] }))
@@ -678,5 +679,144 @@ describe('clicking a found club event joins it', () => {
     fireEvent.click(await findEvents())
     await waitFor(() => expect(station.now().fdJoinAddr).toBe(HOST))
     expect(within(findBlock()).queryByText(/^Name this position/)).toBeNull()
+  })
+
+  // ⭐ A CONTEST CLUB SYNC CANNOT RUN (2026-10-12). The click saved the address, but the station runs
+  // no club link for a contest it refuses, so nothing came under the list, and the reason was the
+  // section's first line, which can be off screen. That sentence now also comes under the list after
+  // the click, where the line would have.
+  describe('for a contest club sync cannot run', () => {
+    const NOT_LOADED =
+      'Club sync does not run Illinois QSO Party: the contest rules this Nexus loaded do not include it. Check for rules updates on the Contesting tab in Settings (new rules apply when Nexus starts again), or pick another contest. This station does not host or join a club event, and each position keeps its own log.'
+    const SERIAL =
+      'Club sync does not run ARRL November Sweepstakes (CW): its serial numbers must run in one sequence for the whole entry, and every position would give out its own. This station does not host or join a club event, and each position keeps its own log.'
+    /** The station's preview of the saved pick: the contest its loaded rules resolve that pick to. */
+    const rulesResolveTo = (event: string) =>
+      api.get('getFdRuleset').mockImplementation(() =>
+        Promise.resolve({ event, rulesYear: 2026, bannedModes: [], spottingAllowed: true, clusterAllowed: true, enforcement: 'warn', role: '', exchange: [], problem: '' }),
+      )
+    const contestChip = (name: string) =>
+      [...document.querySelectorAll('button.theme-chip')].find((b) => b.textContent === name) as HTMLButtonElement
+
+    // The operator's case (the loaded rules lack the contest), and a contest no club log can run.
+    for (const [fdEvent, resolved, sentence] of [
+      ['ilqp', 'arrlfd', NOT_LOADED],
+      ['arrlss_cw', 'arrlss_cw', SERIAL],
+    ]) {
+      it(`a click says why right under the list, in the section's own sentence (${fdEvent})`, async () => {
+        const live = settingsFixture({ fdEvent, fdJoinAddr: '', fdPositionName: 'SSB tent' }) as Record<string, unknown>
+        const station = backend(live)
+        rulesResolveTo(resolved)
+        const onSaved = vi.fn()
+        const { rerender } = renderPanel(undefined, onSaved)
+        await openContesting()
+        await screen.findByText(sentence)
+        fireEvent.click(await findEvents())
+        await waitFor(() => expect(onSaved).toHaveBeenCalled())
+        // The station's next snapshot: club sync refused, so no club link (`Engine::fd_club_link`).
+        rerender(panel(undefined, onSaved))
+        expect(findBlock().nextElementSibling?.textContent).toBe(sentence)
+        // The section's first line stays: the sentence there and under the list.
+        expect(screen.getAllByText(sentence)).toHaveLength(2)
+        // The click still saved the join address and nothing else.
+        expect(station.now()).toEqual({ ...live, fdJoinAddr: HOST })
+      })
+    }
+
+    it('CONTROL: no click, no sentence under the list; the section says it once', async () => {
+      backend(settingsFixture({ fdEvent: 'ilqp', fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+      rulesResolveTo('arrlfd')
+      renderPanel()
+      await openContesting()
+      await findEvents()
+      expect(await screen.findByText(NOT_LOADED)).toBeTruthy()
+      expect(screen.getAllByText(NOT_LOADED)).toHaveLength(1)
+      expect(findBlock().nextElementSibling?.textContent).not.toBe(NOT_LOADED)
+    })
+
+    it('CONTROL: the same contest, carried by the loaded rules, joins as before, with no refusal', async () => {
+      backend(settingsFixture({ fdEvent: 'ilqp', fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+      rulesResolveTo('ilqp')
+      const onSaved = vi.fn()
+      const { rerender } = renderPanel(undefined, onSaved)
+      await openContesting()
+      fireEvent.click(await findEvents())
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
+      expect(api.get('getFdRuleset')).toHaveBeenCalled()
+      rerender(panel(link({ state: 'looking' }), onSaved))
+      expect(findBlock().nextElementSibling?.textContent).toBe('Looking for the host at 192.168.1.20:42073…')
+      rerender(panel(link({ state: 'joined', event: 'ILQP rehearsal', hostCall: 'W9ABC' }), onSaved))
+      expect(findBlock().nextElementSibling?.textContent).toBe('Joined ILQP rehearsal, hosted by W9ABC, as SSB tent.')
+      expect(screen.queryByText(/Club sync does not run/)).toBeNull()
+    })
+
+    it('CONTROL: a hosting laptop still cannot click one, so the sentence stays the section\'s alone', async () => {
+      backend(settingsFixture({ fdEvent: 'ilqp', fdHostEnable: true, fdPositionName: 'HQ' }))
+      rulesResolveTo('arrlfd')
+      renderPanel()
+      await openContesting()
+      const join = await findEvents()
+      expect(join.disabled).toBe(true)
+      expect(within(findBlock()).getByText(HOSTING_REASON)).toBeTruthy()
+      fireEvent.click(join)
+      await Promise.resolve()
+      expect(saves()).toHaveLength(0)
+      expect(await screen.findByText(NOT_LOADED)).toBeTruthy()
+      expect(screen.getAllByText(NOT_LOADED)).toHaveLength(1)
+    })
+
+    it('CONTROL: a click refused for the position name saves nothing, so only that refusal comes', async () => {
+      backend(settingsFixture({ fdEvent: 'ilqp', fdJoinAddr: '', fdPositionName: '' }))
+      rulesResolveTo('arrlfd')
+      renderPanel()
+      await openContesting()
+      await screen.findByText(NOT_LOADED)
+      fireEvent.click(await findEvents())
+      expect(await within(findBlock()).findByText(/^Name this position on the Contesting tab/)).toBeTruthy()
+      expect(saves()).toHaveLength(0)
+      expect(screen.getAllByText(NOT_LOADED)).toHaveLength(1)
+    })
+
+    it('brings the sentence into view once, as it would the line, and a later line moves nothing', async () => {
+      const reveal = stubReveal()
+      try {
+        backend(settingsFixture({ fdEvent: 'ilqp', fdJoinAddr: '', fdPositionName: 'SSB tent' }))
+        rulesResolveTo('arrlfd')
+        const onSaved = vi.fn()
+        const { rerender } = renderPanel(undefined, onSaved)
+        await openContesting()
+        await screen.findByText(NOT_LOADED)
+        fireEvent.click(await findEvents())
+        await waitFor(() => expect(onSaved).toHaveBeenCalled())
+        rerender(panel(undefined, onSaved))
+        const under = findBlock().nextElementSibling
+        expect(reveal.all().map((c) => [c.el.textContent, c.el === under, c.args])).toEqual([
+          [NOT_LOADED, true, [{ block: 'nearest' }]],
+        ])
+        // The click's reveal is spent: a line a later snapshot brings is not scrolled to.
+        rerender(panel(link({ state: 'looking' }), onSaved))
+        expect(reveal.all()).toHaveLength(1)
+      } finally {
+        reveal.restore()
+      }
+    })
+
+    it('names the contest the join runs under, the saved one: the click does not save the picker', async () => {
+      const live = settingsFixture({ fdEvent: 'ilqp', fdJoinAddr: '', fdPositionName: 'SSB tent' }) as Record<string, unknown>
+      const station = backend(live)
+      rulesResolveTo('arrlfd')
+      const onSaved = vi.fn()
+      const { rerender } = renderPanel(undefined, onSaved)
+      await openContesting()
+      await screen.findByText(NOT_LOADED)
+      // Picked and not saved: the section's first line speaks for the picker, so it goes.
+      fireEvent.click(contestChip('ARRL Field Day'))
+      expect(screen.queryByText(NOT_LOADED)).toBeNull()
+      fireEvent.click(await findEvents())
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
+      rerender(panel(undefined, onSaved))
+      expect(station.now()).toEqual({ ...live, fdJoinAddr: HOST })
+      expect(findBlock().nextElementSibling?.textContent).toBe(NOT_LOADED)
+    })
   })
 })
