@@ -81,6 +81,13 @@
 //! leaves one line in the diagnostic log, naming the check, the kind of start and the radio's own
 //! line ([`watch`]): what the bench sends back. It keys nothing.
 //!
+//! The operator's mic PTT during a voice-keyer message is the same shape, for an over: handed to
+//! the operator only once a tester's bench has named what the radio reports for it
+//! (`tempo_net::flex::ptt_evidence::OPERATOR_MIC`), when the session sends Nexus's own unkey and
+//! stops the message's DAX audio, and the radio loop ends the message as the keyer's Stop does
+//! ([`FlexDaemon::take_operator_mic`]), with no alarm. Until then the mic's PTT fails the readback
+//! and raises the alarm, and the diagnostic line carries what the radio reported for it.
+//!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
 
@@ -165,6 +172,9 @@ pub(crate) struct ClientState {
     /// The operator's own key took over our CW since the radio loop last asked
     /// ([`FlexDaemon::take_operator_break`]).
     pub(crate) operator_break: AtomicBool,
+    /// The operator's own mic took over our over since the radio loop last asked
+    /// ([`FlexDaemon::take_operator_mic`]).
+    pub(crate) operator_mic: AtomicBool,
     /// The key being asked for is a voice-keyer message's, which carries Nexus's own audio: the
     /// shim keys it only while the radio takes its transmit audio from Nexus's DAX
     /// ([`FlexDaemon::set_voice_key`]). Set by the radio loop around that one key.
@@ -586,6 +596,15 @@ impl FlexDaemon {
     /// (`Engine::cw_operator_break`) before it takes another word. Each take-over once.
     pub fn take_operator_break(&self) -> bool {
         self.state.operator_break.swap(false, Ordering::Relaxed)
+    }
+
+    /// Whether the operator's own mic PTT took over our over (a voice-keyer message) since the last
+    /// call: the session has sent our own unkey and carries no more of our audio, and the radio
+    /// loop ends the message as the keyer's Stop does, with no alarm and the TX latch as it was.
+    /// Each take-over once. Only once a tester's bench has named what the radio reports for the
+    /// mic (`tempo_net::flex::ptt_evidence::OPERATOR_MIC`).
+    pub fn take_operator_mic(&self) -> bool {
+        self.state.operator_mic.swap(false, Ordering::Relaxed)
     }
 
     /// The radio's CW speed as it reports it (`transmit speed`), whoever set it. Cheap.
@@ -1191,6 +1210,20 @@ fn watch(
             )),
             Event::ReadbackFailed(failure) => {
                 tempo_core::applog::warn("cat", &format!("Flex client ({radio}): {failure}"));
+            }
+            // The operator's own mic took over our over: no alarm. The radio loop ends the
+            // message.
+            Event::OperatorTookOver {
+                kind: StartKind::Key,
+            } => {
+                tempo_core::applog::info(
+                    "cat",
+                    &format!(
+                        "Flex client ({radio}): the operator's mic took over Nexus's over; Nexus \
+                         sent its own unkey"
+                    ),
+                );
+                state.operator_mic.store(true, Ordering::Relaxed);
             }
             // The operator's own key took over our CW: no alarm. The radio loop drops the rest of
             // the message.

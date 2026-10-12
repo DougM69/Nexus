@@ -86,7 +86,21 @@
 //! and the operation ends once the reply to a `cwx clear` ([`StopTracker::cleared`]) and the hold
 //! have passed with our CWX not keying. Our CWX keying after them fails the attempt, as any other
 //! source or handle does. ⚠️ No bench has shown what the radio reports for a paddle, so
-//! [`OPERATOR_KEY`] is empty and such a report fails the attempt as any unknown source does.
+//! [`OPERATOR_KEY`] is empty and such a report fails the attempt as any unknown source does. While
+//! the key keys the radio after a hand-over, and for the hold after it lets go, the tracker says so
+//! ([`StopTracker::operator_on_air`]): the session's escalation waits on it rather than send its
+//! unkey against the operator's paddle (operator ruling, 2026-10-12, "Wait while the paddle keys").
+//!
+//! **The operator's own mic** is added for Nexus too, for an `xmit` over only (operator rulings,
+//! 2026-10-12, "Your mic wins, like the paddle", built switched off): a whole keying report in the
+//! mic's own signature ([`OPERATOR_MIC`]: a source none of Nexus's kinds keys under, naming this
+//! connection or no client), transmit allowed, with no reason but an amplifier's, hands the open
+//! over to the operator's mic ([`Phase::Operator`]). The mic's keying and its release are theirs
+//! with no deadline over them; Nexus's part is its own unkey, and the over ends once that unkey's
+//! reply and [`MIC_HOLD_MS`] have passed with Nexus's own key not keying. Its own key keying after
+//! them fails the attempt, as any other source or handle does. ⚠️ No bench has shown what the radio
+//! reports for the mic's PTT during an over of Nexus's, so [`OPERATOR_MIC`] is empty and such a
+//! report fails the attempt as any unknown source does.
 //!
 //! **A failure is kept for the diagnostic log** ([`StopTracker::take_failure`]): the check that
 //! failed, and the radio's line that failed it, as it arrived, or for a missed deadline the last
@@ -170,7 +184,7 @@ pub const ATU_RESULTS: [&str; 8] = [
     "TUNE_MANUAL_BYPASS",
 ];
 
-/// Whose handle the radio names while the operator's own key keys it ([`OperatorKey`]).
+/// Whose handle the radio names while the operator's own key or mic keys it ([`OperatorKey`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyHandle {
     /// The client the radio assigned the transmitter to: this connection.
@@ -179,8 +193,9 @@ pub enum KeyHandle {
     NoClient,
 }
 
-/// What the radio reports while the operator's own paddle or key in its key jack keys it: the
-/// interlock's `source`, and whose handle it names.
+/// What the radio reports while one of the operator's own inputs keys it, their paddle or key in
+/// its key jack ([`OPERATOR_KEY`]) or their mic's PTT ([`OPERATOR_MIC`]): the interlock's `source`,
+/// and whose handle it names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperatorKey {
     pub source: &'static str,
@@ -208,6 +223,17 @@ impl OperatorKey {
             .contains(&self.source)
     }
 
+    /// Whether this report, taken as the operator's mic PTT during an over of ours, can be told
+    /// apart from every source Nexus keys under and from the radio's own voice keyer: a source of
+    /// its own, never empty, `SW`, `TUNE`, the CWX or ATU profile's, or `DVK`. One that cannot is
+    /// taken as no mic at all: a mic reported under `SW` could not be told from Nexus's own key.
+    /// `MIC` is what FlexRadio documents for a mic PTT; whatever the bench shows, any other input
+    /// the radio reports the same way is taken for the mic too.
+    pub fn distinct_mic(&self) -> bool {
+        !self.source.is_empty()
+            && ![KEY.source, TUNE.source, CWX.source, ATU.source, "DVK"].contains(&self.source)
+    }
+
     /// Whether a sample keyed under `source` and naming `handle` is this key's, on a connection
     /// whose handle is `ours`.
     pub fn keys(&self, source: &str, handle: u32, ours: u32) -> bool {
@@ -228,6 +254,21 @@ impl OperatorKey {
 /// paddle wins: a `cwx clear`, no unkey, no alarm); empty, it fails the readback and alarms, as an
 /// unknown source does. A value [`OperatorKey::distinct`] refuses is never taken.
 pub const OPERATOR_KEY: Option<OperatorKey> = None;
+
+/// ⚠️ EMPTY UNTIL A TESTER'S BENCH SHOWS IT: the operator's own mic PTT on the radio, as the radio
+/// reports it while it keys during an over of Nexus's (`xmit 1`: a voice-keyer message). FlexRadio
+/// documents the source `MIC` for a mic PTT (SmartSDR-Status-Responses), but not whether the
+/// interlock shows it while Nexus's own key holds the transmitter, nor whose handle it names then.
+/// This is the one value set from the bench, from the diagnostic line the mic's PTT pressed during
+/// a voice-keyer message leaves: the source and whose handle the interlock named. Set, that press
+/// ends the message (the mic wins: Nexus's own unkey, no alarm); empty, it fails the readback and
+/// alarms, as an unknown source does. A value [`OperatorKey::distinct_mic`] refuses is never taken.
+pub const OPERATOR_MIC: Option<OperatorKey> = None;
+
+/// How long the radio must show Nexus's own key not keying, from the reply to Nexus's unkey, before
+/// an over handed to the operator's mic ([`OPERATOR_MIC`]) counts as ended: the hold the readback
+/// gives a CW word's end, without the break-in delay an over does not have.
+pub const MIC_HOLD_MS: u64 = CWX_IDLE_MS;
 
 /// The longest a tune carrier may be held: the radio loop's own ceiling.
 pub const TUNE_HOLD_MAX_MS: u64 = 60_000;
@@ -327,7 +368,9 @@ pub enum Phase {
     /// A radio-ended start is under way: its window is open.
     Window,
     /// Our CWX was handed to the operator's own key ([`OPERATOR_KEY`]): it ends once its clear's
-    /// reply and the hold have passed with our CWX not keying.
+    /// reply and the hold have passed with our CWX not keying. Our over was handed to the
+    /// operator's mic ([`OPERATOR_MIC`]): it ends once our unkey's reply and [`MIC_HOLD_MS`] have
+    /// passed with our key not keying.
     Operator,
     Confirmed,
     Failed,
@@ -411,14 +454,23 @@ pub struct StopTracker {
     /// The operator's own key as the radio reports it ([`OPERATOR_KEY`]), when it can be told
     /// apart ([`OperatorKey::distinct`]).
     operator_key: Option<OperatorKey>,
-    /// The open CWX operation was handed to the operator's own key ([`Phase::Operator`]).
+    /// The operator's own mic as the radio reports it ([`OPERATOR_MIC`]), when it can be told
+    /// apart ([`OperatorKey::distinct_mic`]).
+    operator_mic: Option<OperatorKey>,
+    /// The open CWX operation was handed to the operator's own key, or the open over to their mic
+    /// ([`Phase::Operator`]).
     handed_over: bool,
-    /// When the radio took a `cwx clear` of the open CWX operation (its reply).
+    /// When the radio took our stop of the operation handed over: the reply to a `cwx clear` of
+    /// the open CWX operation, or to our unkey of the over (or the hand-over, if that came later).
     cleared_ms: Option<u64>,
-    /// Since the hand-over: the last whole sample was our CWX keying.
+    /// Since the hand-over: the last whole sample was our kind keying.
     ours_keying: bool,
     /// Since the hand-over: the last whole sample was idle.
     radio_idle: bool,
+    /// Since the hand-over: the last whole sample was the operator's own input keying.
+    operator_keying: bool,
+    /// Since the hand-over: when the radio last stopped showing the operator's input keying.
+    operator_let_go_ms: Option<u64>,
     /// The last interlock state line, as it arrived: what a missed deadline is reported with.
     last_interlock: Option<String>,
     /// The line that failed the attempt, as it arrived, when a line did.
@@ -488,10 +540,13 @@ impl StopTracker {
             idle_since_ms: None,
             atu_result: false,
             operator_key: OPERATOR_KEY.filter(OperatorKey::distinct),
+            operator_mic: OPERATOR_MIC.filter(OperatorKey::distinct_mic),
             handed_over: false,
             cleared_ms: None,
             ours_keying: false,
             radio_idle: false,
+            operator_keying: false,
+            operator_let_go_ms: None,
             last_interlock: None,
             failed_line: None,
             failure_taken: false,
@@ -522,10 +577,41 @@ impl StopTracker {
         self
     }
 
-    /// The open CWX operation has been handed to the operator's own key ([`Phase::Operator`]),
-    /// until its proof is taken.
+    /// The operator's own mic as this tracker takes it: [`OPERATOR_MIC`] when it can be told
+    /// apart, else none.
+    pub fn operator_mic(&self) -> Option<OperatorKey> {
+        self.operator_mic
+    }
+
+    /// This tracker, taking `mic` as the operator's own mic in place of [`OPERATOR_MIC`]: the
+    /// tests' way to run the mic's hand-over before a bench has shown what the radio reports. A mic
+    /// that cannot be told apart is taken as none. Not compiled outside tests.
+    #[cfg(any(test, feature = "flex-unbenched"))]
+    pub fn with_operator_mic(mut self, mic: Option<OperatorKey>) -> StopTracker {
+        self.operator_mic = mic.filter(OperatorKey::distinct_mic);
+        self
+    }
+
+    /// The open CWX operation has been handed to the operator's own key, or the open over to their
+    /// mic ([`Phase::Operator`]), until its proof is taken.
     pub fn handed_over(&self) -> bool {
         self.handed_over
+    }
+
+    /// Whether the operator's own key still has the radio, after our CWX was handed to it: the
+    /// radio's last whole sample shows that key keying, or stopped showing it less than the hold
+    /// ago (the break-in delay + 300 ms, the readback's own measure of a CW's end), and our CWX is
+    /// not keying. What the session's escalation waits on: Nexus never sends its unkey against the
+    /// operator's paddle, and sends it as soon as the radio shows Nexus's own CW (operator ruling,
+    /// 2026-10-12, "Wait while the paddle keys"). Never after the attempt has failed.
+    pub fn operator_on_air(&self) -> bool {
+        self.profile == CWX
+            && self.after_hand_over()
+            && !self.ours_keying
+            && (self.operator_keying
+                || self
+                    .operator_let_go_ms
+                    .is_some_and(|at| self.last_ms < at.saturating_add(self.window.hold_ms)))
     }
 
     /// What failed the attempt, once, for the diagnostic log: the check, and the radio's line that
@@ -559,9 +645,11 @@ impl StopTracker {
         let highest = self.highest_session;
         let timeout = self.timeout_ms;
         let key = self.operator_key;
+        let mic = self.operator_mic;
         *self = StopTracker::new(timeout);
         self.highest_session = highest;
         self.operator_key = key;
+        self.operator_mic = mic;
     }
 
     /// Start tracking a new transport session. `session` must be nonzero and higher than any
@@ -602,8 +690,9 @@ impl StopTracker {
     /// An open window, at the time of the last input: confirmed once the radio has settled (idle,
     /// no start awaiting its reply, and the ATU's result reported) for its hold past the expected
     /// end; failed if it has not settled by the deadline. Handed to the operator, our part is
-    /// confirmed once the clear's reply and the hold have passed with our CWX not keying, and our
-    /// CWX keying then fails it: our own CW still keying after its clear.
+    /// confirmed once our stop's reply (the clear's; for an over, our unkey's) and the hold have
+    /// passed with our kind not keying, and our kind keying then fails it: our own CW, or our own
+    /// key, still keying after its stop.
     fn settle_window(&mut self) {
         if self.phase == Phase::Operator && self.past_hold() {
             if self.ours_keying {
@@ -739,30 +828,62 @@ impl StopTracker {
         self.settle_window();
     }
 
-    /// Since the hand-over: the clear's reply and the hold have passed.
+    /// Since the hand-over: our stop's reply and the hold have passed (the window's for our CWX,
+    /// [`MIC_HOLD_MS`] for an over).
     fn past_hold(&self) -> bool {
+        let hold = if self.profile == KEY {
+            MIC_HOLD_MS
+        } else {
+            self.window.hold_ms
+        };
         self.cleared_ms
-            .is_some_and(|at| self.last_ms >= at.saturating_add(self.window.hold_ms))
+            .is_some_and(|at| self.last_ms >= at.saturating_add(hold))
     }
 
-    /// The open CWX operation was handed to the operator, and its proof is not yet taken.
+    /// The open operation was handed to the operator, and its proof is not yet taken.
     fn after_hand_over(&self) -> bool {
         self.handed_over && matches!(self.phase, Phase::Operator | Phase::Confirmed)
     }
 
-    /// The operator's own key keys the radio during our CWX: from its first sample the radio is
-    /// theirs. The words Nexus thinks the radio still holds are dropped, and nothing puts a
-    /// deadline over the operator's keying: the session's stop (the clear it sends at once) bounds
-    /// what is ours.
+    /// The operator's own input that may take the open operation over: their key during our CWX,
+    /// their mic during our over. None for any other kind.
+    fn operators_input(&self) -> Option<OperatorKey> {
+        if self.profile == CWX {
+            self.operator_key
+        } else if self.profile == KEY {
+            self.operator_mic
+        } else {
+            None
+        }
+    }
+
+    /// The operator's own key keys the radio during our CWX, or their mic during our over: from its
+    /// first sample the radio is theirs. The words Nexus thinks the radio still holds are dropped,
+    /// and nothing puts a deadline over the operator's keying: the session's stop (the clear, or
+    /// for an over our unkey, which it sends at once) bounds what is ours. An over whose unkey was
+    /// already answered counts its hold from here.
     fn hand_over(&mut self) {
         if !self.handed_over {
             self.handed_over = true;
             self.phase = Phase::Operator;
             self.deadline_ms = 0;
             self.words.clear();
+            if self.profile == KEY && self.stop_replied {
+                self.cleared_ms.get_or_insert(self.last_ms);
+            }
         }
         self.ours_keying = false;
         self.radio_idle = false;
+        self.operator_keying = true;
+        self.operator_let_go_ms = None;
+    }
+
+    /// Since the hand-over: a whole sample that is not the operator's input keying. When it ends
+    /// their keying, the hold after they let go starts here ([`Self::operator_on_air`]).
+    fn operator_not_keying(&mut self) {
+        if std::mem::take(&mut self.operator_keying) {
+            self.operator_let_go_ms = Some(self.last_ms);
+        }
     }
 
     fn arm(
@@ -794,6 +915,8 @@ impl StopTracker {
         self.atu_result = false;
         self.handed_over = false;
         self.cleared_ms = None;
+        self.operator_keying = false;
+        self.operator_let_go_ms = None;
         self.key_sequence = key_sequence;
         self.stop_sequence = 0;
         self.deadline_ms = now_ms + self.timeout_ms;
@@ -807,7 +930,8 @@ impl StopTracker {
     }
 
     /// Bind the stop for the armed attempt. Allowed once, from the key's reply up to
-    /// transmitting; anything else fails the attempt (the caller still writes its unkey).
+    /// transmitting, or for an over handed to the operator's mic before its unkey went out;
+    /// anything else fails the attempt (the caller still writes its unkey).
     pub fn request_stop(
         &mut self,
         operation: Operation,
@@ -825,9 +949,10 @@ impl StopTracker {
             self.fail(Failure::Identity);
             return false;
         }
+        let handed_to_mic = self.phase == Phase::Operator && self.profile == KEY;
         if self.stop.is_some()
-            || self.phase < Phase::AwaitKeyReply
-            || self.phase > Phase::Transmitting
+            || (!handed_to_mic
+                && (self.phase < Phase::AwaitKeyReply || self.phase > Phase::Transmitting))
         {
             self.fail(Failure::State);
             return false;
@@ -907,8 +1032,20 @@ impl StopTracker {
             return;
         }
         // Handed to the operator: a word dropped with the hand-over may still be answered, and no
-        // reply proves anything now.
+        // reply proves anything now, but our unkey's for an over handed to the operator's mic: from
+        // its reply the hold runs. An unkey the radio refused starts nothing, and the session's
+        // escalation clock stands.
         if self.after_hand_over() {
+            if self.profile == KEY
+                && result == Some(0)
+                && sequence == self.stop_sequence
+                && self.stop_written
+                && !self.stop_replied
+                && self.stop_matches()
+            {
+                self.stop_replied = true;
+                self.cleared_ms.get_or_insert(self.last_ms);
+            }
             return;
         }
         if sequence != self.key_sequence && sequence != self.stop_sequence {
@@ -1135,22 +1272,24 @@ impl StopTracker {
             return;
         }
         let keying = matches!(state, "PTT_REQUESTED" | "TRANSMITTING");
-        // ⭐ THE OPERATOR'S OWN KEY ([`OPERATOR_KEY`]). During our CWX, from its start's write on, a
-        // whole keying sample in the key's own report, transmit allowed, with no reason but an
-        // amplifier's, is the operator's paddle: the radio is theirs from here ([`Self::hand_over`]).
-        // With no key named, there is none, and the sample fails the attempt below as any unknown
-        // source does.
+        // ⭐ THE OPERATOR'S OWN KEY ([`OPERATOR_KEY`]) AND MIC ([`OPERATOR_MIC`]). During our CWX,
+        // from its start's write on, a whole keying sample in the key's own report, transmit
+        // allowed, with no reason but an amplifier's, is the operator's paddle; during our over,
+        // from its key's write until the radio has let go of it, one in the mic's own report is the
+        // operator's mic. The radio is theirs from here ([`Self::hand_over`]). With none named,
+        // there is none, and the sample fails the attempt below as any unknown source does.
         let operator = keying
             && allowed == "1"
             && (reason.is_empty() || amplifier_only(reason))
             && self
-                .operator_key
+                .operators_input()
                 .is_some_and(|k| k.keys(source, handle, self.client_handle));
-        if operator
-            && self.profile == CWX
-            && (matches!(self.phase, Phase::AwaitKeyReply | Phase::Window)
-                || self.after_hand_over())
-        {
+        let open = if self.profile == CWX {
+            matches!(self.phase, Phase::AwaitKeyReply | Phase::Window)
+        } else {
+            self.phase >= Phase::AwaitKeyReply && self.phase <= Phase::AwaitOwnerClear
+        };
+        if operator && (open || self.after_hand_over()) {
             self.hand_over();
             return;
         }
@@ -1172,7 +1311,9 @@ impl StopTracker {
         if self.after_hand_over() {
             // The operator's: their keying is above, its release and the idle here. Our CWX may
             // still finish the word or character going out until the clear's reply and the hold
-            // have passed; keying after them, it is our own CW still keying, and fails the attempt.
+            // have passed, our over until our unkey's reply and its hold have; keying after them,
+            // it is our own CW or key still keying, and fails the attempt.
+            self.operator_not_keying();
             match state {
                 _ if idle => {
                     self.ours_keying = false;
@@ -1314,8 +1455,8 @@ impl StopTracker {
         if self.evidence(now_ms) != Some(request) {
             return false;
         }
-        // After a hand-over the operator's key may still be keying: ready again only once the
-        // radio is seen idle.
+        // After a hand-over the operator's key or mic may still be keying: ready again only once
+        // the radio is seen idle.
         self.phase = if self.handed_over && !self.radio_idle {
             Phase::AwaitIdle
         } else {
@@ -2357,6 +2498,258 @@ mod tests {
             (report.failure, report.line.as_deref()),
             (Failure::InvalidInput, Some(&long[..MAX_LINE]))
         );
+    }
+
+    /// ⭐ What the session's escalation waits on after a hand-over (operator ruling, 2026-10-12,
+    /// "Wait while the paddle keys"): the radio showing the operator's key keying, and the hold
+    /// (the break-in delay, 300, and 300) after it stops showing it; never our own CW keying, never
+    /// once the attempt has failed, never for an over, and never without a hand-over.
+    #[test]
+    fn the_operators_key_on_the_air_is_what_the_escalation_waits_on() {
+        let ours = 0x1234_5678;
+        let handed = || {
+            let mut h = Harness::with_key(Some(PADDLE));
+            h.window_opened(CWX, Window::cwx(1_000, 300));
+            h.feed(TRANSMITTING);
+            assert!(!h.tracker.operator_on_air(), "our CWX, before the touch");
+            h.feed(&sample("TRANSMITTING", "PADDLE", ours));
+            h
+        };
+        let mut h = handed();
+        assert!(h.tracker.operator_on_air(), "the paddle keying");
+        h.now += 30_000;
+        h.tracker.poll(h.now);
+        assert!(h.tracker.operator_on_air(), "no deadline over it");
+        // It lets go: the release, then the idle; the hold counts from the first.
+        h.feed(&sample("UNKEY_REQUESTED", "", ours));
+        let let_go = h.now;
+        h.feed(READY_OWNED);
+        h.now += 100;
+        h.feed(IDLE);
+        h.now = let_go + 600 - 1;
+        h.tracker.poll(h.now);
+        assert!(
+            h.tracker.operator_on_air(),
+            "inside the hold after it let go"
+        );
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert!(!h.tracker.operator_on_air(), "the hold has passed");
+        // Keying again: the wait is back, with a fresh hold after it.
+        h.feed(&sample("PTT_REQUESTED", "PADDLE", ours));
+        assert!(h.tracker.operator_on_air());
+        // Our own CW keying ends the wait at once.
+        h.feed(TRANSMITTING);
+        assert!(!h.tracker.operator_on_air(), "our CWX keying");
+        // A failed attempt waits on nothing.
+        let mut h = handed();
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        assert_eq!(h.tracker.phase(), Phase::Failed);
+        assert!(!h.tracker.operator_on_air());
+        // No key named: no hand-over, nothing to wait on.
+        let mut h = Harness::with_key(None);
+        h.window_opened(CWX, Window::cwx(1_000, 300));
+        h.feed(&sample("TRANSMITTING", "PADDLE", ours));
+        assert!(!h.tracker.operator_on_air());
+        // An over handed to the mic: not the paddle's wait.
+        let mut h = Harness::with_mic(Some(MIC));
+        h.start();
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        assert_eq!(h.tracker.phase(), Phase::Operator);
+        assert!(!h.tracker.operator_on_air());
+    }
+
+    // No bench has shown what the radio reports for the mic's PTT during an over of ours, so these
+    // tests name a mic of their own: `MIC` under this connection's handle, as the radio might.
+    const MIC: OperatorKey = OperatorKey {
+        source: "MIC",
+        handle: KeyHandle::Ours,
+    };
+
+    impl Harness {
+        /// [`Harness::new`], on a tracker taking `mic` as the operator's own mic.
+        fn with_mic(mic: Option<OperatorKey>) -> Harness {
+            let mut h = Harness::new();
+            h.tracker = std::mem::take(&mut h.tracker).with_operator_mic(mic);
+            h
+        }
+    }
+
+    /// ⭐ The operator's mic is a report of its own: never a source Nexus keys under, so a bench's
+    /// value cannot make our own key the operator's, and never the radio's voice keeper. One that
+    /// cannot be told apart is taken as none, whatever names it. A reconnect keeps it.
+    #[test]
+    fn the_operator_mic_is_none_of_ours() {
+        assert!(
+            OPERATOR_MIC.is_none_or(|m| m.distinct_mic()),
+            "{OPERATOR_MIC:?}"
+        );
+        for source in ["", KEY.source, TUNE.source, CWX.source, ATU.source, "DVK"] {
+            for handle in [KeyHandle::Ours, KeyHandle::NoClient] {
+                let mic = OperatorKey { source, handle };
+                assert!(!mic.distinct_mic(), "{mic:?}");
+                let taken = StopTracker::default().with_operator_mic(Some(mic));
+                assert_eq!(taken.operator_mic(), None, "{mic:?}");
+            }
+        }
+        assert!(MIC.distinct_mic());
+        let mut t = StopTracker::default().with_operator_mic(Some(MIC));
+        assert_eq!(t.operator_mic(), Some(MIC));
+        t.reset(7, 0x1234_5678);
+        assert_eq!(t.operator_mic(), Some(MIC));
+    }
+
+    /// As it ships, no bench has named what the radio reports for the mic's PTT during an over, so
+    /// no mic is taken. The bench's value goes in [`OPERATOR_MIC`], and this line goes with it.
+    #[test]
+    fn as_it_ships_no_operator_mic_is_named() {
+        assert_eq!(OPERATOR_MIC, None);
+        assert_eq!(StopTracker::default().operator_mic(), None);
+    }
+
+    /// ⭐ The operator's mic during our over: from its first sample the radio is theirs, with no
+    /// deadline over their keying. Our stop, bound and written after the hand-over, ends our part
+    /// once its reply and [`MIC_HOLD_MS`] have passed with our key not keying, while the mic may
+    /// still key; the tracker is ready again once the radio is seen idle. A mic pressed after our
+    /// unkey's reply counts the hold from its first sample; an unkey the radio refused proves
+    /// nothing. Under no client when the bench says so, and with an amplifier's reason.
+    #[test]
+    fn the_operators_mic_takes_an_over_over() {
+        let ours = 0x1234_5678;
+        let mut h = Harness::with_mic(Some(MIC));
+        h.start();
+        h.now += 300;
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.handed_over()),
+            (Phase::Operator, true)
+        );
+        h.now += 10_000;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.phase(), Phase::Operator, "no deadline over it");
+        h.stop_reply();
+        let replied = h.now;
+        h.now = replied + MIC_HOLD_MS - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None, "inside the hold");
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop), "our part is over");
+        assert!(h.tracker.consume(h.stop, h.now));
+        assert_eq!(h.tracker.phase(), Phase::AwaitIdle, "the mic still keys");
+        h.feed(&sample("UNKEY_REQUESTED", "", ours));
+        h.feed(READY_OWNED);
+        h.feed(IDLE);
+        assert_eq!(h.tracker.phase(), Phase::Idle);
+        assert!(h.tracker.begin(op(2), 103, h.now), "the next over arms");
+
+        // Our unkey answered before the mic's first sample: the hold counts from that sample.
+        let mut h = Harness::with_mic(Some(MIC));
+        h.start();
+        h.stop_reply();
+        h.now += 50;
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        let touched = h.now;
+        assert_eq!(h.tracker.phase(), Phase::Operator);
+        h.now = touched + MIC_HOLD_MS - 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), None);
+        h.now += 1;
+        h.tracker.poll(h.now);
+        assert_eq!(h.evidence(), Some(h.stop));
+
+        // An unkey the radio refused: no hold, no proof.
+        let mut h = Harness::with_mic(Some(MIC));
+        h.start();
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        h.stop_request();
+        h.written(102, false, true);
+        h.feed("R102|50000015|");
+        h.now += 4_000;
+        h.tracker.poll(h.now);
+        assert_eq!((h.tracker.phase(), h.evidence()), (Phase::Operator, None));
+
+        let no_client = OperatorKey {
+            handle: KeyHandle::NoClient,
+            ..MIC
+        };
+        for (mic, handle) in [(MIC, ours), (no_client, 0)] {
+            let mut h = Harness::with_mic(Some(mic));
+            h.start();
+            h.feed(&with_reason(
+                &sample("PTT_REQUESTED", "MIC", handle),
+                "AMP:PG-XL",
+            ));
+            assert_eq!(h.tracker.phase(), Phase::Operator, "{mic:?}");
+            h.stop_reply();
+            h.feed(&sample("UNKEY_REQUESTED", "", handle));
+            h.feed(&sample("READY", "", handle));
+            h.feed(IDLE);
+            h.now += MIC_HOLD_MS;
+            h.tracker.poll(h.now);
+            assert_eq!(h.evidence(), Some(h.stop), "{mic:?}");
+            assert!(h.tracker.consume(h.stop, h.now));
+            assert_eq!(h.tracker.phase(), Phase::Idle, "{mic:?}: seen idle");
+        }
+    }
+
+    /// ⭐ After the mic's hand-over, our own key keying is ours only until our unkey's reply and
+    /// the hold have passed: still keying then, or keying after, fails the attempt. Every other
+    /// source and handle fails it as before the hand-over. With no mic named the mic's sample fails
+    /// the over as any unknown source does, and a mic named takes over only an over: during our CWX
+    /// it is an unknown source as before.
+    #[test]
+    fn after_the_mic_hand_over_our_key_still_keying_and_any_other_source_fail() {
+        let ours = 0x1234_5678;
+        let handed = || {
+            let mut h = Harness::with_mic(Some(MIC));
+            h.start();
+            h.feed(&sample("TRANSMITTING", "MIC", ours));
+            assert_eq!(h.tracker.phase(), Phase::Operator);
+            h
+        };
+        // Our key still keying when the hold passes.
+        let mut h = handed();
+        h.stop_reply();
+        h.now += 100;
+        h.feed(TRANSMITTING);
+        assert_eq!(h.tracker.phase(), Phase::Operator, "inside the hold");
+        h.now += MIC_HOLD_MS;
+        h.tracker.poll(h.now);
+        assert_eq!(
+            (h.tracker.phase(), h.tracker.failure()),
+            (Phase::Failed, Failure::State)
+        );
+        // Keying again once the hold has passed, the proof not yet taken.
+        let mut h = handed();
+        h.stop_reply();
+        h.now += MIC_HOLD_MS;
+        h.tracker.poll(h.now);
+        assert_eq!(h.tracker.phase(), Phase::Confirmed);
+        h.feed(TRANSMITTING);
+        assert_eq!((h.tracker.failure(), h.evidence()), (Failure::State, None));
+        for line in [
+            sample("TRANSMITTING", "ACC", ours),
+            sample("TRANSMITTING", "PADDLE", ours),
+            sample("TRANSMITTING", "MIC", 0x8765_4321),
+            sample("TRANSMITTING", "MIC", 0),
+            with_reason(&sample("TRANSMITTING", "MIC", ours), "PA_RANGE"),
+            "S0|interlock state=TRANSMITTING".to_string(),
+        ] {
+            let mut h = handed();
+            h.feed(&line);
+            assert_eq!(h.tracker.phase(), Phase::Failed, "{line}");
+        }
+        let mut h = Harness::with_mic(None);
+        h.start();
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        assert_eq!(h.tracker.failure(), Failure::Ownership);
+        assert!(!h.tracker.handed_over());
+        let mut h = Harness::with_mic(Some(MIC));
+        h.window_opened(CWX, Window::cwx(1_000, 300));
+        h.feed(&sample("TRANSMITTING", "MIC", ours));
+        assert_eq!(h.tracker.failure(), Failure::Ownership);
+        assert!(!h.tracker.handed_over());
     }
 
     /// `line` with `reason` in place of its empty reason.

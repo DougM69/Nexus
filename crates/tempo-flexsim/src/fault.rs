@@ -136,6 +136,32 @@ pub enum Fault {
         hold: Duration,
     },
 
+    /// **The operator's own mic during an over.** Each `xmit 1` keys the radio, and `after` its
+    /// TRANSMITTING the operator's mic PTT on the radio takes the transmitter: the interlock reports
+    /// TRANSMITTING under `source` and `handle` (`None`: the handle the radio assigned the
+    /// transmitter to, the sender's), holds it for `hold`, then releases it as the radio releases a
+    /// key, UNKEY_REQUESTED and READY under that handle, then READY with no client. The over's own
+    /// `xmit 0` is acknowledged and its statuses are withheld: the mic holds the transmitter until
+    /// it lets go.
+    ///
+    /// FlexRadio documents `MIC` as the interlock's source for a mic PTT
+    /// (SmartSDR-Status-Responses), but not what the radio reports for one pressed while a client's
+    /// own key holds the transmitter, nor what that client's unkey does then: `source`, `handle`
+    /// and the withheld unkey are what a test supposes. A tester's bench is to show what a real
+    /// radio reports.
+    ///
+    /// *Guard:* the mic's PTT during a voice-keyer message (operator rulings, 2026-10-12). While
+    /// the rule is inert, any keying source the readback does not know fails the attempt: the
+    /// over's unkey is never proven, it goes out again and the operator is told, as for any unknown
+    /// source. Once a bench has named the mic's source and handle, that keying hands the over to the
+    /// operator's mic: Nexus's own unkey at once, no alarm, and the rest of the message dropped.
+    OperatorMic {
+        after: Duration,
+        source: String,
+        handle: Option<u32>,
+        hold: Duration,
+    },
+
     /// **An ATU cycle that never ends.** `atu start` keys the radio as its rule does, and the
     /// cycle then reports no result and never lets go: the rule's statuses stop at its
     /// TRANSMITTING. Which command ends a cycle part way is not documented, so this plays the worst
@@ -228,14 +254,15 @@ pub enum Fault {
 pub const REFUSED: &str = "5000002C";
 
 /// Whether a fault withholds the statuses of `command`'s rule, so the radio acknowledges the
-/// command and does nothing else: [`Fault::StuckTransmit`] for `xmit 0`, [`Fault::StuckTune`] for
-/// `transmit tune 0`, [`Fault::AtuNeverEnds`] for both. The simulator asks this, and so does a test
-/// that answers for the radio on its own clock, so the two cannot disagree.
+/// command and does nothing else: [`Fault::StuckTransmit`] and [`Fault::OperatorMic`] for
+/// `xmit 0`, [`Fault::StuckTune`] for `transmit tune 0`, [`Fault::AtuNeverEnds`] for both. The
+/// simulator asks this, and so does a test that answers for the radio on its own clock, so the two
+/// cannot disagree.
 pub fn withholds(faults: &[Fault], command: &str) -> bool {
     faults.iter().any(|f| {
         matches!(
             (f, command),
-            (Fault::StuckTransmit, "xmit 0")
+            (Fault::StuckTransmit | Fault::OperatorMic { .. }, "xmit 0")
                 | (Fault::StuckTune, "transmit tune 0")
                 | (Fault::AtuNeverEnds, "xmit 0" | "transmit tune 0")
         )
@@ -262,9 +289,10 @@ pub const AMPLIFIERS: &str = "0x5A0F0001,0x5A0F0002";
 /// What `command`'s rule sends once the faults have acted on its `items`: nothing when a fault
 /// withholds them all ([`withholds`]); for [`Fault::HoldsCwx`], a `cwx send`'s items up to its
 /// TRANSMITTING, and for [`Fault::AtuNeverEnds`] an `atu start`'s; for [`Fault::OperatorKeys`], the
-/// word's items up to its TRANSMITTING, then the operator's keying and its release; for
-/// [`Fault::KeyingReason`], each keying report carrying its reason or the amplifiers. The simulator
-/// applies this, and so does a test that answers for the radio on its own clock.
+/// word's items up to its TRANSMITTING, then the operator's keying and its release, and for
+/// [`Fault::OperatorMic`] an `xmit 1`'s; for [`Fault::KeyingReason`], each keying report carrying
+/// its reason or the amplifiers. The simulator applies this, and so does a test that answers for
+/// the radio on its own clock.
 pub fn statuses(faults: &[Fault], command: &str, mut items: Vec<Item>) -> Vec<Item> {
     if withholds(faults, command) {
         return Vec::new();
@@ -282,19 +310,26 @@ pub fn statuses(faults: &[Fault], command: &str, mut items: Vec<Item>) -> Vec<It
         }
     }
     for fault in faults {
-        let Fault::OperatorKeys {
-            word,
-            after,
-            source,
-            handle,
-            hold,
-        } = fault
-        else {
-            continue;
+        // The operator's key during the named word, or their mic during an over; with the radio
+        // holding its CWX, the word keys again after the operator.
+        let (after, source, handle, hold, holds) = match fault {
+            Fault::OperatorKeys {
+                word,
+                after,
+                source,
+                handle,
+                hold,
+            } if command.starts_with(&format!("cwx send \"{word}\" ")) => {
+                (after, source, handle, hold, holds)
+            }
+            Fault::OperatorMic {
+                after,
+                source,
+                handle,
+                hold,
+            } if command == "xmit 1" => (after, source, handle, hold, false),
+            _ => continue,
         };
-        if !command.starts_with(&format!("cwx send \"{word}\" ")) {
-            continue;
-        }
         let Some(at) = keyed(&items) else { continue };
         let ours = items[at].clone();
         items.truncate(at + 1);
@@ -720,6 +755,61 @@ mod tests {
             ]
         );
         assert!(matches!(held.last(), Some(Item::Send(_))), "{held:?}");
+    }
+
+    /// The operator's mic during an over: the over keys, the mic's keying follows after `after`
+    /// under its source and handle, held for `hold`, then released; the over's own `xmit 0` is
+    /// answered with nothing after it. Every other command is as it was.
+    #[test]
+    fn the_operators_mic_takes_an_over_and_its_unkey_changes_nothing() {
+        let none: &[Fault] = &[];
+        let mic = |handle| Fault::OperatorMic {
+            after: Duration::from_millis(300),
+            source: "MIC".into(),
+            handle,
+            hold: Duration::from_millis(2_000),
+        };
+        let line = |state: &str, source: &str| {
+            Item::Send(format!(
+                "S0|interlock tx_client_handle=0x{{h}} state={state} reason= source={source} \
+                 tx_allowed=1 amplifier="
+            ))
+        };
+        assert_eq!(
+            sent(&[mic(None)], "xmit 1"),
+            [
+                line("PTT_REQUESTED", "SW"),
+                Item::Wait(30),
+                line("TRANSMITTING", "SW"),
+                Item::Wait(300),
+                line("TRANSMITTING", "MIC"),
+                Item::Wait(2_000),
+                line("UNKEY_REQUESTED", ""),
+                line("READY", ""),
+                Item::Wait(100),
+                Item::Send(
+                    "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= \
+                     tx_allowed=1 amplifier="
+                        .into()
+                ),
+            ]
+        );
+        assert!(withholds(&[mic(None)], "xmit 0"));
+        assert_eq!(sent(&[mic(None)], "xmit 0"), Vec::<Item>::new());
+        assert_eq!(lines(&sent(none, "xmit 0")).len(), 3, "the bundled release");
+        // Under a handle the test names: no client here.
+        assert!(lines(&sent(&[mic(Some(0))], "xmit 1"))[2]
+            .starts_with("S0|interlock tx_client_handle=0x00000000 state=TRANSMITTING "));
+        for other in [
+            "cwx send \"CQ\" 1",
+            "cwx clear",
+            "transmit tune 1",
+            "transmit tune 0",
+            "atu start",
+        ] {
+            assert_eq!(sent(&[mic(None)], other), sent(none, other), "{other}");
+            assert!(!withholds(&[mic(None)], other), "{other}");
+        }
     }
 
     #[test]

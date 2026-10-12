@@ -54,9 +54,19 @@
 //! session sends `cwx clear` at once unless a clear has gone out, reports
 //! [`Event::OperatorTookOver`], refuses every start with [`Refusal::OperatorKeying`] until our part
 //! is over, and ends the operation once the clear's reply and the hold show our CWX gone: no unkey,
-//! no alarm, no close. The escalation clock the clear armed stands. While that key alone keys the
-//! radio under this session's handle, it is not ours: no stop goes out for it. A previous
-//! session's handle keeps the rule for what Nexus cannot know, every stop.
+//! no alarm, no close. The escalation clock the clear armed stands, but its unkey waits while the
+//! radio shows the operator's key keying and for the hold after it lets go, and goes as soon as
+//! the radio shows our own CW (operator ruling, 2026-10-12, "Wait while the paddle keys"): the
+//! case is a clear the radio refuses while the paddle keys, which leaves our part unproven. While
+//! that key alone keys the radio under this session's handle, it is not ours: no stop goes out for
+//! it. A previous session's handle keeps the rule for what Nexus cannot know, every stop.
+//!
+//! **The operator's own mic during our over** ([`ptt_evidence::OPERATOR_MIC`], empty until a
+//! tester's bench names what the radio reports): the readback hands the over to the operator's
+//! mic, and the session sends its own unkey at once unless one has gone out, reports
+//! [`Event::OperatorTookOver`] and ends the over once that unkey's reply and its hold show our key
+//! gone: no alarm, no close, and from the hand-over no DAX audio of ours. While the mic alone keys
+//! the radio under this session's handle, it is not ours either.
 //!
 //! **A readback check that fails** is reported as [`Event::ReadbackFailed`], for the diagnostic
 //! log: it changes no decision.
@@ -195,6 +205,11 @@ pub struct Config {
     /// has shown it. Compiled only where `unbenched` is.
     #[cfg(any(test, feature = "flex-unbenched"))]
     pub operator_key: Option<ptt_evidence::OperatorKey>,
+    /// The operator's own mic as the radio reports it, in place of
+    /// [`ptt_evidence::OPERATOR_MIC`]: the tests' way to run the mic's hand-over before a tester's
+    /// bench has shown it. Compiled only where `unbenched` is.
+    #[cfg(any(test, feature = "flex-unbenched"))]
+    pub operator_mic: Option<ptt_evidence::OperatorKey>,
 }
 
 impl Config {
@@ -218,6 +233,8 @@ impl Config {
             unbenched: false,
             #[cfg(any(test, feature = "flex-unbenched"))]
             operator_key: ptt_evidence::OPERATOR_KEY,
+            #[cfg(any(test, feature = "flex-unbenched"))]
+            operator_mic: ptt_evidence::OPERATOR_MIC,
         }
     }
 }
@@ -336,10 +353,11 @@ pub enum Event {
     /// A readback check failed, for the diagnostic log. It decides nothing: what the failure
     /// causes (the stops again, [`Event::UnkeyUnconfirmed`], the close) follows as it always has.
     ReadbackFailed(ReadbackFailure),
-    /// The operator's own key took over a transmission of ours of `kind` (CWX): the radio reported
-    /// it keying ([`ptt_evidence::OPERATOR_KEY`]). The radio's CW buffer is cleared at once, the
-    /// operation ends with no unkey and no alarm, and the rest of the message is to be dropped,
-    /// never sent.
+    /// The operator's own input took over a transmission of ours of `kind`: their key, our CWX
+    /// ([`ptt_evidence::OPERATOR_KEY`]), or their mic, our over ([`ptt_evidence::OPERATOR_MIC`]).
+    /// For CWX the radio's CW buffer is cleared at once and the operation ends with no unkey; for
+    /// an over our own unkey goes out at once. Either way no alarm, and the rest of the message is
+    /// to be dropped, never sent.
     OperatorTookOver { kind: StartKind },
     /// The session ended. Nothing follows.
     Closed {
@@ -465,7 +483,8 @@ struct Keyed {
     clear_replied_ms: Option<u64>,
     /// The unkey that follows a clear the radio did not act on has gone out.
     unkey_followed: bool,
-    /// Our CWX was handed to the operator's own key ([`Event::OperatorTookOver`]).
+    /// Our CWX was handed to the operator's own key, or our over to their mic
+    /// ([`Event::OperatorTookOver`]).
     handed_over: bool,
 }
 
@@ -532,7 +551,9 @@ impl Session {
         let deadline = now_ms + config.registration_timeout_ms;
         let tracker = StopTracker::new(config.unkey_deadline_ms);
         #[cfg(any(test, feature = "flex-unbenched"))]
-        let tracker = tracker.with_operator_key(config.operator_key);
+        let tracker = tracker
+            .with_operator_key(config.operator_key)
+            .with_operator_mic(config.operator_mic);
         Session {
             keepalive: Keepalive::new(config.ping_interval_ms),
             tracker,
@@ -662,7 +683,7 @@ impl Session {
     }
 
     /// Whether the interlock's last owner is this session or one of our previous sessions, and the
-    /// radio is not keying for the operator's own key alone ([`Self::operators_key_alone`]).
+    /// radio is not keying for the operator's own key or mic alone ([`Self::operators_key_alone`]).
     fn named(&self) -> bool {
         self.model
             .interlock
@@ -671,20 +692,24 @@ impl Session {
             && !self.operators_key_alone()
     }
 
-    /// Whether the radio keys for the operator's own key alone ([`ptt_evidence::OPERATOR_KEY`]): no
-    /// operation of ours is open, and the last whole sample is that key keying under this session's
-    /// handle. The radio names us, but the transmission is the operator's, and no stop of ours goes
-    /// out against it. Never under a previous session's handle: what that session keyed, Nexus
-    /// cannot know, so every stop still goes out for it. With no key named, never.
+    /// Whether the radio keys for the operator's own key or mic alone
+    /// ([`ptt_evidence::OPERATOR_KEY`], [`ptt_evidence::OPERATOR_MIC`]): no operation of ours is
+    /// open, and the last whole sample is that input keying under this session's handle. The radio
+    /// names us, but the transmission is the operator's, and no stop of ours goes out against it.
+    /// Never under a previous session's handle: what that session keyed, Nexus cannot know, so
+    /// every stop still goes out for it. With neither named, never.
     fn operators_key_alone(&self) -> bool {
-        let (Some(ours), Some(key)) = (self.handle, self.tracker.operator_key()) else {
+        let Some(ours) = self.handle else {
             return false;
         };
         self.keyed.is_none()
             && self.model.interlock.sample.as_ref().is_some_and(|s| {
                 matches!(s.state.as_str(), "PTT_REQUESTED" | "TRANSMITTING")
                     && s.tx_client_handle == ours
-                    && key.keys(&s.source, s.tx_client_handle, ours)
+                    && [self.tracker.operator_key(), self.tracker.operator_mic()]
+                        .into_iter()
+                        .flatten()
+                        .any(|input| input.keys(&s.source, s.tx_client_handle, ours))
             })
     }
 
@@ -844,8 +869,12 @@ impl Session {
         self.tracker.poll(now);
         self.check_evidence(now);
         // The operator's own key took our CWX over: until our part has ended, nothing of ours
-        // starts, a word of the dropped message least of all.
-        if self.keyed.is_some_and(|k| k.handed_over) {
+        // starts, a word of the dropped message least of all. (An over handed to their mic is
+        // still ours until its unkey is proven: admission refuses a start then as already keyed.)
+        if self
+            .keyed
+            .is_some_and(|k| k.handed_over && k.kind == StartKind::Cwx)
+        {
             return Err(Refusal::OperatorKeying);
         }
         let admitted = self.admit(start)?;
@@ -1043,10 +1072,11 @@ impl Session {
         }
     }
 
-    /// The readback handed our CWX to the operator's own key: their paddle wins. The clear goes
-    /// out at once unless one has (a stop of our own, never gated), and whoever sent the message
-    /// is told to drop the rest of it. The escalation clock the clear arms stands, so a clear the
-    /// radio never takes still ends in the alarm.
+    /// The readback handed our CWX to the operator's own key, or our over to their mic: they win.
+    /// Our own stop goes out at once unless one has (the clear; for an over, our unkey: a stop of
+    /// our own, never gated), and whoever sent the message is told to drop the rest of it. The
+    /// escalation clock the stop arms stands, so a stop the radio never takes still ends in the
+    /// alarm.
     fn check_hand_over(&mut self, out: &mut dyn Write, now: u64) {
         if !self.tracker.handed_over() {
             return;
@@ -1054,17 +1084,21 @@ impl Session {
         let Some(keyed) = self
             .keyed
             .as_mut()
-            .filter(|k| k.kind == StartKind::Cwx && !k.handed_over)
+            .filter(|k| matches!(k.kind, StartKind::Cwx | StartKind::Key) && !k.handed_over)
         else {
             return;
         };
         keyed.handed_over = true;
-        let clear = keyed.first_stop_ms.is_none();
-        self.events.push_back(Event::OperatorTookOver {
-            kind: StartKind::Cwx,
-        });
-        if clear {
-            self.stop(out, TxStop::CwxClear, now);
+        let kind = keyed.kind;
+        let stop = keyed.first_stop_ms.is_none();
+        self.events.push_back(Event::OperatorTookOver { kind });
+        if stop {
+            let own = if kind == StartKind::Key {
+                TxStop::Unkey
+            } else {
+                TxStop::CwxClear
+            };
+            self.stop(out, own, now);
         }
     }
 
@@ -1509,7 +1543,13 @@ impl Session {
             let due = keyed
                 .first_stop_ms
                 .is_some_and(|first| now >= first.saturating_add(self.config.unkey_deadline_ms));
-            if due && !keyed.escalated {
+            // Our CWX handed to the operator's own key and its end unproven (a clear the radio
+            // refused while the paddle keyed): the escalation's unkey waits while the radio shows
+            // that key keying, and for the hold after it lets go, and goes as soon as the radio
+            // shows our own CW (operator ruling, 2026-10-12, "Wait while the paddle keys"). Our
+            // own stops are never held: Stop TX and `T 0` still send the clear.
+            let paddle = keyed.handed_over && self.tracker.operator_on_air();
+            if due && !keyed.escalated && !paddle {
                 self.escalate(out, now);
                 return;
             }
@@ -1825,10 +1865,10 @@ impl Connection {
         rx.recv().map_err(|_| None)?.map_err(Some)
     }
 
-    /// Whether an over of ours (`xmit 1`) is unconfirmed, on a session that has not closed: what
-    /// the last published state says, without copying it. The DAX transmit pacer sends only then:
-    /// a CWX word, a tune or an ATU cycle is keyed unconfirmed too, but the radio makes it itself,
-    /// and no DAX audio belongs on it.
+    /// Whether an over of ours (`xmit 1`) is unconfirmed, on a session that has not closed, and
+    /// not handed to the operator's mic: what the last published state says, without copying it.
+    /// The DAX transmit pacer sends only then: a CWX word, a tune or an ATU cycle is keyed
+    /// unconfirmed too, but the radio makes it itself, and no DAX audio belongs on it.
     pub fn over_keyed(&self) -> bool {
         self.shared.open.load(Ordering::Acquire) && self.shared.over.load(Ordering::Acquire)
     }
@@ -2020,7 +2060,10 @@ fn publish(session: &Session, shared: &Shared) {
     let snapshot = session.snapshot();
     shared.on_air.store(snapshot.ours_on_air, Ordering::Release);
     *lock(&shared.snapshot) = snapshot;
-    let over = session.keyed.is_some_and(|k| k.kind == StartKind::Key);
+    // An over handed to the operator's mic carries no more of our audio.
+    let over = session
+        .keyed
+        .is_some_and(|k| k.kind == StartKind::Key && !k.handed_over);
     shared.over.store(over, Ordering::Release);
     shared.open.store(!session.is_closed(), Ordering::Release);
     shared.changed.notify_all();

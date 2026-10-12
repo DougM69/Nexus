@@ -141,7 +141,9 @@ asks the radio to take its transmit audio from DAX, keys only once the radio
 reports it, plays the message, unkeys, and gives the radio its mic back once the
 unkey is confirmed. A message the radio has not switched for within 2 seconds,
 or that something else keys first, is dropped, never played later, and the
-status bar says why; one longer than 20 seconds is refused. Right after a
+status bar says why; one longer than 20 seconds is refused. Turning native DAX
+audio off while a message plays ends the message and unkeys at once, as Stop
+does; TX On stays as it was. Right after a
 message Nexus's own PTT can be refused for a moment, until the mic is back; the
 mic's own PTT works throughout. **SSTV and APRS can't send** then: SSTV rides
 Phone, and APRS uses FM, which the radio treats as a voice mode too. Each says

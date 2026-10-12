@@ -368,7 +368,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CW buffer at once: the rest of the message is dropped and never resent, with no alarm, no
   reconnect and no unkey sent against your paddle, and the CW screen says your paddle took over.
   An F-key pressed while your paddle keys the radio is refused with that reason, and the next one
-  after it sends as usual. Any other keying during Nexus's CW (your mic's PTT, a foot switch, the
+  after it sends as usual. If the radio refuses that clear while your paddle keys, the unkey Nexus
+  would send 5 seconds later waits while the radio shows your paddle keying, and goes as soon as
+  the radio shows Nexus's own CW, or once you have let go with Nexus's CW not shown to have
+  stopped. Any other keying during Nexus's CW (your mic's PTT, a foot switch, the
   accessory jack, another program) still gets the amber alarm, and so does Nexus's own CW still
   keying after its clear. The unkey that follows Stop TX's clear now goes out only while the radio
   still shows Nexus's own CW transmitting. Until the bench has shown it, a paddle touch during
@@ -409,11 +412,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio its mic back once the unkey is confirmed. A message the radio has not switched for within 2
   seconds, or that something else keys first, is dropped, never played later, and the status bar
   says why; a message longer than 20 seconds, or one sent while something else is transmitting, is
-  refused with the reason. Stop TX ends a message at once. Right after a message Nexus's own PTT
-  can be refused for a moment, until the mic is back; the mic's own PTT works throughout, and a
-  message plays with the radio's VOX on. Pressing the mic's PTT during a message still gets the
-  amber alarm and a reconnect, as before, until a tester's bench shows what the radio reports for
-  it. SSTV and APRS stay refused in Phone and FM. NEEDS-BENCH on a FLEX radio.
+  refused with the reason. Stop TX ends a message at once, and so does turning native DAX audio off
+  while it plays: the rest is dropped and the radio unkeyed, and TX On stays as it was. Right after
+  a message Nexus's own PTT can be refused for a moment, until the mic is back; the mic's own PTT
+  works throughout, and a message plays with the radio's VOX on. Pressing the mic's PTT during a
+  message still gets the amber alarm and a reconnect, as before, until a tester's bench shows what
+  the radio reports for it; from then on your mic wins: Nexus drops the message and ends its own
+  key, with no alarm (built now, off until then). SSTV and APRS stay refused in Phone and FM.
+  NEEDS-BENCH on a FLEX radio.
 - **A contest log line says what each exchange box is for.** The box for the other station's
   county was captioned QTH, which reads as anything but "their county". Each box now says what it
   holds for your role in the contest you picked: **County / State** inside a QSO party's state and

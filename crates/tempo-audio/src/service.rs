@@ -6397,6 +6397,23 @@ impl RadioLoop {
             {
                 engine_lock(engine).halt_tx_for_lost_slot_audio();
             }
+            // …and a voice-keyer message through the client's switch to DAX, which hands its
+            // whole waveform to the tee at its key in the same way: it ends as the keyer's own
+            // Stop ends it, the rest dropped and the radio unkeyed in this same tick (the voice
+            // block below), with TX On left as it was (operator ruling, 2026-10-12, "End the
+            // message and unkey"). Only while its audio is still going out, as for a slot over.
+            if self.dax_tee_id.is_some()
+                && self.flex_voice_until_ms.is_some_and(|t| {
+                    self.tx_until_ms == Some(t) && now < t - crate::slot::TX_TAIL_MS
+                })
+            {
+                tempo_core::applog::info(
+                    "tx",
+                    "voice-keyer message ended: its Flex native DAX audio went part way through \
+                     (unkeyed; TX On unchanged)",
+                );
+                engine_lock(engine).stop_voice();
+            }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
@@ -10676,10 +10693,22 @@ impl RadioLoop {
                 &captured
             };
 
+            // THE OPERATOR'S MIC TOOK OVER (Nexus's Flex client, once a tester's bench has named
+            // what the radio reports for it): the client has sent our own unkey and stopped the
+            // message's DAX audio, and the message ends here as the keyer's own Stop ends it. Not
+            // Stop TX: the latch, the stop hold and every other gate stay as they were.
+            let mic_took_over = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(crate::flex::FlexDaemon::take_operator_mic);
             let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine_lock(engine);
                 if eng.is_recording() {
                     eng.push_record_samples(rec_samples);
+                }
+                if mic_took_over {
+                    eng.stop_voice();
                 }
                 (
                     eng.take_voice_abort(),

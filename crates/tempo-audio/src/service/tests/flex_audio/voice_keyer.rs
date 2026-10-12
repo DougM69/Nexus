@@ -512,6 +512,64 @@ fn stop_tx_mid_message_unkeys_and_drops_the_rest_before_the_mic_comes_back() {
     }
 }
 
+/// ⭐ NATIVE AUDIO OFF MID-MESSAGE ENDS IT AT ONCE (operator ruling, 2026-10-12, "End the message
+/// and unkey", and the line the signed text gained for it). The message's audio goes with the DAX
+/// route, so the over ends as the keyer's own Stop ends it: the unkey within a few ticks of the
+/// switch, never at the message's own end; nothing of the rest reaches the radio; and the mic comes
+/// back after the radio has let go. TX On stays as it was: the latch on, no lane, no alarm.
+#[test]
+fn native_audio_off_mid_message_ends_it_and_unkeys_with_tx_on_as_it_was() {
+    let mut s = phone();
+    let since = Instant::now();
+    s.engine
+        .lock()
+        .unwrap()
+        .send_voice(message_of(3.0))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while dax_in(&s, since).len() < 20 {
+        assert!(
+            Instant::now() < deadline,
+            "the message never went out as DAX"
+        );
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    s.set_native_audio(false);
+    let off = Instant::now();
+    run_until_seen(&mut s, since, "radio dax=0");
+    s.run(300);
+    let unkey = seen_at(&s, since, "xmit 0").expect("the unkey");
+    let late: Vec<Duration> = dax_in(&s, since)
+        .iter()
+        .filter(|(t, _)| *t > unkey)
+        .map(|(t, _)| t.duration_since(unkey))
+        .collect();
+    let frames: usize = dax_in(&s, since).iter().map(|(_, n)| n).sum();
+    // One engine lock at a time: a guard taken inside the format below would live to its end.
+    let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
+    let tx_enabled = s.engine.lock().unwrap().tx_enabled();
+    let alarm = names_an_alarm(&cat_status(&s).1);
+    assert_eq!(
+        format!(
+            "unkey_within_500ms={} late_dax={} frames_under_a_second={} tx_enabled={tx_enabled} \
+             dropped={} slot_lane={} alarm={alarm} wire={:?}",
+            unkey.duration_since(off) < Duration::from_millis(500),
+            late.iter().any(|d| *d >= Duration::from_millis(30)),
+            frames < ONE_SECOND_OF_DAX,
+            snap["radio"]["voiceDropped"],
+            snap["radio"]["slotAudioLost"],
+            voice_trace(&s, since)
+        ),
+        "unkey_within_500ms=true late_dax=false frames_under_a_second=true tx_enabled=true \
+         dropped=null slot_lane=null alarm=false wire=[\"stream create type=dax_tx\", \
+         \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\", \"transmit \
+         set dax=0\", \"radio dax=0\"]",
+        "the unkey {:?} after native audio went off",
+        unkey.duration_since(off)
+    );
+}
+
 /// …and Stop during the wait: the message never plays, the radio is never keyed, and the mic comes
 /// back once the radio has reported the DAX it was switching to.
 #[test]
@@ -878,5 +936,89 @@ fn the_mics_ptt_during_a_message_still_alarms_and_reconnects() {
             .collect::<Vec<_>>(),
         ["xmit 1", "xmit 0", "xmit 0"],
         "the unkey sent again, unproven"
+    );
+}
+
+/// The client's session taking `MIC` under our handle as the operator's own mic, as a bench might
+/// name it (no bench has shown what the radio reports for the mic's PTT during an over).
+fn mic_named() -> tempo_net::flex::session::Config {
+    let mut config = tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap());
+    config.operator_mic = Some(tempo_net::flex::ptt_evidence::OperatorKey {
+        source: "MIC",
+        handle: tempo_net::flex::ptt_evidence::KeyHandle::Ours,
+    });
+    config
+}
+
+/// When the radio first sent a keying line under `source` at or after `since`.
+fn keyed_under(s: &FlexScene, since: Instant, source: &str) -> Option<Instant> {
+    s.log()
+        .into_iter()
+        .filter(|(at, _)| *at >= since)
+        .find(|(_, e)| {
+            matches!(e, SimEvent::Sent { line, .. }
+                if line.contains("|interlock ") && line.contains(" state=TRANSMITTING ")
+                    && line.contains(&format!(" source={source} ")))
+        })
+        .map(|(at, _)| at)
+}
+
+/// ⭐ YOUR MIC WINS (operator rulings, 2026-10-12, "Your mic wins, like the paddle", built switched
+/// off): with the mic named as a bench would name it, the operator's mic PTT 300 ms into a message
+/// ends the message as the keyer's own Stop does. Nexus's unkey goes out on the radio's first line
+/// for the mic, the message's DAX stops with it, the rest is dropped, and nothing alarms or
+/// reconnects: no amber, no lane, TX On as it was. Once the mic lets go and the radio is idle, the
+/// mic is put back as after any message.
+#[test]
+fn with_a_mic_named_the_mics_ptt_during_a_message_ends_it_with_no_alarm() {
+    let mut s = FlexScene::with_faults(
+        true,
+        reports(&["USB"]),
+        vec![tempo_flexsim::Fault::OperatorMic {
+            after: Duration::from_millis(300),
+            source: "MIC".into(),
+            handle: None,
+            hold: Duration::from_millis(2_000),
+        }],
+        mic_named(),
+    );
+    shack_on(&mut s);
+    let since = Instant::now();
+    s.engine
+        .lock()
+        .unwrap()
+        .send_voice(message_of(3.0))
+        .unwrap();
+    run_until_seen(&mut s, since, "radio dax=0");
+    s.run(300);
+    let mic = keyed_under(&s, since, "MIC").expect("the mic's PTT");
+    let unkey = seen_at(&s, since, "xmit 0").expect("the unkey");
+    let late: Vec<Duration> = dax_in(&s, since)
+        .iter()
+        .filter(|(t, _)| *t > mic)
+        .map(|(t, _)| t.duration_since(mic))
+        .collect();
+    let frames: usize = dax_in(&s, since).iter().map(|(_, n)| n).sum();
+    // One engine lock at a time: a guard taken inside the format below would live to its end.
+    let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
+    let tx_enabled = s.engine.lock().unwrap().tx_enabled();
+    let alarm = names_an_alarm(&cat_status(&s).1);
+    assert_eq!(
+        format!(
+            "unkey_after_mic={} late_dax={} frames_under_a_second={} tx_enabled={tx_enabled} \
+             dropped={} alarm={alarm} rebuilt={} wire={:?}",
+            unkey >= mic && unkey.duration_since(mic) < Duration::from_millis(100),
+            late.iter().any(|d| *d >= Duration::from_millis(30)),
+            frames < ONE_SECOND_OF_DAX,
+            snap["radio"]["voiceDropped"],
+            s.rebuilt.load(std::sync::atomic::Ordering::Relaxed),
+            voice_trace(&s, since)
+        ),
+        "unkey_after_mic=true late_dax=false frames_under_a_second=true tx_enabled=true \
+         dropped=null alarm=false rebuilt=false wire=[\"stream create type=dax_tx\", \
+         \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"xmit 0\", \"idle\", \
+         \"transmit set dax=0\", \"radio dax=0\"]",
+        "the unkey {:?} after the mic's line",
+        unkey.saturating_duration_since(mic)
     );
 }
