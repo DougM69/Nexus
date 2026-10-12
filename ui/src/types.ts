@@ -3380,6 +3380,11 @@ export interface FieldDayStatus {
    *  it is also the "I moved" edit surface, and committing a live serial through `move_to`
    *  freezes the run at that number. */
   composingText?: string
+  /** The same exchange as a PHONE contact sends it: the report at two digits (`'59 MCHE'` where
+   *  `composingText` reads `'599 MCHE'`), as the engine stamps a phone row. What the phone
+   *  cockpit's Give line and a phone strip's Sending line read. Absent from an older station and
+   *  from the hosted page (which is not sent it yet): read `composingText` then. */
+  composingTextPhone?: string
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.

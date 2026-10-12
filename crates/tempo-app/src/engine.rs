@@ -9563,12 +9563,37 @@ impl Engine {
     /// operator is — Field Day's class and section, a QSO party's QTH — and refuses a
     /// serial by name (`ContestSession::check_move`). So the rendered string and the
     /// editable vector are deliberately two things.
+    ///
+    /// ⚠️ **The report is the session's, the 3-digit form** — what a CW or digital
+    /// contact sends. A phone contact sends `59`, and reads
+    /// [`contest_composing_text_phone`](Self::contest_composing_text_phone).
     pub fn contest_composing_text(&self) -> Option<String> {
+        self.composing_text_as(None)
+    }
+
+    /// ⭐ **The same exchange as a PHONE contact sends it** — the report at phone's two
+    /// digits, `59 MCHE` where [`contest_composing_text`](Self::contest_composing_text) reads
+    /// `599 MCHE`. The session has no mode, so it holds the 3-digit constant, and a phone row
+    /// is stamped `59` when it is logged (`ContestSession::fit_sent_rst`, from `tx_for_row`).
+    /// This is rendered through that same function, so the line the phone operator reads
+    /// aloud and the row the file carries cannot disagree: the phone cockpit's Give line and
+    /// a phone strip's Sending line read this. An exchange with no report reads the same.
+    pub fn contest_composing_text_phone(&self) -> Option<String> {
+        self.composing_text_as(Some("PH"))
+    }
+
+    /// The composing exchange in send order, with the issued serial, and — for a
+    /// `mode_class` — its report fitted as a row of that class is stamped.
+    fn composing_text_as(&self, mode_class: Option<&str>) -> Option<String> {
         use tempo_core::contest::FieldKind;
         let Mode::FieldDay { station, .. } = &self.mode else {
             return None;
         };
         let session = &station.log.session;
+        let mut sent = session.my_exchange.clone();
+        if let Some(class) = mode_class {
+            session.fit_sent_rst(&mut sent, class);
+        }
         let serial = session.serial_now();
         let words: Vec<String> = session
             .role()
@@ -9577,7 +9602,12 @@ impl Engine {
             .filter_map(|key| match session.exchange.field(key).map(|f| f.kind) {
                 None => None,
                 Some(FieldKind::Serial { .. }) => serial.map(|n| n.to_string()),
-                Some(_) => Some(session.field(key).to_string()),
+                Some(_) => Some(
+                    sent.iter()
+                        .find(|v| v.key == *key)
+                        .map(|v| v.raw.clone())
+                        .unwrap_or_default(),
+                ),
             })
             .filter(|v| !v.is_empty())
             .collect();
@@ -46786,6 +46816,118 @@ mod tests {
             ]
         };
         (e, ex)
+    }
+
+    /// ⭐ **What the Sending line says in each mode is what that mode's row is stamped with.** An
+    /// Illinois party runs CW and phone in ONE session, whose report is the 3-digit constant. A
+    /// phone strip reads [`Engine::contest_composing_text_phone`] (`59 KANE`) and a phone row's
+    /// sent exchange is the same; CW reads [`Engine::contest_composing_text`] (`599 KANE`) and a
+    /// CW row's is that. Phone used to read `599 KANE` and log `59 KANE`.
+    #[test]
+    fn the_sending_line_in_each_mode_is_what_that_modes_row_is_stamped_with() {
+        let (mut e, ex) = ilqp_from_kane();
+        assert_eq!(e.contest_composing_text().as_deref(), Some("599 KANE"));
+        assert_eq!(e.contest_composing_text_phone().as_deref(), Some("59 KANE"));
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            (fd.composing_text.as_str(), fd.composing_text_phone.as_str()),
+            ("599 KANE", "59 KANE"),
+            "the snapshot carries both"
+        );
+        assert!(e
+            .contest_log_manual("K9AAA", &ex("COOK"), "PH", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9BBB", &ex("COOK"), "CW", None)
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            [fd.composing_text_phone.as_str(), fd.composing_text.as_str()],
+            "the phone row, then the CW row"
+        );
+    }
+
+    /// ⭐ **Each contact carries its own mode's reports into the files the sponsor gets**, by
+    /// value: Cabrillo and ADIF. The SENT report is the row's — the session holds the 3-digit
+    /// constant and [`ContestSession::tx_for_row`](tempo_core::contest::ContestSession::tx_for_row)
+    /// stamps `59` on a phone row. The RECEIVED one is what the strip handed over, written as
+    /// given and never fitted, because it is what the other station sent. So the rehearsal's
+    /// CW contact — one the strip handed the phone default `59` — goes into both files as
+    /// `59`: no export can tell that from a report really heard, and the strip must not hand it
+    /// over (`LogEntry`'s `fdValue`).
+    #[test]
+    fn a_phone_and_a_cw_contact_carry_their_own_reports_into_the_cabrillo_and_the_adif() {
+        let (mut e, _) = ilqp_from_kane();
+        let rcvd = |rst: &str, qth: &str| {
+            vec![
+                ("RST".to_string(), rst.to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K9AAA", &rcvd("59", "COOK"), "PH", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9BBB", &rcvd("599", "WILL"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9EEE", &rcvd("59", "MCDN"), "CW", None)
+            .unwrap());
+
+        let cab = e.export_log("cabrillo").expect("one entry");
+        let qso = |call: &str| {
+            cab.lines()
+                .find(|l| l.starts_with("QSO:") && l.contains(&format!(" {call} ")))
+                .unwrap_or_else(|| panic!("no QSO line for {call} in\n{cab}"))
+                .to_string()
+        };
+        for (call, mode, tail) in [
+            ("K9AAA", " PH ", " W9XYZ 59 KANE K9AAA 59 COOK"),
+            ("K9BBB", " CW ", " W9XYZ 599 KANE K9BBB 599 WILL"),
+            ("K9EEE", " CW ", " W9XYZ 599 KANE K9EEE 59 MCDN"),
+        ] {
+            let line = qso(call);
+            assert!(
+                line.contains(mode) && line.trim_end().ends_with(tail),
+                "{call}: {line:?}"
+            );
+        }
+
+        // The contest's own ADIF: the received report under its standard tag, and the row's sent
+        // exchange in the carrier a restart reads back. An ADIF length is exact, so `<RST_RCVD:2>59`
+        // can only be 59.
+        let record = |adif: &str, call: &str| {
+            let tag = format!("<CALL:{}>{call}", call.len());
+            adif.split("<EOR>")
+                .find(|r| r.contains(&tag))
+                .unwrap_or_else(|| panic!("no ADIF record for {call} in\n{adif}"))
+                .to_string()
+        };
+        let adif = e.export_log("adif").expect("one entry");
+        for (call, sent, got) in [
+            ("K9AAA", "<APP_NEXUS_MYEX:28>RST::59;", "<RST_RCVD:2>59"),
+            ("K9BBB", "<APP_NEXUS_MYEX:29>RST::599;", "<RST_RCVD:3>599"),
+            ("K9EEE", "<APP_NEXUS_MYEX:29>RST::599;", "<RST_RCVD:2>59"),
+        ] {
+            let r = record(&adif, call);
+            assert!(r.contains(sent) && r.contains(got), "{call}: {r:?}");
+        }
+        // …and the general log's, once merged: the ADIF the operator's uploads are made from.
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("still in the party")
+        };
+        let mut general = tempo_core::logbook::Logbook::new();
+        tempo_core::contest::merge::merge_into_general(&station.log, "pos", &mut general);
+        let merged = general.adif();
+        for (call, sent, got) in [
+            ("K9AAA", "<RST_SENT:2>59", "<RST_RCVD:2>59"),
+            ("K9BBB", "<RST_SENT:3>599", "<RST_RCVD:3>599"),
+            ("K9EEE", "<RST_SENT:3>599", "<RST_RCVD:2>59"),
+        ] {
+            let r = record(&merged, call);
+            assert!(r.contains(sent) && r.contains(got), "merged {call}: {r:?}");
+        }
     }
 
     /// ⭐ **A county line is ONE call that logs one scored row PER COUNTY, at one time.**

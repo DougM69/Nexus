@@ -569,6 +569,10 @@ export function LogEntry({
   }))
   const setFdField = (key: string, v: string) =>
     setFdFields((prev) => ({ ...prev, [key]: v.toUpperCase() }))
+  /** The boxes the operator typed in (or picked, or grabbed into) since the strip last cleared —
+   *  the fill state's `typed`, which travels with the shared entry, rendered here. A report box
+   *  not in it shows the mode's own report (`fdValue`). */
+  const [typedMarks, setTypedMarks] = useState<FillState['typed']>({})
   // ⭐ THE EXCHANGE TYPE-AHEAD — which box is open and what it is offering. One entry,
   // not one per slot: only the box being typed in shows a list, and a stale list under
   // another box would be a menu of the wrong universe.
@@ -603,9 +607,20 @@ export function LogEntry({
   // What a box holds: what was typed or filled, else — for a signal report nobody has
   // touched — the default report. A box is empty only because somebody emptied it, so the
   // report is there from the first contact however late the session's slots arrive.
+  //
+  // ⭐ A REPORT IS THE OPERATOR'S ONLY WHILE THEY HAVE TYPED IT FOR THIS CONTACT (`typedMarks`).
+  // Otherwise it is the report of the mode this strip logs under NOW — 59 on phone, 599 on CW
+  // and the keyboard modes — whatever the box map holds, because a value there may have been
+  // written under another mode: one strip lives across a mode change (the logger window follows
+  // the station's section, the Satellites strip the station's mode), and the shared entry hands
+  // one window's boxes to another cockpit's strip. The map used to hold the reset report itself
+  // from the first logged contact on, so a move from Phone to CW kept offering 59, and a CW
+  // contact went into the log with it.
   const rstDefault = defaultContestRst(fdMode)
-  const fdValue = (f: ContestFieldSpec): string =>
-    fdFields[f.key] ?? (f.kind === 'rst' ? rstDefault : '')
+  const fdValue = (f: ContestFieldSpec): string => {
+    if (f.kind !== 'rst') return fdFields[f.key] ?? ''
+    return typedMarks[f.key] ? (fdFields[f.key] ?? rstDefault) : rstDefault
+  }
 
   // Pre-fill the exchange from the last logged FD contact — but ONLY when the
   // log actually GREW. `fieldDay` is a fresh object every 300 ms snapshot poll;
@@ -617,8 +632,10 @@ export function LogEntry({
   // `class`/`section`, which is what this reads through `fdRcvd`. That carries Field
   // Day's two slots and nothing else, so every other slot starts the next contact
   // EMPTY — the next station's zone is not the last one's — except a signal report,
-  // which goes back to its default: it read blank here, and every contest that sends
-  // one needed it retyped on every contact.
+  // which goes back to untouched, the mode's own: it read blank here, and every contest
+  // that sends one needed it retyped on every contact. Untouched, not WRITTEN: a report
+  // written here is the mode this contact was logged in, and it stayed in the box after a
+  // move to another one.
   const fdLogLen = fieldDay?.log?.length ?? 0
   const fdSeenLen = useRef(fdLogLen)
   useEffect(() => {
@@ -630,7 +647,8 @@ export function LogEntry({
         setFdFields((prev) => {
           const next = { ...prev }
           for (const f of fdReceives) {
-            next[f.key] = f.kind === 'rst' ? rstDefault : fdRcvd(lastEntry, f.key)
+            if (f.kind === 'rst') delete next[f.key]
+            else next[f.key] = fdRcvd(lastEntry, f.key)
           }
           return next
         })
@@ -850,6 +868,7 @@ export function LogEntry({
     if (next === fillRef.current) return
     fillRef.current = next
     setFillMarks(next.filled)
+    setTypedMarks(next.typed)
   }
   /** The operator typed in a box (or picked from its list, or grabbed into it): it is theirs. */
   const noteTyped = (key: string) => setFill(typedIn(fillRef.current, key))
@@ -908,6 +927,7 @@ export function LogEntry({
       setFdFields(c.fields)
       fillRef.current = c.fill
       setFillMarks(c.fill.filled)
+      setTypedMarks(c.fill.typed)
       setRemoveArmed(c.take.armed)
       setRemoveNote(c.take.note)
     },
@@ -1906,6 +1926,14 @@ export function LogEntry({
   // preformatted string off the snapshot — the only thing that renders a row's sent
   // exchange is `sent_exchange(row, spec)` in Rust, and this describes no row.
   const fdComposing = fieldDay?.composing ?? []
+  /** The Sending line: the session's exchange as THIS strip's contacts send it. A phone strip reads
+   *  the engine's phone form, its report at two digits (`59`), as a phone row is stamped; CW and
+   *  the keyboard modes read the session's own (`599`). A station that sends no phone form reads
+   *  as it always did. */
+  const fdSending =
+    ((fdMode ?? 'PH') === 'PH' ? fieldDay?.composingTextPhone : undefined) ||
+    fieldDay?.composingText ||
+    fdComposing.map((v) => v.raw).filter((r) => r !== '').join(' ')
 
   /** "I moved" — commit the edited sent exchange (§4.1).
    *
@@ -2304,7 +2332,7 @@ export function LogEntry({
               {movingTo === null ? (
                 <>
                   <span className="mono le-fd-sent-val" title={t('logEntry.sent.title')}>
-                    {fieldDay?.composingText || fdComposing.map((v) => v.raw).filter((r) => r !== '').join(' ')}
+                    {fdSending}
                   </span>
                   <button
                     type="button"

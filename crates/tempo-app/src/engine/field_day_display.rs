@@ -141,6 +141,8 @@ impl Engine {
             // vector below because that one is also the "I moved" edit surface; see
             // `FieldDayStatus::composing_text`.
             composing_text: self.contest_composing_text().unwrap_or_default(),
+            // …and as a phone contact sends it, the report at two digits.
+            composing_text_phone: self.contest_composing_text_phone().unwrap_or_default(),
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             // The dupe rule's mode grouping, so the strip's badge and the engine's
             // refusal answer the same question.
@@ -248,6 +250,7 @@ impl Engine {
         // per-string rule and must be refused here first rather than there.
         check(&self.contest_sent_exchange().unwrap_or_default())?;
         check(&self.contest_composing_text().unwrap_or_default())?;
+        check(&self.contest_composing_text_phone().unwrap_or_default())?;
         // The advisory band list comes out of a rules file, which bounds nothing about it.
         for b in log.ruleset().bands {
             check(b)?;

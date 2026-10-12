@@ -35,9 +35,16 @@ struct Capture {
 /// screen: one read off any other page is one a peer could make a key to match. The page's Field
 /// Day check refuses a key it does not know, so leaving them out also keeps every published page
 /// able to read such a host. The Field Day capture and Remote's snapshot both go through here.
+///
+/// The phone form of the composing exchange (`FieldDayStatus::composing_text_phone`) stays out for
+/// that reason alone: no published page lists it yet, and emptied it is not serialised. The page
+/// reads `composing_text`, as it always did.
 pub(in crate::remote_service) fn leave_out_the_hosts_own(
     field_day: &mut Option<tempo_app::dto::FieldDayStatus>,
 ) {
+    if let Some(f) = field_day.as_mut() {
+        f.composing_text_phone.clear();
+    }
     if let Some(club) = field_day.as_mut().and_then(|f| f.club.as_mut()) {
         club.club_code.clear();
         for r in &mut club.refused {
@@ -129,7 +136,17 @@ pub(in crate::remote_service) mod tests {
             let original = e.lock().unwrap().field_day_log_adif();
             let value = read_engine(&e).unwrap();
             let native = e.lock().unwrap().snapshot().field_day.unwrap();
-            assert_eq!(value["fieldDay"], serde_json::to_value(native).unwrap());
+            // The station's own status, less the one key no published page lists yet: the phone
+            // form of the exchange (`leave_out_the_hosts_own`). Everything else is the same.
+            let mut native = serde_json::to_value(native).unwrap();
+            assert!(
+                native
+                    .as_object_mut()
+                    .and_then(|o| o.remove("composingTextPhone"))
+                    .is_some(),
+                "CONTROL: the station's own status carries the phone form ({event})"
+            );
+            assert_eq!(value["fieldDay"], native);
             assert_eq!(value["fieldDay"]["qsoCount"], 2);
             assert_eq!(value["fieldDay"]["points"], 3);
             assert_eq!(

@@ -590,3 +590,64 @@ fn an_exchange_with_no_serial_reads_aloud_unchanged() {
         .expect("a Field Day session builds");
     assert_eq!(e.contest_composing_text().as_deref(), Some("2A WI"));
 }
+
+/// ⭐ **On phone the exchange read aloud carries the ISSUED serial too.** The phone cockpit's
+/// Give line and a phone strip's Sending line read `contest_composing_text_phone`, which renders
+/// the serial slot exactly as `contest_composing_text` does — the number this station was
+/// given, never the template's `"0"` — and what is read aloud is what the row records. CQ WPX
+/// SSB is a phone-only contest whose own report is already `59`, so the two forms agree here;
+/// a session that runs CW and phone holds `599` and the phone form fits it (the Illinois party,
+/// `engine.rs`).
+#[test]
+fn on_phone_the_exchange_read_aloud_carries_the_issued_serial() {
+    resolver();
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = "cqwpx_ssb".into();
+    s.contest_category_power = "LOW".into();
+    s.contest_category_assisted = "NON-ASSISTED".into();
+    s.contest_qth_state = "WI".into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-sp")
+        .expect("a CQ WPX SSB session builds");
+    e.set_frequency(14.250, "20m", "USB");
+
+    e.contest_working("K1ABC").expect("a running session");
+    assert_eq!(e.contest_composing_text_phone().as_deref(), Some("59 1"));
+    assert_eq!(
+        e.contest_composing_text().as_deref(),
+        Some("59 1"),
+        "a phone-only contest's own report is two digits already"
+    );
+    let fd = e.snapshot().field_day.expect("in the contest");
+    assert_eq!(fd.composing_text_phone, "59 1", "the snapshot carries it");
+
+    assert!(e
+        .contest_log_manual("K1ABC", &fields(&[("RST", "59"), ("NR", "5")]), "PH", None)
+        .unwrap());
+    let cab = e.export_log("cabrillo").expect("one entry");
+    let lines = qso_lines(&cab);
+    assert_eq!(lines.len(), 1, "{cab}");
+    assert!(
+        lines[0].contains(" PH ") && lines[0].contains(" W9XYZ 59 1 K1ABC 59 5 "),
+        "what was read aloud is what was logged: {:?}",
+        lines[0]
+    );
+}
+
+/// POSITIVE CONTROL — an exchange with no report reads the same on phone: Field Day's.
+#[test]
+fn an_exchange_with_no_report_reads_the_same_on_phone() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = "arrlfd".into();
+    s.fd_class = "2A".into();
+    s.fd_section = "WI".into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-sp")
+        .expect("a Field Day session builds");
+    assert_eq!(e.contest_composing_text_phone().as_deref(), Some("2A WI"));
+    assert_eq!(e.contest_composing_text_phone(), e.contest_composing_text());
+}
