@@ -3442,6 +3442,10 @@ export interface ContestFieldSpec {
    *  it has one. It says what a slot MEANS without the UI guessing from a slot id — the
    *  zone hint is offered on the slot tagged `CQZ`. */
   adif?: string
+  /** The rules file's own word for this slot, the on-air label that introduces it (`NAME` in
+   *  "NAME ALEX"), when it declares one. A box shows it in place of the words the strip derives
+   *  (`receivedCaption`). Absent for a positional slot, which is every slot shipped today. */
+  label?: string
 }
 
 /** One copied exchange value. */

@@ -83,7 +83,11 @@ describe('what an edit sends', () => {
     const form = editForm(one, PARTY)
     expect(editOf({ ...form, call: '  ' }, one, PARTY)).toEqual({ why: 'A contact needs a call.' })
     expect(editOf({ ...form, fields: { RST: '599', QTH: 'XXXX' } }, one, PARTY)).toEqual({
-      why: 'QTH "XXXX" isn\'t a known value — required to log.',
+      why: 'County "XXXX" isn\'t a known value — required to log.',
+    })
+    // …naming the box as it is captioned for the station's role: outside Illinois, IL county.
+    expect(editOf({ ...form, fields: { RST: '599', QTH: 'XXXX' } }, one, PARTY, 'w_ve')).toEqual({
+      why: 'IL county "XXXX" isn\'t a known value — required to log.',
     })
     expect(editOf({ ...form, fields: { RST: '599', QTH: 'COOK/LAKE' } }, one, PARTY)).toEqual({
       why: 'This contact was logged for one county, and an edit keeps it one.',

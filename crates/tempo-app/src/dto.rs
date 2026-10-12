@@ -2644,6 +2644,15 @@ pub struct FdFieldDto {
     /// from a slot id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adif: Option<String>,
+    /// The rules file's own word for this slot — [`FieldSpec::label`], the on-air label that
+    /// introduces it (`NAME` in "NAME ALEX") — when it declares one. The strip captions the
+    /// box with it in place of the words it derives from the slot's lists and kind. `None`
+    /// for a positional slot, which is every slot shipped today, and then the key is absent
+    /// from the wire.
+    ///
+    /// [`FieldSpec::label`]: tempo_core::contest::FieldSpec::label
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl FdFieldDto {
@@ -2678,6 +2687,7 @@ impl FdFieldDto {
             min,
             max,
             adif: f.adif.rcvd.map(str::to_string),
+            label: f.label.map(str::to_string),
         }
     }
 }
@@ -4452,6 +4462,55 @@ mod tests {
         assert!(wire.get("min").is_none() && wire.get("max").is_none());
         assert!(wire.get("adif").is_none());
         assert_eq!(wire["required"], false);
+    }
+
+    /// ⭐ **A slot the rules file labels keeps its label on the strip.** The label is the
+    /// on-air word that introduces the field (`NAME` in "NAME ALEX"), and the strip shows it
+    /// in place of the caption it derives. Every seeded slot is positional, so no seeded
+    /// contest's wire gains a key: the snapshot the strip reads is the bytes it was.
+    #[test]
+    fn a_received_slot_carries_the_rules_files_own_label_and_only_that() {
+        use tempo_core::contest::{AdifTags, FieldKind, FieldSpec};
+        use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
+        static NAME: FieldSpec = FieldSpec {
+            key: "NAME",
+            adif: AdifTags {
+                rcvd: Some("NAME"),
+                sent: Some("MY_NAME"),
+            },
+            label: Some("NAME"),
+            required: false,
+            source: "",
+            kind: FieldKind::Text { max_len: 16 },
+        };
+        let d = FdFieldDto::from_spec(&NAME);
+        assert_eq!(d.label.as_deref(), Some("NAME"));
+        assert_eq!(serde_json::to_value(&d).unwrap()["label"], "NAME");
+        // CONTROL: every slot of every seeded contest, none of which declares a label, sends
+        // no `label` key at all — rather than an empty one a strip would show as a caption.
+        let seed: serde_json::Value =
+            serde_json::from_str(include_str!("../../tempo-core/src/fd_rules.seed.json")).unwrap();
+        let events: Vec<&str> = seed["rulesets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["event"].as_str().unwrap())
+            .collect();
+        assert!(
+            events.len() >= 18,
+            "read only {} seeded contests",
+            events.len()
+        );
+        let mut slots = 0;
+        for event in events {
+            let rs = ruleset_by_id(event, CURRENT_RULES_YEAR).unwrap();
+            for f in rs.exchange.fields {
+                let wire = serde_json::to_value(FdFieldDto::from_spec(f)).unwrap();
+                assert!(wire.get("label").is_none(), "{event} {}: {wire}", f.key);
+                slots += 1;
+            }
+        }
+        assert!(slots >= 30, "checked only {slots} slots");
     }
 
     /// ⭐ THE WIRE KEYS THE PANE READS, spelled out one at a time.

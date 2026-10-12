@@ -28,7 +28,7 @@ import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
 import { composingSlot, composingText } from '../features/contestExchange'
-import { slotCaption } from '../features/contestSlots'
+import { receivedCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
@@ -334,10 +334,13 @@ export function ContestLogHead({
   fieldDayColumns,
   isWfd,
   slotColumns,
+  role,
 }: {
   fieldDayColumns: boolean
   isWfd: boolean
   slotColumns: readonly ContestFieldSpec[]
+  /** The session's role, which a column's caption depends on as its box's does. */
+  role?: string
 }) {
   return (
     <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
@@ -357,7 +360,7 @@ export function ContestLogHead({
         </>
       ) : (
         slotColumns.map((f) => (
-          <span className="fd-col slot" key={f.key}>{slotCaption(f.key)}</span>
+          <span className="fd-col slot" key={f.key}>{receivedCaption(f, role)}</span>
         ))
       )}
       <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
@@ -3240,7 +3243,7 @@ export function ContestView({
 
       {/* LOG TABLE */}
       <div className="fd-log">
-        <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} />
+        <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} role={fieldDay?.role} />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
           {rows.map((r, i) => {
@@ -3252,6 +3255,7 @@ export function ContestView({
                   key={`edit-${r.qso.call}-${r.qso.whenUnix}`}
                   rows={editRows}
                   receives={fieldDay?.receives ?? []}
+                  role={fieldDay?.role}
                   bands={fieldDay?.bands}
                   onDone={editDone}
                 />

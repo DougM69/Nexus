@@ -92,7 +92,7 @@ const box = (caption: string): HTMLInputElement => {
   if (!cap) throw new Error(`no received box captioned ${caption}`)
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
-const qthBox = () => box('QTH')
+const qthBox = () => box('County / State')
 const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
 const hits = () => [...document.querySelectorAll('.le-fd-suggest .le-fd-hit-code')].map((n) => n.textContent)
 
