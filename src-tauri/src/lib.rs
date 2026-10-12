@@ -27395,6 +27395,10 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
         name: dto.name.clone(),
         // f64 Display trims a whole-watt value to "100", not "100.0".
         power: dto.tx_power.map(|w| w.to_string()),
+        // A contest's exchange rides the ENTER sequence; this is an ADDDIRECT insert of an
+        // ordinary QSO into ACLog, which carries none.
+        exchange: Vec::new(),
+        serial_sent: None,
     };
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }

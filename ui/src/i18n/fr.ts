@@ -5958,7 +5958,7 @@ export const FR: PartialCatalog = {
   "settings.n3fjp.host.label": "Hôte N3FJP",
   "settings.n3fjp.host.placeholder": "{{example}} (vide = désactivé)",
   "settings.n3fjp.legend": "Intégration N3FJP (journal maître du club)",
-  "settings.n3fjp.note": "Chaque contact que vous enregistrez en mode Concours arrive dans le journal maître N3FJP du club dès que vous l'enregistrez. Nexus remplit le formulaire du <b>N3FJP Field Day Contest Log</b> (indicatif, bande, mode, classe et section) : en Field Day, le score de tout le club se met donc à jour en temps réel ; un concours dont l'échange n'est pas une classe et une section arrive dans N3FJP sans son échange. Faites tourner N3FJP sur l'ordinateur maître ; pointez Nexus vers son IP + port (1100 par défaut).",
+  "settings.n3fjp.note": "Chaque contact que vous enregistrez en mode Concours arrive dans le journal maître N3FJP du club dès que vous l'enregistrez. Nexus remplit le formulaire du <b>N3FJP Field Day Contest Log</b> (indicatif, bande, mode, classe et section) : en Field Day, le score de tout le club se met donc à jour en temps réel. En CQ WPX, en CQ WW RTTY et dans les concours ARRL VHF, l'échange part aussi ; un contact d'une QSO Party, de Sweepstakes ou de CQ WW CW/SSB arrive dans N3FJP sans son échange. Faites tourner N3FJP sur l'ordinateur maître ; pointez Nexus vers son IP + port (1100 par défaut).",
   "settings.n3fjp.port.hint": "Le port TCP de l'API N3FJP (1100 par défaut).",
   "settings.n3fjp.port.label": "Port N3FJP",
   "settings.n3fjp.reportBand.hint": "Indique à N3FJP la bande sur laquelle vous êtes (sans CAT), pour que le tableau des bandes du Network Status Display du club affiche ce poste. Désactivé par défaut.",

@@ -1690,9 +1690,12 @@ DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 "Each contact you log in Contest mode reaches the club's master N3FJP log the
 moment you log it." Nexus fills in the form of the **N3FJP Field Day Contest Log**
 (call, band, mode, class and section), so at Field Day the whole club's score
-updates in real time; a contest whose exchange is not a class and section reaches
-N3FJP without its exchange. Run N3FJP on the master computer and point Nexus at its
-IP and port.
+updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their
+exchange too, in the boxes N3FJP's own programs for them use (both reports and the
+serial received, with N3FJP told the serial you sent; both reports, the zone and the
+state or province; the grid). A QSO party, Sweepstakes or CQ WW CW/SSB contact
+reaches N3FJP without its exchange: N3FJP does not publish which boxes those
+programs use. Run N3FJP on the master computer and point Nexus at its IP and port.
 
 ![The N3FJP group: an empty N3FJP host box showing the placeholder "192.168.1.10 (empty = off)", N3FJP port 1100, "Use ENTER for Field Day scoring" on, and "Report my band to N3FJP" off.](../img/manual/settings-n3fjp.webp)
 
@@ -1703,7 +1706,8 @@ Test N3FJP button continue to the right.*
 - **N3FJP port** — N3FJP's API TCP port (default 1100).
 - **Use ENTER for contest scoring** — on by default. Logs each contest contact with
   N3FJP's ENTER sequence, "which scores the contest — the correct path." Off
-  falls back to a plain `ADDDIRECT` insert, which may not score.
+  falls back to a plain `ADDDIRECT` insert, which may not score and carries no
+  exchange beyond a class and section.
 - **Report my band to N3FJP** — "Tell N3FJP which band you're on (no CAT needed),
   so the club's Network Status Display band board shows this position." Off by
   default.

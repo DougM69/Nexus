@@ -334,6 +334,11 @@ pub(super) fn field_day_qso(
         // looping over these rows has the right value in hand and
         // no reason to reach out to the session.
         mex: tempo_core::contest::sent_exchange_string(q, spec),
+        // The same, slot by slot, for the one emitter that fills boxes rather than a line.
+        sent: tempo_core::contest::sent_exchange(q, spec)
+            .into_iter()
+            .map(|v| (v.key.to_string(), v.raw))
+            .collect(),
         // What this contact RECEIVED, aligned with `receives` below — the
         // contest log table's columns. Field Day's already ride class/section.
         rcvd: if spec.name == "fieldday" {

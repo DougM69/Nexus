@@ -7876,7 +7876,7 @@ export const EN = {
   // written. The host/port EXAMPLES are invariant tokens in the panel.
   'settings.n3fjp.legend': 'N3FJP Integration (club master log)',
   'settings.n3fjp.note':
-    "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time; a contest whose exchange is not a class and section reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+    "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their exchange too; a QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
   'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
   'settings.n3fjp.host.hint':

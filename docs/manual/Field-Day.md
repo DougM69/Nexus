@@ -305,7 +305,7 @@ When you change frequency — whether via a software dial command or by turning 
 
 ## N3FJP Setup
 
-N3FJP Field Day Contest Log is widely used by clubs as the master log. Nexus pushes each new FD QSO to N3FJP immediately after logging over TCP, using the `ADDDIRECT` command followed by `CHECKLOG` to refresh the N3FJP screen.
+N3FJP Field Day Contest Log is widely used by clubs as the master log. Nexus pushes each new contest contact to N3FJP over TCP after logging it. By default it fills in N3FJP's entry form and presses its Enter (the ENTER sequence, which scores the contact); with **Use ENTER for contest scoring** off it inserts the contact with `ADDDIRECT` followed by `CHECKLOG` to refresh the N3FJP screen. The ENTER sequence fills the boxes N3FJP documents for the program the contest is logged in: class and section at Field Day and Winter Field Day; both reports and the serial received in CQ WPX, where N3FJP is also told the serial you sent so the two logs number the contact alike; both reports, the zone and the state or province in CQ WW RTTY; the grid in the VHF Contest Log (ARRL January, June and September VHF).
 
 **In N3FJP first:**
 
@@ -379,6 +379,7 @@ A plain-text check sheet: every section multiplier with the call and band that f
 - **No warning on 12, 17, 30 or 60 m at Winter Field Day.** They are not WFD bands, but the log strip's band warning is off for both Field Days, so the checklist above is what says so.
 - **Winter Field Day's objectives are yours to tick.** The hints for six bands, twelve bands and multiple modes count what your log shows; nothing is ticked for you, and the sponsor decides what it credits.
 - **N3FJP errors are not surfaced in the UI** beyond the initial Test button; monitor N3FJP's own display to confirm pushes are landing.
+- **A QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange.** N3FJP's API page does not say which boxes those programs keep the exchange in (it gives the state QSO parties as "Varies"), so Nexus sends the call, band and mode and fills nothing it would have to guess at.
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.

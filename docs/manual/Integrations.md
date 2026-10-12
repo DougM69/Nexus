@@ -83,7 +83,7 @@ Commands served: frequency read/set (`f`/`F`), mode read/set (`m`/`M`), PTT read
 
 ## N3FJP Field Day Push
 
-During a Field Day session, Nexus pushes each newly logged QSO to N3FJP over TCP using the documented N3FJP API (ADDDIRECT + CHECKLOG). The push is fire-and-forget from a spawned thread so a slow or parked N3FJP host never stalls the decode loop.
+During a contest session, Nexus pushes each newly logged QSO to N3FJP over TCP using the documented N3FJP API: the ENTER sequence, which scores the contact, or ADDDIRECT + CHECKLOG with **Use ENTER for contest scoring** off. The ENTER sequence carries the exchange in the boxes N3FJP documents for the contest's program: Field Day and Winter Field Day, CQ WPX, CQ WW RTTY and the ARRL VHF contests. A QSO party, Sweepstakes or CQ WW CW/SSB contact goes without its exchange, because N3FJP does not document those programs' boxes. The push is fire-and-forget from a spawned thread so a slow or parked N3FJP host never stalls the decode loop.
 
 **Default port: 1100** (N3FJP's documented API default). Configure host and port in **Settings › Logging & Connectors › N3FJP Integration**.
 

@@ -962,6 +962,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             when_unix: 1_782_510_000,
             sat: "AO-91".into(),
             mex: "1D EMA".into(),
+            sent: Vec::new(),
             rcvd: vec!["2A".into(), "WI".into()],
             dkey: vec!["K1ABC".into(), "20m".into(), "CW".into()],
             dupe: true,

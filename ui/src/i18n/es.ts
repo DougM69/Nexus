@@ -5958,7 +5958,7 @@ export const ES: PartialCatalog = {
   "settings.n3fjp.host.label": "Host de N3FJP",
   "settings.n3fjp.host.placeholder": "{{example}} (vacío = off)",
   "settings.n3fjp.legend": "Integración con N3FJP (log maestro del club)",
-  "settings.n3fjp.note": "Cada contacto que anotas en el modo Concurso llega al log maestro N3FJP del club en cuanto lo anotas. Nexus rellena el formulario del <b>N3FJP Field Day Contest Log</b> (indicativo, banda, modo, clase y sección), así que en Field Day la puntuación de todo el club se actualiza en tiempo real; un concurso cuyo intercambio no es una clase y una sección llega a N3FJP sin su intercambio. Ejecuta N3FJP en el ordenador maestro; apunta Nexus a su IP + puerto (por defecto 1100).",
+  "settings.n3fjp.note": "Cada contacto que anotas en el modo Concurso llega al log maestro N3FJP del club en cuanto lo anotas. Nexus rellena el formulario del <b>N3FJP Field Day Contest Log</b> (indicativo, banda, modo, clase y sección), así que en Field Day la puntuación de todo el club se actualiza en tiempo real. En CQ WPX, CQ WW RTTY y los concursos ARRL VHF también va el intercambio; un contacto de una QSO Party, de Sweepstakes o de CQ WW CW/SSB llega a N3FJP sin su intercambio. Ejecuta N3FJP en el ordenador maestro; apunta Nexus a su IP + puerto (por defecto 1100).",
   "settings.n3fjp.port.hint": "Puerto TCP de la API de N3FJP (por defecto 1100).",
   "settings.n3fjp.port.label": "Puerto de N3FJP",
   "settings.n3fjp.reportBand.hint": "Dile a N3FJP en qué banda estás (sin necesidad de CAT), para que el panel de bandas del Network Status Display del club muestre este puesto. Desactivado por defecto.",
