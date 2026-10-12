@@ -2779,6 +2779,7 @@ export const JA: PartialCatalog = {
   "fieldDay.cabrillo.restart": "電力カテゴリーとスポット支援はコンテストモードをオンにしたときに読み込まれます。設定したら、コンテストモードをいったんオフにしてからオンに戻してください。交信はログに残ります。",
   "fieldDay.mode.club": "クラブ同期はオンです。コンテストモードがオフの間も、この局はクラブイベントに参加したままで、モードが再びオンになるまで交信を送信しません。ログは何も失われません。",
   "fieldDay.advisory.banned": "{{mode}}は{{event}}では認められていません（{{year}}年ルール）。記録はできますが得点にはなりません",
+  "fieldDay.advisory.noCredit": "{{mode}} · 得点なし",
   "fieldDay.advisory.cluster": "DXクラスターの利用は{{event}}では認められていません（{{year}}年ルール）。現在有効: {{sources}}",
   "fieldDay.advisory.spotting": "スポッティング支援は{{event}}では認められていません（{{year}}年ルール）。現在有効: {{sources}}",
   "fieldDay.advisory.spotsRfOnly": "{{event}} の開催中はアマチュア無線経由のスポットのみ認められているため、終了まで Nexus は PSK Reporter へのレポート、DX クラスターへのスポット、POTA のセルフスポットを送りません。スポットの受信は続きます。",

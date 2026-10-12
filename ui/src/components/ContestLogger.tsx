@@ -54,7 +54,7 @@ import { useContestSwitch } from '../contestSwitch'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
 import { annotate, ContestLogHead, ContestLogRow, ContestView, OperatorBox } from './ContestView'
-import { FdAdvisories } from './FdAdvisories'
+import { NoCreditChip } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
 
 /** Where the entry keeps its text size. Per surface (`windowScope`): each window its own, on this
@@ -113,8 +113,10 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
  * of the main window's Contest screen: one component, so the two cannot drift.
  *
  * It logs under the station's operating section (`contestLogMode`), as the cockpit there logs, and
- * says in words when that is a mode the contest does not permit: the header chip's own sentence,
- * for the same mode (`stationMode`). Logging stays allowed; the contact is the sponsor's to score.
+ * says so when that is a mode the contest does not permit: "FT8 · no credit" on its top row, right
+ * after the mode chip, with the header chip's own sentence on hover, for the same mode
+ * (`stationMode`). A chip and not a band over the boxes, the operator's pick (2026-10-12). Logging
+ * stays allowed; the contact is the sponsor's to score.
  *
  * ⛔ NOTHING HERE TRANSMITS: the strip gets no `esm`, and A− / A+ only size the text. `sharedEntry`
  * is the logger window's (`LogEntry`): there Esc clears the entry. Absent, in the main window, Esc
@@ -194,7 +196,6 @@ export function ContestLargeEntry({
           </button>
         </div>
         <div className="contest-logger-scaled" style={scaled}>
-          <FdAdvisories fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, pskName)} />
           <LogEntry
             snap={snap}
             mode={m.mode}
@@ -205,6 +206,9 @@ export function ContestLargeEntry({
             fdMode={m.fdMode}
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
+            noCreditChip={
+              <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, pskName)} />
+            }
             operatorBox={
               <OperatorBox
                 onLogLine

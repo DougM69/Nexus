@@ -12938,6 +12938,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 2px var(--space-2);
 }
+/* A MODE THE CONTEST DOES NOT CREDIT, on the large log line's top row right after the mode chip
+   (FdAdvisories' `NoCreditChip`, which only `ContestLargeEntry` passes): "FT8 · no credit", the
+   whole sentence on hover. It replaced a full-width yellow band over the boxes that the operator
+   found "very verbose and yellow and distracting", so it is quiet: an outline in the de-emphasised
+   state ink, and no fill. The warning amber would not do even here: it letters about 4.2:1 on the
+   light panel, under the 4.5:1 a word needs. The face is `.le-fd-mode`'s, so the chip is never
+   taller than the row, and it never breaks inside. Tokens only, both themes. */
+.le-fd-nocredit {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--state-pending);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+}
 .le-fd-hint {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-faint);
@@ -19485,16 +19503,6 @@ button.cq-skiptx1.on {
 }
 .contest-logger-recent .fd-mode-chip {
   font-size: calc(14px * var(--text-scale));
-}
-/* A MODE THE CONTEST DOES NOT PERMIT, over the boxes (ContestLargeEntry): the header chip's own
-   sentence, whole — the chip ellipsizes in its banner row, this wraps — at the size of the verdicts
-   under the boxes, its box on the log line's own (inset as the strip's padding insets the boxes, and
-   centred on the entry's measure past it). */
-.contest-logger-scaled > .fd-advisory {
-  max-width: none;
-  margin: var(--space-2) max(var(--space-4), calc((100% - 1600px) / 2 + var(--space-4))) 0;
-  white-space: normal;
-  font-size: var(--fs-title);
 }
 /* THE CONTEST SCREEN'S ENTRY, in the main window (App.tsx): the same large log line at the top of
    the screen while a contest runs, the last contacts under it, and the screen below, scrolling in

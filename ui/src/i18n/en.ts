@@ -4183,6 +4183,9 @@ export const EN = {
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.
   'fieldDay.advisory.banned':
     '{{mode}} is not permitted at {{event}} ({{year}} rules) — you can still log it, but it will not count',
+  // The large log line's chip for the same fact (`NoCreditChip`), beside its mode chip; the
+  // sentence above is its title.
+  'fieldDay.advisory.noCredit': '{{mode}} · no credit',
   'fieldDay.advisory.cluster':
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':

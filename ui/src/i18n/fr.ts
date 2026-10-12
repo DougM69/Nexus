@@ -1625,6 +1625,7 @@ export const FR: PartialCatalog = {
   "fieldDay.cabrillo.restart": "La catégorie de puissance et l'assistance par spots sont lues à l'activation du mode Concours : après les avoir indiquées, désactive puis réactive le mode Concours. Tes contacts restent dans le log.",
   "fieldDay.mode.club": "La synchro club est active. Mode Concours désactivé, cette station reste dans l'événement du club et n'envoie aucun contact tant que le mode n'est pas réactivé. Rien n'est perdu dans le log.",
   "fieldDay.advisory.banned": "{{mode}} n'est pas autorisé au {{event}} (règles {{year}}) — vous pouvez quand même le journaliser, mais il ne comptera pas",
+  "fieldDay.advisory.noCredit": "{{mode}} · ne compte pas",
   "fieldDay.advisory.cluster": "L'assistance par cluster DX n'est pas autorisée au {{event}} (règles {{year}}) — actif en ce moment : {{sources}}",
   "fieldDay.advisory.spotting": "L'assistance au spotting n'est pas autorisée au {{event}} (règles {{year}}) — actif en ce moment : {{sources}}",
   "fieldDay.advisory.spotsRfOnly": "{{event}} n'autorise les spots que par radio amateur pendant l'épreuve : Nexus n'envoie ni rapports PSK Reporter, ni spots au DX cluster, ni autospots POTA jusqu'à la fin. Les spots reçus continuent d'arriver.",

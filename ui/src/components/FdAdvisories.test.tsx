@@ -12,9 +12,11 @@
 //   cannot pass vacuously (a component that never renders anything would fail
 //   the control).
 import { describe, it, expect, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
-import { FdAdvisories } from './FdAdvisories'
+import { render, cleanup, screen } from '@testing-library/react'
+import { FdAdvisories, NoCreditChip } from './FdAdvisories'
 import type { FdRulesetDto } from '../api'
+import { contestName } from '../fdEvent'
+import { t } from '../i18n'
 
 // The shipped 2026 WFD ruleset facts, as get_fd_ruleset serves them (dormant
 // assistance; the WSJT-suite ban).
@@ -68,6 +70,53 @@ describe('the banned-mode chip (the first consumer bannedModes has ever had)', (
     render(<FdAdvisories fdActive ruleset={WFD} activeMode="FT8" />)
     expect(advisories().length).toBeGreaterThan(0)
     expect(document.querySelector('button, input, select, a, [disabled]')).toBeNull()
+  })
+})
+
+// ⭐ THE LARGE LOG LINE'S CHIP (2026-10-12): the banned-mode line's fact in two words, for the one
+// surface the operator ruled on ("A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no
+// credit'; hover it for the full sentence. No yellow band."). The banner and the cockpit header keep
+// the line. Pinned: the chip shows for exactly the inputs the line shows for, carrying its sentence.
+describe('the no-credit chip', () => {
+  const sentence = (mode: string, event: string) => t('fieldDay.advisory.banned', { mode, event: contestName(event), year: 2026 })
+  const ILQP: FdRulesetDto = { ...SFD, event: 'ilqp', bannedModes: ['FT8', 'FT4'] }
+
+  it('reads "<mode> · no credit", with the whole sentence as its title and its accessible description', () => {
+    render(<NoCreditChip fdActive ruleset={ILQP} activeMode="FT4" />)
+    const chip = screen.getByRole('status', { name: 'FT4 · no credit', description: sentence('FT4', 'ilqp') })
+    expect(chip.textContent).toBe('FT4 · no credit')
+    expect(chip.getAttribute('title')).toBe(sentence('FT4', 'ilqp'))
+  })
+
+  it('shows for exactly the inputs the banned line shows for, with that line’s sentence', () => {
+    const rulesets = [WFD, SFD, ILQP, null, undefined]
+    const modes = ['FT8', 'ft8', ' Ft4 ', 'FT2', 'SSB', 'CW', '', undefined]
+    let shown = 0
+    let cases = 0
+    for (const fdActive of [true, false])
+      for (const ruleset of rulesets)
+        for (const activeMode of modes) {
+          const what = `fdActive=${fdActive} ${ruleset?.event ?? ruleset} ${JSON.stringify(activeMode)}`
+          const line = render(<FdAdvisories fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />)
+          const said = line.container.querySelector('.fd-advisory.banned')?.getAttribute('title') ?? null
+          line.unmount()
+          const chip = render(<NoCreditChip fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />)
+          const el = chip.container.firstElementChild
+          expect(el?.getAttribute('title') ?? null, what).toBe(said)
+          if (said !== null) expect(el!.textContent, what).toBe(`${activeMode!.trim().toUpperCase()} · no credit`)
+          chip.unmount()
+          cases++
+          if (said !== null) shown++
+        }
+    // Neither side can pass by never rendering, or by always rendering: FT8, ft8 and Ft4 at the
+    // Illinois QSO Party, and FT8, ft8 and Ft4 at Winter Field Day.
+    expect([shown, cases]).toEqual([6, 80])
+  })
+
+  it('warns only — no control, no disabled', () => {
+    render(<NoCreditChip fdActive ruleset={ILQP} activeMode="FT8" />)
+    expect(document.body.textContent).toBe('FT8 · no credit')
+    expect(document.querySelector('button, input, select, a, [disabled], [tabindex]')).toBeNull()
   })
 })
 
