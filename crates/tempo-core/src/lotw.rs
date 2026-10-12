@@ -23,6 +23,12 @@ pub const LOTW_REPORT_URL: &str = "https://lotw.arrl.org/lotwuser/lotwreport.adi
 /// `qso_qsl=yes`, `qso_qsldetail=yes`, `qso_withown=yes`) are applied by
 /// [`build_report_url`]; only the operator-specific bits vary.
 ///
+/// There is no `qso_owncall` ("Returns only records whose 'own' call sign matches"): both
+/// downloads ask for every call on the account, so an operator who changed calls gets the old
+/// call's confirmations too. `qso_withown=yes` puts on each row the call its QSO was made under
+/// (`STATION_CALLSIGN`), and a row confirms only a contact made under that call
+/// ([`crate::reconcile::lotw_own_call`]).
+///
 /// `Debug` is implemented manually to **redact the password** — it must never
 /// reach a log, error string, or the UI.
 #[derive(Clone)]
@@ -31,8 +37,6 @@ pub struct LotwQuery {
     pub username: String,
     /// LoTW **website** password.
     pub password: String,
-    /// Scope to this station call (`qso_owncall`); `None`/empty → account default.
-    pub owncall: Option<String>,
     /// Incremental cursor (`qso_qslsince`): UTC `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS`.
     /// `None`/empty → full pull (first sync), which [`build_report_url`] asks for from
     /// 1900-01-01. Only valid when the rest of the query is identical to the one that
@@ -45,7 +49,6 @@ impl std::fmt::Debug for LotwQuery {
         f.debug_struct("LotwQuery")
             .field("username", &self.username)
             .field("password", &"<redacted>")
-            .field("owncall", &self.owncall)
             .field("qsl_since", &self.qsl_since)
             .finish()
     }
@@ -90,13 +93,6 @@ pub fn build_report_url(q: &LotwQuery) -> String {
         pct(&q.username),
         pct(&q.password),
     );
-    if let Some(call) = q.owncall.as_deref() {
-        let call = call.trim();
-        if !call.is_empty() {
-            url.push_str("&qso_owncall=");
-            url.push_str(&pct(call));
-        }
-    }
     let since = q
         .qsl_since
         .as_deref()
@@ -132,13 +128,6 @@ pub fn build_own_report_url(q: &LotwQuery, start_date: Option<&str>) -> String {
         pct(&q.username),
         pct(&q.password),
     );
-    if let Some(call) = q.owncall.as_deref() {
-        let call = call.trim();
-        if !call.is_empty() {
-            url.push_str("&qso_owncall=");
-            url.push_str(&pct(call));
-        }
-    }
     if let Some(start) = start_date {
         let start = start.trim();
         if !start.is_empty() {
@@ -217,7 +206,6 @@ mod tests {
         LotwQuery {
             username: "KD9TAW".into(),
             password: "p@ss w&rd=1".into(),
-            owncall: None,
             qsl_since: None,
         }
     }
@@ -233,21 +221,20 @@ mod tests {
         // Password special chars must be percent-encoded, never raw.
         assert!(url.contains("password=p%40ss%20w%26rd%3D1"));
         assert!(!url.contains("p@ss w&rd=1"));
-        // No qso_owncall when not provided; no cursor asks for the whole history.
-        assert!(!url.contains("qso_owncall="));
+        // Every call on the account, never one; no cursor asks for the whole history.
+        assert!(!url.contains("qso_owncall"));
         assert!(url.contains("qso_qslsince=1900-01-01"));
     }
 
     #[test]
-    fn url_includes_owncall_and_since_when_set() {
+    fn url_includes_since_when_set() {
         let url = build_report_url(&LotwQuery {
-            owncall: Some("KD9TAW".into()),
             qsl_since: Some("2026-01-02 03:04:05".into()),
             ..q()
         });
-        assert!(url.contains("qso_owncall=KD9TAW"));
         // Space in the date is encoded.
         assert!(url.contains("qso_qslsince=2026-01-02%2003%3A04%3A05"));
+        assert!(!url.contains("qso_owncall"));
     }
 
     #[test]
@@ -271,20 +258,15 @@ mod tests {
 
     #[test]
     fn own_report_url_requests_unmatched_own_qsos() {
-        let url = build_own_report_url(
-            &LotwQuery {
-                owncall: Some("KD9TAW".into()),
-                ..q()
-            },
-            Some("2026-03-01"),
-        );
+        let url = build_own_report_url(&q(), Some("2026-03-01"));
         assert!(url.contains("qso_query=1"));
         assert!(
             url.contains("qso_qsl=no"),
             "own-echo asks for unmatched records"
         );
         assert!(!url.contains("qso_qsl=yes"));
-        assert!(url.contains("qso_owncall=KD9TAW"));
+        // The uploads of every call on the account, never one call's.
+        assert!(!url.contains("qso_owncall"));
         // Bounded by the start date; no match-date cursor; password still encoded.
         assert!(url.contains("qso_startdate=2026-03-01"));
         assert!(!url.contains("qso_qslsince="));
@@ -314,16 +296,6 @@ mod tests {
             );
             assert_eq!(url.matches("qso_qsorxsince=").count(), 1);
         }
-    }
-
-    #[test]
-    fn blank_owncall_is_omitted() {
-        // (A blank cursor is not omitted: `an_empty_cursor_asks_for_the_whole_history`.)
-        let url = build_report_url(&LotwQuery {
-            owncall: Some("  ".into()),
-            ..q()
-        });
-        assert!(!url.contains("qso_owncall="));
     }
 
     #[test]

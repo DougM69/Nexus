@@ -609,6 +609,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
+  its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
+  Settings, so if you changed calls, the confirmations of QSOs made under your old call never
+  reached your log. Both now ask for every call on your LoTW account, and a confirmation lands only
+  on a contact logged under the call LoTW names on it: the contact's station call, or for a contact
+  that names none, the call in Settings, which is the call Nexus uploads it under. Two of your calls
+  that worked the same station on the same band in the same minute each get their own
+  confirmation, and a contact is marked as on file at LoTW only by an upload made under its own
+  call. A confirmation for a call your log has no contacts under, such as a club call on the same
+  account, changes nothing, and Check confirmations counts those in the Connections log. The first
+  download after this update asks LoTW for your whole confirmation history, so it takes longer than
+  usual; you do not need to press Download everything again.
 - **Closing the torn-off waterfall's window puts the waterfall back, and Alt+F4 closes the contest
   logger window.** Closing the window of a popped-out waterfall left the re-dock bar in its place on
   the Operate screen, and the waterfall came back only when you clicked the bar. Closing the window

@@ -6517,9 +6517,11 @@ impl Engine {
     /// no TX-queue clear, no QSY reconcile). Returns the updated [`Settings`] so the
     /// caller can persist them. The LoTW confirmation download must be invisible to
     /// live operation — a mid-QSO sync must not kick the operator back to Chat or
-    /// drop queued TX.
+    /// drop queued TX. The high-water is a download of every call on the account's, which is
+    /// what lets the next download ask from it (`Settings::lotw_cursor_every_call`).
     pub fn set_lotw_cursor(&mut self, high_water: String) -> Settings {
         self.settings.lotw_last_qsl = high_water;
+        self.settings.lotw_cursor_every_call = true;
         self.settings.clone()
     }
 
@@ -27277,9 +27279,10 @@ contact yourself."
         self.station.import_adif(text)
     }
 
-    /// See [`StationCore::merge_lotw_report`].
+    /// See [`StationCore::merge_lotw_report`], with the call in Settings.
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.station.merge_lotw_report(text)
+        self.station
+            .merge_lotw_report(text, Some(&self.settings.mycall))
     }
 
     /// See [`StationCore::import_pota_log`].
@@ -27287,9 +27290,10 @@ contact yourself."
         self.station.import_pota_log(text)
     }
 
-    /// See [`StationCore::merge_lotw_own_echo`].
+    /// See [`StationCore::merge_lotw_own_echo`], with the call in Settings.
     pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
-        self.station.merge_lotw_own_echo(text, when_unix)
+        self.station
+            .merge_lotw_own_echo(text, when_unix, Some(&self.settings.mycall))
     }
 
     /// See [`StationCore::stamp_qrz_upload`].
@@ -43904,7 +43908,8 @@ mod tests {
 
         let confirmed = tempo_core::logbook::adif_record(&e.stored_log()[7])
             .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
-        e.station.merge_lotw_report(&confirmed);
+        e.station
+            .merge_lotw_report(&confirmed, Some(&e.settings.mycall));
         assert_eq!(
             next_contact_and_snapshot(&mut e, 106),
             (0, 0),
@@ -50092,6 +50097,53 @@ mod tests {
             "the next LoTW sync must be a FULL pull, not an incremental one"
         );
         assert!(e.settings().eqsl_last_sync.is_empty(), "eQSL likewise");
+    }
+
+    /// ★ The first LoTW download after the update asks for the whole history. A settings file
+    /// from before it holds the cursor of a download that asked for the Settings call alone, and
+    /// LoTW lets a cursor stand only for the identical query: asked of every call on the account,
+    /// it would skip, for good, every confirmation of the operator's other calls that LoTW matched
+    /// before it. So that cursor is not asked from; the high-water the full download brings back
+    /// is, and survives a save; Download everything again empties it.
+    #[test]
+    fn the_first_lotw_download_after_the_update_asks_for_the_whole_history() {
+        let asks_from = |s: &Settings| {
+            tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
+                username: "k2def-test".into(),
+                password: "not-a-password".into(),
+                qsl_since: Some(s.lotw_sync_cursor().to_string()),
+            })
+        };
+        let before: Settings = serde_json::from_str(
+            r#"{"mycall":"K2DEF","lotwUsername":"k2def-test","lotwLastQsl":"2026-08-04 21:12:44"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            before.lotw_last_qsl, "2026-08-04 21:12:44",
+            "premise: the older file's cursor is read"
+        );
+        assert!(
+            asks_from(&before).contains("&qso_qslsince=1900-01-01"),
+            "the first download is a full one: {}",
+            asks_from(&before)
+        );
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings = before;
+        let saved = e.set_lotw_cursor("2026-10-12 10:00:00".to_string());
+        let reread: Settings =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert!(
+            asks_from(&reread).contains("&qso_qslsince=2026-10-12%2010%3A00%3A00"),
+            "the next asks from the full download's high-water: {}",
+            asks_from(&reread)
+        );
+        e.reset_lotw_cursor();
+        assert_eq!(
+            e.settings().lotw_sync_cursor(),
+            "",
+            "Download everything again"
+        );
     }
 
     #[test]
