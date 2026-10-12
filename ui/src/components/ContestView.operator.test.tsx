@@ -63,3 +63,49 @@ describe('Field Day operator swap', () => {
     expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
   })
 })
+
+// ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the window shows this screen with an ask
+// pending, and the operator box takes the caret as soon as it can be typed in (its settings read),
+// once per ask, and says so.
+describe('the operator box answers Ctrl+O', () => {
+  const box = () => screen.getByLabelText('Operator (call or initials)') as HTMLInputElement
+
+  it('takes the caret once its settings are read, and says it did', async () => {
+    const focused = vi.fn()
+    render(<ContestView fieldDay={FD} onSetMode={() => {}} operatorAsk={1} onOperatorFocused={focused} />)
+    expect(document.activeElement, 'not before the box can be typed in').not.toBe(box())
+    await settle()
+    expect(document.activeElement).toBe(box())
+    expect(focused).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes it again at the next ask, and never without one', async () => {
+    const focused = vi.fn()
+    const view = render(<ContestView fieldDay={FD} onSetMode={() => {}} onOperatorFocused={focused} />)
+    await settle()
+    expect(document.activeElement).not.toBe(box())
+    view.rerender(<ContestView fieldDay={FD} onSetMode={() => {}} operatorAsk={1} onOperatorFocused={focused} />)
+    await settle()
+    expect(document.activeElement).toBe(box())
+    box().blur()
+    view.rerender(<ContestView fieldDay={FD} onSetMode={() => {}} operatorAsk={2} onOperatorFocused={focused} />)
+    await settle()
+    expect(document.activeElement).toBe(box())
+    expect(focused).toHaveBeenCalledTimes(2)
+  })
+
+  it('a Remote observer’s read-only box never takes it', async () => {
+    const focused = vi.fn()
+    render(
+      <ContestView
+        fieldDay={FD}
+        observation={{ fdOperator: 'K1ABC', fdPowerMult: 2, fdBonuses: [], fdBonusesPlanned: [] }}
+        operatorAsk={1}
+        onOperatorFocused={focused}
+      />,
+    )
+    await settle()
+    expect(document.activeElement).not.toBe(box())
+    expect(focused).not.toHaveBeenCalled()
+  })
+})

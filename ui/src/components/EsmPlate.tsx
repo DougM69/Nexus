@@ -1,6 +1,7 @@
 // ENTER SENDS MESSAGE'S PLATE, in the CW, RTTY and Phone cockpits' TX docks: the ESM switch, Run
-// or S&P, and what the next Enter in the contest strip does — the key or keys it sends, or why it
-// sends nothing, or why ESM steps aside (rule 4: "the ESM plate says why").
+// or S&P, and what the next Enter in the contest strip does — the key or keys it sends, that it
+// logs a dupe and sends nothing, or why it sends nothing, or why ESM steps aside (rule 4: "the ESM
+// plate says why").
 //
 // A SENDER'S SETTING, NEVER A STOP. Nothing here keys or stops a transmission, so it has no pane id
 // and is on no stop-line list; it sits in the dock beside the F-keys whose message it names. ONE
@@ -34,6 +35,8 @@ function nextLine(preview: EsmDecision | null): string {
       return t('contest.esm.next', { keys: preview.keys.join(' + ') })
     case 'speak':
       return t('contest.esm.phone.speak')
+    case 'log':
+      return t('contest.esm.logDupe')
     case 'refuse':
       return esmRefusalText(preview.refusal)
     case 'inert':

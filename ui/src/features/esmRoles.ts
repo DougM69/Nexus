@@ -21,7 +21,8 @@ export type EsmRoleMap = Partial<Record<EsmRole, readonly MacroKey[]>>
 /** The contest layout — RTTY's contest set's as it ships: F1 CQ · F2 his call and my exchange ·
  *  F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8 AGN. AGN is on F8 as in
  *  N1MM's default message sets; it traded keys with B4 (operator, 2026-10-10), and nothing else
- *  moved. ESM sends six of the eight; F5 and F7 stay keys the operator presses. */
+ *  moved. ESM sends seven of the eight, QSO B4 to a dupe that calls the run; F5 stays a key the
+ *  operator presses. */
 export const CONTEST_LAYOUT_ROLES: EsmRoleMap = {
   cq: ['F1'],
   callExch: ['F2'],
@@ -29,13 +30,15 @@ export const CONTEST_LAYOUT_ROLES: EsmRoleMap = {
   myCall: ['F4'],
   exch: ['F6'],
   again: ['F8'],
+  b4: ['F7'],
 }
 
 /** The voice keyer's slots while ESM is on: F1 CQ · F2 my exchange · F3 TU · F4 my call · F8 AGN,
  *  AGN on the key the contest layout sends it from (operator, 2026-10-10; it was F5). A recording
  *  cannot say a callsign, so no slot holds "his call and my exchange" — running, the operator says
  *  it — and F5, his call alone in the contest layout, stays the operator's own, as F6 does. An
- *  empty slot sends nothing, and the strip names the slot to record. */
+ *  empty slot sends nothing, and the strip names the slot to record. The keyer has no QSO B4 slot
+ *  (no F7, and no slot labelled B4), so QSO B4 plays only once the operator maps it to a slot. */
 export const VOICE_SLOT_ROLES: EsmRoleMap = {
   cq: ['F1'],
   exch: ['F2'],

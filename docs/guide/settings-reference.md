@@ -2110,7 +2110,8 @@ contact runs, step by step, and the rules ESM keeps are in the
   The next Enter asks for a repeat instead of sending your call again." Off by
   default.
 - **CW steps** — which keys of the active CW profile send each step: CQ, his
-  call and your exchange, TU, your call, your S&P exchange and AGN. A step can
+  call and your exchange, TU, your call, your S&P exchange, AGN and QSO B4 (to a
+  dupe that calls you while you run). A step can
   send two keys as one message, such as F5 then F2. The mapping is saved with
   the profile, and **Reset to defaults** under [CW](#cw) clears it with the
   profile's keys. A profile still on the built-in sets shows their steps and has
@@ -2122,7 +2123,7 @@ contact runs, step by step, and the rules ESM keeps are in the
 - **Voice keyer steps** — which recording each step plays, one slot per step.
   The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F8
   AGN, the key AGN is on in the CW and RTTY contest sets; F5 and F6 are yours.
-  An empty slot plays nothing.
+  No slot holds QSO B4 until you map one you recorded. An empty slot plays nothing.
 
 Every step row shows what Enter would send there, or why it would send nothing:
 no key mapped, or a key with nothing on it. A set with no step mapped makes ESM

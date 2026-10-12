@@ -196,6 +196,7 @@ import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
 import { useContestSwitch } from './contestSwitch'
+import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
 import { Logbook } from './components/Logbook'
 import { RoamPanel } from './components/RoamPanel'
@@ -2469,6 +2470,15 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     [handleSetMode, !!remote, settings?.fdActive, snap?.mode],
   )
 
+  // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
+  // operator box answers by taking the caret. Only the view changes. A key in a log line leaves the
+  // station's mode as it is, so the FT8/FT4 role `handleView` enters on the way in is not touched.
+  const [operatorAsk, setOperatorAsk] = useState(0)
+  useOperatorBoxAsk(() => {
+    setView('fieldDay')
+    setOperatorAsk((n) => n + 1)
+  })
+
   /**
    * Open Settings AT a specific place. `where` is anything `resolveTarget` understands: a section
    * id (`'audio'`), a tab, a tab label, a legacy tab name, or a prose path
@@ -3225,6 +3235,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onOpenSettings={openSettingsAt}
             onSettingsSaved={handleSettingsSaved}
             contestSwitch={contestSwitch}
+            operatorAsk={operatorAsk}
+            onOperatorFocused={() => setOperatorAsk(0)}
           />
         </main>
       )
