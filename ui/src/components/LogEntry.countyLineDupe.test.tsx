@@ -120,7 +120,7 @@ function renderStrip(fd: FieldDayStatus) {
 }
 
 const qthBox = (): HTMLInputElement => {
-  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'QTH')
+  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'County / State')
   if (!cap) throw new Error('no received QTH box')
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
