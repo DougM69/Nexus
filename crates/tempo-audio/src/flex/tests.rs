@@ -1532,7 +1532,7 @@ fn eventually<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
 /// the wire shows `want`.
 fn route_until(d: &FlexDaemon, sim: &Simulator, browser_voice: bool, want: &str, times: usize) {
     eventually(&format!("{want} x{times}"), || {
-        d.sync_tx_routing(browser_voice);
+        d.sync_tx_routing(browser_voice, false);
         (count(sim, want) >= times).then_some(())
     });
 }
@@ -1541,7 +1541,7 @@ fn route_until(d: &FlexDaemon, sim: &Simulator, browser_voice: bool, want: &str,
 fn route_for(d: &FlexDaemon, browser_voice: bool, ms: u64) {
     let end = Instant::now() + Duration::from_millis(ms);
     while Instant::now() < end {
-        d.sync_tx_routing(browser_voice);
+        d.sync_tx_routing(browser_voice, false);
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -2285,6 +2285,67 @@ fn a_phone_key_is_refused_until_the_radio_has_its_mic_back() {
     assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
     assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// ⭐ A VOICE-KEYER MESSAGE ONLY ON DAX (operator ruling, 2026-10-12, "Change it now"). In Phone at
+/// the shack the radio has its mic, with Nexus's DAX transmit stream there from a digital mode
+/// before: a key marked as the keyer's message (Nexus's own audio) is refused, in the shim's words,
+/// until the radio takes DAX; then it keys. While the radio is on that DAX, Nexus's own PTT,
+/// unmarked, is still refused until the mic is back; and the marked message's stop goes out as
+/// every stop does.
+#[test]
+fn a_key_carrying_the_keyers_message_needs_the_radios_dax() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    eventually("the mic", || {
+        (d.session().snapshot().model.transmit.dax == Some(false)).then_some(())
+    });
+    d.set_voice_key(true);
+    let asked = Instant::now();
+    let answer = c.ask("T 1", 1);
+    d.set_voice_key(false);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        format!(
+            "answer={answer:?} xmit1={} refused={:?}",
+            count(&sim, "xmit 1"),
+            d.key_refused_since(asked)
+        ),
+        "answer=\"RPRT -1\\n\" xmit1=0 refused=Some((\"not keying the voice keyer's USB message: \
+         the radio takes its transmit audio from its mic input\", Some(FlexAudioRefusal { mode: \
+         \"USB\", cause: NotYetDax })))"
+    );
+
+    // The keyer's DAX: Nexus's own PTT still waits for the mic, and the message keys.
+    let mut keyer = || {
+        d.sync_tx_routing(false, true);
+        (count(&sim, "transmit set dax=1") >= 2).then_some(())
+    };
+    eventually("the keyer's DAX", &mut keyer);
+    eventually("the radio on DAX", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    let asked = Instant::now();
+    assert_eq!(c.ask("T 1", 1), "RPRT -1\n", "Nexus's own PTT, unmarked");
+    assert_eq!(
+        d.key_refused_since(asked)
+            .and_then(|(_, r)| r)
+            .map(|r| r.cause),
+        Some(tempo_app::dto::FlexAudioCause::MicNotBack)
+    );
+    d.set_voice_key(true);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n", "the message keys on DAX");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    // Marked or not, the stop is never gated.
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    d.set_voice_key(false);
+    assert_eq!(wait_count(&sim, "xmit 0", 1), 1);
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
 }
 
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,

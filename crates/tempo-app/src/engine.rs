@@ -1596,14 +1596,18 @@ const AB_NO_DRIVABLE_MAPPING: &str =
     "Nexus drives Main = downlink / Sub = uplink only through its own native CI-V backend, and \
      that backend has no path to this radio — so no VFO mapping carries this pass's uplink here.";
 
-/// What [`Engine::send_voice`] answers while the radio has the mic (Nexus's own Flex client with
-/// native audio on, Phone at the shack). The keyer says it first, in the operator's language,
-/// from the snapshot; this English answer is for a send that reaches the engine anyway.
-const FLEX_RADIO_HAS_MIC: &str = "The voice keyer can't play while the radio has the mic: with \
-     Flex native DAX audio on, Phone at the shack uses the radio's own mic, so a recorded message \
-     would not go out. Nothing was keyed.";
-/// …and what [`Engine::aprs_tx_gate`] answers then, for a beacon or a message: the APRS cockpit
-/// says it first, in the operator's language.
+/// The longest voice-keyer message Nexus's own Flex client plays while the radio has the mic, in
+/// samples at the keyer's 12 kHz: 20 seconds, what the client's DAX transmit queue holds. The queue
+/// keeps the newest audio past that, so a longer message would lose its start and go out with dead
+/// air at its end. The client's queue is checked against it where it is defined.
+pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
+/// What [`Engine::send_voice`] answers for a message longer than that.
+const FLEX_VOICE_TOO_LONG: &str = "The voice keyer can't play this message through the Flex \
+     native client: it is longer than 20 seconds, the most the client's DAX carries, so its start \
+     would be lost. Nothing was keyed.";
+/// What [`Engine::aprs_tx_gate`] answers while the radio has the mic (Nexus's own Flex client with
+/// native audio on, a voice mode), for a beacon or a message: the APRS cockpit says it first, in
+/// the operator's language.
 const APRS_RADIO_HAS_MIC: &str = "APRS can't send while the radio has the mic: with Flex native \
      DAX audio on, a voice mode such as FM uses the radio's own mic, so the packet would not go \
      out. Nothing was keyed.";
@@ -2889,9 +2893,9 @@ pub struct Engine {
     /// [`Self::observe_flex_dax_tx`].
     flex_dax_tx: bool,
     /// The radio has the mic while Nexus's native Flex audio is on (Phone at the shack, or APRS
-    /// in FM), so a recorded message, a packet or a picture sent over DAX would not reach the
-    /// air. The voice keyer, APRS and SSTV refuse while it stands; see
-    /// [`Self::observe_flex_radio_has_mic`].
+    /// in FM), so a packet or a picture sent over DAX would not reach the air: APRS and SSTV
+    /// refuse while it stands, and a voice-keyer message waits for the radio to take DAX for it;
+    /// see [`Self::observe_flex_radio_has_mic`].
     flex_radio_has_mic: bool,
     /// While Nexus's own Flex client tunes with the radio's own carrier: what the radio reports
     /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
@@ -3676,6 +3680,15 @@ pub struct Engine {
     /// held), keys PTT, plays it, and drops PTT when it's out — the same path the soundcard CW
     /// keyer uses. Set by `send_voice`.
     voice_tx: Option<Vec<f32>>,
+    /// When the pending message was queued for Nexus's own Flex client's DAX switch, the radio
+    /// having the mic: the radio loop asks the radio for DAX, keys only once it reports it, and
+    /// drops the message when that has not happened 2 seconds after the press, or something else
+    /// keys first ([`Engine::voice_waits_for_dax`]). `None` for a message the radio takes as it
+    /// is.
+    voice_dax: Option<Instant>,
+    /// The last such message the Flex client dropped without keying, and why
+    /// ([`Engine::drop_flex_voice`]). Kept until the keyer accepts the next message.
+    voice_dropped: Option<crate::dto::VoiceDropped>,
     /// One-shot voice-keyer abort: the loop flushes the output ring + unkeys, then clears it.
     voice_abort: bool,
     /// True while recording a voice message — the radio loop appends captured audio to
@@ -5719,6 +5732,8 @@ impl Engine {
             broker_ptt: false,
             broker_context_hold: false,
             voice_tx: None,
+            voice_dax: None,
+            voice_dropped: None,
             voice_abort: false,
             recording: false,
             record_buf: Vec::new(),
@@ -7749,12 +7764,17 @@ impl Engine {
     /// On a radio Nexus's own Flex client serves, the transmit slice's mode decides where the
     /// transmitter takes its audio from (operator ruling, 2026-10-03): DAX for the digital modes
     /// and the stream's browser voice, the radio's own mic for Phone at the shack. Audio Nexus
-    /// makes still leaves over DAX, so while the radio has the mic a recorded voice message would
-    /// not reach the air and the mic would carry the over in its place. The voice keyer refuses
-    /// while this stands and keys nothing (operator ruling, 2026-10-04, "Refuse with a message"),
-    /// and so do APRS and SSTV, whose packets and pictures leave over DAX the same way: APRS in
-    /// FM, a voice mode to the radio, and SSTV in plain SSB (operator ruling, 2026-10-04, "Refuse
-    /// like the voice keyer"). An automatic APRS ack that can't go out is skipped and logged.
+    /// makes still leaves over DAX, so while the radio has the mic a packet or a picture would not
+    /// reach the air and the mic would carry the over in its place: APRS and SSTV refuse while
+    /// this stands and key nothing, APRS in FM, a voice mode to the radio, and SSTV in plain SSB
+    /// (operator ruling, 2026-10-04, "Refuse like the voice keyer"; kept 2026-10-12, "Stay
+    /// refused"). An automatic APRS ack that can't go out is skipped and logged.
+    ///
+    /// The voice keyer plays then, through a switch around each message (operator ruling,
+    /// 2026-10-12, "Change it now", which replaced the refusal of 2026-10-04): a message sent while
+    /// this stands waits for the radio to take DAX for it ([`Self::send_voice`],
+    /// [`Self::voice_waits_for_dax`]). The client keeps this standing while the radio is on DAX
+    /// only for such a message, so APRS and SSTV stay refused through it.
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
@@ -11073,11 +11093,18 @@ impl Engine {
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
 
     /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. REFUSED while
-    /// TX is disabled (Monitor), the dial is outside the licence's privileges, or the radio has
-    /// the mic ([`Self::observe_flex_radio_has_mic`]), so a stray F-key never keys unexpectedly
-    /// and a message never puts the mic on the air in its place: nothing is queued, the log says
-    /// why, and so does the `Err`, which the keyer's toast shows. It used to be ignored without a
-    /// word. Replaces any still-pending message (one voice over at a time).
+    /// TX is disabled (Monitor) or the dial is outside the licence's privileges, so a stray F-key
+    /// never keys unexpectedly: nothing is queued, the log says why, and so does the `Err`, which
+    /// the keyer's toast shows. It used to be ignored without a word. Replaces any still-pending
+    /// message (one voice over at a time).
+    ///
+    /// While the radio has the mic ([`Self::observe_flex_radio_has_mic`]: Nexus's own Flex client,
+    /// native audio on, Phone at the shack) the message goes out through a switch around it
+    /// (operator ruling, 2026-10-12, "Change it now"): it waits for the radio to take its transmit
+    /// audio from DAX, keys only then, and the mic comes back after its proven unkey
+    /// ([`Self::voice_waits_for_dax`]). Two more refusals then: anything else already holding the
+    /// transmitter, in that transmission's own words, and a message longer than the client's DAX
+    /// can carry ([`FLEX_VOICE_MAX_SAMPLES`]), which would lose its start.
     pub fn send_voice(&mut self, samples: Vec<f32>) -> Result<(), String> {
         // A streamed operator's microphone over owns the transmitter from its arm: a canned
         // message queued under it would be appended to the output ring behind their voice, and
@@ -11088,16 +11115,6 @@ impl Engine {
                 "voice-keyer over refused: the Remote microphone is transmitting",
             );
             return Err(TxOwner::Mic.busy_reason());
-        }
-        // Nexus's own Flex client with native audio on, in Phone at the shack: the message would
-        // leave over DAX while the radio takes the mic, so the mic would carry the over. Refused
-        // before anything is queued, so nothing keys (operator ruling, 2026-10-04).
-        if self.flex_radio_has_mic {
-            tempo_core::applog::info(
-                "tx",
-                "voice-keyer message refused: the radio has the mic (Flex native audio)",
-            );
-            return Err(FLEX_RADIO_HAS_MIC.to_string());
         }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
@@ -11125,23 +11142,57 @@ impl Engine {
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
         }
+        if self.flex_radio_has_mic {
+            // The pending message is the one this replaces, not something else transmitting.
+            if let Some(owner) = self.tx_owner_beside_voice() {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("voice-keyer message refused: {owner:?} holds the transmitter"),
+                );
+                return Err(owner.busy_reason());
+            }
+            if samples.len() > FLEX_VOICE_MAX_SAMPLES {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "voice-keyer message refused: {} samples, longer than the Flex client's \
+                         DAX carries",
+                        samples.len()
+                    ),
+                );
+                return Err(FLEX_VOICE_TOO_LONG.to_string());
+            }
+        }
         if !samples.is_empty() {
             tempo_core::applog::info(
                 "tx",
-                &format!("voice-keyer over queued: {} samples", samples.len()),
+                &format!(
+                    "voice-keyer over queued: {} samples{}",
+                    samples.len(),
+                    if self.flex_radio_has_mic {
+                        ", waiting for the radio to take DAX"
+                    } else {
+                        ""
+                    }
+                ),
             );
             self.voice_tx = Some(samples);
+            self.voice_dax = self.flex_radio_has_mic.then(Instant::now);
+            self.voice_dropped = None;
         }
         Ok(())
     }
 
-    /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges,
-    /// and on the radio not having the mic).
+    /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges).
+    /// A message waiting for the radio to take DAX ([`Self::voice_waits_for_dax`]) is taken only
+    /// once the radio loop has seen the radio report it, and passes these same gates then.
     ///
     /// ⛔ A message REFUSED here is DROPPED, never held (operator, 2026-09-30: the rule CW, RTTY
     /// and PSK follow): TX went off, the dial left the privileges, or the radio took the mic,
     /// after it was queued. Held, it played the moment TX was allowed again. The log says why;
     /// the keyer has no warning line to carry it, its toasts being the answer to the send itself.
+    /// "The radio took the mic" is for a message queued while it did not have it, which would
+    /// leave over DAX with nobody switching the radio to it.
     pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
         self.voice_tx.as_ref()?;
         let refused = if self.clock_repair_holds_tx() {
@@ -11152,11 +11203,12 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
-        } else if self.flex_radio_has_mic {
+        } else if self.flex_radio_has_mic && self.voice_dax.is_none() {
             Some("the radio has the mic (Flex native audio)")
         } else {
             None
         };
+        self.voice_dax = None;
         if let Some(why) = refused {
             tempo_core::applog::info(
                 "tx",
@@ -11168,10 +11220,37 @@ impl Engine {
         self.voice_tx.take()
     }
 
+    /// When the pending message was queued, if it waits for Nexus's own Flex client to switch the
+    /// radio's transmit audio to DAX ([`Self::send_voice`]). The radio loop's presence for the
+    /// client's routing (DAX, then the mic back), and its hold before [`Self::poll_voice`]: it
+    /// takes the message only once the radio reports DAX, and drops it
+    /// ([`Self::drop_flex_voice`]) when that has not happened 2 seconds after the press, or when
+    /// anything else keys first. A dropped message is never played later.
+    pub fn voice_waits_for_dax(&self) -> Option<Instant> {
+        self.voice_dax.filter(|_| self.voice_tx.is_some())
+    }
+
+    /// Drop the voice-keyer message Nexus's own Flex client could not play, and keep why for the
+    /// status lane ([`crate::dto::RadioStatus::voice_dropped`]): the radio did not take DAX in
+    /// time, or something else keyed first. The radio loop's call; nothing was keyed for it.
+    pub fn drop_flex_voice(&mut self, cause: crate::dto::VoiceDropCause) {
+        tempo_core::applog::info(
+            "tx",
+            &format!("voice-keyer message not played: {cause:?} (Flex native audio, dropped)"),
+        );
+        self.voice_tx = None;
+        self.voice_dax = None;
+        self.voice_dropped = Some(crate::dto::VoiceDropped {
+            at: now_unix_secs(),
+            cause,
+        });
+    }
+
     /// Abort voice playback in progress: drop any pending message + raise the one-shot
     /// abort flag so the loop flushes the output ring and unkeys.
     pub fn stop_voice(&mut self) {
         self.voice_tx = None;
+        self.voice_dax = None;
         self.voice_abort = true;
     }
 
@@ -16147,9 +16226,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.drop_psk_latch();
         self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
-                              // Cut any in-progress SSTV image the same way: drop the queued job and arm the
-                              // one-shot abort so the radio loop drops the feed, flushes the output ring and
-                              // unkeys on its next tick.
+        self.voice_dax = None;
+        // Cut any in-progress SSTV image the same way: drop the queued job and arm the
+        // one-shot abort so the radio loop drops the feed, flushes the output ring and
+        // unkeys on its next tick.
         self.sstv_tx = None;
         self.sstv_abort = true;
         self.sstv_tx_mode = None;
@@ -19605,6 +19685,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// is pending work, not ownership — it keys only through `poll_aprs_tx`,
     /// behind this arbiter.
     pub fn tx_owner(&self) -> Option<TxOwner> {
+        self.tx_owner_with(self.voice_tx.is_some())
+    }
+
+    /// [`Self::tx_owner`] apart from the voice keyer's own pending message: what ELSE holds the
+    /// transmitter. Asked for a message that waits for Nexus's own Flex client to switch the radio
+    /// to DAX, at its send and while it waits: anything here refuses or drops it.
+    pub fn tx_owner_beside_voice(&self) -> Option<TxOwner> {
+        self.tx_owner_with(false)
+    }
+
+    /// The arbiter's one chain, with the voice keyer's pending message as `voice`.
+    fn tx_owner_with(&self, voice: bool) -> Option<TxOwner> {
         if self.app.radio.transmitting {
             Some(TxOwner::Slot)
         } else if self.tuning {
@@ -19615,7 +19707,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // From the arm, before any audio: an armed over owns the transmitter the way a
             // latched RTTY stream does from its first tick, so nothing else can key under it.
             Some(TxOwner::Mic)
-        } else if self.voice_tx.is_some() {
+        } else if voice {
             Some(TxOwner::Voice)
         } else if !self.cw_queue.is_empty() {
             Some(TxOwner::Cw)
@@ -23283,6 +23375,7 @@ contact yourself."
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
         s.radio.slot_audio_lost = self.slot_audio_lost.clone();
         s.radio.ptt_refused = self.ptt_refused.clone();
+        s.radio.voice_dropped = self.voice_dropped.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
@@ -30777,32 +30870,51 @@ mod tests {
         );
     }
 
-    /// ⭐ THE VOICE KEYER CAN'T PLAY WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04,
-    /// "Refuse with a message"). With Nexus's own Flex client and native audio on, Phone at the
-    /// shack puts the radio on its own mic while a recorded message still leaves over DAX, so the
-    /// message would not reach the air and the mic would carry the over. The send is refused with
-    /// the reason and nothing is queued; a message queued before the radio took the mic is
-    /// dropped, never held; and once the radio is off the mic, a message plays as before.
-    #[test]
-    fn the_voice_keyer_refuses_while_the_radio_has_the_mic() {
+    /// Phone at the shack on Nexus's own Flex client with native audio on: TX armed, a dial inside
+    /// the privileges, and the radio on its own mic.
+    fn engine_with_the_radio_on_its_mic() -> Engine {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_license_class("general");
         e.set_operating_mode("phone", false); // arms TX
         e.set_frequency(14.250, "20m", "USB");
         e.observe_flex_radio_has_mic(true);
+        e
+    }
+
+    /// ⭐ THE VOICE KEYER PLAYS WHILE THE RADIO HAS THE MIC, THROUGH THE SWITCH (operator ruling,
+    /// 2026-10-12, "Change it now"; it replaced the refusal of 2026-10-04). A message is queued to
+    /// wait for the radio to take DAX, and the loop takes it once it has; a message queued while
+    /// the radio did not have the mic, which would leave over a DAX nobody switched it to, is still
+    /// dropped once the radio has it; and without the mic a message plays as it always has.
+    #[test]
+    fn the_voice_keyer_waits_for_dax_while_the_radio_has_the_mic() {
+        let mut e = engine_with_the_radio_on_its_mic();
         assert!(e.snapshot().radio.flex_radio_has_mic, "the keyer is told");
-        let why = e.send_voice(vec![0.5; 100]).unwrap_err();
-        assert!(
-            why.contains("the radio has the mic"),
-            "the send says why: {why}"
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert!(e.voice_waits_for_dax().is_some(), "it waits for DAX");
+        assert_eq!(
+            e.tx_owner(),
+            Some(TxOwner::Voice),
+            "and holds the transmitter"
         );
-        assert_eq!(e.tx_owner(), None, "nothing was queued");
-        assert_eq!(e.poll_voice(), None, "nothing plays");
+        assert_eq!(
+            e.tx_owner_beside_voice(),
+            None,
+            "nothing else does: the message is not its own rival"
+        );
+        // What the loop does once the radio reports DAX.
+        assert_eq!(e.poll_voice(), Some(vec![0.5; 100]));
+        assert_eq!(e.voice_waits_for_dax(), None, "taken");
 
         // Queued while the radio took DAX (the stream's browser voice, say), and the radio took
         // the mic before the loop played it: dropped, not held for later.
         e.observe_flex_radio_has_mic(false);
         e.send_voice(vec![0.5; 100]).unwrap();
+        assert_eq!(
+            e.voice_waits_for_dax(),
+            None,
+            "a message the radio takes as it is"
+        );
         e.observe_flex_radio_has_mic(true);
         assert_eq!(
             e.poll_voice(),
@@ -30820,6 +30932,100 @@ mod tests {
         e.send_voice(vec![0.5; 100]).unwrap();
         assert_eq!(e.poll_voice(), Some(vec![0.5; 100]));
         assert!(!e.snapshot().radio.flex_radio_has_mic);
+    }
+
+    /// ⭐ THE TWO REFUSALS OF THE SWITCH, BY VALUE: anything else holding the transmitter, in its own
+    /// words, and a message longer than the 20 seconds the Flex client's DAX carries; a message of
+    /// exactly 20 seconds is taken. Nothing refused is queued, and a message still pending is not
+    /// touched. Neither refusal applies while the radio does not have the mic: the sound card or
+    /// another program's DAX carries the message there, as it always has.
+    #[test]
+    fn the_switch_refuses_a_busy_transmitter_and_a_message_longer_than_twenty_seconds() {
+        let mut e = engine_with_the_radio_on_its_mic();
+        e.set_ptt(true);
+        assert_eq!(
+            e.send_voice(vec![0.5; 100]),
+            Err("Mic PTT is held — release it first".to_string())
+        );
+        e.set_ptt(false);
+        e.set_tune(true);
+        assert_eq!(
+            e.send_voice(vec![0.5; 100]),
+            Err("Tune carrier is up — stop tuning first".to_string())
+        );
+        e.set_tune(false);
+        assert_eq!(e.tx_owner(), None, "nothing refused was queued");
+
+        let longest = vec![0.5; FLEX_VOICE_MAX_SAMPLES];
+        assert_eq!(e.send_voice(longest), Ok(()), "exactly 20 seconds is taken");
+        assert_eq!(
+            e.send_voice(vec![0.5; FLEX_VOICE_MAX_SAMPLES + 1]),
+            Err(FLEX_VOICE_TOO_LONG.to_string())
+        );
+        assert_eq!(
+            e.poll_voice().map(|m| m.len()),
+            Some(FLEX_VOICE_MAX_SAMPLES),
+            "the pending message is the one taken, untouched by the refusal"
+        );
+
+        // The radio not on its mic: neither refusal, as before.
+        e.observe_flex_radio_has_mic(false);
+        assert_eq!(e.send_voice(vec![0.5; FLEX_VOICE_MAX_SAMPLES + 1]), Ok(()));
+        e.set_ptt(true);
+        assert_eq!(e.send_voice(vec![0.5; 100]), Ok(()));
+    }
+
+    /// ⭐ A MESSAGE THAT WAITS PASSES EVERY GATE AGAIN WHEN THE LOOP TAKES IT: TX turned off
+    /// meanwhile (the latch), or the dial gone outside the privileges, drops it, never held; and
+    /// Stop TX, Halt or the keyer's ■ Stop drops it outright.
+    #[test]
+    fn a_waiting_message_meets_the_latch_the_privileges_and_the_stops() {
+        let mut e = engine_with_the_radio_on_its_mic();
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.set_tx_enabled(false);
+        assert_eq!(e.poll_voice(), None, "TX went off while it waited");
+        e.set_tx_enabled(true);
+        assert_eq!(e.poll_voice(), None, "dropped, not held");
+
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.set_frequency(14.200, "20m", "USB");
+        assert_eq!(e.poll_voice(), None, "the dial left the privileges");
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(e.poll_voice(), None, "dropped, not held");
+
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.halt_tx();
+        assert_eq!(e.voice_waits_for_dax(), None, "Stop TX drops it");
+        assert_eq!(e.tx_owner(), None);
+        e.set_tx_enabled(true);
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.stop_voice();
+        assert_eq!(e.voice_waits_for_dax(), None, "the keyer's ■ Stop drops it");
+        assert_eq!(e.tx_owner(), None);
+    }
+
+    /// The loop's drop: the message goes, and the status lane says why, as the UI receives it,
+    /// until the keyer accepts the next message.
+    #[test]
+    fn a_message_the_flex_client_drops_is_on_the_status_lane_until_the_next() {
+        let mut e = engine_with_the_radio_on_its_mic();
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.drop_flex_voice(crate::dto::VoiceDropCause::NoDax);
+        assert_eq!(e.voice_waits_for_dax(), None);
+        assert_eq!(e.tx_owner(), None);
+        let lane = |e: &Engine| {
+            serde_json::to_value(e.snapshot()).unwrap()["radio"]["voiceDropped"]["cause"].clone()
+        };
+        assert_eq!(lane(&e), "noDax");
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.drop_flex_voice(crate::dto::VoiceDropCause::Keyed);
+        assert_eq!(lane(&e), "keyed");
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert_eq!(
+            lane(&e),
+            serde_json::Value::Null,
+            "a new message answers anew"
+        );
     }
 
     /// …and a send made while TX is off or outside the privileges, which was ignored without

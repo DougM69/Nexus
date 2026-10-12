@@ -15,7 +15,6 @@ const REFUSALS = {
   clockRepair: { why: 'clockRepair' },
   recording: { why: 'recording' },
   pttHeld: { why: 'pttHeld' },
-  radioHasMic: { why: 'radioHasMic' },
   unmapped: { why: 'unmapped', role: 'tu' },
   empty: { why: 'empty', role: 'callExch', key: 'F2' },
   oneSlot: { why: 'oneSlot', role: 'exch' },
@@ -46,7 +45,6 @@ describe('Enter Sends Message — its words', () => {
       clockRepair: 'A clock repair is holding transmit, so Enter sends nothing.',
       recording: 'The voice keyer is recording, so Enter plays nothing.',
       pttHeld: 'You are holding PTT, so Enter plays nothing.',
-      radioHasMic: 'The radio has the mic, so a recording would not go out.',
       unmapped: 'TU: no key is mapped, so Enter sends nothing and logs nothing at that step.',
       empty: 'His call and your exchange: F2 is empty, so Enter sends nothing and logs nothing at that step.',
       oneSlot: 'Your S&P exchange: mapped to two recordings, and the keyer plays one per press.',
@@ -64,7 +62,7 @@ describe('Enter Sends Message — its words', () => {
 
   it('maps reasons to sentences one to one', () => {
     const texts = [...Object.values(REFUSALS).map(esmRefusalText), ...inert.map(esmInertText)]
-    expect(texts).toHaveLength(15)
+    expect(texts).toHaveLength(14)
     expect(new Set(texts).size).toBe(texts.length)
   })
 })
