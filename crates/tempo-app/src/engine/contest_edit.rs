@@ -87,7 +87,7 @@ pub struct ContestEdited {
     pub edit: ContestEdit,
     /// `Some` when the logbook holds a merged copy, which keeps what it said: the services that
     /// have taken it (or were sent it), by the copy's own upload marks. `None` when it was never
-    /// merged.
+    /// merged, or when the logbook could not be read (the app log says so).
     pub logbook: Option<Vec<&'static str>>,
 }
 
@@ -152,7 +152,8 @@ impl Engine {
 
 /// ★ [`Engine::contest_edit`] as a command makes it: the edit under the lock, its journal on
 /// disk before the answer (the journal is the contact's only copy on disk until it is merged),
-/// and a merged copy's upload marks read after.
+/// and a merged copy's upload marks read after — or, when the logbook cannot be read, the copy
+/// left unnamed: the edit is made either way, and the answer must say so.
 ///
 /// ⚠️ It waits and reads the store: never call it holding the Engine lock.
 pub fn edit(
@@ -171,7 +172,20 @@ pub fn edit(
         Ok(edit) => edit,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    let marks = crate::engine::log_plan(engine).merged_uploads(&edit.qids)?;
-    let logbook = (!marks.is_empty()).then(|| holders(&marks));
+    // The edit is made and on disk: a logbook that cannot be read now must not turn it into an
+    // answer that says nothing was edited. The copy goes unnamed, and the log says why.
+    let logbook = match crate::engine::log_plan(engine).merged_uploads(&edit.qids) {
+        Ok(marks) => (!marks.is_empty()).then(|| holders(&marks)),
+        Err(e) => {
+            tempo_core::applog::error(
+                "contest",
+                &format!(
+                    "a contest contact was edited, and the logbook could not be read to say \
+                     whether it holds a copy merged before the edit: {e}"
+                ),
+            );
+            None
+        }
+    };
     Ok(Ok(ContestEdited { edit, logbook }))
 }
