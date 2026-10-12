@@ -2687,7 +2687,9 @@ impl LinkState {
 /// ⭐ **How long a position reads Connected on the host's board without a line from it**: two of
 /// its heartbeats ([`tempo_net::fdsync::PING_SECS`] each; each one carries a presence report), so
 /// one late or lost beat is not yet a missed link. Past it the position reads Reconnecting, and
-/// Lost past [`tempo_net::fdsync::DEAD_SECS`], when the host closes its link ([`PositionLink::of`]).
+/// Lost past [`tempo_net::fdsync::DEAD_SECS`] ([`PositionLink::of`]), in whole seconds. The host
+/// closes the link on a clock of its own, its serve loop's 250 ms read tick once the socket has
+/// been silent for `DEAD_SECS`, so Lost and the close are not one moment: either can come first.
 pub const HEARD_WINDOW_SECS: u64 = 2 * tempo_net::fdsync::PING_SECS;
 
 /// ⭐ **Where a club position's link stands, in the words the host's board says it** — read from

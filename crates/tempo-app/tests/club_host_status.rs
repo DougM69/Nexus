@@ -239,10 +239,10 @@ fn own_link(eng: &Shared) -> (String, Option<String>, Option<u64>, Option<String
 /// the host's board and on the position's own club line, and the host's count of connected
 /// positions agrees with its board in every snapshot.** The relay between the CW tent and the host
 /// goes quiet both ways, the way a dead Wi-Fi link does: the host's board says Reconnecting once
-/// two heartbeats are missed and Lost past the dead timeout, when it has closed the link; the CW
-/// tent says the same of the host; when the link comes back the tent rejoins on its own and both
-/// say Connected. CONTROLS: the Phone tent, on its own link, reads Connected throughout, and the
-/// host's own line reads "host".
+/// two heartbeats are missed and Lost past the dead timeout; the CW tent says the same of the
+/// host; the host closes the link on its own clock, no later than 2 s after both ends say Lost;
+/// when the link comes back the tent rejoins on its own and both say Connected. CONTROLS: the
+/// Phone tent, on its own link, reads Connected throughout, and the host's own line reads "host".
 #[test]
 fn a_positions_link_reads_connected_reconnecting_lost_and_connected_again_at_both_ends() {
     let dir = std::env::temp_dir().join(format!("club-status-{}", std::process::id()));
@@ -340,12 +340,20 @@ fn a_positions_link_reads_connected_reconnecting_lost_and_connected_again_at_bot
     assert!(board_link(&club, "bbbb0002")
         .1
         .is_some_and(|h| h > fdsync::DEAD_SECS));
-    assert!(
-        !engine_lock(&host)
-            .fd_club_log()
-            .unwrap()
-            .connected("bbbb0002"),
-        "the host closed the link"
+    // Lost is the heard age in whole seconds (`PositionLink::of`); the host closes the link on
+    // its own clock, once its serve loop's 250 ms read tick finds the socket silent past the dead
+    // timeout, and then takes the engine lock. So the close can trail both ends' Lost by a tick
+    // or so, more on a loaded box: it is waited for, up to 2 s (eight ticks).
+    wait_showing(
+        "the host closed the link, no later than 2 s after both ends said Lost",
+        2,
+        || {
+            !engine_lock(&host)
+                .fd_club_log()
+                .unwrap()
+                .connected("bbbb0002")
+        },
+        show,
     );
 
     relay.quiet.store(false, Ordering::Relaxed);
