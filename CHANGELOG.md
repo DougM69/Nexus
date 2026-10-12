@@ -42,6 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as they were, the ones it logs meanwhile go up when it is let back, and a removal is kept through
   a restart of the host. Club sync is still v4, so a laptop on an earlier v4 build is turned away
   the same way, in the same words.
+- **The club board shows every position in a band × mode grid.** Above the positions table, on
+  the Contest screen, in the logger window, in the board's pop-out and on the hosted Remote page,
+  each position's name sits in the cell of its band and mode: the contest's bands across, every one
+  the same width so an empty cell is a free band and mode, and the contest's own mode classes down
+  (CW/DIG and PH at the Illinois QSO Party, which counts CW and digital as one mode; CW, DIG and PH
+  at Field Day). Two positions on one band and mode both show in the cell, a position on a band
+  the contest does not use gets a column of its own, and one with no band yet is named under the
+  grid. On the host's own screen each name is coloured by its link, green Connected, amber
+  Reconnecting and red Lost, with ✓, ↻ or ✕ beside it and a legend under the grid, and a position
+  the host removed is left out of the grid (its line in the table keeps Allow back). A joined
+  laptop and Remote are not sent the host's link words, so there no name is coloured; each laptop
+  marks its own name ⌂. There, a position the host has not heard for more than 15 seconds is
+  greyed with ⚠ after its name, as its line in the table is, and the legend says what ⚠ means.
+  The table's Reconnecting and Lost now read in the grid's amber and red.
+  When the bands do not fit the window the grid scrolls sideways by itself, never the page.
 - **N3FJP gets the exchange in CQ WPX, CQ WW RTTY and the ARRL VHF contests.** With an N3FJP host
   set, each contact now fills in the boxes N3FJP's own program for the contest uses, as N3FJP's API
   page documents them: in CQ WPX both reports and the serial received, with N3FJP told the serial

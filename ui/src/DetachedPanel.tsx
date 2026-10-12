@@ -916,6 +916,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             detached
             fieldDay={isFieldDay(snap.fieldDay?.event)}
             keepsDupes={snap.fieldDay?.dupeRule?.logDupes === true}
+            bands={snap.fieldDay?.bands}
+            dupeRule={snap.fieldDay?.dupeRule}
+            ownPosid={settings?.fdPositionId}
           />
         ) : clubRefusal ? (
           // Switched on for a contest club sync cannot run, so the engine refuses it:
