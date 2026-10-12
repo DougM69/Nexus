@@ -1697,8 +1697,8 @@ export function OperateCockpit({
         </div>
 
         {/* Warn-only Field Day banned-mode chip (e.g. FT8 at WFD — this cockpit is
-            where a banned mode would actually be keyed). A PASSIVE status div in
-            the header, outside every ⊞-removable pane: it is a status line, not a
+            where a banned mode would actually be keyed). A PASSIVE status chip in
+            the header, outside every ⊞-removable pane: it is a status, not a
             control, so it carries no panel-vocabulary id and no stop-line role. */}
         <FdAdvisories fdActive={fdActive} ruleset={fdRuleset} activeMode={tier} />
 

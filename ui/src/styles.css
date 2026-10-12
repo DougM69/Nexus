@@ -12576,9 +12576,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 600;
 }
 /* Warn-only FD rule advisory (FdAdvisories.tsx) — a PASSIVE status line, never a
-   control, hosted by the FD event banner and the Operate cockpit header (outside
-   every ⊞-removable pane). --alert-warning exists in both themes. Ellipsizes in
-   a tight header; the title attribute carries the whole sentence. */
+   control, hosted by the FD event banner (a banned mode is the no-credit chip,
+   `.le-fd-nocredit`, there and in the Operate cockpit header). --alert-warning
+   exists in both themes. Ellipsizes in a tight header; the title attribute
+   carries the whole sentence. */
 .fd-advisory {
   flex: 0 1 auto;
   min-width: 0;
@@ -12938,13 +12939,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 2px var(--space-2);
 }
-/* A MODE THE CONTEST DOES NOT CREDIT, on the large log line's top row right after the mode chip
-   (FdAdvisories' `NoCreditChip`, which only `ContestLargeEntry` passes): "FT8 · no credit", the
-   whole sentence on hover. It replaced a full-width yellow band over the boxes that the operator
-   found "very verbose and yellow and distracting", so it is quiet: an outline in the de-emphasised
-   state ink, and no fill. The warning amber would not do even here: it letters about 4.2:1 on the
-   light panel, under the 4.5:1 a word needs. The face is `.le-fd-mode`'s, so the chip is never
-   taller than the row, and it never breaks inside. Tokens only, both themes. */
+/* A MODE THE CONTEST DOES NOT CREDIT (FdAdvisories' `NoCreditChip`): "FT8 · no credit", the whole
+   sentence on hover. On the large log line's top row right after the mode chip, it replaced a
+   full-width yellow band over the boxes that the operator found "very verbose and yellow and
+   distracting"; in the Contest banner and the Operate (FT) cockpit header, the amber line
+   (`.fd-advisory`). So it is quiet: an outline in the de-emphasised state ink, and no fill. The
+   warning amber would not do even here: it letters about 4.2:1 on the light panel, under the 4.5:1 a
+   word needs. The face is `.le-fd-mode`'s, so the chip is never taller than the row, and it never
+   breaks inside. Tokens only, both themes. */
 .le-fd-nocredit {
   flex: 0 0 auto;
   font-family: var(--font-mono);

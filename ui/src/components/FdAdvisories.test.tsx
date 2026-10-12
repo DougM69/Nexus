@@ -39,18 +39,22 @@ const SFD: FdRulesetDto = {
   enforcement: 'warn',
 }
 
-const advisories = () => [...document.querySelectorAll('.fd-advisory')]
+/** Every advisory drawn: the lines, and the banned mode's chip. */
+const advisories = () => [...document.querySelectorAll('.fd-advisory, .le-fd-nocredit')]
+const sentence = (mode: string, event: string) => t('fieldDay.advisory.banned', { mode, event: contestName(event), year: 2026 })
 
 afterEach(cleanup)
 
 describe('the banned-mode chip (the first consumer bannedModes has ever had)', () => {
-  it('renders for a banned tier at WFD, citing event + rules year', () => {
+  it('is the no-credit chip for a banned tier at WFD, its sentence citing the event and rules year', () => {
     render(<FdAdvisories fdActive ruleset={WFD} activeMode="FT8" />)
-    const chip = document.querySelector('.fd-advisory.banned')
-    expect(chip, 'FT8 is banned at WFD — the chip must render').not.toBeNull()
-    expect(chip!.textContent).toContain('FT8')
-    expect(chip!.textContent).toContain('Winter Field Day')
-    expect(chip!.textContent).toContain('2026')
+    // The words, and nothing else: the amber line it replaced is drawn nowhere.
+    expect(document.body.textContent).toBe('FT8 · no credit')
+    expect(document.querySelector('.fd-advisory')).toBeNull()
+    const chip = screen.getByRole('status', { name: 'FT8 · no credit', description: sentence('FT8', 'wfd') })
+    expect(chip.getAttribute('title')).toBe(sentence('FT8', 'wfd'))
+    expect(chip.getAttribute('title')).toContain('Winter Field Day')
+    expect(chip.getAttribute('title')).toContain('2026')
   })
 
   it('is absent for a legal tier at WFD (FT2 is not a WSJT mode)', () => {
@@ -73,12 +77,13 @@ describe('the banned-mode chip (the first consumer bannedModes has ever had)', (
   })
 })
 
-// ⭐ THE LARGE LOG LINE'S CHIP (2026-10-12): the banned-mode line's fact in two words, for the one
-// surface the operator ruled on ("A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no
-// credit'; hover it for the full sentence. No yellow band."). The banner and the cockpit header keep
-// the line. Pinned: the chip shows for exactly the inputs the line shows for, carrying its sentence.
+// ⭐ THE NO-CREDIT CHIP (2026-10-12): the banned-mode line's fact in two words. First on the large log
+// line ("A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no credit'; hover it for the
+// full sentence. No yellow band."), then in the Contest banner and the FT screen's header, which drew
+// the line ("Same small chip with the full sentence on hover, in the Contest banner and the FT screen
+// header"). Pinned: those two draw the log line's very chip, for exactly the inputs the line was drawn
+// for, carrying its sentence.
 describe('the no-credit chip', () => {
-  const sentence = (mode: string, event: string) => t('fieldDay.advisory.banned', { mode, event: contestName(event), year: 2026 })
   const ILQP: FdRulesetDto = { ...SFD, event: 'ilqp', bannedModes: ['FT8', 'FT4'] }
 
   it('reads "<mode> · no credit", with the whole sentence as its title and its accessible description', () => {
@@ -88,29 +93,36 @@ describe('the no-credit chip', () => {
     expect(chip.getAttribute('title')).toBe(sentence('FT4', 'ilqp'))
   })
 
-  it('shows for exactly the inputs the banned line shows for, with that line’s sentence', () => {
+  it('the banner and the FT header draw the log line’s very chip, for exactly the inputs the line was drawn for', () => {
     const rulesets = [WFD, SFD, ILQP, null, undefined]
     const modes = ['FT8', 'ft8', ' Ft4 ', 'FT2', 'SSB', 'CW', '', undefined]
-    let shown = 0
+    const shown: string[] = []
     let cases = 0
     for (const fdActive of [true, false])
       for (const ruleset of rulesets)
         for (const activeMode of modes) {
           const what = `fdActive=${fdActive} ${ruleset?.event ?? ruleset} ${JSON.stringify(activeMode)}`
-          const line = render(<FdAdvisories fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />)
-          const said = line.container.querySelector('.fd-advisory.banned')?.getAttribute('title') ?? null
-          line.unmount()
+          const hosts = render(<FdAdvisories fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />)
+          const drawn = hosts.container.innerHTML
+          hosts.unmount()
           const chip = render(<NoCreditChip fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />)
-          const el = chip.container.firstElementChild
-          expect(el?.getAttribute('title') ?? null, what).toBe(said)
-          if (said !== null) expect(el!.textContent, what).toBe(`${activeMode!.trim().toUpperCase()} · no credit`)
+          expect(drawn, what).toBe(chip.container.innerHTML)
+          if (drawn) expect(chip.container.textContent, what).toBe(`${activeMode!.trim().toUpperCase()} · no credit`)
           chip.unmount()
           cases++
-          if (said !== null) shown++
+          if (drawn) shown.push(what)
         }
-    // Neither side can pass by never rendering, or by always rendering: FT8, ft8 and Ft4 at the
-    // Illinois QSO Party, and FT8, ft8 and Ft4 at Winter Field Day.
-    expect([shown, cases]).toEqual([6, 80])
+    // Neither side can pass by never drawing, or by always drawing: the six the line was drawn for,
+    // FT8, ft8 and Ft4 at Winter Field Day and at the Illinois QSO Party.
+    expect(shown).toEqual([
+      'fdActive=true wfd "FT8"',
+      'fdActive=true wfd "ft8"',
+      'fdActive=true wfd " Ft4 "',
+      'fdActive=true ilqp "FT8"',
+      'fdActive=true ilqp "ft8"',
+      'fdActive=true ilqp " Ft4 "',
+    ])
+    expect(cases).toBe(80)
   })
 
   it('warns only — no control, no disabled', () => {
@@ -125,24 +137,26 @@ describe('the no-credit chip', () => {
 // would have told its operator the ban came from Field Day. Latent until a ruleset other than
 // WFD banned something — the Illinois QSO Party bans FT8 and FT4.
 describe('the event the advisory names', () => {
+  /** The chip's whole sentence, on hover. */
+  const said = () => document.querySelector('.le-fd-nocredit')?.getAttribute('title')
+
   it('is the running contest, not Field Day', () => {
     const rtty: FdRulesetDto = { ...WFD, event: 'cqww_rtty' }
     render(<FdAdvisories fdActive ruleset={rtty} activeMode="FT8" />)
-    const chip = document.querySelector('.fd-advisory.banned')!
-    expect(chip.textContent).toContain('CQ World-Wide RTTY DX Contest')
-    expect(chip.textContent).not.toContain('Field Day')
+    expect(said()).toContain('CQ World-Wide RTTY DX Contest')
+    expect(said()).not.toContain('Field Day')
     // A ruleset id this build's picker does not list is shown as itself — a token, never
     // another contest's name.
     cleanup()
     render(<FdAdvisories fdActive ruleset={{ ...WFD, event: 'zzqp' }} activeMode="FT8" />)
-    expect(document.querySelector('.fd-advisory.banned')!.textContent).toContain('zzqp')
+    expect(said()).toContain('zzqp')
     // POSITIVE CONTROLS: both Field Day events still name themselves.
     cleanup()
     render(<FdAdvisories fdActive ruleset={WFD} activeMode="FT8" />)
-    expect(document.querySelector('.fd-advisory.banned')!.textContent).toContain('Winter Field Day')
+    expect(said()).toContain('Winter Field Day')
     cleanup()
     render(<FdAdvisories fdActive ruleset={{ ...SFD, bannedModes: ['FT8'] }} activeMode="FT8" />)
-    expect(document.querySelector('.fd-advisory.banned')!.textContent).toContain('ARRL Field Day')
+    expect(said()).toContain('ARRL Field Day')
   })
 })
 

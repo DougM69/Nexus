@@ -15,7 +15,9 @@
 //     phone, then FT8, then phone again, without the window mounting anew;
 //   · its look, computed from the real sheets on the chain this window renders: an outline in the
 //     de-emphasised state ink, no fill, and 4.5:1 or better on its face in every theme and mode. The
-//     main window's Contest screen is held to the same in App.contestScreenEntry.test.tsx.
+//     main window's Contest screen is held to the same in App.contestScreenEntry.test.tsx;
+//   · the Contest banner, here and in the contest screen window, says it with the same chip where it
+//     drew an amber line, and it looks the same there.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, act, fireEvent, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
@@ -212,6 +214,44 @@ describe('the logger window: a mode the contest does not credit', () => {
   })
 })
 
+// ⭐ THE CONTEST BANNER SAYS IT THE SAME WAY (2026-10-12): it drew the same sentence as an amber line,
+// and the operator picked "Same small chip with the full sentence on hover, in the Contest banner and
+// the FT screen header". The banner is in this window's copy of the Contest screen, and in the
+// contest screen window that the main window pops out.
+
+/** What a window's Contest banner shows right after the contest's window: where its advisories stand. */
+const afterWindow = () => document.querySelector('.fd-event-banner > .fd-event-subtitle')!.nextElementSibling!
+
+describe('the Contest banner in the logger window and the contest screen window', () => {
+  it.each(['contestlog', 'contestscreen'])('?panel=%s on FT8: "FT8 · no credit", the sentence on hover; the amber line is gone', async (panel) => {
+    section = 'digital'
+    render(<DetachedPanel panel={panel} />)
+    await poll()
+    expect(afterWindow().textContent).toBe('FT8 · no credit')
+    expect(afterWindow().getAttribute('title')).toBe(banned('FT8'))
+    const banner = document.querySelector<HTMLElement>('.fd-event-banner')!
+    expect(within(banner).getByRole('status', { name: 'FT8 · no credit', description: banned('FT8') })).toBe(afterWindow())
+    expect(banner.querySelector('.fd-advisory')).toBeNull()
+    expect(banner.textContent).not.toContain(banned('FT8'))
+  })
+
+  it.each(['contestlog', 'contestscreen'])('?panel=%s follows the station: phone, then FT4, then phone again', async (panel) => {
+    render(<DetachedPanel panel={panel} />)
+    await poll()
+    const said = () => document.querySelector('.fd-event-banner')!.querySelector('.le-fd-nocredit')?.textContent ?? null
+    expect(document.querySelector('.fd-event-banner'), 'control: the banner is on show').not.toBeNull()
+    expect(said(), 'phone').toBeNull()
+    section = 'digital'
+    tier = 'Ft4'
+    await poll()
+    expect(said(), 'moved to FT4').toBe('FT4 · no credit')
+    section = 'phone'
+    await poll()
+    expect(said(), 'back on phone').toBeNull()
+    expect(document.querySelector('.fd-advisory')).toBeNull()
+  })
+})
+
 // ── the chip's look ─────────────────────────────────────────────────────────────────────────
 
 const read = (name: string) =>
@@ -299,5 +339,23 @@ describe('the logger window: the no-credit chip’s look, computed from the real
     expect(unreadable(LOOK, chain)).toEqual([])
     const fires = unreadable(AMBER, chain)
     expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the light panel').toBeDefined()
+  })
+
+  it('in this window’s Contest banner, the same outline and ink, and 4.5:1 or better on the banner’s own face', async () => {
+    section = 'digital'
+    render(<DetachedPanel panel="contestlog" />)
+    await poll()
+    const c = afterWindow()
+    expect(c.textContent, 'control: the chip is on show').toBe('FT8 · no credit')
+    const chain = chainOf(c)
+    for (const m of BASE_MODES) {
+      expect(winnerAt(LOOK, m, chain, 'color')?.value, m).toBe('var(--state-pending)')
+      expect(winnerAt(LOOK, m, chain, 'border', 'border-color')?.value, m).toBe('1px solid currentColor')
+      expect(winnerAt(LOOK, m, chain, 'background', 'background-color'), m).toBeNull()
+      expect(winnerAt(LOOK, m, chain, 'font-size')?.value, m).toBe('calc(11px * var(--text-scale))')
+    }
+    expect(unreadable(LOOK, chain)).toEqual([])
+    const fires = unreadable(AMBER, chain)
+    expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the banner’s light face').toBeDefined()
   })
 })

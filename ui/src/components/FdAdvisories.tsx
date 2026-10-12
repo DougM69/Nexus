@@ -7,9 +7,10 @@
 //
 //   BANNED MODE — the active on-air tier is in the event's `bannedModes` (WFD
 //   bans the WSJT suite; this is the first consumer the data has ever had).
-//   Renders in the ContestView event banner AND the Operate cockpit header.
-//   The large log line says it in two words instead, beside its mode chip
-//   (`NoCreditChip`, below), with this line's sentence on hover.
+//   Said in two words, "FT8 · no credit", with the whole sentence on hover
+//   (`NoCreditChip`, below): in the ContestView event banner AND the Operate
+//   cockpit header, through this component, and on the large log line beside
+//   its mode chip.
 //
 //   ASSISTANCE — the ruleset restricts spotting or cluster use AND the
 //   corresponding assistance source is effectively ON. Banner only
@@ -44,8 +45,7 @@ const CLUSTER_SOURCES = ['DX cluster / RBN']
 const SPOTTING_SOURCES = ['DX cluster / RBN', 'PSK Reporter needs']
 
 /** The mode the station is on, when the contest does not credit it, and the sentence that says so;
- *  null when it does. The banned-mode line and the log line's chip both ask this, so they show for
- *  the same modes and say the same thing. */
+ *  null when it does (`NoCreditChip`). */
 function bannedMode(ruleset: FdRulesetDto, activeMode: string | undefined): { mode: string; text: string } | null {
   const mode = (activeMode ?? '').trim().toUpperCase()
   if (!mode || !ruleset.bannedModes.some((m) => m.toUpperCase() === mode)) return null
@@ -91,8 +91,6 @@ export function FdAdvisories({
   const year = ruleset.rulesYear
 
   const lines: { key: string; text: string }[] = []
-  const banned = bannedMode(ruleset, activeMode)
-  if (banned) lines.push({ key: 'banned', text: banned.text })
   if (showAssistance) {
     const live = (want: string[]) => assistanceOn.filter((s) => want.includes(s))
     if (!ruleset.clusterAllowed) {
@@ -127,9 +125,12 @@ export function FdAdvisories({
   ) {
     lines.push({ key: 'spotsRfOnly', text: t('fieldDay.advisory.spotsRfOnly', { event: eventName }) })
   }
-  if (lines.length === 0) return null
   return (
     <>
+      {/* The banned mode is the log line's chip here too, where it was an amber line: the operator's
+          pick (2026-10-12), "Same small chip with the full sentence on hover, in the Contest banner
+          and the FT screen header". */}
+      <NoCreditChip fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />
       {lines.map((l) => (
         // Ellipsizes in a tight header; the title carries the whole sentence.
         <div key={l.key} className={`fd-advisory ${l.key}`} role="status" title={l.text}>
@@ -142,15 +143,18 @@ export function FdAdvisories({
 }
 
 /**
- * ⭐ THE LARGE LOG LINE'S CHIP (`ContestLargeEntry` passes it to its strip's top row, right after the
- * mode chip). That log line used to draw the banned-mode line above as a full-width band over its
- * boxes, which the operator found "very verbose and yellow and distracting" (2026-10-12). The pick:
- * "A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no credit'; hover it for the full
- * sentence. No yellow band." So it is the mode and two words, and the line's sentence is its title.
+ * ⭐ THE NO-CREDIT CHIP. First the large log line's (`ContestLargeEntry` passes it to its strip's top
+ * row, right after the mode chip). That log line used to draw the banned-mode line above as a
+ * full-width band over its boxes, which the operator found "very verbose and yellow and distracting"
+ * (2026-10-12). The pick: "A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no
+ * credit'; hover it for the full sentence. No yellow band." So it is the mode and two words, and the
+ * line's sentence is its title. The same day, the same chip took the place of the amber line in the
+ * Contest banner and the FT screen's header (`FdAdvisories`, above): "Same small chip with the full
+ * sentence on hover, in the Contest banner and the FT screen header".
  *
- * Shown for exactly the modes the banned line is (`bannedMode`). Its name is its own words
- * (`aria-label`): a status takes its name from its title otherwise, and the title is left to be its
- * description, the whole sentence, as a screen reader gives it.
+ * Shown exactly when the contest does not credit the station's mode (`bannedMode`). Its name is its
+ * own words (`aria-label`): a status takes its name from its title otherwise, and the title is left
+ * to be its description, the whole sentence, as a screen reader gives it.
  */
 export function NoCreditChip({
   fdActive,

@@ -310,14 +310,17 @@ describe('the main window’s Contest screen takes contacts', () => {
 // operator found the full-width yellow band over the log line's top row "very verbose and yellow and
 // distracting", and picked "A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no
 // credit'; hover it for the full sentence. No yellow band." So the row reads, left to right, CONTEST
-// LOG · DIG · FT8 · no credit · the band line. The screen's own chip in its banner, further down, is
-// another surface, and is as it was.
+// LOG · DIG · FT8 · no credit · the band line. The screen's banner, further down, and the FT screen's
+// header drew the same sentence as an amber line, and say it with the same chip: "Same small chip with
+// the full sentence on hover, in the Contest banner and the FT screen header".
 
 describe('a mode the contest does not permit', () => {
   const banned = (mode: string) =>
     t('fieldDay.advisory.banned', { mode, event: contestName('ilqp'), year: 2026 })
   /** What the entry's top row shows right after its mode chip. */
   const afterMode = (entry: Element) => entry.querySelector('.le-fd-header > .le-fd-mode')!.nextElementSibling!
+  /** What the screen's banner shows right after the contest's window. */
+  const afterWindow = (host: Element) => host.querySelector('.fd-event-banner > .fd-event-subtitle')!.nextElementSibling!
 
   it('on FT8 the top row says "FT8 · no credit" right after the mode, the sentence on hover; no band; the contact still logs', async () => {
     operatingMode = 'digital'
@@ -332,8 +335,13 @@ describe('a mode the contest does not permit', () => {
     // No band: the sentence is not drawn anywhere in the entry.
     expect(entry.querySelector('.fd-advisory')).toBeNull()
     expect(entry.textContent).not.toContain(banned('FT8'))
-    // The screen's own chip, in its banner, is as it was.
-    expect(host.querySelector('.fd-event-banner .fd-advisory.banned')?.textContent).toBe(`⚠ ${banned('FT8')}`)
+    // The screen's banner says it with the same chip, where its amber line stood; the line is gone.
+    const banner = host.querySelector<HTMLElement>('.fd-event-banner')!
+    expect(afterWindow(host).textContent).toBe('FT8 · no credit')
+    expect(afterWindow(host).getAttribute('title')).toBe(banned('FT8'))
+    expect(within(banner).getByRole('status', { name: 'FT8 · no credit', description: banned('FT8') })).toBe(afterWindow(host))
+    expect(banner.querySelector('.fd-advisory')).toBeNull()
+    expect(banner.textContent).not.toContain(banned('FT8'))
     // The rules line says what the contest permits, as it always did.
     expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
     // Logging stays allowed: the contact goes, under the digital class.
@@ -356,6 +364,8 @@ describe('a mode the contest does not permit', () => {
     const chip = afterMode(host.querySelector('.contest-logger-entry')!)
     expect(chip.textContent).toBe('FT4 · no credit')
     expect(chip.getAttribute('title')).toBe(banned('FT4'))
+    expect(afterWindow(host).textContent).toBe('FT4 · no credit')
+    expect(afterWindow(host).getAttribute('title')).toBe(banned('FT4'))
   })
 
   it('on FT8 at a contest that credits it there is no chip: the band line follows the mode', async () => {
@@ -365,7 +375,7 @@ describe('a mode the contest does not permit', () => {
     const entry = host.querySelector('.contest-logger-entry')!
     expect(afterMode(entry).textContent).toBe(t('logEntry.contest.hint', { band: '20m' }))
     expect(entry.querySelector('.le-fd-header')!.textContent).not.toContain('no credit')
-    expect(host.querySelector('.fd-advisory')).toBeNull()
+    expect(host.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
   })
 
   it('on phone neither the entry nor the header warns — the FT tier left at FT8 is not the station’s mode', async () => {
@@ -374,9 +384,62 @@ describe('a mode the contest does not permit', () => {
     expect(entry.querySelector('.le-fd-mode')!.textContent).toBe('PH')
     expect(afterMode(entry).textContent).toBe(t('logEntry.contest.hint', { band: '20m' }))
     expect(entry.querySelector('.le-fd-header')!.textContent).not.toContain('no credit')
-    expect(host.querySelector('.fd-advisory')).toBeNull()
+    expect(host.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
     // The rules line still says what the contest permits.
     expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
+  })
+})
+
+// ── the FT screen's header ──────────────────────────────────────────────────────────────────
+//
+// The FT screen is where an FT8 contact is made, and its header drew the same amber sentence while the
+// contest ran. It says it with the log line's chip, right after Hound, where the line stood.
+
+describe('the FT screen’s header: a mode the contest does not permit', () => {
+  const banned = (mode: string) =>
+    t('fieldDay.advisory.banned', { mode, event: contestName('ilqp'), year: 2026 })
+  /** The FT screen's header, in the real App. */
+  async function ftHeader(): Promise<HTMLElement> {
+    await mountOn('operate')
+    return waitFor(
+      () => {
+        const h = document.querySelector<HTMLElement>('.operate-cockpit .cockpit-header')
+        expect(h?.querySelector('.cockpit-specialop'), 'control: the FT screen’s header is on show').toBeTruthy()
+        return h!
+      },
+      { timeout: 15_000 },
+    )
+  }
+  /** What the header shows right after Hound. */
+  const afterHound = (header: Element) => header.querySelector('.cockpit-specialop')!.nextElementSibling!
+
+  it('on FT8 it says "FT8 · no credit", the sentence on hover; the amber line is gone', async () => {
+    operatingMode = 'digital'
+    const header = await ftHeader()
+    await waitFor(() => expect(afterHound(header).textContent).toBe('FT8 · no credit'))
+    expect(afterHound(header).getAttribute('title')).toBe(banned('FT8'))
+    expect(within(header).getByRole('status', { name: 'FT8 · no credit', description: banned('FT8') })).toBe(afterHound(header))
+    expect(header.querySelector('.fd-advisory')).toBeNull()
+    expect(header.textContent).not.toContain(banned('FT8'))
+  })
+
+  it('on FT4 the chip names FT4', async () => {
+    operatingMode = 'digital'
+    tier = 'Ft4'
+    const header = await ftHeader()
+    await waitFor(() => expect(afterHound(header).textContent).toBe('FT4 · no credit'))
+    expect(afterHound(header).getAttribute('title')).toBe(banned('FT4'))
+  })
+
+  it('at a contest that credits FT8 there is none', async () => {
+    operatingMode = 'digital'
+    rules = { ...ILQP_RULES, bannedModes: [] }
+    const header = await ftHeader()
+    // The ruleset is in, so nothing here is a ruleset not yet read.
+    await waitFor(() => expect(bridgeCalls.map((c) => c.cmd)).toContain('get_fd_ruleset'))
+    await settle()
+    expect(afterHound(header).className).toBe('cockpit-meta')
+    expect(document.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
   })
 })
 
@@ -845,5 +908,57 @@ describe('the no-credit chip’s look, computed from the real sheets', () => {
     expect(unreadable(LOOK, chain)).toEqual([])
     const fires = unreadable(AMBER, chain)
     expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the light panel').toBeDefined()
+  })
+})
+
+// The same chip where the amber line stood, in the screen's banner and in the FT screen's header: no
+// rule of either host restyles it, and it reads 4.5:1 or better on each host's own face (the banner's
+// accent tint, the header's panel), where the amber would not.
+describe('the chip in the screen’s banner and the FT screen’s header: its look, computed from the real sheets', () => {
+  const hosts: [string, () => Promise<Element>][] = [
+    [
+      'the Contest screen’s banner',
+      async () => {
+        operatingMode = 'digital'
+        const host = await contestScreen()
+        return waitFor(() => {
+          const c = host.querySelector('.fd-event-banner > .fd-event-subtitle')!.nextElementSibling!
+          expect(c.textContent, 'control: the chip is on show').toBe('FT8 · no credit')
+          return c
+        })
+      },
+    ],
+    [
+      'the FT screen’s header',
+      async () => {
+        operatingMode = 'digital'
+        await mountOn('operate')
+        return waitFor(
+          () => {
+            const c = document.querySelector('.operate-cockpit .cockpit-header .cockpit-specialop')!.nextElementSibling!
+            expect(c.textContent, 'control: the chip is on show').toBe('FT8 · no credit')
+            return c
+          },
+          { timeout: 15_000 },
+        )
+      },
+    ],
+  ]
+
+  it.each(hosts)('in %s: the log line’s outline, ink and type, with no fill', async (_, find) => {
+    const chain = chainOf(await find())
+    for (const m of BASE_MODES) {
+      expect(winnerAt(LOOK, m, chain, 'color')?.value, m).toBe('var(--state-pending)')
+      expect(winnerAt(LOOK, m, chain, 'border', 'border-color')?.value, m).toBe('1px solid currentColor')
+      expect(winnerAt(LOOK, m, chain, 'background', 'background-color'), m).toBeNull()
+      expect(winnerAt(LOOK, m, chain, 'font-size')?.value, m).toBe('calc(11px * var(--text-scale))')
+    }
+  })
+
+  it.each(hosts)('in %s: 4.5:1 or better on its face in every theme and mode, where the amber would not', async (_, find) => {
+    const chain = chainOf(await find())
+    expect(unreadable(LOOK, chain)).toEqual([])
+    const fires = unreadable(AMBER, chain)
+    expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the light face').toBeDefined()
   })
 })

@@ -8,6 +8,7 @@ import { StationDataContext } from '../stationAccess'
 import { installApplicationTransport } from '../applicationTransport'
 import { fieldDayPage } from './__fixtures__/field-day-page'
 import { parseFieldDay } from './field-day'
+import { contestName } from '../fdEvent'
 import { t } from '../i18n'
 
 // THE BUDGET (2026-10-09). The slowest case here, "uses the real event boards and disclosures without…", takes 0.34 s
@@ -149,6 +150,30 @@ it('keeps Winter Field Day raw-point scoring distinct from ARRL totals',async()=
  const test=setup(vi.fn(async()=>page));await screen.findByText('K1ABC')
  const math=test.container.querySelector('.fd-score-math')!.textContent!
  expect(math).toContain('3');expect(math).not.toContain('106');expect(math.toLowerCase()).not.toContain('power')
+})
+// The station's Contest banner says a mode the contest does not credit with a small chip, "FT8 · no credit", the whole
+// sentence on hover, where it drew an amber line (2026-10-12). This page draws that banner from what it is sent today
+// (the ruleset and the tier), so it says it the same way, and asks the station for nothing more.
+it('says a mode the contest does not credit with the banner’s chip, from what it is sent today',async()=>{
+ const forbidden=vi.fn(async()=>{throw new Error('unexpected native operation')})
+ const uninstall=installApplicationTransport({kind:'remote',invoke:forbidden})
+ try {
+  const page=fieldDayPage()
+  const source=(page.meta as unknown as {source:{fieldDay:{event:string};ruleset:{event:string;bannedModes:string[]}}}).source
+  source.fieldDay.event='wfd';source.ruleset.event='wfd';source.ruleset.bannedModes=['FT8']
+  const test=setup(vi.fn(async()=>page));await screen.findByText('K1ABC')
+  const banner=test.container.querySelector<HTMLElement>('.fd-event-banner')!
+  const sentence=t('fieldDay.advisory.banned',{mode:'FT8',event:contestName('wfd'),year:2026})
+  const chip=banner.querySelector('.fd-event-subtitle')!.nextElementSibling!
+  expect(chip.textContent).toBe('FT8 · no credit')
+  expect(chip.getAttribute('title')).toBe(sentence)
+  expect(within(banner).getByRole('status',{name:'FT8 · no credit',description:sentence})).toBe(chip)
+  expect(banner.querySelector('.fd-advisory'),'the amber line is gone').toBeNull()
+  expect(banner.textContent).not.toContain(sentence)
+  // The one request this page makes, and nothing of the station's native side.
+  expect(test.invoke).toHaveBeenCalledTimes(1)
+  expect(forbidden).not.toHaveBeenCalled()
+ } finally {uninstall()}
 })
 // The station's Contest screen takes contacts in its own window (its log line at the top, App.tsx); this page is an
 // observation of that screen and logs nothing, so none of that log line reaches it.

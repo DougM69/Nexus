@@ -412,12 +412,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The FT8/FT4 warning on the contest log line is a small chip.** On a mode the contest does not
-  credit (FT8 or FT4 at the Illinois QSO Party), the large log line on the Contest screen and in the
-  Logger window no longer draws a yellow band across the window above its top row. A small outlined
-  **FT8 · no credit** (or **FT4 · no credit**) chip sits beside the mode instead, and hovering it
-  shows the whole sentence. It shows on exactly the modes the band did, and the contact still logs:
-  what is logged and scored is unchanged.
+- **The FT8/FT4 warning is a small chip.** On a mode the contest does not credit (FT8 or FT4 at the
+  Illinois QSO Party), the large log line on the Contest screen and in the Logger window no longer
+  draws a yellow band across the window above its top row, and the Contest screen's banner and the FT
+  screen's header no longer show the long amber sentence. A small outlined **FT8 · no credit** (or
+  **FT4 · no credit**) chip says it instead, beside the mode on the log line and where the sentence
+  was in the banner (on the Remote page's Contest view too) and the FT header; hovering it shows the
+  whole sentence. It shows on exactly the modes the warning did, and the contact still logs: what is
+  logged and scored is unchanged.
 - **The Contest screen's operator box is at the top, and the screen below it uses the whole
   window.** While a contest runs, the Operator box sits on the log line's title line beside
   Sending and I moved, in the main window and in the Logger window, and Ctrl+O puts the cursor
