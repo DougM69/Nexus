@@ -41,9 +41,6 @@ interface Props {
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
   fdExchange?: string | null
-  /** The radio has the mic while Nexus's native Flex audio is on (Phone at the shack), so a
-   * recorded message would not go out: playback is refused and says why. */
-  radioHasMic?: boolean
   /** ENTER SENDS MESSAGE in the Phone cockpit's contest strip: the slot the next Enter plays
    *  glows (`lit`), the keyer lends the strip its recordings and a player (`report`, null when it
    *  goes), its ■ Stop is a stop (`onStop`), and a slot played by hand is reported (`onPlay`), so
@@ -97,7 +94,7 @@ export interface VoiceKeyerForEnter {
  * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
  * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
-export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHasMic, esm }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
   const [recording, setRecording] = useState<number | null>(null)
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({})
@@ -182,11 +179,9 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     if (!m || !m.file) return { text: t('phone.keyer.empty', { slot }), ms: 3000 }
     if (recording !== null) return { text: t('phone.keyer.busyRecording'), ms: 2500 }
     if (keyed) return { text: t('phone.keyer.releasePtt'), ms: 3000 }
-    // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse with a message"). With Nexus's
-    // own Flex client and native audio on, Phone at the shack takes the radio's own mic while a
-    // recorded message goes out over DAX, so the radio would ignore the message and the mic
-    // would carry the over. Nothing is sent, so nothing keys; the engine refuses the same send.
-    if (radioHasMic) return { text: t('phone.keyer.radioHasMic'), ms: 6000 }
+    // The radio having the mic (Nexus's own Flex client, native audio on, Phone at the shack) is
+    // not a refusal since 2026-10-12 ("Change it now"): the station switches the radio to DAX for
+    // the message and back. A message it then drops says why on the status lane.
     if (!txEnabled) {
       // NAME THE CONTROL THAT IS ON THIS SCREEN (#81). "enable transmit" was honest and
       // useless: the Phone cockpit shows no Enable-Tx button — App hides the TopBar's TX
@@ -316,7 +311,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, txEnabled, keyed, recording, radioHasMic])
+  }, [msgs, txEnabled, keyed, recording])
 
   return (
     <div className="vk">

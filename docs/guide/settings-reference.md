@@ -506,8 +506,8 @@ Baud continue across to the right.*
   invisible under Remote Desktop**. Native DAX audio works only through the
   **Flex native client (Beta)**: with SmartSDR CAT it does nothing, and the
   setting is kept for the client. On the client the digital modes transmit over
-  DAX, while Phone at the shack keeps the radio's own mic (so the voice keyer
-  can't play there). Both are Beta and **unverified on hardware**, so both are opt-in; if
+  DAX, while Phone at the shack keeps the radio's own mic, and the voice keyer
+  switches the radio to DAX for each message. Both are Beta and **unverified on hardware**, so both are opt-in; if
   the scope stays blank or decodes stop, turn them back off.
 - **CI-V bus diagnostic log** — appears once native CI-V is on. Records every
   byte to and from the radio to a file in your Downloads, for hardware-only

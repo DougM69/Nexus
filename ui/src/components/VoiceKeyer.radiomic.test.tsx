@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 //
-// THE VOICE KEYER CAN'T PLAY WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse
-// with a message"). With Nexus's own Flex client and native DAX audio on, Phone at the shack takes
-// the radio's own mic while a recorded message goes out over DAX, so the radio would ignore the
-// message and the mic would carry the over. A press says so in the operator's language and sends
-// nothing, by click and by F-key; without that state the same press plays as before. The toast
-// module is the real one: what is asserted is the sentence the operator reads.
+// THE VOICE KEYER HAS NO REFUSAL OF ITS OWN FOR THE RADIO'S MIC. Until 2026-10-12 it refused while
+// the radio had the mic (Nexus's own Flex client, native DAX audio on, Phone at the shack), since a
+// recorded message goes out over DAX. The operator's ruling of that day, "Change it now", replaced
+// the refusal with a switch around each message: the station asks the radio for DAX, keys once
+// the radio reports it, and gives the mic back after the unkey. The engine refuses what the switch
+// cannot carry, and a message the station then drops says why on the status lane. So the keyer
+// plays by click and by F-key with nothing to say; the cockpit's own test runs it with the radio
+// on its mic (PhoneCockpit.esm.test.tsx). The toast module is the real one.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { VoiceKeyer } from './VoiceKeyer'
 import { subscribeToasts, dismissToast, type Toast } from '../toast'
-import { DE } from '../i18n/de'
-import { EN, installCatalog, setLocale } from '../i18n'
 
 const { playVoiceMessage } = vi.hoisted(() => ({
   playVoiceMessage: vi.fn(async (): Promise<unknown> => ({})),
@@ -38,64 +38,19 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
-  setLocale('en')
   for (const t of toasts) dismissToast(t.id)
   unsub()
   playVoiceMessage.mockReset()
 })
 
-/** Render the keyer with TX on and let its slot list load. */
-async function keyer(radioHasMic: boolean) {
-  const view = render(
-    <VoiceKeyer txEnabled keyed={false} transmitting={false} radioHasMic={radioHasMic} />,
-  )
-  await act(async () => {})
-  const slot = view.container.querySelector<HTMLButtonElement>('.vk-play')
-  expect(slot, 'precondition: F1 holds a message').not.toBeNull()
-  return slot!
-}
-
-describe('the voice keyer while the radio has the mic', () => {
-  it('sends nothing on a click and says why', async () => {
-    const slot = await keyer(true)
-    await act(async () => {
-      fireEvent.click(slot)
-    })
-    expect(playVoiceMessage).not.toHaveBeenCalled()
-    expect(toasts.map((t) => [t.kind, t.message])).toEqual([
-      ['info', EN['phone.keyer.radioHasMic']],
-    ])
-  })
-
-  it('sends nothing on its F-key either, once the radio has taken the mic', async () => {
-    // Mounted before the radio took the mic: the F-key handler must see the change.
-    const view = render(
-      <VoiceKeyer txEnabled keyed={false} transmitting={false} radioHasMic={false} />,
-    )
+describe('the voice keyer and the radio’s mic', () => {
+  it('plays by click and by F-key, with nothing to say', async () => {
+    const view = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
     await act(async () => {})
-    view.rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} radioHasMic />)
+    const slot = view.container.querySelector<HTMLButtonElement>('.vk-play')
+    expect(slot, 'precondition: F1 holds a message').not.toBeNull()
     await act(async () => {
-      fireEvent.keyDown(window, { key: 'F1' })
-    })
-    expect(playVoiceMessage).not.toHaveBeenCalled()
-    expect(toasts.map((t) => t.message)).toEqual([EN['phone.keyer.radioHasMic']])
-  })
-
-  it('says it in the operator’s language', async () => {
-    installCatalog('de', DE)
-    setLocale('de')
-    const slot = await keyer(true)
-    await act(async () => {
-      fireEvent.click(slot)
-    })
-    expect(DE['phone.keyer.radioHasMic']).toBeTruthy()
-    expect(toasts.map((t) => t.message)).toEqual([DE['phone.keyer.radioHasMic']])
-  })
-
-  it('plays as before when the radio does not have the mic', async () => {
-    const slot = await keyer(false)
-    await act(async () => {
-      fireEvent.click(slot)
+      fireEvent.click(slot!)
     })
     expect(playVoiceMessage).toHaveBeenCalledWith(1)
     await act(async () => {

@@ -91,8 +91,6 @@ export type EsmRefusal =
   | { why: 'recording' }
   /** Phone: the operator is holding PTT. */
   | { why: 'pttHeld' }
-  /** Phone: the radio has the mic (Nexus's own Flex audio), so a recording would not go out. */
-  | { why: 'radioHasMic' }
   /** The set has no message for this step: no key is mapped to it. */
   | { why: 'unmapped'; role: EsmRole }
   /** The key this step is on sends nothing (an empty macro, a voice slot with no recording). */
@@ -239,7 +237,6 @@ export type EsmGuards =
       keyerShown: boolean
       pttHeld: boolean
       recording: boolean
-      radioHasMic: boolean
     } & TxGuards)
 
 /** Why ESM steps aside: Enter logs exactly as it does with ESM off, sends nothing, and the ESM
@@ -264,7 +261,6 @@ export function esmTxRefusal(guards: EsmGuards): EsmRefusal | null {
   if (guards.cockpit === 'phone') {
     if (guards.recording) return { why: 'recording' }
     if (guards.pttHeld) return { why: 'pttHeld' }
-    if (guards.radioHasMic) return { why: 'radioHasMic' }
   }
   return null
 }

@@ -17,6 +17,8 @@ use tempo_flexsim::{
 };
 use tempo_net::flex::encode::Station;
 
+mod voice_keyer;
+
 /// An audio backend that notes when transmit audio starts and, as the sound card does, hands it
 /// to an installed tee instead of the device.
 #[derive(Clone, Default)]
@@ -635,14 +637,13 @@ fn run_until(s: &mut FlexScene, what: &str, done: impl Fn(&FlexScene) -> bool) {
     }
 }
 
-/// ⭐ THE VOICE KEYER CAN'T PLAY WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04,
-/// "Refuse with a message"). Phone at the shack with native audio on: the TX slice is in USB, so
-/// the radio takes its transmit audio from its own mic, and a recorded message, which Nexus sends
-/// as DAX, would not reach the air. The send is refused with the reason before anything is
-/// queued, so nothing keys and nothing plays. The control, in the same scene: native audio off,
-/// and the same message keys the radio and plays, as it always has.
+/// Phone at the shack, with native audio on and then off. On, the radio has its mic, and a
+/// message goes out through the switch to DAX around it (`voice_keyer`, operator ruling,
+/// 2026-10-12, "Change it now"). The client's own answer follows native audio at once, whatever
+/// the radio last reported; and off, the radio is the operator's again, and the same message keys
+/// and plays through the sound card as it always has, with no DAX source written for it.
 #[test]
-fn the_voice_keyer_refuses_in_phone_at_the_shack_with_native_audio_on() {
+fn with_native_audio_off_the_voice_keyer_plays_as_it_always_has() {
     let mut s = FlexScene::with_session(true, reports(&["USB"]));
     {
         let mut e = s.engine.lock().unwrap();
@@ -652,19 +653,6 @@ fn the_voice_keyer_refuses_in_phone_at_the_shack_with_native_audio_on() {
     run_until(&mut s, "the radio never had the mic", |s| {
         s.engine.lock().unwrap().snapshot().radio.flex_radio_has_mic
     });
-    let sent = s.engine.lock().unwrap().send_voice(message());
-    s.run(1_000);
-    assert_eq!(keys(&s), 0, "nothing was keyed");
-    assert!(
-        s.backend.played.lock().unwrap().is_empty(),
-        "nothing played"
-    );
-    assert!(s.state.tx_until_ms.is_none());
-    let why = sent.expect_err("the voice keyer refuses while the radio has the mic");
-    assert!(
-        why.contains("the radio has the mic"),
-        "the refusal says why: {why}"
-    );
 
     // The client's own answer follows native audio at once, whatever the radio last reported.
     let d = s
@@ -691,6 +679,11 @@ fn the_voice_keyer_refuses_in_phone_at_the_shack_with_native_audio_on() {
         s.backend.played.lock().unwrap().len(),
         1,
         "the message played"
+    );
+    assert!(
+        !s.log().iter().any(|(_, e)| matches!(e,
+            SimEvent::Command { text, .. } if text.starts_with("transmit set dax"))),
+        "no DAX source written for it"
     );
 }
 

@@ -402,6 +402,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **FlexRadio: the voice keyer plays in Phone through the Flex native client with native DAX
+  audio on (Beta).** It used to refuse there, because the radio keeps its own mic in Phone. Now
+  each message switches the radio for its own length: Nexus asks the radio to take its transmit
+  audio from DAX, keys only once the radio reports it, plays the message, unkeys, and gives the
+  radio its mic back once the unkey is confirmed. A message the radio has not switched for within 2
+  seconds, or that something else keys first, is dropped, never played later, and the status bar
+  says why; a message longer than 20 seconds, or one sent while something else is transmitting, is
+  refused with the reason. Stop TX ends a message at once. Right after a message Nexus's own PTT
+  can be refused for a moment, until the mic is back; the mic's own PTT works throughout, and a
+  message plays with the radio's VOX on. Pressing the mic's PTT during a message still gets the
+  amber alarm and a reconnect, as before, until a tester's bench shows what the radio reports for
+  it. SSTV and APRS stay refused in Phone and FM. NEEDS-BENCH on a FLEX radio.
 - **A contest log line says what each exchange box is for.** The box for the other station's
   county was captioned QTH, which reads as anything but "their county". Each box now says what it
   holds for your role in the contest you picked: **County / State** inside a QSO party's state and

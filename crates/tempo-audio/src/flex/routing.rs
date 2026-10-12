@@ -15,12 +15,24 @@
 //! older native audio worker on SmartSDR CAT, retired 2026-10-04 (operator ruling, "Retire it"):
 //! native audio now rides this client only.
 //!
+//! **The voice keyer** (operator ruling, 2026-10-12, "Change it now", for the length of a message
+//! only): in Phone at the shack, DAX also while a voice-keyer message waits to go out, and the mic
+//! again once it has gone, the radio loop keying the message only after the radio reports DAX and
+//! this write of the mic going out only after the radio has proved the unkey.
+//!
 //! ## How each part holds
 //! - **Follow the mode.** [`wanted_source`] maps the TX slice's mode to the source: the digital
 //!   modes ([`mode_class`]) to DAX, the phone modes to the mic, or to DAX while the stream's
-//!   browser voice is live (a streamed operator's transmit presence); CW, FreeDV and anything
-//!   else leave the operator's setting alone. Only while Nexus's native audio is on: with it off,
-//!   Nexus feeds nothing over DAX and the flag goes back to the operator's.
+//!   browser voice is live (a streamed operator's transmit presence) or a voice-keyer message
+//!   waits; CW, FreeDV and anything else leave the operator's setting alone. Only while Nexus's
+//!   native audio is on: with it off, Nexus feeds nothing over DAX and the flag goes back to the
+//!   operator's.
+//! - **The keyer's DAX is the message's only.** A DAX write made for a voice-keyer message alone
+//!   is remembered as the keyer's until the radio reports its mic again
+//!   ([`Routing::dax_for_keyer`]), so the radio still counts as having the mic through it for APRS
+//!   and SSTV, which stay refused, and the Phone screen does not show the mic off for every
+//!   message. The message's presence does not lift the voice rule below for Nexus's own PTT: that
+//!   key carries the operator's voice, which the keyer's DAX would not.
 //! - **On a change only.** [`Routing`] decides when its inputs change (the TX slice, its mode,
 //!   the browser voice, native audio on or off) and writes once per decision, so a flag the
 //!   operator flips by hand is not fought. A write the radio never reports back within
@@ -142,7 +154,25 @@ struct Inputs {
     tx_slice: Option<u8>,
     mode: Option<String>,
     browser_voice: bool,
+    /// A voice-keyer message waits to go out over DAX.
+    voice_keyer: bool,
     native_audio: bool,
+}
+
+impl Inputs {
+    /// Whether these want DAX for the voice keyer's message alone: without it, Phone at the shack
+    /// would have the mic.
+    fn dax_only_for_keyer(&self) -> bool {
+        self.native_audio
+            && self.voice_keyer
+            && wanted_source(self.mode.as_deref(), self.browser_voice) == Some(false)
+    }
+
+    /// Whether these want DAX for anything but the voice keyer's message: a digital mode, or the
+    /// stream's browser voice.
+    fn dax_beside_keyer(&self) -> bool {
+        self.native_audio && wanted_source(self.mode.as_deref(), self.browser_voice) == Some(true)
+    }
 }
 
 /// The routing state of one connection.
@@ -160,6 +190,9 @@ pub struct Routing {
     wrote: Option<bool>,
     /// A write not yet reported back by the radio, and when it went.
     unconfirmed: Option<(bool, u64)>,
+    /// Nexus's last DAX write was for a voice-keyer message alone, and since then nothing else
+    /// has wanted DAX and the radio has not reported its mic ([`Routing::dax_for_keyer`]).
+    keyer_dax: bool,
 }
 
 impl Routing {
@@ -180,12 +213,14 @@ impl Routing {
 
     /// What to write now, if anything, at `now_ms` on any monotonic clock. Call it only at a
     /// quiet point; carry out at most one step per call and report a written flag with
-    /// [`Routing::written`].
+    /// [`Routing::written`]. `browser_voice`: the stream's browser voice is live; `voice_keyer`: a
+    /// voice-keyer message waits to go out over DAX.
     pub fn step(
         &mut self,
         view: &View,
         native_audio: bool,
         browser_voice: bool,
+        voice_keyer: bool,
         now_ms: u64,
     ) -> Option<Step> {
         if view.other_feeder {
@@ -222,8 +257,14 @@ impl Routing {
             tx_slice: view.tx_slice,
             mode: view.tx_mode.clone(),
             browser_voice,
+            voice_keyer,
             native_audio,
         };
+        // The keyer's DAX ends with the radio back on its mic, or with DAX wanted for something
+        // else: it is then that mode's, or the browser voice's.
+        if !radio || inputs.dax_beside_keyer() {
+            self.keyer_dax = false;
+        }
         if self.decided.as_ref() != Some(&inputs) {
             self.decided = Some(inputs);
             self.applied = false;
@@ -237,7 +278,7 @@ impl Routing {
             return None;
         }
         let (target, why) = if native_audio {
-            match wanted_source(view.tx_mode.as_deref(), browser_voice) {
+            match wanted_source(view.tx_mode.as_deref(), browser_voice || voice_keyer) {
                 Some(dax) => (dax, Why::FollowMode),
                 None => {
                     self.applied = true;
@@ -276,6 +317,13 @@ impl Routing {
     pub fn written(&mut self, dax: bool, why: Why, now_ms: u64) -> Option<bool> {
         self.wrote = Some(dax);
         self.unconfirmed = Some((dax, now_ms));
+        if dax {
+            self.keyer_dax = why == Why::FollowMode
+                && self
+                    .decided
+                    .as_ref()
+                    .is_some_and(Inputs::dax_only_for_keyer);
+        }
         match why {
             Why::RestoreAtConnect => {
                 self.restore = None;
@@ -337,6 +385,17 @@ impl Routing {
     pub fn leaves_voice_on_dax(&self, view: &View, native_audio: bool) -> bool {
         let browser_voice = self.decided.as_ref().is_some_and(|i| i.browser_voice);
         self.leaves_dax(view) && !(native_audio && browser_voice)
+    }
+
+    /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus
+    /// wrote it for the message alone, in place of the mic Phone at the shack has, and the radio
+    /// still reports it. Its mic counts as the operator's through that (APRS and SSTV stay
+    /// refused, and the Phone screen does not show the mic off for a message).
+    pub fn dax_for_keyer(&self, view: &View) -> bool {
+        self.keyer_dax
+            && view.radio == Some(true)
+            && !view.other_feeder
+            && wanted_source(view.tx_mode.as_deref(), false) == Some(false)
     }
 }
 

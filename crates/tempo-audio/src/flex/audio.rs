@@ -75,8 +75,13 @@ const TX_IDLE_WAIT: Duration = Duration::from_millis(100);
 /// How far behind schedule the pacer may fall before it resyncs instead of catching up: a
 /// descheduled thread must not turn its backlog into a burst at the radio.
 const TX_MAX_CATCHUP: Duration = Duration::from_millis(100);
-/// About twenty seconds at the modem rate; an FT8 over is 12.6 s.
+/// About twenty seconds at the modem rate; an FT8 over is 12.6 s. Past it the oldest audio goes,
+/// so the voice keyer refuses a longer message on this route.
 const TX_QUEUE_CAP: usize = MODEM_RATE as usize * 20;
+const _: () = assert!(
+    TX_QUEUE_CAP == tempo_app::engine::FLEX_VOICE_MAX_SAMPLES,
+    "the voice keyer's longest message on the Flex client is what its DAX queue holds"
+);
 /// Modem-rate samples resampled at a time: one packet's worth.
 const TX_CHUNK: usize = TX_FRAMES_PER_PACKET * MODEM_RATE as usize / DAX_RATE_HZ as usize;
 

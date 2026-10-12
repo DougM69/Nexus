@@ -42,6 +42,17 @@
 //! over is refused while Nexus's own write still has the radio on DAX, which nothing feeds then:
 //! never a silent over.
 //!
+//! **The voice keyer in Phone at the shack** (operator ruling, 2026-10-12, "Change it now"): the
+//! radio keeps its mic between messages, and a message switches it to DAX for its own length. The
+//! radio loop gives the routing the message's presence ([`FlexDaemon::sync_tx_routing`]), keys the
+//! message only once the radio reports DAX on Nexus's own stream with nothing keyed
+//! ([`FlexDaemon::takes_voice_dax`]), marks that one key as carrying Nexus's audio, which the shim
+//! then keys only on the radio's DAX ([`FlexDaemon::set_voice_key`]), and drops a message the radio
+//! did not switch for in 2 seconds or that something else keyed before
+//! ([`FlexDaemon::keyed_by_another`]). The mic comes back at a quiet point after the over, its write
+//! refused at the wire until the radio has proved the unkey. Through the keyer's own DAX the radio
+//! still counts as having the mic ([`FlexDaemon::radio_has_mic`], [`FlexDaemon::dax_for_keyer`]).
+//!
 //! ## Not yet
 //! No panadapter stream from this session (the older native pan still opens its own), no
 //! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
@@ -154,6 +165,10 @@ pub(crate) struct ClientState {
     /// The operator's own key took over our CW since the radio loop last asked
     /// ([`FlexDaemon::take_operator_break`]).
     pub(crate) operator_break: AtomicBool,
+    /// The key being asked for is a voice-keyer message's, which carries Nexus's own audio: the
+    /// shim keys it only while the radio takes its transmit audio from Nexus's DAX
+    /// ([`FlexDaemon::set_voice_key`]). Set by the radio loop around that one key.
+    pub(crate) voice_key: AtomicBool,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
@@ -678,17 +693,59 @@ impl FlexDaemon {
 
     /// Whether the radio has the mic while native audio is on: Nexus is the only program feeding
     /// DAX, and the radio takes its transmit audio from its own mic, as the routing has it for
-    /// Phone at the shack. Audio Nexus makes (a recorded voice message, an APRS packet, an SSTV
-    /// picture) would then go over DAX, which the radio ignores, and the mic would carry the
-    /// over; the voice keyer, APRS and SSTV refuse while this holds (operator rulings,
-    /// 2026-10-04). Beside another program's DAX the flag is not Nexus's to judge, as for the
-    /// digital refusal at `T 1`. Cheap: what the audio control thread last read.
+    /// Phone at the shack. Audio Nexus makes (an APRS packet, an SSTV picture) would then go over
+    /// DAX, which the radio ignores, and the mic would carry the over; APRS and SSTV refuse while
+    /// this holds (operator rulings, 2026-10-04 and 2026-10-12), and a voice-keyer message waits
+    /// for the switch to DAX around it. It still holds while the radio is on DAX only for such a
+    /// message ([`Self::dax_for_keyer`]). Beside another program's DAX the flag is not Nexus's to
+    /// judge, as for the digital refusal at `T 1`. Cheap: what the audio control thread last read,
+    /// and the session's state read in place.
     pub fn radio_has_mic(&self) -> bool {
         self.state.native_audio.load(Ordering::Relaxed)
-            && self
-                .audio
-                .as_ref()
-                .is_some_and(|a| a.radio_dax() == Some(false) && !a.other_feeder())
+            && self.audio.as_ref().is_some_and(|a| {
+                !a.other_feeder() && (a.radio_dax() == Some(false) || self.dax_for_keyer())
+            })
+    }
+
+    /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus
+    /// wrote it for the message alone, in place of the mic Phone at the shack has
+    /// ([`Routing::dax_for_keyer`]). Cheap: the session's state read in place.
+    pub fn dax_for_keyer(&self) -> bool {
+        let view = self.conn().read(|s| routing_view(s, &self.state));
+        lock(&self.state.routing).dax_for_keyer(&view)
+    }
+
+    /// Whether a voice-keyer message waiting for DAX may key now: the radio reports taking its
+    /// transmit audio from DAX, Nexus's own DAX transmit stream is there to carry the message (the
+    /// route is up), and nothing of ours is keyed, with the radio seen idle. The radio loop's hold
+    /// before it takes such a message. Cheap: the session's state read in place.
+    pub fn takes_voice_dax(&self) -> bool {
+        self.tx_route_ready()
+            && self.conn().read(|s| {
+                s.model.transmit.dax == Some(true) && s.dax_tx_stream.is_some() && s.transmit_ready
+            })
+    }
+
+    /// Whether the radio reports a transmission nothing of ours has open: keyed (PTT_REQUESTED or
+    /// TRANSMITTING) while this session has no start unconfirmed. The operator's mic PTT on the
+    /// radio, another program, an earlier session of ours: a voice-keyer message waiting for DAX
+    /// is dropped on it, never keyed after it. Cheap: the session's state read in place.
+    pub fn keyed_by_another(&self) -> bool {
+        self.conn().read(|s| {
+            !s.keyed
+                && s.model
+                    .interlock
+                    .sample
+                    .as_ref()
+                    .is_some_and(|i| matches!(i.state.as_str(), "PTT_REQUESTED" | "TRANSMITTING"))
+        })
+    }
+
+    /// Mark the key the radio loop is about to ask for as a voice-keyer message's, which carries
+    /// Nexus's own audio: the shim keys it only while the radio takes its transmit audio from
+    /// Nexus's DAX ([`shim::FlexShim`]). Set just before that one key, cleared just after it.
+    pub fn set_voice_key(&self, on: bool) {
+        self.state.voice_key.store(on, Ordering::SeqCst);
     }
 
     /// Whether Nexus's own write still has the radio taking its transmit audio from DAX in place
@@ -711,9 +768,10 @@ impl FlexDaemon {
     /// Carry out the next step of the transmit audio routing, if any (operator ruling,
     /// 2026-10-03; [`routing`]). **Call it only at a quiet point**: the radio loop calls it at the
     /// end of a tick in which nothing of ours is keyed or about to be, which is what keeps the
-    /// flag out of the keying path. `browser_voice`: the stream's browser voice is live. Returns
-    /// what it did, for the log.
-    pub fn sync_tx_routing(&self, browser_voice: bool) -> Option<String> {
+    /// flag out of the keying path. `browser_voice`: the stream's browser voice is live;
+    /// `voice_keyer`: a voice-keyer message waits to go out over DAX. Returns what it did, for the
+    /// log.
+    pub fn sync_tx_routing(&self, browser_voice: bool, voice_keyer: bool) -> Option<String> {
         let conn = self.conn();
         let snap = conn.snapshot();
         if snap.phase != Phase::Ready {
@@ -722,7 +780,8 @@ impl FlexDaemon {
         let view = routing_view(&snap, &self.state);
         let native = self.state.native_audio.load(Ordering::Relaxed);
         let now = monotonic_ms();
-        let step = lock(&self.state.routing).step(&view, native, browser_voice, now)?;
+        let step =
+            lock(&self.state.routing).step(&view, native, browser_voice, voice_keyer, now)?;
         let (audio, done) = match step {
             Step::CreateDaxTx => {
                 let mut asked = lock(&self.asked_tx_stream);
