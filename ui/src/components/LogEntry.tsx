@@ -1,6 +1,7 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from
-// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, plus everything this strip prints about a
+// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, the contest boxes' examples
+// (`slotExample`), plus everything this strip prints about a
 // contact — the callsign, RST, grid, band, mode and frequency are wire values, and a locale that
 // "translated" one would have broken an example of a wire format. See the invariant-token rule in
 // `i18n/index.ts`.
@@ -38,7 +39,7 @@ import { composingSlot } from '../features/contestExchange'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
 import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
-import { fdFieldOk, fdSlotValue, fdVerdict, slotCaption, slotTitle } from '../features/contestSlots'
+import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
 import { contestDupe, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
@@ -85,10 +86,9 @@ const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
   { key: 'SECTION', kind: 'enum', required: true, domain: 'fd_sections' },
 ]
 
-/** The operator-facing caption for a slot — `features/contestSlots.ts`, the one table the
- *  strip and the contest log table both read. A slot id is an INVARIANT TOKEN; its caption
- *  is PROSE. Field Day's two slots keep the captions they shipped with, and a slot with no
- *  entry shows its id — a token, correctly untranslated, rather than an invented word. */
+/** The caption for a SENT slot's box, by id — `features/contestSlots.ts`. A slot id is an
+ *  INVARIANT TOKEN; its caption is PROSE. A RECEIVED box is captioned by what it holds for this
+ *  station's role (`receivedCaption`), as the contest log table and the edit caption it. */
 const fdFieldLabel = slotCaption
 
 /** One received value off a logged DTO row, by slot id.
@@ -200,8 +200,9 @@ const LOG_EXAMPLES = {
  * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
  * reads are the SAME token here, which is why this is one list and not a value/label pair.
  */
-/** The example value shown in an empty box. An example drawn from a technical
- *  namespace is an INVARIANT TOKEN and never a catalog string — see `LOG_EXAMPLES`. */
+/** The example value shown in an empty box, by slot; any other box shows a code from the list it
+ *  draws on (`slotExample`). An example drawn from a technical namespace is an INVARIANT TOKEN
+ *  and never a catalog string — see `LOG_EXAMPLES`. */
 const FD_FIELD_EXAMPLES: Record<string, string | undefined> = {
   CLASS: LOG_EXAMPLES.fdClass,
   SECTION: LOG_EXAMPLES.fdSection,
@@ -2367,6 +2368,7 @@ export function LogEntry({
             key={`${editRows[0].call}|${editRows[0].whenUnix}`}
             rows={editRows}
             receives={fdReceives}
+            role={fieldDay?.role}
             bands={fieldDay?.bands}
             onDone={editDone}
           />
@@ -2402,15 +2404,17 @@ export function LogEntry({
             // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
             // value: typing over it, or the strip clearing, takes the mark away.
             const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            // What the box holds for this station's role: "County / State" in Illinois.
+            const caption = receivedCaption(f, fieldDay?.role)
             return (
             <label className="le-fd-field" key={f.key}>
               {fromHistory ? (
                 <span className="le-fd-cap le-fd-cap-marked">
-                  <span className="le-fd-cap-text">{fdFieldLabel(f.key)}</span>
+                  <span className="le-fd-cap-text">{caption}</span>
                   <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
                 </span>
               ) : (
-                <span className="le-fd-cap">{fdFieldLabel(f.key)}</span>
+                <span className="le-fd-cap">{caption}</span>
               )}
               <input
                 ref={(el) => {
@@ -2452,7 +2456,7 @@ export function LogEntry({
                   window.clearTimeout(fdHitsCloseTimer.current)
                   fdHitsCloseTimer.current = window.setTimeout(closeFdHits, 150)
                 }}
-                placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
+                placeholder={f === zoneSlot && zoneHint ? zoneHint : (FD_FIELD_EXAMPLES[f.key] ?? slotExample(f))}
                 autoComplete="off"
                 spellCheck={false}
                 title={
@@ -2583,7 +2587,7 @@ export function LogEntry({
         )}
         {slotFree && logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
-            {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField))}
+            {fdVerdict(fdBadField, fdValue(fdBadField), fdLineDomain(fdBadField), fieldDay?.role)}
           </div>
         )}
         {slotFree && fdOwnDupe && (

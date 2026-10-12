@@ -132,14 +132,13 @@ describe('1 — the boxes are the session’s received slots, in receive order',
           { key: 'PREC', kind: 'pattern', required: true },
           { key: 'CALL', kind: 'call', required: true },
           { key: 'CK', kind: 'pattern', required: true },
-          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections' },
+          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections', domains: ['ss_sections'] },
         ],
       }),
     )
     const caps = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].map((n) => n.textContent)
-    // A slot with no catalog caption shows its SLOT ID — an invariant token, correctly
-    // untranslated, rather than an invented English word.
-    expect(caps).toEqual(['Call', 'NR', 'PREC', 'CALL', 'CK', 'SEC'])
+    // Each box says what it holds, in Sweepstakes' own words, rather than its slot id.
+    expect(caps).toEqual(['Call', 'Serial', 'Precedence', 'Call', 'Check', 'Section'])
   })
 })
 
@@ -166,11 +165,13 @@ describe('2 — space walks Call → field₁ → … → Call', () => {
           { key: 'PREC', kind: 'pattern', required: true },
           { key: 'CALL', kind: 'call', required: true },
           { key: 'CK', kind: 'pattern', required: true },
-          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections' },
+          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections', domains: ['ss_sections'] },
         ],
       }),
     )
-    const order = [callBox(), box('NR'), box('PREC'), box('CALL'), box('CK'), box('SEC')]
+    // The exchange's CALL box is captioned Call as the strip's own is: the second one.
+    const exchangeCall = screen.getAllByText('Call')[1].closest('label')!.querySelector('input')!
+    const order = [callBox(), box('Serial'), box('Precedence'), exchangeCall, box('Check'), box('Section')]
     for (let i = 0; i < order.length; i++) {
       order[i].focus()
       fireEvent.keyDown(order[i], { key: ' ', code: 'Space' })

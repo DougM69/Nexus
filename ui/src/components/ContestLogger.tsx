@@ -78,7 +78,7 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
         <h2 id={titleId} className="contest-logger-recent-title">
           {t('contestLogger.recent.title')}
         </h2>
-        <ContestLogHead fieldDayColumns={fieldDayColumns} isWfd={fieldDay.event === 'wfd'} slotColumns={slotColumns} />
+        <ContestLogHead fieldDayColumns={fieldDayColumns} isWfd={fieldDay.event === 'wfd'} slotColumns={slotColumns} role={fieldDay.role} />
         {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
         {rows.map(({ row, at }) => (
           <ContestLogRow

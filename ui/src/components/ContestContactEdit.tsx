@@ -16,7 +16,7 @@ import { t } from '../i18n'
 import { isStreamInput } from '../remote-native/stream-input'
 import { bandOptions, editForm, editOf, editText, modeOptions } from '../features/contestEdit'
 import { contactLabel } from '../features/contestRemoval'
-import { slotCaption } from '../features/contestSlots'
+import { receivedCaption } from '../features/contestSlots'
 
 /** The line a host shows once an edit is over. */
 export interface EditNote {
@@ -27,6 +27,7 @@ export interface EditNote {
 export function ContestContactEdit({
   rows,
   receives,
+  role,
   bands,
   onDone,
 }: {
@@ -34,6 +35,8 @@ export function ContestContactEdit({
   rows: FieldDayQso[]
   /** The session's received slots, in receive order. */
   receives: readonly ContestFieldSpec[]
+  /** The session's role, which each box's caption depends on as the strip's does. */
+  role?: string
   /** The contest's bands. */
   bands?: readonly string[]
   /** The edit is over: what to say, or `null` when it was left as it was. */
@@ -59,7 +62,7 @@ export function ContestContactEdit({
       onDone({ text: t('contest.edit.remote'), alert: true })
       return
     }
-    const made = editOf(form, rows, receives)
+    const made = editOf(form, rows, receives, role)
     if ('why' in made) {
       setWhy(made.why)
       return
@@ -101,7 +104,7 @@ export function ContestContactEdit({
       </label>
       {receives.map((f) => (
         <label className="contest-edit-field" key={f.key}>
-          <span className="contest-edit-cap">{slotCaption(f.key)}</span>
+          <span className="contest-edit-cap">{receivedCaption(f, role)}</span>
           <input
             className="settings-input mono"
             value={form.fields[f.key] ?? ''}

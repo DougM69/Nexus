@@ -356,6 +356,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A contest log line says what each exchange box is for.** The box for the other station's
+  county was captioned QTH, which reads as anything but "their county". Each box now says what it
+  holds for your role in the contest you picked: **County / State** inside a QSO party's state and
+  **IL county** (or NY, OH, TN, TX, CA) outside it, **State** in CQ WW RTTY, **Serial** in CQ WPX
+  and the California QSO Party, **Grid** in the VHF contests, and Serial, Precedence, Call, Check
+  and Section in Sweepstakes. Field Day's Class and Section and CQ WW's Zone are unchanged. While
+  empty, a county box shows a county from its own list as an example (`COOK`), and a state or
+  section box shows `WI`. The logger window, the Contest screen's log table and the edit of a
+  logged contact use the same words. What is logged, sent and scored is unchanged.
 - **No CW ID after an FT8 or FT4 contact, as in WSJT-X.** With CW ID after 73 on, Nexus no longer
   keys your call in CW after its final 73 in FT8, FT4, FT2, TempoFast or TempoDeep, so Disable TX
   after sending 73 now leaves TX off after those contacts (the ID turned it back on). Q65, FST4 and

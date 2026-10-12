@@ -1868,6 +1868,19 @@ export const EN = {
   'logEntry.fd.badNumber': '{{field}} must be a number from {{min}} to {{max}}.',
   'logEntry.fd.zone.label': 'Zone',
   'logEntry.fd.zone.title': 'Their CQ zone, 1–40',
+  // A received box says what it holds for this station's role (`receivedCaption` in
+  // `features/contestSlots.ts`): "County / State" inside a QSO party's state, "IL county" outside
+  // it. `{{state}}` is a state code (IL, NY), a token. The precedence and check are Sweepstakes'.
+  'logEntry.fd.county.label': 'County',
+  'logEntry.fd.countyOrState.label': 'County / State',
+  'logEntry.fd.countyIn.label': '{{state}} county',
+  'logEntry.fd.state.label': 'State',
+  'logEntry.fd.serial.label': 'Serial',
+  'logEntry.fd.grid.label': 'Grid',
+  'logEntry.fd.precedence.label': 'Precedence',
+  'logEntry.fd.precedence.title': 'Their precedence: Q, A, B, U, M or S',
+  'logEntry.fd.check.label': 'Check',
+  'logEntry.fd.check.title': 'Their check: the last two digits of the year they were first licensed',
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',

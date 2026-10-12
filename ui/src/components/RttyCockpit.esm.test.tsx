@@ -130,7 +130,7 @@ async function renderCockpit() {
 }
 const stripCall = () => document.querySelector('.le-fd-input-call') as HTMLInputElement
 const qthBox = () => {
-  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'QTH')
+  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'County / State')
   return cap!.closest('label')!.querySelector('input') as HTMLInputElement
 }
 async function enter(el: Element) {
