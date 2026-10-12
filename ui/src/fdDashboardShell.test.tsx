@@ -289,6 +289,36 @@ describe('the control row is a row that wraps, never a crushed column', () => {
   })
 })
 
+describe('the operator box stays beside Sending when the entry’s title line wraps', () => {
+  // The large entry's title line wraps rather than squeezing (A+ at 160 %, Larger text in a 1024 px
+  // logger window). The score chip takes the first line's room, so a wrapped line packs to the
+  // right, and the box and Sending pack as a pair: neither carries an auto margin that would split
+  // the room between them or leave Sending at the far left of the next line. Where the line breaks
+  // is a real browser's to say; this computes the three declarations that keep the pair together.
+  const titleLine = (scaled: boolean) => {
+    document.documentElement.setAttribute('data-viewport', 'md')
+    document.body.innerHTML =
+      `<div class="${scaled ? 'contest-logger-scaled' : 'pane-body'}"><div class="log-entry log-entry-fd"><div class="le-fd-header">` +
+      '<span class="le-fd-score"></span>' +
+      (scaled ? '<label class="le-fd-operator"></label>' : '') +
+      '<div class="le-fd-sent"></div></div></div></div>'
+    const q = (s: string) => document.body.querySelector(s)
+    return {
+      header: applied(q('.le-fd-header')!, 'justify-content') ?? 'normal',
+      box: scaled ? (applied(q('.le-fd-operator')!, 'margin-left') ?? '0') : null,
+      sent: applied(q('.le-fd-sent')!, 'margin-left') ?? '0',
+    }
+  }
+
+  it('the large entry: the line packs right, and neither the box nor Sending pushes away from the other', () => {
+    expect(titleLine(true)).toEqual({ header: 'flex-end', box: '0', sent: '0' })
+  })
+
+  it('control: a cockpit’s strip, with no box, keeps Sending pushed to the end as it always has', () => {
+    expect(titleLine(false)).toEqual({ header: 'normal', box: null, sent: 'auto' })
+  })
+})
+
 describe('prose inside keeps a measure of its own where the panel outgrew the old cap', () => {
   const PROSE =
     '<div class="fd-mode-status"><p class="fd-mode-line">x</p></div><p class="fd-score-note">x</p>' +

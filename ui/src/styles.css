@@ -13173,8 +13173,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 /* THE OPERATOR BOX, on the large log line's title line (ContestView's `OperatorBox`, which only
    `ContestLargeEntry` passes the strip): right beside the sent side, set off from what comes before
    it as that side is, under the same caption face. A header-row box — a call's width, and no taller
-   than I moved beside it, so the title line does not grow. Its auto margin takes it to the row's
-   end with the sent side wherever the score chip is not there to fill the room before it.
+   than I moved beside it, so the title line does not grow. Neither it nor the sent side after it
+   carries an auto margin: the score chip before them takes the room, and when the line wraps it
+   packs to the right (`.contest-logger-scaled .le-fd-header`), so the two stay side by side at the
+   row's end instead of the room splitting between them or Sending starting the next line alone.
    `.settings-input`, later in this sheet, would win the box's own padding and height on source
    order at one class, hence two. */
 .le-fd-operator {
@@ -13182,7 +13184,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
-  margin-left: auto;
   padding-left: var(--space-3);
   border-left: 1px solid var(--border-soft);
 }
@@ -19260,10 +19261,13 @@ button.cq-skiptx1.on {
 }
 /* The header row wraps here rather than squeezing: this entry hangs from the top of its window,
    so a second line moves nothing the fingers are on (the strip's one-line rule is for the docks,
-   which are anchored at the bottom). */
+   which are anchored at the bottom). A wrapped line packs to the right, so what wraps keeps its
+   end of the row, and the operator box and Sending go together (`.le-fd-operator`); the score chip
+   takes the first line's room, so nothing on that line moves. */
 .contest-logger-scaled .le-fd-header {
   flex-wrap: wrap;
   row-gap: var(--space-1);
+  justify-content: flex-end;
 }
 .contest-logger-scaled .le-fd-cap {
   font-size: var(--fs-title);
