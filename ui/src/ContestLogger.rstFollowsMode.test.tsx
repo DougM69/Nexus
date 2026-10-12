@@ -139,7 +139,7 @@ const lastLogged = () => logged[logged.length - 1]
 async function logContact(call: string, qth: string, rst?: string) {
   type(callBox(), call)
   if (rst !== undefined) type(box('RST'), rst)
-  type(box('QTH'), qth)
+  type(box('County / State'), qth)
   fireEvent.keyDown(callBox(), { key: 'Enter' })
   await settle()
   await settle()
@@ -177,7 +177,7 @@ describe('the contest logger window: the report follows the mode', () => {
     // Typed on phone, and the station moves to CW before Enter: the report is what was heard.
     type(callBox(), 'K9CCC')
     type(box('RST'), '57')
-    type(box('QTH'), 'LAKE')
+    type(box('County / State'), 'LAKE')
     await poll()
     section = 'cw'
     await poll()

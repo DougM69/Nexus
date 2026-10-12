@@ -139,7 +139,7 @@ const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
 const inWindow = (w: string) => within(screen.getByTestId(w))
 const callIn = (w: string) => inWindow(w).getByPlaceholderText('W1AW') as HTMLInputElement
 const rstIn = (w: string) => inWindow(w).getByLabelText('RST') as HTMLInputElement
-const qthIn = (w: string) => inWindow(w).getByLabelText('QTH') as HTMLInputElement
+const qthIn = (w: string) => inWindow(w).getByLabelText('County / State') as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const lastLogged = () => engine.logged[engine.logged.length - 1]
 
