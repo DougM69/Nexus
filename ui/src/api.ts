@@ -507,6 +507,13 @@ export interface FdRulesetDto {
   overlayCategories?: string[]
   addressHeaders?: string[]
   soapbox?: boolean
+  /** ⭐ The bands an entry may declare (Cabrillo `CATEGORY-BAND`, CQ WW's `ALL 160M … 10M`), for
+   *  the Band category picker; absent for a contest that lists none. Invariant tokens. */
+  bandCategories?: string[]
+  /** ⭐ The Cabrillo lines the sponsor requires that a contest started from these settings would
+   *  leave out, for the Contest screen to name before Contest mode turns on. Filled by the
+   *  preview only. */
+  cabrilloMissing?: string[]
   /** ⭐ When the picked contest runs: its running-or-next window (Unix UTC), from the same
    *  rules data the session's banner reads, so the contest screen can show it before any
    *  session exists. Filled by the preview only; absent from the Remote capture. */

@@ -3385,6 +3385,11 @@ export interface FieldDayStatus {
    *  cockpit's Give line and a phone strip's Sending line read. Absent from an older station and
    *  from the hosted page (which is not sent it yet): read `composingText` then. */
   composingTextPhone?: string
+  /** ⭐ The Cabrillo header lines this contest's sponsor requires that the file exported now
+   *  would leave out (`'CATEGORY-POWER'`…), in the ruleset's order — read in Rust off the header
+   *  the export writes. Names, not prose: the Contest screen words each one. Absent when nothing
+   *  is missing, for a contest whose requirements this build does not read, and on Remote. */
+  cabrilloMissing?: string[]
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
@@ -4276,6 +4281,10 @@ export interface Settings {
   contestAddressCountry?: string
   /** Cabrillo `SOAPBOX`, as typed, for a contest whose template has one. */
   contestSoapbox?: string
+  /** Cabrillo `CATEGORY-BAND`: `ALL`, or the one band a single-band entry is entered on, from the
+   *  selected contest's own list (`FdRulesetDto.bandCategories`), '' = undeclared. Written only
+   *  when it is one of them. A declaration, never read off the log. */
+  contestCategoryBand?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else

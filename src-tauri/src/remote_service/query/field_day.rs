@@ -39,12 +39,15 @@ struct Capture {
 ///
 /// The phone form of the composing exchange (`FieldDayStatus::composing_text_phone`) stays out for
 /// that reason alone: no published page lists it yet, and emptied it is not serialised. The page
-/// reads `composing_text`, as it always did.
+/// reads `composing_text`, as it always did. So do the Cabrillo lines the export would leave out
+/// (`FieldDayStatus::cabrillo_missing`): no page lists them, and the export they are about runs
+/// only at the station.
 pub(in crate::remote_service) fn leave_out_the_hosts_own(
     field_day: &mut Option<tempo_app::dto::FieldDayStatus>,
 ) {
     if let Some(f) = field_day.as_mut() {
         f.composing_text_phone.clear();
+        f.cabrillo_missing.clear();
     }
     if let Some(club) = field_day.as_mut().and_then(|f| f.club.as_mut()) {
         club.club_code.clear();

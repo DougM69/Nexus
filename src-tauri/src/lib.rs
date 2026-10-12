@@ -8544,6 +8544,17 @@ struct FdRulesetDto {
     address_headers: Vec<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     soapbox: bool,
+    /// ⭐ **The bands an entry in the picked contest may declare** (Cabrillo `CATEGORY-BAND`, CQ WW's
+    /// `ALL 160M 80M 40M 20M 15M 10M`), for the Band category picker, shown only where the sponsor
+    /// lists them. Filled by the PREVIEW only and absent when empty, for `entry_classes`' reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    band_categories: Vec<String>,
+    /// ⭐ **The Cabrillo lines the sponsor requires that a contest started from these Settings would
+    /// leave out** (`CATEGORY-POWER`…), for the Contest screen to name before Contest mode turns
+    /// on — the running session's own list is `FieldDayStatus::cabrillo_missing`. Filled by the
+    /// PREVIEW only and absent when empty, for `entry_classes`' reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cabrillo_missing: Vec<String>,
     /// ⭐ **When the picked contest runs** — its running-or-next window (Unix UTC), from the
     /// rules data by the same `next_or_running` the session's own banner reads. The contest
     /// screen shows it beside the Field Day mode switch before any session exists: with the
@@ -8585,6 +8596,8 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         overlay_categories: Vec::new(),
         address_headers: Vec::new(),
         soapbox: false,
+        band_categories: Vec::new(),
+        cabrillo_missing: Vec::new(),
         event_start_unix: None,
         event_end_unix: None,
     }
@@ -8619,6 +8632,7 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
         dto.overlay_categories = owned(rs.cabrillo_overlay_categories);
         dto.address_headers = owned(rs.cabrillo_address_headers);
         dto.soapbox = rs.cabrillo_soapbox;
+        dto.band_categories = owned(rs.cabrillo_band_categories);
         // When it runs, by the computation the session's banner reads — so the contest screen
         // says the same thing before the session exists as during it.
         let window = rs.next_or_running(now_unix().max(0) as u64);
@@ -8632,6 +8646,12 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
                     .location_warning
                     .as_ref()
                     .map(tempo_app::dto::LocationWarningDto::from);
+                // …and what its Cabrillo file would leave out, named before the session starts.
+                dto.cabrillo_missing = eng
+                    .cabrillo_missing_at_start(s)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
             }
             Err(e) => dto.problem = e,
         }
@@ -36911,6 +36931,72 @@ mod tests {
         assert_eq!(il.exchange, vec!["599", "4", "IL"]);
     }
 
+    /// ⭐ **Before Contest mode turns on, the Contest screen is told what a CQ entry's Cabrillo file
+    /// would leave out** — by the session constructor the mode entry uses, so a declaration that
+    /// session reads as it starts (power, assistance) is made in time. A multi-operator station
+    /// that has picked its class and has an operator at the key is missing nothing, since every
+    /// contact will name that operator; with no class, the OPERATORS line that comes with one is
+    /// missing too. Field Day names nothing, and the Remote capture never carries the key.
+    #[test]
+    fn the_preview_names_the_cabrillo_lines_a_cq_entry_would_leave_out() {
+        let _ = tempo_core::contest::install_call_resolver(super::contest_place_call);
+        let preview = |edit: &dyn Fn(&mut tempo_app::settings::Settings)| {
+            let mut s = tempo_app::settings::Settings {
+                mycall: "W9XYZ".into(),
+                fd_event: "cqww_ssb".into(),
+                contest_cq_zone: 4,
+                contest_qth_state: "IL".into(),
+                ..Default::default()
+            };
+            edit(&mut s);
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let declared = |s: &mut tempo_app::settings::Settings| {
+            s.contest_category_power = "LOW".into();
+            s.contest_category_assisted = "ASSISTED".into();
+            s.contest_category_band = "40M".into();
+        };
+        let blank = preview(&|_| {});
+        assert_eq!(blank.problem, "", "the session builds");
+        assert_eq!(
+            blank.cabrillo_missing,
+            ["CATEGORY-ASSISTED", "CATEGORY-BAND", "CATEGORY-POWER"]
+        );
+        let json = serde_json::to_value(&blank).unwrap();
+        assert_eq!(json["cabrilloMissing"][2], "CATEGORY-POWER", "{json}");
+        assert_eq!(
+            preview(&|s| declared(s)).cabrillo_missing,
+            Vec::<String>::new()
+        );
+        let multi = |at_key: &'static str, class: &'static str| {
+            preview(&move |s| {
+                declared(s);
+                s.contest_category_operator = "MULTI-OP".into();
+                s.fd_operator = at_key.into();
+                s.contest_category_transmitter = class.into();
+            })
+            .cabrillo_missing
+        };
+        assert_eq!(multi("K1ABC", "TWO"), Vec::<String>::new());
+        assert_eq!(
+            multi("", "TWO"),
+            ["OPERATORS"],
+            "nobody at the key, none typed"
+        );
+        assert_eq!(
+            multi("K1ABC", ""),
+            ["CATEGORY-TRANSMITTER", "OPERATORS"],
+            "no class, so no OPERATORS line either"
+        );
+        // CONTROL: Field Day names nothing; the Remote capture sends no such key.
+        let fd = serde_json::to_value(preview(&|s| s.fd_event = "arrlfd".into())).unwrap();
+        assert!(fd.get("cabrilloMissing").is_none(), "{fd}");
+        assert!(serde_json::to_value(super::fd_ruleset_dto("cqww_ssb"))
+            .unwrap()
+            .get("cabrilloMissing")
+            .is_none());
+    }
+
     #[cfg(feature = "radio")]
     #[test]
     fn local_amp_gesture_revokes_remote_permission_without_changing_tx() {
@@ -38040,9 +38126,19 @@ mod tests {
             tempo_core::contest::CABRILLO_ADDRESS_HEADERS
         );
         assert!(wpx.soapbox);
+        assert_eq!(
+            wpx.band_categories,
+            ["ALL", "160M", "80M", "40M", "20M", "15M", "10M"]
+        );
+        assert_eq!(
+            preview("cqww_rtty").band_categories,
+            ["ALL", "80M", "40M", "20M", "15M", "10M"],
+            "CQ WW RTTY runs on five bands"
+        );
         let json = serde_json::to_value(&wpx).unwrap();
         assert_eq!(json["transmitterCategories"][1], "TWO", "{json}");
         assert_eq!(json["soapbox"], true, "{json}");
+        assert_eq!(json["bandCategories"][0], "ALL", "{json}");
         // CONTROL: Field Day's preview names none and sends none of the keys.
         let fd = serde_json::to_value(preview("arrlfd")).unwrap();
         for key in [
@@ -38050,6 +38146,7 @@ mod tests {
             "overlayCategories",
             "addressHeaders",
             "soapbox",
+            "bandCategories",
         ] {
             assert!(fd.get(key).is_none(), "{key}: {fd}");
             assert!(

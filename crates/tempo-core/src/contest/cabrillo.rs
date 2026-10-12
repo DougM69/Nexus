@@ -21,7 +21,9 @@
 //! ⚠️ **Only headers with a SOURCE are modelled, and an optional one is written only
 //! when a ruleset asks for it and it holds a value.** `CATEGORY-ASSISTED` and
 //! `CATEGORY-POWER` are the entry's own declarations (Settings ▸ Contesting),
-//! `CATEGORY-BAND` / `CATEGORY-MODE` and `CLAIMED-SCORE` are read off the log, and
+//! `CATEGORY-BAND` is the band the entry declares where the sponsor lists bands and the
+//! log's otherwise, `CATEGORY-MODE` is the contest's own mode where the ruleset names one and
+//! the log's otherwise, `CLAIMED-SCORE` is read off the log, and
 //! `NAME` / `EMAIL` / `CLUB` / `ENTRY-CLASS` are the entrant's own settings
 //! ([`CabrilloEntrant`]). `OPERATORS` is everyone the rows say was at the key plus the
 //! entrant's own list, and `QRP-COMPETITION` follows the declared power. A field nothing
@@ -97,11 +99,11 @@ pub struct CabrilloHeaders {
     /// `CATEGORY-ASSISTED` — `ASSISTED` / `NON-ASSISTED`, as the entry declared it.
     /// Optional: `""` writes no line.
     pub category_assisted: String,
-    /// `CATEGORY-BAND` — `ALL`, or the one band a single-band log holds (`20M`).
-    /// Optional: `""` writes no line.
+    /// `CATEGORY-BAND` — `ALL` or one band (`20M`): the entry's declaration, or what a
+    /// single-band log holds. Optional: `""` writes no line.
     pub category_band: String,
-    /// `CATEGORY-MODE` — `CW` / `SSB` / `FM` / `RTTY` / `DIGI` / `MIXED`, from the log's
-    /// rows. Optional: `""` writes no line.
+    /// `CATEGORY-MODE` — `CW` / `SSB` / `FM` / `RTTY` / `DIGI` / `MIXED`: the contest's own,
+    /// or from the log's rows. Optional: `""` writes no line.
     pub category_mode: String,
     /// `CATEGORY-POWER` — `HIGH` / `LOW` / `QRP`, as the entry declared it. Optional:
     /// `""` writes no line.
@@ -254,6 +256,10 @@ pub struct CabrilloEntrant {
     pub address: CabrilloAddress,
     /// `SOAPBOX`, as typed — any number of lines — for a contest whose template carries it.
     pub soapbox: String,
+    /// `CATEGORY-BAND`, as picked: `ALL`, or the one band a single-band entry is entered on.
+    /// Written only when it is one of the contest's own bands, so a band picked for another
+    /// contest claims nothing.
+    pub band: String,
 }
 
 /// ⭐ **The entrant's mailing address, as typed**: the street lines, then the parts a sponsor

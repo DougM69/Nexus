@@ -21,7 +21,7 @@ import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import { CONTESTS, CONTESTS_SENDING_POWER, isFieldDay } from '../fdEvent'
 import defaultSettings from './__fixtures__/defaultSettings.json'
-// ⭐ A whole settings file as this release's Rust `Settings` serialises it (every key, 334 of
+// ⭐ A whole settings file as this release's Rust `Settings` serialises it (every key, 335 of
 // them), with every Contesting value set away from its default (the Cabrillo declarations
 // included) and the Station tab's State set to a ragchew QTH. Made by serialising `Settings` with those values; nothing in it is typed by
 // hand but the two ESM step maps, whose keys the Rust side keeps as written.
@@ -139,10 +139,11 @@ const chipFor = (contest: string) =>
   })
 
 // The Cabrillo declarations each contest's rules data gives the preview, as the seed has them:
-// CQ WW CW has all four, the Illinois QSO Party the mailing address and the soapbox, and the two
-// Field Days none. The class is offered to a MULTI-OP entry only.
+// CQ WW CW has all five (its band category too), the Illinois QSO Party the mailing address and
+// the soapbox, and the two Field Days none. The class is offered to a MULTI-OP entry only.
 const DECLARES: Record<string, Record<string, unknown>> = {
   cqww_cw: {
+    bandCategories: ['ALL', '160M', '80M', '40M', '20M', '15M', '10M'],
     transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
     overlayCategories: ['CLASSIC', 'ROOKIE', 'YOUTH'],
     addressHeaders: ['ADDRESS', 'ADDRESS-CITY', 'ADDRESS-STATE-PROVINCE', 'ADDRESS-POSTALCODE', 'ADDRESS-COUNTRY'],
@@ -155,6 +156,7 @@ const DECLARES: Record<string, Record<string, unknown>> = {
 }
 const CLASS = 'Which multi-operator class you are entering'
 const OVERLAY = 'Which overlay category you are also entering'
+const BAND = 'Which band category you are entering'
 
 const LEGENDS = [
   'Contest',
@@ -266,7 +268,7 @@ describe('the groups, in the order an entry is set up', () => {
     expect(groupOf(boxLabelled('Entry class'))).toBe('Your entry')
   })
 
-  it('a multi-operator class, an overlay, the mailing address and the soapbox sit with the rest of the entry', async () => {
+  it('a multi-operator class, a band category, an overlay, the mailing address and the soapbox sit with the rest of the entry', async () => {
     station = { ...station, fdEvent: 'cqww_cw', contestCategoryOperator: 'MULTI-OP' }
     api.get('getFdRuleset').mockImplementation(() =>
       Promise.resolve({ event: 'cqww_cw', ...DECLARES.cqww_cw } as never),
@@ -275,6 +277,7 @@ describe('the groups, in the order an entry is set up', () => {
     await openTab('Contesting')
     const where: Record<string, Element | null> = {
       'Multi-operator class': await screen.findByRole('group', { name: CLASS }),
+      'Band category': screen.getByRole('group', { name: BAND }),
       Overlay: screen.getByRole('group', { name: OVERLAY }),
       'Mailing address': fieldLabelled('Mailing address'),
       'Mailing city': fieldLabelled('Mailing city'),
@@ -368,6 +371,7 @@ describe('a stored settings file, every Contesting value set', () => {
       Club: value('Club'),
       'Other operators': value('Other operators'),
       'Multi-operator class': screen.queryByRole('group', { name: CLASS }) ? pressedIn(CLASS) : null,
+      'Band category': screen.queryByRole('group', { name: BAND }) ? pressedIn(BAND) : null,
       Overlay: screen.queryByRole('group', { name: OVERLAY }) ? pressedIn(OVERLAY) : null,
       'Mailing address': text('Mailing address'),
       'Mailing city': value('Mailing city'),
@@ -427,6 +431,7 @@ describe('a stored settings file, every Contesting value set', () => {
       'Other operators': 'KB9QRS N0AAA',
       // Kept in the file whatever is picked, shown where the contest's rules data offers it.
       'Multi-operator class': declares.transmitterCategories ? 'UNLIMITED' : null,
+      'Band category': declares.bandCategories ? '40M' : null,
       Overlay: declares.overlayCategories ? 'ROOKIE' : null,
       'Mailing address': address ? '1 Example Road\nUnit 2' : null,
       'Mailing city': address ? 'Springfield' : null,

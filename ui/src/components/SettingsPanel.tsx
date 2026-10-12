@@ -12706,6 +12706,35 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.contestPick.operators.hint')}</span>
               </label>
+              {/* ⭐ THE BAND CATEGORY, for a contest whose sponsor lists the bands an entry is entered
+                  on: ALL, or one band for a single-band entry. A declaration, never read off the
+                  log, because a single-band entrant logs every contact, other bands included. The
+                  tokens are the sponsor's, from the rules data; a saved band this contest does not
+                  list shows as unset, which is also what the export does with it. */}
+              {rulesetPreview?.bandCategories?.length ? (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.contestPick.band.label')}</span>
+                  <div className="theme-switcher" role="group" aria-label={t('settings.contestPick.band.aria')}>
+                    {['', ...rulesetPreview.bandCategories].map((c) => {
+                      const picked = (form.contestCategoryBand ?? '').trim().toUpperCase()
+                      const on = rulesetPreview.bandCategories?.find((b) => b.toUpperCase() === picked) ?? ''
+                      return (
+                        <button
+                          key={c || 'unset'}
+                          type="button"
+                          className={`theme-chip${on === c ? ' active' : ''}`}
+                          aria-pressed={on === c}
+                          disabled={locked('contestCategoryBand')}
+                          onClick={() => update('contestCategoryBand', c)}
+                        >
+                          {c || t('settings.contestPick.entryAxes.unset')}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <span className="settings-hint">{t('settings.contestPick.band.hint')}</span>
+                </div>
+              ) : null}
               {/* ⭐ THE REST OF WHAT A SPONSOR'S TEMPLATE DECLARES: a multi-operator entry's class,
                   an overlay, the mailing address and the soapbox. Each is offered only for a
                   contest whose sponsor writes it, from the rules data and never from a list kept

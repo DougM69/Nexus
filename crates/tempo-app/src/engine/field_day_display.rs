@@ -143,6 +143,17 @@ impl Engine {
             composing_text: self.contest_composing_text().unwrap_or_default(),
             // …and as a phone contact sends it, the report at two digits.
             composing_text_phone: self.contest_composing_text_phone().unwrap_or_default(),
+            // What the sponsor requires and the file exported now would leave out, read off the
+            // header the export writes for the entrant's Settings; nothing is read for a contest
+            // whose requirements this build does not know.
+            cabrillo_missing: if rs.cabrillo_required.is_empty() {
+                Vec::new()
+            } else {
+                log.cabrillo_missing(&self.contest_entrant())
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            },
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             // The dupe rule's mode grouping, so the strip's badge and the engine's
             // refusal answer the same question.

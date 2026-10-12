@@ -4159,6 +4159,13 @@ export const EN = {
   'fieldDay.mode.needs.two':
     'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
   'fieldDay.mode.needs.open': 'Open in Settings',
+  // The Cabrillo lines the sponsor requires and the entry has left out (`cabrilloMissing`), named
+  // before the export. {{lines}} is the list, each the Settings control that fills it and the
+  // Cabrillo line it writes, which are invariant tokens.
+  'fieldDay.cabrillo.missing':
+    'Before you export, set what {{contest}} requires in its Cabrillo file under Settings ▸ Contesting ▸ Your entry: {{lines}}.',
+  'fieldDay.cabrillo.restart':
+    'Power category and Spotting assistance are read when Contest mode turns on, so after setting them turn Contest mode off and on again. Your contacts stay in the log.',
   'fieldDay.mode.club':
     'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
@@ -4387,11 +4394,11 @@ export const EN = {
   'settings.contestPick.power.wfd': 'Winter Field Day takes QRP or LOW (its limit is 100 W PEP), and HIGH writes no CATEGORY-POWER line.',
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
-    'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
+    'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (the CQ contests), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
   'settings.contestPick.entryClass.label': 'Entry class',
   'settings.contestPick.entryClass.hint': 'The class the sponsor scores your entry in, from this contest\'s own rules, written on the ENTRY-CLASS line of the Cabrillo log. In the Illinois QSO Party a club running more than one transmitter at once enters UNLIMITED, and the high and low power classes split at 100 watts PEP. To certify a QRP entry, pick QRP under Power category.',
   'settings.contestPick.club.label': 'Club',
-  'settings.contestPick.club.hint': 'Your contest club, for the CLUB line of the Cabrillo log when the contest\'s rules have one (the Illinois QSO Party). Leave it blank to leave the line out.',
+  'settings.contestPick.club.hint': 'Your contest club, for the CLUB line of the Cabrillo log when the contest\'s rules have one (the CQ contests, the Illinois QSO Party). Spell out the club\'s full name, as CQ asks. Leave it blank to leave the line out.',
   'settings.contestPick.operators.label': 'Other operators',
   'settings.contestPick.operators.hint': 'The OPERATORS line of the Cabrillo log lists everyone who was set as Operator at the key when they logged a contact. Add anyone else here, as callsigns separated by spaces or commas.',
   'settings.contestPick.transmitter.label': 'Multi-operator class',
@@ -4406,6 +4413,10 @@ export const EN = {
   'settings.contestPick.address.state': 'Mailing state or province',
   'settings.contestPick.address.postalCode': 'Postal code',
   'settings.contestPick.address.country': 'Mailing country',
+  'settings.contestPick.band.label': 'Band category',
+  'settings.contestPick.band.aria': 'Which band category you are entering',
+  'settings.contestPick.band.hint':
+    'ALL for an all-band entry, or the one band a single-band entry is entered on, for the CATEGORY-BAND line of the Cabrillo log. A single-band entry still logs every contact, other bands included, and the sponsor scores only the band named here. In the CQ contests a multi-operator entry is ALL. Leave it unset to leave the line out.',
   'settings.contestPick.soapbox.label': 'Soapbox',
   'settings.contestPick.soapbox.hint': 'Your comments on the contest, for the SOAPBOX lines of the Cabrillo log. Each line you type is a line there, and a long one is wrapped to fit. The California QSO Party asks for its award lines here (YL, YOUTH, MOBILE, NEW CONTESTER…). Leave it blank to leave it out.',
   'settings.contestStation.legend': 'Your station data',

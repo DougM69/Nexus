@@ -2557,22 +2557,15 @@ impl FieldDayLog {
         self.cabrillo_with(freq_khz, &crate::contest::CabrilloEntrant::default())
     }
 
-    /// [`cabrillo`](Self::cabrillo) with the entrant's `NAME` and `EMAIL`, which come from
-    /// the operator's own settings at export time (the caller reads them; this crate holds
-    /// none). Each is written only where the ruleset lists it and it holds a value.
-    ///
-    /// ⭐ **Field Day's file is exactly what it has always been.** The optional headers are
-    /// written only for a ruleset whose `cabrillo.headers` names them (neither Field Day
-    /// event does), and the dial frequency on a QSO line is never used for Field Day: both
-    /// files are pinned byte for byte by the §8(a) goldens.
-    pub fn cabrillo_with(
+    /// The header block [`cabrillo_with`](Self::cabrillo_with) writes for `entrant` — the one
+    /// place it is built, so the export and [`cabrillo_missing`](Self::cabrillo_missing) cannot
+    /// come to disagree about which lines a file carries. `Err` is the export's own refusal.
+    fn cabrillo_header_block(
         &self,
-        freq_khz: u32,
         entrant: &crate::contest::CabrilloEntrant,
-    ) -> Result<String, String> {
+    ) -> Result<crate::contest::CabrilloHeaders, String> {
         let spec = self.session.exchange;
         let rs = self.ruleset();
-        let field_day = spec.name == "fieldday";
         // An optional header is written only when the sponsor's template lists it (the
         // rules file's `cabrillo.headers`); a value the ruleset does not ask for is "".
         let declared = |tag: &str, value: String| {
@@ -2729,8 +2722,26 @@ impl FieldDayLog {
                     .find(|c| c.eq_ignore_ascii_case(self.session.category_power.trim()))
                     .map_or_else(String::new, |c| c.to_string())
             },
-            category_band: declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
-            category_mode: declared("CATEGORY-MODE", cabrillo_category_mode(&self.qsos)),
+            // ⭐ The band the ENTRY declares, where the sponsor lists the bands it may (CQ: "If
+            // you are entering an all band category, use ALL, otherwise select one of the
+            // individual bands shown"); a band picked for another contest claims nothing. A
+            // sponsor whose template takes the band off the log (CQ WW RTTY, X.2) still gets that
+            // for an entry that declares none.
+            category_band: rs
+                .cabrillo_band_categories
+                .iter()
+                .find(|b| b.eq_ignore_ascii_case(entrant.band.trim()))
+                .map_or_else(
+                    || declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
+                    |b| b.to_string(),
+                ),
+            // The contest's own mode where the ruleset names it (every CQ WW CW entry is a CW
+            // entry), and otherwise the log's, where the sponsor's template takes that.
+            category_mode: if rs.cabrillo_mode_category.is_empty() {
+                declared("CATEGORY-MODE", cabrillo_category_mode(&self.qsos))
+            } else {
+                rs.cabrillo_mode_category.to_string()
+            },
             // The claimed score is the one the screen shows, and only when that score is
             // the whole score: no power tier or ticked bonus after it, and no note saying
             // it leaves something out. An objectives contest WITH its menu (Winter Field
@@ -2828,7 +2839,26 @@ impl FieldDayLog {
                 Vec::new()
             },
         };
-        let mut s = headers.render();
+        Ok(headers)
+    }
+
+    /// [`cabrillo`](Self::cabrillo) with the entrant's `NAME` and `EMAIL`, which come from
+    /// the operator's own settings at export time (the caller reads them; this crate holds
+    /// none). Each is written only where the ruleset lists it and it holds a value.
+    ///
+    /// ⭐ **Field Day's file is exactly what it has always been.** The optional headers are
+    /// written only for a ruleset whose `cabrillo.headers` names them (neither Field Day
+    /// event does), and the dial frequency on a QSO line is never used for Field Day: both
+    /// files are pinned byte for byte by the §8(a) goldens.
+    pub fn cabrillo_with(
+        &self,
+        freq_khz: u32,
+        entrant: &crate::contest::CabrilloEntrant,
+    ) -> Result<String, String> {
+        let spec = self.session.exchange;
+        let rs = self.ruleset();
+        let field_day = spec.name == "fieldday";
+        let mut s = self.cabrillo_header_block(entrant)?.render();
         for q in self.submitted() {
             // QSO: freq mo date time mycall myexch call exch — ARRL requires a
             // REAL `yyyy-mm-dd hhmm`; the old `----------` placeholder failed
@@ -2948,6 +2978,44 @@ impl FieldDayLog {
         }
         s.push_str("END-OF-LOG:\n");
         Ok(s)
+    }
+
+    /// ⭐ **The header lines this contest's sponsor requires that this log's Cabrillo file would
+    /// leave out**, in the ruleset's order — its
+    /// [`cabrillo_required`](crate::fd_rules::FdRuleset::cabrillo_required), read against the
+    /// header [`cabrillo_with`](Self::cabrillo_with) writes for `entrant`, so the Contest screen
+    /// can name each one before the export. Never a refusal: the file is the entrant's to send.
+    ///
+    /// `CATEGORY-TRANSMITTER` and `OPERATORS` are a multi-operator entry's (Cabrillo: *"The
+    /// category-transmitter is required for multi-operator entries"*; CQ: *"If you select a
+    /// multi-operator category and do not enter operator callsigns in this field, the robot will
+    /// reject your log"*), so a single operator's file is never missing them; and a `CHECKLOG` is
+    /// placed in no category, so nothing is missing from it. A log the export refuses names
+    /// nothing here: the refusal is its own sentence.
+    pub fn cabrillo_missing(&self, entrant: &crate::contest::CabrilloEntrant) -> Vec<&'static str> {
+        use crate::contest::OperatorCategory;
+        const MULTI_OPERATOR_LINES: [&str; 2] = ["CATEGORY-TRANSMITTER", "OPERATORS"];
+        let rs = self.ruleset();
+        let category = self.session.entry_category;
+        if rs.cabrillo_required.is_empty() || category == OperatorCategory::Checklog {
+            return Vec::new();
+        }
+        let Ok(header) = self.cabrillo_header_block(entrant) else {
+            return Vec::new();
+        };
+        let header = header.render();
+        rs.cabrillo_required
+            .iter()
+            .copied()
+            .filter(|tag| {
+                category == OperatorCategory::MultiOp || !MULTI_OPERATOR_LINES.contains(tag)
+            })
+            .filter(|tag| {
+                !header
+                    .lines()
+                    .any(|l| l.split_once(": ").is_some_and(|(t, _)| t == *tag))
+            })
+            .collect()
     }
 }
 

@@ -277,12 +277,20 @@ fn declared_entrant() -> CabrilloEntrant {
 
 /// One contest's log, built and exported as the entry `entry` with the entrant `entrant`.
 fn export(case: &Case, entry: Entry, entrant: &CabrilloEntrant) -> String {
+    logged(case, &station(case, entry), entry == Entry::Declared)
+        .cabrillo_with(14_000, entrant)
+        .unwrap_or_else(|e| panic!("{} exports: {e}", case.event))
+}
+
+/// One contest's log of its three rows, for the station `station`, with `K1ABC` at the key on
+/// every row when `at_key`.
+fn logged(case: &Case, station: &StationData, at_key: bool) -> FieldDayLog {
     resolver();
     let rs = ruleset_by_id(case.event, CURRENT_RULES_YEAR).expect("a shipped ruleset");
-    let session = ContestSession::for_ruleset(rs, &station(case, entry))
+    let session = ContestSession::for_ruleset(rs, station)
         .unwrap_or_else(|e| panic!("{} refused: {e}", case.event));
     let mut log = FieldDayLog::new("W9XYZ", session, case.rows[0].1);
-    if entry == Entry::Declared {
+    if at_key {
         log.operator = "K1ABC".into();
     }
     for (i, (call, band, fields)) in case.rows.iter().enumerate() {
@@ -304,8 +312,7 @@ fn export(case: &Case, entry: Entry, entrant: &CabrilloEntrant) -> String {
             case.event
         );
     }
-    log.cabrillo_with(14_000, entrant)
-        .unwrap_or_else(|e| panic!("{} exports: {e}", case.event))
+    log
 }
 
 /// Every contest's two files, in one document: `### <event> <entry>` above each.
@@ -328,10 +335,75 @@ fn existing_entrant(entry: Entry) -> CabrilloEntrant {
     }
 }
 
-/// ⭐ **No new declaration, no changed byte** — for all eighteen contests, as the station's
-/// defaults and as a multi-operator entry declaring everything else.
+/// ⭐ **What a CQ file carries from declarations that already existed**, over the golden: the
+/// CATEGORY lines CQ asks every entry for — the declared assistance, the declared `band` (`""`
+/// for none), the contest's own mode and the declared power — then the entrant's CLUB, EMAIL
+/// and NAME. `(category lines, entrant lines)`, each in file order; both empty for every
+/// contest that is not CQ's. CQ WW RTTY wrote its CATEGORY lines before (its log decides the
+/// band), so it gains CLUB alone.
+fn cq_lines(event: &str, entry: Entry, band: &str) -> (Vec<String>, Vec<String>) {
+    let declared = entry == Entry::Declared;
+    let who = |lines: &[&str]| -> Vec<String> {
+        if declared {
+            lines.iter().map(|l| l.to_string()).collect()
+        } else {
+            Vec::new()
+        }
+    };
+    let mode = match event {
+        "cqww_cw" | "cqwpx_cw" => "CW",
+        "cqww_ssb" | "cqwpx_ssb" => "SSB",
+        "cqww_rtty" => return (Vec::new(), who(&["CLUB: EXAMPLE CONTEST CLUB"])),
+        _ => return (Vec::new(), Vec::new()),
+    };
+    let mut categories = vec![format!(
+        "CATEGORY-ASSISTED: {}",
+        if declared { "ASSISTED" } else { "NON-ASSISTED" }
+    )];
+    if !band.is_empty() {
+        categories.push(format!("CATEGORY-BAND: {band}"));
+    }
+    categories.push(format!("CATEGORY-MODE: {mode}"));
+    categories.push("CATEGORY-POWER: LOW".to_string());
+    (
+        categories,
+        who(&[
+            "CLUB: EXAMPLE CONTEST CLUB",
+            "EMAIL: k1abc@example.com",
+            "NAME: A NAME",
+        ]),
+    )
+}
+
+/// ⭐ **`got` is `golden` with exactly `added` put in** — those lines, in that order — **and not
+/// one other byte moved**, the QSO lines included.
+fn assert_golden_plus(head: &str, got: &str, golden: &str, added: &[String]) {
+    let new: Vec<&str> = got
+        .lines()
+        .filter(|l| !golden.lines().any(|g| g == *l))
+        .collect();
+    assert_eq!(new, added, "{head}: the added lines");
+    assert!(
+        added.iter().all(|l| !l.starts_with("QSO:")),
+        "{head}: a QSO line is among the added ones"
+    );
+    let rest: String = got
+        .lines()
+        .filter(|l| !added.iter().any(|a| a == l))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(
+        rest, golden,
+        "{head}: a byte other than the added lines moved"
+    );
+}
+
+/// ⭐ **No new declaration, no changed byte, but in a CQ file** — for all eighteen contests, as
+/// the station's defaults and as a multi-operator entry declaring everything else. Thirteen
+/// export their golden byte for byte; the five CQ contests export it with their category lines
+/// and the entrant's lines put in ([`cq_lines`]), and nothing else moved.
 #[test]
-fn every_contests_file_is_unchanged_with_no_new_declaration() {
+fn every_contests_file_is_its_golden_and_a_cq_file_gains_only_its_category_lines() {
     assert_eq!(cases().len(), 18, "every shipped contest");
     let got = every_file(existing_entrant);
     if std::env::var_os("NEXUS_WRITE_DECLARATION_GOLDENS").is_some() {
@@ -358,9 +430,26 @@ fn every_contests_file_is_unchanged_with_no_new_declaration() {
         got.iter().map(|(h, _)| h).collect::<Vec<_>>(),
         want.iter().map(|(h, _)| h).collect::<Vec<_>>()
     );
+    let mut cq = 0;
     for ((head, g), (_, w)) in got.iter().zip(&want) {
-        assert_eq!(g, w, "{head}: the Cabrillo file changed");
+        let (event, entry) = head.split_once(' ').expect("`<event> <entry>`");
+        let entry = if entry == "Declared" {
+            Entry::Declared
+        } else {
+            Entry::Defaults
+        };
+        let (categories, who) = cq_lines(event, entry, "");
+        let added: Vec<String> = categories.into_iter().chain(who).collect();
+        if added.is_empty() {
+            assert_eq!(g, w, "{head}: the Cabrillo file changed");
+        } else {
+            assert_golden_plus(head, g, w, &added);
+            cq += 1;
+        }
     }
+    // POSITIVE CONTROL: the CQ files were the ones compared by their added lines — four
+    // contests in both entries, and CQ WW RTTY's declared entry (its club).
+    assert_eq!(cq, 9);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -384,13 +473,15 @@ fn address() -> CabrilloAddress {
 const SOAPBOX: &str = "A fine weekend.\n\nFirst licensed 2024-05-01.";
 
 /// [`existing_entrant`] with every new declaration set as well: a transmitter class and an
-/// overlay every sponsor that takes either has (`ONE`, `ROOKIE`), the address and the soapbox.
+/// overlay every sponsor that takes either has (`ONE`, `ROOKIE`), the address, the soapbox, and
+/// the band category every CQ contest takes (`ALL`, which CQ WW RTTY's log already says).
 fn every_declaration(entry: Entry) -> CabrilloEntrant {
     CabrilloEntrant {
         transmitter: "ONE".into(),
         overlay: "ROOKIE".into(),
         address: address(),
         soapbox: SOAPBOX.into(),
+        band: "ALL".into(),
         ..existing_entrant(entry)
     }
 }
@@ -426,13 +517,17 @@ fn added_lines(event: &str, entry: Entry) -> Vec<String> {
         other => panic!("no row for {other}"),
     };
     let multi = entry == Entry::Declared;
-    let mut lines: Vec<&str> = Vec::new();
+    // A CQ contest's category lines come first and its entrant's CLUB, EMAIL and NAME after
+    // the overlay, where the file carries them ([`cq_lines`]).
+    let (categories, who) = cq_lines(event, entry, "ALL");
+    let mut lines: Vec<&str> = categories.iter().map(String::as_str).collect();
     if tx && multi {
         lines.push("CATEGORY-TRANSMITTER: ONE");
     }
     if rookie {
         lines.push("CATEGORY-OVERLAY: ROOKIE");
     }
+    lines.extend(who.iter().map(String::as_str));
     match addr {
         Address::None => {}
         Address::Lines => lines.extend([
@@ -516,7 +611,8 @@ fn every_declaration_adds_only_the_lines_each_sponsor_names() {
     assert_eq!(changed, 28);
 }
 
-/// The full file of a CQ WW multi-operator entry, every line in its place, by value.
+/// The full file of a CQ WW multi-operator entry, every line in its place, by value: the lines of
+/// the sponsor's own sample header (cqww.com/cabrillo.htm), each from a declaration.
 #[test]
 fn a_cq_ww_multi_two_entry_heads_its_file_the_way_the_sponsor_shows() {
     let case = cases()
@@ -537,9 +633,16 @@ fn a_cq_ww_multi_two_entry_heads_its_file_the_way_the_sponsor_shows() {
             "CONTEST: CQ-WW-CW",
             "CALLSIGN: W9XYZ",
             "CATEGORY-OPERATOR: MULTI-OP",
+            "CATEGORY-ASSISTED: ASSISTED",
+            "CATEGORY-BAND: ALL",
+            "CATEGORY-MODE: CW",
+            "CATEGORY-POWER: LOW",
             "CATEGORY-TRANSMITTER: TWO",
             "LOCATION: IL",
+            "CLUB: EXAMPLE CONTEST CLUB",
             "CREATED-BY: Nexus",
+            "EMAIL: k1abc@example.com",
+            "NAME: A NAME",
             "ADDRESS: 1 Example Rd",
             "ADDRESS: Apt 2",
             "ADDRESS-CITY: Springfield",
@@ -683,10 +786,10 @@ fn export_edited(case: &Case, entry: Entry, entrant: &CabrilloEntrant) -> (Strin
 
 /// ⭐ **An edited call reaches the file, and nothing else moves** — all eighteen contests, both
 /// entries. The second contact is logged under a busted call and edited to the call the golden
-/// logged, and the file is then the golden, byte for byte: an edit keeps the contact's time,
-/// serial, operator and what was sent, so only its call may change, and it changes to the right
-/// one. CONTROL: before the edit every file differs from its golden on that one QSO line, by the
-/// call alone.
+/// logged, and the file is then the golden, byte for byte (a CQ file with its category lines
+/// put in, [`cq_lines`]): an edit keeps the contact's time, serial, operator and what was sent,
+/// so only its call may change, and it changes to the right one. CONTROL: before the edit every
+/// file differs from the edited one on that one QSO line, by the call alone.
 #[test]
 fn an_edited_call_exports_the_golden_of_the_call_logged_right() {
     let golden = std::fs::read_to_string(GOLDEN).unwrap_or_else(|e| panic!("{GOLDEN}: {e}"));
@@ -703,20 +806,19 @@ fn an_edited_call_exports_the_golden_of_the_call_logged_right() {
             let head = format!("{} {entry:?}", case.event);
             let want = goldens[head.as_str()];
             let (before, after) = export_edited(case, entry, &existing_entrant(entry));
-            assert_eq!(
-                after, want,
-                "{head}: the edited log's file is not the golden"
-            );
+            let (categories, who) = cq_lines(case.event, entry, "");
+            let added: Vec<String> = categories.into_iter().chain(who).collect();
+            assert_golden_plus(&head, &after, want, &added);
             assert!(!after.contains(&wrong), "{head}: the busted call stayed");
             // CONTROL: the busted call was in the file until the edit, on one QSO line only.
             assert_eq!(
                 before.lines().count(),
-                want.lines().count(),
+                after.lines().count(),
                 "{head}: line count"
             );
             let differ: Vec<(&str, &str)> = before
                 .lines()
-                .zip(want.lines())
+                .zip(after.lines())
                 .filter(|(b, w)| b != w)
                 .collect();
             assert_eq!(differ.len(), 1, "{head}: before the edit: {differ:?}");
@@ -730,4 +832,190 @@ fn an_edited_call_exports_the_golden_of_the_call_logged_right() {
         }
     }
     assert_eq!(files, 36, "eighteen contests, two entries each");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The CQ contests' CATEGORY lines: the band an entry declares, and what is missing.
+// ---------------------------------------------------------------------------------------------
+
+/// ⭐ **A declared band is written where the sponsor lists it, and nowhere else.** CQ's pages:
+/// *"If you are entering an all band category, use ALL, otherwise select one of the individual
+/// bands shown"*. CQ WW and WPX gain the line; CQ WW RTTY's log said `ALL` (20 m and 40 m) and
+/// the declaration says `20M`, which is what a single-band entrant who also logged other bands
+/// needs (*"Single band entrants are required to include all contacts made during the contest
+/// period, even if made on other bands"*); every other contest's file does not move.
+#[test]
+fn a_declared_band_is_written_only_where_the_sponsor_lists_it() {
+    let with_band = |band: &str| CabrilloEntrant {
+        band: band.into(),
+        ..CabrilloEntrant::default()
+    };
+    let band_lines = |file: &str| -> Vec<String> {
+        file.lines()
+            .filter(|l| l.starts_with("CATEGORY-BAND"))
+            .map(String::from)
+            .collect()
+    };
+    let mut written = 0;
+    for case in &cases() {
+        let none = export(case, Entry::Defaults, &CabrilloEntrant::default());
+        let got = export(case, Entry::Defaults, &with_band("20M"));
+        match case.event {
+            "cqww_cw" | "cqww_ssb" | "cqwpx_cw" | "cqwpx_ssb" => {
+                assert_golden_plus(case.event, &got, &none, &["CATEGORY-BAND: 20M".into()]);
+                written += 1;
+            }
+            "cqww_rtty" => {
+                assert_eq!(band_lines(&none), ["CATEGORY-BAND: ALL"], "the log's own");
+                assert_eq!(
+                    got,
+                    none.replace("CATEGORY-BAND: ALL\n", "CATEGORY-BAND: 20M\n")
+                );
+                written += 1;
+            }
+            _ => assert_eq!(got, none, "{}: no sponsor of its lists a band", case.event),
+        }
+    }
+    assert_eq!(written, 5, "the five CQ contests");
+    // A band the sponsor does not list claims nothing: 6 m is no CQ WW band, and 160 m is no CQ
+    // WW RTTY band, whose log decides as it did before. A typed token is the sponsor's own.
+    let case = |event: &str| -> Case {
+        cases()
+            .into_iter()
+            .find(|c| c.event == event)
+            .expect("shipped")
+    };
+    let cqww = case("cqww_cw");
+    let rtty = case("cqww_rtty");
+    assert_eq!(
+        band_lines(&export(&cqww, Entry::Defaults, &with_band("6M"))),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        band_lines(&export(&rtty, Entry::Defaults, &with_band("160M"))),
+        ["CATEGORY-BAND: ALL"]
+    );
+    assert_eq!(
+        band_lines(&export(&cqww, Entry::Defaults, &with_band(" 160m "))),
+        ["CATEGORY-BAND: 160M"]
+    );
+}
+
+/// ⭐ **What CQ requires and the entry left blank is named, before the export** — and only that.
+///
+/// CQ's rules: *"Failure to fill out the header correctly may result in the entry being placed
+/// in the wrong category or reclassified as a Checklog"*; its pages: the category-transmitter
+/// *"is required for multi-operator entries"*, and *"If you select a multi-operator category and
+/// do not enter operator callsigns in this field, the robot will reject your log"*. So a scored
+/// CQ entry's file needs its assistance, band, mode and power, and a multi-operator one its
+/// class and operators. A checklog is not scored, and no other contest's sponsor is read as
+/// requiring any of them. Each name is a line the export leaves out, by value.
+#[test]
+fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
+    let ssb = cases()
+        .into_iter()
+        .find(|c| c.event == "cqww_ssb")
+        .expect("shipped");
+    // `(operator category, power, assisted)` as declared, and whether K1ABC was at the key.
+    let missing = |declared: (&str, &str, &str), at_key: bool, entrant: &CabrilloEntrant| {
+        let (category, power, assisted) = declared;
+        let entry = StationData {
+            contest_category_operator: category.into(),
+            contest_category_power: power.into(),
+            contest_category_assisted: assisted.into(),
+            ..station(&ssb, Entry::Defaults)
+        };
+        let log = logged(&ssb, &entry, at_key);
+        let file = log.cabrillo_with(14_000, entrant).expect("exports");
+        let named = log.cabrillo_missing(entrant);
+        // CONTROL: every line named is one the file leaves out.
+        for tag in &named {
+            assert!(
+                !file.lines().any(|l| l.starts_with(&format!("{tag}: "))),
+                "{tag} is named and in the file:\n{file}"
+            );
+        }
+        named
+    };
+    let nothing = CabrilloEntrant::default();
+    let band = CabrilloEntrant {
+        band: "ALL".into(),
+        ..CabrilloEntrant::default()
+    };
+    let class = |tx: &str, typed: &str| CabrilloEntrant {
+        band: "ALL".into(),
+        transmitter: tx.into(),
+        operators: typed.into(),
+        ..CabrilloEntrant::default()
+    };
+    assert_eq!(
+        missing(("SINGLE-OP", "", ""), false, &nothing),
+        ["CATEGORY-ASSISTED", "CATEGORY-BAND", "CATEGORY-POWER"],
+        "nothing declared"
+    );
+    assert_eq!(
+        missing(("SINGLE-OP", "LOW", ""), false, &band),
+        ["CATEGORY-ASSISTED"]
+    );
+    assert_eq!(
+        missing(("SINGLE-OP", "LOW", "NON-ASSISTED"), false, &band),
+        Vec::<&str>::new(),
+        "everything a single operator's file needs"
+    );
+    assert_eq!(
+        missing(("MULTI-OP", "LOW", "ASSISTED"), false, &band),
+        ["CATEGORY-TRANSMITTER", "OPERATORS"],
+        "a multi-operator entry with no class"
+    );
+    assert_eq!(
+        missing(("MULTI-OP", "LOW", "ASSISTED"), false, &class("TWO", "")),
+        ["OPERATORS"],
+        "a class, and nobody named at the key or typed"
+    );
+    assert_eq!(
+        missing(("MULTI-OP", "LOW", "ASSISTED"), true, &class("TWO", "")),
+        Vec::<&str>::new(),
+        "the operator at the key names one"
+    );
+    assert_eq!(
+        missing(
+            ("MULTI-OP", "LOW", "ASSISTED"),
+            false,
+            &class("TWO", "W2DEF")
+        ),
+        Vec::<&str>::new(),
+        "a typed operator names one"
+    );
+    assert_eq!(
+        missing(("CHECKLOG", "", ""), false, &nothing),
+        Vec::<&str>::new(),
+        "a checklog is not placed in a category"
+    );
+    // Every other contest: nothing is named, whatever is blank. The CQ ones name what these
+    // entries leave out (no band declared; a multi-operator entry with no class, whose OPERATORS
+    // line comes with the class), which is the control on this loop.
+    let mut named = Vec::new();
+    for case in &cases() {
+        for entry in [Entry::Defaults, Entry::Declared] {
+            let log = logged(case, &station(case, entry), entry == Entry::Declared);
+            let m = log.cabrillo_missing(&CabrilloEntrant::default());
+            if !m.is_empty() {
+                named.push(format!("{} {entry:?}: {}", case.event, m.join(" ")));
+            }
+        }
+    }
+    assert_eq!(
+        named,
+        [
+            "cqww_cw Defaults: CATEGORY-BAND",
+            "cqww_cw Declared: CATEGORY-BAND CATEGORY-TRANSMITTER OPERATORS",
+            "cqww_ssb Defaults: CATEGORY-BAND",
+            "cqww_ssb Declared: CATEGORY-BAND CATEGORY-TRANSMITTER OPERATORS",
+            "cqww_rtty Declared: CATEGORY-TRANSMITTER OPERATORS",
+            "cqwpx_cw Defaults: CATEGORY-BAND",
+            "cqwpx_cw Declared: CATEGORY-BAND CATEGORY-TRANSMITTER OPERATORS",
+            "cqwpx_ssb Defaults: CATEGORY-BAND",
+            "cqwpx_ssb Declared: CATEGORY-BAND CATEGORY-TRANSMITTER OPERATORS",
+        ]
+    );
 }

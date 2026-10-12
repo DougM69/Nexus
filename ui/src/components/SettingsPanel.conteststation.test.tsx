@@ -374,3 +374,57 @@ describe('the multi-operator class, overlay, mailing address and soapbox', () =>
     expect(screen.queryByText('Soapbox', { selector: '.settings-label' })).toBeNull()
   })
 })
+
+// ⭐ THE BAND CATEGORY (CATEGORY-BAND): ALL, or one band for a single-band entry, from the contest's
+// own list through the ruleset preview, offered only where the sponsor lists bands. A declaration:
+// nothing reads it off the log, and a band this contest does not list shows as not set.
+describe('the band category', () => {
+  const BAND = 'Which band category you are entering'
+  const CQWW = ['ALL', '160M', '80M', '40M', '20M', '15M', '10M']
+  const chips = async () =>
+    Array.from((await screen.findByRole('group', { name: BAND })).querySelectorAll('button'))
+  const pressed = (buttons: HTMLButtonElement[]) =>
+    buttons.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)
+
+  it('offers the contest\'s own bands, not set by default, and saves the pick', async () => {
+    stored = { ...stored, fdEvent: 'cqww_ssb' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'cqww_ssb', bandCategories: CQWW } as never),
+    )
+    renderPanel()
+    await openContesting()
+    const bands = await chips()
+    expect(bands.map((b) => b.textContent)).toEqual(['Not set', ...CQWW])
+    expect(pressed(bands)).toEqual(['Not set'])
+    fireEvent.click(bands[5])
+    await save()
+    await waitFor(() => expect(lastSaved()?.contestCategoryBand).toBe('20M'))
+  })
+
+  it('shows a band this contest does not list as not set', async () => {
+    // CQ WW RTTY runs on five bands: a 160M picked for CQ WW SSB claims nothing here.
+    stored = { ...stored, fdEvent: 'cqww_rtty', contestCategoryBand: '160M' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'cqww_rtty', bandCategories: ['ALL', '80M', '40M', '20M', '15M', '10M'] } as never),
+    )
+    const view = renderPanel()
+    await openContesting()
+    expect(pressed(await chips())).toEqual(['Not set'])
+    view.unmount()
+    // CONTROL: a band it lists reads as picked.
+    stored = { ...stored, contestCategoryBand: '40M' }
+    renderPanel()
+    await openContesting()
+    expect(pressed(await chips())).toEqual(['40M'])
+  })
+
+  it('POSITIVE CONTROL: a contest whose sponsor lists no bands offers no band category', async () => {
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd' } as never))
+    renderPanel()
+    await openContesting()
+    expect(await inputFor('Club')).toBeTruthy()
+    await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole('group', { name: BAND })).toBeNull()
+  })
+})

@@ -1028,6 +1028,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         sent_exchange: "1D EMA".into(),
         composing_text: "1D EMA".into(),
         composing_text_phone: "1D EMA".into(),
+        cabrillo_missing: vec!["CATEGORY-POWER".into()],
         bands: vec!["20m".into()],
         dupe_mode_groups: vec![vec!["CW".into(), "DIG".into()]],
         dupe_rule: DupeRuleDto {
@@ -1057,9 +1058,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             && native["club"]["clubCode"] == "3HV8-ZQ1P"
             && native["club"]["board"][0]["link"] == "reconnecting"
             && native["club"]["board"][0]["heardSecs"] == 12
-            && native["composingTextPhone"] == "1D EMA",
+            && native["composingTextPhone"] == "1D EMA"
+            && native["cabrilloMissing"][0] == "CATEGORY-POWER",
         "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
-         the host board's link words and the phone form of the exchange"
+         the host board's link words, the phone form of the exchange and the Cabrillo lines the \
+         export would leave out"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.
