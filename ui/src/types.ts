@@ -3533,6 +3533,13 @@ export interface FdClubBoardRow {
    *  absent on a position's, for a position that has not measured one, and from a station
    *  older than the field. Shown, never applied. */
   clockMs?: number | null
+  /** Where this position's link stands, as the HOST's own screen says it
+   *  (`fdevent::PositionLink`): `host` is the host's own position. On the host's board only:
+   *  absent on a position's, and Remote's copy leaves it out. */
+  link?: 'host' | 'connected' | 'reconnecting' | 'lost' | 'removed'
+  /** Seconds since the host last heard this position on its own socket, beside `link`; absent
+   *  when this run of the host has not heard it (a position from before a restart). */
+  heardSecs?: number
 }
 
 /** This laptop's club link (`ClubLinkDto`): where its join stands and, on the host, its hosting
@@ -3556,6 +3563,12 @@ export interface ClubLink {
   position: string
   clubCode: string
   hosting?: ClubHosting
+  /** A position's link to its host in the host board's words, once it has been in the event at
+   *  this address; absent before then and while turned away (the state and the host's words say
+   *  why), and on the host. */
+  status?: 'connected' | 'reconnecting' | 'lost'
+  /** Seconds since this laptop last heard its host, beside `status`. */
+  heardSecs?: number
 }
 
 /** The host's line: whether the club is open, where a position joins it, and who is in. */
@@ -3564,7 +3577,8 @@ export interface ClubHosting {
   port: number
   /** Each of this laptop's network addresses with the port, and the adapter it is on. */
   addrs: { addr: string; adapter: string }[]
-  /** Other positions connected now (this laptop's own is left out). */
+  /** Other positions connected now (this laptop's own is left out): the host board's rows that
+   *  read Connected. */
   connected: number
   failed?: 'start' | 'portInUse' | 'port'
   detail?: string

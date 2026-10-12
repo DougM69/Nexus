@@ -29,8 +29,9 @@ struct Capture {
 }
 
 /// ⭐ **What only the host's own screen acts on stays out of everything Remote reads**: the Give
-/// button's handle on a turned-away entry (`FdClubRefusedDto::handle`), and the club codes, this
-/// laptop's own (`FdClubDto::club_code`) and each turned-away laptop's. The button and its command
+/// button's handle on a turned-away entry (`FdClubRefusedDto::handle`), the club codes, this
+/// laptop's own (`FdClubDto::club_code`) and each turned-away laptop's, and the link words and
+/// heard seconds on each line of the host's board (`FdClubBoardRow::link`, beside its Remove). The button and its command
 /// exist on the host's desktop alone, and a code is shown only there and on that laptop's own
 /// screen: one read off any other page is one a peer could make a key to match. The page's Field
 /// Day check refuses a key it does not know, so leaving them out also keeps every published page
@@ -50,6 +51,11 @@ pub(in crate::remote_service) fn leave_out_the_hosts_own(
         for r in &mut club.refused {
             r.handle = None;
             r.club_code = None;
+        }
+        // The host board's link words and heard seconds: its own screen's, beside its Remove.
+        for r in &mut club.board {
+            r.link = None;
+            r.heard_secs = None;
         }
     }
 }

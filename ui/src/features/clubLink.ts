@@ -15,6 +15,13 @@ import type { ClubLink } from '../types'
  *  the shell's search uses (a test holds the two together). */
 export const FIND_CLUB_EVENTS_SECS = 5
 
+/** The club link's heartbeat and dead timeout, in seconds: `tempo_net::fdsync::PING_SECS` and
+ *  `DEAD_SECS`, which the host's board measures its link words by (`fdevent::PositionLink`): a
+ *  position is Connected while heard within two heartbeats, Reconnecting until the dead timeout,
+ *  and Lost past it. Said in the board's tooltip; a test holds them to fdsync.rs. */
+export const CLUB_PING_SECS = 5
+export const CLUB_DEAD_SECS = 15
+
 /** Between two of the addresses on the host's line: punctuation, not prose. */
 export const ADDR_SEP = ' · '
 
@@ -30,6 +37,14 @@ export interface ClubLinkLine {
   addrs?: string[]
   /** The joined line: this laptop's club code, shown after the words. */
   code?: string
+}
+
+/** How long ago a club laptop was last heard, in seconds, minutes or hours: "12 s ago", "4 min
+ *  ago". The host's board and a position's own link line both say it this way. */
+export function heardAgo(secs: number): string {
+  if (secs < 60) return t('fieldDay.club.heard.secs', { secs })
+  if (secs < 3600) return t('fieldDay.club.heard.mins', { mins: Math.floor(secs / 60) })
+  return t('fieldDay.club.heard.hours', { hours: Math.floor(secs / 3600) })
 }
 
 /** What a failed attempt to reach the host leaves to check there. */
@@ -84,6 +99,20 @@ function hostingLines(link: ClubLink): ClubLinkLine[] {
 export function clubLinkLines(link: ClubLink, inClubBlock = false): ClubLinkLine[] {
   const lines = hostingLines(link)
   const addr = link.addr
+  // A position that has been in the event says its link in the host board's words: past the
+  // heartbeats it says Reconnecting, and Lost past the dead timeout, whatever the socket is doing
+  // between attempts; Connected keeps the line that says which position this laptop is.
+  if (link.role === 'position' && link.status && link.status !== 'connected') {
+    const ago = heardAgo(link.heardSecs ?? 0)
+    lines.push(
+      link.status === 'reconnecting'
+        ? { key: 'link', text: t('fieldDay.club.link.reconnecting', { addr, ago }), alert: true }
+        : { key: 'link', text: t('fieldDay.club.link.lostHeard', { addr, ago }), alert: true },
+    )
+    const why = whyLine(link.why)
+    if (why) lines.push(why)
+    return lines
+  }
   switch (link.state) {
     case 'turnedAway':
       if (!inClubBlock) {
@@ -106,6 +135,13 @@ export function clubLinkLines(link: ClubLink, inClubBlock = false): ClubLinkLine
               code: link.clubCode || undefined,
             },
       )
+      if (link.status === 'connected') {
+        lines.push({
+          key: 'heard',
+          text: t('fieldDay.club.link.heard', { ago: heardAgo(link.heardSecs ?? 0) }),
+          alert: false,
+        })
+      }
       return lines
     default:
       break

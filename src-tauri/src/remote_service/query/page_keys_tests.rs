@@ -992,6 +992,9 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 rate: 30,
                 last_seen_secs: 5,
                 clock_ms: Some(-3_000),
+                // The host's link words and heard seconds: the capture leaves both out (below).
+                link: Some("reconnecting".into()),
+                heard_secs: Some(12),
             }],
             board_full: Some(FdBoardFullDto {
                 positions: 70,
@@ -1052,9 +1055,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         native["club"]["refused"][0]["handle"] == 7
             && native["club"]["refused"][0]["clubCode"] == "7KQ2-M9XD"
             && native["club"]["clubCode"] == "3HV8-ZQ1P"
+            && native["club"]["board"][0]["link"] == "reconnecting"
+            && native["club"]["board"][0]["heardSecs"] == 12
             && native["composingTextPhone"] == "1D EMA",
-        "CONTROL: the station's own snapshot carries the Give button's handle, the club codes and \
-         the phone form of the exchange"
+        "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
+         the host board's link words and the phone form of the exchange"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.

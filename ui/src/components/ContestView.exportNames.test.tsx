@@ -23,6 +23,8 @@ vi.mock('../api', () => ({
   exportLog: vi.fn(async () => ''),
   fdClubExport: vi.fn(async () => ''),
   fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
+  fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
   openPanelWindow: vi.fn(async () => {}),
   saveTextToDownloads: vi.fn(async () => '/tmp/x'),
 }))

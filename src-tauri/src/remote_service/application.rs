@@ -315,6 +315,9 @@ impl Publisher {
                 }
                 Command::Snapshot => {
                     let mut snapshot = eng.snapshot();
+                    // The club board every position is sent, as the Field Day capture carries it:
+                    // the host's own list of every position is its own screen's.
+                    eng.fd_club_board_to_remote(&mut snapshot.field_day);
                     // The host's own Give handles and the club codes are its screen's alone.
                     super::query::field_day::leave_out_the_hosts_own(&mut snapshot.field_day);
                     let ft_runtime = eng.remote_ft_runtime();
@@ -1182,6 +1185,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!(meter["data"]["smeterDb"], -12);
+    }
+
+    /// ⭐ **Remote's snapshot carries the club board every position is sent, never the host's own
+    /// list**: a host whose club has more positions than one club line carries lists every one of
+    /// them on its own screen, each with its Remove, while Remote's snapshot carries the cut every
+    /// position gets, as the Field Day capture does (`Engine::fd_club_board_to_remote`), so no
+    /// Remote payload grows with each position that ever joined. CONTROL: the station's own
+    /// snapshot lists all of them.
+    #[test]
+    fn remotes_snapshot_carries_the_club_board_every_position_is_sent() {
+        use std::collections::BTreeSet;
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-snapshot-board-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "arrlfd".into(),
+            fd_class: "2A".into(),
+            fd_section: "WI".into(),
+            mycall: "K1ABC".into(),
+            fd_host_enable: true,
+            fd_position_id: "aaaa0001".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        e.fd_host_start(dir.join("fd_event_board.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        for i in 1..=70u32 {
+            let id = format!("{:08x}", 0xc000_0000u32 + i);
+            let name = format!("Position {i:02} tent, the north field");
+            assert!(e
+                .fd_club_join(v, &id, &name, "K1ABC", "arrlfd", "", &format!("{i:064x}"))
+                .is_ok());
+            e.fd_club_pos_status(
+                &id,
+                &tempo_net::fdsync::PosReport {
+                    band: "20m".into(),
+                    mode: "CW".into(),
+                    op: "K1ABC".into(),
+                    freq: 14_025_000,
+                    name,
+                    clock_ms: None,
+                },
+            );
+        }
+        let sent: BTreeSet<String> = tempo_net::fdsync::board_fit(&e.fd_club_state(0, 0, "").board)
+            .rows
+            .into_iter()
+            .map(|r| r.pos)
+            .collect();
+        assert!(sent.len() < 70, "premise: one club line cannot carry 70");
+        let own: BTreeSet<String> = e
+            .snapshot()
+            .field_day
+            .unwrap()
+            .club
+            .unwrap()
+            .board
+            .into_iter()
+            .map(|r| r.posid)
+            .collect();
+        assert_eq!(own.len(), 70, "CONTROL: the station's own snapshot");
+        let engine = Arc::new(Mutex::new(e));
+        let read = Publisher::default()
+            .read(&engine, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let value: Value = serde_json::from_str(&read).unwrap();
+        let remote: BTreeSet<String> = value["data"]["fieldDay"]["club"]["board"]
+            .as_array()
+            .expect("the board in Remote's snapshot")
+            .iter()
+            .map(|r| r["posid"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(remote, sent, "the board every position is sent");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⭐ **Remote's snapshot carries none of what only the host's own screen acts on**: the

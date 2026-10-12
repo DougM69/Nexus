@@ -29425,6 +29425,45 @@ fn fd_club_give_position(state: State<'_, SharedEngine>, handle: u64) -> FdGiveD
     }
 }
 
+/// What the host's Remove or Allow back did: done, or why nothing changed.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum FdRemoveDto {
+    Done,
+    Refused { refusal: &'static str },
+}
+
+impl From<Result<(), tempo_app::fdevent::RemoveRefusal>> for FdRemoveDto {
+    fn from(done: Result<(), tempo_app::fdevent::RemoveRefusal>) -> Self {
+        match done {
+            Ok(()) => FdRemoveDto::Done,
+            Err(refusal) => FdRemoveDto::Refused {
+                refusal: refusal.code(),
+            },
+        }
+    }
+}
+
+/// ⭐ **Remove a position from the club event** — the Remove button on the host's own club board,
+/// by the position's id ([`tempo_app::engine::Engine::fd_club_remove_position`]): its link is
+/// closed and every JOIN under it turned away until Allow back; its contacts stay in the club's
+/// log as they were. Refused when this Nexus is not hosting, for its own position, and for a
+/// position the club does not know.
+///
+/// ⛔ Not one of Remote's operations: a club change is refused from afar, and the button refuses a
+/// press that comes through a stream. Nothing here transmits or touches the radio.
+#[tauri::command(async)]
+fn fd_club_remove_position(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
+    engine_lock(&state).fd_club_remove_position(&posid).into()
+}
+
+/// Let a removed position back in ([`tempo_app::engine::Engine::fd_club_allow_back`]): its next
+/// try joins, and it sends what it logged meanwhile. The host's own board only, as Remove is.
+#[tauri::command(async)]
+fn fd_club_allow_back(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
+    engine_lock(&state).fd_club_allow_back(&posid).into()
+}
+
 /// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
 /// on a datagram socket just resolves the route, so `local_addr` answers even
 /// on an offline site LAN. `None` = no route at all; the Settings row words
@@ -35417,6 +35456,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fd_discover_events,
             fd_club_export,
             fd_club_give_position,
+            fd_club_remove_position,
+            fd_club_allow_back,
             fd_scoreboard_status,
             n3fjp_test_connection,
             set_hold_tx_freq,
@@ -37549,6 +37590,59 @@ mod tests {
         assert!(
             !remote.contains("give_position"),
             "Remote must not reach the Give button's command"
+        );
+    }
+
+    /// ⭐ The host's Remove and Allow back reach the engine only if both commands are REGISTERED
+    /// and each goes through its own engine call, and no Remote dispatcher names either: a club
+    /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
+    /// calls they make.
+    #[test]
+    fn the_remove_and_allow_back_commands_are_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for (command, call) in [
+            (
+                "fd_club_remove_position",
+                ".fd_club_remove_position(&posid)",
+            ),
+            ("fd_club_allow_back", ".fd_club_allow_back(&posid)"),
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{command},")),
+                "{command} is not registered — its button would fail at runtime"
+            );
+            let body = src
+                .split_once(&format!("\nfn {command}("))
+                .unwrap_or_else(|| panic!("{command} exists"))
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            assert!(body.contains(call), "{body}");
+        }
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+            include_str!("remote_service/operations/logging.rs"),
+            include_str!("remote_service/operations/settings.rs"),
+            include_str!("remote_service/query.rs"),
+            include_str!("remote_service/query/field_day.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("remove_position") && !remote.contains("allow_back"),
+            "Remote must not reach the Remove or Allow back command"
         );
     }
 

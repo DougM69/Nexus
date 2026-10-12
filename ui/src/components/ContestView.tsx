@@ -5,6 +5,7 @@ import type {
   ContestBoard,
   ContestFieldSpec,
   DupeRule,
+  FdClubBoardRow,
   FdClubStatus,
   FdMergeReport,
   FieldDayQso,
@@ -12,7 +13,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubExport, fdClubGivePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
@@ -20,7 +21,7 @@ import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } 
 import { WfdObjectivesSection } from './WfdObjectivesSection'
 import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
-import { ADDR_SEP, clubLinkLines, type ClubLinkLine } from '../features/clubLink'
+import { ADDR_SEP, CLUB_DEAD_SECS, CLUB_PING_SECS, clubLinkLines, heardAgo, type ClubLinkLine } from '../features/clubLink'
 import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
 import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -1069,6 +1070,31 @@ const CLUB_BOARD_GRID: CSSProperties = {
 }
 /** The host's board has one more column: each position's clock. */
 const CLUB_BOARD_COLUMNS_HOST = 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr minmax(0,0.9fr)'
+/** …and, while its rows carry the host's link words, the Status column after the position and,
+ *  on the host's own contest screen, one at the end for each row's Remove or Allow back. */
+function clubBoardColumns(link: boolean, manage: boolean): string {
+  const [position, ...rest] = CLUB_BOARD_COLUMNS_HOST.split(' ')
+  return [position, ...(link ? ['minmax(0,1.7fr)'] : []), ...rest, ...(manage ? ['auto'] : [])].join(' ')
+}
+/** Each link word's ink, from the sync chip's own three (both themes carry them): the host's own
+ *  row and a removed one read in the dim ink, as no alarm. */
+const CLUB_LINK_INK: Record<NonNullable<FdClubBoardRow['link']>, string> = {
+  host: 'var(--text-dim)',
+  connected: 'var(--status-confirmed)',
+  reconnecting: 'var(--status-new-band)',
+  lost: 'var(--status-new-entity)',
+  removed: 'var(--text-dim)',
+}
+/** Each half of a link cell keeps to one line, and the cell wraps between them; a half wider than
+ *  the whole column still ends in an ellipsis rather than spill into the next. */
+const LINK_CHUNK: CSSProperties = {
+  display: 'inline-block',
+  maxWidth: '100%',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  verticalAlign: 'top',
+}
 const CLUB_COL_HEAD: CSSProperties = {
   fontSize: textPx(10),
   fontWeight: 700,
@@ -1133,6 +1159,48 @@ function clockCell(ms: number | null | undefined): string {
   return secs > 0
     ? t('fieldDay.club.board.clock.ahead', { secs })
     : t('fieldDay.club.board.clock.behind', { secs: -secs })
+}
+
+/** A board row's position as its line names it: an unnamed position falls back to who is sitting
+ *  at it, and only then to a translated placeholder — never to the position id, which is internal
+ *  plumbing an operator should never be shown. */
+function boardName(row: FdClubBoardRow): string {
+  return row.posName || row.operator || t('fieldDay.club.board.unnamed')
+}
+
+/** A host board row's link word and when the host last heard the position, as one cell: on one
+ *  line where the column has room, and the heard part on a line of its own where it has not (a
+ *  1024-wide window), never cut. */
+function LinkCell({ row }: { row: FdClubBoardRow }) {
+  const link = row.link
+  if (!link) return <span />
+  const word =
+    link === 'host'
+      ? t('fieldDay.club.board.link.host')
+      : link === 'connected'
+        ? t('fieldDay.club.board.link.connected')
+        : link === 'reconnecting'
+          ? t('fieldDay.club.board.link.reconnecting')
+          : link === 'lost'
+            ? t('fieldDay.club.board.link.lost')
+            : t('fieldDay.club.board.link.removed')
+  const heard =
+    link === 'host'
+      ? ''
+      : row.heardSecs == null
+        ? t('fieldDay.club.board.heard.never')
+        : t('fieldDay.club.board.heard', { ago: heardAgo(row.heardSecs) })
+  return (
+    <span data-club-row={row.posid} style={{ minWidth: 0 }} title={heard ? `${word} ${heard}` : word}>
+      <span style={{ ...LINK_CHUNK, color: CLUB_LINK_INK[link], fontWeight: 600 }}>{word}</span>
+      {heard && (
+        <>
+          {' '}
+          <span style={{ ...LINK_CHUNK, color: 'var(--text-dim)' }}>{heard}</span>
+        </>
+      )}
+    </span>
+  )
 }
 
 /** The club link's lines (`features/clubLink.ts`) in the club block's two styles: the addresses
@@ -1378,6 +1446,8 @@ export function FdClubSection({
   club,
   onExport,
   onGivePosition,
+  onRemovePosition,
+  onAllowBack,
   busy = false,
   detached = false,
   readOnly = false,
@@ -1391,6 +1461,11 @@ export function FdClubSection({
    *  entry names, by the entry's `handle`. Not passed on Remote, in the pop-out or on a
    *  position, so no Give button shows there. */
   onGivePosition?: (handle: number) => Promise<FdGiveAnswer>
+  /** The host's own contest screen only, as `onGivePosition` is: remove a position from the club
+   *  event by its id, and let a removed one back. Each row of the host's board gets the button
+   *  that applies, but the host's own. */
+  onRemovePosition?: (posid: string) => Promise<FdRemoveAnswer>
+  onAllowBack?: (posid: string) => Promise<FdRemoveAnswer>
   busy?: boolean
   detached?: boolean
   readOnly?: boolean
@@ -1454,6 +1529,73 @@ export function FdClubSection({
               },
         ),
       () => setGiveNote({ text: t('fieldDay.club.give.failed'), alert: true }),
+    )
+  }
+  // The host's link words ride its own board alone (a position's board and Remote's copy have
+  // none), and its Remove and Allow back are on its own contest screen alone.
+  const showLink = club.hosting && club.board.some((r) => r.link != null)
+  const manage = showLink && !detached && !readOnly && onRemovePosition != null && onAllowBack != null
+  // What the last Remove or Allow back did, until the next press.
+  const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The position a Remove press asks about, by id, until it is answered: asked only while that
+  // position is on the board and not removed already.
+  const [removing, setRemoving] = useState<{ posid: string; name: string } | null>(null)
+  const removingListed =
+    removing != null && club.board.some((r) => r.posid === removing.posid && r.link !== 'removed' && r.link !== 'host')
+  const remoteNote = { text: t('fieldDay.club.remove.refused.remote'), alert: true }
+  function refusedNote(refusal: 'notHosting' | 'own' | 'stale') {
+    return {
+      text:
+        refusal === 'notHosting'
+          ? t('fieldDay.club.remove.refused.notHosting')
+          : refusal === 'own'
+            ? t('fieldDay.club.remove.refused.own')
+            : t('fieldDay.club.remove.refused.stale'),
+      alert: true,
+    }
+  }
+  function askRemove(row: FdClubBoardRow) {
+    // Only at the host, as Give is: read before anything awaits.
+    if (isStreamInput()) {
+      setRemoveNote(remoteNote)
+      return
+    }
+    setRemoveNote(null)
+    setRemoving({ posid: row.posid, name: boardName(row) })
+  }
+  function remove() {
+    if (isStreamInput()) {
+      setRemoveNote(remoteNote)
+      return
+    }
+    if (!removing) return
+    const { posid, name } = removing
+    setRemoving(null)
+    onRemovePosition?.(posid).then(
+      (answer) =>
+        setRemoveNote(
+          answer.outcome === 'done'
+            ? { text: t('fieldDay.club.remove.done', { name }), alert: false }
+            : refusedNote(answer.refusal),
+        ),
+      () => setRemoveNote({ text: t('fieldDay.club.remove.failed'), alert: true }),
+    )
+  }
+  function allowBack(row: FdClubBoardRow) {
+    if (isStreamInput()) {
+      setRemoveNote(remoteNote)
+      return
+    }
+    const name = boardName(row)
+    setRemoveNote(null)
+    onAllowBack?.(row.posid).then(
+      (answer) =>
+        setRemoveNote(
+          answer.outcome === 'done'
+            ? { text: t('fieldDay.club.allowBack.done', { name }), alert: false }
+            : refusedNote(answer.refusal),
+        ),
+      () => setRemoveNote({ text: t('fieldDay.club.remove.failed'), alert: true }),
     )
   }
   return (
@@ -1620,6 +1762,11 @@ export function FdClubSection({
           {giveNote.text}
         </div>
       )}
+      {removeNote && (
+        <div style={removeNote.alert ? CLUB_WARN : CLUB_NOTE} role={removeNote.alert ? 'alert' : 'status'}>
+          {removeNote.text}
+        </div>
+      )}
       {/* The host's alone, for the rest of the event: every contact it kept out of the club's
           log, how many and the newest of them, each with the position that sent it and why. */}
       {club.keptOut && (
@@ -1658,53 +1805,73 @@ export function FdClubSection({
           data-club-board=""
           style={{
             ...(big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID),
-            ...(club.hosting ? { gridTemplateColumns: CLUB_BOARD_COLUMNS_HOST } : {}),
+            ...(club.hosting ? { gridTemplateColumns: clubBoardColumns(showLink, manage) } : {}),
           }}
         >
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.mode')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
+          {/* The host's: where each position's link stands, and when the host last heard it. */}
+          {showLink && (
+            <span
+              data-head=""
+              style={colHead(big)}
+              title={t('fieldDay.club.board.link.title', {
+                beat: CLUB_PING_SECS,
+                window: 2 * CLUB_PING_SECS,
+                dead: CLUB_DEAD_SECS,
+              })}
+            >
+              {t('fieldDay.club.board.column.link')}
+            </span>
+          )}
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.mode')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
           {/* The host's column: each position's clock, as it reported it to the host. */}
           {club.hosting && (
-            <span style={colHead(big)} title={t('fieldDay.club.board.clock.title')}>
+            <span data-head="" style={colHead(big)} title={t('fieldDay.club.board.clock.title')}>
               {t('fieldDay.club.board.column.clock')}
             </span>
           )}
+          {/* The host's own contest screen: each row's Remove or Allow back. */}
+          {manage && <span data-head="" aria-hidden="true" />}
           {club.board.map((row) => {
-            // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
-            // screen but never silently stale.
-            const stale = row.lastSeenSecs > 15
+            // A host's row says where its link stands, so it is dimmed when that is lost or removed;
+            // a position's board stale-marks past 15 s (the DEAD_SECS threshold). Either way a
+            // reading stays on screen but is never silently stale.
+            const stale = row.link
+              ? row.link === 'lost' || row.link === 'removed'
+              : row.lastSeenSecs > 15
+            const marked = stale && !row.link
             const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
             return (
               <Fragment key={row.posid}>
                 <span
                   className="mono"
+                  data-club-row={row.posid}
                   style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                   title={
-                    stale
+                    marked
                       ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
                       : undefined
                   }
                 >
-                  {/* An unnamed position falls back to who is sitting at it, and only
-                      then to a translated placeholder — never to the position id, which is
-                      internal plumbing an operator should never be shown. */}
-                  {row.posName || row.operator || t('fieldDay.club.board.unnamed')}
-                  {stale && <span aria-hidden="true"> ⚠</span>}
+                  {boardName(row)}
+                  {marked && <span aria-hidden="true"> ⚠</span>}
                 </span>
-                <span className="mono" style={dim}>{row.band}</span>
-                <span className="mono" style={dim}>{row.mode}</span>
-                <span className="mono" style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.operator}</span>
-                <span className="mono" style={dim}>{row.qsos}</span>
-                <span className="mono" style={dim}>
+                {showLink && <LinkCell row={row} />}
+                <span className="mono" data-club-row={row.posid} style={dim}>{row.band}</span>
+                <span className="mono" data-club-row={row.posid} style={dim}>{row.mode}</span>
+                <span className="mono" data-club-row={row.posid} style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.operator}</span>
+                <span className="mono" data-club-row={row.posid} style={dim}>{row.qsos}</span>
+                <span className="mono" data-club-row={row.posid} style={dim}>
                   {t('fieldDay.club.board.rate', { rate: row.rate })}
                 </span>
                 {club.hosting && (
                   <span
                     className="mono"
+                    data-club-row={row.posid}
                     style={{
                       ...dim,
                       overflow: 'hidden',
@@ -1718,6 +1885,48 @@ export function FdClubSection({
                   >
                     {clockCell(row.clockMs)}
                   </span>
+                )}
+                {manage && (
+                  <span data-club-row={row.posid}>
+                    {row.link === 'removed' ? (
+                      <button
+                        type="button"
+                        className="export-btn"
+                        onClick={() => allowBack(row)}
+                        title={t('fieldDay.club.allowBack.title')}
+                      >
+                        {t('fieldDay.club.allowBack.label')}
+                      </button>
+                    ) : row.link && row.link !== 'host' ? (
+                      <button
+                        type="button"
+                        className="export-btn"
+                        onClick={() => askRemove(row)}
+                        title={t('fieldDay.club.remove.title')}
+                      >
+                        {t('fieldDay.club.remove.label')}
+                      </button>
+                    ) : null}
+                  </span>
+                )}
+                {/* The question a Remove press asks, under the row it was pressed on. */}
+                {manage && removingListed && removing?.posid === row.posid && (
+                  <div
+                    role="group"
+                    aria-label={t('fieldDay.club.remove.confirm.aria')}
+                    style={{ ...CLUB_CONFIRM, gridColumn: '1 / -1', fontSize: textPx(big ? 16 : 12) }}
+                  >
+                    <div>{t('fieldDay.club.remove.confirm.head', { name: removing.name })}</div>
+                    <div>{t('fieldDay.club.remove.confirm.body')}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <button type="button" className="export-btn" onClick={remove}>
+                        {t('fieldDay.club.remove.confirm.yes')}
+                      </button>
+                      <button type="button" className="export-btn" onClick={() => setRemoving(null)}>
+                        {t('fieldDay.club.remove.confirm.no')}
+                      </button>
+                    </div>
+                  </div>
                 )}
               </Fragment>
             )
@@ -3067,6 +3276,8 @@ export function ContestView({
           club={fieldDay.club}
           onExport={observed ? undefined : handleExport}
           onGivePosition={observed ? undefined : fdClubGivePosition}
+          onRemovePosition={observed ? undefined : fdClubRemovePosition}
+          onAllowBack={observed ? undefined : fdClubAllowBack}
           busy={busy !== null}
           readOnly={observed}
           fieldDay={fdEventIsFieldDay}
