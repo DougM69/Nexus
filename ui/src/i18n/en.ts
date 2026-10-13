@@ -4057,6 +4057,11 @@ export const EN = {
   'contestOver.notNow': 'Not now',
   'contestOver.turnOff': 'Turn off',
   'contestOver.busy': 'Working…',
+  // At a club: this laptop's contacts the club's log does not have yet, the club chip's count.
+  'contestOver.club.queued': {
+    one: '{{count}} contact from this laptop is not in the club\'s log yet. It still goes to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
+    other: '{{count}} contacts from this laptop are not in the club\'s log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
+  },
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -4195,7 +4200,7 @@ export const EN = {
   'fieldDay.cabrillo.restart':
     'Power category and Spotting assistance are read when Contest mode turns on, so after setting them turn Contest mode off and on again. Your contacts stay in the log.',
   'fieldDay.mode.club':
-    'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+    'Club sync is on. With Contest mode off, this station stays in the club event, and contacts the club\'s log does not have yet still go to the host while Nexus is open. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.

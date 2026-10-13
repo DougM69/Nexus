@@ -130,6 +130,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaving only the call, and so was a county that call history filled from the next call in that
   moment. It now stays, with the contest logger window open or closed, and logs with the next
   contact.
+- **At a club, contacts the host does not have yet still go to it after Contest mode goes off.** A
+  laptop whose link to the host dropped with contacts still to send, and whose Contest mode was then
+  turned off, sent none of them and counted none until the mode was back on, so at the end of a
+  party they could miss the club's log. They now go to the host when the link is back, with the mode
+  on or off, and so do contacts still waiting when opening Chat takes the station out of the
+  contest. **Contest over?** says how many of this laptop's contacts the club's log does not have
+  yet. They go only to the club they were logged for, in the same contest, never to a later event,
+  and only while Nexus stays open: closed with the mode off, they wait in the contest journal and go
+  up the next time the mode is on and joined to that club.
 
 ## [1.18.0] — 2026-10-12
 

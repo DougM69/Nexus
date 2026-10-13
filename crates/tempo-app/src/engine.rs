@@ -26,6 +26,10 @@ mod clock_repair_message_tests;
 /// ADIF's contacts by value.
 #[cfg(test)]
 mod club_log_tests;
+/// The contacts a laptop still owes its club once the mode has left the contest: counted and
+/// sent, and only to that club, in that running, for that contest.
+#[cfg(test)]
+mod club_queue_tests;
 mod contest_before;
 /// The station as it was before the contest changed it: taken, kept, let go, round-tripped.
 #[cfg(test)]
@@ -2793,6 +2797,18 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// ⭐ **The contest log the mode left, kept for club sync, and when it left it**
+    /// ([`Self::fd_sync_log`]).
+    ///
+    /// Club sync runs whatever the operating mode (hosting on, or a join address set), while the
+    /// contest log lives in `Mode::FieldDay`. Every send and every count read it there, so a laptop
+    /// whose Contest mode went off with contacts queued counted none and sent none until the mode
+    /// came back on: at the end of a party, never. So the log stays here as the mode leaves Field
+    /// Day, for Chat or for another mode ([`Self::leave_field_day`], `set_mode`), and is let go as
+    /// Field Day is entered again, whose journal restore brings the same rows back, and as the
+    /// club link is pointed at another club (`apply_settings`): its rows were that club's. Nothing
+    /// logs into it; club sync only reads it.
+    fd_left_log: Option<(tempo_core::fieldday::FieldDayLog, u64)>,
     /// ⭐ **Which position pump owns the club link** ([`Self::fd_link_take_over`]): the
     /// generation the newest pump's bridge carries. The shell's supervisor stops a pump and
     /// starts the next for the same address when the contest changes; the stopped one notices
@@ -5515,6 +5531,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_left_log: None,
             fd_link_gen: 0,
             fd_host_lan: Vec::new(),
             fd_host_failure: None,
@@ -6447,6 +6464,8 @@ impl Engine {
         // about another host.
         if self.fd_sync_targets().1 != club_target_was {
             self.fd_mirror.forget_host();
+            // …and the contacts the mode left were that host's to have ([`Self::fd_left_log`]).
+            self.fd_left_log = None;
         }
     }
 
@@ -6519,7 +6538,11 @@ impl Engine {
     /// that switches the contest ([`Self::save_switches_contest`]) — one function, so both end
     /// a session the same way.
     fn leave_field_day(&mut self) {
-        self.mode = Mode::Chat;
+        // The contest log stays with club sync ([`Self::fd_left_log`]): contacts the host does not
+        // have yet still go up, and are still counted, with the mode off.
+        if let Mode::FieldDay { station, .. } = std::mem::replace(&mut self.mode, Mode::Chat) {
+            self.fd_left_log = Some((station.log, now_unix_secs()));
+        }
         // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
         // sets it, and leaving it stale-true after the exit suppresses the
         // smart auto-cycle on the next chat answer. Scoped to the reset for
@@ -13233,16 +13256,35 @@ impl Engine {
     /// An empty posid means the shell has not initialized identity yet — the
     /// pump treats that as "don't connect".
     pub fn fd_sync_identity(&self) -> (String, String, String, u64) {
-        let max_seq = match &self.mode {
-            Mode::FieldDay { station, .. } => station.log.max_seq(),
-            _ => 0,
-        };
+        let max_seq = self.fd_sync_log().map_or(0, |log| log.max_seq());
         (
             self.settings.fd_position_id.clone(),
             self.fd_position_label(),
             self.settings.mycall.clone(),
             max_seq,
         )
+    }
+
+    /// ⭐ **The contest log club sync sends and counts from**: the live session's while Field Day
+    /// runs, and outside it the one the mode left ([`Self::fd_left_log`]) while it is a log of the
+    /// contest the club runs, in the running it was left in.
+    ///
+    /// A left log of another contest is no club's here to send: switching contest while the mode
+    /// is on leaves its rows behind the same way. Nor is one of an earlier running
+    /// ([`tempo_core::fd_rules::FdRuleset::running_of`]): a club's rehearsal belongs to the
+    /// running before, and a laptop asleep with its mode off from the rehearsal to the day must
+    /// not send the rehearsal's contacts to the party's host, which the journal restore keeps
+    /// out of the party's log for the same reason.
+    fn fd_sync_log(&self) -> Option<&tempo_core::fieldday::FieldDayLog> {
+        match &self.mode {
+            Mode::FieldDay { station, .. } => Some(&station.log),
+            _ => self.fd_left_log.as_ref().and_then(|(log, left_at)| {
+                let rs = log.ruleset();
+                (crate::fdevent::canonical_contest(&log.session.event_id) == self.fd_club_contest()
+                    && rs.running_of(*left_at) == rs.running_of(now_unix_secs()))
+                .then_some(log)
+            }),
+        }
     }
 
     /// THE OUTBOX: own FD rows with `seq > after`, as wire rows — derived
@@ -13260,7 +13302,7 @@ impl Engine {
     /// Own live FD rows whose seq `keep` takes, as wire rows, ascending — the outbox's rows and a
     /// restore's ([`Self::fd_sync_marks`]).
     fn fd_sync_rows(&self, keep: impl Fn(u64) -> bool) -> Vec<tempo_net::fdsync::WireQso> {
-        let Mode::FieldDay { station, .. } = &self.mode else {
+        let Some(log) = self.fd_sync_log() else {
             return Vec::new();
         };
         let posid = &self.settings.fd_position_id;
@@ -13272,8 +13314,7 @@ impl Engine {
         } else {
             self.settings.fd_operator.trim().to_uppercase()
         };
-        let mut rows: Vec<_> = station
-            .log
+        let mut rows: Vec<_> = log
             .qsos()
             .iter()
             .filter(|q| keep(q.seq))
@@ -13317,7 +13358,7 @@ impl Engine {
     /// once or while away), as the row itself. Ascending by seq.
     pub fn fd_sync_marks(&self) -> Vec<tempo_net::fdsync::Mark> {
         use tempo_net::fdsync::Mark;
-        let Mode::FieldDay { station, .. } = &self.mode else {
+        let Some(log) = self.fd_sync_log() else {
             return Vec::new();
         };
         let posid = &self.settings.fd_position_id;
@@ -13325,8 +13366,7 @@ impl Engine {
             return Vec::new();
         }
         let host = &self.fd_mirror.retracted;
-        let mut marks: Vec<Mark> = station
-            .log
+        let mut marks: Vec<Mark> = log
             .removed()
             .iter()
             .flat_map(|entry| &entry.rows)
@@ -13374,8 +13414,9 @@ impl Engine {
     /// logged under and what the outbox sends: the picker can move while a session runs
     /// (a session survives every change between Field Day modes), and a JOIN naming the
     /// picker's contest over another contest's rows is the mismatch the host exists to
-    /// catch. Outside Field Day there are no rows, and the picker's contest is the honest
-    /// answer.
+    /// catch. Outside Field Day the picker's contest is the honest answer: the only rows sent
+    /// then are those the mode left, and only while they are that contest's
+    /// ([`Self::fd_sync_log`]).
     pub fn fd_position_contest(&self) -> String {
         match &self.mode {
             Mode::FieldDay { station, .. } => {
@@ -13460,15 +13501,12 @@ impl Engine {
         // What the host lacks: own live rows past its ack, and the take-backs it does not hold.
         // Never a seq past the ack that was taken back before it went up: the host is never
         // sent that row, so counting it read "Behind 1" for good.
-        let rows = match &self.mode {
-            Mode::FieldDay { station, .. } => station
-                .log
-                .qsos()
+        let rows = self.fd_sync_log().map_or(0, |log| {
+            log.qsos()
                 .iter()
                 .filter(|q| q.seq > self.fd_mirror.acked)
-                .count() as u64,
-            _ => 0,
-        };
+                .count() as u64
+        });
         crate::fdevent::SyncState::derive(
             self.fd_sync_enabled(),
             self.fd_mirror.connected,
@@ -14619,7 +14657,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // even when its label and CAT mode are unchanged. Do not let older
         // Remote work overwrite that intent; invalid specs above change nothing.
         self.remote_actuation.revoke();
-        self.mode = next_mode;
+        let left = std::mem::replace(&mut self.mode, next_mode);
+        // The contest log a switch out of Field Day leaves stays with club sync
+        // ([`Self::fd_left_log`]); one into Field Day lets it go, because the journal restore
+        // below brings the same rows into the new station.
+        match (&self.mode, left) {
+            (Mode::FieldDay { .. }, _) => self.fd_left_log = None,
+            (_, Mode::FieldDay { station, .. }) => {
+                self.fd_left_log = Some((station.log, now_unix_secs()))
+            }
+            _ => {}
+        }
         // Carry the operator's RR73/RRR preference into a fresh QSO sequencer.
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.confirm_with_rrr = self.settings.prefer_rrr;

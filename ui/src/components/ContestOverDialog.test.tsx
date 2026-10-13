@@ -93,9 +93,18 @@ describe('what the checklist offers', () => {
   })
 
   it('has something to offer with contacts or with a change, and nothing with neither', () => {
-    expect(hasOffer({ contacts: 0, event: 'ilqp', putBack: [] })).toBe(false)
-    expect(hasOffer({ contacts: 1, event: 'ilqp', putBack: [] })).toBe(true)
+    expect(hasOffer({ contacts: 0, event: 'ilqp', putBack: [], clubQueued: 0 })).toBe(false)
+    expect(hasOffer({ contacts: 1, event: 'ilqp', putBack: [], clubQueued: 0 })).toBe(true)
     expect(hasOffer(contestOverOffer(clubNow(), 0, 'ilqp'))).toBe(true)
+  })
+
+  it('carries the club chip\'s count, and has that to say with nothing else to offer', () => {
+    expect(contestOverOffer(clubNow(), 5, 'ilqp').clubQueued).toBe(0)
+    const owed = contestOverOffer(clubNow({ contestBefore: null }), 0, 'ilqp', 2)
+    expect([owed.contacts, owed.putBack.length, owed.clubQueued]).toEqual([0, 0, 2])
+    expect(hasOffer(owed)).toBe(true)
+    // CONTROL: the same station with the club holding everything.
+    expect(hasOffer(contestOverOffer(clubNow({ contestBefore: null }), 0, 'ilqp', 0))).toBe(false)
   })
 })
 
@@ -213,6 +222,30 @@ describe('the checklist', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       'Only at the station: a press through Remote merges no contact into the logbook.',
     )
+  })
+
+  it('at a club, says how many of this laptop\'s contacts the club\'s log does not have yet', () => {
+    open(contestOverOffer(clubNow(), 212, 'ilqp', 2))
+    expect(document.querySelector('.contest-over-club')?.textContent).toBe(
+      "2 contacts from this laptop are not in the club's log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.",
+    )
+    cleanup()
+    open(contestOverOffer(clubNow(), 212, 'ilqp', 1))
+    expect(document.querySelector('.contest-over-club')?.textContent).toBe(
+      "1 contact from this laptop is not in the club's log yet. It still goes to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.",
+    )
+    // CONTROL: the club has them all, and nothing is said.
+    cleanup()
+    open(contestOverOffer(clubNow(), 212, 'ilqp', 0))
+    expect(document.querySelector('.contest-over-club')).toBeNull()
+  })
+
+  it('with only the club\'s count to say, Turn off turns the mode off and puts nothing back', async () => {
+    const { turnOff } = open(contestOverOffer(clubNow({ contestBefore: null }), 0, 'ilqp', 2))
+    expect(screen.queryAllByRole('checkbox')).toEqual([])
+    await press(/Turn off/)
+    expect(calls).toEqual(['turnOff'])
+    expect(turnOff).toHaveBeenCalledWith({})
   })
 
   it('offers no merge or export when the session holds no contacts', () => {
