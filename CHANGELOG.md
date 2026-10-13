@@ -196,6 +196,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADIF under its operator's own call. It now rebuilds every contact of the contest's running
   whatever its age, as each laptop's own log already does, under the club's call and class, until
   the day before the contest is next held.
+- **At a club, a laptop still on the club's call is let back in after Contest over? on the host.**
+  **Contest over?** puts the host laptop's own call back, and the host then turned away every
+  laptop rejoining on the club's call, so the contacts a laptop logged while its link was down
+  never reached the club's log or its files. While the host holds the club's log it now lets in
+  its laptops on the club's call, names that call to each laptop that joins and in **Find club
+  events**, and their waiting contacts reach the Club Cabrillo and Club ADIF. A laptop on any other
+  call is still turned away, with the same words.
 
 ## [1.18.0] — 2026-10-12
 

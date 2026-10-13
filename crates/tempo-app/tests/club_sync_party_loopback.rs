@@ -747,3 +747,234 @@ fn a_position_on_another_call_is_refused_by_name_on_both_screens() {
     std::thread::sleep(Duration::from_millis(300));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Each QSO line of a club's Cabrillo file as `(call sent, call worked)`.
+fn worked(cab: &str) -> Vec<(String, String)> {
+    cab.lines()
+        .filter(|l| l.starts_with("QSO:"))
+        .map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f[5].to_string(), f[f.len() - 3].to_string())
+        })
+        .collect()
+}
+
+/// ⭐ **After "Contest over?" on the host, a laptop of the club still on the club's call is
+/// taken back in, and what it still owes reaches the club's log and files.** The put-back gives
+/// the host laptop its operator's own call, and the JOIN's call gate read the host's Settings, so
+/// a laptop rejoining on the club's call was turned away ("this club is on the air as K9OWN and
+/// this Nexus as W9XYZ"), and the contacts it logged while its link was down never reached the
+/// club. While the host holds the club's log, the gate, the welcome and the beacon read the call
+/// the club's files are written under.
+///
+/// CONTROL first: the CW tent's first contact merges, and the put-back lands with the laptop
+/// still hosting. Then the CW tent, back on the club's call, joins, and its waiting contact is in
+/// the club's log, once, and in the Club Cabrillo and Club ADIF under the club's call; its
+/// welcome and the host's beacon name the club's call. A laptop on another call is still turned
+/// away, by the same sentence naming the club's call, and none of its contacts reaches the club.
+/// The host's own laptop, its link made again on the operator's own call, is in as it always was.
+/// And when the host closes Nexus the CW tent's next contact waits, its link lost; the host
+/// reopened from its journal still holds the club's call, and the contact arrives.
+#[test]
+fn a_laptop_on_the_club_call_rejoins_after_the_hosts_put_back() {
+    let dir = std::env::temp_dir().join(format!("ilqp-rejoin-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_event.ilqp.jsonl");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = party_engine("aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let cw = party_engine("bbbb0002", "CW tent", &addr);
+    let cw_sd = start_pump(&cw, &addr);
+    log_party(&cw, "K9AAA", "COOK", "CW");
+    wait_until("the CW tent's first contact merged", 10, || {
+        club_rows(&host) == 1
+    });
+
+    // Whether the host holds a live link for `pos`.
+    let connected = |eng: &Shared, pos: &str| {
+        engine_lock(eng)
+            .fd_club_log()
+            .is_some_and(|c| c.connected(pos))
+    };
+    // What a laptop's screen says of its link: where it stands, and the host's words when it
+    // was turned away.
+    let link = |eng: &Shared| {
+        engine_lock(eng)
+            .fd_club_link()
+            .map(|l| (l.state, l.told.unwrap_or_default()))
+            .unwrap_or_default()
+    };
+    let joined = || ("joined".to_string(), String::new());
+    // A laptop's club chip: its state and the contacts the club's log does not have yet.
+    let chip = |eng: &Shared| {
+        engine_lock(eng)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| (c.sync_state, c.queued))
+            .unwrap_or_default()
+    };
+    let club_file = |eng: &Shared| {
+        engine_lock(eng)
+            .fd_club_export(true)
+            .expect("club cabrillo")
+    };
+    let sent_as_the_club = |calls: &[&str]| {
+        calls
+            .iter()
+            .map(|c| ("W9XYZ".to_string(), c.to_string()))
+            .collect::<Vec<_>>()
+    };
+
+    // The CW tent's link goes (it is carried out of the Wi-Fi's reach) and it logs on: that
+    // contact waits in its own log.
+    cw_sd.store(true, Ordering::Relaxed);
+    wait_until("the host hears the CW tent's link go", 10, || {
+        !connected(&host, "bbbb0002")
+    });
+    log_party(&cw, "K9BBB", "KANE", "CW");
+
+    // "Contest over?" on the host: Turn off with the call and the class ticked, ONE save.
+    let put_back = |eng: &Shared| {
+        let mut e = engine_lock(eng);
+        let mut s = e.settings().clone();
+        s.fd_active = false;
+        s.mycall = "K9OWN".into();
+        s.contest_entry_class = String::new();
+        e.apply_settings(s);
+    };
+    put_back(&host);
+    {
+        let e = engine_lock(&host);
+        assert_eq!(
+            (
+                e.settings().mycall.as_str(),
+                e.settings().fd_active,
+                e.fd_hosting()
+            ),
+            ("K9OWN", false, true),
+            "CONTROL: the put-back landed, the mode is off, and the laptop still hosts"
+        );
+    }
+
+    // The CW tent is back, still on the club's call.
+    let cw_sd = start_pump(&cw, &addr);
+    wait_until("the CW tent is answered", 20, || {
+        club_rows(&host) == 2 || link(&cw).0 == "turnedAway"
+    });
+    assert_eq!(
+        (club_rows(&host), link(&cw)),
+        (2, joined()),
+        "the CW tent, on the club's call, is taken back in and its waiting contact merges"
+    );
+    assert_eq!(
+        (
+            engine_lock(&cw)
+                .fd_club_link()
+                .map(|l| l.host_call)
+                .unwrap_or_default(),
+            engine_lock(&host).fd_club_call()
+        ),
+        ("W9XYZ".to_string(), "W9XYZ".to_string()),
+        "its welcome names the club's call, and so does the host's beacon"
+    );
+    let cab = club_file(&host);
+    assert_eq!(
+        worked(&cab),
+        sent_as_the_club(&["K9AAA", "K9BBB"]),
+        "the contact that waited is in the Club Cabrillo once, sent as the club: {cab}"
+    );
+    let adif = engine_lock(&host).fd_club_export(false).expect("club adif");
+    assert!(
+        adif.contains("<CALL:5>K9BBB"),
+        "…and in the Club ADIF: {adif}"
+    );
+
+    // CONTROL: a laptop on another call is still turned away, by the sentence it always met, now
+    // naming the club's call, and not one of its contacts reaches the club.
+    let other = party_engine_on("K9ABC", "cccc0003", "SSB tent", &addr);
+    log_party(&other, "K9CCC", "COOK", "PH");
+    let other_sd = start_pump(&other, &addr);
+    wait_until("the laptop on another call is answered", 10, || {
+        link(&other).0 == "turnedAway" || club_rows(&host) == 3
+    });
+    let contest = engine_lock(&host).fd_club_log().unwrap().contest_id.clone();
+    assert_eq!(
+        (link(&other), club_rows(&host)),
+        (
+            (
+                "turnedAway".to_string(),
+                tempo_app::fdevent::call_mismatch(&contest, "W9XYZ", "K9ABC")
+            ),
+            2
+        ),
+        "the laptop on another call is turned away and none of its contacts merges"
+    );
+    other_sd.store(true, Ordering::Relaxed);
+
+    // The host's own laptop, its link made again on the operator's own call (as reopening Nexus
+    // makes it): in, as it always was.
+    host_pump_sd.store(true, Ordering::Relaxed);
+    wait_until("the host hears its own link go", 10, || {
+        !connected(&host, "aaaa0001") && !engine_lock(&host).fd_mirror_mut().connected
+    });
+    let host_pump_sd = start_pump(&host, &addr);
+    wait_until("the host's own laptop is answered", 20, || {
+        matches!(link(&host).0.as_str(), "joined" | "turnedAway")
+    });
+    assert_eq!(
+        link(&host),
+        joined(),
+        "the host's own laptop is in on the operator's own call"
+    );
+
+    // The host closes Nexus: no club log is held. The CW tent's link is lost, and its next
+    // contact waits in its own log, counted on its chip.
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    wait_until("the CW tent's link is lost", 10, || link(&cw).0 == "lost");
+    log_party(&cw, "K9DDD", "WILL", "CW");
+    assert_eq!(
+        chip(&cw),
+        ("offline".to_string(), 1),
+        "the CW tent's contact waits"
+    );
+
+    // Reopened with the put-back saved, the host rebuilds the club from its journal, the call it
+    // was hosted under with it, and the CW tent rejoins by itself and sends what waited.
+    std::thread::sleep(Duration::from_millis(600));
+    let host2 = party_engine("aaaa0001", "HQ", &addr);
+    put_back(&host2);
+    engine_lock(&host2).fd_host_start(journal.clone()).unwrap();
+    assert_eq!(
+        (club_rows(&host2), engine_lock(&host2).fd_club_call()),
+        (2, "W9XYZ".to_string()),
+        "the reopened host holds the club's contacts and the call they were sent under"
+    );
+    let host2_sd = start_host(&host2, reusable_listener(port));
+    let host2_pump_sd = start_pump(&host2, &addr);
+    wait_until("the CW tent is answered by the reopened host", 30, || {
+        club_rows(&host2) == 3 || link(&cw).0 == "turnedAway"
+    });
+    assert_eq!(
+        (club_rows(&host2), link(&cw)),
+        (3, joined()),
+        "the CW tent rejoins the reopened host and its waiting contact merges"
+    );
+    let cab = club_file(&host2);
+    assert_eq!(
+        worked(&cab),
+        sent_as_the_club(&["K9AAA", "K9BBB", "K9DDD"]),
+        "{cab}"
+    );
+
+    for sd in [cw_sd, host2_sd, host2_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
