@@ -311,30 +311,33 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   useEffect(() => {
     if (!going) setCommitted('')
   }, [going])
-  // One send at a time: a commit planned on text an earlier one already took would send it twice.
-  const busy = useRef(false)
+  // Sends run one after another, in the order they were made: a commit planned on text an earlier
+  // one already took would send it twice, and an F-key pressed meanwhile must be neither lost nor
+  // allowed to overtake what was sent before it. A send reads the box when its turn comes.
+  const chain = useRef<Promise<unknown>>(Promise.resolve())
   const idle = useRef<number | null>(null)
-  const applySent = (r: JttySent, fromBox: boolean) => {
+  const applySent = (r: JttySent | null, fromBox: boolean) => {
+    if (!r) return
     setJtty(r.state)
     if (!fromBox) return
     draftRef.current = draftRef.current.slice(r.consumed)
     setDraft(draftRef.current)
     if (r.sent) setCommitted((c) => c + r.sent)
   }
-  const sendWith = (f: () => Promise<JttySent>, fromBox: boolean): boolean => {
-    if (!canSend || busy.current) return false
-    busy.current = true
-    void f()
+  const sendWith = (f: () => Promise<JttySent | null>, fromBox: boolean) => {
+    if (!canSend) return
+    chain.current = chain.current
+      .then(f)
       .then((r) => applySent(r, fromBox))
       .catch((e) => pushToast(String(e), 'error'))
-      .finally(() => {
-        busy.current = false
-      })
-    return true
   }
+  // A live commit of each kind waits in the chain at most once: typing faster than the engine
+  // answers queues one look at the box, not one per keystroke.
+  const pendingCommit = useRef({ advance: false, flush: false })
   // Send (WSJT-X's Ctrl+K): all of it, ending the message, and a live session with it.
   const sendTyped = () => {
-    if (draftRef.current.trim()) sendWith(() => jttySend(draftRef.current, hisCall), true)
+    if (!draftRef.current.trim()) return
+    sendWith(() => (draftRef.current.trim() ? jttySend(draftRef.current, hisCall) : Promise.resolve(null)), true)
   }
   const sendFkey = (n: number) => sendWith(() => jttyFkey(n, hisCall), false)
   // Live (WSJT-X's Alt+J), and its sign-off (Alt+K): `DE <call> K`, and the session ends.
@@ -343,11 +346,13 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // While live: what is typed goes as WSJT-X sends it — a batch once five words are complete beyond
   // the three it holds back, and everything after a pause of LIVE_IDLE_MS.
   const commitLive = (flush: boolean) => {
-    if (!live || !draftRef.current) return
-    if (!sendWith(() => jttyLiveCommit(draftRef.current, hisCall, flush), true) && flush) {
-      // A send was still in flight: the pause's flush comes round again, never dropped.
-      idle.current = window.setTimeout(() => commitLive(true), 200)
-    }
+    const kind = flush ? 'flush' : 'advance'
+    if (!live || !draftRef.current || pendingCommit.current[kind]) return
+    pendingCommit.current[kind] = true
+    sendWith(() => {
+      pendingCommit.current[kind] = false
+      return draftRef.current ? jttyLiveCommit(draftRef.current, hisCall, flush) : Promise.resolve(null)
+    }, true)
   }
   const onDraft = (v: string) => {
     draftRef.current = v
