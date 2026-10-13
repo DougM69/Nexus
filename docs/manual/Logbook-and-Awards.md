@@ -158,7 +158,7 @@ Auto-push on log is controlled by `clublog_upload` (default: **off**). ClubLog i
 
 ## eQSL Integration
 
-**Outbound push:** one QSO is POSTed to `https://www.eqsl.cc/qslcard/ImportADIF.cfm`. Credentials travel inside the ADIF payload as `EQSL_USER`/`EQSL_PSWD` header tags, not as form fields. Responses are classified by text markers: "N out of M records added" (N > 0 → Accepted, N = 0 → Rejected), "duplicate" → Duplicate, credential errors → AuthFail, "system is down" → None (retryable, no stamp).
+**Outbound push:** one QSO is POSTed to `https://www.eqsl.cc/qslcard/ImportADIF.cfm`. Credentials travel inside the ADIF payload as `EQSL_USER`/`EQSL_PSWD` header tags, not as form fields. Responses are classified by text markers: "N out of M records added" (N > 0 → Accepted, N = 0 → Rejected), "duplicate" → Duplicate, a wrong or missing username or password → AuthFail, "system is down" → None (retryable, no stamp). Two refusals name the eQSL account rather than the login, and are Rejected with their own reason: "No match on eQSL_User/eQSL_Pswd for date …" means the contact is outside the dates of your eQSL account (the password is fine; check the dates under My Profile at eqsl.cc), and "Multiple accounts match …" or "No match on APP_EQSL_QTH_NICKNAME" means the QTH Nickname is missing or wrong (enter it in Settings exactly as My Profile spells it). The reason is kept on the contact, so the Connections row and Awards ▸ Confirmations say it.
 
 **InBox import (inbound confirmation sync):** a two-step HTTP flow:
 1. Fetch the `DownloadInBox.cfm` HTML, confirm the "Your ADIF log file has been built" marker, and extract the `.adi` download link.

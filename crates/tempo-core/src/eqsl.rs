@@ -301,19 +301,39 @@ pub fn build_upload_body(
     format!("ADIFData={}", pct(&payload))
 }
 
-/// Classify an `ImportADIF.cfm` response by its documented markers. `None` for a
-/// transient "system is down" (leave the QSO unstamped for a clean retry, matching
-/// the LoTW/ClubLog convention). Order matters: auth + transient are checked before
-/// the duplicate/added markers.
-pub fn classify_upload(html: &str) -> Option<crate::logbook::UploadOutcome> {
-    use crate::logbook::UploadOutcome as U;
+/// Classify an `ImportADIF.cfm` response by its documented markers: the outcome, and for a
+/// refusal the class of its reason ([`crate::logbook::UploadDetail`], Nexus's own words, never
+/// eQSL's). `None` for a transient "system is down" (leave the QSO unstamped for a clean retry,
+/// matching the LoTW/ClubLog convention). Order matters: the account refusals, auth and transient
+/// are checked before the duplicate/added markers.
+pub fn classify_upload(
+    html: &str,
+) -> Option<(
+    crate::logbook::UploadOutcome,
+    Option<crate::logbook::UploadDetail>,
+)> {
+    use crate::logbook::{UploadDetail as D, UploadOutcome as U};
     let s = html.to_ascii_lowercase();
+    // Refused for the ACCOUNT, not the login: the login matched, and no single account of it
+    // takes this contact. eQSL's ImportADIF spec documents both: "No match on eQSL_User/eQSL_Pswd
+    // for date yyyymmdd hh:mm" (none of the call's accounts covers the contact's date) and
+    // "Multiple accounts match eQSL_User/eQSL_Pswd for date …" (two do, and the upload names
+    // neither); a QTH Nickname that names none of them is refused as "No match on
+    // APP_EQSL_QTH_NICKNAME". Checked before the login because the dates refusal holds the bad
+    // login's own words. The note "Records were posted to multiple accounts" is no refusal, which
+    // is why the second test reads "multiple accounts match".
+    if s.contains("no match on eqsl_user") && s.contains("for date") {
+        return Some((U::Rejected, Some(D::AccountDates)));
+    }
+    if s.contains("multiple accounts match") || s.contains("no match on app_eqsl_qth_nickname") {
+        return Some((U::Rejected, Some(D::QthNickname)));
+    }
     // Auth failures (fatal): bad/missing credentials.
     if s.contains("no match on eqsl_user")
         || s.contains("missing eqsl_user")
         || s.contains("missing eqsl_pswd")
     {
-        return Some(U::AuthFail);
+        return Some((U::AuthFail, Some(D::Credentials)));
     }
     // System down → transient; don't stamp so the next attempt retries cleanly.
     if s.contains("system is down") || (s.contains("error:") && s.contains("down")) {
@@ -321,14 +341,19 @@ pub fn classify_upload(html: &str) -> Option<crate::logbook::UploadOutcome> {
     }
     // Duplicate (benign — already on file at eQSL).
     if s.contains("duplicate") {
-        return Some(U::Duplicate);
+        return Some((U::Duplicate, None));
     }
-    // "Result: x out of y records added" — accepted iff x > 0.
+    // "Result: x out of y records added" — accepted iff x > 0; none added is this record refused.
     if let Some(added) = parse_added_count(&s) {
-        return Some(if added > 0 { U::Accepted } else { U::Rejected });
+        return Some(if added > 0 {
+            (U::Accepted, None)
+        } else {
+            (U::Rejected, Some(D::RecordRefused))
+        });
     }
-    // Any other "Error:" or unrecognized body → a definitive bounce.
-    Some(U::Rejected)
+    // Any other "Error:" or unrecognized body → a definitive bounce, with no class claimed for
+    // it: none of them says what this was, and eQSL's own words are never kept.
+    Some((U::Rejected, None))
 }
 
 /// Pull the leading integer out of a lowercased `result: <x> out of …` line.
@@ -536,34 +561,104 @@ Generated on Tuesday, August 25, 2026 at 22:21:51 PM UTC\n\
 
     #[test]
     fn classify_upload_covers_documented_markers() {
-        use crate::logbook::UploadOutcome as U;
+        use crate::logbook::{UploadDetail as D, UploadOutcome as U};
         assert_eq!(
             classify_upload("Result: 1 out of 1 records added"),
-            Some(U::Accepted)
+            Some((U::Accepted, None))
         );
         assert_eq!(
             classify_upload("Result: 0 out of 1 records added"),
-            Some(U::Rejected)
+            Some((U::Rejected, Some(D::RecordRefused)))
         );
         assert_eq!(
             classify_upload("Warning: Y=2026 M=06 D=07 Bad record: Duplicate"),
-            Some(U::Duplicate)
+            Some((U::Duplicate, None))
         );
         assert_eq!(
             classify_upload("Error: No match on eQSL_User/eQSL_Pswd"),
-            Some(U::AuthFail)
+            Some((U::AuthFail, Some(D::Credentials)))
         );
         assert_eq!(
             classify_upload("Error: Missing eQSL_Pswd"),
-            Some(U::AuthFail)
+            Some((U::AuthFail, Some(D::Credentials)))
         );
         // System down → transient, no stamp.
         assert_eq!(
             classify_upload("Error: The system is down until 1200Z"),
             None
         );
-        // Unrecognized → a definitive bounce.
-        assert_eq!(classify_upload("Error: something odd"), Some(U::Rejected));
+        // Unrecognized → a definitive bounce, with no reason claimed for it.
+        assert_eq!(
+            classify_upload("Error: something odd"),
+            Some((U::Rejected, None))
+        );
+    }
+
+    /// An `ImportADIF.cfm` answer as eQSL's page carries it: `lines`, one to a `<BR>`.
+    fn answer(lines: &[&str]) -> String {
+        format!(
+            "<HTML><HEAD><TITLE>eQSL.cc ADIF Import</TITLE></HEAD><BODY>\n{}<BR>\n</BODY></HTML>\n",
+            lines.join("<BR>\n")
+        )
+    }
+
+    /// ★ A contact outside the dates of the operator's eQSL account is not a bad login. eQSL's
+    /// ImportADIF spec answers it `Error: No match on eQSL_User/eQSL_Pswd for date yyyymmdd
+    /// hh:mm`, "due to multiple accounts with different dates", and that text holds the bad
+    /// login's own, `No match on eQSL_User/eQSL_Pswd`. Read as the login, every contact of an
+    /// older log dated before the account's start said "login invalid" and sent the operator to
+    /// re-enter a password that was right.
+    #[test]
+    fn a_contact_outside_the_accounts_dates_is_not_a_bad_login() {
+        use crate::logbook::{UploadDetail as D, UploadOutcome as U};
+        let dates = answer(&[
+            "Information: Received 266 bytes",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22",
+            "Result: 0 out of 1 records added",
+        ]);
+        assert_eq!(
+            classify_upload(&dates),
+            Some((U::Rejected, Some(D::AccountDates))),
+            "refused for the account's dates, and the login worked"
+        );
+        // Controls: the bad login itself and the missing credentials still read as the login.
+        assert_eq!(
+            classify_upload(&answer(&[
+                "Error: No match on eQSL_User/eQSL_Pswd",
+                "Result: 0 out of 1 records added",
+            ])),
+            Some((U::AuthFail, Some(D::Credentials)))
+        );
+        assert_eq!(
+            classify_upload(&answer(&["Error: Missing eQSL_User"])),
+            Some((U::AuthFail, Some(D::Credentials)))
+        );
+    }
+
+    /// ★ An answer that cannot place the contact in one of the operator's accounts says the QTH
+    /// Nickname. eQSL refuses `Multiple accounts match eQSL_User/eQSL_Pswd for date …` when two
+    /// of a call's accounts cover the contact's date and the upload names neither, and `No match
+    /// on APP_EQSL_QTH_NICKNAME` when the nickname it names is none of them. Both read as a bare
+    /// "rejected" that never said the fix.
+    #[test]
+    fn an_answer_that_names_no_one_account_says_the_qth_nickname() {
+        use crate::logbook::{UploadDetail as D, UploadOutcome as U};
+        for refusal in [
+            "Error: Multiple accounts match eQSL_User/eQSL_Pswd for date 20261001 18:00",
+            "Error: NO MATCH ON APP_EQSL_QTH_NICKNAME",
+        ] {
+            assert_eq!(
+                classify_upload(&answer(&[refusal, "Result: 0 out of 1 records added"])),
+                Some((U::Rejected, Some(D::QthNickname))),
+                "{refusal}"
+            );
+        }
+        // Control: eQSL's note that an upload went to more than one account is no refusal.
+        let posted = answer(&[
+            "Information: Records were posted to multiple accounts for callsign K2DEF",
+            "Result: 1 out of 1 records added",
+        ]);
+        assert_eq!(classify_upload(&posted), Some((U::Accepted, None)));
     }
 
     #[test]

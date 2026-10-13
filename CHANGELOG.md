@@ -78,6 +78,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
+  read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
+  re-enter a password that was right. Nexus now says the contact is outside your eQSL account's
+  dates, which you check under My Profile at eqsl.cc, and offers to send it again once they are
+  right. When eQSL cannot tell which of your accounts a contact belongs to, because the QTH
+  Nickname is missing or misspelled, Nexus says that instead of a bare "rejected", and that the
+  nickname must match eQSL's My Profile exactly, capitals included. Every eQSL refusal now keeps
+  its reason on the contact, so the Connections row and Awards ▸ Confirmations still show it after
+  the toast has gone.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never

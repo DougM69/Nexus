@@ -27279,7 +27279,8 @@ async fn eqsl_push_qso(
     let res =
         tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
             .await
-            .map_err(|e| format!("upload task failed: {e}"))?;
+            .map_err(|e| format!("upload task failed: {e}"))?
+            .map(|(report, _)| report);
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -27291,7 +27292,7 @@ fn eqsl_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
     wait: bool,
-) -> Result<UploadReportDto, String> {
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -27356,22 +27357,40 @@ fn eqsl_push_qso_impl(
         propagation::live::eqsl::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
     }; // `body` (holds the password) dropped here
 
-    match tempo_core::eqsl::classify_upload(&resp) {
+    eqsl_answered(named.as_deref(), &rec, &resp, engine, wait)
+}
+
+/// What eQSL's answer to one upload does ([`tempo_core::eqsl::classify_upload`]): the outcome
+/// stamped on the contact, with the class of a refusal, and the report for the caller beside that
+/// class. It reads eQSL's answer alone; the request, and the password in it, are gone by then.
+fn eqsl_answered(
+    named: Option<&str>,
+    rec: &tempo_core::logbook::QsoRecord,
+    answer: &str,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
+    match tempo_core::eqsl::classify_upload(answer) {
         // Transient (system down) → leave unstamped for a clean retry.
-        None => Ok(UploadReportDto {
-            dispatched: 1,
-            outcome: "retry".into(),
-            detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-        }),
-        Some(outcome) => {
+        None => Ok((
+            UploadReportDto {
+                dispatched: 1,
+                outcome: "retry".into(),
+                detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+            },
+            None,
+        )),
+        Some((outcome, detail)) => {
             // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
-            let subject = stamp_subject(named.as_deref(), &rec);
+            let subject = stamp_subject(named, rec);
+            // ⛔ The CLASS of the refusal, off eQSL's markers — never eQSL's page, which is not
+            // kept anywhere. See `UploadDetail`: this field is exported in the signed LoTW batch.
             let status = tempo_core::logbook::UploadStatus {
                 outcome,
                 when_unix: now_unix(),
-                detail: None,
+                detail,
             };
             let stamp = || {
                 tempo_app::logwrite::stamp_push(
@@ -27392,14 +27411,46 @@ fn eqsl_push_qso_impl(
                     .wait(tempo_app::logstore::DURABLE_WAIT)
                     .map_err(durability_failed)?;
             }
-            Ok(UploadReportDto {
-                dispatched: 1,
-                outcome: outcome.code().to_string(),
-                detail: None,
-                skipped_edited: 0,
-                skipped_deleted: 0,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: 1,
+                    outcome: outcome.code().to_string(),
+                    detail: detail.map(|d| d.sentence().to_string()),
+                    skipped_edited: 0,
+                    skipped_deleted: 0,
+                },
+                detail,
+            ))
         }
+    }
+}
+
+/// The eQSL part of a contact's one upload toast ("W9XYZ → QRZ ✓ · eQSL ✗ …"), from the push's
+/// report and the class it stamped ([`eqsl_answered`]).
+fn eqsl_toast_part(
+    r: &UploadReportDto,
+    class: Option<tempo_core::logbook::UploadDetail>,
+) -> String {
+    use tempo_core::logbook::UploadDetail as D;
+    match (r.outcome.as_str(), class) {
+        ("accepted", _) => "eQSL ✓".to_string(),
+        ("duplicate", _) => "eQSL dup".to_string(),
+        ("authfail", _) => "eQSL ✗ login invalid — check Settings".to_string(),
+        ("retry", _) => "eQSL ✗ unavailable".to_string(),
+        // The two refusals of the account rather than the contact: each says where its fix is.
+        (_, Some(D::AccountDates)) => {
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)".to_string()
+        }
+        (_, Some(D::QthNickname)) => {
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)".to_string()
+        }
+        _ => format!(
+            "eQSL ✗ rejected{}",
+            r.detail
+                .as_deref()
+                .map(|d| format!(": {d}"))
+                .unwrap_or_default()
+        ),
     }
 }
 
@@ -28020,7 +28071,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     }
     if eqsl_on && owed & legs::EQSL != 0 {
         let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
-            Ok(r) => {
+            Ok((r, refusal)) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
                     "eQSL",
@@ -28028,26 +28079,17 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     format!("auto-push QSO with {call} — {}", r.outcome),
                 );
                 if !ok {
-                    let class = match r.outcome.as_str() {
-                        "authfail" => "Credentials",
-                        "retry" => "ServerError",
+                    use tempo_core::logbook::UploadDetail as D;
+                    let class = match (r.outcome.as_str(), refusal) {
+                        ("authfail", _) => "Credentials",
+                        ("retry", _) => "ServerError",
+                        (_, Some(D::AccountDates)) => "AccountDates",
+                        (_, Some(D::QthNickname)) => "QthNickname",
                         _ => "Refused",
                     };
                     diag_upload_failure("eQSL", class, None, &dto);
                 }
-                let part = match r.outcome.as_str() {
-                    "accepted" => "eQSL ✓".to_string(),
-                    "duplicate" => "eQSL dup".to_string(),
-                    "authfail" => "eQSL ✗ login invalid — check Settings".to_string(),
-                    "retry" => "eQSL ✗ unavailable".to_string(),
-                    _ => format!(
-                        "eQSL ✗ rejected{}",
-                        r.detail
-                            .as_deref()
-                            .map(|d| format!(": {d}"))
-                            .unwrap_or_default()
-                    ),
-                };
+                let part = eqsl_toast_part(&r, refusal);
                 // "retry" = eQSL temporarily unavailable → retry; authfail/reject = don't.
                 (part, ok, r.outcome.as_str() == "retry")
             }
@@ -45536,6 +45578,87 @@ mod tests {
             tempo_core::reconcile::check::Channel::Eqsl,
             || crate::eqsl_check_on(engine, &test_eqsl(), &|url| eqsl.fetch(url)),
         )
+    }
+
+    /// ★ An eQSL refusal reaches the contact with its reason, and its toast names the fix. The
+    /// push classified eQSL's answer and stamped the outcome alone, so the Connections row and
+    /// Awards ▸ Confirmations had no reason to give for any eQSL bounce, and a contact outside the
+    /// dates of the operator's eQSL account read as a bad login. Only eQSL's answer is handed in
+    /// here: the request, and the password it carries, never reach this half of the push.
+    #[test]
+    fn an_eqsl_refusal_is_stamped_with_its_reason() {
+        use tempo_core::logbook::{UploadDetail as D, UploadOutcome as U};
+        let log = tempo_core::logbook::parse_adif(
+            &[
+                check_row("W1AW", "20m", "FT8", "180000", ""),
+                check_row("K1ABC", "20m", "FT8", "181500", ""),
+                check_row("N0SUP", "20m", "FT8", "183000", ""),
+            ]
+            .concat(),
+        );
+        let (dir, engine) = store_holding("eqsl-refusal-reason", &log);
+        let answered = |call: &str, answer: &str| {
+            let held = engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .expect("logged");
+            let named = held.id.map(|id| id.to_string());
+            crate::eqsl_answered(named.as_deref(), &held, answer, &engine, true).expect("answered")
+        };
+        let (dates, class) = answered(
+            "W1AW",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n\
+             Result: 0 out of 1 records added",
+        );
+        assert_eq!(
+            (dates.outcome.as_str(), dates.detail.as_deref(), class),
+            (
+                "rejected",
+                Some(D::AccountDates.sentence()),
+                Some(D::AccountDates)
+            ),
+            "what Awards ▸ Confirmations' Push to eQSL shows"
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&dates, class),
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)"
+        );
+        let (nickname, class) = answered(
+            "K1ABC",
+            "Error: NO MATCH ON APP_EQSL_QTH_NICKNAME<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&nickname, class),
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)"
+        );
+        // Control: a bad login is still the login.
+        let (login, class) = answered(
+            "N0SUP",
+            "Error: No match on eQSL_User/eQSL_Pswd<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&login, class),
+            "eQSL ✗ login invalid — check Settings"
+        );
+        let stamp = |call: &str| {
+            engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.upload.eqsl)
+                .map(|s| (s.outcome, s.detail))
+        };
+        assert_eq!(
+            [stamp("W1AW"), stamp("K1ABC"), stamp("N0SUP")],
+            [
+                Some((U::Rejected, Some(D::AccountDates))),
+                Some((U::Rejected, Some(D::QthNickname))),
+                Some((U::AuthFail, Some(D::Credentials))),
+            ],
+            "each contact carries its own reason, for the Connections row and Awards"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The QRZ Logbook key the tests check with. It is no one's: the fake below answers.

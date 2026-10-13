@@ -613,11 +613,19 @@ pub enum UploadDetail {
     Unclassified,
     /// Not a failure: the operator declared these already uploaded through another tool.
     OperatorDeclared,
+    /// eQSL holds no account under this login for the contact's date. Split from
+    /// [`Self::Credentials`] because the login matched: what does not cover the contact is the
+    /// date range of the operator's eQSL account, and that is fixed at eqsl.cc, not in Settings.
+    AccountDates,
+    /// eQSL could not tell which of the operator's accounts the contact belongs to: the QTH
+    /// Nickname is missing (two of the call's accounts cover the contact's date) or matches none
+    /// of them. The fix is the nickname in Settings, spelled as eQSL's My Profile page spells it.
+    QthNickname,
 }
 
 impl UploadDetail {
     /// Every class, for exhaustive walks (the round-trip and allow-list tests).
-    pub const ALL: [UploadDetail; 7] = [
+    pub const ALL: [UploadDetail; 9] = [
         UploadDetail::Credentials,
         UploadDetail::CallsignCertificate,
         UploadDetail::StationLocation,
@@ -625,6 +633,8 @@ impl UploadDetail {
         UploadDetail::BatchPartlySigned,
         UploadDetail::Unclassified,
         UploadDetail::OperatorDeclared,
+        UploadDetail::AccountDates,
+        UploadDetail::QthNickname,
     ];
 
     /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
@@ -638,6 +648,8 @@ impl UploadDetail {
             UploadDetail::BatchPartlySigned => "partial",
             UploadDetail::Unclassified => "unclassified",
             UploadDetail::OperatorDeclared => "declared",
+            UploadDetail::AccountDates => "account-dates",
+            UploadDetail::QthNickname => "qth-nickname",
         }
     }
 
@@ -677,6 +689,16 @@ impl UploadDetail {
             UploadDetail::OperatorDeclared => {
                 "Marked as already uploaded through another tool — by you, or by the log \
                  this record was imported from."
+            }
+            UploadDetail::AccountDates => {
+                "This contact's date is outside the dates of your eQSL account, so eQSL did \
+                 not take it. Your password is fine. Check the account's dates under My Profile \
+                 at eqsl.cc, then upload again."
+            }
+            UploadDetail::QthNickname => {
+                "The QTH Nickname is missing or matches none of your eQSL accounts, so eQSL \
+                 could not tell where this contact belongs. Enter it in Settings exactly as My \
+                 Profile at eqsl.cc spells it, capitals included, then upload again."
             }
         }
     }
@@ -8476,6 +8498,22 @@ mod tests {
         for code in -1..=12 {
             details.push(crate::lotw_upload::tqsl_detail(code, &hostile));
         }
+        // eQSL: every answer its upload classifier reads, plus one it has never sent, each with
+        // the hostile text beside it on the page.
+        for marker in [
+            "Result: 1 out of 1 records added",
+            "Result: 0 out of 1 records added",
+            "Warning: Y=2026 M=06 D=07 Bad record: Duplicate",
+            "Error: No match on eQSL_User/eQSL_Pswd",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22",
+            "Error: Multiple accounts match eQSL_User/eQSL_Pswd for date 20190314 18:22",
+            "Error: something new",
+        ] {
+            details.push(
+                crate::eqsl::classify_upload(&format!("{marker}<BR>\n{hostile}"))
+                    .and_then(|(_, detail)| detail),
+            );
+        }
 
         // The positive control, and this test is worthless without it: the same predicate run
         // over the thing that WOULD leak has to trip.
@@ -8525,6 +8563,14 @@ mod tests {
             crate::lotw_upload::tqsl_detail(9, &hostile),
             Some(UploadDetail::BatchPartlySigned),
             "TQSL dropping part of a batch is the one thing the outcome alone cannot say"
+        );
+        assert_eq!(
+            crate::eqsl::classify_upload(&format!(
+                "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n{hostile}"
+            ))
+            .and_then(|(_, detail)| detail),
+            Some(UploadDetail::AccountDates),
+            "a contact outside the eQSL account's dates must still say so"
         );
         for d in UploadDetail::ALL {
             assert!(!d.sentence().trim().is_empty(), "{d:?} says nothing");

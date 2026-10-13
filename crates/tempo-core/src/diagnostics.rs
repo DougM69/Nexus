@@ -942,9 +942,24 @@ fn bucket_kind(reason: &Reason) -> &'static str {
                 "eQSL" => "eQSL login rejected — fix it in Settings",
                 _ => "LoTW rejected your certificate — fix it in TQSL",
             },
-            Action::ReUpload { source, .. } => match source.as_str() {
+            Action::ReUpload { source, detail } => match source.as_str() {
                 "QRZ" => "QRZ upload bounced — fix & re-upload",
                 "ClubLog" => "ClubLog upload bounced — fix & re-upload",
+                // eQSL's two account refusals are fixed in the account, not in the contact, so
+                // they get buckets that say where. `detail` is the class's own sentence (the R9
+                // arm above writes it from the stamp), so comparing it names the class exactly.
+                "eQSL"
+                    if detail.as_deref()
+                        == Some(crate::logbook::UploadDetail::AccountDates.sentence()) =>
+                {
+                    "Outside your eQSL account's dates (check My Profile at eqsl.cc)"
+                }
+                "eQSL"
+                    if detail.as_deref()
+                        == Some(crate::logbook::UploadDetail::QthNickname.sentence()) =>
+                {
+                    "eQSL QTH Nickname missing or wrong (fix it in Settings)"
+                }
                 "eQSL" => "eQSL upload bounced — fix & re-upload",
                 _ => "LoTW upload bounced — fix & re-upload",
             },
@@ -1445,6 +1460,76 @@ mod tests {
             .buckets
             .iter()
             .any(|b| b.kind == "eQSL upload bounced — fix & re-upload"));
+    }
+
+    /// ★ eQSL's two account refusals land in Awards ▸ Confirmations under what fixes them. A
+    /// contact outside the dates of the operator's eQSL account read as a refused login, with a
+    /// button into Settings where nothing was wrong, and a QTH Nickname eQSL could not place read
+    /// as a bare bounce. Driven from eQSL's own answers through its classifier, as the push stamps
+    /// them.
+    #[test]
+    fn eqsl_account_refusals_name_their_fix() {
+        let stamped = |answer: &str| {
+            let (outcome, detail) =
+                crate::eqsl::classify_upload(answer).expect("a definitive answer");
+            let mut r = rec("W1AW", "20m", "FT8", 20_000);
+            r.upload.eqsl = Some(UploadStatus {
+                outcome,
+                when_unix: NOW,
+                detail,
+            });
+            diag(&[r], &[None], vec![])
+        };
+        let kinds = |rep: &DiagnosticsReport| -> Vec<String> {
+            rep.buckets.iter().map(|b| b.kind.clone()).collect()
+        };
+
+        let dates = stamped(
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n\
+             Result: 0 out of 1 records added",
+        );
+        let top = &dates.diagnoses[0].reasons[0];
+        assert!(
+            matches!(&top.action, Action::ReUpload { source, .. } if source == "eQSL"),
+            "a re-push once the dates are right, never a re-login: {:?}",
+            top.action
+        );
+        assert_eq!(
+            top.explanation,
+            format!(
+                "Your eQSL upload of W1AW bounced. {}",
+                UploadDetail::AccountDates.sentence()
+            )
+        );
+        assert_eq!(
+            kinds(&dates),
+            ["Outside your eQSL account's dates (check My Profile at eqsl.cc)"]
+        );
+
+        let nickname = stamped(
+            "Error: Multiple accounts match eQSL_User/eQSL_Pswd for date 20261001 18:00<BR>\n\
+             Result: 0 out of 1 records added",
+        );
+        assert_eq!(
+            nickname.diagnoses[0].reasons[0].explanation,
+            format!(
+                "Your eQSL upload of W1AW bounced. {}",
+                UploadDetail::QthNickname.sentence()
+            )
+        );
+        assert_eq!(
+            kinds(&nickname),
+            ["eQSL QTH Nickname missing or wrong (fix it in Settings)"]
+        );
+
+        // Controls: a bad login is still the login, and a refused record is still a bounce.
+        let login =
+            stamped("Error: No match on eQSL_User/eQSL_Pswd<BR>\nResult: 0 out of 1 records added");
+        assert_eq!(kinds(&login), ["eQSL login rejected — fix it in Settings"]);
+        let record = stamped(
+            "Warning: Y=2026 M=10 D=01 Bad Mode: QQQ<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(kinds(&record), ["eQSL upload bounced — fix & re-upload"]);
     }
 
     #[test]
