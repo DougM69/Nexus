@@ -5,6 +5,8 @@
 // as it stood before the move (Logbook.tsx at d5be14ea — `fmtUtc` :214, `sortVal` :263, the search
 // :933, the sort :958), pasted unchanged, and the extracted `logOrder` must agree with it on the
 // fixture log and on thousands of random logs, for every column, both directions, every search.
+// One rule in it has moved since, decided rather than ported: the country column sorts on the
+// country the Logbook shows, the DXCC entity, and the stored text only where the call has none.
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -26,7 +28,7 @@ function sortVal(q: LoggedQso, k: SortKey): string | number {
     case 'call':
       return q.call.toUpperCase()
     case 'country':
-      return (q.country ?? '').toUpperCase()
+      return (q.entity ?? q.country ?? '').toUpperCase()
     case 'band':
     case 'freq':
       return q.freqMhz
@@ -171,5 +173,22 @@ describe('the search looks in the SUBMODE as well as the MODE', () => {
     expect(found('lsb')).toEqual(['K2BBB'])
     expect(found('ssb')).toEqual(['K1AAA', 'K2BBB', 'K3CCC'])
     expect(found('vara')).toEqual(['K5EEE'])
+  })
+})
+
+describe('the country column sorts on the country the Logbook shows', () => {
+  it('sorts a QRZ Germany with Fed. Rep. of Germany, and by the stored text only without an entity', () => {
+    const row = (call: string, entity: string | null, country: string, i: number) =>
+      ({ ...FIXTURE[0], call, entity, country, whenUnix: FIXTURE[0].whenUnix + i * 60 }) as LoggedQso
+    const log = [
+      row('DL1ABC', 'Fed. Rep. of Germany', 'Germany', 0),
+      row('F5ABC', 'France', 'France', 1),
+      row('DL2XYZ', 'Fed. Rep. of Germany', 'Fed. Rep. of Germany', 2),
+      row('G4ABC', 'England', 'England', 3),
+      row('Q0ZZZ', null, 'Freedonia', 4), // no entity: the stored text decides
+    ]
+    const sorted = (asc: boolean) => logOrder(log, { sort: 'country', asc, search: '', needsConfirmOnly: false }).map((i) => log[i].call)
+    expect(sorted(true)).toEqual(['G4ABC', 'DL1ABC', 'DL2XYZ', 'F5ABC', 'Q0ZZZ'])
+    expect(sorted(false)).toEqual(['Q0ZZZ', 'F5ABC', 'DL2XYZ', 'DL1ABC', 'G4ABC'])
   })
 })

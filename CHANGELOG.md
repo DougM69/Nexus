@@ -123,6 +123,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sideband, however they were logged or imported, and ssb finds all of them. A digital contact
   whose mode is kept in its submode, such as VARA HF under DYNAMIC, is found by that name too.
   The Remote page's log search does the same.
+- **Sorting the Logbook by country keeps each country together.** The Logbook shows a contact's
+  country as its DXCC entity, but sorting by country went by the text the contact was stored
+  with, so a Germany from a QRZ lookup and a Fed. Rep. of Germany sorted into two places. Sorting
+  by country now follows the country the Logbook shows. A contact whose call belongs to no entity
+  sorts by the country it was logged with.
 - **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
   read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
   re-enter a password that was right. Nexus now says the contact is outside your eQSL account's

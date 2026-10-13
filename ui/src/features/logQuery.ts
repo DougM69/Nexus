@@ -51,7 +51,9 @@ export function sortVal(q: LoggedQso, k: LogSortKey): string | number {
     case 'call':
       return q.call.toUpperCase()
     case 'country':
-      return (q.country ?? '').toUpperCase()
+      // The country the Logbook shows: the DXCC entity, so a QRZ "Germany" and a "Fed. Rep. of
+      // Germany" sort together, and the stored text only where the call resolves to none.
+      return (q.entity ?? q.country ?? '').toUpperCase()
     case 'band':
     case 'freq':
       return q.freqMhz

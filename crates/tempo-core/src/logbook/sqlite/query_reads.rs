@@ -288,7 +288,7 @@ mod tests {
             search: String::new(),
             needs_confirm_only: false,
         };
-        let expected: Vec<u32> = order(rowids.iter().copied().zip(all.iter()), &default);
+        let expected: Vec<u32> = order(rowids.iter().copied().zip(all.iter()), &default, &|_| None);
         assert_eq!(db.rowids_newest_first().unwrap(), expected);
         let plan: Vec<String> = {
             let mut stmt = db
@@ -473,8 +473,8 @@ mod tests {
                 search: search.to_string(),
                 needs_confirm_only: false,
             };
-            let whole = order(rowids.iter().copied().zip(all.iter()), &query);
-            let mut b = OrderBuilder::new(&query);
+            let whole = order(rowids.iter().copied().zip(all.iter()), &query, &|_| None);
+            let mut b = OrderBuilder::new(&query, &|_| None);
             assert!(b.searches());
             db.each_narrow_after_with_submode(ORDER_COLUMNS, 0, &mut |rowid, r| b.push(rowid, r))
                 .unwrap();

@@ -246,7 +246,7 @@ fn reference_answer(
     let query = || -> LogQuery { serde_json::from_value(q["query"].clone()).expect("a query") };
     match q["kind"].as_str().expect("kind") {
         "page" => {
-            let order = reference::order(log, &query());
+            let order = reference::order(log, &query(), &resolve);
             let (offset, limit) = (
                 q["offset"].as_u64().expect("offset") as usize,
                 q["limit"].as_u64().expect("limit") as usize,
@@ -260,7 +260,7 @@ fn reference_answer(
         }
         "locate" => {
             let id = golden_id_text(q["id"].as_str().expect("id"));
-            let order = reference::order(log, &query());
+            let order = reference::order(log, &query(), &resolve);
             json!({"index": order.iter().position(|&i| log[i].id.map(|r| r.to_string()) == Some(id.clone()))})
         }
         "callHistory" => {
@@ -1486,7 +1486,7 @@ fn assert_parity(seed: u64, step: &str, engine: &SharedEngine, queries: &LogQuer
             "search": g.pick(&searches), "needsConfirmOnly": g.below(3) == 0,
         });
         let parsed: LogQuery = serde_json::from_value(query.clone()).unwrap();
-        let order = reference::order(&held, &parsed);
+        let order = reference::order(&held, &parsed, &resolve);
         let (offset, limit) = (g.below(held.len() + 2), 1 + g.below(8));
         let page = ask(
             queries,

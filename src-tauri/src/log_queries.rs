@@ -458,7 +458,7 @@ impl LogQueries {
                         offset,
                         limit,
                     } => self.page(&c, query, *offset, *limit, resolve),
-                    LogQuestion::Locate { query, id } => self.locate(&c, query, id),
+                    LogQuestion::Locate { query, id } => self.locate(&c, query, id, resolve),
                     _ => unreachable!("answered above"),
                 }
             }
@@ -468,8 +468,14 @@ impl LogQueries {
     // ── the Logbook: order vectors, pages, places ────────────────────────────────────────────
 
     /// The order `query` gives at the capture's `index_rev`: kept, or built once however many
-    /// ask at the same time.
-    fn order_of(&self, c: &Capture, query: &LogQuery) -> Result<Arc<Vec<u32>>, String> {
+    /// ask at the same time. `resolve` is a call's live DXCC entity, which the country column
+    /// sorts on.
+    fn order_of(
+        &self,
+        c: &Capture,
+        query: &LogQuery,
+        resolve: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Arc<Vec<u32>>, String> {
         let key = OrderKey {
             index_rev: c.index_rev,
             query: query.clone(),
@@ -487,13 +493,15 @@ impl LogQueries {
             slot
         };
         let mut not_kept = None;
-        let kept = slot.0.get_or_init(|| match self.build_order(c, query) {
-            Ok(order) => Some(Arc::new(order)),
-            Err(e) => {
-                not_kept = Some(e);
-                None
-            }
-        });
+        let kept = slot
+            .0
+            .get_or_init(|| match self.build_order(c, query, resolve) {
+                Ok(order) => Some(Arc::new(order)),
+                Err(e) => {
+                    not_kept = Some(e);
+                    None
+                }
+            });
         match kept {
             Some(order) => Ok(Arc::clone(order)),
             None => {
@@ -501,7 +509,7 @@ impl LogQueries {
                 match not_kept {
                     Some(e) => Err(e),
                     // Another asker's build was not kept: this one reads for itself.
-                    None => self.build_order(c, query).map(Arc::new),
+                    None => self.build_order(c, query, resolve).map(Arc::new),
                 }
             }
         }
@@ -510,7 +518,12 @@ impl LogQueries {
     /// Build the order vector: off the index for the default order, else one narrow pass in log
     /// order through the UI's filter and comparator — with each row's SUBMODE when the query
     /// searches, since the search looks there too and nothing else reads it.
-    fn build_order(&self, c: &Capture, query: &LogQuery) -> Result<Vec<u32>, String> {
+    fn build_order(
+        &self,
+        c: &Capture,
+        query: &LogQuery,
+        resolve: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<u32>, String> {
         #[cfg(test)]
         self.0
             .built
@@ -520,7 +533,7 @@ impl LogQueries {
                 if query.is_default() {
                     db.rowids_newest_first()
                 } else {
-                    let mut b = OrderBuilder::new(query);
+                    let mut b = OrderBuilder::new(query, resolve);
                     if b.searches() {
                         db.each_narrow_after_with_submode(ORDER_COLUMNS, 0, &mut |rowid, r| {
                             b.push(rowid, r)
@@ -543,7 +556,7 @@ impl LogQueries {
         limit: usize,
         resolve: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Value, String> {
-        let order = self.order_of(c, query)?;
+        let order = self.order_of(c, query, resolve)?;
         let slice: Vec<u32> = order.iter().skip(offset).take(limit).copied().collect();
         let (rows, log_size): (Vec<(u32, QsoRecord)>, u64) = match &c.rows {
             LogRows::Store(reads) => {
@@ -579,8 +592,14 @@ impl LogQueries {
 
     /// Where the row `id` sits in the order `query` gives, or `null` when the order does not show
     /// it — filtered out, or gone.
-    fn locate(&self, c: &Capture, query: &LogQuery, id: &str) -> Result<Value, String> {
-        let order = self.order_of(c, query)?;
+    fn locate(
+        &self,
+        c: &Capture,
+        query: &LogQuery,
+        id: &str,
+        resolve: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Value, String> {
+        let order = self.order_of(c, query, resolve)?;
         let handle = match id.parse::<RecordId>() {
             Err(()) => None,
             Ok(id) => match &c.rows {
