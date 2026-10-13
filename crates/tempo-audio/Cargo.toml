@@ -192,3 +192,7 @@ tempo-flexsim = { path = "../tempo-flexsim" }
 # door the Flex client's tests use to run its CW path, which admission refuses in every build that
 # ships (a release build will not compile with it).
 tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched"] }
+# TEST-ONLY: the door past JTTY's transmit switch (`tempo_app::engine::jtty_tx::SWITCHED_ON`),
+# which the radio loop's JTTY tests open to run the transmitter that is off in every build that
+# ships. Not a new dependency: tempo-app is already one; a release build refuses the feature.
+tempo-app = { path = "../tempo-app", features = ["jtty-tx-test"] }

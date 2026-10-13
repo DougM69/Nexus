@@ -1,7 +1,8 @@
 //! The WSJT-X UDP API while the JTTY section is the operator's, as WSJT-X itself speaks it in
 //! JTTY: the Status names the mode `JTTY` (its mode and TX mode are both `m_mode`,
-//! `widgets/mainwindow.cpp` `statusUpdate`) with the JTTY Rx frequency as its RX offset (WSJT-X
-//! keeps its two Rx spin boxes in step, `on_RxFreqSpinBox_2_valueChanged`), and no Decode
+//! `widgets/mainwindow.cpp` `statusUpdate`) with the JTTY Rx frequency as its RX offset and the
+//! JTTY Tx frequency as its TX offset (WSJT-X keeps its two pairs of spin boxes in step,
+//! `on_RxFreqSpinBox_2_valueChanged`, `on_TxFreqSpinBox_2_valueChanged`), and no Decode
 //! datagram goes out: WSJT-X's JTTY receive path never calls its message client, and its FT
 //! decoder is not running in JTTY.
 //!
@@ -11,8 +12,8 @@
 
 use super::*;
 
-/// What a Status datagram says about the mode: (mode, TX mode, RX offset).
-fn status_mode(listener: &std::net::UdpSocket) -> (String, String, u32) {
+/// What a Status datagram says about the mode: (mode, TX mode, RX offset, TX offset).
+fn status_mode(listener: &std::net::UdpSocket) -> (String, String, u32, u32) {
     let mut buf = [0u8; 4096];
     loop {
         let (n, _) = listener.recv_from(&mut buf).expect("a Status datagram");
@@ -31,13 +32,14 @@ fn status_mode(listener: &std::net::UdpSocket) -> (String, String, u32) {
             r.read_bool(); // TX enabled, transmitting, decoding
         }
         let rx_df = r.read_u32().expect("RX offset");
-        return (mode, tx_mode, rx_df);
+        let tx_df = r.read_u32().expect("TX offset");
+        return (mode, tx_mode, rx_df, tx_df);
     }
 }
 
 /// The Status a station in `section` sends once the loop has crossed a slot boundary, with the
-/// JTTY Rx frequency set to 1234 Hz and the FT RX offset at the engine's own.
-fn status_in(section: &str) -> (String, String, u32) {
+/// JTTY Rx and Tx frequencies set to 1234 and 1777 Hz and the FT offsets at the engine's own.
+fn status_in(section: &str) -> (String, String, u32, u32) {
     let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     listener
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -52,6 +54,7 @@ fn status_in(section: &str) -> (String, String, u32) {
         let mut eng = engine.lock().unwrap();
         eng.set_operating_mode(section, false);
         eng.set_jtty_rx(1234.0, 50.0).unwrap();
+        eng.set_jtty_tx(1777.0).unwrap();
     }
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();
@@ -80,18 +83,23 @@ fn status_in(section: &str) -> (String, String, u32) {
     status_mode(&listener)
 }
 
-/// ⭐ In the JTTY section the Status says JTTY, with the JTTY Rx frequency; in PSK, the same
-/// Keyboard section with the other modem, it says what it always said.
+/// ⭐ In the JTTY section the Status says JTTY, with the JTTY Rx frequency and the JTTY Tx
+/// frequency — the offset JTTY actually transmits on, not the FT one; in PSK, the same Keyboard
+/// section with the other modem, it says what it always said.
 #[test]
 fn the_status_names_jtty_while_the_jtty_section_is_the_operators() {
-    assert_eq!(status_in("jtty"), ("JTTY".into(), "JTTY".into(), 1234));
-    let (mode, tx_mode, rx_df) = status_in("keyboard");
+    assert_eq!(
+        status_in("jtty"),
+        ("JTTY".into(), "JTTY".into(), 1234, 1777)
+    );
+    let (mode, tx_mode, rx_df, tx_df) = status_in("keyboard");
     assert_eq!(
         (mode.as_str(), tx_mode.as_str()),
         ("FT8", "FT8"),
         "control: PSK's Status names the tier, as before"
     );
     assert_ne!(rx_df, 1234, "control: and the FT RX offset");
+    assert_ne!(tx_df, 1777, "control: and the FT TX offset");
 }
 
 /// Whether the boundary's emitter sends a Decode datagram for the FT8 line the engine decoded,

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use tempo_app::engine::jtty_tx::{self, JttyTick};
 use tempo_app::engine::{
     engine_lock, run_decode_job, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
     DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick, SatCatBackend,
@@ -3501,6 +3502,9 @@ struct RadioLoop {
     /// The live continuous-TX PSK stream, `None` when nothing is latched. See
     /// [`PskTxStream`].
     psk_stream: Option<PskTxStream>,
+    /// Unix-ms until which the JTTY audio already played is still going out — PSK's pacing role
+    /// for JTTY's frames (switched off in every build: see `jtty_tx`).
+    jtty_busy_until: f64,
     /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
     /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
     /// multi-minute image never dumps into the unbounded ring at once. `None` = no
@@ -4171,6 +4175,7 @@ impl RadioLoop {
             rtty_stream: None,
             psk_busy_until: 0.0,
             psk_stream: None,
+            jtty_busy_until: 0.0,
             #[cfg(feature = "serial")]
             rtty_keyer: None,
             sstv_feed: None,
@@ -6075,9 +6080,10 @@ impl RadioLoop {
         // drops the engine's latch across a handoff; this drops the generator with it, so a
         // resumed chunk can never splice the old radio's carrier onto the new one.
         self.rtty_stream = None;
-        // PSK's latched stream, for the identical reason.
+        // PSK's latched stream, for the identical reason, and JTTY's pacing with it.
         self.psk_busy_until = 0.0;
         self.psk_stream = None;
+        self.jtty_busy_until = 0.0;
         self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
         self.fm_push_misses = 0;
@@ -10505,6 +10511,68 @@ impl RadioLoop {
             }
         }
 
+        // JTTY (WSJT-X's keyboard mode). ⛔ SWITCHED OFF in every build
+        // (`tempo_app::engine::jtty_tx::SWITCHED_ON`): the engine refuses every send, hands this
+        // block nothing, and reads the switch again before every frame it would hand out. Built for
+        // the operator's sign-off and bench. The engine renders each segment's audio OFF this loop
+        // (the modem lock a decode can hold for seconds never stalls the unkey path) and hands it
+        // out a frame at a time; this keeps between one and two frames queued
+        // (`keyboard::JTTY`), so a loop that stops ticking unkeys within them and the tail. Every
+        // gate is re-checked on every tick while anything of JTTY's is going (`Engine::poll_jtty`),
+        // `may_key` is the one gate it cannot see, and the abort/`tx_until_ms` machinery unkeys as
+        // PSK's does. Queued segments chain with no gap: PTT stays up across them.
+        {
+            let ahead_ms = (self.jtty_busy_until - now).max(0.0);
+            let want = ahead_ms < keyboard::JTTY.stream_ahead_ms(jtty_tx::JTTY_BAUD);
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                eng.set_jtty_sending(now < self.jtty_busy_until);
+                let tick = if self.may_key() {
+                    eng.poll_jtty(want, ahead_ms)
+                } else {
+                    eng.jtty_cannot_key();
+                    JttyTick::Idle
+                };
+                // AFTER the poll, so a cut it armed is taken on this same tick.
+                (eng.take_jtty_abort(), tick)
+            };
+            if abort {
+                // Only while JTTY audio is actually going (`jtty_busy_until` is the evidence), so
+                // a cut can never take an FT8 slot over riding the same PTT and ring.
+                if now < self.jtty_busy_until {
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
+                self.jtty_busy_until = 0.0;
+                engine_lock(engine).set_jtty_sending(false);
+            }
+            if let JttyTick::Frame(buf) = tick {
+                // Assert the rig and key once per transmission, and again after an unkey ran
+                // underneath us; frames after the first chain onto the keyed transmitter.
+                let mut key = KeyUp::Keyed;
+                if self.tx_until_ms.is_none() || now >= self.jtty_busy_until {
+                    self.ensure_commanded(rig); // read-only launch: assert before key
+                    self.publish_tx_intent_now(); // before keying
+                    key = self.key_over(rig, false);
+                }
+                // A frame the rig would not key is not played (`key_over`), and a JTTY message
+                // cannot go on after a hole: the engine drops what it has going.
+                if key.sends() {
+                    backend.play(&buf);
+                    self.jtty_busy_until = self.jtty_busy_until.max(now) + buf.len() as f64 / 12.0;
+                    let until = self.jtty_busy_until + crate::slot::TX_TAIL_MS;
+                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    engine_lock(engine).set_jtty_sending(true);
+                } else {
+                    engine_lock(engine).jtty_key_refused();
+                }
+                if let KeyUp::Refused(why) = &key {
+                    note_refused_key("JTTY not keyed", why);
+                }
+            }
+        }
+
         // APRS beacon: an explicit one-shot position beacon. The engine already rendered the
         // AFSK-1200 audio (12 kHz mono); key PTT, play it, and drop PTT via `tx_until_ms` — the
         // same seam the voice/CW soundcard keyer uses. The `tx_until_ms` guard covers the
@@ -13100,12 +13168,21 @@ impl RadioLoop {
                 // In the JTTY section the Status names JTTY, as WSJT-X's does (its mode and TX
                 // mode are both `m_mode`), and its RX offset is the JTTY Rx frequency: WSJT-X
                 // keeps its two Rx spin boxes in step, and the Status reads the first.
-                let (mode, rx_df) = if eng.jtty_section() {
-                    ("JTTY", eng.jtty_rx_hz().max(0.0) as u32)
+                // Its TX offset is JTTY's own Tx (WSJT-X's Status reads its JTTY Tx spin box).
+                let (mode, rx_df, tx_df) = if eng.jtty_section() {
+                    (
+                        "JTTY",
+                        eng.jtty_rx_hz().max(0.0) as u32,
+                        eng.jtty_tx_hz().max(0.0) as u32,
+                    )
                 } else {
                     // REAL audio offsets (GridTracker/JTAlert show these) — hardcoded 1500s
                     // confused every cooperating logger.
-                    (tier, snap.radio.rx_offset_hz.max(0.0) as u32)
+                    (
+                        tier,
+                        snap.radio.rx_offset_hz.max(0.0) as u32,
+                        snap.radio.tx_offset_hz.max(0.0) as u32,
+                    )
                 };
                 let _ = server.send_status(&WsjtxStatus {
                     dial_freq: cur_dial,
@@ -13114,13 +13191,15 @@ impl RadioLoop {
                     report: "",
                     tx_mode: mode,
                     tx_enabled: false,
-                    transmitting: snap.radio.transmitting,
+                    // …and in JTTY, WSJT-X's `m_transmitting` is its JTTY transmission too.
+                    transmitting: snap.radio.transmitting
+                        || (eng.jtty_section() && eng.jtty_sending()),
                     // `decoding` and `transmitting` are disjoint phases in
                     // WSJT-X: when we decode the prior RX slot AND transmit in
                     // this one (calling CQ), report the transmit phase only.
                     decoding: did_rx && !tx_this_slot,
                     rx_df,
-                    tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
+                    tx_df,
                     de_call: &snap.mycall,
                     de_grid: &snap.mygrid,
                     dx_grid: "",
@@ -15815,6 +15894,7 @@ mod tests {
     mod ic905_ten_ghz;
     mod icom_lan;
     mod jtty_status;
+    mod jtty_transmit;
     mod omnirig_coverage;
     mod receive_source;
     mod refused_key;
