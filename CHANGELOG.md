@@ -296,6 +296,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field that fills it, with a button to Settings ▸ Contesting ▸ Your entry, as it does for the CQ
   contests' category lines. An Entry class counts only when it is one of the party's own classes,
   and the file still exports either way.
+- **A satellite pass no longer retunes the radio you are using on another screen.** With ISS SSTV
+  auto-arm switched on, every ISS pass tuned the radio to 145.800 FM wherever you were. On a radio
+  that cannot reach 2 m, such as an FT-710 working FT8 on 20 m, transmit was turned off, the
+  decodes were cleared, and the band picker was left reading "20m (custom)". The auto-arm now tunes
+  only while the SSTV or Satellites screen is open. On any other screen it tells you the ISS is up
+  and leaves the radio alone, and opening SSTV during the pass arms it then. A satellite picked for
+  a radio that cannot receive it is no longer steered onto that radio by Doppler during the pass
+  either.
 
 ## [1.18.0] — 2026-10-12
 

@@ -5,10 +5,19 @@
 // arm happen at most once per pass (the `weArmedIt` guard).
 //
 // The safety rules are absolute: EVERY rig-touching action is gated on the
-// opt-in, and we never fight the operator — the dial is restored ONLY while it's
-// still sitting on 145.800 FM (a mid-pass manual QSY is left alone), and SSTV is
-// disarmed ONLY for a pass WE armed. `savedDial` is in-session (a mid-pass app
-// restart forfeits the restore — acceptable for v1).
+// opt-in AND on the screen in use (`ISS_SCREENS`), and we never fight the
+// operator — the dial is restored ONLY while it's still sitting on 145.800 FM (a
+// mid-pass manual QSY is left alone), and SSTV is disarmed ONLY for a pass WE
+// armed. `savedDial` is in-session (a mid-pass app restart forfeits the restore —
+// acceptable for v1).
+//
+// ⛔ THE OPT-IN IS NOT A LICENCE TO TAKE THE RADIO FROM ANOTHER SCREEN. It once
+// was: every ISS pass sent 145.800 FM to whatever radio was in use. An FT-710
+// running FT8 on 20 m refused 2 m, its dial read back 14.074 with the app's mode
+// left at FM, the band picker said "20m (custom)", and the band change had
+// already turned transmit off (reproduced 2026-10-13, from a report of exactly
+// that picker). Away from SSTV and Satellites the pass is announced, once, and
+// nothing moves: an alert notifies, it never acts.
 
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
@@ -19,6 +28,7 @@
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import type { SatPass } from '../types'
+import type { View } from './registry'
 
 // The ISS SSTV downlink — the 2 m band-plan channel (bandplan.rs).
 const ISS_DIAL_MHZ = 145.8
@@ -27,6 +37,11 @@ const ISS_MODE = 'FM'
 // Dial-match tolerance (MHz) — 1 kHz. Covers CAT read-back rounding while still
 // meaning "the operator is on OUR channel", not somewhere they've retuned to.
 const DIAL_EPS = 0.001
+/** The screens where working the ISS downlink IS what the operator is doing: SSTV,
+ * where the pictures land, and Satellites, where the pass is. On any other screen
+ * the radio is that screen's (FT8 on 20 m, a CW run, a net on 2 m), so the pass is
+ * announced and the radio is left alone. */
+const ISS_SCREENS: ReadonlySet<View> = new Set<View>(['sstv', 'sats'])
 
 /** The dial fields the tick reads / restores (a subset of RadioStatus). */
 export interface IssRadio {
@@ -59,11 +74,14 @@ export interface IssArmDeps {
 // Session state. Only ever touch the rig for a pass WE armed.
 let weArmedIt = false
 let savedDial: IssRadio | null = null
+// The AOS of the last pass announced from another screen: one notice per pass.
+let toldAos: number | null = null
 
 /** Test hook — forget any in-session arm. Does NOT touch the rig. */
 export function resetIssAutoArm(): void {
   weArmedIt = false
   savedDial = null
+  toldAos = null
 }
 
 /** Dial is within tolerance of the 145.800 downlink (mode-agnostic). */
@@ -100,11 +118,14 @@ function unwind(radio: IssRadio | undefined, deps: IssArmDeps, reason: string): 
 
 /**
  * ISS SSTV auto-arm tick — call on each 30 s pass poll with the ISS's
- * current/next pass (from getIssPass). EVERY rig-touching action is gated on
- * `enabled`: at AOS of an in-progress pass it saves the dial, tunes 145.800 FM,
- * and arms the SSTV decoder; at LOS — or when the opt-in is flipped off mid-pass
- * — it disarms and restores the saved dial. Idempotent under the repeating tick:
- * the `weArmedIt` guard means a second tick inside the same pass does nothing.
+ * current/next pass (from getIssPass) and the screen in front of the operator.
+ * EVERY rig-touching action is gated on `enabled`: at AOS of an in-progress pass,
+ * on the SSTV or Satellites screen, it saves the dial, tunes 145.800 FM, and arms
+ * the SSTV decoder; on any other screen it only says the ISS is overhead, once
+ * per pass, and arms when the operator opens SSTV or Satellites during it. At LOS
+ * — or when the opt-in is flipped off mid-pass — it disarms and restores the
+ * saved dial. Idempotent under the repeating tick: the `weArmedIt` guard means a
+ * second tick inside the same pass does nothing.
  */
 export function tickIssAutoArm(
   pass: SatPass | null,
@@ -112,6 +133,7 @@ export function tickIssAutoArm(
   enabled: boolean,
   deps: IssArmDeps,
   nowSecs: number,
+  screen: View,
 ): void {
   // Opt-in OFF: unwind an arm still in flight (so turning it off mid-pass puts
   // the dial back), then stay completely inert.
@@ -132,6 +154,20 @@ export function tickIssAutoArm(
   // their dial, tune to the downlink, arm the decoder. (If they're already on
   // 145.800 we leave the VFO alone and don't claim to have moved it.)
   if (inPass && !weArmedIt && !onIssDial(radio)) {
+    // …but only on a screen that works the ISS. Elsewhere the radio is in use:
+    // say so once, move nothing, and arm if they come to SSTV or Satellites.
+    if (!ISS_SCREENS.has(screen)) {
+      if (toldAos !== pass.aosUnix) {
+        toldAos = pass.aosUnix
+        pushToast(
+          t('sat.iss.overhead', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE }),
+          'info',
+          12000,
+          { prominent: true },
+        )
+      }
+      return
+    }
     savedDial = radio
       ? { dialMhz: radio.dialMhz, band: radio.band, sideband: radio.sideband }
       : null

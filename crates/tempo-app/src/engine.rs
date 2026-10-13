@@ -18640,7 +18640,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// engine wrote nothing.
     ///
     /// Both legs are `false` with no HELD transponder — there is nothing to
-    /// tune. Inside a hold:
+    /// tune — and on a radio KNOWN unable to receive the held downlink
+    /// ([`Self::rig_covers_mhz`] answering `Some(false)`): a radio that cannot
+    /// hear the bird is not working the pass. The pick asks exactly that before
+    /// it tunes ([`Self::sat_tune_nominal`]'s capability gate) and refuses both
+    /// legs on it; the tick never asked, so a bird held on an HF-only rig was
+    /// steered onto it at AOS anyway. An FT-710 working FT8 on 20 m was sent
+    /// the 70 cm downlink three times a correction, refused each time and read
+    /// back, and its band picker flickered "20m (custom)" for the whole pass
+    /// (measured 2026-10-13). Re-asked every tick against the radio active RIGHT
+    /// NOW, like the uplink consent: a switch to a rig that covers the bird
+    /// resumes Doppler there, and unknown coverage fails open, as everywhere.
+    ///
+    /// Inside a hold, on a radio that can hear the bird:
     /// - downlink = the off switch + a mapping that leaves the dial ours
     ///   ([`crate::settings::Settings::sat_doppler_downlink`]);
     /// - uplink = the per-radio confirmed consent
@@ -18650,12 +18662,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///   SIMPLEX channel — one dial carries both legs there, and a split would
     ///   engage the rig's cross-band satellite mode on a same-band channel.
     pub fn sat_doppler_legs(&self) -> tempo_core::doppler::Legs {
-        let Some(st) = self.sat_tune.as_ref() else {
-            return tempo_core::doppler::Legs {
-                downlink: false,
-                uplink: false,
-            };
+        let neither = tempo_core::doppler::Legs {
+            downlink: false,
+            uplink: false,
         };
+        let Some(st) = self.sat_tune.as_ref() else {
+            return neither;
+        };
+        let downlink_mhz = st.transponder.downlink_centre_hz as f64 / 1_000_000.0;
+        if self.rig_covers_mhz(downlink_mhz) == Some(false) {
+            return neither;
+        }
         tempo_core::doppler::Legs {
             downlink: self.settings.sat_doppler_downlink(),
             uplink: self.settings.sat_doppler_uplink()
@@ -60112,6 +60129,188 @@ mod tests {
         );
         assert!((e.settings.dial_mhz - 14.074).abs() < 1e-9, "no QSY");
         assert!(b.note.is_some(), "and the refusal is said out loud");
+    }
+
+    /// The station in the 2026-10-13 report: ONE radio, an FT-710 (HF + 6 m, its coverage
+    /// probed), working FT8 on 20 m, here with SO-50 held from earlier in the session. The pick
+    /// has already refused to tune it, out loud.
+    fn ft710_on_ft8_holding_so50() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        assert!(
+            b.note
+                .as_deref()
+                .is_some_and(|n| n.contains("doesn't cover")),
+            "scene: the pick refused the FT-710: {b:?}"
+        );
+        e
+    }
+
+    /// The armed track's Doppler ticks over the first minute of a pass, each on a slot boundary
+    /// (the Digital section steers only in the slot's quiet window), at a range rate stepped so
+    /// every tick wants a fresh frequency. What each tick wrote, in order.
+    fn doppler_at_aos(e: &mut Engine) -> Vec<Option<tempo_core::doppler::Correction>> {
+        e.set_sat_pass_engaged(true);
+        (1..=4u64)
+            .map(|n| e.sat_doppler_tick(-5.0 + n as f64, 1_005_000 + n * 15_000, false))
+            .collect()
+    }
+
+    #[test]
+    fn a_held_bird_the_radio_cannot_hear_never_steers_it_at_aos() {
+        // THE REPORT (2026-10-13): "I will be working ft8, I will get a pop up that a satellite
+        // is passing. My 20m band changes from 20m to 20m custom." Its pop up and retune were
+        // the ISS SSTV auto-arm (issAutoArm.ts); this is the other road to the same picker. The
+        // pick refuses a radio that cannot reach the downlink, but the Doppler tick never asked,
+        // so at AOS it steered the FT-710 to 436.8 MHz three times a correction, refused each
+        // time and read back, and the FT8 band picker flickered "20m (custom)" for the pass.
+        let mut e = ft710_on_ft8_holding_so50();
+        let wrote = doppler_at_aos(&mut e);
+        assert_eq!(
+            wrote,
+            vec![None; 4],
+            "Doppler wrote to a radio that cannot hear the bird"
+        );
+        let r = e.snapshot().radio;
+        assert_eq!(
+            (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+            (14.074, "20m", "USB"),
+            "the FT8 dial must stay where the operator put it"
+        );
+        assert_eq!(e.split_tx_mhz(), None, "no uplink reached the split either");
+        assert_eq!(
+            e.sat_doppler_legs(),
+            tempo_core::doppler::Legs {
+                downlink: false,
+                uplink: false
+            },
+            "the badge and the readout must not claim a leg the tick will not drive"
+        );
+        // Still HELD: the pass is the operator's to release, and nothing here released it.
+        assert!(e.sat_transponder_held().is_some());
+    }
+
+    #[test]
+    fn a_radio_that_hears_the_bird_is_still_steered_at_aos() {
+        // CONTROL — the single-radio satellite operator. The same section, the same bird and
+        // the same ticks on a radio whose probed coverage takes 70 cm: the pick tunes and every
+        // tick corrects, exactly as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+            (1_240_000_000, 1_300_000_000),
+        ]));
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        assert_eq!(
+            b.note, None,
+            "scene: the pick tuned the radio that hears the bird"
+        );
+        let wrote = doppler_at_aos(&mut e);
+        assert!(
+            wrote
+                .iter()
+                .all(|c| c.is_some_and(|c| c.downlink_hz.is_some())),
+            "every tick corrects the downlink: {wrote:?}"
+        );
+        let dial = e.snapshot().radio.dial_mhz;
+        assert!(
+            (dial - 436.795).abs() < 0.02 && (dial - 436.795).abs() > 1e-6,
+            "the dial rides the CORRECTED downlink, got {dial}"
+        );
+
+        // …and a radio whose coverage is UNKNOWN is steered too: the probe can fail, and the
+        // range gate fails open everywhere (`rig_covers_mhz`).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        let wrote = doppler_at_aos(&mut e);
+        assert!(
+            wrote
+                .iter()
+                .all(|c| c.is_some_and(|c| c.downlink_hz.is_some())),
+            "unknown coverage must not stop Doppler: {wrote:?}"
+        );
+    }
+
+    #[test]
+    fn the_dual_radio_pass_is_steered_on_the_rig_the_pick_handed_it_to() {
+        // CONTROL — the dual-radio station: the FTdx10 active on 20 m, the IC-9700 beside it.
+        // The pick hands RS-44 to the 9700 and Doppler follows it there, before and after the
+        // 9700's own coverage probe answers.
+        let (mut e, ic9700) = fresh_dual_radio_sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "scene: the pick handed off"
+        );
+        e.set_sat_pass_engaged(true);
+        assert!(
+            e.sat_doppler_tick(-5.0, 1_020_000, false)
+                .is_some_and(|c| c.downlink_hz.is_some()),
+            "Doppler drives the 9700 before its probe answers"
+        );
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+        ]));
+        assert!(
+            e.sat_doppler_tick(-3.0, 1_035_000, false)
+                .is_some_and(|c| c.downlink_hz.is_some()),
+            "…and after it"
+        );
+    }
+
+    #[test]
+    fn a_mid_pass_switch_to_a_rig_that_cannot_hear_the_bird_leaves_its_dial_alone() {
+        // The same station mid-pass. A switch back to the FTdx10 — the HF rig, its coverage
+        // probed — hands the dial to a radio that cannot hear the bird: Doppler leaves it alone,
+        // and picks the pass up again on the 9700.
+        let (mut e, ic9700) = fresh_dual_radio_sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "scene: the pick handed off"
+        );
+        e.set_sat_pass_engaged(true);
+        e.set_active_radio(0);
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 75_000_000)]));
+        let hf = e.snapshot().radio.dial_mhz;
+        assert_eq!(e.sat_doppler_tick(-1.0, 1_050_000, false), None);
+        assert_eq!(
+            e.snapshot().radio.dial_mhz,
+            hf,
+            "the HF rig's dial is untouched"
+        );
+        e.set_active_radio(ic9700);
+        assert!(
+            e.sat_doppler_tick(1.0, 1_065_000, false)
+                .is_some_and(|c| c.downlink_hz.is_some()),
+            "back on the 9700, Doppler resumes"
+        );
     }
 
     #[test]

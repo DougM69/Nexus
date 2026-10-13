@@ -43075,6 +43075,49 @@ mod tests {
         assert!(!local.is_empty(), "a local arm flies whatever Remote did");
     }
 
+    /// ⭐ THE 2026-10-13 REPORT'S STATION THROUGH THE SHIPPED LOOP: one radio, an FT-710 (HF +
+    /// 6 m, its coverage probed), working FT8 on 20 m and holding SO-50, a bird it cannot hear,
+    /// when a real pass comes up. The loop flies the whole pass and never steers that radio: the FT8
+    /// dial stays on 14.074, and every badge says no Doppler leg is driven, so the LOS report
+    /// claims no dial handback. The pass itself is still reported — the badges go `tracking`,
+    /// which is what raises the AOS alert (`satPassAlert.ts`).
+    #[test]
+    fn a_real_pass_never_steers_a_radio_that_cannot_hear_the_bird() {
+        let eng: SharedEngine = {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+            e.set_sat_transponder(Some((
+                "SO-50|FM repeater".into(),
+                0,
+                tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+            )));
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        };
+        let badges = run_simulated_pass(&eng, None, tempo_core::rotator::RotatorConfig::default());
+        assert!(
+            badges.iter().any(|b| b.state == "tracking"),
+            "the pass must still be reported: {} badges",
+            badges.len()
+        );
+        let claimed: Vec<_> = badges
+            .iter()
+            .filter(|b| b.doppler_downlink || b.doppler_uplink || b.mode != "pass-only")
+            .map(|b| (b.mode.clone(), b.doppler_downlink, b.doppler_uplink))
+            .collect();
+        // ONE assertion over both facts, so a red names the dial AND the badge by value.
+        let r = engine_lock(&eng).snapshot().radio;
+        assert_eq!(
+            (
+                (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+                claimed.first()
+            ),
+            ((14.074, "20m", "USB"), None),
+            "the FT8 dial must never move, and no badge may claim Doppler on this radio"
+        );
+    }
+
     /// A written snapshot round-trips through its own serde (camelCase keys on
     /// the wire), and the untagged loader picks the snapshot shape.
     #[test]

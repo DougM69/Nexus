@@ -2461,7 +2461,9 @@ pub struct Settings {
     /// restored only while still on 145.800 FM). ISS SSTV is an event-only
     /// downlink, so it fires on every pass; the arm/restore loop lives in the
     /// frontend (issAutoArm.ts, mirroring the sat alarm) since SSTV RX only runs
-    /// while the app is open.
+    /// while the app is open. It takes the radio only while the SSTV or
+    /// Satellites screen is the one in use: on any other screen the pass is
+    /// announced and the radio is left to that screen.
     pub iss_sstv_auto_arm: bool,
 
     // --- SSTV (Settings ▸ Digital ▸ SSTV) ---

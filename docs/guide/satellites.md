@@ -123,6 +123,11 @@ the VFO and Nexus follows: it takes your new dial as your position in the
 passband and moves your uplink to match (mirrored, if the transponder inverts).
 Doppler keeps correcting around wherever you put yourself.
 
+A radio that cannot receive the bird is never steered. Pick a 70 cm bird with
+only an HF rig in use and the pick says the radio does not cover it and tunes
+nothing; Doppler then leaves that radio alone for the whole pass, and takes it
+up on a radio that does cover the bird.
+
 ![The Frequencies pane during a pass: Doppler-corrected downlink and uplink, and a passband bar with the two legs marked.](../img/manual/satellites-doppler-passband.webp)
 
 *The passband readout in Nexus 1.10.3 on a **simulated** FO-29 pass. **DOPPLER** prints each
@@ -515,7 +520,7 @@ plainly when it can't:
 ## Related guides
 
 - [Conditions — map + propagation](connect.md) (Satellite Passes pane, live map layer)
-- [SSTV](sstv.md) (ISS SSTV auto-arm: at AOS Nexus tunes 145.800 FM and arms the
-  decoder for you)
+- [SSTV](sstv.md) (ISS SSTV auto-arm: at AOS, with SSTV or Satellites open, Nexus
+  tunes 145.800 FM and arms the decoder for you)
 - [Settings reference](settings-reference.md) (rotator setup)
 - [DXpeditions](dxpeditions.md) (the same alarm machinery)

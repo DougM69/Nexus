@@ -4908,6 +4908,8 @@ export const EN = {
   'sat.iss.optOut': 'ISS auto-arm off — SSTV disarmed, dial restored',
   'sat.iss.los': 'ISS LOS — SSTV disarmed, dial restored',
   'sat.iss.armed': 'ISS overhead — tuned {{dial}} {{mode}}, SSTV armed',
+  // The same pass seen from any screen but SSTV or Satellites: nothing was touched.
+  'sat.iss.overhead': 'ISS overhead — SSTV on {{dial}} {{mode}}. Open SSTV to receive it; your radio was not retuned.',
 
   // The manual element-refresh result (features/tleMessages.ts) — one composer for the
   // Update-now toast and the Settings "Last refresh" line, so the two can never drift.
@@ -7784,7 +7786,7 @@ export const EN = {
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
-    'Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.',
+    'Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.',
   'settings.sstv.transmitting.title': 'Transmitting',
   'settings.sstv.txMode.label': 'Transmit mode',
   'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
