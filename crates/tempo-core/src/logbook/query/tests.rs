@@ -368,9 +368,15 @@ fn reference_answer(
 ) -> Value {
     let name = |r: &QsoRecord| golden_name(&r.id.expect("an id"));
     let query = || -> LogQuery { serde_json::from_value(q["query"].clone()).expect("a query") };
+    // A call's entity, as the fixture resolves it (one entity per call).
+    let entity = |call: &str| {
+        log.iter()
+            .find(|r| r.call == call)
+            .and_then(|r| entities[&r.id.expect("an id")].clone())
+    };
     match q["kind"].as_str().expect("kind") {
         "page" => {
-            let order = reference::order(log, &query());
+            let order = reference::order(log, &query(), &entity);
             let (offset, limit) = (
                 q["offset"].as_u64().unwrap() as usize,
                 q["limit"].as_u64().unwrap() as usize,
@@ -384,7 +390,7 @@ fn reference_answer(
             json!({"total": order.len(), "logSize": log.len(), "offset": offset, "keys": keys})
         }
         "locate" => {
-            let order = reference::order(log, &query());
+            let order = reference::order(log, &query(), &entity);
             let id = q["id"].as_str().unwrap();
             json!({"index": order.iter().position(|&i| name(&log[i]) == id)})
         }
@@ -445,14 +451,7 @@ fn reference_answer(
         "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
         "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
         // The COUNTS, which the window orders (`finishLogStats`) into the golden answer.
-        "statistics" => {
-            let entity = |call: &str| {
-                log.iter()
-                    .find(|r| r.call == call)
-                    .and_then(|r| entities[&r.id.expect("an id")].clone())
-            };
-            json!(reference::fold(log, LogStatCounter::new(&entity)))
-        }
+        "statistics" => json!(reference::fold(log, LogStatCounter::new(&entity))),
         other => panic!("no reference answer for {other}"),
     }
 }
@@ -509,6 +508,56 @@ fn the_was_lists_are_the_uis() {
     };
     assert_eq!(list("US_ENTITIES"), US_ENTITIES);
     assert_eq!(list("WAS_STATES"), WAS_STATES);
+}
+
+/// ★ BY STATE counts a contact by its DXCC entity, the United States, Alaska or Hawaii, however
+/// its source spelled COUNTRY (LoTW's and DXKeeper's `UNITED STATES OF AMERICA`, or none at all),
+/// and by the stored text only where its call resolves to no entity, as the entities are counted.
+/// A US mailing country on a foreign entity's contact is not a state.
+#[test]
+fn by_state_counts_a_contact_by_its_dxcc_entity() {
+    // (call, the entity its call resolves to, the stored COUNTRY, STATE)
+    let rows: [(&str, Option<&str>, Option<&str>, &str); 7] = [
+        (
+            "W1AW",
+            Some("United States"),
+            Some("UNITED STATES OF AMERICA"),
+            "CT",
+        ),
+        ("K1ABC", Some("United States"), None, "MA"),
+        ("KL7AA", Some("Alaska"), Some("ALASKA"), "AK"),
+        ("KH6AA", Some("Hawaii"), Some("HAWAII"), "HI"),
+        ("KP4AA", Some("Puerto Rico"), Some("United States"), "FL"),
+        // No entity: the stored text decides, as it always has.
+        ("Q0ZZZ", None, Some("United States"), "WI"),
+        ("Q1ZZZ", None, Some("UNITED STATES OF AMERICA"), "NY"),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .map(|&(call, _, country, state)| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.state = Some(state.to_string());
+            r
+        })
+        .collect();
+    let entity = |call: &str| {
+        rows.iter()
+            .find(|r| r.0 == call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let counts = reference::fold(&log, LogStatCounter::new(&entity));
+    let by_state: Vec<(&str, usize)> = counts
+        .by_state
+        .iter()
+        .map(|t| (t.label.as_str(), t.count))
+        .collect();
+    assert_eq!(
+        by_state,
+        [("CT", 1), ("MA", 1), ("AK", 1), ("HI", 1), ("WI", 1)]
+    );
 }
 
 /// The bands in the log are its own spellings, first seen first: nothing trimmed or folded, and
@@ -622,8 +671,9 @@ fn the_golden_log_exercises_what_it_claims() {
         search: search.to_string(),
         needs_confirm_only: false,
     };
-    assert_eq!(reference::order(&log, &q("z")).len(), 24);
-    let ssb: Vec<String> = reference::order(&log, &q("ssb"))
+    let none = |_: &str| None;
+    assert_eq!(reference::order(&log, &q("z"), &none).len(), 24);
+    let ssb: Vec<String> = reference::order(&log, &q("ssb"), &none)
         .into_iter()
         .map(|i| golden_name(&log[i].id.unwrap()))
         .collect();
@@ -637,6 +687,7 @@ fn the_golden_log_exercises_what_it_claims() {
                 search: String::new(),
                 needs_confirm_only: false,
             },
+            &none,
         );
         let at = |n: &str| {
             by_call
@@ -652,5 +703,62 @@ fn the_golden_log_exercises_what_it_claims() {
     assert_eq!(
         reference::worked_calls(&log, &["W1AW".into(), "W1AW ".into()]),
         ["W1AW".to_string()]
+    );
+}
+
+/// ★ The country column sorts on the country the Logbook shows: the DXCC entity, so a QRZ
+/// `Germany` and a `Fed. Rep. of Germany` sort together, and the stored text only where the call
+/// resolves to no entity.
+#[test]
+fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
+    // (call, the entity its call resolves to, the stored COUNTRY)
+    let rows: [(&str, Option<&str>, Option<&str>); 5] = [
+        ("DL1ABC", Some("Fed. Rep. of Germany"), Some("Germany")),
+        ("F5ABC", Some("France"), Some("France")),
+        (
+            "DL2XYZ",
+            Some("Fed. Rep. of Germany"),
+            Some("Fed. Rep. of Germany"),
+        ),
+        ("G4ABC", Some("England"), Some("England")),
+        // No entity: the stored text decides.
+        ("Q0ZZZ", None, Some("Freedonia")),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &(call, _, country))| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.when_unix += i as u64 * 60;
+            r
+        })
+        .collect();
+    let entity = |call: &str| {
+        rows.iter()
+            .find(|r| r.0 == call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let sorted = |asc: bool| -> Vec<&str> {
+        let query = LogQuery {
+            sort: SortKey::Country,
+            asc,
+            search: String::new(),
+            needs_confirm_only: false,
+        };
+        reference::order(&log, &query, &entity)
+            .into_iter()
+            .map(|i| log[i].call.as_str())
+            .collect()
+    };
+    assert_eq!(
+        sorted(true),
+        ["G4ABC", "DL1ABC", "DL2XYZ", "F5ABC", "Q0ZZZ"]
+    );
+    assert_eq!(
+        sorted(false),
+        ["Q0ZZZ", "F5ABC", "DL2XYZ", "DL1ABC", "G4ABC"]
     );
 }

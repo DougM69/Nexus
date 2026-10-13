@@ -88,6 +88,16 @@ impl Picture<'_> {
         self.each_in(Scope::All, narrow, each)
     }
 
+    /// [`Self::each`], each contact with its SUBMODE as well (`LogDb::each_narrow_with_submode`):
+    /// what a search of the log looks in beside the MODE, which nothing else reads.
+    pub(in crate::remote_service) fn each_with_submode(
+        &self,
+        narrow: Narrow,
+        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        self.pass(Scope::All, narrow, true, each)
+    }
+
     /// [`Self::each`] over only the contacts `scope` holds: on the store through the index that
     /// holds them, on the 1.13 path by the same test made here. A scope narrows, it never decides
     /// (P2): a reader still tests every contact it is handed.
@@ -97,12 +107,24 @@ impl Picture<'_> {
         narrow: Narrow,
         each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
+        self.pass(scope, narrow, false, each)
+    }
+
+    /// The pass [`Self::each_in`] and [`Self::each_with_submode`] make; `submode` reads each
+    /// contact's SUBMODE as well. A test's own rows are whole, and carry it already.
+    fn pass(
+        &self,
+        scope: Scope<'_>,
+        narrow: Narrow,
+        submode: bool,
+        each: &mut dyn FnMut(Pick, &QsoRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
         #[cfg(test)]
         seam(Seam::Each);
         match self {
             Picture::Store(db) => {
                 let (mut at, mut answer) = (0, Ok(()));
-                db.each_narrow(narrow, scope, Order::Log, &mut |q| {
+                let mut visit = |q: &QsoRecord| {
                     let pick = Pick { at, id: q.id };
                     at += 1;
                     match each(pick, q) {
@@ -112,7 +134,12 @@ impl Picture<'_> {
                             ControlFlow::Break(())
                         }
                     }
-                })
+                };
+                if submode {
+                    db.each_narrow_with_submode(narrow, scope, Order::Log, &mut visit)
+                } else {
+                    db.each_narrow(narrow, scope, Order::Log, &mut visit)
+                }
                 .map_err(|_| UNREADABLE)?;
                 answer
             }

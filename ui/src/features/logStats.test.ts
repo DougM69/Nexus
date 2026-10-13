@@ -89,6 +89,20 @@ describe('computeLogStats', () => {
     expect(s2.byState.some((t) => t.label === 'WA')).toBe(false)
   })
 
+  it('WAS by-state counts a contact by its DXCC entity, however the source spelled the country', () => {
+    const s3 = computeLogStats([
+      qso({ call: 'W1AW', entity: 'United States', country: 'UNITED STATES OF AMERICA', state: 'CT' }), // LoTW's, DXKeeper's spelling
+      qso({ call: 'K1ABC', entity: 'United States', country: null, state: 'MA' }), // a source that writes no country
+      qso({ call: 'KL7AA', entity: 'Alaska', country: 'ALASKA', state: 'AK' }),
+      qso({ call: 'KH6AA', entity: 'Hawaii', country: 'HAWAII', state: 'HI' }),
+      qso({ call: 'KP4AA', entity: 'Puerto Rico', country: 'United States', state: 'FL' }), // a US mailing country, not a state
+      // No entity: the stored text decides, as it always has.
+      qso({ call: 'Q0ZZZ', entity: null, country: 'United States', state: 'WI' }),
+      qso({ call: 'Q1ZZZ', entity: null, country: 'UNITED STATES OF AMERICA', state: 'NY' }),
+    ])
+    expect(s3.byState).toEqual(['AK', 'CT', 'HI', 'MA', 'WI'].map((label) => ({ label, count: 1 })))
+  })
+
   it('by year chronological', () => {
     expect(s.byYear).toEqual([
       { label: '2025', count: 1 },

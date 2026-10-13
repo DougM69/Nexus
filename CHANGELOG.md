@@ -110,6 +110,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DXCC entity, so an imported "UNITED STATES" and Nexus's own "United States" read the same; the
   imported text is still on the tooltip. Awards and confirmations already treated the spellings as
   one band, so no credit changes.
+- **Most-worked states counts every US contact, however its country was spelled.** The
+  statistics' Most-worked states (WAS) list went by the country text a contact was stored with,
+  so contacts from LoTW or DXKeeper, which spell it UNITED STATES OF AMERICA, and from loggers
+  that write no country at all were left out. A contact now counts there when its call is in the
+  United States, Alaska or Hawaii, the same DXCC entity the WAS award counts it under, and a
+  station elsewhere whose record carries a US country no longer does. A contact whose call
+  belongs to no entity still counts by the country it was logged with. The Remote page's
+  statistics count the same way.
+- **Searching the Logbook for usb or lsb finds your phone contacts.** The Logbook search now looks
+  in a contact's submode as well as its mode, so usb and lsb find the contacts made on that
+  sideband, however they were logged or imported, and ssb finds all of them. A digital contact
+  whose mode is kept in its submode, such as VARA HF under DYNAMIC, is found by that name too.
+  The Remote page's log search does the same.
+- **Sorting the Logbook by country keeps each country together.** The Logbook shows a contact's
+  country as its DXCC entity, but sorting by country went by the text the contact was stored
+  with, so a Germany from a QRZ lookup and a Fed. Rep. of Germany sorted into two places. Sorting
+  by country now follows the country the Logbook shows. A contact whose call belongs to no entity
+  sorts by the country it was logged with.
 - **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
   read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
   re-enter a password that was right. Nexus now says the contact is outside your eQSL account's

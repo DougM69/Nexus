@@ -210,15 +210,15 @@ impl Statistics {
         // handling included: `remote/test/insights-reference.mjs` runs that module as an
         // independent comparator against this roll-up, so the two must agree input for input.
         tally(&mut self.modes, phone_mode_label(&q.mode))?;
-        // Existing UI Statistics gates WAS by the stored country, separately
-        // from the resolved-entity headline. Do not silently change that rule.
+        // WAS is gated on the entity the headline counts: the one the call resolves to, the
+        // stored country only where it resolves to none. A US-family entity (the United States,
+        // Alaska, Hawaii) counts however its source spelled COUNTRY, LoTW's and DXKeeper's
+        // "UNITED STATES OF AMERICA" included, and a foreign entity's contact stored with a US
+        // country does not. This mirrors `wasState` in `ui/src/features/logStats.ts` EXACTLY:
+        // `remote/test/insights-reference.mjs` runs that module as the comparator for this
+        // roll-up, so the two must agree input for input.
         if matches!(
-            q.country
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .to_uppercase()
-                .as_str(),
+            entity.unwrap_or("").trim().to_uppercase().as_str(),
             "UNITED STATES" | "ALASKA" | "HAWAII"
         ) {
             let state = q.state.as_deref().unwrap_or("").trim().to_uppercase();
@@ -344,6 +344,58 @@ mod tests {
         e.import_adif(&adif);
         assert_eq!(e.stored_log().len(), count);
         Arc::new(Mutex::new(e))
+    }
+    /// ★ BY STATE counts a contact by its DXCC entity, the United States, Alaska or Hawaii,
+    /// however its source spelled COUNTRY (LoTW's and DXKeeper's `UNITED STATES OF AMERICA`, or
+    /// none at all), and by the stored text only where its call resolves to no entity: the rule
+    /// `wasState` keeps in `ui/src/features/logStats.ts`.
+    #[test]
+    fn by_state_counts_a_contact_by_its_dxcc_entity() {
+        for (call, entity) in [
+            ("W1AW", Some("United States")),
+            ("K1ABC", Some("United States")),
+            ("KL7AA", Some("Alaska")),
+            ("KH6AA", Some("Hawaii")),
+            ("KP4AA", Some("Puerto Rico")),
+            ("Q0ZZZ", None),
+            ("Q1ZZZ", None),
+        ] {
+            assert_eq!(
+                propagation::dxcc::resolve(call).map(|i| i.entity),
+                entity,
+                "premise: {call}'s entity"
+            );
+        }
+        let row = |call: &str, country: Option<&str>, state: &str| {
+            let country = country.map_or(String::new(), |c| format!("<COUNTRY:{}>{c}", c.len()));
+            format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260909<TIME_ON:6>120000\
+                 {country}<STATE:2>{state}<EOR>\n",
+                call.len()
+            )
+        };
+        let mut e = tempo_app::engine::Engine::with_settings(Default::default());
+        e.import_adif(
+            &[
+                row("W1AW", Some("UNITED STATES OF AMERICA"), "CT"),
+                row("K1ABC", None, "MA"),
+                row("KL7AA", Some("ALASKA"), "AK"),
+                row("KH6AA", Some("HAWAII"), "HI"),
+                // A US mailing country on a Puerto Rico call: not a state.
+                row("KP4AA", Some("United States"), "FL"),
+                // No entity: the stored text decides, as it always has.
+                row("Q0ZZZ", Some("United States"), "WI"),
+                row("Q1ZZZ", Some("UNITED STATES OF AMERICA"), "NY"),
+            ]
+            .concat(),
+        );
+        assert_eq!(e.stored_log().len(), 7);
+        let engine = Arc::new(Mutex::new(e));
+        let stats = read_engine(&engine, Collection::Statistics).unwrap();
+        assert_eq!(
+            stats["statistics"]["byState"],
+            json!(["AK", "CT", "HI", "MA", "WI"].map(|label| json!({ "label": label, "count": 1 })))
+        );
     }
     #[test]
     fn full_log_summaries_match_native_awards_and_geography_beyond_the_display_window() {
