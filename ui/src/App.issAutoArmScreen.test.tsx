@@ -22,6 +22,7 @@ import type { AppSnapshot } from './types'
 import App from './App'
 import { t } from './i18n'
 import { resetIssAutoArm } from './features/issAutoArm'
+import { dismissToast, subscribeToasts, type Toast } from './toast'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 
@@ -78,8 +79,11 @@ function issPass() {
   return { name: 'ISS', aosUnix: now - 60, losUnix: now + 540, maxElDeg: 45, aosAzDeg: 200, losAzDeg: 40 }
 }
 
+/** The snapshot every radio verb answers with: `snapshot`, unless a test puts another station in. */
+let station: AppSnapshot = snapshot
+
 function respond(cmd: string): unknown {
-  if (/^(get_snapshot|set_tx_enabled|set_operating_mode|set_area|tune_channel|set_frequency)$/.test(cmd)) return snapshot
+  if (/^(get_snapshot|set_tx_enabled|set_operating_mode|set_area|tune_channel|set_frequency)$/.test(cmd)) return station
   if (cmd === 'get_settings') return { ...defaultSettings, issSstvAutoArm: true }
   if (cmd === 'get_propagation') return propagation
   if (cmd === 'get_iss_pass') return issPass()
@@ -129,6 +133,7 @@ beforeEach(() => {
   pastTheSwitch()
   resetIssAutoArm()
   bridgeCalls.length = 0
+  station = snapshot
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
       bridgeCalls.push({ cmd, args })
@@ -181,5 +186,37 @@ describe('the ISS SSTV auto-arm and the screen in use', () => {
     ])
     expect(sent.some((c) => c.cmd === 'sstv_arm' && c.args?.on === true)).toBe(true)
     expect(document.body.textContent).toContain(t('sat.iss.armed', { dial: '145.800', mode: 'FM' }))
+  })
+})
+
+// NO RADIO HERE CAN RECEIVE 145.800 (operator, 2026-10-13: "say it once per session"). The station of
+// the report: one radio, an FT-710, its probed coverage stopping at 56 MHz. The App hands the tick
+// that coverage and the fact that this is the station's only enabled radio (the settings file has
+// one), and the pass is answered with the one notice that says what is wrong, instead of the
+// per-pass announcement.
+describe('the ISS SSTV auto-arm where no radio here can receive 145.800 MHz', () => {
+  // The toast store outlives a test, and the announcements above would otherwise still be on
+  // screen here, where the assertion is that this pass made none.
+  beforeEach(() => {
+    let left: Toast[] = []
+    subscribeToasts((ts) => {
+      left = ts
+    })()
+    for (const x of left) dismissToast(x.id)
+  })
+
+  it('on the FT8 screen says the radio cannot receive it and moves nothing', async () => {
+    station = {
+      ...snapshot,
+      activeRadioId: 0,
+      radio: { ...snapshot.radio, rxRangesMhz: [[0.03, 56]] },
+    } as AppSnapshot
+    await mountOn('operate')
+    const sent = await nextPoll()
+    // The stored opt-in reached the pass tick: without this the silence below proves nothing.
+    expect(sent.map((c) => c.cmd)).toContain('get_iss_pass')
+    expect(sent.filter((c) => MOVES_THE_RADIO.has(c.cmd))).toEqual([])
+    expect(document.body.textContent).toContain(t('sat.iss.cannotReceive', { dial: '145.800' }))
+    expect(document.body.textContent).not.toContain(t('sat.iss.overhead', { dial: '145.800', mode: 'FM' }))
   })
 })

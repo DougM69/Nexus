@@ -18,6 +18,11 @@
 // already turned transmit off (reproduced 2026-10-13, from a report of exactly
 // that picker). Away from SSTV and Satellites the pass is announced, once, and
 // nothing moves: an alert notifies, it never acts.
+//
+// Where NO radio here can receive 145.800 (the station's only enabled radio, its
+// probed coverage leaving 2 m out: an FT-710 alone), the auto-arm cannot work on
+// any screen, and a tune could only be refused. It says so once a session, with
+// where the switch is, and is quiet after that: no notice per pass, no tune.
 
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
@@ -48,6 +53,9 @@ export interface IssRadio {
   dialMhz: number
   band: string
   sideband: string
+  /** The radio's probed receive coverage, `[loMhz, hiMhz]` pairs. Empty or absent is UNKNOWN,
+   * which never stops the auto-arm. */
+  rxRangesMhz?: [number, number][] | null
 }
 
 /** The rig actions the tick performs, injected so tests can observe them. */
@@ -76,12 +84,15 @@ let weArmedIt = false
 let savedDial: IssRadio | null = null
 // The AOS of the last pass announced from another screen: one notice per pass.
 let toldAos: number | null = null
+// Told that no radio here can receive 145.800: once a session, then quiet.
+let toldCannotReceive = false
 
 /** Test hook — forget any in-session arm. Does NOT touch the rig. */
 export function resetIssAutoArm(): void {
   weArmedIt = false
   savedDial = null
   toldAos = null
+  toldCannotReceive = false
 }
 
 /** Dial is within tolerance of the 145.800 downlink (mode-agnostic). */
@@ -93,6 +104,16 @@ function onIssDial(radio: IssRadio | undefined): boolean {
  * restore from yanking the operator back out of a manual QSY. */
 function onIssChannel(radio: IssRadio | undefined): boolean {
   return onIssDial(radio) && !!radio && radio.sideband.toUpperCase() === ISS_MODE
+}
+
+/** No radio here can receive the ISS downlink: `radio` is the station's only enabled radio and
+ * its probed coverage leaves 145.800 out. The satellite pick asks the same two questions before it
+ * holds a bird (`Engine::hold_sat_transponder`). Unknown coverage, or another radio that may take
+ * the channel, is never "cannot". */
+function cannotReceiveIss(radio: IssRadio | undefined, soleRadio: boolean): boolean {
+  const ranges = radio?.rxRangesMhz
+  if (!soleRadio || !ranges || ranges.length === 0) return false
+  return !ranges.some(([lo, hi]) => ISS_DIAL_MHZ >= lo && ISS_DIAL_MHZ <= hi)
 }
 
 /** Fire-and-forget a receiver call (it may return a promise); swallow failures so
@@ -125,7 +146,9 @@ function unwind(radio: IssRadio | undefined, deps: IssArmDeps, reason: string): 
  * per pass, and arms when the operator opens SSTV or Satellites during it. At LOS
  * — or when the opt-in is flipped off mid-pass — it disarms and restores the
  * saved dial. Idempotent under the repeating tick: the `weArmedIt` guard means a
- * second tick inside the same pass does nothing.
+ * second tick inside the same pass does nothing. `soleRadio` = `radio` is the
+ * station's only enabled radio; with its coverage leaving 145.800 out, nothing is
+ * tuned on any screen and the notice is said once a session.
  */
 export function tickIssAutoArm(
   pass: SatPass | null,
@@ -134,6 +157,7 @@ export function tickIssAutoArm(
   deps: IssArmDeps,
   nowSecs: number,
   screen: View,
+  soleRadio = false,
 ): void {
   // Opt-in OFF: unwind an arm still in flight (so turning it off mid-pass puts
   // the dial back), then stay completely inert.
@@ -154,7 +178,18 @@ export function tickIssAutoArm(
   // their dial, tune to the downlink, arm the decoder. (If they're already on
   // 145.800 we leave the VFO alone and don't claim to have moved it.)
   if (inPass && !weArmedIt && !onIssDial(radio)) {
-    // …but only on a screen that works the ISS. Elsewhere the radio is in use:
+    // …unless no radio here can receive it. Then a tune would only be refused, on
+    // any screen: say so once a session, then leave everything alone. Sticky,
+    // because it is said once: a notice that faded before the operator looked
+    // would not come again until the next session.
+    if (cannotReceiveIss(radio, soleRadio)) {
+      if (!toldCannotReceive) {
+        toldCannotReceive = true
+        pushToast(t('sat.iss.cannotReceive', { dial: ISS_DIAL_MHZ.toFixed(3) }), 'info', 0)
+      }
+      return
+    }
+    // …and only on a screen that works the ISS. Elsewhere the radio is in use:
     // say so once, move nothing, and arm if they come to SSTV or Satellites.
     if (!ISS_SCREENS.has(screen)) {
       if (toldAos !== pass.aosUnix) {

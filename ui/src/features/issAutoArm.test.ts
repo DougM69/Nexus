@@ -222,3 +222,99 @@ describe('tickIssAutoArm and the screen in use', () => {
     expect(d.tuneChannel).not.toHaveBeenCalled()
   })
 })
+
+// ⭐ NO RADIO HERE CAN RECEIVE 145.800 (operator, 2026-10-13: "say it once per session"). An FT-710
+// alone, HF + 6 m: every pass announced the ISS and that the radio was not retuned, and on SSTV or
+// Satellites the auto-arm tuned a channel the radio refuses. Now one notice a session says the
+// radio cannot receive 145.800 MHz and where the switch is, and the auto-arm does nothing else.
+describe('tickIssAutoArm where no radio here can receive 145.800 MHz', () => {
+  // The FT-710's probed coverage (HF + 6 m) and an IC-9700's, in the snapshot's own shape (MHz).
+  const FT710: IssRadio = { ...OFF_FREQ, rxRangesMhz: [[0.03, 56]] }
+  const IC9700: IssRadio = { ...OFF_FREQ, rxRangesMhz: [[144, 148], [430, 450]] }
+  const overhead = () => t('sat.iss.overhead', { dial: '145.800', mode: 'FM' })
+  const cannotReceive = () => t('sat.iss.cannotReceive', { dial: '145.800' })
+  const notices = () => toasts.mock.calls.map((c) => c[0])
+  const now = 1_900_000_000
+  // Two ISS passes about 90 minutes apart.
+  const passes = [pass(now - 60), pass(now + 5_400)]
+
+  /** Two polls into each pass, on `screen`, with `radio` the station's only radio or not. */
+  function twoPasses(
+    d: ReturnType<typeof deps>,
+    radio: IssRadio,
+    screen: 'operate' | 'sstv' | 'sats',
+    soleRadio: boolean,
+    tick = tickIssAutoArm,
+  ) {
+    for (const p of passes) {
+      tick(p, radio, true, d, p.aosUnix + 60, screen, soleRadio)
+      tick(p, radio, true, d, p.aosUnix + 90, screen, soleRadio)
+    }
+  }
+
+  function expectNothingMoved(d: ReturnType<typeof deps>) {
+    expect(d.tuneChannel).not.toHaveBeenCalled()
+    expect(d.setFrequency).not.toHaveBeenCalled()
+    expect(d.sstvArm).not.toHaveBeenCalled()
+    expect(d.sstvAutoDisarm).not.toHaveBeenCalled()
+  }
+
+  it('says so once a session, across passes, and touches nothing', () => {
+    const d = deps()
+    twoPasses(d, FT710, 'operate', true)
+    expect(notices()).toEqual([cannotReceive()])
+    expectNothingMoved(d)
+  })
+
+  it('says so again after a restart', async () => {
+    const d = deps()
+    twoPasses(d, FT710, 'operate', true)
+    expect(notices(), 'the first session').toEqual([cannotReceive()])
+    toasts.mockClear()
+    // A restart is a fresh module: the session is the page's lifetime, and nothing outlives it.
+    vi.resetModules()
+    const restarted = await import('./issAutoArm')
+    const { pushToast: restartedToast } = await import('../toast')
+    twoPasses(d, FT710, 'operate', true, restarted.tickIssAutoArm)
+    expect(vi.mocked(restartedToast).mock.calls.map((c) => c[0]), 'the next session').toEqual([
+      cannotReceive(),
+    ])
+    expectNothingMoved(d)
+  })
+
+  it('tunes nothing on the SSTV or Satellites screen either', () => {
+    const d = deps()
+    twoPasses(d, FT710, 'sstv', true)
+    twoPasses(d, FT710, 'sats', true)
+    expect(notices()).toEqual([cannotReceive()])
+    expectNothingMoved(d)
+  })
+
+  it('with another enabled radio, announces every pass and tunes on SSTV as before (control)', () => {
+    const d = deps()
+    twoPasses(d, FT710, 'operate', false)
+    expect(notices()).toEqual([overhead(), overhead()])
+    expectNothingMoved(d)
+    tickIssAutoArm(passes[1], FT710, true, d, passes[1].aosUnix + 120, 'sstv', false)
+    expect(d.tuneChannel).toHaveBeenCalledWith(145.8, '2m', 'FM')
+  })
+
+  it('with the coverage unknown, announces every pass as before (control)', () => {
+    // An empty list and an absent one both mean the probe has not answered: never "cannot".
+    for (const unknown of [{ ...OFF_FREQ, rxRangesMhz: [] }, OFF_FREQ]) {
+      resetIssAutoArm()
+      toasts.mockClear()
+      const d = deps()
+      twoPasses(d, unknown, 'operate', true)
+      expect(notices()).toEqual([overhead(), overhead()])
+      expectNothingMoved(d)
+    }
+  })
+
+  it('arms a radio that covers 145.800 as before (control)', () => {
+    const d = deps()
+    tickIssAutoArm(passes[0], IC9700, true, d, passes[0].aosUnix + 60, 'sstv', true)
+    expect(d.tuneChannel).toHaveBeenCalledWith(145.8, '2m', 'FM')
+    expect(d.sstvArm).toHaveBeenCalledWith(true)
+  })
+})

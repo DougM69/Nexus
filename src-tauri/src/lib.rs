@@ -11157,7 +11157,10 @@ fn hold_sat_row(
         .filter(|&hz| hz != 0 && hz != uplink)
         .collect();
     let mut eng = engine_lock(state);
-    eng.set_sat_transponder(Some((
+    // A bird no radio here can receive is refused before anything is held, and the reason is
+    // the pick's answer: a hold that can drive nothing would still take the dial from FT8, FT4
+    // and the TX gate (`Engine::hold_sat_transponder`). Everything below describes a hold made.
+    eng.hold_sat_transponder((
         label,
         index,
         tempo_core::doppler::Transponder {
@@ -11166,7 +11169,7 @@ fn hold_sat_row(
             invert: tp.invert,
             half_width_hz: half,
         },
-    )));
+    ))?;
     // AFTER the pick, which clears the list — see `Engine::set_sat_alt_uplinks`.
     eng.set_sat_alt_uplinks(alt_uplinks);
     // ⭐ AND WHAT KIND OF BIRD THIS IS, on the same terms and for the same reason: the
@@ -42138,6 +42141,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ⭐ A BIRD NO RADIO HERE CAN RECEIVE IS NOT HELD. The station's only radio is an FT-710 (HF
+    /// and 6 m, its coverage probed) working FT8 on 20 m, and AO-91 goes through the real pick:
+    /// its downlink is on 2 m. The pick answers why and holds nothing, so the Satellites screen
+    /// and the logger window read no hold (`satellite_held`, the read behind
+    /// `get_sat_transponder`), and the radio stays where the operator left it.
+    #[test]
+    fn the_pick_holds_nothing_for_a_bird_the_only_radio_cannot_receive() {
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[{"norad_cat_id":43017,"description":"Mode U/V FM Voice (no CTCSS any longer)","alive":true,"type":"Transceiver","invert":false,"uplink_low":435250000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145960000,"downlink_high":null,"mode":"FM"}]"#,
+        );
+        assert_eq!(rows.len(), 1, "scene: AO-91 parsed");
+        let shared = sat_pick_station("digital");
+        {
+            let mut e = engine_lock(&shared);
+            e.set_frequency(14.074, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+        }
+        let picked = super::hold_sat_row(&shared, "AO-91", &[&rows[0]], 0);
+        let e = engine_lock(&shared);
+        let r = e.snapshot().radio;
+        assert_eq!(
+            (
+                picked,
+                super::satellite_held(&e).map(|h| h.name),
+                (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+            ),
+            (
+                Err("This radio doesn't cover 145.9600 MHz — nothing is held.".to_string()),
+                None,
+                (14.074, "20m", "USB"),
+            )
+        );
     }
 
     /// …and nothing else moves. The FM birds stay FM through the same pick (SO-50 and PO-101

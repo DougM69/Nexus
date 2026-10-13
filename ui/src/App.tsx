@@ -921,6 +921,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             sstvArm,
             sstvAutoDisarm,
           }
+          // The radio in use is the station's only enabled radio: with its probed coverage,
+          // that is how the tick knows 145.800 cannot be received here at all. Read when the
+          // tick runs, as the screen is.
+          const soleRadio = () =>
+            !(settingsRef.current?.radios ?? []).some(
+              (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
+            )
           if (settingsRef.current?.issSstvAutoArm === true) {
             getIssPass()
               .then((issPass) =>
@@ -931,6 +938,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                   issDeps,
                   Date.now() / 1000,
                   viewRef.current,
+                  soleRadio(),
                 ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
@@ -945,6 +953,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                   issDeps,
                   Date.now() / 1000,
                   viewRef.current,
+                  soleRadio(),
                 ),
               )
           } else {

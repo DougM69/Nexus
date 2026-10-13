@@ -123,10 +123,13 @@ the VFO and Nexus follows: it takes your new dial as your position in the
 passband and moves your uplink to match (mirrored, if the transponder inverts).
 Doppler keeps correcting around wherever you put yourself.
 
-A radio that cannot receive the bird is never steered. Pick a 70 cm bird with
-only an HF rig in use and the pick says the radio does not cover it and tunes
-nothing; Doppler then leaves that radio alone for the whole pass, and takes it
-up on a radio that does cover the bird.
+A radio that cannot receive the bird is never steered. When it is the station's
+only radio (an HF rig and a 70 cm bird, say), the pick says the radio doesn't
+cover the bird and holds nothing, so FT8 and the rest of the app carry on as if
+nothing had been picked. With a second radio enabled the bird is held as before;
+Doppler leaves the HF rig alone for the whole pass and works it on the radio that
+covers the bird. A radio whose coverage Nexus has not read yet is treated as able
+to receive the bird.
 
 ![The Frequencies pane during a pass: Doppler-corrected downlink and uplink, and a passband bar with the two legs marked.](../img/manual/satellites-doppler-passband.webp)
 

@@ -1355,8 +1355,9 @@ it well below their SSB drive.*
 - **ISS SSTV auto-arm** — off by default. Tunes 145.800 FM and arms the decoder
   when the ISS is overhead while the SSTV or Satellites screen is open, and
   restores your dial at LOS. On any other screen it only tells you the ISS is up,
-  and leaves your radio alone. A pass arm is an explicit act, so this works
-  whether or not the switch above is on.
+  and leaves your radio alone. If your radio cannot receive 145.800 MHz, it tells
+  you once per session and does nothing else. A pass arm is an explicit act, so
+  this works whether or not the switch above is on.
 
 **Transmitting**
 

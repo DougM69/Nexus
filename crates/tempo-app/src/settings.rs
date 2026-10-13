@@ -2463,7 +2463,8 @@ pub struct Settings {
     /// frontend (issAutoArm.ts, mirroring the sat alarm) since SSTV RX only runs
     /// while the app is open. It takes the radio only while the SSTV or
     /// Satellites screen is the one in use: on any other screen the pass is
-    /// announced and the radio is left to that screen.
+    /// announced and the radio is left to that screen. Where no radio here can
+    /// receive 145.800 it tunes nothing on any screen, and says so once a session.
     pub iss_sstv_auto_arm: bool,
 
     // --- SSTV (Settings ▸ Digital ▸ SSTV) ---

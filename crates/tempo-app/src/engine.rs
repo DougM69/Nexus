@@ -17319,6 +17319,54 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// THE PICK'S HOLD: hold `tp` as the transponder to work, as
+    /// [`Self::set_sat_transponder`] does, unless no radio on this station can
+    /// receive its downlink. The command layer's pick holds through here.
+    ///
+    /// A hold on a radio that cannot hear the bird drives nothing (both legs
+    /// refuse there, [`Self::sat_doppler_legs`]), yet everything that defers to
+    /// a held pass still defers to it: entering the Digital section leaves the
+    /// dial put, an FT8 to FT4 flip does not QSY, the TX gate stamps the pass's
+    /// identity instead of the dial ([`TxGateStamp`]), and the logger window
+    /// says a bird is picked. Right for a pass being worked, wrong for one that
+    /// cannot be. So the pick refuses it, with the reason, and holds nothing;
+    /// none of those paths changes, they simply have no hold to defer to.
+    ///
+    /// Refused only when both are KNOWN: the active radio's probed coverage
+    /// leaves the downlink out (the question `sat_doppler_legs` asks every
+    /// tick), and no other enabled radio exists to work the pass on. Unknown
+    /// coverage holds, failing open as [`Self::rig_covers_mhz`] does
+    /// everywhere. So does a station with another enabled radio: its coverage
+    /// has never been probed here, the pick may hand the pass to it
+    /// ([`Self::sat_tune_nominal`]), and Doppler resumes on it after a switch.
+    ///
+    /// A refusal changes nothing, as every other refused pick does: a hold
+    /// already standing stays, and the reason names it.
+    pub fn hold_sat_transponder(
+        &mut self,
+        tp: (String, usize, tempo_core::doppler::Transponder),
+    ) -> Result<(), String> {
+        let downlink_mhz = tp.2.downlink_centre_hz as f64 / 1_000_000.0;
+        let another_radio = self
+            .settings
+            .radios
+            .iter()
+            .any(|p| p.enabled && p.id != self.settings.active_radio);
+        if self.rig_covers_mhz(downlink_mhz) == Some(false) && !another_radio {
+            return Err(match self.sat_tune.as_ref() {
+                None => {
+                    format!("This radio doesn't cover {downlink_mhz:.4} MHz — nothing is held.")
+                }
+                Some(held) => format!(
+                    "This radio doesn't cover {downlink_mhz:.4} MHz — {} stays held.",
+                    held.label.split('|').next().unwrap_or("").trim()
+                ),
+            });
+        }
+        self.set_sat_transponder(Some(tp));
+        Ok(())
+    }
+
     /// The tracked pass is UP (the track loop's `tracking` phase) — or is not.
     /// Pushed every tick by the loop that owns the pass, so a track that dies
     /// without a handback cannot leave the state standing.
@@ -60133,7 +60181,9 @@ mod tests {
 
     /// The station in the 2026-10-13 report: ONE radio, an FT-710 (HF + 6 m, its coverage
     /// probed), working FT8 on 20 m, here with SO-50 held from earlier in the session. The pick
-    /// has already refused to tune it, out loud.
+    /// has already refused to tune it, out loud. (The pick now refuses such a hold outright when
+    /// it knows the coverage, `hold_sat_transponder`; set directly, this one stands for a hold
+    /// made before the probe answered.)
     fn ft710_on_ft8_holding_so50() -> Engine {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_operating_mode("digital", false);
@@ -60310,6 +60360,151 @@ mod tests {
             e.sat_doppler_tick(1.0, 1_065_000, false)
                 .is_some_and(|c| c.downlink_hz.is_some()),
             "back on the 9700, Doppler resumes"
+        );
+    }
+
+    /// AO-91: an FM bird, its uplink on 70 cm and its downlink on 2 m.
+    const AO91: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 435_250_000,
+        downlink_centre_hz: 145_960_000,
+        invert: false,
+        half_width_hz: 0,
+    };
+
+    /// The pick's engine half as the command layer runs it (`hold_sat_row`): hold, then tune what
+    /// the hold names. A refused hold is the pick's answer, and nothing is tuned.
+    fn pick_sat(
+        e: &mut Engine,
+        label: &str,
+        t: tempo_core::doppler::Transponder,
+        class: tempo_core::doppler::DownlinkClass,
+    ) -> Result<Option<String>, String> {
+        e.hold_sat_transponder((label.into(), 0, t))?;
+        Ok(e.sat_tune_nominal(class, 1_000_000).note)
+    }
+
+    /// From 20 m Phone: enter the FT8 section, read the TX gate's stamp there, then flip FT8 to
+    /// FT4. The dial after entry, the stamp's dial and pass identity, the dial after the flip.
+    fn ft8_entry_then_ft4(e: &mut Engine) -> (f64, Option<u64>, Option<(String, i64)>, f64) {
+        e.set_operating_mode("digital", true);
+        let entered = e.settings.dial_mhz;
+        let stamp = e.tx_gate_stamp();
+        e.set_tier(Tier::Ft4);
+        (
+            entered,
+            stamp.dial_hz,
+            stamp.sat_tuning,
+            e.settings.dial_mhz,
+        )
+    }
+
+    #[test]
+    fn a_bird_the_only_radio_cannot_receive_is_not_held_and_the_dial_stays_the_operators() {
+        // The 2026-10-13 station with nothing held yet: ONE radio, an FT-710 (HF + 6 m, its
+        // coverage probed), on 20 m. AO-91 is picked, a 2 m downlink it cannot receive. Held, the
+        // pass drove nothing (`sat_doppler_legs`), yet everything that defers to a held pass
+        // deferred to it: entering FT8 left the dial put, FT8 to FT4 did not QSY, and the TX gate
+        // stamped the pass's identity instead of the dial. Refused, nothing is held, and each of
+        // those does what it does with no pick at all. None of them is changed to get there.
+        let ft710 = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+            e
+        };
+        let mut no_pick = ft710();
+        let as_with_no_pick = ft8_entry_then_ft4(&mut no_pick);
+        assert_eq!(
+            as_with_no_pick,
+            (14.074, Some(14_074_000), None, 14.080),
+            "control: with no pick, FT8 re-homes, the gate judges the dial, and FT4 QSYs"
+        );
+
+        let mut e = ft710();
+        let picked = pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD);
+        let held = e.sat_transponder_held().map(|(label, _)| label.to_string());
+        assert_eq!(
+            (picked, held, ft8_entry_then_ft4(&mut e)),
+            (
+                Err("This radio doesn't cover 145.9600 MHz — nothing is held.".to_string()),
+                None,
+                as_with_no_pick,
+            ),
+            "the pick holds nothing and says so, and FT8, FT4 and the TX gate judge the dial"
+        );
+    }
+
+    #[test]
+    fn a_bird_a_radio_here_may_receive_is_still_held() {
+        // CONTROLS for the refusal above: every station here may work the pass, so the pick holds.
+        //
+        // A second enabled radio. The FTdx10 in use cannot hear AO-91, and the pick hands the
+        // pass to the IC-9700 beside it.
+        let (mut e, ic9700) = fresh_dual_radio_sat_station();
+        assert_eq!(
+            pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD).map(|_| ()),
+            Ok(()),
+            "another enabled radio: the pick holds"
+        );
+        assert_eq!(e.sat_transponder_held(), Some(("AO-91|FM", Some(0))));
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "the pick handed the pass on"
+        );
+
+        // One radio of UNKNOWN coverage (no CAT, or the probe has not answered yet): fails open
+        // and holds, as the coverage gate does everywhere (`rig_covers_mhz`).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(
+            pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD).map(|_| ()),
+            Ok(()),
+            "unknown coverage: the pick holds"
+        );
+        assert_eq!(e.sat_transponder_held(), Some(("AO-91|FM", Some(0))));
+
+        // One radio that covers 2 m: the single-radio satellite operator, tuned as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+        ]));
+        assert_eq!(pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD), Ok(None));
+        assert_eq!(e.sat_transponder_held(), Some(("AO-91|FM", Some(0))));
+    }
+
+    #[test]
+    fn a_refused_pick_leaves_the_pass_already_held() {
+        // A refused pick changes nothing, as every other refused pick does: an IC-9700 alone,
+        // RS-44 held, and AO-7's mode A picked (its downlink on 10 m, which the 9700 cannot
+        // receive). RS-44 stays held and keeps the dial, and the reason says so rather than
+        // claiming that nothing is held.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+        ]));
+        pick_sat(&mut e, "RS-44|linear", RS44, SSB_BIRD).expect("scene: RS-44 held on the 9700");
+        let owner = e.sat_dial_owner().cloned();
+        let ao7_mode_a = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_900_000,
+            downlink_centre_hz: 29_450_000,
+            invert: false,
+            half_width_hz: 50_000,
+        };
+        assert_eq!(
+            pick_sat(&mut e, "AO-7|Mode A", ao7_mode_a, SSB_BIRD),
+            Err("This radio doesn't cover 29.4500 MHz — RS-44 stays held.".to_string())
+        );
+        assert_eq!(e.sat_transponder_held(), Some(("RS-44|linear", Some(0))));
+        assert_eq!(
+            e.sat_dial_owner().cloned(),
+            owner,
+            "the pass keeps the dial"
         );
     }
 

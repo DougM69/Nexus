@@ -304,6 +304,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and leaves the radio alone, and opening SSTV during the pass arms it then. A satellite picked for
   a radio that cannot receive it is no longer steered onto that radio by Doppler during the pass
   either.
+- **Picking a satellite your only radio cannot receive no longer takes over the dial.** On a
+  station with one radio, such as an FT-710 and a 2 m satellite, the pick was held even though
+  the radio could not hear the bird. Opening FT8 then did not bring the dial back to the FT8
+  channel, switching FT8 to FT4 did not move to the FT4 channel, the transmit check went by the
+  satellite instead of your dial, and the contest logger window said the bird was picked. The pick
+  now says "This radio doesn't cover … nothing is held" and holds nothing, so all of these work as
+  if nothing had been picked. With a second radio enabled, or when Nexus cannot yet tell what the
+  radio covers, the satellite is held as before.
+- **ISS SSTV auto-arm on a radio that cannot receive 145.800 MHz now says so once.** Every ISS
+  pass used to bring the "ISS overhead" notice, and on the SSTV or Satellites screen the auto-arm
+  tuned a channel the radio refuses. When your only radio cannot receive 145.800 MHz, Nexus now
+  tells you once per session, with where to turn the auto-arm off (Settings ▸ Digital ▸ SSTV), and
+  then leaves the radio and the screen alone.
 
 ## [1.18.0] — 2026-10-12
 
