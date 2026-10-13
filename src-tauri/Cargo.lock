@@ -2526,6 +2526,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jtty"
+version = "0.1.0"
+dependencies = [
+ "tempo-fast-sys",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5527,6 +5534,7 @@ name = "tempo-app"
 version = "0.2.0"
 dependencies = [
  "js8",
+ "jtty",
  "modes",
  "ring",
  "serde",

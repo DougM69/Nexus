@@ -2747,6 +2747,7 @@ name = "tempo-app"
 version = "0.2.0"
 dependencies = [
  "js8",
+ "jtty",
  "modes",
  "ring",
  "serde",

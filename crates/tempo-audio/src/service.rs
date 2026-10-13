@@ -11772,6 +11772,21 @@ impl RadioLoop {
         // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
         // they cost nothing here, and moving them would risk dropping audio under contention.
         eng.feed_rx_audio(&captured);
+        // JTTY's PSK Reporter spots (`tempo_app::engine::jtty_rx`): only calls its receive side has
+        // decoded in two separate messages are ever queued. Taken every tick, so the queue cannot
+        // grow while uploading is off; sent with the rest by the PSK Reporter flush below.
+        let jtty_spots = eng.take_jtty_spots();
+        if sinks.psk.is_some() {
+            station
+                .psk_spots
+                .extend(jtty_spots.into_iter().map(|s| Spot {
+                    call: s.call,
+                    freq_hz: s.freq_hz,
+                    snr: s.snr,
+                    mode: "JTTY".to_string(),
+                    time_secs: s.time_secs,
+                }));
+        }
 
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---

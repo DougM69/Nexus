@@ -943,6 +943,27 @@ fn own_decode_heards(
         .collect()
 }
 
+/// This radio's confirmed JTTY stations ([`tempo_app::engine::Engine::jtty_heard`]) as the Needed
+/// board's heard records: each on the band of the frequency it was heard on and at that exact
+/// frequency (a click goes there), in mode JTTY, with the locator its message carried, if any,
+/// for a grid need and the state hint. A station heard off the band table is left out.
+fn jtty_heards(heard: &[tempo_app::dto::JttyHeard]) -> Vec<propagation::Heard> {
+    heard
+        .iter()
+        .filter(|h| !h.band.is_empty())
+        .map(|h| propagation::Heard {
+            call: h.call.clone(),
+            band: h.band.clone(),
+            mode: "JTTY".to_string(),
+            freq_mhz: Some(h.freq_hz as f64 / 1e6),
+            admitted_at: Some(h.at_utc_ms / 1000),
+            evidence: Some("decoded by YOUR radio in JTTY, in two separate messages".to_string()),
+            grid: h.grid.clone(),
+            us_state: us_state_hint(&h.call, h.grid.as_deref()),
+        })
+        .collect()
+}
+
 /// A plausibly-real operator callsign — checked by SHAPE, not a denylist. Network
 /// features that log in to public services (DX cluster / RBN, PSK Reporter MQTT)
 /// gate on this so they never key an unset/garbage call on a public service.
@@ -3782,6 +3803,7 @@ mod logbook_startup_tests {
             "spawn_ai_cw(",
             "spawn_rtty_rx(",
             "spawn_psk_rx(",
+            "spawn_jtty_rx(",
             "spawn_aprs_rx(",
             "spawn_sstv_rx(",
             "send_main_window_to_the_app(&handle)",
@@ -16847,6 +16869,71 @@ async fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, St
     with_engine(&state, |eng| psk_state_dto(&eng)).await
 }
 
+// ---- JTTY receive (WSJT-X's keyboard mode; `tempo_app::engine::jtty_rx`). RECEIVE ONLY: no
+// command here can key anything. Every command answers the whole `JttyState`, the DTO serialised
+// directly (the JS8 shape). ----
+
+/// The live JTTY receive state (poll while the JTTY cockpit is visible).
+#[tauri::command]
+async fn get_jtty_state(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::JttyState, String> {
+    with_engine(&state, |eng| eng.jtty_state()).await
+}
+
+/// Arm/disarm the JTTY decoder by an EXPLICIT operator act (session-only, never persisted, so the
+/// app never launches armed). A stop is remembered for the session: `jtty_auto_arm` will not
+/// restart the decoder behind the operator.
+#[tauri::command(async)]
+fn jtty_arm(state: State<'_, SharedEngine>, on: bool) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_armed(on);
+    Ok(eng.jtty_state())
+}
+
+/// Arm the decoder because the operator ENTERED the JTTY view. Receive-only by construction: only
+/// upgrades from off, and refuses once the operator has stopped it this session.
+#[tauri::command(async)]
+fn jtty_auto_arm(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_auto_arm();
+    Ok(eng.jtty_state())
+}
+
+/// WSJT-X's Rx frequency and F Tol for JTTY: the audio channel always searched. Takes effect at
+/// the next search without restarting the reception.
+#[tauri::command(async)]
+fn jtty_set_rx(
+    state: State<'_, SharedEngine>,
+    rx_hz: f32,
+    ftol_hz: f32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_rx(rx_hz, ftol_hz)?;
+    Ok(eng.jtty_state())
+}
+
+/// The JTTY waterfall's range: the fixed 1200-1500 and 1500-1800 Hz channels are searched where
+/// they fall inside it, as WSJT-X searches them inside its wide graph.
+#[tauri::command(async)]
+fn jtty_set_band(
+    state: State<'_, SharedEngine>,
+    low_hz: i32,
+    high_hz: i32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_band(low_hz, high_hz)?;
+    Ok(eng.jtty_state())
+}
+
+/// Empty the JTTY receive window (WSJT-X's Erase); what has been heard stays heard.
+#[tauri::command(async)]
+fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_clear();
+    Ok(eng.jtty_state())
+}
+
 // ---- JS8 (the `engine::js8` adapter; every command answers the whole Js8State — the PSK
 // shape — and the DTO is `tempo_app::dto::Js8State` serialised directly, no copy here) ----
 
@@ -18357,12 +18444,12 @@ fn get_licensed_band_plan(
     use tempo_app::settings::OperatingMode;
     let eng = engine_lock(&state);
     let class = eng.settings().license_class;
-    // RTTY / SSTV / PSK / JS8: fixed standard watering-hole channels (like WSJT-X's
+    // RTTY / SSTV / PSK / JS8 / JTTY: fixed standard watering-hole channels (like WSJT-X's
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
     // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan).
     let lower = mode.to_ascii_lowercase();
-    if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
+    if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" || lower == "jtty" {
         let (plan, priv_mode) = if lower == "rtty" {
             (
                 tempo_app::bandplan::rtty_band_plan(),
@@ -18371,6 +18458,13 @@ fn get_licensed_band_plan(
         } else if lower == "psk" {
             (
                 tempo_app::bandplan::psk_band_plan(),
+                OperatingMode::Keyboard,
+            )
+        } else if lower == "jtty" {
+            // WSJT-X's JTTY frequency list as it is; a keyboard mode, so the Keyboard section's
+            // data privileges mark it.
+            (
+                tempo_app::bandplan::jtty_band_plan(),
                 OperatingMode::Keyboard,
             )
         } else if lower == "js8" {
@@ -22315,6 +22409,9 @@ fn read_need_alerts(
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
     let license_class = eng.settings().license_class;
+    // This radio's JTTY decoder: only the stations it has decoded in two separate messages a
+    // short time apart (`tempo_app::engine::jtty_rx`), for as long as the radio's other decodes.
+    let jtty_heard = eng.jtty_heard(now_unix() * 1000, OWN_DECODE_MAX_AGE_SECS * 1000);
     drop(eng); // nothing below needs the engine — don't hold the hot lock
     let needs = needs_finish(needs, needs_kept)?;
     let hunted = log_folds::hunted_today(&hunted_rows, now_unix())?;
@@ -22335,6 +22432,7 @@ fn read_need_alerts(
         &tier_mode,
         OWN_DECODE_MAX_AGE_SECS,
     );
+    heard.extend(jtty_heards(&jtty_heard));
     // The real value (empirical evidence, not a model): two complementary signals
     // over the PSK Reporter firehose + near-region feed —
     //   1. heard_near_me: a receiver NEAR YOU is hearing the DX (their signal
@@ -35071,6 +35169,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         tempo_audio::rttyrx::spawn_rtty_rx(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::amppoll::spawn_amp_poll(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::pskrx::spawn_psk_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::jttyrx::spawn_jtty_rx(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::aprsrx::spawn_aprs_rx(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::sstvrx::spawn_sstv_rx(
             handle.state::<SharedEngine>().inner().clone(),
@@ -35400,6 +35499,12 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             psk_arm,
             psk_auto_arm,
             get_psk_state,
+            get_jtty_state,
+            jtty_arm,
+            jtty_auto_arm,
+            jtty_set_rx,
+            jtty_set_band,
+            jtty_clear,
             js8_enter,
             get_js8_state,
             js8_locator_refusal,
@@ -40170,17 +40275,17 @@ mod tests {
     use super::{
         assistance_posture_changed, b64_decode, b64_encode, callbook_candidates, catalog_marks,
         cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
-        is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, load_tle_snapshot_from,
-        migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode, profile_dir_name,
-        qso_is_sat, reconcile_gallery, rect_lands_on_work_area, redact_for_backup, resolve_bird,
-        resolve_birds, roster_local_spots, roster_spot_age_secs, run_sat_track, sanitize_profile,
-        sat_excluded, set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
-        tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
-        tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
-        tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in, AssistanceEvent,
-        AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SatnogsFetchState,
-        SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS,
-        TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, jtty_heards,
+        load_tle_snapshot_from, migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode,
+        profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
+        redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
+        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spotter_evidence_rank,
+        spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
+        tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
+        tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
+        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
+        SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
+        TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -40689,6 +40794,61 @@ mod tests {
         );
     }
 
+    /// This radio's confirmed JTTY stations reach the Needed board as heard in mode JTTY, on the
+    /// band and at the exact frequency each was heard on (a click goes there), with the locator
+    /// its message carried; one off the band table is left out.
+    #[test]
+    fn confirmed_jtty_stations_reach_the_board_on_their_own_band_and_frequency() {
+        let h =
+            |call: &str, freq_hz: u64, band: &str, grid: Option<&str>| tempo_app::dto::JttyHeard {
+                call: call.into(),
+                freq_hz,
+                band: band.into(),
+                snr: -9,
+                grid: grid.map(str::to_string),
+                at_utc_ms: 1_780_000_000_500,
+            };
+        let heard = jtty_heards(&[
+            h("K1ABC", 14_091_500, "20m", Some("FN42")),
+            h("W1AW", 7_079_480, "40m", None),
+            h("VE3XYZ", 5_000_000, "", None),
+        ]);
+        let rows: Vec<_> = heard
+            .iter()
+            .map(|x| {
+                (
+                    x.call.as_str(),
+                    x.band.as_str(),
+                    x.mode.as_str(),
+                    x.freq_mhz,
+                    x.grid.as_deref(),
+                    x.admitted_at,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "K1ABC",
+                    "20m",
+                    "JTTY",
+                    Some(14.0915),
+                    Some("FN42"),
+                    Some(1_780_000_000)
+                ),
+                (
+                    "W1AW",
+                    "40m",
+                    "JTTY",
+                    Some(7.07948),
+                    None,
+                    Some(1_780_000_000)
+                ),
+            ]
+        );
+    }
+
     /// REGRESSION (operator 2026-08-05, "I would want spots to show up for almost
     /// all those spotted in the US"): the Needed board's HF locality gate, exercised
     /// through the buffer that feeds it — because the two halves only work together.
@@ -41129,11 +41289,12 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 19] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 20] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
         "get_psk_state",
+        "get_jtty_state",
         "get_js8_state",
         "get_sstv_state",
         "get_settings",

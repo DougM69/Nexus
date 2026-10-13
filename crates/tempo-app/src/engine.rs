@@ -1085,6 +1085,11 @@ use crate::AppState;
 #[path = "js8.rs"]
 pub mod js8;
 
+/// JTTY receive (`crates/tempo-app/src/jtty_rx.rs`) — a CHILD of this module, as `js8` is, so
+/// it reaches the engine's private fields with no visibility widening. RECEIVE ONLY.
+#[path = "jtty_rx.rs"]
+pub mod jtty_rx;
+
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
 /// mean "not read yet / not reported". `cat_ok` mirrors the active radio's `(Option<bool>)` health.
 #[derive(Debug, Clone, Default)]
@@ -3898,6 +3903,10 @@ pub struct Engine {
     /// Whether the PSK demodulator's quality squelch currently reads a signal
     /// (the cockpit's carrier indicator).
     psk_signal: bool,
+    /// JTTY receive (WSJT-X's keyboard mode): the armed decoder's tap, its receptions, the
+    /// receive window and the two-decode rule's state. Session-only; RECEIVE ONLY — nothing in
+    /// it can key the rig (see [`jtty_rx`]).
+    jtty: jtty_rx::JttyRx,
     /// One-shot: drop + rebuild the RX demodulator (the cockpit's Re-acquire —
     /// fresh AFC pull from the netted center).
     psk_afc_reset: bool,
@@ -5775,6 +5784,7 @@ impl Engine {
             psk_chars: VecDeque::new(),
             psk_afc_hz: 0.0,
             psk_signal: false,
+            jtty: jtty_rx::JttyRx::default(),
             psk_afc_reset: false,
             psk_center: None,
             psk_mode: tempo_core::psk::PskModeKind::Bpsk31,
@@ -18603,6 +18613,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.psk_audio.drain(0..drop);
             }
         }
+        // JTTY's tap keeps each reception's samples contiguous on its own timeline instead of
+        // dropping the oldest (`jtty_rx`); disarmed it is one branch.
+        self.jtty_feed(samples, now_unix_millis() as i64);
         if self.aprs_arm.is_armed() {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {

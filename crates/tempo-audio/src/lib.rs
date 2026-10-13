@@ -75,6 +75,10 @@ pub mod frames;
 /// rides the `device` feature like the Flex client.
 #[cfg(feature = "device")]
 pub mod icomlan;
+/// JTTY RX decode thread (armed-decoder-on-the-RX-path, the `pskrx` pattern) over the engine's
+/// `jtty_rx` driver. RX ONLY — no TX path.
+#[cfg(feature = "device")]
+pub mod jttyrx;
 pub mod mic_decode;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local

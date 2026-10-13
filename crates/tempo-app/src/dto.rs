@@ -618,6 +618,79 @@ pub struct Js8State {
     pub last_error: Option<String>,
 }
 
+/// The live JTTY receive state the cockpit polls (`get_jtty_state`) — `PskRxState`'s role
+/// for WSJT-X's keyboard mode. RECEIVE ONLY: nothing in it can start a transmission.
+/// Computed from engine truth at poll time (`Engine::jtty_state`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyState {
+    /// The decoder is armed (session-only; the app never launches armed).
+    pub armed: bool,
+    /// WSJT-X's Rx frequency and F Tol: the audio channel always searched, `rx_hz` ± `ftol_hz`.
+    pub rx_hz: f32,
+    pub ftol_hz: f32,
+    /// The waterfall's range: the fixed 1200-1500 and 1500-1800 Hz channels are searched only
+    /// where they fall inside `low_hz..=high_hz` (WSJT-X searches them inside its wide graph).
+    pub low_hz: i32,
+    pub high_hz: i32,
+    /// The receive window, oldest first: one line per decoded message, updated in place while
+    /// it grows.
+    pub lines: Vec<JttyLine>,
+    /// The stations decoded in two separate messages a short time apart, newest first: the
+    /// only calls a lookup may be offered for, and the ones the Needed board hears.
+    pub heard: Vec<JttyHeard>,
+    /// Why receiving stopped or restarted, to show the operator (`None` when there is nothing
+    /// to say since the last arm or clear).
+    pub notice: Option<String>,
+}
+
+/// One message in the JTTY receive window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyLine {
+    /// The decoder's message id: stable while the message grows.
+    pub id: i64,
+    /// When its first frame started, UTC milliseconds.
+    pub start_utc_ms: i64,
+    /// Audio frequency (Hz) and the dial it was heard on (Hz).
+    pub freq_hz: f32,
+    pub dial_hz: u64,
+    /// SNR of its first frame, dB in 2500 Hz (WSJT-X's column).
+    pub snr: i32,
+    /// The text so far, as WSJT-X shows it (keep-alive filler removed).
+    pub text: String,
+    /// The line exactly as WSJT-X's decode pane prints it, without the optional time label:
+    /// frequency, SNR and the text wrapped at 40 characters (continuations indented).
+    pub line: String,
+    /// `"growing" | "complete" | "expired" | "ended"`: still arriving, ended by its sender,
+    /// timed out, or cut off by the reception ending.
+    pub state: String,
+    /// The message belongs to the RX-frequency pane (WSJT-X's right-hand pane): it was within
+    /// F Tol of the Rx frequency when first heard, and stays there as it drifts.
+    pub rx: bool,
+    /// The calls in this line that have been decoded in two separate messages: the ones a
+    /// click may look up. A call not listed here has been heard once, and may be a false
+    /// decode.
+    pub confirmed_calls: Vec<String>,
+}
+
+/// A JTTY station decoded in two separate messages a short time apart, at its latest message
+/// that named it as the sender (WSJT-X's spot shape: `CQ|DE|<call> <sender> [grid]`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyHeard {
+    pub call: String,
+    /// The RF frequency it was heard on: dial + audio frequency, Hz.
+    pub freq_hz: u64,
+    /// The band of `freq_hz` (`"20m"`), or `""` off the band table.
+    pub band: String,
+    pub snr: i32,
+    /// A locator the message carried after the sender, if any.
+    pub grid: Option<String>,
+    /// When that message started, UTC milliseconds.
+    pub at_utc_ms: i64,
+}
+
 /// A single chat message (inbound or outbound) within a conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
