@@ -11,9 +11,8 @@
 //!   it: Esc stays an ordinary key, and over the picture it is the page's Stop TX. F11 itself is
 //!   kept here and never reaches the page or the shack; Esc is never touched.
 //! - **No browser shortcuts in the way.** WebView2's own accelerators (F5 and Ctrl+R reload, Ctrl+P
-//!   print, Ctrl+F find, Alt+Left back…) are switched off, so those keys reach the page and, through
-//!   the stream, the shack. Tauri 2.11 does not pass wry's switch for this through, so
-//!   `quiet_browser_keys` sets `AreBrowserAcceleratorKeysEnabled` on the webview itself.
+//!   print, Ctrl+F find, Alt+Left back…) are off, as in every Nexus window (`browser_keys`), so
+//!   those keys reach the page and, through the stream, the shack.
 //! - **Its own place on the desktop.** Size and position are remembered, and clamped on load to
 //!   the monitors attached then (`window_state`, the main window's policy). Full screen is not
 //!   remembered: a window closed full screen reopens at its last windowed box.
@@ -311,7 +310,7 @@ pub async fn open_remote_stations_window(app: tauri::AppHandle) -> Result<(), St
     let window = builder.build().map_err(|_| NOT_OPENED)?;
     window_state::arm_remote_capture(&window);
     #[cfg(windows)]
-    quiet_browser_keys(&window);
+    f11_full_screen(&window);
     Ok(())
 }
 
@@ -416,26 +415,24 @@ pub async fn open_lan_stations_window(
         }
     });
     #[cfg(windows)]
-    quiet_browser_keys(&window);
+    f11_full_screen(&window);
     Ok(())
 }
 
-/// WebView2's browser accelerators off, and F11 for the window's own full screen.
+/// F11 for the window's own full screen. (WebView2's browser accelerators are off in every Nexus
+/// window: `browser_keys`.)
 ///
-/// `AreBrowserAcceleratorKeysEnabled` false hands F5, Ctrl+R, Ctrl+P, Ctrl+F, F12, Alt+Left and the
-/// rest to the page instead of acting on them; editing keys (Ctrl+C/V/X/A/Z) are not affected.
 /// The `AcceleratorKeyPressed` handler sees F11 before the page does: it keeps F11, press and
 /// release, and toggles the window's full screen on the press (not on auto-repeat). The toggle runs
 /// on a thread of its own because this handler is inside WebView2's event, where resizing the
 /// window under it is not safe. No other key is touched; Esc in particular always reaches the page.
 #[cfg(windows)]
-fn quiet_browser_keys(window: &tauri::WebviewWindow) {
+fn f11_full_screen(window: &tauri::WebviewWindow) {
     use webview2_com::AcceleratorKeyPressedEventHandler;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2Settings3, COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+        COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
         COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP, COREWEBVIEW2_PHYSICAL_KEY_STATUS,
     };
-    use windows_core::Interface;
 
     /// `VK_F11` (winuser.h).
     const VK_F11: u32 = 0x7A;
@@ -446,13 +443,6 @@ fn quiet_browser_keys(window: &tauri::WebviewWindow) {
         // SAFETY: plain COM calls on the live controller of this window's own webview, on the
         // thread WebView2 created it on (`with_webview` runs there).
         unsafe {
-            if let Ok(settings) = controller
-                .CoreWebView2()
-                .and_then(|core| core.Settings())
-                .and_then(|settings| settings.cast::<ICoreWebView2Settings3>())
-            {
-                let _ = settings.SetAreBrowserAcceleratorKeysEnabled(false);
-            }
             let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
                 let Some(args) = args else {
                     return Ok(());

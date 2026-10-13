@@ -108,6 +108,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
   asked.
+- **F5, Ctrl+F5 and Ctrl+R no longer reload Nexus on Windows.** One of them pressed by mistake
+  reloaded the whole window, in a contest in the middle of a contact. WebView2's own browser
+  shortcuts are now off in every Nexus window, as they already were in the Remote stations window:
+  the main window, the splash and every pop-out, the Contest screen and the Contest logger among
+  them. With them, Ctrl+P no longer prints the window and Ctrl+F no longer opens a find bar. Copy,
+  paste, cut, undo and select all work as before, and so do Nexus's own F-keys. Not yet tried on
+  Windows.
 
 ## [1.18.0] — 2026-10-12
 

@@ -30,6 +30,9 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+/// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
+/// window, set on each webview as Tauri makes it.
+mod browser_keys;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -35180,6 +35183,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         // The data-folder picker (#289). Driven from Rust only (`pick_data_folder`); no
         // capability entry, so the webview cannot open a dialog of its own.
         .plugin(tauri_plugin_dialog::init())
+        // WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P, Ctrl+F…) off in every window:
+        // set on each webview as Tauri makes it, the configured windows included.
+        .plugin(browser_keys::init())
         .manage(d.engine)
         .manage(remote_publisher)
         .manage(d.spectrum_feed)

@@ -1091,11 +1091,11 @@ principal third-party components, not a substitute for that gate:
   seed its own scale on a high-DPI panel instead of rendering half-size until the operator
   finds the zoom control) — MIT. Not a new crate: already in the tree at the same version as a
   dependency of gtk, gdkx11 and webkit2gtk, which the Linux webview pulls in regardless.
-- **webview2-com** and **windows-core** (Windows only: the Remote stations window turns off
-  WebView2's own browser keys, such as reload, print and find, so they cannot act on the Remote
-  page) — MIT, and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both
-  are already in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the
-  webview Tauri uses.
+- **webview2-com** and **windows-core** (Windows only: every Nexus window turns off WebView2's
+  own browser keys, such as reload, print and find, so they cannot act on Nexus's pages) — MIT,
+  and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both are already
+  in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the webview Tauri
+  uses.
 - **tokio-rustls** (Remote over this network: the shack's own listener, TLS 1.3 with raw keys pinned at
   pairing) — MIT OR Apache-2.0 (© 2017 quininer kel). Not a new crate: already in the tree at the same
   version (0.26) as a dependency of reqwest, hyper-rustls and tokio-tungstenite.
