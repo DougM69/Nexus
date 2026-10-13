@@ -4,16 +4,18 @@
 //! The HOST holds a [`ClubLog`]: every position's rows merged idempotently by
 //! `(position id, seq)`, an append-only NDJSON event journal (one merged row
 //! per line, flushed per merge — no whole-file clobber window, unlike the ADIF
-//! journal's rewrite), the club dupe index, sections, per-position stats and
-//! the scored total. **The club log is always reconstructible as the union of
-//! the position journals** — the invariant that makes "host dies, nothing
-//! lost" true: a restarted host replays its own journal, and every position
-//! re-pushes its tail for free because the merge is idempotent.
+//! journal's rewrite), the club dupe index, sections, the multiplier values
+//! worked, per-position stats and the scored total. **The club log is always
+//! reconstructible as the union of the position journals** — the invariant
+//! that makes "host dies, nothing lost" true: a restarted host replays its own
+//! journal, and every position re-pushes its tail for free because the merge
+//! is idempotent.
 //!
 //! A non-host POSITION holds only the compact [`ClubMirror`]: club dupe keys
-//! (the while-typing verdict), sections, counters and board rows pushed down
-//! by the host. No per-QSO attribution — which is why the scoreboard server
-//! runs at the host (`Engine::fd_board_snapshot` is `Some` only there).
+//! (the while-typing verdict), sections, the multiplier values the club has
+//! worked (its board), counters and board rows pushed down by the host. No
+//! per-QSO attribution — which is why the scoreboard server runs at the host
+//! (`Engine::fd_board_snapshot` is `Some` only there).
 //!
 //! Dupe semantics are N3FJP's: a CROSS-POSITION dupe is a **warning, never a
 //! lock** — the host keeps both rows, exports dedupe earliest-wins, and the
@@ -1024,6 +1026,15 @@ pub struct ClubLog {
     /// Sections in first-seen order (same append-only contract).
     sections_list: Vec<String>,
     sections_set: HashSet<String>,
+    /// ⭐ **The multiplier values the club has worked** — `(slot, value)` for every slot a
+    /// multiplier board of this contest is over ([`mult_slots`](Self::mult_slots)), in
+    /// first-seen order, each with the index in [`dkeys_list`](Self::dkeys_list) of the key
+    /// its contact brought: a value is taken only from a contact that brings a NEW key, the
+    /// row a club counts, as a position's own board reads only the rows its log counts. So
+    /// the list is append-only within a generation and rides the dupe cursor
+    /// ([`club_state`](Self::club_state)).
+    mults_list: Vec<(usize, String, String)>,
+    mults_set: HashSet<(String, String)>,
     positions: HashMap<String, ClubPosition>,
     /// Merge ARRIVAL times (host clock) with the row's `(posid, seq)`, pruned to the trailing
     /// hour — the per-position rate meter. In-memory only: after a host restart the rate
@@ -1178,6 +1189,25 @@ impl ClubLog {
     /// what a position running the same contest builds its keys with.
     fn dupe_rule(&self) -> DupeRule {
         self.ruleset().dupe_rule
+    }
+
+    /// ⭐ **The slots this club's multiplier boards are over** — every board the contest draws
+    /// for any of its roles ([`tempo_core::contest::boards`], what a position's own board is built
+    /// from), each slot once: an Illinois QSO Party's QTH, a Field Day's SECTION. Every role,
+    /// because the club log does not hold the host's: its positions all run the host's role, and
+    /// a board picks out its own slot's values.
+    fn mult_slots(&self) -> Vec<&'static str> {
+        let rs = self.ruleset();
+        let spec = self.exchange();
+        let mut slots: Vec<&'static str> = Vec::new();
+        for role in spec.roles {
+            for b in tempo_core::contest::boards(&rs.scoring, spec, role) {
+                if !slots.contains(&b.slot) {
+                    slots.push(b.slot);
+                }
+            }
+        }
+        slots
     }
 
     /// Is this club running one of the two Field Day events — the contests a v1
@@ -1761,8 +1791,9 @@ impl ClubLog {
         }
     }
 
-    /// One live row into the club's dupe keys, sections and its position's counts — the part
-    /// of a merge [`rebuild_index`](Self::rebuild_index) repeats for every live row.
+    /// One live row into the club's dupe keys, sections, multiplier values and its position's
+    /// counts — the part of a merge [`rebuild_index`](Self::rebuild_index) repeats for every
+    /// live row.
     fn index_row(&mut self, row: &MergedRow) {
         // ⭐ A satellite contact the contest gives no credit (Winter Field Day) is kept in
         // the club's rows and journal, and acked and counted on its position's board like
@@ -1771,9 +1802,21 @@ impl ClubLog {
         let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
         if counts && self.dkeys_set.insert(dkey.clone()) {
+            let at = self.dkeys_list.len();
             self.dkeys_list.push(dkey);
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
+            for slot in self.mult_slots() {
+                let value = row
+                    .ex
+                    .iter()
+                    .find(|f| f.k == slot)
+                    .map(|f| f.r.trim().to_ascii_uppercase())
+                    .unwrap_or_default();
+                if !value.is_empty() && self.mults_set.insert((slot.to_string(), value.clone())) {
+                    self.mults_list.push((at, slot.to_string(), value));
+                }
+            }
         }
         let sect = row.section.trim().to_ascii_uppercase();
         if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
@@ -1784,16 +1827,19 @@ impl ClubLog {
         pos.last_qso_unix = pos.last_qso_unix.max(row.when_unix);
     }
 
-    /// ⭐ **The dupe keys, sections and per-position counts, rebuilt from the live rows in merge
-    /// order** — exactly what merging them one by one builds, so after a take-back the club is
-    /// as if the contact had never come, and after its undo as if it had never gone. One more
-    /// generation: a delta cannot take a key away, so every connection gets a fresh snap.
+    /// ⭐ **The dupe keys, sections, multiplier values and per-position counts, rebuilt from the
+    /// live rows in merge order** — exactly what merging them one by one builds, so after a
+    /// take-back the club is as if the contact had never come, and after its undo as if it had
+    /// never gone. One more generation: a delta cannot take a key away, so every connection gets
+    /// a fresh snap.
     fn rebuild_index(&mut self) {
         self.dkeys_list.clear();
         self.dkeys_set.clear();
         self.dupes_list.clear();
         self.sections_list.clear();
         self.sections_set.clear();
+        self.mults_list.clear();
+        self.mults_set.clear();
         for p in self.positions.values_mut() {
             p.qsos_raw = 0;
             p.last_qso_unix = 0;
@@ -2121,6 +2167,20 @@ impl ClubLog {
         &self.sections_list
     }
 
+    /// ⭐ **The values the club has worked in multiplier slot `slot`**, sorted — what the host's
+    /// own board lights, from the list every position is sent ([`club_state`](Self::club_state)),
+    /// so the host and its positions can never light different cells.
+    pub fn worked_mults(&self, slot: &str) -> Vec<String> {
+        let mut values: Vec<String> = self
+            .mults_list
+            .iter()
+            .filter(|(_, s, _)| s == slot)
+            .map(|(_, _, v)| v.clone())
+            .collect();
+        values.sort();
+        values
+    }
+
     /// Earliest-wins unique attribution: for every club dupe key, the row
     /// that logged it FIRST by the position's own clock (merge order breaks
     /// ties — an offline position's late re-push of an EARLIER contact takes
@@ -2409,6 +2469,8 @@ impl ClubLog {
                     uniq: uniq.get(id.as_str()).copied().unwrap_or(0),
                     rate: rate.get(id.as_str()).copied().unwrap_or(0),
                     age: now.saturating_sub(p.last_seen_unix.min(now)),
+                    // Every laptop's board says so with the next club line; its line stays.
+                    removed: self.is_removed(id),
                 }
             })
             .collect()
@@ -2441,6 +2503,14 @@ impl ClubLog {
                 .get(sections_from..)
                 .unwrap_or(&[])
                 .to_vec(),
+            // Past the DUPE cursor: each value came in with the key at its index, so the delta
+            // that sends a key sends the values its contact brought.
+            mults: self.mults_list[self
+                .mults_list
+                .partition_point(|(at, _, _)| *at < dupes_from)..]
+                .iter()
+                .map(|(_, slot, value)| (slot.clone(), value.clone()))
+                .collect(),
             score,
             qsos: self.qsos_raw(),
             board: self.board_rows(now),
@@ -2535,6 +2605,10 @@ pub struct ClubMirror {
     /// The same keys under the ruleset's own rule — what a v2 position reads.
     pub dkeys: HashSet<Vec<String>>,
     pub sections: HashSet<String>,
+    /// ⭐ The multiplier values the club has worked, `(slot, value)`, as the host sent them
+    /// (`ClubState::mults`): what this laptop's board lights beside its own contacts. Empty from
+    /// a host older than the list, and this laptop's board is then its own, as it always was.
+    pub mults: HashSet<(String, String)>,
     pub score: u32,
     pub qsos: u64,
     pub board: Vec<WireBoardRow>,
@@ -2577,6 +2651,7 @@ impl ClubMirror {
             self.dupes.clear();
             self.dkeys.clear();
             self.sections.clear();
+            self.mults.clear();
         }
         for k in &st.dupes {
             self.dupes.insert(k.clone());
@@ -2586,6 +2661,9 @@ impl ClubMirror {
         }
         for s in &st.sections {
             self.sections.insert(s.clone());
+        }
+        for m in &st.mults {
+            self.mults.insert(m.clone());
         }
         self.score = st.score;
         self.qsos = st.qsos;
@@ -3675,6 +3753,7 @@ mod tests {
             dupes: vec![("W1AW".into(), "20m".into(), "DIG".into())],
             dkeys: vec![vec!["W1AW".into(), "20M".into(), "DIG".into()]],
             sections: vec!["CT".into()],
+            mults: vec![("SECTION".into(), "CT".into())],
             score: 10,
             qsos: 1,
             board: vec![],
@@ -3684,12 +3763,14 @@ mod tests {
             dupes: vec![("K1ABC".into(), "40m".into(), "CW".into())],
             dkeys: vec![vec!["K1ABC".into(), "40M".into(), "CW".into()]],
             sections: vec!["EMA".into()],
+            mults: vec![("SECTION".into(), "EMA".into())],
             score: 14,
             qsos: 2,
             board: vec![],
         });
         assert_eq!(m.dupes.len(), 2, "deltas union");
         assert_eq!(m.dkeys.len(), 2, "…and the generalised keys with them");
+        assert_eq!(m.mults.len(), 2, "…and the club's multiplier values");
         assert_eq!((m.score, m.qsos), (14, 2), "scalars overwrite");
         // A rejoin snap (host restarted into a new event) CLEARS before applying.
         m.apply(&ClubState {
@@ -3697,6 +3778,7 @@ mod tests {
             dupes: vec![("N0XYZ".into(), "20m".into(), "PH".into())],
             dkeys: vec![vec!["N0XYZ".into(), "20M".into(), "PH".into()]],
             sections: vec!["MN".into()],
+            mults: vec![("SECTION".into(), "MN".into())],
             score: 1,
             qsos: 1,
             board: vec![],
@@ -3713,6 +3795,13 @@ mod tests {
         assert!(m
             .dkeys
             .contains(&vec!["N0XYZ".to_string(), "20M".into(), "PH".into()]));
+        assert_eq!(
+            m.mults,
+            [("SECTION".to_string(), "MN".to_string())]
+                .into_iter()
+                .collect(),
+            "and so are the club's multiplier values"
+        );
     }
 
     #[test]
@@ -4477,6 +4566,83 @@ mod tests {
         let s = club.score_with("W9XYZ", session, 1, &[], &[]);
         assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
         assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+    }
+
+    /// ⭐ **The club log lists every multiplier value any position worked** — what every laptop's
+    /// board lights (`ClubState::mults`): the county board's counties and the in-state board's
+    /// states, both off the party's QTH slot, in the order they were first worked. A club dupe
+    /// brings nothing (it is the same contact, its key already in), the delta past a key cursor
+    /// carries the values its contacts brought, and a take-back takes a value with it under a new
+    /// generation and its undo puts it back.
+    #[test]
+    fn the_club_lists_every_multiplier_value_any_position_worked() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        let row = |pos: &str, seq: u64, call: &str, qth: &str, at: u64| {
+            ilqp_row(
+                pos,
+                seq,
+                call,
+                "40m",
+                "CW",
+                "",
+                qth,
+                "MCLN",
+                ILQP_START + at,
+            )
+        };
+        club.merge(&row("aaaa", 1, "K9AAA", "COOK", 60), 1);
+        club.merge(&row("bbbb", 1, "K9BBB", "WILL", 120), 2);
+        club.merge(&row("bbbb", 2, "W1AW", "CT", 180), 3);
+        // The second position works K9AAA again on the same band and mode, from the same county:
+        // the club dupe, the club's key already in.
+        club.merge(&row("bbbb", 3, "K9AAA", "COOK", 240), 4);
+        assert_eq!(club.qsos_raw(), 4);
+        assert_eq!(club.worked_mults("QTH"), ["COOK", "CT", "WILL"]);
+        let pair = |v: &str| ("QTH".to_string(), v.to_string());
+        assert_eq!(
+            club.club_state(0, 0, 0, 5).mults,
+            [pair("COOK"), pair("WILL"), pair("CT")],
+            "first worked first"
+        );
+        let (keys, _) = club.counts();
+        assert_eq!(keys, 3, "three keys: the dupe brought none");
+        assert_eq!(
+            club.club_state(1, 0, 0, 5).mults,
+            [pair("WILL"), pair("CT")],
+            "past the first key, the values its contacts brought"
+        );
+        assert!(club.club_state(keys, 0, 0, 5).mults.is_empty());
+        // Will was the second position's alone: a take-back takes it, under a new generation.
+        let before = club.generation();
+        assert!(club.take_back("bbbb", 1, 6));
+        assert_eq!(club.worked_mults("QTH"), ["COOK", "CT"]);
+        assert!(
+            club.generation() > before,
+            "every position gets a fresh snap"
+        );
+        assert!(club.put_back("bbbb", 1, 7));
+        assert_eq!(club.worked_mults("QTH"), ["COOK", "CT", "WILL"]);
+        // CONTROL: no other slot is a board here.
+        assert!(club.worked_mults("RST").is_empty());
+    }
+
+    /// ⭐ **A Field Day club's board is its sections, and a club dupe brings no section** — the
+    /// second position's W1AW on 20 m CW is the contact the first already logged, however it
+    /// copied the section, as a position's own log counts only the contacts it counts. Read off
+    /// the legacy `class`/`sect` a v1 position streams (`wq`), through the one synthesis.
+    #[test]
+    fn a_field_day_clubs_board_is_its_sections_and_a_club_dupe_brings_none() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "CW", "CT", 100), 10);
+        club.merge(&wq("bbbb", 1, "W1AW", "20m", "CW", "EMA", 200), 11);
+        club.merge(&wq("bbbb", 2, "K1ABC", "40m", "CW", "me", 300), 12);
+        assert_eq!(club.worked_mults("SECTION"), ["CT", "ME"]);
+        assert!(
+            club.worked_mults("CLASS").is_empty(),
+            "the class is no board"
+        );
+        let pair = |v: &str| ("SECTION".to_string(), v.to_string());
+        assert_eq!(club.club_state(0, 0, 0, 13).mults, [pair("CT"), pair("ME")]);
     }
 
     /// ⭐ **Two positions logging the same station: the second is the CLUB dupe** — kept
@@ -6700,6 +6866,22 @@ mod tests {
         assert_eq!(club.remove("bbbb0002", "aaaa0001", 102), Ok(()));
         assert!(club.is_removed("bbbb0002"));
         assert_eq!(club.link("bbbb0002", 102), PositionLink::Removed);
+        // Every laptop's board says so with the next club line (`WireBoardRow::removed`), the
+        // line itself staying.
+        let flagged = |c: &ClubLog| -> Vec<(String, bool)> {
+            c.board_rows(102)
+                .into_iter()
+                .map(|r| (r.pos, r.removed))
+                .collect()
+        };
+        assert_eq!(
+            flagged(&club),
+            [
+                ("aaaa0001".to_string(), false),
+                ("bbbb0002".to_string(), true),
+                ("cccc0003".to_string(), false)
+            ]
+        );
         assert_eq!(club.held("bbbb0002", cw), Err(POSITION_REMOVED.to_string()));
         assert_eq!(
             club.held("cccc0003", ssb),
@@ -6729,6 +6911,10 @@ mod tests {
         );
         assert_eq!(club.allow_back("bbbb0002", 105), Ok(()));
         assert!(!club.is_removed("bbbb0002"));
+        assert!(
+            flagged(&club).iter().all(|(_, removed)| !removed),
+            "and stops saying so after Allow back"
+        );
         assert_eq!(club.held("bbbb0002", cw), Ok(()), "served again");
         assert_eq!(club.link("bbbb0002", 105), PositionLink::Connected);
         assert_eq!(

@@ -4004,6 +4004,19 @@ export const EN = {
   'fieldDay.board.count': '{{worked}}/{{total}} worked',
   'fieldDay.board.cell.worked.title': '{{code}} — {{name}} — worked',
   'fieldDay.board.cell.notWorked.title': '{{code}} — {{name}} — not worked yet',
+  // At a club the board is the club's: a cell any position worked is lit, and this laptop's own
+  // are marked apart (⌂) from another position's (✓). "This laptop" is the club grid's word for
+  // the computer the screen is on; `{{own}}` counts its cells, `{{worked}}` the club's.
+  'fieldDay.sections.countClub': '{{worked}}/{{total}} sections · {{own}} on this laptop',
+  'fieldDay.sections.cell.own.title': '{{code}} — {{name}} ({{division}}) — worked on this laptop',
+  'fieldDay.sections.cell.club.title': '{{code}} — {{name}} ({{division}}) — worked by another position',
+  'fieldDay.sections.cell.own.aria': '{{name}}, worked on this laptop',
+  'fieldDay.sections.cell.club.aria': '{{name}}, worked by another position',
+  'fieldDay.board.countClub': '{{worked}}/{{total}} worked · {{own}} on this laptop',
+  'fieldDay.board.cell.own.title': '{{code}} — {{name}} — worked on this laptop',
+  'fieldDay.board.cell.club.title': '{{code}} — {{name}} — worked by another position',
+  'fieldDay.board.legend.own': 'Worked on this laptop',
+  'fieldDay.board.legend.club': 'Worked by another position',
   // The end-of-contest merge. The label carries the count so the button says what it
   // will do BEFORE it does it, and the report says what it did — which is the only thing
   // that tells a second (idempotent, no-op) press apart from a button that did nothing.

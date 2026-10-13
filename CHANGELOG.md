@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   100 and how many the club holds, so a long contest does not slow the screen; every contact is in
   the files. Only the host has it: a joined laptop has no merged log to show, and the list is not on
   the Remote page.
+- **At a club, every laptop's county or sections board shows what the whole club has worked.** A
+  county, state or ARRL section lights on the host's board and on every joined laptop's as soon as
+  any position logs it, so everyone sees what the club still needs. This laptop's own are marked
+  apart, ⌂ in the colour its name has in the club grid, from the green ✓ of one another position
+  worked, with a legend over the board and both counts ("34/102 worked · 12 on this laptop"). Remove
+  last takes a county off every board again. The club's list rides the club line the host already
+  sends when a contact brings a new dupe key, so it shows within a second on a LAN, and the
+  5-second heartbeat is unchanged. When the host removes a position, the other laptops' boards now
+  say Removed after its name within a heartbeat, where they used to learn it only when its line
+  went quiet, about 20 seconds later. Club sync is still v4: a laptop or host on an earlier v4 build
+  works with one on this one as before, and shows its own board. The hosted Remote page is sent
+  nothing new and shows the station's own board, and the score is unchanged (the club score was
+  already the club's).
 
 ### Changed
 

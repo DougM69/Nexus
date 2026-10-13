@@ -828,6 +828,33 @@ const CELL_UNWORKED: CSSProperties = {
   border: '1px solid var(--border-soft)',
   opacity: 0.5,
 }
+/** A cell THIS laptop worked, on a board that also shows the club's: the look the club grid gives
+ *  this laptop (`.club-grid-pos.link-self`) — its ⌂ mark, an accent edge and a tint of its face,
+ *  the code in ink — so it reads apart from the green ✓ of a cell another position worked by its
+ *  colour and by its mark, never the colour alone. A board with no club list keeps CELL_WORKED. */
+const CELL_OWN: CSSProperties = {
+  ...CELL_BASE,
+  fontWeight: 700,
+  color: 'var(--text)',
+  background: 'color-mix(in srgb, var(--accent) 14%, transparent)',
+  border: '1px solid var(--accent)',
+}
+/** The legend's two keys, each in the look of the cells it names, on the header's line after the
+ *  board's name (its auto margin keeps the count at the right), so the board keeps its rows of
+ *  cells where it has least room; the line wraps where it is too narrow for all three. */
+const BOARD_LEGEND: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 8,
+  marginRight: 'auto',
+}
+const LEGEND_KEY: CSSProperties = {
+  fontFamily: 'inherit',
+  fontSize: textPx(12),
+  fontWeight: 600,
+  padding: '2px 8px',
+}
 
 /** The colored worked/unworked section grid, grouped by ARRL division. */
 export function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
@@ -909,6 +936,13 @@ export function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
  *
  * ⚠️ A board whose domain this build has no value set for renders WHAT WAS WORKED and
  * says nothing about a total — an honest empty universe, not a fabricated one.
+ *
+ * ⭐ **At a club the board is the CLUB's.** A board that carries `club` (the host's club log, or
+ * what the host sent this laptop) lights every value any position worked, so everyone sees what
+ * the club still needs, and marks this laptop's own (`worked`) apart: ⌂ in the accent this laptop
+ * has on the club grid, against the green ✓ of another position's, with a legend saying which is
+ * which and a count of both. A board without it (no club sync, an older host, Remote) is this
+ * laptop's own, exactly as it always was.
  */
 export function MultiplierBoards({ boards }: { boards: ContestBoard[] }) {
   return (
@@ -920,24 +954,48 @@ export function MultiplierBoards({ boards }: { boards: ContestBoard[] }) {
   )
 }
 
+/** What a cell of a multiplier board shows: worked here, worked by another position of the club
+ *  (only on a board that carries the club's list), or not worked yet. */
+type CellWorked = 'own' | 'club' | 'none'
+
 function MultiplierBoard({ board }: { board: ContestBoard }) {
   const domain = contestDomain(board.domain)
   const workedSet = useMemo(
     () => new Set(board.worked.map((v) => v.trim().toUpperCase())),
     [board.worked],
   )
+  // The club's, this laptop's included — present only while club sync runs and the host sends it.
+  const clubSet = useMemo(
+    () => new Set((board.club ?? []).map((v) => v.trim().toUpperCase())),
+    [board.club],
+  )
+  const club = clubSet.size > 0
+  const cellWorked = (code: string): CellWorked =>
+    workedSet.has(code) ? 'own' : clubSet.has(code) ? 'club' : 'none'
   // Field Day's board IS the sections board, down to its strings — the block an
   // operator has been reading for releases. Nothing about it moves here.
   const isSections = board.domain === 'fd_sections' || board.domain === 'arrl_sections'
   const groups: DomainGroup[] = domain
     ? domain.groups
-    : // No value set for this domain: the universe is what has been worked.
-      [{ label: '', values: [...workedSet].sort().map((c) => ({ code: c, name: c })) }]
-  const total = domain ? domain.total : workedSet.size
-  const workedCount = groups.reduce(
-    (n, g) => n + g.values.filter((v) => workedSet.has(v.code)).length,
-    0,
-  )
+    : // No value set for this domain: the universe is what has been worked, by anyone.
+      [
+        {
+          label: '',
+          values: [...new Set([...workedSet, ...clubSet])].sort().map((c) => ({ code: c, name: c })),
+        },
+      ]
+  const total = domain ? domain.total : groups[0].values.length
+  const countOf = (pick: (w: CellWorked) => boolean) =>
+    groups.reduce((n, g) => n + g.values.filter((v) => pick(cellWorked(v.code))).length, 0)
+  const workedCount = countOf((w) => w !== 'none')
+  const ownCount = countOf((w) => w === 'own')
+  const count = club
+    ? isSections
+      ? t('fieldDay.sections.countClub', { worked: workedCount, total, own: ownCount })
+      : t('fieldDay.board.countClub', { worked: workedCount, total, own: ownCount })
+    : isSections
+      ? t('fieldDay.sections.count', { worked: workedCount, total })
+      : t('fieldDay.board.count', { worked: workedCount, total })
   return (
     <div
       style={SECTIONS_BOARD_WRAP}
@@ -945,17 +1003,20 @@ function MultiplierBoard({ board }: { board: ContestBoard }) {
         isSections ? t('fieldDay.sections.aria') : t('fieldDay.board.aria', { name: board.id })
       }
     >
-      <div style={SECTIONS_HEADER}>
+      <div style={club ? { ...SECTIONS_HEADER, flexWrap: 'wrap' } : SECTIONS_HEADER}>
         <span style={{ fontSize: textPx(15), fontWeight: 700, color: 'var(--text)' }}>
           {/* A board id that is not Field Day's is a SLOT ID — an invariant token, shown
               as itself rather than run through a catalog that has no word for it. */}
           {isSections ? t('fieldDay.sections.head') : board.id}
         </span>
-        <span style={{ fontSize: textPx(13), color: 'var(--text-dim)' }}>
-          {isSections
-            ? t('fieldDay.sections.count', { worked: workedCount, total })
-            : t('fieldDay.board.count', { worked: workedCount, total })}
-        </span>
+        {club && (
+          // For the eye: every cell already says its own words to a screen reader.
+          <div style={BOARD_LEGEND} data-board-legend="" aria-hidden="true">
+            <span style={{ ...CELL_OWN, ...LEGEND_KEY }}>⌂ {t('fieldDay.board.legend.own')}</span>
+            <span style={{ ...CELL_WORKED, ...LEGEND_KEY }}>✓ {t('fieldDay.board.legend.club')}</span>
+          </div>
+        )}
+        <span style={{ fontSize: textPx(13), color: 'var(--text-dim)' }}>{count}</span>
       </div>
       <div style={SECTIONS_GRID}>
         {groups.map((g) => (
@@ -963,28 +1024,47 @@ function MultiplierBoard({ board }: { board: ContestBoard }) {
             {g.label !== '' && <span style={DIVISION_LABEL}>{g.label}</span>}
             <div style={DIVISION_CELLS}>
               {g.values.map((v) => {
-                const worked = workedSet.has(v.code)
-                const vals = { code: v.code, name: v.name, division: g.label }
+                const worked = cellWorked(v.code)
+                const { code, name } = v
+                const division = g.label
+                const divided = division !== ''
                 return (
                   <span
                     key={v.code}
-                    style={worked ? CELL_WORKED : CELL_UNWORKED}
+                    data-worked={worked}
+                    style={
+                      worked === 'none' ? CELL_UNWORKED : worked === 'own' && club ? CELL_OWN : CELL_WORKED
+                    }
                     title={
-                      g.label !== ''
-                        ? worked
-                          ? t('fieldDay.sections.cell.worked.title', vals)
-                          : t('fieldDay.sections.cell.notWorked.title', vals)
-                        : worked
-                          ? t('fieldDay.board.cell.worked.title', vals)
-                          : t('fieldDay.board.cell.notWorked.title', vals)
+                      worked === 'none'
+                        ? divided
+                          ? t('fieldDay.sections.cell.notWorked.title', { code, name, division })
+                          : t('fieldDay.board.cell.notWorked.title', { code, name })
+                        : !club
+                          ? divided
+                            ? t('fieldDay.sections.cell.worked.title', { code, name, division })
+                            : t('fieldDay.board.cell.worked.title', { code, name })
+                          : worked === 'own'
+                            ? divided
+                              ? t('fieldDay.sections.cell.own.title', { code, name, division })
+                              : t('fieldDay.board.cell.own.title', { code, name })
+                            : divided
+                              ? t('fieldDay.sections.cell.club.title', { code, name, division })
+                              : t('fieldDay.board.cell.club.title', { code, name })
                     }
                     aria-label={
-                      worked
-                        ? t('fieldDay.sections.cell.worked.aria', { name: v.name })
-                        : t('fieldDay.sections.cell.notWorked.aria', { name: v.name })
+                      worked === 'none'
+                        ? t('fieldDay.sections.cell.notWorked.aria', { name: v.name })
+                        : !club
+                          ? t('fieldDay.sections.cell.worked.aria', { name: v.name })
+                          : worked === 'own'
+                            ? t('fieldDay.sections.cell.own.aria', { name: v.name })
+                            : t('fieldDay.sections.cell.club.aria', { name: v.name })
                     }
                   >
-                    {worked && <span aria-hidden="true">✓</span>}
+                    {worked !== 'none' && (
+                      <span aria-hidden="true">{worked === 'own' && club ? '⌂' : '✓'}</span>
+                    )}
                     {v.code}
                   </span>
                 )
@@ -2202,6 +2282,9 @@ export function FdClubSection({
               ? row.link === 'lost' || row.link === 'removed'
               : notHeard(row)
             const marked = stale && !row.link
+            // A position's board has no Status column, and one link word: a position its host's
+            // operator removed. The word goes after the name, as the host's column says it.
+            const removedHere = !showLink && row.link === 'removed'
             const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
             return (
               <Fragment key={row.posid}>
@@ -2212,11 +2295,14 @@ export function FdClubSection({
                   title={
                     marked
                       ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
-                      : undefined
+                      : removedHere
+                        ? linkWord('removed')
+                        : undefined
                   }
                 >
                   {boardName(row)}
                   {marked && <span aria-hidden="true"> ⚠</span>}
+                  {removedHere && <span> · {linkWord('removed')}</span>}
                 </span>
                 {showLink && <LinkCell row={row} />}
                 <span className="mono" data-club-row={row.posid} style={dim}>{row.band}</span>
