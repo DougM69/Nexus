@@ -18,16 +18,22 @@
 //! decode CLIs. A file that cannot be decoded is an error line on stderr and
 //! exit status 1, so a failed run never reads as "no decodes".
 //!
+//! `--block N` decodes the file the way the app decodes live audio instead: pushed
+//! into a `jtty::Live` N samples at a time, with a pump after each (WSJT-X's
+//! `MainWindow::pumpJttyReceive`), then the reception ended. Each message's last
+//! update must come out the same either way; `--updates` shows more of a
+//! message's life in this mode, because updates are taken more often.
+//!
 //! The decoder's DSP caches are process-wide, so the lab runs this once per
 //! file; each file gets a fresh receiver either way.
 //!
 //! Usage:
 //!   cargo run -q -p jtty --example decode_wav_jtty -- FILE.wav [FILE2.wav ...]
-//!       [--center 1500] [--ftol 50] [--low 200] [--high 2800] [--updates]
+//!       [--center 1500] [--ftol 50] [--low 200] [--high 2800] [--block N] [--updates]
 
 use std::collections::HashMap;
 
-use jtty::{EndReason, Receiver, SearchBand, Terminal, Update};
+use jtty::{EndReason, Live, Receiver, SearchBand, Terminal, Update};
 
 fn arg<T: std::str::FromStr>(args: &[String], flag: &str, default: T) -> T {
     args.iter()
@@ -67,6 +73,19 @@ fn decode(pcm: &[i16], band: SearchBand) -> Result<Vec<Update>, String> {
     Ok(rx.take_updates())
 }
 
+/// The live path: `block` samples pushed at a time, a pump after each.
+fn decode_live(pcm: &[i16], band: SearchBand, block: usize) -> Result<Vec<Update>, String> {
+    let mut live = Live::new().ok_or("no free receive context")?;
+    live.begin(1);
+    let mut updates = Vec::new();
+    for piece in pcm.chunks(block) {
+        live.push(piece);
+        updates.extend(live.pump(band).map_err(|e| format!("{e:?}"))?);
+    }
+    updates.extend(live.end());
+    Ok(updates)
+}
+
 fn terminal(t: Terminal) -> String {
     match t {
         Terminal::Growing => "growing".into(),
@@ -79,7 +98,7 @@ fn terminal(t: Terminal) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let flags_with_values = ["--center", "--ftol", "--low", "--high"];
+    let flags_with_values = ["--center", "--ftol", "--low", "--high", "--block"];
     let files: Vec<&String> = args
         .iter()
         .enumerate()
@@ -90,7 +109,7 @@ fn main() {
         .collect();
     if files.is_empty() {
         eprintln!(
-            "usage: decode_wav_jtty FILE.wav [...] [--center 1500] [--ftol 50] [--low 200] [--high 2800] [--updates]"
+            "usage: decode_wav_jtty FILE.wav [...] [--center 1500] [--ftol 50] [--low 200] [--high 2800] [--block N] [--updates]"
         );
         std::process::exit(2);
     }
@@ -101,15 +120,30 @@ fn main() {
         tolerance_hz: arg(&args, "--ftol", 50.0),
     };
     let every_update = args.iter().any(|a| a == "--updates");
+    let block: usize = arg(&args, "--block", 0);
     eprintln!(
-        "# mode: JTTY (blind, {:.0} ± {:.0} Hz, {}-{} Hz)",
-        band.center_hz, band.tolerance_hz, band.low_hz, band.high_hz
+        "# mode: JTTY (blind, {:.0} ± {:.0} Hz, {}-{} Hz{})",
+        band.center_hz,
+        band.tolerance_hz,
+        band.low_hz,
+        band.high_hz,
+        if block > 0 {
+            format!(", live in {block}-sample blocks")
+        } else {
+            String::new()
+        }
     );
 
     let mut failed = false;
     for path in files {
         eprintln!("# file: {path}");
-        let updates = match read_pcm(path).and_then(|pcm| decode(&pcm, band)) {
+        let updates = match read_pcm(path).and_then(|pcm| {
+            if block > 0 {
+                decode_live(&pcm, band, block)
+            } else {
+                decode(&pcm, band)
+            }
+        }) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("# {path}: ERROR {e}");

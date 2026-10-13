@@ -9,14 +9,15 @@
 //! message as it grows.
 //!
 //! ⚠️ **Not offered in any release.** The modem comes from a WSJT-X pre-release
-//! (3.3.0-beta1; see NOTICE), and this crate is the FFI only. Nothing in the app
-//! calls it, and nothing here keys a transmitter: [`gen_wave`] returns audio
-//! samples and stops there.
+//! (3.3.0-beta1; see NOTICE). This crate is the FFI and the live receive driver
+//! ([`Live`]); the app's receive side (`tempo-app`'s `jtty_rx`) is its only caller,
+//! and nothing here keys a transmitter: [`gen_wave`] returns audio samples and stops
+//! there.
 //!
 //! Wraps Nexus's `jtty_cabi.f90` ([`encode`], [`encode_atoms`], [`gen_wave`],
 //! [`pack`] and [`unpack`], and the update records) and upstream's own receive API,
 //! `jtty_receive_context.f90`'s `jtty_rx_*`, which a [`Receiver`] holds one
-//! handle of.
+//! handle of. [`Live`] drives a `Receiver` the way WSJT-X's live receive does.
 //!
 //! # Thread safety
 //! Not thread-safe; every entry serializes behind
@@ -504,6 +505,122 @@ impl Drop for Receiver {
     }
 }
 
+/// Samples one forward search moves on: a quarter frame, 0.472 s.
+pub const STEP_SAMPLES: usize = FRAME_SAMPLES / 4;
+
+/// Audio one forward search reads: a frame and a step, WSJT-X's receive window.
+pub const WINDOW_SAMPLES: usize = FRAME_SAMPLES + STEP_SAMPLES;
+
+/// A reception decoded as its audio arrives: WSJT-X's live receive pump
+/// (`MainWindow::pumpJttyReceive`, `widgets/mainwindow_jtty_receive.cpp`) over one
+/// [`Receiver`].
+///
+/// The audio is pushed in whatever pieces it arrives in; [`pump`](Self::pump) then runs
+/// every search the audio so far allows, as WSJT-X does: ONE quarter-frame step per
+/// `process` call, the call given the audio from
+/// [`Receiver::next_required_sample`] up to the next search plus a frame and a step
+/// ([`WINDOW_SAMPLES`]), and stopped there. A step reads only its own window (or, for a
+/// retro search after a subtraction, one of the three windows before it) and the
+/// reception's state, so the messages come out exactly as decoding the whole recording
+/// in one call would give them, however the audio was cut up (the tests hold that).
+///
+/// Only the audio a later search can still read is kept (the window and the three retro
+/// steps behind it), so a reception can run for hours in bounded memory. Sample
+/// positions are on the reception's own timeline: the first sample pushed after
+/// [`begin`](Self::begin) is sample 0, and [`Update::start_s`] counts from it.
+#[derive(Debug)]
+pub struct Live {
+    rx: Receiver,
+    /// Audio from sample `first` on.
+    pcm: Vec<i16>,
+    first: i64,
+    running: bool,
+}
+
+impl Live {
+    /// A live reception over a free receive context, or `None` when all eight are taken.
+    pub fn new() -> Option<Self> {
+        Receiver::new().map(|rx| Self {
+            rx,
+            pcm: Vec::new(),
+            first: 0,
+            running: false,
+        })
+    }
+
+    /// Start a reception, ending any running one (its open messages end as
+    /// [`Terminal::ReceptionEnded`]; take them with [`end`](Self::end) first to keep
+    /// them). WSJT-X begins a live reception on the quarter-frame grid from its first
+    /// sample (`state.live.begin(event.session, 0, event.firstSample)`, with the first
+    /// sample 0).
+    pub fn begin(&mut self, session_id: i64) {
+        self.rx.begin(session_id, 0, 0);
+        self.pcm.clear();
+        self.first = 0;
+        self.running = true;
+    }
+
+    /// Append the next samples (12 kHz, 16-bit) of the running reception.
+    pub fn push(&mut self, pcm: &[i16]) {
+        if self.running {
+            self.pcm.extend_from_slice(pcm);
+        }
+    }
+
+    /// Samples pushed since [`begin`](Self::begin): where the next one falls on the
+    /// reception's timeline.
+    pub fn received(&self) -> i64 {
+        self.first + self.pcm.len() as i64
+    }
+
+    /// Run every search the audio pushed so far allows, one quarter-frame step per
+    /// `process` call, and take the updates. An error means the reception cannot go
+    /// on (it is not running, or audio a search needs is gone); WSJT-X restarts the
+    /// reception then (`restartJttyReception`), and so must the caller.
+    pub fn pump(&mut self, band: SearchBand) -> Result<Vec<Update>, ProcessError> {
+        if !self.running {
+            return Err(ProcessError::NotRunning);
+        }
+        let end = self.received();
+        loop {
+            let search = self.rx.next_search_sample();
+            let stop = search + WINDOW_SAMPLES as i64;
+            if stop > end {
+                break;
+            }
+            let from = self.rx.next_required_sample();
+            if from < self.first {
+                return Err(ProcessError::NeedEarlierAudio);
+            }
+            let pcm = &self.pcm[(from - self.first) as usize..(stop - self.first) as usize];
+            let steps = self.rx.process(pcm, from, stop, 1, band)?;
+            // A call can finish a retro sweep without searching (its windows fell
+            // before the reception's first), which still moves the search on. One that
+            // neither searched nor moved would loop for ever, so it ends this pump; the
+            // next audio tries again, as WSJT-X's next pump does.
+            if steps == 0 && self.rx.next_search_sample() == search {
+                break;
+            }
+        }
+        let keep = self.rx.next_required_sample().clamp(self.first, end);
+        self.pcm.drain(..(keep - self.first) as usize);
+        self.first = keep;
+        Ok(self.rx.take_updates())
+    }
+
+    /// End the reception and take its last updates: every message still open ends as
+    /// [`Terminal::ReceptionEnded`] (WSJT-X's `finishJttyReception`). Audio too short
+    /// for another search is let go, as WSJT-X lets it go.
+    pub fn end(&mut self) -> Vec<Update> {
+        if self.running {
+            self.rx.end(EndReason::ReceptionEnded);
+            self.running = false;
+        }
+        self.pcm.clear();
+        self.rx.take_updates()
+    }
+}
+
 /// NUL-terminated (or NUL-filled) byte field → trimmed String.
 fn nul_terminated(raw: &[u8]) -> String {
     let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
@@ -862,6 +979,205 @@ mod tests {
         assert_eq!(unpack(&[]), Err(UnpackError::BadFrames));
         assert_eq!(unpack(&[cq; 17]), Err(UnpackError::BadFrames));
         assert_eq!(unpack(&[1 << 34]), Err(UnpackError::BadFrames));
+    }
+
+    /// `msgs` as they sound over `secs` seconds of noise: each `(text, f0, start
+    /// seconds, amplitude)` encoded under the Unknown profile and added in, over
+    /// deterministic Gaussian noise of RMS `noise` (int16 units).
+    fn scene(secs: f32, msgs: &[(&str, f32, f32, f32)], noise: f32, seed: u64) -> Vec<i16> {
+        let n = (secs * SAMPLE_RATE) as usize;
+        let mut acc = vec![0f32; n];
+        let mut state = seed;
+        let mut uniform = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f32 / (1u64 << 53) as f32
+        };
+        for s in acc.iter_mut() {
+            // Twelve uniforms make a near-Gaussian with unit variance.
+            *s = ((0..12).map(|_| uniform()).sum::<f32>() - 6.0) * noise;
+        }
+        for &(text, f0, start, amp) in msgs {
+            let enc = encode(text, Profile::Unknown).expect("the message encodes");
+            let wave = gen_wave(&enc.tones, f0).expect("the tones make a waveform");
+            let at = (start * SAMPLE_RATE) as usize;
+            for (i, w) in wave.iter().enumerate() {
+                if let Some(s) = acc.get_mut(at + i) {
+                    *s += w * amp;
+                }
+            }
+        }
+        acc.iter()
+            .map(|&s| s.round().clamp(-32768.0, 32767.0) as i16)
+            .collect()
+    }
+
+    /// Each message's final state, in order of start: what a reception decoded,
+    /// however its updates were batched. A message's pending update is replaced in
+    /// place until it is taken (upstream's `queue_message_update`), so a caller that
+    /// takes often sees more steps of a message's life than one that takes once;
+    /// where each message ends up must not depend on it. Message ids come from a
+    /// counter the receivers share, so they are left out. Floats compare by bits.
+    fn finals(updates: &[Update]) -> Vec<(String, u32, u64, u64, Terminal, i32)> {
+        let mut last = std::collections::HashMap::new();
+        for u in updates {
+            last.insert(u.message_id, u);
+        }
+        let mut v: Vec<_> = last
+            .into_values()
+            .map(|u| {
+                (
+                    u.text.clone(),
+                    u.freq_hz.to_bits(),
+                    u.start_s.to_bits(),
+                    u.latest_s.to_bits(),
+                    u.terminal,
+                    u.snr_db,
+                )
+            })
+            .collect();
+        v.sort_by(|a, b| {
+            f64::from_bits(a.2)
+                .total_cmp(&f64::from_bits(b.2))
+                .then(a.1.cmp(&b.1))
+                .then(a.0.cmp(&b.0))
+        });
+        v
+    }
+
+    /// `pcm` streamed through a [`Live`] in pieces of the sizes `chunks` yields (the
+    /// last piece may be short), a pump after each, then the reception ended:
+    /// everything it reported.
+    fn stream(pcm: &[i16], band: SearchBand, chunks: impl Iterator<Item = usize>) -> Vec<Update> {
+        let mut live = Live::new().expect("a free receive context");
+        live.begin(1);
+        let mut out = Vec::new();
+        let mut at = 0;
+        for n in chunks {
+            if at >= pcm.len() {
+                break;
+            }
+            let to = (at + n.max(1)).min(pcm.len());
+            live.push(&pcm[at..to]);
+            out.extend(live.pump(band).expect("the reception keeps its audio"));
+            at = to;
+        }
+        assert_eq!(at, pcm.len(), "the whole buffer went in");
+        out.extend(live.end());
+        out
+    }
+
+    /// One reception over the whole buffer in one call, as a file is decoded
+    /// (`decode_wav_jtty`, WSJT-X's File > Open), at `band`.
+    fn receive_at(pcm: &[i16], band: SearchBand) -> Vec<Update> {
+        let mut rx = Receiver::new().expect("a free receive context");
+        rx.begin(1, 0, 0);
+        rx.process(pcm, 0, pcm.len() as i64, u32::MAX, band)
+            .expect("the whole buffer is given");
+        rx.end(EndReason::ReceptionEnded);
+        rx.take_updates()
+    }
+
+    /// The live path decodes exactly what the file path decodes. WSJT-X's live
+    /// pump (`MainWindow::pumpJttyReceive`) runs one quarter-frame step per call,
+    /// reading a frame and a step from the next search and keeping audio from the
+    /// earliest sample a retro search may read; its file decode hands over every
+    /// sample at once. Each step reads only its own window and the reception
+    /// state, so the two must agree message for message, bit for bit, however the
+    /// audio is cut up: by Nexus's 100 ms drain (1200 samples), WSJT-X's own
+    /// 3456-sample input blocks, a prime, one short of a window, and irregular
+    /// pieces.
+    ///
+    /// The scene holds what the searches do differently: a three-frame message;
+    /// two messages queued back to back with no spacing frame; a strong and a
+    /// weak signal overlapping 30 Hz apart (subtraction, then the retro searches
+    /// it starts); a message in the fixed 1200-1500 Hz channel; and a message
+    /// the end of the audio cuts off, which only the reception's end closes.
+    #[test]
+    fn streaming_decodes_exactly_what_the_file_decode_does() {
+        let pcm = scene(
+            30.0,
+            &[
+                ("CQ KD9TAW EN52", 1500.0, 1.3, 600.0),
+                ("CQ K1ABC CQ", 1480.0, 8.1, 600.0),
+                (
+                    "K1ABC 599 0123",
+                    1480.0,
+                    8.1 + FRAME_SAMPLES as f32 / SAMPLE_RATE,
+                    600.0,
+                ),
+                ("TU WB9XYZ CQ", 1510.0, 14.2, 2500.0),
+                ("HELLO FROM 9A1AA", 1540.0, 14.9, 500.0),
+                ("CQ 3D2AB CQ", 1300.0, 20.4, 700.0),
+                ("CQ KH6ABC KH6ABC", 1500.0, 27.0, 700.0),
+            ],
+            900.0,
+            7,
+        );
+        let file = receive_at(&pcm, BAND);
+        let want = finals(&file);
+        // The scene decodes, so equality below is not two empty lists agreeing.
+        let texts: Vec<&str> = want.iter().map(|m| m.0.as_str()).collect();
+        for text in [
+            "CQ KD9TAW EN52",
+            "CQ K1ABC CQ",
+            "TU WB9XYZ CQ",
+            "CQ 3D2AB CQ",
+        ] {
+            assert!(
+                texts.contains(&text),
+                "{text} decodes from the file: {want:?}"
+            );
+        }
+        assert!(
+            want.iter().any(|m| m.4 == Terminal::ReceptionEnded),
+            "the message the audio cuts off is closed by the reception's end: {want:?}"
+        );
+        let mut irregular = 0x2545_f491u64;
+        let irregular = std::iter::from_fn(move || {
+            irregular ^= irregular << 13;
+            irregular ^= irregular >> 7;
+            irregular ^= irregular << 17;
+            Some(1 + (irregular % 9000) as usize)
+        });
+        for (name, got) in [
+            ("1200", stream(&pcm, BAND, std::iter::repeat(1200))),
+            ("3456", stream(&pcm, BAND, std::iter::repeat(3456))),
+            ("7", stream(&pcm, BAND, std::iter::repeat(7))),
+            (
+                "a window less one",
+                stream(&pcm, BAND, std::iter::repeat(WINDOW_SAMPLES - 1)),
+            ),
+            ("irregular", stream(&pcm, BAND, irregular)),
+        ] {
+            assert_eq!(finals(&got), want, "streamed in {name}-sample pieces");
+        }
+    }
+
+    /// The live path keeps only the audio a later search can still read: the
+    /// window and the three retro steps behind it, never the reception so far.
+    #[test]
+    fn the_live_path_keeps_a_bounded_tail_of_audio() {
+        let pcm = scene(40.0, &[("CQ KD9TAW EN52", 1500.0, 2.0, 700.0)], 900.0, 3);
+        let mut live = Live::new().expect("a free receive context");
+        live.begin(1);
+        let mut decoded = Vec::new();
+        for piece in pcm.chunks(1200) {
+            live.push(piece);
+            decoded.extend(live.pump(BAND).expect("the reception keeps its audio"));
+            assert!(
+                live.pcm.len() <= WINDOW_SAMPLES + 4 * STEP_SAMPLES,
+                "{} samples held",
+                live.pcm.len()
+            );
+        }
+        assert!(
+            decoded
+                .iter()
+                .any(|u| u.terminal == Terminal::Complete && u.text == "CQ KD9TAW EN52"),
+            "the bounded tail still decodes: {decoded:?}"
+        );
     }
 
     /// The quoted three-letter names in the Fortran list that opens at `start`
