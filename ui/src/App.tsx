@@ -3496,6 +3496,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onThemeChange={setTheme}
             skin={skin}
             onSkinChange={setSkin}
+            paintedTheme={theme}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}

@@ -65,6 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
+  install there opens in System, so the very first screen already matches Windows, and it changes
+  when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as
+  before, and so do the hosted Remote page and its station monitor. Settings ▸ Appearance ▸ Theme ▸
+  System is there on every computer. A theme you picked stays as you picked it. Earlier versions
+  saved Dark for everyone who never picked one, so a computer that ran them keeps Dark: pick System
+  to follow the computer.
+- **Light has the softer silver look of the Silver chassis theme.** A pale silver page, white
+  panels, graphite text and steel blue keys, by day and with Night on, and the scopes and meters
+  take Silver's lit keys and digits. If you had Silver chassis picked, you see Light, which looks
+  the same. The brighter Light of earlier versions is the Bright theme in the gallery, unchanged.
+  The transmit red, the ON AIR sign and the signal and Needed colours are as they were.
 - **FlexRadio: the voice keyer plays in Phone through the Flex native client with native DAX
   audio on (Beta).** It used to refuse there, because the radio keeps its own mic in Phone. Now
   each message switches the radio for its own length: Nexus asks the radio to take its transmit

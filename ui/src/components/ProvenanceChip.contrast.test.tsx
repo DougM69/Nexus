@@ -278,8 +278,9 @@ describe('the provenance chip reads in every light theme', () => {
   it('FIRES: the chip as it shipped is caught in the light theme, at the ratios Chrome measured, and not in the dark one', () => {
     const found = unreadable(SHIPPED, chips, LIGHT)
     // The resolver must agree with what Chrome painted, or it is not measuring the same thing.
-    expect(found).toContain('Connect Conditions cached light: #a76d00 on #e5eaf0 = 3.59:1')
-    expect(found).toContain('the map bar live light: #007f35 on #e5eaf0 = 4.25:1')
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    expect(found).toContain('Connect Conditions cached light skin=bright: #a76d00 on #e5eaf0 = 3.59:1')
+    expect(found).toContain('the map bar live light skin=bright: #007f35 on #e5eaf0 = 4.25:1')
     expect(found.some((m) => m.startsWith('DXpeditions offline light skin=paper')), 'the paper theme').toBe(true)
     expect(unreadable(SHIPPED, chips, BASE_MODES.filter((b) => baseTheme(b) === 'dark'))).toEqual([])
   }, 60_000)

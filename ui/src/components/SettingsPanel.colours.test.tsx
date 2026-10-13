@@ -61,6 +61,7 @@ function renderPanel(props: {
   palette?: PaletteSelection
   onPaletteChange?: (role: PaletteRoleId, presetId: string) => void
   skin?: SkinId | null
+  paintedTheme?: 'light' | 'dark'
 }) {
   return render(
     <SettingsPanel
@@ -166,6 +167,27 @@ describe('Settings ▸ Appearance ▸ Colours', () => {
       expect(within(group(s, 'readout')).getByRole('button', { name: E['palette.preset.amber'] }).getAttribute('aria-pressed')).toBe('true')
       cleanup()
     }
+  })
+
+  it('on the standard Light the Accent and Readout defaults are Light’s own colours; on Dark they are the standard Cyan', async () => {
+    // Light took Silver's look (2026-10-13): its accent is steel blue and its digits navy, no cyan,
+    // so the chip says what a built-in theme's says. The signal rows keep their names on both.
+    for (const painted of ['light', 'dark'] as const) {
+      renderPanel({ palette: DEFAULT_SELECTION, onPaletteChange: () => {}, paintedTheme: painted })
+      const s = await section()
+      for (const r of PALETTE_ROLES) {
+        const first = within(group(s, r.id)).getAllByRole('button')[0]
+        const sw = first.querySelector('.palette-swatch') as HTMLElement
+        const own = painted === 'light' && (r.id === 'accent' || r.id === 'readout')
+        expect(first.textContent, `${painted} ${r.id}`).toBe(own ? E['palette.preset.themeOwn'] : E[r.presets[0].labelKey])
+        expect(sw.style.getPropertyValue('--swatch-light'), `${painted} ${r.id}`).toBe(r.presets[0].light[r.swatch])
+        expect(sw.style.getPropertyValue('--swatch-dark'), `${painted} ${r.id}`).toBe(own ? r.presets[0].light[r.swatch] : r.presets[0].dark[r.swatch])
+      }
+      cleanup()
+    }
+    // By value: Light's own are Silver's steel blue and navy.
+    expect(PALETTE_ROLES.find((r) => r.id === 'accent')!.presets[0].light['--accent']).toBe('#3b5a7a')
+    expect(PALETTE_ROLES.find((r) => r.id === 'readout')!.presets[0].light['--readout']).toBe('#143d6b')
   })
 
   it('reports a pick', async () => {

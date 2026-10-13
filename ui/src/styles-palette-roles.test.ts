@@ -72,6 +72,7 @@ import {
   type Rule,
 } from './cssCascade'
 import { PALETTE_ROLES, isLockedToken, type PalettePreset, type PaletteRole } from './features/paletteRoles'
+import { STANDARD_LIGHT_WELL } from './features/skins'
 
 const blank = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
 const read = (name: string) => readFileSync(fileURLToPath(new URL(`./${name}`, import.meta.url)), 'utf8')
@@ -102,8 +103,19 @@ const modeFor = (r: PaletteRole, p: PalettePreset, base: BaseMode): Mode =>
   isDefault(r, p) ? base : withRoles(base, { [r.id]: p.id })
 /** Which of the table's two columns paints here: a well is the dark theme in either. */
 const columnOf = (mode: Mode, scope: Scope) => (scope === 'well' ? 'dark' : baseTheme(mode))
-/** What the table says `p` paints in `mode`: its night values at night, if its role dims. */
-const valuesOf = (p: PalettePreset, mode: Mode, scope: Scope) => (isNight(mode) && p.night ? p.night : p)[columnOf(mode, scope)]
+/** The standard Light's own accent and readout in its wells (skins.ts STANDARD_LIGHT_WELL), which a
+ *  role on its default paints there instead of its dark values. */
+const lightWellOf = (mode: Mode, vals: Record<string, string>): Record<string, string> => {
+  const own: Record<string, string> = isNight(mode) ? STANDARD_LIGHT_WELL.night : STANDARD_LIGHT_WELL.day
+  return { ...vals, ...Object.fromEntries(Object.keys(vals).filter((t) => t in own).map((t) => [t, own[t]])) }
+}
+/** What the table says `p` paints in `mode`: its night values at night, if its role dims, and in a
+ *  light well its dark values, but the standard Light's own where `p` is its role's default. */
+const valuesOf = (p: PalettePreset, mode: Mode, scope: Scope) => {
+  const vals = (isNight(mode) && p.night ? p.night : p)[columnOf(mode, scope)]
+  const isDefault = PALETTE_ROLES.some((r) => r.presets[0] === p)
+  return scope === 'well' && baseTheme(mode) === 'light' && isDefault ? lightWellOf(mode, vals) : vals
+}
 /** The four day modes: where "today's values" is a statement about exact hexes. */
 const DAY_MODES = BASE_MODES.filter((b) => !isNight(b))
 
@@ -312,16 +324,21 @@ function blockProblems(rules: Rule[]): string[] {
 /** main at ab84af6b, before the colour roles: what every role painted, dark (which is also every
  *  well) and light. The readout's is the accent's, because the digits were painted in it.
  *
- *  ONE DELIBERATE CHANGE SINCE: the light accent and readout, #0d8ecf → #0174ab (2026-09-27,
- *  the operator's "Darken it slightly"), so they read 4.5:1 as lettering. The focus ring and your
- *  own bubble follow the accent, as they do in every other preset (the ring had been one shade
- *  darker, #0b83c0, only because #0d8ecf missed 3:1 on the page). The dark theme is untouched. */
-const TODAY: Record<string, { dark: Record<string, string>; light: Record<string, string> }> = {
+ *  TWO DELIBERATE CHANGES SINCE, both to the light theme; the dark theme is untouched. The light
+ *  accent and readout, #0d8ecf → #0174ab (2026-09-27, the operator's "Darken it slightly"), so they
+ *  read 4.5:1 as lettering; the focus ring and your own bubble follow the accent, as they do in every
+ *  other preset (the ring had been one shade darker, #0b83c0, only because #0d8ecf missed 3:1 on the
+ *  page). Then Light took the Silver chassis look (2026-10-13, the operator: "that should classify
+ *  as the new light mode"): Silver's accent and digits, at <html> and in its wells (`lightWell`;
+ *  where a role has none, a light well paints its dark values as every well does). The #0174ab
+ *  Light is the Bright theme's now (styles-light-is-silver.test.ts). */
+const TODAY: Record<string, { dark: Record<string, string>; light: Record<string, string>; lightWell?: Record<string, string> }> = {
   accent: {
     dark: { '--accent': '#4cc9f0', '--accent-ink': '#06222c', '--focus-ring': '#4cc9f0', '--bubble-mine': '#1f5d73', '--bubble-mine-text': '#eaf7fc' },
-    light: { '--accent': '#0174ab', '--accent-ink': '#ffffff', '--focus-ring': '#0174ab', '--bubble-mine': '#0174ab', '--bubble-mine-text': '#ffffff' },
+    light: { '--accent': '#3b5a7a', '--accent-ink': '#ffffff', '--focus-ring': '#3b5a7a', '--bubble-mine': '#3b5a7a', '--bubble-mine-text': '#ffffff' },
+    lightWell: { '--accent': '#a9c0d8', '--accent-ink': '#0b1a2a', '--focus-ring': '#a9c0d8', '--bubble-mine': '#1f5d73', '--bubble-mine-text': '#eaf7fc' },
   },
-  readout: { dark: { '--readout': '#4cc9f0' }, light: { '--readout': '#0174ab' } },
+  readout: { dark: { '--readout': '#4cc9f0' }, light: { '--readout': '#143d6b' }, lightWell: { '--readout': '#9ccbff' } },
   ok: {
     dark: { '--snr-strong': '#69d98d', '--rx': '#69d98d', '--band-open': '#69d98d' },
     light: { '--snr-strong': '#007f35', '--rx': '#007f35', '--band-open': '#007f35' },
@@ -335,14 +352,15 @@ const TODAY: Record<string, { dark: Record<string, string>; light: Record<string
 
 describe('the defaults are byte-identical to today', () => {
   it.each(PALETTE_ROLES.map((r) => [r.id, r] as const))('%s: the default preset is today’s values', (_n, r) => {
-    expect({ dark: r.presets[0].dark, light: r.presets[0].light }).toEqual(TODAY[r.id])
+    expect({ dark: r.presets[0].dark, light: r.presets[0].light }).toEqual({ dark: TODAY[r.id].dark, light: TODAY[r.id].light })
   })
 
   it.each(PALETTE_ROLES.map((r) => [r.id, r] as const))('%s: with no attribute set, the sheet paints today’s values', (_n, r) => {
     for (const base of DAY_MODES) {
       for (const scope of SCOPES) {
         const tk = tokensIn(RULES, base, scope)
-        const want = TODAY[r.id][columnOf(base, scope)]
+        const today = TODAY[r.id]
+        const want = scope === 'well' && baseTheme(base) === 'light' ? (today.lightWell ?? today.dark) : today[columnOf(base, scope)]
         for (const t of r.tokens) expect(valueOf(tk, t), `${r.id} ${base} ${scope}: ${t}`).toBe(want[t])
       }
     }
@@ -536,8 +554,11 @@ describe('the checks fire', () => {
       dark: { '--accent': '#e0444e', '--accent-ink': '#1a0507', '--focus-ring': '#e0444e', '--bubble-mine': '#7a2228', '--bubble-mine-text': '#fdeced' },
       light: { '--accent': '#b3261e', '--accent-ink': '#ffffff', '--focus-ring': '#b3261e', '--bubble-mine': '#b3261e', '--bubble-mine-text': '#ffffff' },
     }
+    // Its own night well rule, as every real preset of a role Night dims has (a light theme's night
+    // well is (0,3,0), so a day rule alone would not reach a well after dark).
     const rules = withBlock(`
       [data-theme='dark'][data-accent='red'], [data-accent='red'] .well { ${Object.entries(red.dark).map(([k, v]) => `${k}: ${v};`).join(' ')} }
+      [data-night='1'][data-accent='red'] .well { ${Object.entries(red.dark).map(([k, v]) => `${k}: ${v};`).join(' ')} }
       [data-theme='light'][data-accent='red'] { ${Object.entries(red.light).map(([k, v]) => `${k}: ${v};`).join(' ')} }`)
     expect(parityProblems(rules, accent, red), 'the block did not take — the control proves nothing').toEqual([])
     const keys = roleProblems(rules, accent, red).map((x) => x.key)
@@ -551,6 +572,7 @@ describe('the checks fire', () => {
     const dim: PalettePreset = { id: 'dim', labelKey: readout.presets[0].labelKey, dark: { '--readout': '#3a4656' }, light: { '--readout': '#b8c2cc' } }
     const rules = withBlock(`
       [data-theme='dark'][data-readout='dim'], [data-readout='dim'] .well { --readout: #3a4656; }
+      [data-night='1'][data-readout='dim'] .well { --readout: #3a4656; }
       [data-theme='light'][data-readout='dim'] { --readout: #b8c2cc; }`)
     expect(parityProblems(rules, readout, dim)).toEqual([])
     const keys = roleProblems(rules, readout, dim).map((x) => x.key)
@@ -564,7 +586,8 @@ describe('the checks fire', () => {
     const rules = withBlock(`
       [data-theme='dark'][data-readout='nowell'] { --readout: #fdbe45; }
       [data-theme='light'][data-readout='nowell'] { --readout: #936823; }`)
-    expect(parityProblems(rules, readout, nowell)).toContain('readout=nowell light well: --readout paints "#4cc9f0", the table says #fdbe45')
+    expect(parityProblems(rules, readout, nowell)).toContain('readout=nowell light well: --readout paints "#9ccbff", the table says #fdbe45')
+    expect(parityProblems(rules, readout, nowell)).toContain('readout=nowell dark well: --readout paints "#4cc9f0", the table says #fdbe45')
   })
 
   it('an OK green darker than the reds is refused (good must stay lighter than bad)', () => {

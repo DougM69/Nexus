@@ -821,11 +821,12 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   }, 60_000)
 
   it('FIRES: the accent words as they shipped are caught in the light theme, at the ratio Chrome measured', () => {
-    const found = unreadable(ACCENT_SHIPPED, accent, ['light'])
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    const found = unreadable(ACCENT_SHIPPED, accent, ['light skin=bright'])
     const has = (re: RegExp) => found.some((m) => re.test(m))
-    expect(has(/ outlook \.strong "14\.2 MHz" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the MUF').toBe(true)
-    expect(has(/ satPasses \.sat-when ".*" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the next pass').toBe(true)
-    expect(has(/ scope \.mini-spectrum-src "AUDIO" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the scope badge').toBe(true)
+    expect(has(/ outlook \.strong "14\.2 MHz" light skin=bright: #0174ab on #e5eaf0 = 4\.25:1/), 'the MUF').toBe(true)
+    expect(has(/ satPasses \.sat-when ".*" light skin=bright: #0174ab on #e5eaf0 = 4\.25:1/), 'the next pass').toBe(true)
+    expect(has(/ scope \.mini-spectrum-src "AUDIO" light skin=bright: #0174ab on #e5eaf0 = 4\.25:1/), 'the scope badge').toBe(true)
   }, 60_000)
 
   it('the reader itself: its element-by-element tokens are cssCascade.tokensAt, wherever no node sets one inline', () => {
@@ -839,20 +840,21 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   }, 240_000)
 
   it('FIRES: the words as they shipped are caught in the light theme at the ratios Chrome measured', () => {
-    const found = unreadable(SHIPPED, state, ['light'])
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    const found = unreadable(SHIPPED, state, ['light skin=bright'])
     const has = (re: RegExp) => found.some((m) => re.test(m))
-    expect(has(/ spacewx \.swx-impact ".*" light: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
-    expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
+    expect(has(/ spacewx \.swx-impact ".*" light skin=bright: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
+    expect(has(/ outlook \.cp-work\.w-good "Good" light skin=bright: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
     // The storm line's own colour is the theme's warning now that --state-warn is (it was the fixed #f5a524, 1.69:1).
-    expect(has(/ kpOutlook \.kp-line\.warn .* light: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
+    expect(has(/ kpOutlook \.kp-line\.warn .* light skin=bright: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
     // Beside the cockpits, in the boxes' boards and on the NOW bar, before their light rules: the POTA/SOTA box's
     // BAND OPEN (1.65:1 here, 1.66:1 in Chrome: the badge's tint rounds a unit apart) and the bar's PROP CACHED.
     // (A need chip, in the rail as anywhere, is NeedChip.contrast.test.tsx's.)
-    expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
-    expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
+    expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light skin=bright: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
+    expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light skin=bright: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
     // NEW PARK, which the census does not count (above): 3.37:1 here, 3.36:1 in Chrome.
-    const badge = unreadable(SHIPPED, all.filter((w) => w.kind === 'pota-badge'), ['light'])
-    expect(badge.some((m) => / pota \.pota-badge\.pota-badge-new "NEW PARK" light: #0174ab on #bcd5e4 = 3\.3[67]:1$/.test(m)), 'NEW PARK').toBe(true)
+    const badge = unreadable(SHIPPED, all.filter((w) => w.kind === 'pota-badge'), ['light skin=bright'])
+    expect(badge.some((m) => / pota \.pota-badge\.pota-badge-new "NEW PARK" light skin=bright: #0174ab on #bcd5e4 = 3\.3[67]:1$/.test(m)), 'NEW PARK').toBe(true)
   }, 60_000)
 
   // A CLOSED BAND RECEDES BY ITS INK, NEVER BY FADING (operator, 2026-09-30: "Closed rows and chips fade by colour instead of

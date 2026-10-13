@@ -232,7 +232,7 @@ import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
-import type { ThemeChoice } from '../useTheme'
+import type { Theme, ThemeChoice } from '../useTheme'
 import { skinOf, type SkinId } from '../features/skins'
 import type { NightChoice } from '../useNight'
 import type { Motion } from '../useMotion'
@@ -316,6 +316,9 @@ interface Props {
    *  setter: owned by App's `useSkin`. Optional like the theme. */
   skin?: SkinId | null
   onSkinChange?: (id: SkinId | null) => void
+  /** The theme the page paints, light or dark (System resolved): what Colours names the standard
+   *  Light's own colours by. Optional like the theme. */
+  paintedTheme?: Theme
   /** #215: Field mode — maximum contrast plus larger type (`useFieldMode`). It shipped as a
    *  chip in the top bar only, which is the other half of why the operator who asked for a
    *  high-contrast, large-text setting could not find one: the two halves of the answer were
@@ -1109,6 +1112,7 @@ export function SettingsPanel({
   onThemeChange,
   skin = null,
   onSkinChange,
+  paintedTheme,
   fieldMode = false,
   onFieldModeChange,
   highContrast = false,
@@ -4421,7 +4425,7 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-colours">
             <legend>{t('settings.colours.legend')}</legend>
             <span className="settings-hint">{t('settings.colours.hint')}</span>
-            <SettingsColours palette={palette} skin={skin} onChange={onPaletteChange} />
+            <SettingsColours palette={palette} skin={skin} paintedTheme={paintedTheme} onChange={onPaletteChange} />
           </fieldset>
           )}
 

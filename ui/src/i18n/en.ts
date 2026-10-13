@@ -11420,11 +11420,12 @@ export const EN = {
   'theme.aria': 'Theme',
   'theme.light.label': 'Light',
   'theme.light.title': 'Light (sunlight)',
-  'theme.light.line': 'Daylight panel, dark scopes and meters',
+  'theme.light.line': 'Pale silver front, white panels, dark scopes and meters',
   'theme.dark.label': 'Dark',
   'theme.dark.title': 'Dark (shack)',
   'theme.dark.line': 'Dark panel, lit dials and meters',
-  // System: follow the computer's own light/dark setting (useTheme.ts). Dark stays the default.
+  // System: follow the computer's own light/dark setting (useTheme.ts). The default for a
+  // computer that never chose a theme in the desktop app on Windows; Dark stays the default elsewhere.
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
   'theme.system.line': 'Follows your computer, light or dark',
@@ -11439,8 +11440,6 @@ export const EN = {
   'theme.greenLcd.line': 'Black chassis, green phosphor digits',
   'theme.blueVfd.label': 'Blue VFD',
   'theme.blueVfd.line': 'Deep navy chassis, blue-white fluorescent digits',
-  'theme.silver.label': 'Silver chassis',
-  'theme.silver.line': 'Pale silver front, white panels, dark scopes and meters',
   'theme.midnight.label': 'Midnight',
   'theme.midnight.line': 'True black for OLED and dark rooms, cyan lit',
   'theme.slate.label': 'Slate',
@@ -11453,6 +11452,10 @@ export const EN = {
   'theme.nebula.line': 'Violet-tinted dark with lavender keys and digits',
   'theme.paper.label': 'Paper',
   'theme.paper.line': 'Warm cream page, white panels, ink-blue keys — low glare',
+  // The standard Light until 2026-10-13, when Light took the Silver chassis look; a plain name
+  // for the brighter of the two.
+  'theme.bright.label': 'Bright',
+  'theme.bright.line': 'The earlier Light: cool white panels, bright blue keys',
 
   // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
   // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on

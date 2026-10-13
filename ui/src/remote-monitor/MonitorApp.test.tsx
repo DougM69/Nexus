@@ -110,3 +110,26 @@ it('the theme button cycles Dark → Light → System → Dark, and System follo
     document.documentElement.dataset.theme = 'dark'
   }
 })
+
+it('the monitor starts from the page’s own theme, whatever the computer prefers', async () => {
+  // The hosted page's station monitor is as it was before Nexus followed the computer on Windows: it
+  // keeps no choice and starts in the theme the page is painted (monitor.html and the hosted page are
+  // data-theme="dark"); System is the third press of its one button.
+  for (const [page, computer, next] of [['dark', 'light', EN['monitor.light']], ['light', 'dark', EN['monitor.system']]] as const) {
+    window.matchMedia = ((q: string) => ({
+      matches: q === '(prefers-color-scheme: dark)' && computer === 'dark', media: q,
+      addEventListener() {}, removeEventListener() {},
+    })) as unknown as typeof window.matchMedia
+    document.documentElement.dataset.theme = page
+    try {
+      const { unmount } = render(<MonitorApp source={source('spe')} />)
+      await screen.findByText('14.074000')
+      expect(document.documentElement.dataset.theme, `a ${page} page on a ${computer} computer`).toBe(page)
+      expect(screen.getByRole('button', { name: next }), `a ${page} page`).toBeTruthy()
+      unmount()
+    } finally {
+      delete (window as { matchMedia?: unknown }).matchMedia
+      document.documentElement.dataset.theme = 'dark'
+    }
+  }
+})

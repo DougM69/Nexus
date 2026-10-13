@@ -26,6 +26,7 @@ import { STALE_DISPLAY_HOLD_MS } from './useStaleDisplay'
 import fixtures from '../remote-monitor/fixtures.v2.json'
 import settingsFixture from '../components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot } from '../types'
+import { offPlatform, onPlatform } from '../webviewPlatforms.testkit'
 
 // THE BUDGET (2026-10-04). The App this file mounts (through BrowserApplication) is real work, and it scales with
 // the CPU a test gets: the slowest test takes 0.49 s on a quiet box, 2.3 s with a fifth of a CPU and 4.1–4.7 s with
@@ -224,4 +225,23 @@ it('the stale display comes when the readings lapse in a render that changes not
   expect(container.querySelector('.app')?.getAttribute('data-remote-stale')).toBe(null)
   await elapse(STALE_DISPLAY_HOLD_MS + 600)
   expect(container.querySelector('.app')?.getAttribute('data-remote-stale')).toBe('true')
+})
+
+// The hosted page is the same App, and a browser on Windows says "Windows NT" just as the desktop app's
+// WebView2 does. Following the computer's light or dark setting by default is the desktop app's on
+// Windows only (useTheme.ts isWindowsDesktop), so the hosted page opens Dark here, on the light
+// computer this file sets up, exactly as it did before Nexus followed the computer anywhere.
+it('the hosted page opens Dark on a light computer in a browser on Windows, and stores no choice', async () => {
+  onPlatform('windowsBrowser')
+  document.documentElement.removeAttribute('data-theme')
+  try {
+    const h = connection()
+    const { container } = render(<BrowserApplication connection={h.connection} disconnect={() => {}} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(booted(container)).toBe(true)
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(localStorage.getItem('tempo-theme')).toBeNull()
+  } finally {
+    offPlatform()
+  }
 })

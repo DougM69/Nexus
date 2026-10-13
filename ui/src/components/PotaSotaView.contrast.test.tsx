@@ -482,9 +482,10 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
   }, 120_000)
 
   it('FIRES: the board as it shipped is caught in the light theme in every host, at the ratios Chrome measured', () => {
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
     const shipped: string[] = []
     for (const w of words) {
-      const { fg, bg, ratio } = wordOf(SHIPPED, 'light', w)
+      const { fg, bg, ratio } = wordOf(SHIPPED, 'light skin=bright', w)
       if (ratio < 4.5) shipped.push(`${w.what}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
     }
     const has = (re: RegExp) => shipped.some((m) => re.test(m))

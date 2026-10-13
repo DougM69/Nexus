@@ -4594,7 +4594,15 @@ body.resizing-row {
   --aprs-cat-other: #94a3b8; /* desaturated neutral: we do not know what this is */
 }
 
-/* ---- LIGHT (sunlight) ---- */
+/* ---- LIGHT (sunlight) ----
+   Silver's look since 2026-10-13 (operator: "that should classify as the new light mode"): the
+   pale silver page, white panels, graphite inks and a steel-blue accent of the Silver chassis
+   theme, which System paints too on a light computer. The bright Light this palette held before
+   is the Bright theme in the gallery (THEMES, below), value for value; styles-light-is-silver
+   .test.ts holds both looks. Only the theme tokens moved: every locked and signal colour below is
+   as it was. The page is #e2e6eb rather than Silver's first #dfe3e8: the Needed board letters its
+   mode cells in the page colour, and #dfe3e8 read 4.45:1 on them by day and 4.09:1 at night
+   (styles-theme-cascade.test.ts); #e2e6eb reads 4.58:1, and 4.54:1 at night. */
 [data-theme='light'] {
   /* Same eight families, darkened and slightly desaturated: the light theme's map is a pale
      surface, so the dark-theme inks would wash out on it. Ordering of lightness between the
@@ -4608,10 +4616,10 @@ body.resizing-row {
   --aprs-cat-object: #a4457a;
   --aprs-cat-other: #5b6675;
 
-  --bg: #e5eaf0;
-  --bg-elev: #fbfcfe;
-  --bg-elev-2: #f4f6f9;
-  --panel: #fbfcfe;
+  --bg: #e2e6eb;
+  --bg-elev: #f9fafb;
+  --bg-elev-2: #f3f5f7;
+  --panel: #f9fafb;
   /* Elevation-first light theme (Refactoring UI / Material 3 / Apple HIG):
      the earlier all-white surfaces read washed-out even though the inks pass
      WCAG — the STRUCTURE was flat. Fix is structural, not more contrast: the
@@ -4623,21 +4631,20 @@ body.resizing-row {
      than a naive inversion. Component-level structure tweaks (row dividers,
      chip fills, state tint) live in the LIGHT-MODE STRUCTURE OVERRIDES section
      further down — all [data-theme='light'] scoped so dark is byte-identical. */
-  --border: #c4cedb;
-  --border-soft: #d8dfe9;
-  --text: #14202e;
-  --text-dim: #46556e;
-  --text-faint: #57647a;
-  /* #0174ab since 2026-09-27: the #0d8ecf this shipped as, darkened at the same hue (operator:
-     "Darken it slightly"). That read 3.3–3.6:1 as lettering on these panels and white read 3.6:1
-     on it; this reads 4.7:1 on --bg-elev-2 and white 5.1:1 on it. It stays brighter than the
-     light Night accent (#006fae), because Night must dim it (styles-night-contrast.test.ts). */
-  --accent: #0174ab;
+  --border: #9aa3ad;
+  --border-soft: #b9c1ca;
+  --text: #1b1f24;
+  --text-dim: #4a525c;
+  --text-faint: #5b636d;
+  /* Silver's steel blue. It reads 6.6:1 as lettering on --bg-elev-2 and white reads 7.2:1 on it;
+     the light Night accent (#325171) is darker again, because Night must dim it
+     (styles-night-contrast.test.ts). */
+  --accent: #3b5a7a;
   --accent-ink: #ffffff;
-  --bubble-mine: #0174ab;
+  --bubble-mine: #3b5a7a;
   --bubble-mine-text: #ffffff;
-  --bubble-theirs: #eef2f7;
-  --bubble-theirs-text: #14202e;
+  --bubble-theirs: #e6e9ed;
+  --bubble-theirs-text: #1b1f24;
   --status-new-entity: #a30000;
   --status-new-band: #bb8805;
   --status-new-mode: #7c44c3;
@@ -4656,12 +4663,12 @@ body.resizing-row {
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
   /* The accent itself again. While the accent was #0d8ecf the ring was one shade darker,
-     #0b83c0: #0d8ecf measured 2.999:1 against --bg (#e5eaf0) — WCAG 1.4.11 wants 3:1 for a
-     focus indicator, so the app-wide ring failed on the page background by a rounding error,
-     on every focusable control in light mode. Nothing looked broken, which is why it took a
-     direct contrast assertion (styles-contrast.test.ts) to find it. #0174ab clears 4.2:1 on
-     --bg, 4.7:1 on --bg-elev-2 (the ⊞ popover) and 5.0:1 on --bg-elev. */
-  --focus-ring: #0174ab;
+     #0b83c0: #0d8ecf measured 2.999:1 against the page then (#e5eaf0) — WCAG 1.4.11 wants 3:1
+     for a focus indicator, so the app-wide ring failed on the page background by a rounding
+     error, on every focusable control in light mode. Nothing looked broken, which is why it took
+     a direct contrast assertion (styles-contrast.test.ts) to find it. #3b5a7a clears 5.7:1 on
+     --bg, 6.6:1 on --bg-elev-2 (the ⊞ popover) and 6.9:1 on --bg-elev. */
+  --focus-ring: #3b5a7a;
   /* DXpedition identity palette, light inks — the same ten hues as dark, taken
      darker and more saturated so the solid spine reads against the off-white
      panel and the low-alpha tint does not wash out to nothing. */
@@ -4683,6 +4690,25 @@ body.resizing-row {
   --state-pending: var(--text-dim);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
   /* The light --need-* inks do NOT live here — see the palette further down. */
+}
+
+/* LIGHT'S DISPLAY WELLS take Silver's accent and readout, as a light built-in theme gives its wells
+   its own (THEMES, below): the rest of a well stays the dark instrument palette (DISPLAY WELLS).
+   HERE, BEFORE THEMES, ON PURPOSE: at equal specificity a light theme's own well rule wins by
+   source order, and so do NIGHT's and the colour roles' well rules after it. By night the second
+   rule takes over, at (0,3,0) like a theme's night well, and a colour-role pick still takes either
+   (its night block is (0,3,0) and later). */
+[data-theme='light'] .well {
+  --accent: #a9c0d8;
+  --accent-ink: #0b1a2a;
+  --focus-ring: #a9c0d8;
+  --readout: #9ccbff;
+}
+[data-theme='light'][data-night='1'] .well {
+  --accent: #879db4;
+  --accent-ink: #0b1a2a;
+  --focus-ring: #879db4;
+  --readout: #78a6d8;
 }
 
 /* ---- THEMES: the built-in themes (Settings ▸ Appearance ▸ Theme; features/skins.ts) ---------
@@ -4876,57 +4902,6 @@ body.resizing-row {
   --well-bg: #090604;
   --well-ink: #bfb4a5;
   --well-grid: #3c352c;
-}
-/* Silver chassis — brushed-silver front panel, white displays, dark LCD digits */
-[data-theme='light'][data-skin='silver'] {
-  --bg: #e2e6eb;
-  --panel: #f9fafb;
-  --bg-elev: #f9fafb;
-  --bg-elev-2: #f3f5f7;
-  --border: #9aa3ad;
-  --border-soft: #b9c1ca;
-  --text: #1b1f24;
-  --text-dim: #4a525c;
-  --text-faint: #5b636d;
-  --accent: #3b5a7a;
-  --accent-ink: #ffffff;
-  --focus-ring: #3b5a7a;
-  --bubble-mine: #3b5a7a;
-  --bubble-mine-text: #ffffff;
-  --bubble-theirs: #e6e9ed;
-  --bubble-theirs-text: #1b1f24;
-  --readout: #143d6b;
-}
-[data-skin='silver'] .well {
-  --accent: #a9c0d8;
-  --accent-ink: #0b1a2a;
-  --focus-ring: #a9c0d8;
-  --readout: #9ccbff;
-}
-[data-theme='light'][data-night='1'][data-skin='silver'] {
-  --bg: #eae4da;
-  --panel: #fcf9f1;
-  --bg-elev: #fcf9f1;
-  --bg-elev-2: #f8f4ed;
-  --border: #a39a90;
-  --border-soft: #bfb7ae;
-  --text: #201c17;
-  --text-dim: #554f48;
-  --text-faint: #5f5851;
-  --accent: #325171;
-  --accent-ink: #ffffff;
-  --focus-ring: #325171;
-  --bubble-mine: #325171;
-  --bubble-mine-text: #ffffff;
-  --bubble-theirs: #e2dfdb;
-  --bubble-theirs-text: #201c17;
-  --readout: #0c3664;
-}
-[data-night='1'][data-skin='silver'] .well {
-  --accent: #879db4;
-  --accent-ink: #0b1a2a;
-  --focus-ring: #879db4;
-  --readout: #78a6d8;
 }
 /* Midnight — true black for OLED and dark rooms, cyan lit */
 [data-theme='dark'][data-skin='midnight'],
@@ -5254,6 +5229,58 @@ body.resizing-row {
   --focus-ring: #5aa0d9;
   --readout: #5aa0d9;
 }
+/* Bright — the standard Light until 2026-10-13: cool white panels, a bright blue accent, and in its
+   wells the dark palette's own cyan */
+[data-theme='light'][data-skin='bright'] {
+  --bg: #e5eaf0;
+  --panel: #fbfcfe;
+  --bg-elev: #fbfcfe;
+  --bg-elev-2: #f4f6f9;
+  --border: #c4cedb;
+  --border-soft: #d8dfe9;
+  --text: #14202e;
+  --text-dim: #46556e;
+  --text-faint: #57647a;
+  --accent: #0174ab;
+  --accent-ink: #ffffff;
+  --focus-ring: #0174ab;
+  --bubble-mine: #0174ab;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #eef2f7;
+  --bubble-theirs-text: #14202e;
+  --readout: #0174ab;
+}
+[data-skin='bright'] .well {
+  --accent: #4cc9f0;
+  --accent-ink: #06222c;
+  --focus-ring: #4cc9f0;
+  --readout: #4cc9f0;
+}
+[data-theme='light'][data-night='1'][data-skin='bright'] {
+  --bg: #eae4da;
+  --panel: #fcf9f1;
+  --bg-elev: #fcf9f1;
+  --bg-elev-2: #f8f4ed;
+  --border: #c5bcb0;
+  --border-soft: #d6cec3;
+  --text: #26211a;
+  --text-dim: #554f48;
+  --text-faint: #5f5851;
+  --accent: #006fae;
+  --accent-ink: #ffffff;
+  --focus-ring: #006fae;
+  --bubble-mine: #006fae;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #efe9df;
+  --bubble-theirs-text: #26211a;
+  --readout: #006fae;
+}
+[data-night='1'][data-skin='bright'] .well {
+  --accent: #42a7c7;
+  --accent-ink: #001620;
+  --focus-ring: #42a7c7;
+  --readout: #42a7c7;
+}
 
 /* ---- FIELD MODE: HIGH-CONTRAST TOKENS (data-contrast='high') -----------
    The outdoor/POTA treatment (field report 2026-08-09: "very difficult to see
@@ -5373,19 +5400,19 @@ body.resizing-row {
   --panel: #fcf9f1;
   --bg-elev: #fcf9f1;
   --bg-elev-2: #f8f4ed;
-  --border: #c5bcb0;
-  --border-soft: #d6cec3;
-  --text: #26211a;
+  --border: #a39a90;
+  --border-soft: #bfb7ae;
+  --text: #201c17;
   --text-dim: #554f48;
   --text-faint: #5f5851;
-  --accent: #006fae;
+  --accent: #325171;
   --accent-ink: #ffffff;
-  --focus-ring: #006fae;
-  --bubble-mine: #006fae;
+  --focus-ring: #325171;
+  --bubble-mine: #325171;
   --bubble-mine-text: #ffffff;
-  --bubble-theirs: #efe9df;
-  --bubble-theirs-text: #26211a;
-  --readout: #006fae;
+  --bubble-theirs: #e2dfdb;
+  --bubble-theirs-text: #201c17;
+  --readout: #0c3664;
 }
 [data-theme='dark'][data-contrast='high'][data-night='1'],
 [data-contrast='high'][data-night='1'] .well {
@@ -5564,7 +5591,7 @@ body.resizing-row {
   --readout: #4cc9f0;
 }
 [data-theme='light'] {
-  --readout: #0174ab;
+  --readout: #143d6b;
 }
 
 /* Accent */
@@ -20989,7 +21016,8 @@ button.cq-skiptx1.on {
   border-radius: 999px;
 }
 /* The light theme's amber is a mid-tone: its page colour read 3.6:1 on it as lettering, and
-   3.45-3.5:1 on the Silver and Paper themes' greyer and warmer pages. Black reads 4.8:1 or better
+   3.45-3.5:1 on the greyer page Light has had since it took Silver's look and on Paper's warmer
+   one. Black reads 4.8:1 or better
    on every Amber preset, by day and at night; the dark theme keeps its dark page-coloured letters. */
 [data-theme='light'] .opening-new {
   color: #000000;

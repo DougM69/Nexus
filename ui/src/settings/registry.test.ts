@@ -401,7 +401,7 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('watch list notes')).toContain('alerts')
     // The built-in themes (2026-09-27) by their names, and by what an operator wants of one; bare
     // 'amber' still reaches Colours first, which owns that word.
-    for (const q of ['amber lcd', 'blue vfd', 'silver chassis', 'paper', 'oled', 'true black', 'rig looks']) {
+    for (const q of ['amber lcd', 'blue vfd', 'silver chassis', 'paper', 'bright', 'oled', 'true black', 'rig looks']) {
       expect(ids(q)[0], `"${q}" must reach the Theme section`).toBe('theme')
     }
     expect(ids('amber')[0]).toBe('colours')
