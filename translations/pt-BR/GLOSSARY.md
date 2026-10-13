@@ -36,7 +36,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | DXCC | 44 | The award programme and the entity list. |
 | SSTV | 48 | The mode. |
 | APRS / APRS-IS | 43 / 12 | The protocol and its internet backbone. |
-| Field Day | 39 | The ARRL/RAC event's official name. |
+| Field Day | 37 | The ARRL/RAC event's official name. |
 | USB / LSB / SSB / FM | 43 / 11 / 33 / 31 | Mode names, as marked on the radio. |
 | ClubLog | 33 | Service name. |
 | FT8 / FT4 | 43 / 25 | Mode names. |

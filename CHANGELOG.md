@@ -296,6 +296,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field that fills it, with a button to Settings ▸ Contesting ▸ Your entry, as it does for the CQ
   contests' category lines. An Entry class counts only when it is one of the party's own classes,
   and the file still exports either way.
+- **The mode badge above Settings names the contest you are running.** With the New York QSO Party
+  or any other contest set up and Contest mode on, the badge with the blue dot at the bottom of the
+  left rail read FIELD DAY. It now reads the contest's short name, the one at the top of the Contest
+  screen, such as NYQP, ILQP, WFD or CQ WW CW, and still FIELD DAY for ARRL Field Day. The VHF
+  contests read JAN VHF, JUN VHF and SEP VHF, which fit the rail. The scoreboard you tear off into
+  its own window now says no contest is running, where it said Field Day was not active, and the
+  Remote page's logging hint now says to log contest contacts at the shack.
 
 ## [1.18.0] — 2026-10-12
 

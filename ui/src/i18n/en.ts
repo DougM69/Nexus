@@ -167,7 +167,7 @@ export const EN = {
   "remote.loggingPermissionRequired": "Remote logging is off for this browser. Allow it in Nexus at the station: Settings → Station → Remote access.",
   "remote.loggingAcquire": "Take logging control",
   "remote.loggingRelease": "Release logging control",
-  "remote.loggingHint": "Manual entries use the station’s general logbook. Log Field Day contacts, and QSOs you want audio recorded for, in Nexus at the shack.",
+  "remote.loggingHint": "Manual entries use the station’s general logbook. Log contest contacts, and QSOs you want audio recorded for, in Nexus at the shack.",
   "remote.loggingSubmitted": "Submitted QSO · retained in this browser until checked",
   "remote.loggingStationTime": "Station time at submission; check the station log for the recorded time.",
   "remote.loggingSaving": "Saving QSO at the station…",
@@ -11156,7 +11156,7 @@ export const EN = {
 
   // ── A torn-off panel window ─────────────────────────────────────────────────────────
   'detached.connecting': 'Connecting to the radio…',
-  'detached.fieldDay.inactive': 'Field Day isn’t active.',
+  'detached.fieldDay.inactive': 'No contest is running.',
   'detached.fdClub.away.head': 'Club board',
   'detached.fdClub.away.body':
     "The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
@@ -11223,8 +11223,9 @@ export const EN = {
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',
-  // The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's name, so only the
-  // conversational mode's word is prose.
+  // The operating-mode badge. `QSO` is a Q-code, and in Contest mode the badge names the contest
+  // running by its own short form (`NYQP`, `FIELD DAY`), so only the conversational mode's word
+  // is prose.
   'nav.mode.chat': 'CHAT',
   // One word for the gear: its tooltip, its accessible name and its visible label are the
   // same claim about the same button.
