@@ -13315,9 +13315,7 @@ fn save_and_publish(
                 settings.lotw_last_qsl.clear();
             }
             // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-                settings.eqsl_last_sync.clear();
-            }
+            keep_eqsl_cursor_for_its_account(eng.settings(), &mut settings);
             // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
             let cur = eng.settings();
             if cur.clublog_email != settings.clublog_email
@@ -24713,6 +24711,36 @@ fn clear_cloudlog_key() -> Result<(), String> {
 /// the resulting re-pull overlap.
 const EQSL_RCVD_MARGIN_SECS: i64 = 86_400;
 
+/// The eQSL account Settings name: its username and its QTH Nickname, as every request sends
+/// them (trimmed). Each nickname is an account of its own at eQSL, with its own InBox and its own
+/// dates, so the InBox cursor belongs to the pair, not to the username alone.
+fn eqsl_account(s: &Settings) -> (&str, &str) {
+    (s.eqsl_username.trim(), s.eqsl_qth_nickname.trim())
+}
+
+/// A save's eQSL InBox cursor ([`save_and_publish`]): kept while the save names the account the
+/// cursor was made for, and emptied when it names another, so the next sync reads that account's
+/// whole InBox. A config profile loads through the same save.
+fn keep_eqsl_cursor_for_its_account(held: &Settings, form: &mut Settings) {
+    if eqsl_account(held) != eqsl_account(form) {
+        form.eqsl_last_sync.clear();
+    }
+}
+
+/// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
+/// (a cut-off one must not skip the cards it never received), and only while Settings still name
+/// the account it read. The fetch runs without the engine lock, and a save meanwhile that names
+/// another account has emptied the cursor for it ([`keep_eqsl_cursor_for_its_account`]).
+fn eqsl_cursor_may_advance(
+    s: &Settings,
+    body: &str,
+    used_username: &str,
+    used_nickname: &str,
+) -> bool {
+    tempo_core::eqsl::is_complete_eqsl_body(body)
+        && eqsl_account(s) == (used_username.trim(), used_nickname.trim())
+}
+
 /// Download new LoTW confirmations and reconcile them into the log.
 ///
 /// Reads the LoTW username + incremental cursor from settings and the password
@@ -25335,6 +25363,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
     let used_username = username.clone();
+    let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
@@ -25375,8 +25404,8 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path (eQSL lands confirmed-not-award by
     // construction). Advance the cursor ONLY if (a) the body is structurally
     // complete — a truncated download must not skip unreceived records — AND (b) the
-    // username is unchanged since this sync started (an in-flight change already
-    // reset the cursor for the new account).
+    // account is unchanged since this sync started (an in-flight change already
+    // reset the cursor for the new account): `eqsl_cursor_may_advance`.
     //
     // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
     // cursor is advanced once it is made.
@@ -25385,9 +25414,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let summary: LotwSyncResult = summary?.into();
     {
         let mut eng = engine_lock(state);
-        if tempo_core::eqsl::is_complete_eqsl_body(&body)
-            && eng.settings().eqsl_username.trim() == used_username.trim()
-        {
+        if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
             let updated = eng.set_eqsl_cursor(next_cursor);
             persist_settings(updated, |e| {
                 eprintln!("tempo: failed to persist eQSL cursor: {e}")
@@ -44829,6 +44856,92 @@ mod tests {
         assert!(super::lotw_cursor_may_advance(
             &older, &body, "nt9e", &since
         ));
+    }
+
+    /// ★ A changed QTH Nickname makes the next eQSL sync read that account's whole InBox. Each
+    /// nickname is an account of its own at eQSL, with its own InBox, and the cursor was emptied
+    /// only when the username changed: after a switch the next sync asked the new account only
+    /// for cards since the old one's last sync, and its earlier cards never arrived. A config
+    /// profile carrying another nickname loads through this same save.
+    #[test]
+    fn a_changed_qth_nickname_makes_the_next_eqsl_sync_read_the_whole_inbox() {
+        let held = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            eqsl_last_sync: "202610010000".into(),
+            ..Default::default()
+        };
+        // What `download_eqsl_report_impl` asks eQSL for, from the settings a save leaves.
+        let next_sync = |s: &tempo_app::settings::Settings| {
+            tempo_core::eqsl::build_inbox_url(&tempo_core::eqsl::EqslQuery {
+                username: s.eqsl_username.trim().to_string(),
+                password: "not-a-password".into(),
+                rcvd_since: Some(s.eqsl_last_sync.trim().to_string()).filter(|c| !c.is_empty()),
+                qth_nickname: Some(s.eqsl_qth_nickname.trim().to_string())
+                    .filter(|n| !n.is_empty()),
+            })
+        };
+        let saved = |edit: &dyn Fn(&mut tempo_app::settings::Settings)| {
+            let mut form = held.clone();
+            edit(&mut form);
+            super::keep_eqsl_cursor_for_its_account(&held, &mut form);
+            next_sync(&form)
+        };
+        let portable = saved(&|f| f.eqsl_qth_nickname = "Portable".into());
+        assert!(
+            portable.ends_with("&QTHNickname=Portable&RcvdSince=190001010000"),
+            "{portable}"
+        );
+        // Controls: a changed username does the same, as it always has. A save that names the
+        // same account keeps the cursor, the nickname's surrounding spaces included, since no
+        // request ever sends them.
+        let other_login = saved(&|f| f.eqsl_username = "k2def-other".into());
+        assert!(
+            other_login.ends_with("&RcvdSince=190001010000"),
+            "{other_login}"
+        );
+        for kept in [
+            saved(&|f| f.eqsl_upload = !f.eqsl_upload),
+            saved(&|f| f.eqsl_qth_nickname = " Home ".into()),
+        ] {
+            assert!(
+                kept.ends_with("&QTHNickname=Home&RcvdSince=202610010000"),
+                "{kept}"
+            );
+        }
+    }
+
+    /// The nickname can change while an eQSL sync runs: the fetch holds no engine lock. The
+    /// sync's cursor belongs to the account it read, so it must not land on the account the save
+    /// switched to, or that account's first sync asks only for cards since the other's.
+    #[test]
+    fn an_eqsl_sync_already_running_keeps_its_cursor_off_another_account() {
+        let inbox = "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n\
+                     <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261001<TIME_ON:6>180000<EOR>\n";
+        let mut s = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            ..Default::default()
+        };
+        assert!(
+            super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "control: nothing moved during the fetch"
+        );
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, &inbox[..inbox.len() - 7], "k2def-test", "Home"),
+            "control: a cut-off download never moves it"
+        );
+        s.eqsl_qth_nickname = "Portable".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync of Home finishing after the switch to Portable"
+        );
+        s.eqsl_qth_nickname = "Home".into();
+        s.eqsl_username = "k2def-other".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync finishing after the username changed, as before"
+        );
     }
 
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."

@@ -89,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the toast has gone.
 - **eQSL uploads name Nexus.** eQSL asks the programs that upload to it to name themselves, and
   each Nexus upload reached it unnamed. Every upload now carries Nexus's name and version.
+- **Changing your eQSL QTH Nickname no longer skips cards.** Each QTH Nickname is an eQSL account
+  of its own with its own InBox, but Nexus kept its place in the InBox across a nickname change,
+  so the next sync asked the new account only for cards since the old account's last sync, and its
+  earlier cards never arrived. Changing the nickname, in Settings or by loading a config profile,
+  now makes the next sync read that account's whole InBox, as changing the username already did,
+  and a sync that was running when you changed it no longer carries its place over to the other
+  account.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never

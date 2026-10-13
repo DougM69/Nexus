@@ -2773,7 +2773,8 @@ pub struct Settings {
     pub eqsl_username: String,
     /// eQSL incremental-sync cursor: a `YYYYMMDDHHMM` timestamp (this sync's start,
     /// rolled back by a safety margin) sent as `RcvdSince`. Empty = full pull.
-    /// Reset to empty when `eqsl_username` changes (the cursor is account-bound).
+    /// Reset to empty when `eqsl_username` or `eqsl_qth_nickname` changes (the cursor is
+    /// account-bound, and each QTH Nickname is an eQSL account of its own).
     pub eqsl_last_sync: String,
     /// QRZ.com account username for callsign lookup. The password lives in the OS
     /// keychain (set via `set_qrz_password`), never here; the session key is cached
