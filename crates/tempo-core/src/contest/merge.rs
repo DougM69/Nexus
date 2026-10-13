@@ -606,7 +606,13 @@ fn serial_of(vals: &[super::spec::FieldValue], spec: &super::spec::ExchangeSpec)
 /// The signal report in a field vector, when the exchange declares an RST slot — what
 /// ADIF's `RST_SENT`/`RST_RCVD` hold. `None` for an exchange with no report, and for an
 /// empty one.
-fn rst_of(vals: &[super::spec::FieldValue], spec: &super::spec::ExchangeSpec) -> Option<String> {
+///
+/// The contest log's own submitted ADIF writes its `RST_SENT` with this too, so the two files
+/// cannot disagree ([`FieldDayLog::submission_adif`]).
+pub(crate) fn rst_of(
+    vals: &[super::spec::FieldValue],
+    spec: &super::spec::ExchangeSpec,
+) -> Option<String> {
     vals.iter()
         .find(|v| {
             matches!(

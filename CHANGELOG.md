@@ -108,6 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
   asked.
+- **The Contest screen's ADIF export has the report you sent.** It had the report you received on
+  each contact but not the one you sent, so a program reading the file found no sent report. Each
+  contact now carries its own, the one its Cabrillo line and the Logbook show: 59 on phone, 599 on
+  CW and digital. A contest whose exchange has no report, such as Field Day, writes none.
 
 ## [1.18.0] — 2026-10-12
 
