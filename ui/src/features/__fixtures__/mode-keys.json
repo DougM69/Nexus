@@ -105,7 +105,7 @@
         { "call": "C5AAA", "band": "40m", "mode": "RTTY", "confirmed": false }
       ],
       "heard": { "call": "C5R", "band": "20m", "mode": "JTTY" },
-      "alert": { "tags": ["NewMode"], "mode": "Digital", "exactMode": "JTTY", "headline": "New mode — JTTY The Gambia (any band)" },
+      "alert": { "tags": ["NewMode"], "mode": "JTTY", "exactMode": "JTTY", "headline": "New mode — JTTY The Gambia (any band)" },
       "cardNewMode": true
     },
     {
