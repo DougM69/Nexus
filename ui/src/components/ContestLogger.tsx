@@ -153,7 +153,7 @@ export function ContestLargeEntry({
 }) {
   const section = snap.radio.operatingMode
   const pskName = usePskName(section)
-  const m = contestLogMode(section, pskName)
+  const m = contestLogMode(section, pskName, snap.link.tier)
   // THE TEXT SIZE (A− / A+): a factor on the app's Text size for the entry and the last contacts,
   // remembered on this computer for this window and clamped as it is read back.
   const [textScale, setTextScale] = useState(() => loggerTextScale(surfaceGet(TEXT_SCALE_KEY)))

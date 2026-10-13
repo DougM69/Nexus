@@ -108,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
   asked.
+- **The contest logger window logs a JS8 contact as JS8, and each digital mode as itself.** With
+  the station on JS8, FT4 or another digital mode, a contact typed into the contest logger window,
+  or into the log line at the top of the Contest screen, named no mode, so the contest log, its
+  ADIF export and the contacts merged into your logbook called it FT8. The Illinois and New York QSO
+  parties and Winter Field Day give FT8 no credit. The log line now names the mode the station
+  runs, as the JS8 screen's own log line does.
 
 ## [1.18.0] — 2026-10-12
 

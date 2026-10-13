@@ -344,7 +344,8 @@ describe('a mode the contest does not permit', () => {
     expect(banner.textContent).not.toContain(banned('FT8'))
     // The rules line says what the contest permits, as it always did.
     expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
-    // Logging stays allowed: the contact goes, under the digital class.
+    // Logging stays allowed: the contact goes, under the digital class, with the tier the station
+    // runs named behind it (this fixture's spelling of it).
     const boxes = await typeContact(entry)
     const from = mark()
     fireEvent.keyDown(boxes[2], { key: 'Enter', code: 'Enter' })
@@ -353,7 +354,7 @@ describe('a mode the contest does not permit', () => {
       call: 'K9ABC',
       fields: [['RST', '599'], ['QTH', 'COOK']],
       mode: 'DIG',
-      submode: null,
+      submode: 'Ft8',
     })
   })
 

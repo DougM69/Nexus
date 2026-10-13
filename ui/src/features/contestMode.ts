@@ -9,11 +9,21 @@ import { PSK_MODE_BY_SLUG } from '../pskModes'
 
 /** What a contest log line off the cockpits logs under: the station's operating section as the
  *  cockpit there logs it — Phone as PH, CW as CW, RTTY and the keyboard modes as DIG with the mode on
- *  the air, and the FT modes as DIG, whose mode the engine stamps from the tier it runs. A station
- *  too old to say logs as Phone, the voice logging the large log line exists for. */
+ *  the air, and the digital section as DIG with the tier it runs (`tier`, the snapshot's, which is
+ *  the engine's own log-mode name, as the Satellites strip reads it). A station too old to say logs
+ *  as Phone, the voice logging the large log line exists for.
+ *
+ *  ⚠️ THE DIGITAL SECTION NAMES ITS MODE. A DIG contact logged with none is stored with none and
+ *  exports as FT8 (`LoggedQso::recorded_mode`): from the JS8 cockpit's section, a JS8 contact went
+ *  out as FT8, a mode the Illinois and New York QSO parties and Winter Field Day give no credit.
+ *
+ *  The sections are the engine's five (`settings::OperatingMode`), and the main window's other
+ *  sections are not among them: JS8 is the digital section on the JS8 tier, picking an SSTV channel
+ *  claims Phone, and APRS and Satellites claim none, so the station stays on the one it was on. */
 export function contestLogMode(
   section: string | undefined,
   pskName: string | null,
+  tier?: string,
 ): { fdMode: 'CW' | 'PH' | 'DIG'; fdSubmode?: string; mode: string; defaultRst: string } {
   switch (section) {
     case 'cw':
@@ -25,8 +35,12 @@ export function contestLogMode(
       const name = pskName ?? PSK_MODE_BY_SLUG.psk31.name
       return { fdMode: 'DIG', fdSubmode: name, mode: name, defaultRst: '599' }
     }
-    case 'digital':
-      return { fdMode: 'DIG', mode: 'FT8', defaultRst: '599' }
+    case 'digital': {
+      const name = tier?.trim()
+      return name
+        ? { fdMode: 'DIG', fdSubmode: name, mode: name, defaultRst: '599' }
+        : { fdMode: 'DIG', mode: 'FT8', defaultRst: '599' }
+    }
     default:
       return { fdMode: 'PH', mode: 'SSB', defaultRst: '59' }
   }
