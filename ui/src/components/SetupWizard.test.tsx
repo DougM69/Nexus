@@ -22,14 +22,15 @@ vi.mock('../api', () => ({
 const importAdif = api.importAdif as ReturnType<typeof vi.fn>
 
 /** `guide: true` supplies onOpenGuide, which is what makes the last step offer
- *  the Getting started walkthrough. Omitted, the offer must not appear at all. */
-function renderWizard(opts: { guide?: boolean } = {}) {
+ *  the Getting started walkthrough. Omitted, the offer must not appear at all.
+ *  `settings` is what the wizard prefills from and diffs its draft against. */
+function renderWizard(opts: { guide?: boolean; settings?: Record<string, unknown> } = {}) {
   const onApply = vi.fn()
   const onSkip = vi.fn()
   const onOpenGuide = vi.fn()
   render(
     <SetupWizard
-      settings={null}
+      settings={(opts.settings ?? null) as never}
       onApply={onApply}
       onTestCat={vi.fn(() => Promise.resolve({} as never))}
       onSkip={onSkip}
@@ -265,6 +266,161 @@ describe('SetupWizard second-radio card', () => {
     await screen.findByText(/Second radio: .*FT-991 on COM7/)
     // The run-both-at-once fact, surfaced at last (it lived only in a picker subtitle).
     expect(screen.getByText(/open Nexus twice/)).toBeTruthy()
+  })
+})
+
+describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
+  // Thirteen radios in the catalog answer CAT keying without keying: the bundled Hamlib says
+  // `Can set PTT: N` for each (NO_CAT_PTT_MODELS), and an IC-706MKIIG answers `T 1` with RPRT 0
+  // while it stays on receive. The wizard switched PTT to CAT for any rig it could name, so Nexus
+  // showed TX and nothing went out. The draft holds only what changed: a draft with no
+  // `pttMethod` leaves PTT as saved (VOX when nothing is).
+  const BRIDGE = {
+    portName: 'COM4',
+    suggestedModel: null,
+    suggestedModelName: null,
+    suggestedAudio: null,
+    suggestedAudioOut: null,
+    chip: 'FT232R',
+    civSide: null,
+    interfaceName: null,
+    interfacePttMethod: null,
+  }
+  const DIGIRIG = {
+    ...BRIDGE,
+    portName: 'COM6',
+    chip: 'CP2102',
+    interfaceName: 'Digirig Mobile',
+    interfacePttMethod: 'rts',
+  }
+  /** A trusted Auto-test hit (the model a radio's saved settings name). */
+  const hit = (portName: string, model: number, modelName: string) => ({
+    found: true,
+    portName,
+    baud: 19200,
+    model,
+    modelName,
+    freqMhz: 7.074,
+    detail: 'the probe answered',
+    modelSeeded: false,
+  })
+
+  beforeEach(() => {
+    cleanup()
+    vi.mocked(api.getRigModels).mockResolvedValue([
+      [3011, 'Icom IC-706MKIIG'],
+      [3073, 'Icom IC-7300'],
+    ] as never)
+    vi.mocked(api.detectRigs).mockResolvedValue([BRIDGE] as never)
+    vi.mocked(api.probeCatPorts).mockReset()
+    vi.mocked(api.probeCatPorts).mockResolvedValue({
+      found: false,
+      detail: 'no rig answered',
+    } as never)
+    vi.mocked(api.updateRadioProfile).mockClear()
+  })
+
+  /** Enter the rig step and click the scanned row on `port`. A bare bridge chip chains into
+   *  Auto-test, which finds nothing here unless a test says otherwise. */
+  async function chooseRow(port: RegExp) {
+    clickNext() // → rig step; the scan on entry lists the rows
+    fireEvent.click(await screen.findByRole('button', { name: port }))
+  }
+  async function pick(model: number) {
+    const select = (await screen.findByLabelText(/Which radio is this/)) as HTMLSelectElement
+    // The catalog loads after mount; a change to a value with no option would pick model 0.
+    await waitFor(() => expect(within(select).getByText('Icom IC-706MKIIG')).toBeTruthy())
+    fireEvent.change(select, { target: { value: String(model) } })
+  }
+  function finishDraft(onApply: ReturnType<typeof vi.fn>) {
+    clickNext() // → log
+    clickNext() // → goals
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
+    return onApply.mock.calls[0][4]
+  }
+
+  it('a pick of the IC-706MKIIG leaves PTT on VOX', async () => {
+    const { onApply } = renderWizard()
+    await chooseRow(/COM4/)
+    await pick(3011)
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    expect(draft.pttMethod).toBeUndefined()
+  })
+
+  it('positive control: a pick of the IC-7300 still sets CAT', async () => {
+    const { onApply } = renderWizard()
+    await chooseRow(/COM4/)
+    await pick(3073)
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3073)
+    expect(draft.pttMethod).toBe('cat')
+  })
+
+  it('correcting a pick to the IC-706MKIIG undoes the CAT the first pick chose', async () => {
+    const { onApply } = renderWizard()
+    await chooseRow(/COM4/)
+    await pick(3073)
+    await pick(3011)
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    expect(draft.pttMethod).toBeUndefined()
+  })
+
+  it('a saved CAT stays: an interface that keys on audio (a SignaLink) transmits on CAT', async () => {
+    const { onApply } = renderWizard({ settings: { pttMethod: 'cat' } })
+    await chooseRow(/COM4/)
+    await pick(3011)
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    // Unchanged from the saved CAT. Rewritten to VOX, the draft would carry `pttMethod: 'vox'`.
+    expect(draft.pttMethod).toBeUndefined()
+  })
+
+  it("a recognised interface's RTS still wins when Auto-test finds the IC-706MKIIG", async () => {
+    vi.mocked(api.detectRigs).mockResolvedValue([DIGIRIG] as never)
+    const { onApply } = renderWizard()
+    await chooseRow(/COM6/)
+    vi.mocked(api.probeCatPorts).mockResolvedValue(hit('COM6', 3011, 'Icom IC-706MKIIG') as never)
+    fireEvent.click(screen.getByRole('button', { name: /Auto-test my ports/ }))
+    await screen.findByText('the probe answered')
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    expect(draft.pttMethod).toBe('rts')
+  })
+
+  it('a scanned row that names the IC-706MKIIG leaves PTT on VOX', async () => {
+    // None of these radios names itself over USB today; the rule holds if one ever does.
+    vi.mocked(api.detectRigs).mockResolvedValue([
+      { ...BRIDGE, suggestedModel: 3011, suggestedModelName: 'Icom IC-706MKIIG' },
+    ] as never)
+    const { onApply } = renderWizard()
+    await chooseRow(/COM4/)
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    expect(draft.pttMethod).toBeUndefined()
+  })
+
+  it("a second radio Auto-test finds as the IC-706MKIIG keeps its profile's VOX", async () => {
+    vi.mocked(api.detectRigs).mockResolvedValue([
+      { ...BRIDGE, portName: 'COM5', suggestedModel: 1042, suggestedModelName: 'Yaesu FTDX10' },
+      BRIDGE,
+    ] as never)
+    vi.mocked(api.getSettings).mockResolvedValue({
+      radios: [
+        { id: 0, serialPort: 'COM5', baud: 38400, pttMethod: 'cat' },
+        { id: 1, serialPort: '', baud: 38400, pttMethod: 'vox' },
+      ],
+    } as never)
+    vi.mocked(api.probeCatPorts).mockResolvedValue(hit('COM4', 3011, 'Icom IC-706MKIIG') as never)
+    renderWizard()
+    await chooseRow(/FTDX10/)
+    fireEvent.click(await screen.findByRole('button', { name: /second radio/ }))
+    await waitFor(() => expect(api.updateRadioProfile).toHaveBeenCalledTimes(1))
+    const [id, patch] = vi.mocked(api.updateRadioProfile).mock.calls[0]
+    expect(id).toBe(1)
+    expect(patch.rigModel).toBe(3011)
+    expect(patch.pttMethod).toBe('vox')
   })
 })
 

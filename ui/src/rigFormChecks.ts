@@ -79,6 +79,22 @@ export function checkRigForm(
   icomLanPasswordSaved?: boolean | null,
 ): RigCheck[] {
   const out: RigCheck[] = []
+  // CAT keying on a radio Hamlib cannot key over CAT (`NO_CAT_PTT_MODELS`): `T 1` answers as if it
+  // keyed and the radio stays on receive, so the station shows TX and nothing goes out. Decided
+  // before the network return below because it is a fact about the MODEL, which rigctld drives over
+  // a network address as it does over a serial port (and over an empty `rigConn`, which an older
+  // settings file loads as and the backend reads as serial). Not OmniRig (its own rig file keys the
+  // radio) and not the Icom network connection (Nexus's own CI-V; none of these radios has one). A
+  // WARNING, never an error: an interface that keys the radio on audio, a SignaLink, transmits
+  // whatever PTT says, and that station must keep saving its CAT setting.
+  if (
+    form.rigConn !== 'omnirig' &&
+    form.rigConn !== 'icomlan' &&
+    form.pttMethod === 'cat' &&
+    NO_CAT_PTT_MODELS.includes(form.rigModel)
+  ) {
+    out.push({ level: 'warning', message: t('settings.radio.check.noCatPtt') })
+  }
   // A network rig has no serial port at all; none of this applies.
   if (form.rigConn === 'network') return out
   // Nor does the Icom network connection: it has its own facts to check.
@@ -240,6 +256,23 @@ function checkIcomLan(form: RigFormFacts, passwordSaved?: boolean | null): RigCh
  * the daemon can serve.
  */
 export const ICOM_LAN_MODELS: readonly number[] = [3078, 3081, 3085, 3090, 3092, 3094]
+
+/**
+ * The radios in the rig list that Hamlib cannot key over CAT: the bundled Hamlib's caps answer
+ * `Can set PTT: N` for each. PTT on CAT keys nothing on them (the IC-706MKIIG's backend declares no
+ * PTT at all, and Hamlib answers its `T 1` with RPRT 0), so the setup wizard never switches one of
+ * them to CAT, and Settings warns when CAT is picked. Malachite DSP SDR, Icom IC-706, IC-706MKII,
+ * IC-706MKIIG, IC-718, IC-725, IC-726, IC-728, IC-729, IC-735, IC-756, Ten-Tec TT-585 Paragon and
+ * Alinco DX-77.
+ *
+ * ⚠️ GENERATED FACTS, not a hand list: `scripts/gen-hamlib-cat-ptt.mjs` dumps every catalog model
+ * into `components/__fixtures__/hamlibCatPtt.json`, and `rigFormChecks.catptt.test.ts` fails unless
+ * this is exactly that fixture's `setPtt: false` rows. NET rigctl (2) is never here: its keying
+ * belongs to the rigctld it reaches.
+ */
+export const NO_CAT_PTT_MODELS: readonly number[] = [
+  2049, 3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3026, 16009, 17001,
+]
 
 /** Convenience: does anything here stop a save? */
 export function blocks(checks: RigCheck[]): boolean {

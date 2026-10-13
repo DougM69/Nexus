@@ -27,6 +27,7 @@ import {
   updateRadioProfile,
 } from '../api'
 import { baudForRig, radioPatch } from './SettingsPanel'
+import { NO_CAT_PTT_MODELS } from '../rigFormChecks'
 import { SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
 import { IS_WINDOWS } from '../platform'
@@ -273,8 +274,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         setSerialPort(r.portName)
         setBaud(r.baud)
         setRigConn('serial')
-        // A real answer means CAT works — kill the silent-VOX default.
-        setPttMethod('cat')
+        // A real answer means CAT works — kill the silent-VOX default. Except on a radio Hamlib
+        // cannot key over CAT: its CAT answers, but CAT keying keys nothing, so PTT stays put.
+        if (!NO_CAT_PTT_MODELS.includes(r.model)) setPttMethod('cat')
         if (r.modelSeeded) {
           // Port + baud proven; the model is a guess. Keep the guess as the dropdown's
           // preselection and say plainly that picking the exact model is the next step.
@@ -305,7 +307,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setModelSeeded(false)
     const fixed = baudForRig(num, baud)
     if (fixed != null) setBaud(fixed)
-    if (pttMethod === 'vox') setPttMethod('cat')
+    if (NO_CAT_PTT_MODELS.includes(num)) {
+      // Hamlib cannot key this radio over CAT. Undo a CAT this wizard chose for an earlier pick or
+      // an Auto-test hit, back to what is saved; a saved CAT is the operator's own and stays.
+      if (pttMethod === 'cat') setPttMethod(settings?.pttMethod ?? 'vox')
+    } else if (pttMethod === 'vox') setPttMethod('cat')
   }
   // --- The SECOND radio: a card in this step, not a fifth step (multi-radio had zero
   // wizard presence — ~11 steps across three Settings sections, with a recorded field
@@ -355,7 +361,8 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
           rigModel: r.model,
           rigModelName: r.modelName,
           rigConn: 'serial',
-          pttMethod: 'cat',
+          // Never CAT for a radio Hamlib cannot key over CAT: the new profile keeps its own VOX.
+          ...(NO_CAT_PTT_MODELS.includes(r.model) ? {} : { pttMethod: 'cat' }),
           ...(row?.suggestedAudio ? { audioIn: row.suggestedAudio } : {}),
           ...(row?.suggestedAudioOut || row?.suggestedAudio
             ? { audioOut: row?.suggestedAudioOut ?? row?.suggestedAudio ?? '' }
@@ -547,10 +554,12 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setRigConn('serial')
     // PTT: a recognised interface cable names its keying line; a model-named rig
     // gets CAT keying (killing the silent-VOX default that made the wizard's own
-    // Test CAT report "✗ VOX — no CAT"). An unidentified bridge chip is left
-    // alone — the Auto-test chain below settles it when it finds the rig.
+    // Test CAT report "✗ VOX — no CAT"), unless Hamlib cannot key it over CAT. An
+    // unidentified bridge chip is left alone — the Auto-test chain below settles it
+    // when it finds the rig.
+    const catKeys = r.suggestedModel != null && !NO_CAT_PTT_MODELS.includes(r.suggestedModel)
     if (r.interfacePttMethod) setPttMethod(r.interfacePttMethod)
-    else if (r.suggestedModel != null && pttMethod === 'vox') setPttMethod('cat')
+    else if (catKeys && pttMethod === 'vox') setPttMethod('cat')
     // RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates under
     // different input/output names on Windows, so reusing the input name for audioOut sent TX
     // audio to the PC speakers. Fall back to the input name only if no output paired.

@@ -6137,6 +6137,7 @@ export const ES: PartialCatalog = {
   "settings.quickReply.qso.hint": "Chips para QSOs secuenciados.",
   "settings.radio.check.catNoModel": "PTT está en CAT pero el modelo de equipo es None/VOX — elige tu modelo de equipo, o usa otro método de PTT.",
   "settings.radio.check.dialIn": "{{port}} es un dispositivo de marcación y se quedará colgado esperando portadora. Usa el puerto /dev/cu.… equivalente.",
+  "settings.radio.check.noCatPtt": "Hamlib no puede manipular este equipo por CAT, así que PTT por CAT no lo pondrá a transmitir. Elige VOX si tu interfaz manipula el equipo con el audio, o RTS o DTR serie si lo manipula por una línea serie.",
   "settings.radio.check.noPort": "No hay puerto serie elegido — hay un modelo de equipo puesto, así que CAT necesita un puerto.",
   "settings.radio.check.portMissing": "{{port}} no está conectado ahora mismo — comprueba que el equipo esté encendido, o elige otro puerto.",
   "settings.radios.active.badge": "Activo",

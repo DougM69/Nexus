@@ -1302,6 +1302,7 @@ export const DE: PartialCatalog = {
   "settings.radio.check.portMissing": "{{port}} ist derzeit nicht verbunden — prüfen, ob das Funkgerät eingeschaltet ist, oder einen anderen Port wählen.",
   "settings.radio.check.dialIn": "{{port}} ist ein Dial-in-Gerät und bleibt beim Warten auf den Carrier hängen. Stattdessen den passenden /dev/cu.…-Port verwenden.",
   "settings.radio.check.catNoModel": "PTT steht auf CAT, aber das Rig-Modell ist Keins/VOX — Rig-Modell wählen oder eine andere PTT-Methode einstellen.",
+  "settings.radio.check.noCatPtt": "Hamlib kann dieses Funkgerät nicht über CAT tasten, PTT über CAT schaltet es also nicht auf Senden. VOX wählen, wenn das Interface das Funkgerät über das Audio tastet, oder Seriell RTS bzw. DTR, wenn es über eine serielle Leitung tastet.",
   "settings.panel.title": "Einstellungen",
   "settings.panel.subtitle": "Operator, Funkgerät & Netzwerk",
   "settings.panel.loading": "Einstellungen werden geladen…",

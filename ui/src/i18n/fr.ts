@@ -6137,6 +6137,7 @@ export const FR: PartialCatalog = {
   "settings.quickReply.qso.hint": "Boutons pour les QSO séquencés.",
   "settings.radio.check.catNoModel": "PTT est réglé sur CAT mais le modèle de radio est Aucun/VOX — choisissez votre modèle de radio, ou une autre méthode PTT.",
   "settings.radio.check.dialIn": "{{port}} est un périphérique dial-in : il restera bloqué à attendre la porteuse. Utilisez plutôt le port /dev/cu.… correspondant.",
+  "settings.radio.check.noCatPtt": "Hamlib ne peut pas manipuler cette radio par CAT, donc PTT sur CAT ne la fera pas passer en émission. Choisissez VOX si votre interface manipule la radio par l'audio, ou RTS ou DTR série si elle la manipule par une ligne série.",
   "settings.radio.check.noPort": "Aucun port série choisi — un modèle de radio est défini, donc CAT a besoin d'un port.",
   "settings.radio.check.portMissing": "{{port}} n'est pas connecté actuellement — vérifiez que la radio est allumée, ou choisissez un autre port.",
   "settings.radios.active.badge": "Active",

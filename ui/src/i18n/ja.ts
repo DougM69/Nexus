@@ -3995,6 +3995,7 @@ export const JA: PartialCatalog = {
   "settings.radio.check.portMissing": "{{port}} は現在接続されていません — 無線機の電源を確認するか、別のポートを選んでください。",
   "settings.radio.check.dialIn": "{{port}} はダイヤルイン用デバイスのため、キャリア待ちで固まります。対応する /dev/cu.… ポートを使ってください。",
   "settings.radio.check.catNoModel": "PTTがCATに設定されていますが、無線機モデルが None/VOX です — 無線機モデルを選ぶか、別のPTT方式を選択してください。",
+  "settings.radio.check.noCatPtt": "Hamlibはこの無線機をCATでキーイングできないため、PTTをCATにしても送信状態になりません。インターフェースが音声で無線機をキーイングする場合はVOXを、シリアル線でキーイングする場合はシリアルRTSまたはDTRを選んでください。",
   "settings.panel.title": "設定",
   "settings.panel.subtitle": "オペレーター・無線機・ネットワーク",
   "settings.panel.loading": "設定を読み込み中…",

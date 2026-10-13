@@ -5,6 +5,19 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The setup wizard no longer puts PTT on CAT for a radio Hamlib cannot key that way.** Hamlib
+  cannot key the Icom IC-706, IC-706MKII, IC-706MKIIG, IC-718, IC-725, IC-726, IC-728, IC-729,
+  IC-735 and IC-756, the Ten-Tec TT-585 Paragon, the Alinco DX-77 or the Malachite DSP SDR over
+  CAT: with PTT on CAT, Nexus showed TX while the radio stayed on receive. The wizard switched PTT
+  to CAT for any rig it could name. For these radios it now leaves PTT on VOX, or on your
+  interface's keying line when it recognises the interface. Settings ▸ Radio says so when you save
+  one of them with PTT on CAT, and keeps your choice: an interface that keys the radio on audio,
+  such as a SignaLink, transmits whatever PTT is set to.
+
 ## [1.18.0] — 2026-10-12
 
 ### Added

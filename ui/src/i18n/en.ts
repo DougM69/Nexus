@@ -6112,6 +6112,8 @@ export const EN = {
   // ⚠️ `{{port}}` is the device name exactly as the OS enumerated it (`COM5`,
   // `/dev/cu.usbserial-A`), and `/dev/cu.…`, CAT, PTT and None/VOX are the settings' own
   // vocabulary — every one of them names a thing the operator has to pick by that name.
+  // `noCatPtt` names PTT Method's own choices (VOX, Serial RTS, Serial DTR): use the words the
+  // catalog gives those options.
   'settings.radio.check.noPort': 'No serial port chosen — a rig model is set, so CAT needs a port.',
   'settings.radio.check.portMissing':
     '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
@@ -6119,6 +6121,8 @@ export const EN = {
     '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
+  'settings.radio.check.noCatPtt':
+    "Hamlib can't key this radio over CAT, so PTT on CAT won't put it in transmit. Choose VOX if your interface keys the radio on audio, or Serial RTS or DTR if it keys on a serial line.",
 
   // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
   // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
