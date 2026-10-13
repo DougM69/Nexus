@@ -250,6 +250,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still logs as typed. Nexus tells where a station is from its call, and a call it cannot place is
   taken as before. The manual now says to type a two-word county without its space (stclair):
   Space moves on to the Call box.
+- **The scope's ▲ dB reading no longer shoves G, Z and the buttons beside it.** On the Phone and
+  CW scopes and the RF scope pane, the reading of how far the strongest signal stands above the
+  noise moved everything after it sideways each time it gained or lost a digit, from 8 dB to 10 dB
+  and back. It now has a field as wide as the widest reading it can show (-120, while you
+  transmit), so nothing in the row moves. On CW at 1024×768 with UI scale at 175 %, the row now
+  stays on two lines, where it jumped to two only for the widest readings.
 
 ## [1.18.0] — 2026-10-12
 
