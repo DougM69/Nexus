@@ -96,6 +96,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now makes the next sync read that account's whole InBox, as changing the username already did,
   and a sync that was running when you changed it no longer carries its place over to the other
   account.
+- **A card from eQSL no longer marks your contact "QSL sent".** Every card in eQSL's InBox carries
+  the sender's own "QSL sent, electronic" mark, and a sync or Check confirmations copied it onto
+  your contact whether or not you had sent anything, so the Logbook showed the sent mark and an
+  ADIF export passed it on to other loggers. A card now brings its confirmation and nothing of the
+  sender's, and a sent mark you set yourself stays as it was. Contacts that already carry a copied
+  mark keep it until you clear it from the row's QSL menu. A listener's (SWL) report in your InBox
+  is no longer read as a card either: it neither confirms a contact nor shows as the confirmation
+  of a QSO missing from your log.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never
