@@ -1837,6 +1837,61 @@ export interface PskState {
   keyerError: string | null
 }
 
+// ---- JTTY (the `get_jtty_state` poll; mirrors tempo_app::dto::JttyState field for field) ----
+
+/** One message in the JTTY receive window (`tempo_app::dto::JttyLine`). */
+export interface JttyLine {
+  /** The decoder's message id: stable while the message grows. */
+  id: number
+  /** When its first frame started, UTC milliseconds. */
+  startUtcMs: number
+  /** Audio frequency (Hz) and the dial it was heard on (Hz). */
+  freqHz: number
+  dialHz: number
+  /** SNR of its first frame, dB in 2500 Hz. */
+  snr: number
+  /** The text so far, as WSJT-X shows it. */
+  text: string
+  /** The line exactly as WSJT-X's decode pane prints it, without the optional time label:
+   *  frequency, SNR and the text wrapped at 40 characters (continuations indented). */
+  line: string
+  /** Still arriving, ended by its sender, timed out, or cut off by the reception ending. */
+  state: 'growing' | 'complete' | 'expired' | 'ended'
+  /** The message belongs to the QSO-frequency pane: within F Tol of Rx when first heard. */
+  rx: boolean
+  /** The calls in this line decoded in two separate messages a short time apart: the only
+   *  ones a click may look up. A call not listed here has been heard once. */
+  confirmedCalls: string[]
+}
+
+/** A JTTY station decoded in two separate messages (`tempo_app::dto::JttyHeard`). */
+export interface JttyHeard {
+  call: string
+  /** RF frequency, Hz. */
+  freqHz: number
+  band: string
+  snr: number
+  grid: string | null
+  atUtcMs: number
+}
+
+/** The live JTTY receive state (poll while the JTTY cockpit is visible). RECEIVE ONLY. */
+export interface JttyState {
+  armed: boolean
+  /** WSJT-X's Rx frequency and F Tol: the audio channel always searched. */
+  rxHz: number
+  ftolHz: number
+  /** The waterfall range the fixed 1200-1500 and 1500-1800 Hz channels are searched inside. */
+  lowHz: number
+  highHz: number
+  /** The receive window, oldest first. */
+  lines: JttyLine[]
+  /** Confirmed stations of the last ten minutes, newest first. */
+  heard: JttyHeard[]
+  /** Why receiving stopped or restarted, to show the operator; null when there is nothing. */
+  notice: string | null
+}
+
 // ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----
 
 /** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
@@ -2378,6 +2433,9 @@ export interface UploadReport {
   /** Contacts of the batch DELETED from the log while TQSL was signing it. Absent from an
    *  older station. */
   skippedDeleted?: number
+  /** Contacts held back because TQSL does not know their mode yet (a JTTY contact, written bare
+   *  as WSJT-X writes it): not sent, still marked not uploaded. Absent from an older station. */
+  heldMode?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -4443,6 +4501,15 @@ export interface Settings {
    * key must read as on — `!== false`, never `!!`. The gate is in the engine
    * (`Engine::psk_auto_arm`), beside the session decline memory. */
   pskRxAutoArm?: boolean
+  /** Whether opening the JTTY view starts its receiver (`jtty_rx_auto_arm`): PSK's twin, default
+   *  TRUE, so an absent key reads as on (`!== false`). */
+  jttyRxAutoArm?: boolean
+  /** JTTY's F Tol, Hz (`jtty_ftol_hz`, WSJT-X's `JTTY_FTol`). The JTTY cockpit is its one
+   *  writer, through `jtty_set_rx`; a form save keeps the live value. */
+  jttyFtolHz?: number
+  /** The Keyboard section's modem (`keyboard_modem`): written by entering the PSK or JTTY
+   *  cockpit, never by the form. */
+  keyboardModem?: 'psk' | 'jtty'
   /** Arm the RTTY decoder on entering the RTTY view. Default TRUE — RTTY was the only
    *  decode mode with no auto-arm, which is very likely what "RTTY is not decoding" was.
    *  Absent = on (`rtty_rx_auto_arm`, settings.rs). */

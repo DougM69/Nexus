@@ -346,7 +346,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'PSK',
     tab: 'digital',
     keywords: ['psk31', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
-      'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan'],
+      'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan',
+      // JTTY, the Keyboard section's other modem, keeps its one setting here.
+      'jtty', 'wsjt-x keyboard', '14.090'],
   },
   {
     id: 'js8',

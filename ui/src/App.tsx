@@ -87,7 +87,7 @@ import { sectionFeatures, featureById, type FeatureId } from './features/registr
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, type OwnScreen } from './features/needs'
 import { useAlertGeoScope } from './features/alertGeoScope'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
@@ -118,6 +118,7 @@ import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
 import { Js8Cockpit } from './components/Js8Cockpit'
+import { JttyCockpit } from './components/JttyCockpit'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -291,7 +292,7 @@ const OPERATE_TIERS: Tier[] = [
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
  *  no top bar, so no Stop TX of its own (N65, the operator's 2026-10-01 ruling). */
-const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'sstv', 'aprs', 'sats', 'connect'])
+const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
 /** On the hosted page only, App binds these four to the same halt: in a browser each one's Stop TX
  *  is the TX strip's remote stop, which is this halt, and their own Esc needs local control. */
 const HOSTED_ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['cw', 'rtty', 'psk', 'js8'])
@@ -581,6 +582,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const rttyPanels = usePanelLayout(RTTY_PANELS)
   const pskPanels = usePanelLayout(PSK_PANELS)
   const js8Panels = usePanelLayout(JS8_PANELS)
+  const jttyPanels = usePanelLayout(JTTY_PANELS)
 
   // Operate MODE: 'dx' (FT8/FT4 structured cockpit) or 'msg' (Tempo two-way
   // calling). The FT8/FT4 ⇄ Tempo switch binds the radio tier+mode and swaps only
@@ -1104,9 +1106,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const cwEnabled = features.isOn('cw')
   const phoneEnabled = features.isOn('phone')
   const rttyEnabled = features.isOn('rtty')
-  // A Needed row heard in JS8 or a PSK mode opens that screen only while it is on (`ownScreen`).
+  // A Needed row heard in JS8, JTTY or a PSK mode opens that screen only while it is on (`ownScreen`).
   const pskEnabled = features.isOn('psk')
   const js8Enabled = features.isOn('js8')
+  const jttyEnabled = features.isOn('jtty')
   // Work-a-spot navigation: whenever a spot is worked — from THIS window's
   // boards or a pop-out (which can't navigate the main window itself) — follow
   // to the matching cockpit (the operator's report: "if I click a contact, it
@@ -1134,6 +1137,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       (target === 'phone' && !phoneEnabled) ||
       (target === 'rtty' && !rttyEnabled) ||
       (target === 'psk' && !pskEnabled) ||
+      (target === 'jtty' && !jttyEnabled) ||
       (target === 'js8' && !js8Enabled)
     )
       return
@@ -1154,7 +1158,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled, remote])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled, remote])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
@@ -2164,12 +2168,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
         return
       }
-      // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
-      // switched on, at the row's own frequency or that screen's channel for the band. A browser has
-      // no Work for either, so its rows keep the target they always had.
+      // A row heard in JS8, JTTY or a PSK mode works on that mode's own screen (`ownScreen`) while it
+      // is switched on, at the row's own frequency or that screen's channel for the band. A browser
+      // has no Work for any of them, so its rows keep the target they always had.
       const screen = remote ? null : ownScreen(alert)
       let own: OwnScreen | null = null
-      if (screen && (screen === 'js8' ? js8Enabled : pskEnabled)) {
+      if (screen && (screen === 'js8' ? js8Enabled : screen === 'jtty' ? jttyEnabled : pskEnabled)) {
         const plan = await withErrorToast(
           () => getLicensedBandPlan(screen),
           t('shell.work.failed.cat', { call: alert.call }),
@@ -2293,7 +2297,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled, remote, canRemoteWork],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled, remote, canRemoteWork],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -2574,6 +2578,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         setView(m)
         return
       }
+      if (m === 'jtty') {
+        // Navigate; the [view] rig-mode effect asserts the Keyboard section with JTTY as its modem
+        // ('jtty', rigModeForView) and re-homes to the band's JTTY frequency on a genuine change —
+        // PSK ⇄ JTTY included. The cockpit auto-arms its RX decoder on entry. Nothing keys.
+        setView(m)
+        return
+      }
       if (m === 'js8') {
         // Navigate; the [view] rig-mode effect asserts DATA and re-homes (rigModeForView), and
         // the cockpit's rising `active` edge calls `js8_enter` — set_tier(JS8) + the JS8
@@ -2823,6 +2834,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // capture phase, never preventDefault, stop authority only). So on the same press a menu or dialog
   // still closes, Satellites still closes the bird detail, the voice keyer still stops itself, and
   // an observer's Esc on the hosted page is no halt at all.
+  // JTTY TOO: its TX strip's Stop TX is the plain halt (it transmits nothing of its own yet), so App
+  // binds its Esc here, as Phone's and SSTV's.
   // CONNECT TOO (N65, the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
   // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
   // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same call, stop authority included.
@@ -3372,7 +3385,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                     ? 'RTTY'
                     : lastOpModeRef.current === 'keyboard'
                       ? 'PSK31'
-                      : snap.link.tier
+                      : lastOpModeRef.current === 'jtty'
+                        ? 'JTTY'
+                        : snap.link.tier
             }
           />
         </main>
@@ -3473,10 +3488,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       break
     case 'rtty':
     case 'psk':
+    case 'jtty':
     case 'sstv':
     case 'aprs':
     case 'js8':
-      // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
+      // Same keep-alive pattern as Operate: RTTY's, PSK's and JTTY's decoded streams,
       // SSTV's always-armed VIS receiver, APRS's decode list and JS8's four-speed
       // activity stream must survive navigation, so all five live in persistent hosts
       // below. Nothing in the slot.
@@ -3606,6 +3622,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                       // toast and the phone USB/LSB override branch. So this labels the
                       // memory honestly and commands nothing new.
                       'PSK31'
+                    : lastOpModeRef.current === 'jtty'
+                    ? // The JTTY cockpit's rig mode, labelled as the mode it is. A memory planRecall
+                      // routes digital (DIGITAL_MODES), as it does PSK31's: it commands nothing new.
+                      'JTTY'
                     : // The tier's own name, not a guess. This was
                       // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
                       // saved on Q65/WSPR/JT65 as FT8.
@@ -3767,6 +3787,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           effectiveView === 'chat' ||
           effectiveView === 'rtty' ||
           effectiveView === 'psk' ||
+          effectiveView === 'jtty' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           effectiveView === 'js8' ||
@@ -3793,6 +3814,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // TX, so the TopBar's cluster is hidden here exactly as for the others).
           effectiveView === 'rtty' ||
           effectiveView === 'psk' ||
+          effectiveView === 'jtty' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
           effectiveView === 'js8' ||
@@ -4033,6 +4055,24 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 macros={settings?.macros}
                 onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
                 onOpenSettings={openSettingsAt}
+              />
+            </div>
+          )}
+          {/* JTTY keep-alive host — the .psk-host contract: the engine keeps decoding while the
+              operator is elsewhere, `active` gates the display poll and fires the auto-arm on the
+              rising edge. Not on the hosted page: JTTY has no Remote surface. */}
+          {isRemoteViewAvailable('jtty') && isViewEnabled('jtty') && (
+            <div className="jtty-host" hidden={effectiveView !== 'jtty'}>
+              <JttyCockpit
+                onOpenLogbook={openLogbookFor}
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'jtty'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
+                theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                panels={jttyPanels}
               />
             </div>
           )}

@@ -609,7 +609,9 @@ export interface RecallPlan {
   settingsPatch: RecallSettingsPatch | null
 }
 
-const DIGITAL_MODES = new Set(['FT8', 'FT4', 'DIG', 'DIGITAL', 'DATA', 'JS8', 'PSK', 'PSK31', 'RTTY'])
+// JTTY: a memory saved from the JTTY cockpit carries it, and outside this set it would recall as
+// PHONE (SSB) — a voice mode commanded on a data frequency.
+const DIGITAL_MODES = new Set(['FT8', 'FT4', 'DIG', 'DIGITAL', 'DATA', 'JS8', 'PSK', 'PSK31', 'RTTY', 'JTTY'])
 
 /** Where a memory's mode lives: FM/SSB/AM → Phone, CW → CW, digital → Operate.
  * The memory "just works" from any cockpit (operator decision: auto-switch). */

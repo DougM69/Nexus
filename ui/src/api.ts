@@ -41,6 +41,7 @@ import type {
   JourneySummary,
   Js8ComposerPrefill,
   Js8State,
+  JttyState,
   Js8InboxState,
   Js8Switch,
   LoggedQso,
@@ -2205,9 +2206,11 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * "phone" forces USB/LSB by band, "cw" forces CW. `followFreq` = true when the operator
  * clicks an actual operating-section tab — then the rig QSYs to that mode's home frequency
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
- * incidental nav and the Needed click (which sets the spot's exact frequency itself). */
+ * incidental nav and the Needed click (which sets the spot's exact frequency itself).
+ * "keyboard" and "jtty" are the one Keyboard section with PSK or JTTY as its modem, which
+ * picks the band plan the section's entry lands on. */
 export async function setOperatingMode(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'jtty',
   followFreq: boolean,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_operating_mode', { mode, followFreq })
@@ -2219,7 +2222,7 @@ export async function setOperatingMode(
  * the snapshot's `workView`: 'keyboard' is PSK's, and 'js8' is Digital named for the JS8 screen
  * (`WORK_SECTION`, features/needs.ts). */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8' | 'jtty',
   freqMhz: number,
   band: string,
   call?: string,
@@ -3364,6 +3367,42 @@ export async function pskType(text: string): Promise<PskState> {
 /** Stop PSK now: abort the over in progress, drop the queue, unkey. */
 export async function pskStop(): Promise<PskState> {
   return invoke<PskState>('psk_stop')
+}
+
+// ---- JTTY (WSJT-X's keyboard mode). RECEIVE ONLY: no command here can key anything, and every
+// one answers the whole JttyState. ----
+
+/** Live JTTY state (poll while the JTTY cockpit is visible). */
+export async function getJttyState(): Promise<JttyState> {
+  return invoke<JttyState>('get_jtty_state')
+}
+
+/** Arm or stop the JTTY decoder by an explicit operator act (session-only; a stop is remembered,
+ * so entering the view does not restart it behind the operator). */
+export async function jttyArm(on: boolean): Promise<JttyState> {
+  return invoke<JttyState>('jtty_arm', { on })
+}
+
+/** Arm the decoder because the operator ENTERED the JTTY view. Receive-only; the engine owns the
+ * policy (only upgrades from off, honours the session stop and the Settings opt-out). */
+export async function jttyAutoArm(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_auto_arm')
+}
+
+/** WSJT-X's Rx frequency and F Tol: the audio channel always searched. F Tol is kept between
+ * sessions, as WSJT-X keeps it; Rx is not. */
+export async function jttySetRx(rxHz: number, ftolHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_rx', { rxHz, ftolHz })
+}
+
+/** The JTTY waterfall's visible range: WSJT-X searches its fixed channels inside it. */
+export async function jttySetBand(lowHz: number, highHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_band', { lowHz, highHz })
+}
+
+/** Empty the JTTY receive window (WSJT-X's Erase). */
+export async function jttyClear(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_clear')
 }
 
 // ---- JS8 (interfaces.md §3.6 — every command answers the whole Js8State, the PSK shape) ----

@@ -118,6 +118,7 @@ import {
   cw,
   cwDual,
   js8,
+  jtty,
   operateClassic,
   operateRoster,
   panelsWith,
@@ -272,11 +273,11 @@ describe('the stop line, computed against the real cockpits', () => {
     // close to the 5 s default, so a budget of its own.
   }, 20_000)
 
-  it('the RF scope pane is on screen with nothing hidden in FT, RTTY, PSK, JS8 and SSTV — else hiding it would sweep nothing', async () => {
+  it('the RF scope pane is on screen with nothing hidden in FT, RTTY, PSK, JTTY, JS8 and SSTV — else hiding it would sweep nothing', async () => {
     // It SHIPS HIDDEN (defaultRemoved), and every sweep above starts from "nothing hidden", so it is
     // on screen at their baseline and every hide of it — singly and with everything else — is a real
     // one. FT's stands beside its waterfall (OperateCockpit.structure.test.tsx holds where).
-    for (const c of [rtty, psk, js8, sstv, operateClassic, operateRoster] as Array<Case<any>>) {
+    for (const c of [rtty, psk, jtty, js8, sstv, operateClassic, operateRoster] as Array<Case<any>>) {
       c.render(panelsWith<string>([]))
       await settle()
       expect(c.ids, `${c.cockpit}: "rfScope" left the vocabulary`).toContain('rfScope')
@@ -506,6 +507,7 @@ describe('Esc is a stop on every operating screen and on Satellites', () => {
     cw: 'CwCockpit, on the shared capture listener → the abort() its Stop TX calls (stop_cw, halt_tx)',
     rtty: 'RttyCockpit, on the shared capture listener → stop() (rtty_stop, halt_tx); an open F-key editor closes instead while nothing is on the air',
     psk: 'PskCockpit, as RTTY (psk_stop, halt_tx)',
+    jtty: 'App, while JTTY is on show → handleHaltTx (halt_tx, as its TX strip Stop TX)',
     js8: 'Js8Cockpit, on the shared capture listener → stop() (halt_tx)',
     chat: 'App, while Tempo is on show → handleHaltTx, the top bar Stop TX on this screen (halt_tx)',
     phone: 'App, while Phone is on show → handleHaltTx (halt_tx, as its header Stop TX); the voice keyer also stops itself',

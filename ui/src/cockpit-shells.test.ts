@@ -334,6 +334,8 @@ const SHELLS: Array<[string, Array<Set<string>>]> = [
   // PSK (Keyboard Modes Phase 1) rides RTTY's region-less shell rule — one
   // comma group in styles.css, but the cascade is computed per shell here.
   ['.layout.single.psk-cockpit', shellChain('psk-cockpit')],
+  // JTTY (WSJT-X's keyboard mode, 2026-10) takes CW's REGION shell rule too — JS8's block in styles.css.
+  ['.layout.single.jtty-cockpit', shellChain('jtty-cockpit')],
   // JS8 (2026-09) takes CW's REGION shell rule — its own block in styles.css, computed here.
   ['.layout.single.js8-cockpit', shellChain('js8-cockpit')],
   ['.layout.single.sstv-view', shellChain('sstv-view')],
@@ -670,6 +672,7 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     // RTTY's and PSK's waterfall dividers (layout L6), the same kind; and SSTV's stage divider.
     ['rtty-cockpit', []],
     ['psk-cockpit', []],
+    ['jtty-cockpit', []],
     ['sstv-view', []],
   ]
   // Phone's sits in its stage (PHONE_STAGES) and carries `in-column` (its margins, below): both states.
@@ -769,7 +772,7 @@ describe('a y divider costs its column nothing: its margins give back the gap it
   const QSOCOL = [...BODY, new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])]
   /** [what, the column's chain (null: a pane-grid column), the divider's own classes] */
   const CASES: Array<[string, Array<Set<string>> | null, Array<Set<string>>, string[]]> = [
-    ...['rtty-cockpit', 'psk-cockpit', 'sstv-view', 'cw-cockpit', 'js8-cockpit'].map(
+    ...['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'sstv-view', 'cw-cockpit', 'js8-cockpit'].map(
       (shell): [string, Array<Set<string>>, Array<Set<string>>, string[]] => [`.${shell}`, shellChain(shell), shellChain(shell), ['pane-splitter', 'horizontal']],
     ),
     // PHONE'S SCOPE DIVIDER (2026-10-03) stands in the stage (PHONE_STAGES) and gives back a column's
@@ -855,7 +858,7 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
   // the pointer at half rate instead). Operate is the pattern: `.cockpit-waterfall
   // { flex: 0 1 var(--cockpit-wf-h, 22%) }` with the decode scroller as the grower.
   // JS8's (layout L2), RTTY's and PSK's (L6) waterfall dividers drive the same kind of basis.
-  for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit']) {
+  for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit', 'jtty-cockpit']) {
     it(`.${shell} .waterfall-wrap resolves flex-grow 0 (its waterfall divider)`, () => {
       const win = winningValue([...shellChain(shell), new Set(['waterfall-wrap'])], blockGrow)
       expect(win, `.${shell} .waterfall-wrap: no rule declares flex at all`).not.toBeNull()
@@ -949,6 +952,9 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
     // shell-scoped rule that wins for one cockpit and not the other visible.
     ['psk-cockpit', 'rtty-dock-keys (F1–F8, Call, TX latch, Esc/Stop)', ['rtty-dock-keys']],
     ['psk-cockpit', 'cw-send (compose bar)', ['cw-send']],
+    // JTTY's compose bar is drawn disabled in its receive-only build; it is the row its sender
+    // lands in, pinned now so the transmit build cannot inherit a shrinkable one.
+    ['jtty-cockpit', 'cw-send (compose bar)', ['cw-send']],
     ['js8-cockpit', 'js8-dock-row (compose + beacon rows)', ['js8-dock-row']],
   ]
   for (const [shell, name, rowClasses] of ROWS) {
@@ -1305,7 +1311,7 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
   // shell valve keeps it from TRAPPING anything, which is why this is a share bug and not a
   // safety bug. PSK shares the strip rule (one comma group), so it is computed separately
   // here — a split of that group could regress one alone.
-  for (const shell of ['rtty-cockpit', 'psk-cockpit']) {
+  for (const shell of ['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit']) {
     const chain = [...shellChain(shell), new Set(['waterfall-wrap'])]
 
     it(`.${shell} resolves a min-height at all (the canvas needs real device pixels)`, () => {
@@ -1454,6 +1460,7 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     // RTTY's and PSK's (layout L6): the same clamps; PSK's strip rides RTTY's rule and variable.
     ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
     ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    ['jtty-cockpit', './components/JttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
     // SSTV's stage divider (layout L6) sizes the stage in its SIZED shape, which is the one its
     // clamps must agree with: the stage's own 16em floor and the sized rule's ceiling.
     ['sstv-view', './components/SstvView.tsx', '--sstv-stage-h', ['sstv-canvas', '[data-sized]']],

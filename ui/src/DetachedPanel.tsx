@@ -434,8 +434,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Full work path from the pop-out: the atomic workSpot switches the rig's MODE + exact
   // frequency (a bare QSY left CW clicks in DATA-U).
   const workNeed = async (a: NeedAlert) => {
-    // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
-    // switched on, at the row's own frequency or that screen's channel for the band, as from the
+    // A row heard in JS8, JTTY or a PSK mode works on that mode's own screen (`ownScreen`) while it
+    // is switched on, at the row's own frequency or that screen's channel for the band, as from the
     // docked board: the main window follows this Work's hint there.
     const modes = readEnabledModes()
     const screen = ownScreen(a)

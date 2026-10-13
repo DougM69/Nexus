@@ -517,6 +517,9 @@ it('every cockpit vocabulary has a Remote stop case, or is declared elsewhere', 
     connect: 'no transmit control; the ruled exception: "remove all radio control from connect, reclaim that space" (Esc stops)',
     // The dashboard rail's slots: the rail draws no transmit control, and it is not on the hosted page.
     dashrail: 'no transmit control; not on the hosted page',
+    // JTTY is not on the hosted page at all (App's isRemoteViewAvailable names no route to it), so a
+    // browser has no JTTY screen to stop from. Its desktop stop line is stop-line.test.tsx's JTTY case.
+    jtty: 'not on the hosted page; the desktop sweep is stop-line.test.tsx',
   }
   for (const vocab of ALL_PANEL_VOCABULARIES)
     expect(CASES.some(c => c.view === vocab.view) || vocab.view in ELSEWHERE, `${vocab.view} has no Remote stop case`).toBe(true)

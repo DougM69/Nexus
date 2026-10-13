@@ -31,8 +31,10 @@
 // Asserting a mode without homing leaves it alone, which is what makes the later FT visit
 // still count as a change.
 
-/** The rig modes a section can own. */
-export type RigMode = 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'
+/** The rig modes a section can own. 'keyboard' and 'jtty' are ONE engine section (Keyboard)
+ *  with PSK or JTTY as its modem: two values here because the modem picks the frequency the
+ *  section re-homes to (PSK31 14.070, JTTY 14.090), so PSK ⇄ JTTY must count as a change. */
+export type RigMode = 'cw' | 'phone' | 'rtty' | 'keyboard' | 'jtty' | 'digital'
 
 /** ⚠️ AN EXPLICIT MAP, NOT A FALLTHROUGH — carried over from App.tsx with its history.
  *  It used to be `featureById(view)?.workspace || …`, so ANY view carrying a `workspace`
@@ -45,6 +47,7 @@ export const RIG_MODE_BY_VIEW: Partial<Record<string, RigMode>> = {
   phone: 'phone',
   rtty: 'rtty',
   psk: 'keyboard', // the Keyboard Modes cockpit (PSK31) — one flat section
+  jtty: 'jtty', // the Keyboard section with JTTY as its modem (WSJT-X's keyboard mode)
   operate: 'digital', // the FT8/FT4 cockpit
   chat: 'digital', // Tempo is a digital mode — but see below: it does NOT own a frequency
   js8: 'digital', // JS8 rides FT8's waveform: DATA-USB, and it OWNS a frequency (see VIEWS_THAT_HOME)
@@ -53,7 +56,7 @@ export const RIG_MODE_BY_VIEW: Partial<Record<string, RigMode>> = {
 /** The views that OWN a frequency, and therefore re-home the dial on entry. `chat` is
  *  deliberately absent: Tempo asserts the digital rig mode but keeps its own band picker's
  *  frequency, and that gap is what #143 was made of. */
-const VIEWS_THAT_HOME = new Set(['operate', 'cw', 'phone', 'rtty', 'psk', 'js8'])
+const VIEWS_THAT_HOME = new Set(['operate', 'cw', 'phone', 'rtty', 'psk', 'jtty', 'js8'])
 
 export interface RigModeTransition {
   /** The mode to assert, or undefined for a view that owns none (Map, Logbook, Settings…). */

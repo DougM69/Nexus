@@ -614,18 +614,18 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(JSON.parse(localStorage.getItem(PHONE_KEY)!).state.needed).toBeUndefined()
   })
 
-  it('Phone and CW ship their Spots and Needed hidden, the five digital cockpits their RF scope pane — and each hidden id is its own', () => {
+  it('Phone and CW ship their Spots and Needed hidden, the six digital cockpits their RF scope pane — and each hidden id is its own', () => {
     // ⚠️ `features/connectPresets.ts` reads Connect's record RAW (`state[s] === 'removed'`) and
     // writes it the same way, i.e. it takes absent to mean docked. That stays true only while
     // Connect lists nothing here: before a vocabulary gains a hidden pane, route every raw
     // reader of its record through `panelStateIn`. (CW's record has no raw reader: CwCockpit and
-    // panelHost read it through `stateOf`; nor do the five digital cockpits' — App and
-    // DetachedPanel build theirs with usePanelLayout, checked 2026-10-04.)
+    // panelHost read it through `stateOf`; nor do the six digital cockpits' — App and
+    // DetachedPanel build theirs with usePanelLayout, checked 2026-10-04; JTTY's, App's alone.)
     const shipsHidden = ALL_PANEL_VOCABULARIES.filter((v) => (v.defaultRemoved ?? []).length > 0)
-    expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'js8'])
+    expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
-    for (const v of [SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS]) {
+    for (const v of [SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS, panelState.JTTY_PANELS]) {
       expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope'])
     }
     // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the six boxes of each ship hidden

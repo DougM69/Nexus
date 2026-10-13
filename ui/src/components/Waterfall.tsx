@@ -234,6 +234,10 @@ interface Props {
   /** The strip's own box, for the divider under it to measure and size (PaneSeam's strip kind:
    *  JS8's waterfall height, layout L2). Omitted ⇒ no ref. */
   stripRef?: Ref<HTMLDivElement>
+  /** Told the audio window the strip shows (Hz), when it mounts and whenever it moves — a zoom
+   *  pick, or the RX marker paging a zoomed view. JTTY's decoder searches its fixed channels
+   *  only inside the range WSJT-X's wide graph shows, so its cockpit hands this on. */
+  onViewChange?: (loHz: number, hiHz: number) => void
 }
 
 // Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
@@ -273,6 +277,7 @@ export function Waterfall({
   fixedWindow,
   keyed = false,
   stripRef,
+  onViewChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -321,6 +326,12 @@ export function Waterfall({
     prevViewRef.current = next
     return next
   }, [rxOffsetHz, zoomSpan, fixedLo, fixedHi])
+  // The window, told to whoever asked (`onViewChange`) — on the edges, never on a fresh callback.
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
+  useEffect(() => {
+    onViewChangeRef.current?.(view.lo, view.hi)
+  }, [view.lo, view.hi])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
