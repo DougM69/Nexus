@@ -116,6 +116,15 @@ describe('what the type-ahead offers', () => {
     // POSITIVE CONTROL: without the cap there really are more than six.
     expect(domainSuggestions(COUNTIES, 'MA', 99).length).toBeGreaterThan(6)
   })
+
+  it('leaves out a name that only contains the text when asked to, as the verdict line does', () => {
+    // The two letters above: the codes and names that begin CO, and none of Han-co-ck, Ma-co-n…
+    expect(domainSuggestions(COUNTIES, 'CO', 6, false).map((v) => v.code)).toEqual(['COLE', 'COOK'])
+    // IL begins no code and no name, so nothing is offered for it; inside a name it is Hamilton,
+    // Vermilion, Will and Williamson, none of which a station sending IL meant.
+    expect(domainSuggestions(QTH, 'IL', 6, false)).toEqual([])
+    expect(domainSuggestions(QTH, 'IL').map((v) => v.code)).toEqual(['HAML', 'VERM', 'WILL', 'WMSN'])
+  })
 })
 
 describe('what a typed value resolves to', () => {

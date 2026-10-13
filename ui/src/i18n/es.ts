@@ -2302,6 +2302,8 @@ export const ES: PartialCatalog = {
   "logEntry.fd.needField": "Introduce {{field}} de la otra estación para registrar.",
   "logEntry.fd.badField": "{{field}} «{{value}}» no es un valor conocido — obligatorio para registrar.",
   "logEntry.fd.badNumber": "{{field}} debe ser un número del {{min}} al {{max}}.",
+  "logEntry.fd.notOnList": "{{value}} no es un condado, un estado ni una provincia de la lista de este concurso.",
+  "logEntry.fd.didYouMean": "{{value}} no es un código de la lista de este concurso. ¿Querías decir {{codes}}?",
   "logEntry.fd.zone.label": "Zona",
   "logEntry.fd.zone.title": "Su zona CQ, 1–40",
   "logEntry.fd.county.label": "Condado",

@@ -1687,7 +1687,10 @@ export function LogEntry({
   // Field Day is the same two slots and the same two tests: CLASS non-blank, SECTION a member of
   // `fd_sections`. `FD_SECTION_CODES` above is that domain's value set, and `contestDomains.ts`
   // is where the strip and the board now read it from.
-  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f), fdLineDomain(f)))
+  //
+  // A QSO party's QTH box is judged by the call's country too (`logEntity`): from a station in the
+  // USA or Canada a value must be on the contest's lists, where a DX station may send its country.
+  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f), fdLineDomain(f), logEntity))
   const fdExchangeOk = fdBadField === undefined
 
   // GRID GATE. A blank grid is normal and logs fine — most HF contacts have none.
@@ -2198,7 +2201,7 @@ export function LogEntry({
    *  new call in S&P send the exchange and log the last station's. */
   const esmGiven = (f: ContestFieldSpec): boolean => {
     const v = fdValue(f)
-    if (!fdFieldOk(f, v, fdLineDomain(f))) return false
+    if (!fdFieldOk(f, v, fdLineDomain(f), logEntity)) return false
     const fill = fillRef.current
     return (
       fill.typed[f.key] === true ||

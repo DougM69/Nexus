@@ -89,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was in the banner (on the Remote page's Contest view too) and the FT header; hovering it shows the
   whole sentence. It shows on exactly the modes the warning did, and the contact still logs: what is
   logged and scored is unchanged.
+- **The manual's Illinois QSO Party club checklists gain three lines.** No test contacts from 1700Z
+  on Saturday: every contact logged with Contest mode on from then is in the party's log, so in the
+  club's file and its claimed score, even before the party starts, and Ctrl+D twice takes back one
+  just made. Every laptop's club chip reads Synced before anyone turns Contest mode off. The host
+  exports the Club Cabrillo before Contest over?, while Contest mode is still on, because its button
+  is on the Contest screen only then. The guide's page on ending a contest now says the last two for
+  every club contest.
 
 ### Fixed
 
@@ -197,6 +204,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out everything from an earlier running of the contest, as each laptop's own log already does, and
   a laptop removed at the rehearsal is not turned away at the party. A running begins a day before
   the contest starts, so a test contact made that day still counts unless you take it back.
+- **At the Illinois QSO Party, the county box no longer logs a county that is on no list.** From a
+  station in the USA or Canada, a value that is not a county, state or province on the sponsor's
+  lists, such as COKO, DUP, IL or Washington (a county and a state), went into the log as typed and
+  counted no county for either station. A line under the box now says so, and Log stays off until
+  the box holds a real one. A name or the start of one gets the codes it may mean: Washington is
+  WASH or WA, and ST may be STAR, STEP or SCLA (St. Clair). Enter Sends Message does not send your
+  exchange for such a value, and an edit of a logged contact refuses it too. A DX station's country
+  still logs as typed. Nexus tells where a station is from its call, and a call it cannot place is
+  taken as before. The manual now says to type a two-word county without its space (stclair):
+  Space moves on to the Call box.
 
 ## [1.18.0] — 2026-10-12
 

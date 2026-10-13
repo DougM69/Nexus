@@ -200,11 +200,16 @@ const nameKey = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
  *
  * Empty for an empty box (a list of 102 counties is not a suggestion) and for a domain
  * this build carries no table for — never a guess.
+ *
+ * `inside: false` leaves the names that merely contain the text out. The verdict line under a
+ * box offers only what a name or a prefix matches: "IL" is inside Hamilton and Will, and a
+ * station that sent IL meant neither.
  */
 export function domainSuggestions(
   domainIds: string[] | undefined,
   typed: string,
   limit = 6,
+  inside = true,
 ): DomainValue[] {
   const q = typed.trim().toUpperCase()
   if (q === '' || !domainIds?.length) return []
@@ -225,7 +230,7 @@ export function domainSuggestions(
   }
   take((v) => v.code.startsWith(q))
   take((v) => nameKey(v.name).startsWith(qk))
-  take((v) => nameKey(v.name).includes(qk))
+  if (inside) take((v) => nameKey(v.name).includes(qk))
   return out
 }
 
