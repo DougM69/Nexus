@@ -236,10 +236,13 @@ contest's session; if one of them fails, nothing after it is done, the reason is
 stays on. With no contacts and nothing changed, the mode goes off at once, as it always did.
 
 "Before" is how each of those settings was the first time one of them changed for this contest, or
-when you turned Contest mode on, whichever came first. So the club call you typed into Settings on
-the Friday is offered back as your own call on the Sunday night. Nexus lets those values go when
-Contest mode goes off, whatever you ticked. A press made through Remote cannot merge or export, as
-on the Contest screen.
+when you turned Contest mode on, whichever came first. A change counts for the contest picked in
+Settings › Contesting from a week before it starts until it ends; with none picked, that is ARRL
+Field Day's week, the contest Contest mode runs then. So the club call you typed into Settings on
+the Friday is offered back as your own call on the Sunday night. Nexus keeps those values until you
+have put them all back, or until the contest is over and the mode is off: turn the mode off after a
+rehearsal with a row left unticked, and **Contest over?** offers it again when you turn the mode off
+at the end. A press made through Remote cannot merge or export, as on the Contest screen.
 
 ### Run the whole club on Nexus (club sync)
 

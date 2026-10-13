@@ -20,8 +20,8 @@
 //     contest's call and categories.
 //   • Unassisted goes back through its own switch (which journals the change) while the mode is
 //     still on, and everything else rides the save that turns it off: the engine lets its note of
-//     "before" go when the mode goes off (`engine/contest_before.rs`), and a change after that
-//     would start a new note holding the contest's value as "before".
+//     "before" go when the mode goes off with all of it put back (`engine/contest_before.rs`), and
+//     a change after that would start a new note holding the contest's value as "before".
 // A step that fails stops the rest, says why, and leaves the mode on.
 //
 // "Before" is the engine's note (`settings.contestBefore`), taken the first time one of these
