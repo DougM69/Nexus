@@ -618,9 +618,9 @@ pub struct Js8State {
     pub last_error: Option<String>,
 }
 
-/// The live JTTY receive state the cockpit polls (`get_jtty_state`) — `PskRxState`'s role
-/// for WSJT-X's keyboard mode. RECEIVE ONLY: nothing in it can start a transmission.
-/// Computed from engine truth at poll time (`Engine::jtty_state`).
+/// The live JTTY state the cockpit polls (`get_jtty_state`) — `PskRxState`'s role for WSJT-X's
+/// keyboard mode: the receiver, and in `tx` what the transmitter is doing. Nothing in it can start
+/// a transmission. Computed from engine truth at poll time (`Engine::jtty_state`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JttyState {
@@ -641,6 +641,33 @@ pub struct JttyState {
     pub heard: Vec<JttyHeard>,
     /// Why receiving stopped or restarted, to show the operator (`None` when there is nothing
     /// to say since the last arm or clear).
+    pub notice: Option<String>,
+    /// The transmitter.
+    pub tx: JttyTxState,
+}
+
+/// What JTTY's transmitter is doing (`engine::jtty_tx`), for the cockpit's dock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyTxState {
+    /// JTTY transmit is switched on in this build. `false` in every build today
+    /// (`engine::jtty_tx::SWITCHED_ON`): the dock is drawn but every send is refused.
+    pub switched_on: bool,
+    /// Why a send would be refused right now (the switch's reason first), or `None`.
+    pub refusal: Option<String>,
+    /// The Tx offset, Hz (WSJT-X's Tx spin box for JTTY).
+    pub tx_hz: f32,
+    /// The contest serial number (`%E` / `%N`).
+    pub serial: u32,
+    /// JTTY audio is on the air.
+    pub sending: bool,
+    /// A live session is running (continuous PTT, the filler between what is typed).
+    pub live: bool,
+    /// Segments still to go, the one on the air included (WSJT-X's "Send (3 left)").
+    pub left: u32,
+    /// Their text, one per line (the Send button's tooltip).
+    pub pending: String,
+    /// WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped.
     pub notice: Option<String>,
 }
 
@@ -672,6 +699,9 @@ pub struct JttyLine {
     /// click may look up. A call not listed here has been heard once, and may be a false
     /// decode.
     pub confirmed_calls: Vec<String>,
+    /// A message this station SENT (WSJT-X shows each in the QSO Frequency pane as it starts on
+    /// the air, its SNR column blank): `snr` is 0 and `line` has no SNR.
+    pub tx: bool,
 }
 
 /// A JTTY station decoded in two separate messages a short time apart, at its latest message

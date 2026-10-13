@@ -2558,6 +2558,12 @@ pub struct Settings {
     /// the live value (see `apply_settings`).
     #[serde(default = "default_jtty_ftol_hz")]
     pub jtty_ftol_hz: u32,
+    /// JTTY's contest serial number, what `%E` and `%N` send: WSJT-X keeps it between sessions
+    /// (`SerialNumberJTTY`, 1 when absent) and moves it on after a message starting "TU ". The
+    /// cockpit and the transmitter are its writers, so a Settings save keeps the live value (see
+    /// `apply_settings`), as it does F Tol's.
+    #[serde(default = "default_jtty_serial")]
+    pub jtty_serial: u32,
     /// RTTY **Auto call**: how long the sequencer listens before it repeats itself, in
     /// seconds (#304). This is the whole of the "CQ, listen, CQ" cadence the reporter
     /// asked for — the window between two CQs when nobody comes back, and equally the
@@ -3160,6 +3166,11 @@ fn default_rtty_auto_repeats() -> u32 {
 /// The engine's own JTTY default, so the setting and the decoder cannot disagree about it.
 fn default_jtty_ftol_hz() -> u32 {
     crate::engine::jtty_rx::JTTY_FTOL_HZ as u32
+}
+
+/// WSJT-X's first JTTY serial number, the transmitter's own constant.
+fn default_jtty_serial() -> u32 {
+    crate::engine::jtty_tx::JTTY_SERIAL_MIN
 }
 
 /// "auto" = the SSTV screen's band-aware pick, which is what it does today.
@@ -5050,6 +5061,7 @@ impl Default for Settings {
             rtty_rx_auto_arm: true,
             jtty_rx_auto_arm: true,
             jtty_ftol_hz: default_jtty_ftol_hz(),
+            jtty_serial: default_jtty_serial(),
             rtty_auto_listen_secs: default_rtty_auto_listen_secs(),
             rtty_auto_repeats: default_rtty_auto_repeats(),
             alert_my_call: true,
@@ -9399,27 +9411,39 @@ mod tests {
         let s = Settings::default();
         assert!(s.jtty_rx_auto_arm);
         assert_eq!(s.jtty_ftol_hz, 20);
+        assert_eq!(s.jtty_serial, 1);
         assert_eq!(s.keyboard_modem, KeyboardModem::Psk);
         let json = serde_json::to_string(&s).unwrap();
         for key in [
             "\"jttyRxAutoArm\":true",
             "\"jttyFtolHz\":20",
+            "\"jttySerial\":1",
             "\"keyboardModem\":\"psk\"",
         ] {
             assert!(json.contains(key), "missing {key} in {json}");
         }
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(
-            (old.jtty_rx_auto_arm, old.jtty_ftol_hz, old.keyboard_modem),
-            (true, 20, KeyboardModem::Psk)
+            (
+                old.jtty_rx_auto_arm,
+                old.jtty_ftol_hz,
+                old.jtty_serial,
+                old.keyboard_modem
+            ),
+            (true, 20, 1, KeyboardModem::Psk)
         );
         let set: Settings = serde_json::from_str(
-            r#"{"jttyRxAutoArm":false,"jttyFtolHz":150,"keyboardModem":"jtty"}"#,
+            r#"{"jttyRxAutoArm":false,"jttyFtolHz":150,"jttySerial":42,"keyboardModem":"jtty"}"#,
         )
         .unwrap();
         assert_eq!(
-            (set.jtty_rx_auto_arm, set.jtty_ftol_hz, set.keyboard_modem),
-            (false, 150, KeyboardModem::Jtty)
+            (
+                set.jtty_rx_auto_arm,
+                set.jtty_ftol_hz,
+                set.jtty_serial,
+                set.keyboard_modem
+            ),
+            (false, 150, 42, KeyboardModem::Jtty)
         );
         let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
         assert_eq!(again, set, "round trip");

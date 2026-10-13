@@ -129,9 +129,57 @@ pub fn jtty_rx_line(start_ms: i64, dial_hz: u64, freq_hz: f32, snr: i32, text: &
     line.trim().to_string()
 }
 
+/// One ALL.TXT line for a JTTY segment going out, as WSJT-X writes it when the segment starts on
+/// the air (`updateJttyTransmitDisplay` → `write_all("Tx", text)`): the time it started, to the
+/// second; the dial; `Tx`; the mode column with the same character-19 test as the `Rx` line, here
+/// on the sent text itself; `   0  0.0`; the Tx offset in 5; a space; the text. Filler is never
+/// logged (the caller sends none).
+///
+/// Example: `261013_221503    14.090 Tx JTTY     0  0.0 1500 CQ K1ABC CQ`.
+pub fn jtty_tx_line(at_ms: i64, dial_hz: u64, tx_hz: f32, text: &str) -> String {
+    let mode = match text.chars().nth(19) {
+        Some('#') => "JT65  ",
+        Some('@') => "JT9   ",
+        _ => "JTTY  ",
+    };
+    let (y, mo, d, h, mi, se) = datetime_utc(at_ms.div_euclid(1000).max(0) as u64);
+    format!(
+        "{:02}{:02}{:02}_{:02}{:02}{:02}{:>10.3} Tx {mode}   0  0.0{:>5} {}",
+        (y as u32) % 100,
+        mo,
+        d,
+        h,
+        mi,
+        se,
+        dial_hz as f64 / 1e6,
+        q_round(tx_hz),
+        text,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A JTTY segment's ALL.TXT line, byte for byte as WSJT-X's `write_all("Tx", …)` builds it:
+    /// `   0  0.0`, the Tx offset in five, a space, the text as sent.
+    #[test]
+    fn a_jtty_tx_line_is_wsjtxs_byte_for_byte() {
+        let at = T as i64 * 1000 + 999;
+        assert_eq!(
+            jtty_tx_line(at, 14_090_000, 1500.0, "CQ K1ABC CQ"),
+            "231114_221320    14.090 Tx JTTY     0  0.0 1500 CQ K1ABC CQ"
+        );
+        assert_eq!(
+            jtty_tx_line(at, 7_078_000, 2345.4, "W1AW 599 001"),
+            "231114_221320     7.078 Tx JTTY     0  0.0 2345 W1AW 599 001"
+        );
+        // The marker test reads the sent text's twentieth character.
+        assert_eq!(
+            jtty_tx_line(at, 14_090_000, 1500.0, "ABCDEFGHIJKLMNOPQRS#T"),
+            "231114_221320    14.090 Tx JT65     0  0.0 1500 ABCDEFGHIJKLMNOPQRS#T"
+        );
+    }
 
     // unix 1_700_000_000 == 2023-11-14 22:13:20 UTC → "231114_221320".
     const T: u64 = 1_700_000_000;

@@ -2,8 +2,11 @@
 //! `engine` (declared with `#[path]` there, as `js8` is), so it reaches the engine's private
 //! fields without widening any visibility.
 //!
-//! ⛔ NOTHING HERE TRANSMITS, AND NOTHING HERE MAY. JTTY's transmitter is its own gated piece
-//! of work; this file decodes, shows, logs and reports what was heard.
+//! ⛔ NOTHING HERE TRANSMITS, AND NOTHING HERE MAY. JTTY's transmitter is `jtty_tx`, switched
+//! off in every build; this file decodes, shows, logs and reports what was heard, and shows what
+//! the transmitter sent. While JTTY transmits the tap stops and the reception ends (WSJT-X ends
+//! it on Transmission), and a message decoded inside our own keyed time is our own echo: it is
+//! shown, but never counts toward the two-decode rule.
 //!
 //! THE SHAPE — the armed-decoder pattern PSK and RTTY use, on JTTY's sample timeline:
 //! - While armed, [`Engine::feed_rx_audio`] taps the radio loop's RX audio into [`JttyRx`] as
@@ -112,6 +115,8 @@ struct Line {
     text: String,
     terminal: Terminal,
     rx: bool,
+    /// A message this station sent (`Engine::jtty_segment_started`).
+    tx: bool,
 }
 
 /// A spot for PSK Reporter, as WSJT-X builds one for a JTTY message (`Results::Spot`): the
@@ -214,6 +219,11 @@ pub struct JttyRx {
     /// Spots for PSK Reporter, taken by the radio loop.
     spots: Vec<JttySpot>,
     notice: Option<String>,
+    /// Our own keyed stretches, each widened by a frame (UTC ms): a message that starts inside
+    /// one is our own transmission decoded back, never a sighting.
+    keyed: VecDeque<(i64, i64)>,
+    /// The id the next sent line takes: negative, so it never meets a decoder's message id.
+    next_sent_id: i64,
 }
 
 impl Default for JttyRx {
@@ -235,6 +245,8 @@ impl Default for JttyRx {
             held_spots: HashMap::new(),
             spots: Vec::new(),
             notice: None,
+            keyed: VecDeque::new(),
+            next_sent_id: -1,
         }
     }
 }
@@ -274,6 +286,47 @@ impl JttyRx {
         if self.current().map(|s| s.id) == Some(session) {
             self.feeding = false;
             self.audio.retain(|(s, _)| *s != session);
+        }
+    }
+
+    /// A stretch of our own transmission, `from_ms..=to_ms` (already widened), for the echo rule.
+    /// Stretches older than the confirmation window can no longer matter and are let go.
+    pub(super) fn note_keyed(&mut self, from_ms: i64, to_ms: i64) {
+        self.keyed.push_back((from_ms, to_ms));
+        while self
+            .keyed
+            .front()
+            .is_some_and(|&(_, end)| to_ms - end > 2 * CONFIRM_WINDOW_MS)
+        {
+            self.keyed.pop_front();
+        }
+    }
+
+    /// Whether a message starting at `start_ms` started inside our own keyed time.
+    fn in_keyed(&self, start_ms: i64) -> bool {
+        self.keyed
+            .iter()
+            .any(|&(from, to)| (from..=to).contains(&start_ms))
+    }
+
+    /// What this station sent, shown as WSJT-X shows it when it starts on the air: a line in the
+    /// QSO Frequency pane at the Tx offset, its SNR column blank.
+    pub(super) fn push_sent(&mut self, at_ms: i64, dial_hz: u64, tx_hz: f32, text: &str) {
+        let id = self.next_sent_id;
+        self.next_sent_id -= 1;
+        self.lines.push_back(Line {
+            id,
+            start_ms: at_ms,
+            freq_hz: tx_hz,
+            dial_hz,
+            snr: 0,
+            text: text.to_string(),
+            terminal: Terminal::Complete,
+            rx: true,
+            tx: true,
+        });
+        while self.lines.len() > JTTY_LINES_CAP {
+            self.lines.pop_front();
         }
     }
 
@@ -439,6 +492,12 @@ pub fn jtty_pane_line(freq_hz: f32, snr: i32, text: &str) -> String {
     )
 }
 
+/// The line WSJT-X prints for a message it SENT (`Jtty::formatJttyTxLine`): the Tx offset
+/// right-aligned in 4 and the SNR column left blank, so sent and received lines line up.
+pub fn jtty_sent_pane_line(tx_hz: f32, text: &str) -> String {
+    format!("{:>4}      {}", crate::alltxt::q_round(tx_hz), wrap(text))
+}
+
 fn terminal_label(t: Terminal) -> &'static str {
     match t {
         Terminal::Growing => "growing",
@@ -553,6 +612,13 @@ impl Engine {
         if !self.jtty.armed || samples.is_empty() {
             return;
         }
+        // While JTTY transmits, nothing is tapped and the reception ends (WSJT-X ends it on
+        // Transmission): what the receiver hears then is our own signal. The next audio after
+        // the transmission starts a new reception.
+        if self.jtty_sending() {
+            self.jtty.feeding = false;
+            return;
+        }
         let dial = dial_hz(self.settings.dial_mhz);
         let j = &mut self.jtty;
         let buffered: usize = j.audio.iter().map(|(_, a)| a.len()).sum();
@@ -605,6 +671,8 @@ impl Engine {
         let uploading = self.pskreporter_uploading();
         let all_txt = self.settings.write_all_txt;
         let current = self.jtty.current().map(|s| s.id) == Some(session);
+        // Our own keyed stretch still going counts as keyed time too.
+        let keyed_since = self.jtty_keyed_since_ms();
         let (center, tolerance) = if current {
             (self.jtty.rx_hz, self.jtty.ftol_hz)
         } else {
@@ -639,6 +707,7 @@ impl Engine {
                         text: text.clone(),
                         terminal: u.terminal,
                         rx: (u.freq_hz - center).abs() < tolerance,
+                        tx: false,
                     });
                     while j.lines.len() > JTTY_LINES_CAP {
                         j.lines.pop_front();
@@ -661,8 +730,15 @@ impl Engine {
                     pending.drain(0..len - 5000);
                 }
             }
-            // The two-decode rule: every call this message names is one sighting of it.
+            // OUR OWN ECHO never counts: a message that started inside our own keyed time is our
+            // transmission decoded back (a receiver that hears us while we key), and it must not
+            // confirm a call, spot one or put one on the board. Shown and logged above, as
+            // received, and nothing more.
             let j = &mut self.jtty;
+            if j.in_keyed(start_ms) || keyed_since.is_some_and(|since| start_ms >= since) {
+                continue;
+            }
+            // The two-decode rule: every call this message names is one sighting of it.
             for call in text.split_whitespace().filter(|w| jtty_call(w)) {
                 if j.confirm.note(call, u.message_id, start_ms) {
                     // A complete message from it was held back for want of this: send it
@@ -774,7 +850,11 @@ impl Engine {
                     dial_hz: l.dial_hz,
                     snr: l.snr,
                     text: l.text.clone(),
-                    line: jtty_pane_line(l.freq_hz, l.snr, &l.text),
+                    line: if l.tx {
+                        jtty_sent_pane_line(l.freq_hz, &l.text)
+                    } else {
+                        jtty_pane_line(l.freq_hz, l.snr, &l.text)
+                    },
                     state: terminal_label(l.terminal).to_string(),
                     rx: l.rx,
                     confirmed_calls: l
@@ -783,10 +863,12 @@ impl Engine {
                         .filter(|w| jtty_call(w) && j.confirm.is_confirmed(w))
                         .map(str::to_string)
                         .collect(),
+                    tx: l.tx,
                 })
                 .collect(),
             heard: self.jtty_heard(now_ms, HEARD_SHOWN_MS),
             notice: j.notice.clone(),
+            tx: self.jtty_tx_state(),
         }
     }
 }
@@ -808,9 +890,9 @@ impl JttyDriver {
     /// only to take and to apply; every search runs with it released (a decode must never hold
     /// the lock the radio loop unkeys under).
     pub fn tick(&mut self, engine: &Mutex<Engine>) {
-        let (armed, audio) = {
+        let (armed, keyed, audio) = {
             let mut e = engine_lock(engine);
-            (e.jtty_armed(), e.take_jtty_audio())
+            (e.jtty_armed(), e.jtty_sending(), e.take_jtty_audio())
         };
         let mut out: Vec<(u64, Vec<Update>)> = Vec::new();
         let mut notice = None;
@@ -849,7 +931,9 @@ impl JttyDriver {
                 }
             }
         }
-        if !armed {
+        // Disarmed, or transmitting: the reception ends here, with what it had (WSJT-X ends it on
+        // Transmission; the audio from before the key was decoded above).
+        if !armed || keyed {
             self.finish(&mut out);
         }
         if out.iter().all(|(_, u)| u.is_empty()) && notice.is_none() {
@@ -1515,6 +1599,131 @@ mod tests {
         engine_lock(&engine).set_jtty_armed(false);
         driver.tick(&engine);
         engine.into_inner().unwrap()
+    }
+
+    /// OUR OWN ECHO NEVER CONFIRMS A CALL. Two messages naming W1AW that started inside our own
+    /// keyed time — our transmission decoded back by a receiver that hears us while we key — are
+    /// shown and logged as received, and confirm nothing, spot nothing and put nobody on the
+    /// board. The control: the same two messages outside it confirm W1AW, spot it and hear it.
+    #[test]
+    fn our_own_echo_never_confirms_a_call() {
+        for keyed in [true, false] {
+            let mut e = rx_engine();
+            let s = begun(&mut e);
+            if keyed {
+                e.jtty.note_keyed(at(2.0), at(30.0));
+            }
+            e.apply_jtty_updates(
+                s,
+                &[
+                    upd(1, "CQ W1AW CQ", 3.0, Terminal::Complete),
+                    upd(2, "CQ W1AW CQ", 13.0, Terminal::Complete),
+                ],
+            );
+            let st = e.jtty_state_at(at(14.0));
+            assert_eq!(st.lines.len(), 2, "keyed {keyed}: both shown");
+            assert_eq!(
+                e.take_all_txt_pending().len(),
+                2,
+                "keyed {keyed}: both logged"
+            );
+            let confirmed: Vec<Vec<String>> =
+                st.lines.iter().map(|l| l.confirmed_calls.clone()).collect();
+            let spotted = spots(&mut e).len();
+            let heard = heard_calls(&e, at(14.0));
+            if keyed {
+                assert_eq!(
+                    confirmed,
+                    vec![Vec::<String>::new(); 2],
+                    "our echo confirmed W1AW"
+                );
+                assert_eq!(
+                    (spotted, heard.len()),
+                    (0, 0),
+                    "our echo spotted or heard W1AW"
+                );
+            } else {
+                assert_eq!(confirmed[1], vec!["W1AW".to_string()], "control");
+                assert_eq!((spotted, heard), (2, vec!["W1AW".to_string()]), "control");
+            }
+        }
+    }
+
+    /// …and while the transmission is still going, what started after it began is ours too.
+    #[test]
+    fn a_message_starting_while_we_are_still_keyed_is_our_echo() {
+        let mut e = rx_engine();
+        e.set_jtty_armed(true);
+        let now = now_unix_millis() as i64;
+        e.jtty_feed(&[0.0; 1200], now);
+        let s = e.jtty.sessions.back().expect("a reception").id;
+        e.set_jtty_sending(true);
+        e.apply_jtty_updates(
+            s,
+            &[
+                upd(1, "CQ W1AW CQ", 0.5, Terminal::Complete),
+                upd(2, "CQ W1AW CQ", 1.0, Terminal::Complete),
+            ],
+        );
+        assert!(
+            heard_calls(&e, now + 2_000).is_empty(),
+            "our echo was heard"
+        );
+        assert!(spots(&mut e).is_empty());
+    }
+
+    /// While JTTY transmits the tap takes nothing (what the receiver hears is our own signal) and
+    /// the decode driver ENDS the reception, as WSJT-X ends it on Transmission: a message still
+    /// arriving is closed as ended. After the transmission the next audio starts a new
+    /// reception. The control: the same audio with nothing keyed leaves the message growing.
+    #[test]
+    fn the_reception_ends_while_jtty_transmits() {
+        // Three frames of a message from 2 s; 5 s of it is two frames in.
+        let audio = captured(5.0, &[("CQ CQ DE W1AW W1AW K", 1500.0, 2.0)], 3);
+        for keyed in [false, true] {
+            let engine = Mutex::new(rx_engine());
+            engine_lock(&engine).set_jtty_armed(true);
+            let mut driver = JttyDriver::default();
+            for (k, piece) in audio.chunks(1200).enumerate() {
+                engine_lock(&engine).jtty_feed(piece, T0_MS + 100 * k as i64);
+                driver.tick(&engine);
+            }
+            let first = engine_lock(&engine).jtty.current().map(|s| s.id);
+            engine_lock(&engine).set_jtty_sending(keyed);
+            engine_lock(&engine).jtty_feed(&[0.5; 1200], T0_MS + 5_000);
+            driver.tick(&engine);
+            let mut g = engine_lock(&engine);
+            let state: Vec<String> = g
+                .jtty_state_at(T0_MS)
+                .lines
+                .iter()
+                .map(|l| l.state.clone())
+                .collect();
+            if keyed {
+                assert_eq!(
+                    state,
+                    vec!["ended".to_string()],
+                    "the reception was not ended"
+                );
+                assert!(
+                    g.take_jtty_audio().is_empty(),
+                    "the tap took our own signal"
+                );
+                g.set_jtty_sending(false);
+                g.jtty_feed(&[0.0; 1200], T0_MS + 9_000);
+                assert_ne!(
+                    g.jtty.current().map(|s| s.id),
+                    first,
+                    "a new reception after it"
+                );
+            } else {
+                assert_eq!(
+                    state,
+                    vec!["growing".to_string()],
+                    "control: still arriving"
+                );
+            }
+        }
     }
 
     /// The engine's receive side decodes exactly what decoding the same audio as a file does:

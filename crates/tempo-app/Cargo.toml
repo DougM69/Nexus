@@ -37,6 +37,11 @@ ring = "0.17"
 # tempo-core's own for those tests too: the confirmation check's replay of 1.17.0's matcher, which
 # builds the state 1.17.0 left by running it (`tempo_core::reconcile::check::replay`).
 test-util = ["tempo-core/test-util"]
+# The door past JTTY's transmit switch (`engine::jtty_tx::SWITCHED_ON`), for another crate's tests:
+# tempo-audio runs the radio loop's JTTY path with it. It lets a test switch on a transmitter that
+# is off in every build, so it is test support only: nothing that ships turns it on, and a release
+# build refuses to compile with it.
+jtty-tx-test = []
 
 [dev-dependencies]
 # The same crate as above with one more feature, for this crate's tests only: `test-util`, the
