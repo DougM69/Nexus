@@ -43,7 +43,9 @@ struct Capture {
 /// (`FieldDayStatus::cabrillo_missing`): no page lists them, and the export they are about runs
 /// only at the station. And so do the values the CLUB has worked on each multiplier board
 /// (`FdBoardDto::club`): Remote is sent nothing new for the club-wide board, and its board stays
-/// this station's own, as it always was.
+/// this station's own, as it always was. And the host's warnings about positions sending another
+/// county than the club (`FdClubDto::other_location`): no page lists them, and the laptop they are
+/// about is put right at the club.
 pub(in crate::remote_service) fn leave_out_the_hosts_own(
     field_day: &mut Option<tempo_app::dto::FieldDayStatus>,
 ) {
@@ -56,6 +58,7 @@ pub(in crate::remote_service) fn leave_out_the_hosts_own(
     }
     if let Some(club) = field_day.as_mut().and_then(|f| f.club.as_mut()) {
         club.club_code.clear();
+        club.other_location.clear();
         for r in &mut club.refused {
             r.handle = None;
             r.club_code = None;

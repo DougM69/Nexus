@@ -13707,6 +13707,27 @@ impl Engine {
                         .collect(),
                 })
             }),
+            // The host's alone: each position whose newest contact sent another county than the
+            // club's own session sends, named as its line on the board names it.
+            other_location: self
+                .fd_club
+                .as_ref()
+                .map(|c| {
+                    let sent = self
+                        .fd_club_session(c)
+                        .map(|s| crate::fdevent::to_wire_fields(&s.my_exchange))
+                        .unwrap_or_default();
+                    c.other_location(&sent)
+                        .into_iter()
+                        .map(|o| crate::dto::FdClubOtherLocationDto {
+                            pos_name: o.name,
+                            operator: o.operator,
+                            sent: o.sent,
+                            club: o.club,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
         })
     }

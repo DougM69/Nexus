@@ -672,8 +672,9 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto, FdClubRefusedDto,
-        FdKeptOutDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto,
+        FdClubOtherLocationDto, FdClubRefusedDto, FdKeptOutDto, FieldDayQso, FieldDayStatus,
+        LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -1019,6 +1020,14 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     club_code: None,
                 }],
             }),
+            // The positions sending another county than the club: the host's screen's alone,
+            // left out too.
+            other_location: vec![FdClubOtherLocationDto {
+                pos_name: "CW tent".into(),
+                operator: "K9OPB".into(),
+                sent: "KANE".into(),
+                club: "MCLN".into(),
+            }],
             // This laptop's own club code: left out too.
             club_code: "3HV8-ZQ1P".into(),
         }),
@@ -1058,11 +1067,12 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             && native["club"]["clubCode"] == "3HV8-ZQ1P"
             && native["club"]["board"][0]["link"] == "reconnecting"
             && native["club"]["board"][0]["heardSecs"] == 12
+            && native["club"]["otherLocation"][0]["sent"] == "KANE"
             && native["composingTextPhone"] == "1D EMA"
             && native["cabrilloMissing"][0] == "CATEGORY-POWER",
         "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
-         the host board's link words, the phone form of the exchange and the Cabrillo lines the \
-         export would leave out"
+         the host board's link words, the positions sending another county, the phone form of \
+         the exchange and the Cabrillo lines the export would leave out"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.

@@ -1828,6 +1828,7 @@ export const ES: PartialCatalog = {
   "fieldDay.club.keptOut.position": "De {{name}} ({{call}}): {{reason}}",
   "fieldDay.club.keptOut.call": "De {{call}}: {{reason}}",
   "fieldDay.club.keptOut.more": { "one": "{{count}} más, sin listar aquí.", "other": "{{count}} más, sin listar aquí." },
+  "fieldDay.club.otherLocation": "{{name}} envía {{sent}}, y este club envía {{club}}. Sus contactos se registran tal como los envió; pon ese portátil en {{club}} para que los siguientes coincidan.",
   "fieldDay.club.boardFull": "Este club tiene {{positions}} posiciones, tantas como caben en el tablero de club de cada posición. A partir de ahí, el tablero de cada posición deja fuera las posiciones oídas hace más tiempo; los contactos, los avisos de duplicado y la puntuación se siguen sincronizando.",
   "fieldDay.club.boardCut": "El tablero de club de cada posición muestra {{shown}} de las {{positions}} posiciones de este club, tantas como lleva una línea de club, y deja fuera las oídas hace más tiempo. Los contactos, los avisos de duplicado y la puntuación se siguen sincronizando.",
   "fieldDay.keptOut.running": { "one": "{{count}} contacto del diario de concursos de este ordenador se registró en otra edición de {{contest}}, por ejemplo un ensayo anterior, así que no está en este log.", "other": "{{count}} contactos del diario de concursos de este ordenador se registraron en otra edición de {{contest}}, por ejemplo un ensayo anterior, así que no están en este log." },

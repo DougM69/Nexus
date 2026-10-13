@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   works with one on this one as before, and shows its own board. The hosted Remote page is sent
   nothing new and shows the station's own board, and the score is unchanged (the club score was
   already the club's).
+- **At a club, the host names a laptop that sends another county.** A laptop set up on another
+  county than the club's sends that county on the air under the club's call, a wrong exchange for
+  every station it works. The host's Contest screen now names the position, with what it sends and
+  what the club sends ("CW tent sends KANE, and this club sends MCLN"), from its newest contact,
+  until one sends the club's county again. Its contacts are still taken as sent. A state, province
+  or section that differs is named the same way. The host sees what a laptop sends once it has
+  logged a contact, and the warning is on the host's own screen only, not on the Remote page.
 
 ### Changed
 

@@ -909,6 +909,19 @@ pub struct KeptOut {
     pub at: u64,
 }
 
+/// ⭐ **A position sending another county than the club** ([`ClubLog::other_location`]): named as
+/// its line on the host's board names it, with what its newest contact sent and what the club
+/// sends there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtherLocation {
+    /// Its name as the host shows it ([`ClubLog::shown_names`]), empty for a position with none.
+    pub name: String,
+    /// Who is at it, as its presence reports say: what an unnamed position's line reads as.
+    pub operator: String,
+    pub sent: String,
+    pub club: String,
+}
+
 /// The most kept-out contacts the host keeps, journals and lists: a peer can send any number,
 /// and a list past this is a peer's flood, not a club's typing.
 const MAX_KEPT_OUT: usize = 256;
@@ -1508,6 +1521,54 @@ impl ClubLog {
     /// own log; the club's file goes without it.
     pub fn kept_out(&self) -> &[KeptOut] {
         &self.kept_out
+    }
+
+    /// ⭐ **The positions sending another county than the club**: each position whose newest
+    /// contact in the club's log (its highest seq) sent another value than `club`, the club's own
+    /// sent exchange, in a slot where the club's value is one off the contest's lists (a county,
+    /// a state or province, a section). Compared trimmed and case-blind; a slot either side left
+    /// empty says nothing. Named positions first, alphabetically, as the board orders them.
+    ///
+    /// Only a warning, for the host's screen: a laptop set up on another county sends it on the
+    /// air under the club's call, a busted exchange for every station it works, and its contacts
+    /// are taken as sent. Read off the contacts, so a position is named once it has logged one,
+    /// and no longer once its newest contact sends the club's value again.
+    pub fn other_location(&self, club: &[WireField]) -> Vec<OtherLocation> {
+        let mut newest: HashMap<&str, &MergedRow> = HashMap::new();
+        for row in &self.rows {
+            let at = newest.entry(row.posid.as_str()).or_insert(row);
+            if row.seq > at.seq {
+                *at = row;
+            }
+        }
+        let shown = self.shown_names();
+        let mut out: Vec<(&str, OtherLocation)> = newest
+            .into_iter()
+            .filter_map(|(pos, row)| {
+                club.iter()
+                    .filter(|c| !c.d.is_empty() && !c.r.trim().is_empty())
+                    .find_map(|c| {
+                        let sent = row.mex.iter().find(|m| m.k == c.k)?.r.trim();
+                        (!sent.is_empty() && !sent.eq_ignore_ascii_case(c.r.trim())).then(|| {
+                            OtherLocation {
+                                name: shown.get(pos).cloned().unwrap_or_default(),
+                                operator: self
+                                    .positions
+                                    .get(pos)
+                                    .map(|p| p.operator.clone())
+                                    .unwrap_or_default(),
+                                sent: sent.to_ascii_uppercase(),
+                                club: c.r.trim().to_ascii_uppercase(),
+                            }
+                        })
+                    })
+                    .map(|o| (pos, o))
+            })
+            .collect();
+        out.sort_by(|(a_pos, a), (b_pos, b)| {
+            (a.name.is_empty(), &a.name, a_pos).cmp(&(b.name.is_empty(), &b.name, b_pos))
+        });
+        out.into_iter().map(|(_, o)| o).collect()
     }
 
     /// The key hash `posid` is pinned to, if any (the host's own tests and the shell's).
@@ -4790,6 +4851,86 @@ mod tests {
             "the journal replays the release too, in order"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host names each position whose newest contact sent another county than the club**
+    /// ([`ClubLog::other_location`]), for its own screen: by the name its board line shows (or who
+    /// is at an unnamed one), with what it sent and what the club sends, named positions first.
+    ///
+    /// Each rule on data that tells it apart: the CW tent went from McLean to Kane (named, Kane);
+    /// the SSB tent from Kane to McLean typed in lower case with spaces (not named); the Alpha
+    /// tent's newest, Kane, was taken back, so Lake decides; an unnamed position on Will reads as
+    /// its operator; the RTTY tent sent the club's county with another report (a slot off no list
+    /// says nothing). CONTROL: a club sending nothing names nobody.
+    #[test]
+    fn the_host_names_each_position_whose_newest_contact_sent_another_county() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        let t = ILQP_START;
+        for (pos, name) in [
+            ("bbbb", "CW tent"),
+            ("cccc", "SSB tent"),
+            ("dddd", ""),
+            ("eeee", "Alpha tent"),
+            ("ffff", "RTTY tent"),
+        ] {
+            club.join(pos, name, "W9XYZ", t);
+        }
+        let report = PosReport {
+            op: "K9OPD".into(),
+            ..Default::default()
+        };
+        club.position_status("dddd", &report, t);
+        let row = |pos: &str, seq: u64, call: &str, mine: &str| {
+            ilqp_row(pos, seq, call, "40m", "CW", "", "COOK", mine, t + seq * 60)
+        };
+        let mut rows = vec![
+            row("bbbb", 1, "K9AAA", "MCLN"),
+            row("bbbb", 2, "K9BBB", "KANE"),
+            row("cccc", 1, "K9CCC", "KANE"),
+            row("cccc", 2, "K9DDD", "MCLN"),
+            row("dddd", 1, "K9EEE", "WILL"),
+            row("eeee", 1, "K9FFF", "LAKE"),
+            row("eeee", 2, "K9GGG", "KANE"),
+            row("ffff", 1, "K9HHH", "MCLN"),
+        ];
+        // The SSB tent's McLean as a laptop could type it; the RTTY tent's other report.
+        for f in &mut rows[3].mex {
+            if f.k == "QTH" {
+                f.r = " mcln ".into();
+            }
+        }
+        rows[7].mex = party_fields("ilqp", &[("RST", "559"), ("QTH", "MCLN")]);
+        for q in &rows {
+            club.merge(q, q.when);
+        }
+        assert!(club.take_back("eeee", 2, t + 600));
+        let sent = to_wire_fields(&party_session("ilqp", "IL", "MCLN").my_exchange);
+        let named = |c: &ClubLog| {
+            c.other_location(&sent)
+                .into_iter()
+                .map(|o| (o.name, o.operator, o.sent, o.club))
+                .collect::<Vec<_>>()
+        };
+        let one = |name: &str, op: &str, sent: &str| {
+            (
+                name.to_string(),
+                op.to_string(),
+                sent.to_string(),
+                "MCLN".to_string(),
+            )
+        };
+        assert_eq!(
+            named(&club),
+            vec![
+                one("Alpha tent", "", "LAKE"),
+                one("CW tent", "", "KANE"),
+                one("", "K9OPD", "WILL"),
+            ]
+        );
+        assert!(
+            club.other_location(&[]).is_empty(),
+            "CONTROL: a club sending nothing names nobody"
+        );
     }
 
     /// ⭐ **A rehearsal under the same Event name stays out of the party's club log.** The host's

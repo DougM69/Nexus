@@ -479,6 +479,89 @@ fn the_club_files_keep_the_call_and_class_the_club_was_hosted_under() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The host's warnings: each position sending another county than the club, as
+/// `(name, sent, club's)`.
+fn other_county(eng: &Shared) -> Vec<(String, String, String)> {
+    engine_lock(eng)
+        .snapshot()
+        .field_day
+        .and_then(|f| f.club)
+        .map(|c| c.other_location)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| (o.pos_name, o.sent, o.club))
+        .collect()
+}
+
+/// ⭐ **The host names a position sending another county than the club's.** A laptop set up on
+/// another Illinois county joins (only the side of the state line is checked at JOIN), and every
+/// contact it logs sends that county under the club's call: a busted exchange for each station
+/// it works. Its contacts are still taken, as sent; the host's screen now says which position,
+/// what it sends and what the club sends, from its newest contact.
+///
+/// CONTROL: a position on the club's county, and the host itself, are not named; the joined
+/// laptops' own screens carry no such list; and the position named is not once its newest
+/// contact sends the club's county again.
+#[test]
+fn the_host_names_a_position_sending_another_county() {
+    let dir = std::env::temp_dir().join(format!("ilqp-county-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let listener = reusable_listener(0);
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let host = party_engine("aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_event.ilqp.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let kane = party_engine("bbbb0002", "CW tent", &addr);
+    engine_lock(&kane)
+        .contest_i_moved(vec![("QTH".into(), "KANE".into())])
+        .expect("the CW tent is set up on Kane");
+    let kane_sd = start_pump(&kane, &addr);
+    let ssb = party_engine("cccc0003", "SSB tent", &addr);
+    let ssb_sd = start_pump(&ssb, &addr);
+    log_party(&host, "K9AAA", "COOK", "PH");
+    log_party(&kane, "K9BBB", "COOK", "CW");
+    log_party(&ssb, "K9CCC", "LAKE", "PH");
+    wait_until("three contacts merged", 10, || club_rows(&host) == 3);
+    let cab = engine_lock(&host)
+        .fd_club_export(true)
+        .expect("club cabrillo");
+    assert!(
+        cab.lines()
+            .any(|l| l.starts_with("QSO:") && l.ends_with("W9XYZ 599 KANE K9BBB 599 COOK")),
+        "CONTROL: the contact is taken, as the CW tent sent it: {cab}"
+    );
+    let warning = |name: &str, sent: &str| vec![(name.to_string(), sent.into(), "MCLN".into())];
+    assert_eq!(
+        other_county(&host),
+        warning("CW tent", "KANE"),
+        "the host names the CW tent, Kane against the club's McLean, and no one else"
+    );
+    assert!(
+        other_county(&kane).is_empty() && other_county(&ssb).is_empty(),
+        "CONTROL: the host's alone"
+    );
+
+    // The CW tent put right: its next contact sends the club's county.
+    engine_lock(&kane)
+        .contest_i_moved(vec![("QTH".into(), "MCLN".into())])
+        .expect("the CW tent is set to McLean");
+    log_party(&kane, "K9DDD", "WILL", "CW");
+    wait_until("the fourth contact merged", 10, || club_rows(&host) == 4);
+    assert_eq!(
+        other_county(&host),
+        Vec::<(String, String, String)>::new(),
+        "named no more once its newest contact sends the club's county"
+    );
+    for sd in [host_sd, host_pump_sd, kane_sd, ssb_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// One Field Day contact, so the refused position has a row it would have sent.
 fn log_party_fd(eng: &Shared) {
     assert!(engine_lock(eng)
