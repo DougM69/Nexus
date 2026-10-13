@@ -4328,6 +4328,17 @@ export const EN = {
   'fieldDay.club.board.link.removed': 'Removed',
   'fieldDay.club.board.heard': '(heard {{ago}})',
   'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
+  // The host's club log on its own screen (ContestView's ClubLogList): every position's contacts
+  // as the host merged them, newest first, with the position that logged each.
+  'fieldDay.club.log.head': 'Club log',
+  'fieldDay.club.log.title':
+    "Every position's contacts as this host merged them, newest first, with the position that logged each: the club's log, which Club ADIF and Club Cabrillo are written from. A duplicate is marked as in your own log. A long contest lists its newest contacts only, so this screen never slows; every contact is in the club's files.",
+  'fieldDay.club.log.count': {
+    one: '{{count}} contact',
+    other: '{{count}} contacts',
+  },
+  'fieldDay.club.log.newest': 'the newest {{shown}} of {{total}} contacts',
+  'fieldDay.club.log.empty': 'No contacts in the club log yet.',
   'fieldDay.club.grid.caption': 'Positions by band and mode',
   'fieldDay.club.grid.noBand': 'No band yet:',
   'fieldDay.club.grid.notHeard': 'Not heard for more than {{secs}} s',

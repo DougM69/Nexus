@@ -29435,6 +29435,16 @@ fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<Stri
     eng.fd_club_export(format == "cabrillo")
 }
 
+/// The host's club log for its own Contest screen and club board: the newest contacts its club
+/// merged, newest first, each with the position that logged it and whether it is a duplicate, and
+/// how many the club holds ([`tempo_app::engine::Engine::fd_club_log_newest`]). `None` when this
+/// instance is not hosting. A read: it changes nothing, and no Remote query or operation reaches
+/// it.
+#[tauri::command(async)]
+fn fd_club_log_newest(state: State<'_, SharedEngine>) -> Option<tempo_app::dto::FdClubLogDto> {
+    engine_lock(&state).fd_club_log_newest()
+}
+
 /// What the host's Give button did: the position given, or why nothing changed.
 #[derive(serde::Serialize)]
 #[serde(tag = "outcome", rename_all = "camelCase")]
@@ -35491,6 +35501,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             contest_i_moved,
             fd_discover_events,
             fd_club_export,
+            fd_club_log_newest,
             fd_club_give_position,
             fd_club_remove_position,
             fd_club_allow_back,
@@ -37745,6 +37756,51 @@ mod tests {
         assert!(
             !remote.contains("remove_position") && !remote.contains("allow_back"),
             "Remote must not reach the Remove or Allow back command"
+        );
+    }
+
+    /// ⭐ The host's club log list reaches the engine only if its command is REGISTERED and reads
+    /// the engine's own list, and no Remote dispatcher names it: the list is the host's own
+    /// screens', never the Remote page's. POSITIVE CONTROL: the dispatchers read here do name the
+    /// engine calls they make.
+    #[test]
+    fn the_club_log_command_is_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "fd_club_log_newest,"),
+            "fd_club_log_newest is not registered — the club log list would fail at runtime"
+        );
+        let body = src
+            .split_once("\nfn fd_club_log_newest(")
+            .expect("the command exists")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(body.contains(".fd_club_log_newest()"), "{body}");
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+            include_str!("remote_service/operations/logging.rs"),
+            include_str!("remote_service/operations/settings.rs"),
+            include_str!("remote_service/query.rs"),
+            include_str!("remote_service/query/field_day.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("club_log"),
+            "Remote must not reach the host's club log"
         );
     }
 

@@ -3017,6 +3017,57 @@ pub struct FdClubKeptOutDto {
     pub latest: Vec<FdClubRefusedDto>,
 }
 
+/// ⭐ **The host's club log, as its own screen lists it** (`Engine::fd_club_log_newest`): how many
+/// contacts the club holds, and the newest of them, newest first.
+///
+/// ⛔ The host's own screens only, as the answer to a command of its own. It rides nothing else:
+/// not the snapshot (so not Remote's, whose Field Day check refuses a key it does not know), not
+/// the club line every position is sent, not the TV board.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubLogDto {
+    /// Every contact in the club's log, duplicates included: the count the club line says.
+    pub total: u64,
+    /// The newest of them, at most `fdevent::CLUB_LOG_SHOWN`, newest first.
+    pub rows: Vec<FdClubLogRow>,
+}
+
+/// One contact of [`FdClubLogDto`]: the columns of the contest log table, read as
+/// [`FieldDayQso`]'s are, and the position that logged it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubLogRow {
+    pub call: String,
+    /// What they sent, Field Day's two slots ([`FieldDayQso::class`] and `section`)…
+    pub class: String,
+    pub section: String,
+    /// …and, for any other contest, one value per received slot of the club's session, in its
+    /// order (blank where the row has none), as [`FieldDayQso::rcvd`]. Empty for Field Day.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<String>,
+    pub band: String,
+    /// Scoring class: "DIG" | "CW" | "PH".
+    pub mode: String,
+    /// The on-air mode behind the class, empty where none was recorded.
+    #[serde(default)]
+    pub submode: String,
+    /// The logging position's clock when it was logged: what the club's files write.
+    pub when_unix: u64,
+    /// The position that logged it, by id: the key of its line on the host's board, never shown.
+    pub posid: String,
+    /// Its seq at that position: `(posid, seq)` is the row's identity in the club's log, and the
+    /// list's key for it. Never shown.
+    pub seq: u64,
+    /// …and by the name the host's board shows it under (`fdevent::ClubLog::shown_names`), empty
+    /// for a position with none: what an unnamed position reads as is the screen's to say.
+    pub pos_name: String,
+    /// ⭐ A later contact of a key the club already holds, by the earliest-wins dedupe the club's
+    /// files are written by (`fdevent::ClubLog::newest`). Skipped when false, as on
+    /// [`FieldDayQso::dupe`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dupe: bool,
+}
+
 /// One entry of [`FdClubDto::refused`], and of [`FdClubKeptOutDto::latest`] (there `call` is
 /// the call of the position that sent the contact, and `reason` the sentence about it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5303,6 +5354,42 @@ mod receivers_dto_tests {
             got.sort();
             // Parser sanity: a scan that found nothing would pass the comparison vacuously.
             assert!(got.len() >= 5, "{interface}: parsed only {got:?}");
+            assert_eq!(
+                got, want,
+                "ui/src/types.ts {interface} vs the serialized DTO"
+            );
+        }
+    }
+
+    /// The host's club log list: `types.ts` declares exactly the keys the command's answer
+    /// carries, a row's optional ones (`rcvd`, `dupe`) present.
+    #[test]
+    fn the_club_logs_typescript_mirror_declares_exactly_its_keys() {
+        let dto = FdClubLogDto {
+            total: 1,
+            rows: vec![FdClubLogRow {
+                call: "K9AAA".into(),
+                class: String::new(),
+                section: String::new(),
+                rcvd: vec!["599".into(), "COOK".into()],
+                band: "40m".into(),
+                mode: "CW".into(),
+                submode: String::new(),
+                when_unix: 1_792_342_800,
+                posid: "aaaa0001".into(),
+                seq: 3,
+                pos_name: "CW tent".into(),
+                dupe: true,
+            }],
+        };
+        let wire = serde_json::to_value(&dto).unwrap();
+        for (interface, v) in [("FdClubLog", &wire), ("FdClubLogRow", &wire["rows"][0])] {
+            let mut want: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            let mut got = ts_keys(interface);
+            want.sort();
+            got.sort();
+            // Parser sanity, as above: `FdClubLog` has two keys.
+            assert!(got.len() >= 2, "{interface}: parsed only {got:?}");
             assert_eq!(
                 got, want,
                 "ui/src/types.ts {interface} vs the serialized DTO"

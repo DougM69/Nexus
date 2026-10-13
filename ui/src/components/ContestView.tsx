@@ -6,6 +6,7 @@ import type {
   ContestFieldSpec,
   DupeRule,
   FdClubBoardRow,
+  FdClubLog,
   FdClubStatus,
   FdMergeReport,
   FieldDayQso,
@@ -13,7 +14,7 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
@@ -361,21 +362,25 @@ function qsoTimeUtc(q: FieldDayQso): string {
 
 /** The log table's head row: Time · Call, then Field Day's Class (Category for Winter Field Day) and
  *  Section or one column per received slot, then Band · Mode. Shared by this screen's table and the
- *  contest logger window's last contacts (ContestLogger.tsx), so the two read alike. */
+ *  contest logger window's last contacts (ContestLogger.tsx), so the two read alike, and by the
+ *  host's club log, which alone adds Position. */
 export function ContestLogHead({
   fieldDayColumns,
   isWfd,
   slotColumns,
   role,
+  position = false,
 }: {
   fieldDayColumns: boolean
   isWfd: boolean
   slotColumns: readonly ContestFieldSpec[]
   /** The session's role, which a column's caption depends on as its box's does. */
   role?: string
+  /** One more column after Mode: the position that logged each contact (`ClubLogList`). */
+  position?: boolean
 }) {
   return (
-    <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
+    <div className="fd-log-head" {...slotGrid(slotColumns.length)} data-pos={position ? '' : undefined}>
       <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
       <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
       {fieldDayColumns ? (
@@ -397,6 +402,7 @@ export function ContestLogHead({
       )}
       <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
       <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
+      {position && <span className="fd-col pos">{t('fieldDay.club.board.column.position')}</span>}
     </div>
   )
 }
@@ -407,17 +413,21 @@ export function ContestLogRow({
   row,
   fieldDayColumns,
   slotColumns,
+  position,
   children,
 }: {
   row: LogRowMeta
   fieldDayColumns: boolean
   slotColumns: readonly ContestFieldSpec[]
+  /** The position that logged it, in the column `ContestLogHead`'s `position` adds. */
+  position?: string
   children?: ReactNode
 }) {
   return (
     <div
       className={`fd-log-row${fieldDayColumns && row.isNewSection ? ' mult' : ''}${row.isDupe ? ' dupe' : ''}`}
       {...slotGrid(slotColumns.length)}
+      data-pos={position !== undefined ? '' : undefined}
       title={
         row.isDupe
           ? t('fieldDay.log.dupe.title')
@@ -450,6 +460,7 @@ export function ContestLogRow({
         )}
         {children}
       </span>
+      {position !== undefined && <span className="fd-col pos">{position}</span>}
     </div>
   )
 }
@@ -1668,6 +1679,101 @@ function ClubBandModeGrid({
   )
 }
 
+/** The log table's columns for the contest a club runs, as the contest screen draws its own log. */
+export interface ClubLogColumns {
+  /** The contest's received slots (`FieldDayStatus.receives`): one column each, but at Field Day. */
+  receives: readonly ContestFieldSpec[]
+  /** The session's role, which a column's caption depends on. */
+  role?: string
+  isWfd: boolean
+}
+
+/** How often the host's own screen reads its club log while the list shows, besides the moment the
+ *  club's count moves: a contact taken back and another merged between two snapshots leave the count
+ *  where it was, and a position renamed moves no count at all. */
+const CLUB_LOG_READ_MS = 2000
+
+/**
+ * ⭐ THE CLUB LOG, ON THE HOST'S OWN SCREEN: every position's contacts as this host merged them,
+ * newest first, with the position that logged each, so the host can watch them arrive (the operator,
+ * benching two laptops: "I can see the number on the board on the host computer here but it doesnt
+ * show in the host master log").
+ *
+ * The rows are the engine's (`fdClubLogNewest`), read from the rows the Club ADIF and Club Cabrillo are
+ * written from, by the same reading: the newest hundred at most, with how many the club holds, so a
+ * long contest costs this screen what a short one does. A duplicate is the engine's verdict, the
+ * files' own, drawn by the row this station's own log is drawn by, so it is marked as a dupe is there.
+ * Each position is named as its line on the board above names it. Read-only: nothing here is pressed.
+ *
+ * The host's alone (`FdClubSection`'s `clubLog`): a joined laptop holds no rows, and Remote's page is
+ * sent none of them.
+ */
+function ClubLogList({
+  club,
+  fieldDay,
+  columns,
+  big,
+}: {
+  club: FdClubStatus
+  fieldDay: boolean
+  columns: ClubLogColumns
+  big: boolean
+}) {
+  const [log, setLog] = useState<FdClubLog | null>(null)
+  // Read now, the moment the club's count moves, and every CLUB_LOG_READ_MS between.
+  useEffect(() => {
+    let live = true
+    const read = () => {
+      fdClubLogNewest().then(
+        (got) => {
+          if (live) setLog(got)
+        },
+        () => {},
+      )
+    }
+    read()
+    const id = window.setInterval(read, CLUB_LOG_READ_MS)
+    return () => {
+      live = false
+      window.clearInterval(id)
+    }
+  }, [club.qsos])
+  const names = useMemo(() => new Map(club.board.map((b) => [b.posid, boardName(b)])), [club.board])
+  if (!log) return null
+  const slotColumns = fieldDay ? [] : columns.receives
+  return (
+    <div className={big ? 'fd-log fd-club-log-big' : 'fd-log'} role="region" aria-label={t('fieldDay.club.log.head')}>
+      <div style={{ ...CLUB_HEADER, gap: 8, fontSize: textPx(big ? 15 : 12) }} title={t('fieldDay.club.log.title')}>
+        <span style={{ fontWeight: 700, color: 'var(--text)' }}>{t('fieldDay.club.log.head')}</span>
+        <span style={{ color: 'var(--text-dim)' }}>
+          {log.total > log.rows.length
+            ? t('fieldDay.club.log.newest', { shown: log.rows.length, total: log.total })
+            : t('fieldDay.club.log.count', { count: log.total })}
+        </span>
+      </div>
+      <ContestLogHead
+        fieldDayColumns={fieldDay}
+        isWfd={columns.isWfd}
+        slotColumns={slotColumns}
+        role={columns.role}
+        position
+      />
+      <div className="fd-log-scroll">
+        {log.rows.length === 0 && <p className="empty">{t('fieldDay.club.log.empty')}</p>}
+        {log.rows.map((r) => (
+          <ContestLogRow
+            key={`${r.posid}:${r.seq}`}
+            row={{ qso: r, isNewSection: false, isDupe: r.dupe === true }}
+            fieldDayColumns={fieldDay}
+            slotColumns={slotColumns}
+            position={names.get(r.posid) ?? (r.posName || t('fieldDay.club.board.unnamed'))}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function FdClubSection({
   club,
   onExport,
@@ -1683,6 +1789,7 @@ export function FdClubSection({
   bands,
   dupeRule,
   ownPosid,
+  clubLog,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
@@ -1715,6 +1822,11 @@ export function FdClubSection({
   /** This laptop's own position id (`Settings.fdPositionId`), whose name the grid marks as this
    *  laptop on a position's board. Not on Remote, which is no laptop of the club's. */
   ownPosid?: string
+  /** ⭐ The host's club log under the board (`ClubLogList`), and the log table's columns of the
+   *  contest the club runs: the host's contest screen and its club board's own window pass it. Not
+   *  Remote's contest view, whose page is sent none of the club's rows, and shown only while this
+   *  laptop hosts: a joined laptop holds the club's counts and keys, never its rows. */
+  clubLog?: ClubLogColumns
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
@@ -2178,6 +2290,9 @@ export function FdClubSection({
             )
           })}
         </div>
+      )}
+      {clubLog && club.hosting && !readOnly && (
+        <ClubLogList club={club} fieldDay={fieldDay} columns={clubLog} big={big} />
       )}
     </div>
   )
@@ -3634,6 +3749,7 @@ export function ContestView({
           bands={fieldDay.bands}
           dupeRule={fieldDay.dupeRule}
           ownPosid={observed ? undefined : nativeSettings?.fdPositionId}
+          clubLog={observed ? undefined : { receives: fieldDay.receives ?? [], role: fieldDay.role, isWfd }}
         />
       )}
       {/* …or, with the Field Day mode off, where this laptop's club link stands: club sync

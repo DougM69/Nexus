@@ -12905,6 +12905,40 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .fd-log-row[data-slots] {
   grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr;
 }
+/* …and the host's club log (ContestView's ClubLogList), which alone sets `data-pos`: the same
+   columns, then the position that logged each contact. A long position name ellipsizes in its own
+   track rather than widen the row. */
+.fd-log-head[data-pos],
+.fd-log-row[data-pos] {
+  grid-template-columns: 0.55fr 1.3fr 0.7fr 0.9fr 0.7fr 0.7fr minmax(0, 1.2fr);
+}
+.fd-log-head[data-slots][data-pos],
+.fd-log-row[data-slots][data-pos] {
+  grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr minmax(0, 1.2fr);
+}
+.fd-col.pos {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* …and in the club board's own window, at that window's glance size as its board is (the type the
+   logger window's last contacts use), the list as tall as half the window rather than the docked
+   strip's few rows. */
+.fd-club-log-big .fd-log-head .fd-col {
+  font-size: calc(13px * var(--text-scale));
+}
+.fd-club-log-big .fd-log-row {
+  font-size: calc(18px * var(--text-scale));
+}
+.fd-club-log-big .fd-log-row .fd-col.time {
+  font-size: calc(16px * var(--text-scale));
+}
+.fd-club-log-big .fd-mode-chip {
+  font-size: calc(13px * var(--text-scale));
+}
+.fd-club-log-big .fd-log-scroll {
+  max-height: max(190px, calc(0.5 * var(--vh-eff, 100vh)));
+}
 .fd-col.mode {
   /* Mode chip column */
 }

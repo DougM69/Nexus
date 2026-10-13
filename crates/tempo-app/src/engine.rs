@@ -22,6 +22,10 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+/// The host's club log as its own screen lists it: the host's alone, newest first, and the Club
+/// ADIF's contacts by value.
+#[cfg(test)]
+mod club_log_tests;
 mod contest_before;
 /// The station as it was before the contest changed it: taken, kept, let go, round-tripped.
 #[cfg(test)]
@@ -13036,6 +13040,66 @@ impl Engine {
     /// that needs more than the counts.
     pub fn fd_club_log(&self) -> Option<&crate::fdevent::ClubLog> {
         self.fd_club.as_ref()
+    }
+
+    /// ⭐ **The host's club log, as its own screen lists it** — the newest
+    /// [`CLUB_LOG_SHOWN`](crate::fdevent::CLUB_LOG_SHOWN) of the club's merged contacts, newest
+    /// first ([`crate::fdevent::ClubLog::newest`]), each with the position that logged it, named as
+    /// the host's board names it, and whether it is a duplicate, beside how many the club holds.
+    /// Read from the rows the Club ADIF and Club Cabrillo are written from, under the same reading
+    /// of each, so the list and the files cannot disagree. Bounded; under the lock it costs the
+    /// dedupe every snapshot's board already runs ([`crate::fdevent::ClubLog::board_rows`]) and a
+    /// sort of the rows by time.
+    ///
+    /// `None` unless this Nexus is hosting: a joined position holds the club's counts and keys,
+    /// never its rows ([`crate::fdevent::ClubMirror`]).
+    ///
+    /// ⛔ The host's own screens only: no Remote query or operation reads it, and none of it rides
+    /// the snapshot, the club line every position is sent or the TV board.
+    pub fn fd_club_log_newest(&self) -> Option<crate::dto::FdClubLogDto> {
+        let club = self.fd_club.as_ref()?;
+        // The log table's columns: Field Day's class and section, and for any other contest one
+        // per received slot of the club's session, as the screen's own log has. A session Settings
+        // can no longer build (the export names why) leaves those columns blank, not guessed.
+        let receives: &[&str] = match club.field_day_event() {
+            Some(_) => &[],
+            None => self
+                .fd_club_session(club)
+                .map(|session| session.role().receives)
+                .unwrap_or(&[]),
+        };
+        let shown = club.shown_names();
+        let rows = club
+            .newest(crate::fdevent::CLUB_LOG_SHOWN)
+            .into_iter()
+            .map(|e| {
+                let raw = |key: &str| {
+                    e.rx.iter()
+                        .find(|v| v.key == key)
+                        .map(|v| v.raw.clone())
+                        .unwrap_or_default()
+                };
+                crate::dto::FdClubLogRow {
+                    call: e.row.call.clone(),
+                    class: raw("CLASS"),
+                    section: raw("SECTION"),
+                    rcvd: receives.iter().map(|k| raw(k)).collect(),
+                    band: e.row.band.clone(),
+                    // As the contest log the files are written from keeps them.
+                    mode: e.row.mode_class.to_ascii_uppercase(),
+                    submode: e.row.submode.trim().to_ascii_uppercase(),
+                    when_unix: e.row.when_unix,
+                    posid: e.row.posid.clone(),
+                    seq: e.row.seq,
+                    pos_name: shown.get(e.row.posid.as_str()).cloned().unwrap_or_default(),
+                    dupe: e.dupe,
+                }
+            })
+            .collect();
+        Some(crate::dto::FdClubLogDto {
+            total: club.qsos_raw(),
+            rows,
+        })
     }
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.

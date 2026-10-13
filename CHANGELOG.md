@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client makes that a transmission ended, when it fails, writes one line to Nexus's diagnostic log
   naming the check and the radio's own line, for the bench to send back; it changes nothing on the
   air. NEEDS-BENCH on a FLEX radio.
+- **The club host lists every position's contacts as they arrive.** Under the club board on the
+  host's Contest screen, in its pop-out, in the logger window and in the board's own pop-out, a Club
+  log lists the contacts the club's log holds, newest first: time, call, exchange, band, mode and the
+  position that logged each, named as on the board. A repeat of a contact another position made
+  first is marked the way your own log marks a dupe. These are the contacts Club ADIF and Club
+  Cabrillo are written from, read the same way, so the list and the files agree. It shows the newest
+  100 and how many the club holds, so a long contest does not slow the screen; every contact is in
+  the files. Only the host has it: a joined laptop has no merged log to show, and the list is not on
+  the Remote page.
 
 ### Changed
 

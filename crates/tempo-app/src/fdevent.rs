@@ -914,6 +914,25 @@ const MAX_KEPT_OUT: usize = 256;
 /// sentence, and the whole Field Day view Remote reads is bounded.
 pub const KEPT_OUT_SHOWN: usize = 16;
 
+/// ⭐ **The most of the club's contacts the host's own screen lists** ([`ClubLog::newest`]), the
+/// newest, beside how many the club holds. A hundred is the last half hour of a busy five-position
+/// club (each running about 40 an hour), or the last hour or more of most clubs: enough to watch
+/// every contact arrive and to check one a position has just logged. And it is a fixed size, so the
+/// screen's poll reads, sends and draws the same hundred rows at the club's five-thousandth contact
+/// as at its fiftieth; the whole log is in the club's files.
+pub const CLUB_LOG_SHOWN: usize = 100;
+
+/// One contact of the club's log as the host's own screen lists it ([`ClubLog::newest`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClubLogEntry<'a> {
+    /// The merged row: the position that logged it, when, and what.
+    pub row: &'a MergedRow,
+    /// What it received, read under the club's exchange as the club's files read it.
+    pub rx: Vec<FieldValue>,
+    /// A later contact of a key the club already holds: the files' own verdict.
+    pub dupe: bool,
+}
+
 /// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
 /// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
 /// `call` are required) and skips it, as it skips a torn line; this build reads each before
@@ -2155,6 +2174,45 @@ impl ClubLog {
     /// which position logged each of the club's contacts without re-deriving the dedupe.
     pub fn unique_log_rows(&self) -> Vec<usize> {
         self.export_indices()
+    }
+
+    /// ⭐ **The club's contacts for the host's own screen, newest first** — at most `limit` of
+    /// [`rows`](Self::rows), by the time each was made (the logging position's own clock, the
+    /// time the club's files write), the later merge first between two made in one second. So an
+    /// offline position's catch-up lands at the times its contacts were made, not on top, and the
+    /// list is the newest `limit`, never the first merged.
+    ///
+    /// Each carries what it received, read under the club's exchange as
+    /// [`unique_log_with`](Self::unique_log_with) reads it for the files, and whether it is a
+    /// DUPLICATE, which is the files' own verdict, never a second reading of it: a row whose key
+    /// the earliest-wins dedupe the files are written by
+    /// ([`earliest_unique_indices`](Self::earliest_unique_indices)) holds for an earlier contact.
+    /// That is a row the files leave out, or, in a contest that wants repeats reported, the one
+    /// they write as its zero-point repeat ([`export_indices`](Self::export_indices)), so a mark
+    /// moves with the file's line when an offline position's late re-push of an EARLIER contact
+    /// takes the key back. A satellite contact the contest gives no credit is in no file and is no
+    /// one's duplicate, as on a position's own log.
+    pub fn newest(&self, limit: usize) -> Vec<ClubLogEntry<'_>> {
+        let mut first = vec![false; self.rows.len()];
+        for i in self.earliest_unique_indices() {
+            first[i] = true;
+        }
+        let credit = self.ruleset().satellite_credit;
+        let spec = self.exchange();
+        let mut order: Vec<usize> = (0..self.rows.len()).collect();
+        order.sort_unstable_by_key(|&i| std::cmp::Reverse((self.rows[i].when_unix, i)));
+        order
+            .into_iter()
+            .take(limit)
+            .map(|i| {
+                let row = &self.rows[i];
+                ClubLogEntry {
+                    row,
+                    rx: from_wire_fields(&row.ex, spec),
+                    dupe: !first[i] && (credit || row.sat.is_empty()),
+                }
+            })
+            .collect()
     }
 
     /// The deduped (earliest-wins) club log as a [`FieldDayLog`] under the
@@ -6839,5 +6897,166 @@ mod tests {
             (None, None),
             "another address"
         );
+    }
+
+    // ---- the host's own screen lists the club's contacts ------------------
+
+    /// `(position, seq)` of each listed contact, with its mark.
+    fn listed(club: &ClubLog, limit: usize) -> Vec<(String, u64, bool)> {
+        club.newest(limit)
+            .iter()
+            .map(|e| (e.row.posid.clone(), e.row.seq, e.dupe))
+            .collect()
+    }
+
+    /// `(position, seq)` of each contact the club's files write, in their order.
+    fn in_the_file(club: &ClubLog) -> Vec<(String, u64)> {
+        club.unique_log_rows()
+            .into_iter()
+            .map(|i| (club.rows()[i].posid.clone(), club.rows()[i].seq))
+            .collect()
+    }
+
+    /// ⭐ **The host's club log lists the club's contacts newest first, by the time each was
+    /// made** — the logging position's own clock, which the club's files write — the later merge
+    /// first between two made in one second, and no more of them than it is asked for: the
+    /// newest, never the first merged. An offline position's catch-up lands at the times its
+    /// contacts were made, not on top of the list.
+    #[test]
+    fn the_hosts_club_log_lists_its_contacts_newest_first_and_no_more_than_asked() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "K1AAA", "20m", "CW", "CT", 100), 10);
+        club.merge(&wq("aaaa", 2, "K1BBB", "20m", "CW", "CT", 300), 11);
+        // An offline position's catch-up: merged last, made in between.
+        club.merge(&wq("bbbb", 1, "K1CCC", "40m", "CW", "EMA", 200), 12);
+        // Made in the same second as K1BBB, merged after it.
+        club.merge(&wq("bbbb", 2, "K1DDD", "40m", "CW", "EMA", 300), 13);
+        let calls = |limit: usize| -> Vec<String> {
+            club.newest(limit)
+                .iter()
+                .map(|e| e.row.call.clone())
+                .collect()
+        };
+        assert_eq!(calls(10), ["K1DDD", "K1BBB", "K1CCC", "K1AAA"]);
+        assert_eq!(calls(2), ["K1DDD", "K1BBB"], "the newest two");
+        assert!(calls(0).is_empty());
+        assert_eq!(
+            club.rows().len(),
+            4,
+            "the list takes nothing out of the log"
+        );
+    }
+
+    /// ⭐ **The contact the club log marks as a duplicate is the one its files leave out** — the
+    /// earliest-wins dedupe the Club ADIF and Club Cabrillo are written by, read once. The
+    /// LATER-merged row here is the EARLIER contact (an offline position's re-push), so the file
+    /// keeps it and the first-merged row is the duplicate: a mark judged in merge order would
+    /// fall on the wrong row. CONTROL: the same station on a new band is no duplicate. Each
+    /// contact carries what it received, read as the file reads it.
+    #[test]
+    fn the_club_logs_duplicate_is_the_contact_its_files_leave_out() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "DIG", "CT", 500), 10);
+        let mut earlier = wq("bbbb", 1, "W1AW", "20m", "DIG", "CT", 100);
+        earlier.class = "5A".into();
+        club.merge(&earlier, 11);
+        club.merge(&wq("bbbb", 2, "W1AW", "40m", "DIG", "CT", 600), 12);
+        assert_eq!(
+            listed(&club, CLUB_LOG_SHOWN),
+            [
+                ("bbbb".to_string(), 2, false),
+                ("aaaa".to_string(), 1, true),
+                ("bbbb".to_string(), 1, false),
+            ]
+        );
+        let mut unmarked: Vec<(String, u64)> = listed(&club, CLUB_LOG_SHOWN)
+            .into_iter()
+            .filter(|(_, _, dupe)| !dupe)
+            .map(|(pos, seq, _)| (pos, seq))
+            .collect();
+        let mut file = in_the_file(&club);
+        unmarked.sort();
+        file.sort();
+        assert_eq!(
+            unmarked, file,
+            "the file writes exactly the unmarked contacts"
+        );
+        let got: Vec<Vec<(&str, String)>> = club
+            .newest(CLUB_LOG_SHOWN)
+            .iter()
+            .map(|e| e.rx.iter().map(|v| (v.key, v.raw.clone())).collect())
+            .collect();
+        assert_eq!(
+            got[2],
+            [("CLASS", "5A".to_string()), ("SECTION", "CT".to_string())],
+            "the earlier contact's own exchange"
+        );
+    }
+
+    /// ⭐ **In a contest that wants repeats reported, the club log marks the repeat its file
+    /// marks.** The New York QSO Party's file writes both contacts and the later one as its
+    /// zero-point repeat, in the order they were made; the list marks the same one, and the
+    /// later-merged row is the earlier contact, so merge order would mark the other.
+    #[test]
+    fn a_club_whose_contest_reports_dupes_marks_the_repeat_its_file_marks() {
+        let mut club = ClubLog::for_ruleset(party("nyqp"), "NYQP TEST");
+        let row = |pos: &str, seq: u64, when: u64| WireQso {
+            pos: pos.into(),
+            seq,
+            call: "K2AAA".into(),
+            class: String::new(),
+            sect: String::new(),
+            ex: party_fields("nyqp", &[("RST", "599"), ("QTH", "BRX")]),
+            mex: party_fields("nyqp", &[("RST", "599"), ("QTH", "ALB")]),
+            band: "20m".into(),
+            mode: "CW".into(),
+            sub: String::new(),
+            when,
+            op: String::new(),
+            sat: String::new(),
+            sat_fm: false,
+        };
+        club.merge(&row("bbbb", 1, 2_000), 1);
+        club.merge(&row("aaaa", 1, 1_000), 2);
+        let log = club.unique_log_with("W2XYZ", party_session("nyqp", "NY", "ALB"));
+        let mut file: Vec<(String, u64, bool)> = in_the_file(&club)
+            .into_iter()
+            .zip(log.qsos())
+            .map(|((pos, seq), q)| (pos, seq, q.dupe))
+            .collect();
+        let mut list = listed(&club, CLUB_LOG_SHOWN);
+        assert_eq!(
+            list,
+            [
+                ("bbbb".to_string(), 1, true),
+                ("aaaa".to_string(), 1, false)
+            ],
+            "the later contact is the repeat"
+        );
+        file.sort();
+        list.sort();
+        assert_eq!(list, file, "both in the file, the same one marked");
+    }
+
+    /// A satellite contact Winter Field Day gives no credit is in no file and no score, and is no
+    /// one's duplicate: the club log does not mark it, as the position's own log does not. A
+    /// terrestrial repeat of the contact it holds is marked. CONTROL: the file leaves out both.
+    #[test]
+    fn a_satellite_contact_winter_field_day_gives_no_credit_is_no_duplicate() {
+        let mut club = ClubLog::new(FdEvent::WinterFd, "TEST WFD");
+        club.merge(&wq("aaaa", 1, "W1AW", "2m", "PH", "CT", 100), 10);
+        let mut bird = wq("bbbb", 1, "W1AW", "2m", "PH", "CT", 200);
+        bird.sat = "AO-91".into();
+        club.merge(&bird, 11);
+        club.merge(&wq("bbbb", 2, "W1AW", "2m", "PH", "CT", 300), 12);
+        assert_eq!(
+            listed(&club, CLUB_LOG_SHOWN),
+            [
+                ("bbbb".to_string(), 2, true),
+                ("bbbb".to_string(), 1, false),
+                ("aaaa".to_string(), 1, false),
+            ]
+        );
+        assert_eq!(in_the_file(&club), [("aaaa".to_string(), 1)]);
     }
 }
