@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **F5, Ctrl+F5 and Ctrl+R no longer reload Nexus on Windows.** One of them pressed by mistake
+  reloaded the whole window, in a contest in the middle of a contact. WebView2's own browser
+  shortcuts are now off in every Nexus window, as they already were in the Remote stations window:
+  the main window, the splash and every pop-out, the Contest screen and the Contest logger among
+  them. With them, Ctrl+P no longer prints the window and Ctrl+F no longer opens a find bar. Copy,
+  paste, cut, undo and select all work as before, and so do Nexus's own F-keys. Not yet tried on
+  Windows.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never
