@@ -283,6 +283,53 @@ fn an_illinois_entrant_counts_counties_states_provinces_and_five_countries() {
     assert_eq!(total, 26 * 12);
 }
 
+/// ⭐ **One province, one multiplier, whichever spelling its station sent.** The sponsor
+/// publishes no exchange code list; its records table spells Newfoundland `NF` and Prince
+/// Edward Island `PEI`, and `il_mults` carries Canada Post's `NL` and `PE` beside them, so a VE
+/// station may send either. *"IL stations multiply points by the sum of IL counties, US states,
+/// VE provinces and DXCC countries"*: provinces, each once.
+///
+/// Measured before the fold (the readiness audit): PE, PEI, NL and NF from four stations
+/// scored 32 = 8 points × 4, where the sponsor counts two provinces, 16.
+#[test]
+fn one_province_in_either_spelling_is_one_multiplier() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("IL", "COOK")), "20m");
+    let work = |log: &mut FieldDayLog, call: &str, qth: &str, t: u64| {
+        assert!(
+            log.log_fields_at(
+                call,
+                &fields(&[("RST", "599"), ("QTH", qth)]),
+                "CW",
+                "",
+                0,
+                t
+            ),
+            "{call} must log"
+        );
+    };
+    work(&mut log, "VY2AB", "PE", 100);
+    work(&mut log, "VY2CD", "PEI", 110);
+    work(&mut log, "VO1AB", "NL", 120);
+    work(&mut log, "VO1CD", "NF", 130);
+    // Each contact keeps what its station sent: that is what its Cabrillo line carries.
+    assert_eq!(
+        log.qsos()
+            .iter()
+            .map(|q| q.rcvd("QTH").to_string())
+            .collect::<Vec<_>>(),
+        ["PE", "PEI", "NL", "NF"]
+    );
+    assert_eq!(
+        log.ruleset().scoring.mult_counts(log.score_rows()),
+        vec![("county", 0), ("mult", 2), ("dxcc", 0)],
+        "Prince Edward Island and Newfoundland"
+    );
+    assert_eq!(score(&log), (8, 8, Some(2), 16));
+    // CONTROL: another province is still a multiplier of its own.
+    work(&mut log, "VE3AB", "ON", 140);
+    assert_eq!(score(&log), (10, 10, Some(3), 30));
+}
+
 /// ⭐ **A non-Illinois entrant counts Illinois counties and nothing else** — *"Non-IL
 /// stations multiply points by the number of IL counties worked."*
 #[test]

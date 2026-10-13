@@ -130,6 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaving only the call, and so was a county that call history filled from the next call in that
   moment. It now stays, with the contest logger window open or closed, and logs with the next
   contact.
+- **At the Illinois QSO Party, a Canadian province counts once, whichever spelling its station
+  sent.** The sponsor's own list spells Prince Edward Island PEI and Newfoundland NF, and many
+  stations send PE and NL. Each spelling counted as a province of its own, so PE and PEI, or NL and
+  NF, claimed two multipliers where the sponsor credits one, in the score on screen, on the club
+  line and in the Cabrillo CLAIMED-SCORE. They now count once there and on the multiplier board,
+  where both spellings' cells light together. Each contact is still logged and exported as its
+  station sent it, and Prince Edward Island typed by name in the county box is logged as PEI.
 
 ## [1.18.0] — 2026-10-12
 
