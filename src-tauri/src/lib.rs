@@ -16901,7 +16901,8 @@ fn jtty_auto_arm(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyS
 }
 
 /// WSJT-X's Rx frequency and F Tol for JTTY: the audio channel always searched. Takes effect at
-/// the next search without restarting the reception.
+/// the next search without restarting the reception. F Tol is saved, as WSJT-X keeps
+/// `JTTY_FTol` between sessions; the Rx frequency is not.
 #[tauri::command(async)]
 fn jtty_set_rx(
     state: State<'_, SharedEngine>,
@@ -16909,7 +16910,13 @@ fn jtty_set_rx(
     ftol_hz: f32,
 ) -> Result<tempo_app::dto::JttyState, String> {
     let mut eng = engine_lock(&state);
+    let kept = eng.settings().jtty_ftol_hz;
     eng.set_jtty_rx(rx_hz, ftol_hz)?;
+    if eng.settings().jtty_ftol_hz != kept {
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist the JTTY F Tol: {e}")
+        });
+    }
     Ok(eng.jtty_state())
 }
 

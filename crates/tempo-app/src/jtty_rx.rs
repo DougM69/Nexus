@@ -47,10 +47,11 @@ pub use jtty::{Terminal as JttyTerminal, Update as JttyUpdate};
 use super::{engine_lock, now_unix_millis, Engine};
 use crate::dto::{JttyHeard, JttyLine, JttyState};
 
-/// WSJT-X's JTTY receive defaults: Rx 1500 Hz, F Tol 50 Hz, and its receive span's
-/// 200-2800 Hz before the cockpit reports its waterfall's range.
+/// WSJT-X's JTTY receive defaults: Rx 1500 Hz (set again whenever JTTY is selected,
+/// `on_actionJTTY_triggered`), F Tol 20 Hz (`JTTY_FTol` when its settings have none), and its
+/// receive span's 200-2800 Hz before the cockpit reports its waterfall's range.
 pub const JTTY_RX_HZ: f32 = 1500.0;
-pub const JTTY_FTOL_HZ: f32 = 50.0;
+pub const JTTY_FTOL_HZ: f32 = 20.0;
 pub const JTTY_LOW_HZ: i32 = 200;
 pub const JTTY_HIGH_HZ: i32 = 2800;
 
@@ -239,6 +240,15 @@ impl Default for JttyRx {
 }
 
 impl JttyRx {
+    /// The receive state at launch, with the F Tol the operator last set (Settings
+    /// `jtty_ftol_hz`, WSJT-X's `JTTY_FTol`), held to the range [`Engine::set_jtty_rx`] accepts.
+    pub(super) fn with_ftol(ftol_hz: u32) -> Self {
+        Self {
+            ftol_hz: ftol_hz.clamp(1, 500) as f32,
+            ..Self::default()
+        }
+    }
+
     /// Where the current reception searches: the operator's selection now.
     fn band(&self) -> SearchBand {
         SearchBand {
@@ -460,11 +470,12 @@ impl Engine {
     }
 
     /// Arm the decoder because the operator ENTERED the JTTY view (the PSK/APRS/SSTV auto-arm
-    /// doctrine): only an upgrade from disarmed, and refused once the operator has stopped it
-    /// this session. Returns whether this call armed it. RX ONLY — arming a decoder keys
-    /// nothing.
+    /// doctrine): only an upgrade from disarmed, refused once the operator has stopped it this
+    /// session, and refused while Settings says opening the view does not start the receiver
+    /// (`jtty_rx_auto_arm`). Returns whether this call armed it. RX ONLY — arming a decoder
+    /// keys nothing.
     pub fn jtty_auto_arm(&mut self) -> bool {
-        if self.jtty.armed || self.jtty.auto_arm_declined {
+        if self.jtty.armed || self.jtty.auto_arm_declined || !self.settings.jtty_rx_auto_arm {
             return false;
         }
         self.jtty.notice = None;
@@ -477,9 +488,15 @@ impl Engine {
         self.jtty.armed
     }
 
+    /// The JTTY Rx frequency, Hz: the RX offset a WSJT-X UDP Status carries in JTTY.
+    pub fn jtty_rx_hz(&self) -> f32 {
+        self.jtty.rx_hz
+    }
+
     /// WSJT-X's Rx frequency and F Tol: the channel always searched. Takes effect at the next
     /// search of the current reception, without restarting it (WSJT-X keeps its context when
-    /// only the audio frequency moves).
+    /// only the audio frequency moves). F Tol is also the one to keep (Settings `jtty_ftol_hz`,
+    /// WSJT-X's `JTTY_FTol`); the caller persists the settings.
     pub fn set_jtty_rx(&mut self, rx_hz: f32, ftol_hz: f32) -> Result<(), String> {
         if !(100.0..=5000.0).contains(&rx_hz) {
             return Err(format!("JTTY Rx {rx_hz} Hz is outside 100-5000 Hz."));
@@ -489,7 +506,24 @@ impl Engine {
         }
         self.jtty.rx_hz = rx_hz;
         self.jtty.ftol_hz = ftol_hz;
+        self.settings.jtty_ftol_hz = self.jtty_ftol_setting();
         Ok(())
+    }
+
+    /// JTTY was selected (the section entered from another one): the Rx frequency goes back to
+    /// 1500 Hz, as WSJT-X sets it whenever JTTY is selected (`on_actionJTTY_triggered`).
+    pub(super) fn jtty_selected(&mut self) {
+        self.jtty.rx_hz = JTTY_RX_HZ;
+    }
+
+    /// The decoder's F Tol, as Settings keeps it (whole hertz).
+    pub(super) fn jtty_ftol_setting(&self) -> u32 {
+        self.jtty.ftol_hz.round() as u32
+    }
+
+    /// A restored Settings bundle's F Tol, for the decoder ([`JttyRx::with_ftol`]'s range).
+    pub(super) fn adopt_jtty_ftol(&mut self, ftol_hz: u32) {
+        self.jtty.ftol_hz = ftol_hz.clamp(1, 500) as f32;
     }
 
     /// The waterfall's range, inside which the fixed 1200-1500 and 1500-1800 Hz channels are
@@ -1203,6 +1237,9 @@ mod tests {
     #[test]
     fn the_window_keeps_wsjtxs_lines_and_rx_pane() {
         let mut e = rx_engine();
+        // The premise, stated rather than taken from the default: F Tol 50 Hz, so 1530 Hz is
+        // within it and 1560 Hz is not.
+        e.set_jtty_rx(JTTY_RX_HZ, 50.0).unwrap();
         let s = begun(&mut e);
         let mut far = upd(2, "CQ 3D2AB CQ", 4.0, Terminal::Complete);
         far.freq_hz = 1300.0;
@@ -1375,7 +1412,8 @@ mod tests {
         assert!(e.set_jtty_band(100, 7000).is_err());
         assert_eq!(
             (e.jtty.rx_hz, e.jtty.ftol_hz, e.jtty.low_hz, e.jtty.high_hz),
-            (1500.0, 50.0, 200, 2800)
+            (1500.0, 20.0, 200, 2800),
+            "WSJT-X's defaults: Rx 1500, F Tol 20 (its JTTY_FTol default), span 200-2800"
         );
         e.set_jtty_rx(1200.0, 20.0).unwrap();
         e.set_jtty_band(300, 2500).unwrap();
@@ -1609,5 +1647,99 @@ mod tests {
             vec!["CQ K1ABC CQ"],
             "the Rx channel, off the waterfall"
         );
+    }
+
+    /// ⭐ WSJT-X keeps F Tol and not Rx: `JTTY_FTol` is saved (20 Hz when its settings have none),
+    /// and the Rx frequency is set back to 1500 Hz whenever JTTY is selected
+    /// (`on_actionJTTY_triggered`). Here F Tol set in the cockpit lands in Settings, a station
+    /// built from those Settings decodes with it, and selecting JTTY again (from another section
+    /// or from PSK, the same section's other modem) puts Rx back at 1500 while F Tol stays. A
+    /// view re-asserting the JTTY section is not a selection.
+    #[test]
+    fn f_tol_is_kept_and_rx_goes_back_to_1500_when_jtty_is_selected() {
+        let fresh = rx_engine();
+        assert_eq!(
+            fresh.settings().jtty_ftol_hz,
+            20,
+            "WSJT-X's JTTY_FTol default"
+        );
+        assert_eq!(fresh.jtty_state().ftol_hz, 20.0);
+
+        let mut e = rx_engine();
+        e.set_operating_mode("jtty", false);
+        e.set_jtty_rx(1200.0, 100.0).unwrap();
+        assert_eq!(e.settings().jtty_ftol_hz, 100, "F Tol is the one kept");
+        let st = e.jtty_state();
+        assert_eq!((st.rx_hz, st.ftol_hz), (1200.0, 100.0));
+
+        e.set_operating_mode("jtty", false);
+        assert_eq!(
+            e.jtty_state().rx_hz,
+            1200.0,
+            "a re-assert is not a selection"
+        );
+
+        e.set_operating_mode("phone", false);
+        assert_eq!(e.jtty_state().rx_hz, 1200.0, "leaving changes nothing");
+        e.set_operating_mode("jtty", false);
+        let st = e.jtty_state();
+        assert_eq!((st.rx_hz, st.ftol_hz), (1500.0, 100.0), "selected again");
+
+        e.set_jtty_rx(1300.0, 100.0).unwrap();
+        e.set_operating_mode("keyboard", false);
+        assert_eq!(e.jtty_state().rx_hz, 1300.0, "PSK leaves JTTY's Rx alone");
+        e.set_operating_mode("jtty", false);
+        assert_eq!(e.jtty_state().rx_hz, 1500.0, "selected again, from PSK");
+
+        let relaunched = Engine::with_settings(e.settings().clone());
+        let st = relaunched.jtty_state();
+        assert_eq!((st.rx_hz, st.ftol_hz), (1500.0, 100.0), "the next launch");
+    }
+
+    /// The cockpit is F Tol's one writer. A Settings save sent from a panel loaded before the
+    /// operator changed it keeps the live value (the waterfall markers' carve-out), and a
+    /// restored bundle's value is the decoder's. A value out of the cockpit's range, hand-edited
+    /// into a settings file, is held to it.
+    #[test]
+    fn a_settings_save_keeps_the_live_f_tol_and_a_restore_brings_its_own() {
+        let mut e = rx_engine();
+        let stale = e.settings().clone();
+        e.set_jtty_rx(1500.0, 150.0).unwrap();
+        e.apply_settings(stale.clone());
+        assert_eq!(
+            e.settings().jtty_ftol_hz,
+            150,
+            "the form's stale 20 did not land"
+        );
+        assert_eq!(e.jtty_state().ftol_hz, 150.0);
+
+        let mut bundle = stale;
+        bundle.jtty_ftol_hz = 300;
+        e.apply_restored_settings(bundle.clone());
+        assert_eq!(e.settings().jtty_ftol_hz, 300);
+        assert_eq!(
+            e.jtty_state().ftol_hz,
+            300.0,
+            "the decoder took the bundle's"
+        );
+
+        bundle.jtty_ftol_hz = 0;
+        assert_eq!(Engine::with_settings(bundle).jtty_state().ftol_hz, 1.0);
+    }
+
+    /// The Settings opt-out (`jtty_rx_auto_arm`, PSK's twin): entering the view does not start
+    /// the receiver, and the explicit Arm still does.
+    #[test]
+    fn the_auto_arm_opt_out_is_honoured_and_arm_still_works() {
+        let mut e = rx_engine();
+        assert!(e.settings().jtty_rx_auto_arm, "on by default");
+        assert!(e.jtty_auto_arm(), "control: the default arms on entry");
+
+        let mut e = rx_engine();
+        e.settings.jtty_rx_auto_arm = false;
+        assert!(!e.jtty_auto_arm(), "setting off: never auto-arm");
+        assert!(!e.jtty_state().armed);
+        e.set_jtty_armed(true);
+        assert!(e.jtty_state().armed, "the explicit Arm still works");
     }
 }

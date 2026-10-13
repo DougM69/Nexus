@@ -12159,7 +12159,7 @@ impl RadioLoop {
                         // recent ingest (post-early-pass it's just the boundary
                         // stragglers). NO PSK spots here: replays must never
                         // double-spot.
-                        if let Some(server) = sinks.wsjtx {
+                        if let Some(server) = sinks.wsjtx.filter(|_| udp_decodes_allowed(&eng)) {
                             let tier = tier_mode(eng.tier());
                             let ms_mid = (now as u64 % 86_400_000) as u32;
                             for d in eng.current_period_decodes() {
@@ -13097,21 +13097,29 @@ impl RadioLoop {
                     .as_ref()
                     .and_then(|q| q.dxcall.clone())
                     .unwrap_or_default();
+                // In the JTTY section the Status names JTTY, as WSJT-X's does (its mode and TX
+                // mode are both `m_mode`), and its RX offset is the JTTY Rx frequency: WSJT-X
+                // keeps its two Rx spin boxes in step, and the Status reads the first.
+                let (mode, rx_df) = if eng.jtty_section() {
+                    ("JTTY", eng.jtty_rx_hz().max(0.0) as u32)
+                } else {
+                    // REAL audio offsets (GridTracker/JTAlert show these) — hardcoded 1500s
+                    // confused every cooperating logger.
+                    (tier, snap.radio.rx_offset_hz.max(0.0) as u32)
+                };
                 let _ = server.send_status(&WsjtxStatus {
                     dial_freq: cur_dial,
-                    mode: tier,
+                    mode,
                     dx_call: &dx,
                     report: "",
-                    tx_mode: tier,
+                    tx_mode: mode,
                     tx_enabled: false,
                     transmitting: snap.radio.transmitting,
                     // `decoding` and `transmitting` are disjoint phases in
                     // WSJT-X: when we decode the prior RX slot AND transmit in
                     // this one (calling CQ), report the transmit phase only.
                     decoding: did_rx && !tx_this_slot,
-                    // REAL audio offsets (GridTracker/JTAlert show these) —
-                    // hardcoded 1500s confused every cooperating logger.
-                    rx_df: snap.radio.rx_offset_hz.max(0.0) as u32,
+                    rx_df,
                     tx_df: snap.radio.tx_offset_hz.max(0.0) as u32,
                     de_call: &snap.mycall,
                     de_grid: &snap.mygrid,
@@ -13635,6 +13643,15 @@ fn js8_due_speeds(done: &mut [Option<u64>; 4], now_ms: u64, enabled: u8) -> Vec<
     due
 }
 
+/// Whether FT decodes may go out as WSJT-X UDP Decode datagrams now. Not in the JTTY section:
+/// WSJT-X sends no Decode in JTTY (its JTTY receive path never calls the message client, and its
+/// FT decoder is not running), and its Status says JTTY there. Nexus's FT decoder keeps running
+/// under the Keyboard section, so its lines are held off the wire there rather than sent beside a
+/// Status that names another mode. PSK Reporter still hears them: they were decoded.
+fn udp_decodes_allowed(eng: &Engine) -> bool {
+    !eng.jtty_section()
+}
+
 fn emit_rx_decodes(
     sinks: &Sinks,
     eng: &Engine,
@@ -13648,9 +13665,10 @@ fn emit_rx_decodes(
     let tier = tier_mode(eng.tier());
     let ms_mid = (now as u64 % 86_400_000) as u32;
     let now_secs = (now / 1000.0) as u32;
+    let wsjtx = sinks.wsjtx.filter(|_| udp_decodes_allowed(eng));
     // ON-AIR text only — never the hound-rewritten internal form.
     for d in eng.wire_decodes() {
-        if let Some(server) = sinks.wsjtx {
+        if let Some(server) = wsjtx {
             let _ = server.send_decode(&build_decode(
                 &d.message,
                 d.snr,
@@ -15796,6 +15814,7 @@ mod tests {
     mod flex_audio;
     mod ic905_ten_ghz;
     mod icom_lan;
+    mod jtty_status;
     mod omnirig_coverage;
     mod receive_source;
     mod refused_key;

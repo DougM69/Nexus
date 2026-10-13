@@ -37,6 +37,20 @@ pub enum OperatingMode {
     Keyboard,
 }
 
+/// Which modem the Keyboard section runs: PSK (PSK31/QPSK31, picked within its cockpit) or
+/// JTTY, WSJT-X's keyboard mode, with a cockpit of its own. Section state, chosen by entering
+/// the cockpit ("jtty" on the wire of `set_operating_mode`), and it only decides what is the
+/// modem's own: the band plan a section entry or a band pick by name lands on, and the mode the
+/// WSJT-X UDP Status names. Every Keyboard policy (data privileges, the digital power cap,
+/// always-USB PKTUSB) is the section's, so it is the same for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyboardModem {
+    #[default]
+    Psk,
+    Jtty,
+}
+
 /// Which VFO carries the uplink and which the downlink during a satellite pass.
 ///
 /// ⚠️ **A WRONG MAPPING TRANSMITS ON YOUR OWN DOWNLINK.** That is why this is an
@@ -1550,6 +1564,9 @@ pub struct Settings {
     /// The active operating mode (Digital / Phone / CW) — the per-section rig-mode
     /// policy. Digital obeys the rig; Phone/CW force USB-LSB / CW. See [`rig_mode`].
     pub operating_mode: OperatingMode,
+    /// The Keyboard section's modem ([`KeyboardModem`]), written with the section by
+    /// `set_operating_mode` and kept across a Settings save exactly as `operating_mode` is.
+    pub keyboard_modem: KeyboardModem,
     /// Amateur license class — drives the transmit-privilege lockout + the licensed-segment
     /// band dropdown. `Open` (default) = no restrictions (non-US). See [`LicenseClass`].
     #[serde(default)]
@@ -2529,6 +2546,18 @@ pub struct Settings {
     /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
     #[serde(default = "default_true")]
     pub rtty_rx_auto_arm: bool,
+    /// Whether opening the JTTY view starts its receiver: [`Settings::psk_rx_auto_arm`]'s
+    /// twin for JTTY, the same doctrine and default, gated in
+    /// [`crate::engine::Engine::jtty_auto_arm`].
+    #[serde(default = "default_true")]
+    pub jtty_rx_auto_arm: bool,
+    /// JTTY's F Tol in hertz: how far either side of the Rx frequency the decoder always
+    /// searches. WSJT-X keeps it between sessions (`JTTY_FTol`, 20 Hz when absent) and does not
+    /// keep the Rx frequency, which it sets back to 1500 Hz whenever JTTY is selected; this is
+    /// the same pair. The cockpit's F Tol control is its one writer, so a Settings save keeps
+    /// the live value (see `apply_settings`).
+    #[serde(default = "default_jtty_ftol_hz")]
+    pub jtty_ftol_hz: u32,
     /// RTTY **Auto call**: how long the sequencer listens before it repeats itself, in
     /// seconds (#304). This is the whole of the "CQ, listen, CQ" cadence the reporter
     /// asked for — the window between two CQs when nobody comes back, and equally the
@@ -3126,6 +3155,11 @@ fn default_rtty_auto_listen_secs() -> u32 {
 
 fn default_rtty_auto_repeats() -> u32 {
     tempo_core::rtty::SeqConfig::default().max_repeats
+}
+
+/// The engine's own JTTY default, so the setting and the decoder cannot disagree about it.
+fn default_jtty_ftol_hz() -> u32 {
+    crate::engine::jtty_rx::JTTY_FTOL_HZ as u32
 }
 
 /// "auto" = the SSTV screen's band-aware pick, which is what it does today.
@@ -4825,8 +4859,9 @@ impl Default for Settings {
             sstv_hold_data_submode: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
+            keyboard_modem: KeyboardModem::Psk,
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
-            cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
+            cw_keyer: CwKeyerBackend::Cat,     // rig keyer via send_morse (zero hardware)
             winkeyer_port: String::new(),
             cw_key_port: String::new(),
             cw_key_line: default_cw_key_line(),
@@ -5013,6 +5048,8 @@ impl Default for Settings {
             sstv_tx_fsk_id: false,
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
+            jtty_rx_auto_arm: true,
+            jtty_ftol_hz: default_jtty_ftol_hz(),
             rtty_auto_listen_secs: default_rtty_auto_listen_secs(),
             rtty_auto_repeats: default_rtty_auto_repeats(),
             alert_my_call: true,
@@ -9350,6 +9387,42 @@ mod tests {
         assert!(old.psk_rx_auto_arm);
         let off: Settings = serde_json::from_str(r#"{"pskRxAutoArm":false}"#).unwrap();
         assert!(!off.psk_rx_auto_arm);
+    }
+
+    /// JTTY's kept settings and the Keyboard section's modem, on the exact wire keys the UI
+    /// writes: the auto-arm opt-out (PSK's twin, on by default), F Tol (WSJT-X's `JTTY_FTol`,
+    /// 20 Hz when a file has none) and the modem (PSK unless JTTY was the last one). A file that
+    /// predates the keys gets the defaults; values that differ from the defaults survive the
+    /// round trip, so a default that ignored the file would not pass.
+    #[test]
+    fn jtty_settings_default_round_trip_and_wire_keys() {
+        let s = Settings::default();
+        assert!(s.jtty_rx_auto_arm);
+        assert_eq!(s.jtty_ftol_hz, 20);
+        assert_eq!(s.keyboard_modem, KeyboardModem::Psk);
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"jttyRxAutoArm\":true",
+            "\"jttyFtolHz\":20",
+            "\"keyboardModem\":\"psk\"",
+        ] {
+            assert!(json.contains(key), "missing {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (old.jtty_rx_auto_arm, old.jtty_ftol_hz, old.keyboard_modem),
+            (true, 20, KeyboardModem::Psk)
+        );
+        let set: Settings = serde_json::from_str(
+            r#"{"jttyRxAutoArm":false,"jttyFtolHz":150,"keyboardModem":"jtty"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (set.jtty_rx_auto_arm, set.jtty_ftol_hz, set.keyboard_modem),
+            (false, 150, KeyboardModem::Jtty)
+        );
+        let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(again, set, "round trip");
     }
 
     /// RTTY's auto-arm field, added as the exact twin of the PSK one above — same default,
