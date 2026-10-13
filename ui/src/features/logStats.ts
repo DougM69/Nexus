@@ -128,11 +128,16 @@ function tallyByCI(
 }
 
 // WAS is a US-only award. Mirror crates/propagation/src/awards.rs: gate on a
-// US-family DXCC entity (United States / Alaska / Hawaii, resolved into
-// `q.country`) so foreign subdivision codes that collide with US postal codes
-// (e.g. Australian "WA" = Western Australia, Brazilian "SC"/"PA") don't pollute
-// the breakdown, then canonicalize to one of the 50 valid WAS codes. Mapping to
-// the canonical code also folds casing, so "ct" and "CT" land in one bucket.
+// US-family DXCC entity (United States / Alaska / Hawaii, ADIF's 291, 6 and 110)
+// so foreign subdivision codes that collide with US postal codes (e.g.
+// Australian "WA" = Western Australia, Brazilian "SC"/"PA") don't pollute the
+// breakdown, then canonicalize to one of the 50 valid WAS codes. Mapping to the
+// canonical code also folds casing, so "ct" and "CT" land in one bucket.
+//
+// The entity is the RESOLVED one (`q.entity`), the stored country only where the
+// call resolves to none, exactly as the entities are counted: the stored text is
+// spelled as its source spelled it, and LoTW's and DXKeeper's "UNITED STATES OF
+// AMERICA" left those contacts out of the breakdown.
 const US_ENTITIES = new Set(['UNITED STATES', 'ALASKA', 'HAWAII'])
 const WAS_STATES = new Set([
   'AK', 'AL', 'AR', 'AZ', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'IA', 'ID', 'IL', 'IN', 'KS',
@@ -143,7 +148,7 @@ const WAS_STATES = new Set([
 
 /** ADIF STATE → a valid WAS code, but only for US-family entities. `null` otherwise. */
 function wasState(q: LoggedQso): string | null {
-  if (!US_ENTITIES.has(q.country?.trim().toUpperCase() ?? '')) return null
+  if (!US_ENTITIES.has((q.entity ?? q.country)?.trim().toUpperCase() ?? '')) return null
   const code = q.state?.trim().toUpperCase()
   return code && WAS_STATES.has(code) ? code : null
 }

@@ -899,7 +899,9 @@ impl Tallies {
     }
 }
 
-/// The US-family entities WAS counts states for (`US_ENTITIES`).
+/// The US-family entities WAS counts states for (`US_ENTITIES`): the country file's names for
+/// ADIF's DXCC entities 291, 6 and 110, the three the WAS award itself is gated on
+/// (`propagation::dxcc::is_us_state_entity`), upper-cased as they are compared.
 const US_ENTITIES: [&str; 3] = ["UNITED STATES", "ALASKA", "HAWAII"];
 
 /// The fifty WAS codes (`WAS_STATES`).
@@ -910,10 +912,12 @@ const WAS_STATES: [&str; 50] = [
     "WV", "WY",
 ];
 
-/// `wasState(q)`: a contact's state as a WAS code, only for a US-family STORED country.
-fn was_state(r: &QsoRecord) -> Option<String> {
-    let country = js_upper(js_trim(r.country.as_deref().unwrap_or("")));
-    if !US_ENTITIES.contains(&country.as_str()) {
+/// `wasState(q)`: a contact's state as a WAS code, only for a contact of a US-family entity.
+/// `named` is the name its entity is counted under: its DXCC entity, or its stored country where
+/// its call resolves to none. So a LoTW download's `UNITED STATES OF AMERICA` counts, and a
+/// foreign entity's contact stored with a US country does not.
+fn was_state(named: &str, r: &QsoRecord) -> Option<String> {
+    if !US_ENTITIES.contains(&js_upper(named).as_str()) {
         return None;
     }
     let code = js_upper(js_trim(r.state.as_deref()?));
@@ -998,7 +1002,7 @@ impl LogFold for LogStatCounter<'_> {
         }
         self.bands.add(&r.band);
         self.modes.add(&phone_mode_label(&r.mode));
-        if let Some(state) = was_state(r) {
+        if let Some(state) = was_state(named, r) {
             self.states.add(&state);
         }
     }

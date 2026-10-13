@@ -511,6 +511,56 @@ fn the_was_lists_are_the_uis() {
     assert_eq!(list("WAS_STATES"), WAS_STATES);
 }
 
+/// ★ BY STATE counts a contact by its DXCC entity, the United States, Alaska or Hawaii, however
+/// its source spelled COUNTRY (LoTW's and DXKeeper's `UNITED STATES OF AMERICA`, or none at all),
+/// and by the stored text only where its call resolves to no entity, as the entities are counted.
+/// A US mailing country on a foreign entity's contact is not a state.
+#[test]
+fn by_state_counts_a_contact_by_its_dxcc_entity() {
+    // (call, the entity its call resolves to, the stored COUNTRY, STATE)
+    let rows: [(&str, Option<&str>, Option<&str>, &str); 7] = [
+        (
+            "W1AW",
+            Some("United States"),
+            Some("UNITED STATES OF AMERICA"),
+            "CT",
+        ),
+        ("K1ABC", Some("United States"), None, "MA"),
+        ("KL7AA", Some("Alaska"), Some("ALASKA"), "AK"),
+        ("KH6AA", Some("Hawaii"), Some("HAWAII"), "HI"),
+        ("KP4AA", Some("Puerto Rico"), Some("United States"), "FL"),
+        // No entity: the stored text decides, as it always has.
+        ("Q0ZZZ", None, Some("United States"), "WI"),
+        ("Q1ZZZ", None, Some("UNITED STATES OF AMERICA"), "NY"),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .map(|&(call, _, country, state)| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.state = Some(state.to_string());
+            r
+        })
+        .collect();
+    let entity = |call: &str| {
+        rows.iter()
+            .find(|r| r.0 == call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let counts = reference::fold(&log, LogStatCounter::new(&entity));
+    let by_state: Vec<(&str, usize)> = counts
+        .by_state
+        .iter()
+        .map(|t| (t.label.as_str(), t.count))
+        .collect();
+    assert_eq!(
+        by_state,
+        [("CT", 1), ("MA", 1), ("AK", 1), ("HI", 1), ("WI", 1)]
+    );
+}
+
 /// The bands in the log are its own spellings, first seen first: nothing trimmed or folded, and
 /// only the empty string left out (`if (r.band) seen.add(r.band)`).
 #[test]

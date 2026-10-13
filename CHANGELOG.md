@@ -110,6 +110,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DXCC entity, so an imported "UNITED STATES" and Nexus's own "United States" read the same; the
   imported text is still on the tooltip. Awards and confirmations already treated the spellings as
   one band, so no credit changes.
+- **Most-worked states counts every US contact, however its country was spelled.** The
+  statistics' Most-worked states (WAS) list went by the country text a contact was stored with,
+  so contacts from LoTW or DXKeeper, which spell it UNITED STATES OF AMERICA, and from loggers
+  that write no country at all were left out. A contact now counts there when its call is in the
+  United States, Alaska or Hawaii, the same DXCC entity the WAS award counts it under, and a
+  station elsewhere whose record carries a US country no longer does. A contact whose call
+  belongs to no entity still counts by the country it was logged with. The Remote page's
+  statistics count the same way.
 - **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
   read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
   re-enter a password that was right. Nexus now says the contact is outside your eQSL account's

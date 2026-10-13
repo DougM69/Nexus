@@ -24,6 +24,8 @@ import type { LoggedQso } from '../types'
 import { computeLogStats, countLogStats, finishLogStats, type LogStatCounts, type LogStats, type Tally } from './logStats'
 
 // ---- ORACLE: today's computeLogStats, verbatim, from before the count/finish split ----
+// One rule has moved since, decided rather than ported: the WAS gate reads the contact's resolved
+// entity, its stored country only where it has none (`wasState`), as the entities are counted.
 
 function tallyBy(log: LoggedQso[], key: (q: LoggedQso) => string | null | undefined): Map<string, number> {
   const m = new Map<string, number>()
@@ -60,7 +62,7 @@ const WAS_STATES = new Set([
   'WV', 'WY',
 ])
 function wasState(q: LoggedQso): string | null {
-  if (!US_ENTITIES.has(q.country?.trim().toUpperCase() ?? '')) return null
+  if (!US_ENTITIES.has((q.entity ?? q.country)?.trim().toUpperCase() ?? '')) return null
   const code = q.state?.trim().toUpperCase()
   return code && WAS_STATES.has(code) ? code : null
 }
@@ -178,9 +180,26 @@ function tiedLog(n: number): LoggedQso[] {
   })
 }
 
+/** A US contact as a LoTW download stores it, its state through the full case map (`ſc` is SC).
+ *  Since the WAS gate reads the entity, the walk above reaches that state only on contacts the gate
+ *  turns away. Band and mode blank, so the ties above stay as they are. */
+const LOTW_US: LoggedQso = {
+  ...GOLDEN_LOG[0],
+  id: 'st140',
+  call: 'K2LOTW',
+  entity: 'United States',
+  country: 'UNITED STATES OF AMERICA',
+  state: 'ſc',
+  band: '',
+  mode: '',
+  qslRcvd: { card: false, lotw: false, eqsl: false },
+  confirmed: false,
+  awardConfirmed: false,
+}
+
 const LOGS: [string, LoggedQso[]][] = [
   ['golden', GOLDEN_LOG],
-  ['tied', tiedLog(140)],
+  ['tied', [...tiedLog(140), LOTW_US]],
   ['empty', []],
 ]
 
@@ -214,13 +233,18 @@ describe('count, then finish, is today’s statistics roll-up', () => {
     )
     expect(differs.length, 'a tie the locale orders differently from code units').toBeGreaterThan(0)
     // …and it reaches every rule the counting port must keep (the Rust port is held to its counts).
-    const us = (q: LoggedQso) => US_ENTITIES.has(q.country?.trim().toUpperCase() ?? '')
+    const usName = (s: string | null | undefined) => US_ENTITIES.has(s?.trim().toUpperCase() ?? '')
+    const us = (q: LoggedQso) => usName(q.entity ?? q.country)
+    const state = (q: LoggedQso) => WAS_STATES.has(q.state?.trim().toUpperCase() ?? '')
     const reached: [string, boolean][] = [
       ['more than twelve entities', counts.entities.length > 12],
       ['a sideband spelled through the full case map (uſb)', log.some((q) => q.mode === 'uſb')],
       ['a mode whose upper case is not a sideband (ſſb)', log.some((q) => q.mode === 'ſſb')],
       ['a state spelled through the full case map (ſc) on a US contact', log.some((q) => q.state === 'ſc' && us(q))],
       ['a US state on a foreign contact', log.some((q) => q.state === 'wa' && !us(q))],
+      ['a state on a US entity whose stored country is not a US one', log.some((q) => state(q) && usName(q.entity) && !usName(q.country))],
+      ['a state on a foreign entity stored with a US country', log.some((q) => state(q) && q.entity != null && !usName(q.entity) && usName(q.country))],
+      ['a state on a contact with no entity, stored with a US country', log.some((q) => state(q) && q.entity == null && usName(q.country))],
       ['an empty entity, which does not fall back to the country', log.some((q) => q.entity === '' && !!q.country?.trim())],
       ['no entity, which does', log.some((q) => q.entity === null && !!q.country?.trim())],
       ['a blank call', log.some((q) => q.call === '')],
