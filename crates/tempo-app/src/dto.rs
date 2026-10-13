@@ -2929,6 +2929,17 @@ pub struct FdClubDto {
     /// is. Absent when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_out: Option<FdClubKeptOutDto>,
+    /// ⭐ **The positions sending another county than the club** — the HOST's alone: each
+    /// position whose newest contact in the club's log sent another county, state, province or
+    /// section than the club's own session sends (`fdevent::ClubLog::other_location`), named as
+    /// its line on the board names it, with both values. A warning, never a refusal: its
+    /// contacts are taken as sent. Read off the contacts, so a position is named once it has
+    /// logged one.
+    ///
+    /// ⚠️ **Never sent to Remote**: the hosted page refuses a key it does not list, so
+    /// `leave_out_the_hosts_own` empties it and an empty one is not serialised.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_location: Vec<FdClubOtherLocationDto>,
     /// ⭐ **This laptop's own club code** (`fdevent::club_code`), on its club line: what the host
     /// compares with the code on its turned-away list before it gives this laptop a position.
     /// Empty, and absent, when this Nexus has no club key.
@@ -3025,6 +3036,22 @@ pub struct ClubLanAddrDto {
 pub struct FdClubKeptOutDto {
     pub total: u32,
     pub latest: Vec<FdClubRefusedDto>,
+}
+
+/// One entry of [`FdClubDto::other_location`]: the position, by what its line on the host's
+/// board says, what its newest contact sent, and what the club sends in that slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubOtherLocationDto {
+    /// The name the host's board shows it under (`fdevent::ClubLog::shown_names`), empty for a
+    /// position with none.
+    pub pos_name: String,
+    /// Who is at it, as its line on the board says: what an unnamed position reads as.
+    pub operator: String,
+    /// What its newest contact sent.
+    pub sent: String,
+    /// What the club sends there.
+    pub club: String,
 }
 
 /// ⭐ **The host's club log, as its own screen lists it** (`Engine::fd_club_log_newest`): how many

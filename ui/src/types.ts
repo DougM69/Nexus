@@ -3680,6 +3680,11 @@ export interface FdClubStatus {
    *  log, and the newest of them (at most 16), each with the position that sent it (its name
    *  and call) and the sentence saying why. Each stays in that position's own log. */
   keptOut?: { total: number; latest: { posName: string; call: string; reason: string }[] }
+  /** The HOST's alone: each position whose newest contact sent another county (or state,
+   *  province or section) than the club sends, named as its line on the board names it (its
+   *  name, else who is at it), with what it sent and what the club sends. A warning: its
+   *  contacts are still taken. Absent when there is none, and never on Remote. */
+  otherLocation?: { posName: string; operator: string; sent: string; club: string }[]
   /** This laptop's own club code, for its club line: what the host compares with the code on
    *  its turned-away list before it gives this laptop a position. Absent with no club key, and
    *  never on Remote. */

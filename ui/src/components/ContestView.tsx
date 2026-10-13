@@ -2218,6 +2218,18 @@ export function FdClubSection({
           )}
         </div>
       )}
+      {/* The host's alone: each position whose newest contact sent another county (or state,
+          province or section) than the club sends, named as its line on the board names it, with
+          both. A warning: its contacts are still taken, as sent. */}
+      {club.otherLocation?.map((o, i) => (
+        <div key={`${o.posName}-${i}`} style={CLUB_WARN} role="status">
+          {t('fieldDay.club.otherLocation', {
+            name: o.posName || o.operator || t('fieldDay.club.board.unnamed'),
+            sent: o.sent,
+            club: o.club,
+          })}
+        </div>
+      ))}
       {/* The host's alone: its board is as big as the club line every position is sent can
           carry — said before one more position might not fit, and once it is cut. */}
       {club.boardFull && (

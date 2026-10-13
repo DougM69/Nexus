@@ -4650,6 +4650,7 @@ export const DE: PartialCatalog = {
   "fieldDay.club.keptOut.position": "Von {{name}} ({{call}}): {{reason}}",
   "fieldDay.club.keptOut.call": "Von {{call}}: {{reason}}",
   "fieldDay.club.keptOut.more": { "one": "{{count}} weiterer, hier nicht aufgeführt.", "other": "{{count}} weitere, hier nicht aufgeführt." },
+  "fieldDay.club.otherLocation": "{{name}} sendet {{sent}}, und dieser Club sendet {{club}}. Seine Kontakte werden so geloggt, wie es sie gesendet hat; stell diesen Laptop auf {{club}}, damit die nächsten stimmen.",
   "fieldDay.club.boardFull": "Dieser Club hat {{positions}} Positionen, so viele, wie das Club-Board jeder Position fasst. Darüber hinaus lässt das Board jeder Position die am längsten nicht gehörten Positionen weg; Kontakte, Duplikat-Warnungen und der Punktestand werden weiter abgeglichen.",
   "fieldDay.club.boardCut": "Das Club-Board jeder Position zeigt {{shown}} der {{positions}} Positionen dieses Clubs, so viele, wie eine Club-Zeile trägt, und lässt die am längsten nicht gehörten weg. Kontakte, Duplikat-Warnungen und der Punktestand werden weiter abgeglichen.",
   "fieldDay.keptOut.running": { "one": "{{count}} Kontakt im Contest-Journal dieses Computers wurde in einer anderen Austragung von {{contest}} geloggt, etwa bei einer Probe davor, und ist darum nicht in diesem Log.", "other": "{{count}} Kontakte im Contest-Journal dieses Computers wurden in einer anderen Austragung von {{contest}} geloggt, etwa bei einer Probe davor, und sind darum nicht in diesem Log." },

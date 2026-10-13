@@ -1829,6 +1829,7 @@ export const FR: PartialCatalog = {
   "fieldDay.club.keptOut.position": "De {{name}} ({{call}}) : {{reason}}",
   "fieldDay.club.keptOut.call": "De {{call}} : {{reason}}",
   "fieldDay.club.keptOut.more": { "one": "{{count}} de plus, non listé ici.", "other": "{{count}} de plus, non listés ici." },
+  "fieldDay.club.otherLocation": "{{name}} envoie {{sent}}, et ce club envoie {{club}}. Ses contacts sont enregistrés tels qu'il les a envoyés ; règle ce portable sur {{club}} pour que les suivants correspondent.",
   "fieldDay.club.boardFull": "Ce club a {{positions}} positions, autant que le tableau de club de chaque position peut en contenir. Au-delà, le tableau de chaque position laisse de côté les positions entendues il y a le plus longtemps ; les contacts, les alertes de doublon et le score restent synchronisés.",
   "fieldDay.club.boardCut": "Le tableau de club de chaque position montre {{shown}} des {{positions}} positions de ce club, autant qu'une ligne de club en porte, en laissant de côté celles entendues il y a le plus longtemps. Les contacts, les alertes de doublon et le score restent synchronisés.",
   "fieldDay.keptOut.running": { "one": "{{count}} contact du journal de concours de cet ordinateur a été journalisé lors d'une autre édition de {{contest}}, une répétition avant, par exemple, et n'est donc pas dans ce log.", "other": "{{count}} contacts du journal de concours de cet ordinateur ont été journalisés lors d'une autre édition de {{contest}}, une répétition avant, par exemple, et ne sont donc pas dans ce log." },

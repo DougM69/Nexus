@@ -2866,6 +2866,7 @@ export const JA: PartialCatalog = {
   "fieldDay.club.keptOut.position": "{{name}}（{{call}}）から: {{reason}}",
   "fieldDay.club.keptOut.call": "{{call}} から: {{reason}}",
   "fieldDay.club.keptOut.more": "ほかに{{count}}件（ここには表示していません）。",
+  "fieldDay.club.otherLocation": "{{name}}は{{sent}}を送っていますが、このクラブは{{club}}を送っています。その交信は送ったとおりに記録されます。次の交信が合うよう、そのノートPCを{{club}}に設定してください。",
   "fieldDay.club.boardFull": "このクラブのポジションは{{positions}}で、各ポジションのクラブボードに載る上限です。これを超えると、各ポジションのボードは最も長く聞こえていないポジションから外します。交信、重複の警告、スコアの同期は続きます。",
   "fieldDay.club.boardCut": "各ポジションのクラブボードには、このクラブの{{positions}}ポジションのうち{{shown}}が表示されます（クラブの1行に載る上限）。最も長く聞こえていないものを外しています。交信、重複の警告、スコアの同期は続きます。",
   "fieldDay.keptOut.running": "このコンピューターのコンテストジャーナルの{{count}}件の交信は {{contest}} の別の開催回（その前のリハーサルなど）に記録されたため、このログには入っていません。",

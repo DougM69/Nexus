@@ -4297,6 +4297,11 @@ export const EN = {
     one: '{{count}} more, not listed here.',
     other: '{{count}} more, not listed here.',
   },
+  // A POSITION SENDING ANOTHER COUNTY THAN THE CLUB (or another state, province or section), on
+  // the host's screen alone: named as its line on the board names it, with what its newest
+  // contact sent and what the club sends. A warning: its contacts are still taken.
+  'fieldDay.club.otherLocation':
+    '{{name}} sends {{sent}}, and this club sends {{club}}. Its contacts are logged as it sent them; set that laptop to {{club}} so the next ones match.',
   'fieldDay.club.boardFull':
     "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
   'fieldDay.club.boardCut':

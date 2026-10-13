@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the logger window's title names the bird and says to log its pass contacts there, where the
   log strip takes the band and the satellite from the pass. It blocks nothing: a contact logged in
   the logger window is logged as before. The main window's Contest screen is unchanged.
+- **At a club, the host names a laptop that sends another county.** A laptop set up on another
+  county than the club's sends that county on the air under the club's call, a wrong exchange for
+  every station it works. The host's Contest screen now names the position, with what it sends and
+  what the club sends ("CW tent sends KANE, and this club sends MCLN"), from its newest contact,
+  until one sends the club's county again. Its contacts are still taken as sent. A state, province
+  or section that differs is named the same way. The host sees what a laptop sends once it has
+  logged a contact, and the warning is on the host's own screen only, not on the Remote page.
 
 ### Changed
 
@@ -175,6 +182,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line and in the Cabrillo CLAIMED-SCORE. They now count once there and on the multiplier board,
   where both spellings' cells light together. Each contact is still logged and exported as its
   station sent it, and Prince Edward Island typed by name in the county box is logged as PEI.
+- **At a club, the Club Cabrillo and Club ADIF keep the club's call and entry class once Contest
+  mode goes off.** The host's club files took whatever call and entry class the host laptop had at
+  export, so a host that put its own back with **Contest over?** first got the club's contacts under
+  its own call with no entry class, even with Contest mode turned back on to reach the button. From
+  the moment Contest mode goes off on the host, the club's files keep the call and class it had,
+  whatever the laptop is set to afterwards, and after Nexus restarts. While the mode is on, a class
+  you correct still reaches them, and after a break they follow your Settings again once the mode
+  is back on with the club's call and class.
+- **At a club, a rehearsal under the same Event name stays out of the party.** The host rebuilt its
+  club log from the last four days of its journal, which is named from the Event name, so a club
+  that rehearsed under the name it then hosted the party with began the party with the rehearsal's
+  contacts on every laptop's club line, in the score and in the Club Cabrillo. The host now leaves
+  out everything from an earlier running of the contest, as each laptop's own log already does, and
+  a laptop removed at the rehearsal is not turned away at the party. A running begins a day before
+  the contest starts, so a test contact made that day still counts unless you take it back.
 
 ## [1.18.0] — 2026-10-12
 

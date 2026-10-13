@@ -238,7 +238,9 @@ done that you have not ticked:
 
 At a club it also says how many of this laptop's contacts the club's log does not have yet. They
 still go to the host once this laptop is back with it, with the mode on or off, as long as Nexus
-stays open with club sync on.
+stays open with club sync on. On the host, putting your own call and entry class back changes
+nothing in the club's files: Club Cabrillo and Club ADIF keep the call and class the club was
+hosted under, even with the mode turned back on to reach them.
 
 **Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
 mode stays on. The merge and the export are done before the mode goes off, because they need the
