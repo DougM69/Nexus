@@ -27,7 +27,26 @@ import { DetachedPanel } from './DetachedPanel'
 import { contestName } from './fdEvent'
 import { allFeatureIds } from './features/registry'
 import { pastTheSwitch } from './components/ConnectView.testkit'
-import { cmpSpec, elOf, expandWith, parseRules, reachesChain, rootTokensFrom, type El, type Rule } from './cssCascade'
+import {
+  BASE_MODES,
+  MODES,
+  chainOf,
+  cmpSpec,
+  contrast,
+  elOf,
+  expandWith,
+  parseRules,
+  reachesChain,
+  rgbHex as hex,
+  rootTokensFrom,
+  toRgb,
+  tokensAt,
+  winnerAt,
+  type El,
+  type Mode,
+  type Rgb,
+  type Rule,
+} from './cssCascade'
 import { t } from './i18n'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
@@ -110,10 +129,13 @@ const ILQP_RULES = {
   eventEndUnix: T0 + 3600,
 }
 
-/** Keyed or not; the section the station is on; and the contest, or none (Contest mode off). */
+/** Keyed or not; the section the station is on and the FT tier it runs; the contest, or none
+ *  (Contest mode off), and its ruleset. */
 let transmitting = false
 let operatingMode = 'phone'
+let tier = 'Ft8'
 let fieldDay: unknown = ILQP
+let rules: Record<string, unknown> = ILQP_RULES
 let settingsAnswer: Record<string, unknown> = {}
 
 const snapshot = () => ({
@@ -137,7 +159,7 @@ const snapshot = () => ({
     slot: 0,
   },
   aiCw: { enabled: false, status: '', text: '' },
-  link: { tier: 'Ft8', periodSecs: 15, snrDb: -8, dtSec: 0.1, freqHz: 1500, rv: 0, state: 'idle', quality: 1 },
+  link: { tier, periodSecs: 15, snrDb: -8, dtSec: 0.1, freqHz: 1500, rv: 0, state: 'idle', quality: 1 },
   stations: [],
   conversations: [],
   activePeer: null,
@@ -154,7 +176,7 @@ function respond(cmd: string): unknown {
   }
   if (cmd === 'contest_log_manual_rows') return [true]
   if (cmd === 'get_settings') return settingsAnswer
-  if (cmd === 'get_fd_ruleset') return ILQP_RULES
+  if (cmd === 'get_fd_ruleset') return rules
   if (cmd === 'get_awards') return { achievements: [] }
   if (cmd === 'get_journey') return { firsts: [], feats: [], ladders: [] }
   if (cmd === 'app_version') return '0.0.0-test'
@@ -171,7 +193,9 @@ beforeEach(() => {
   bridgeCalls.length = 0
   transmitting = false
   operatingMode = 'phone'
+  tier = 'Ft8'
   fieldDay = ILQP
+  rules = ILQP_RULES
   settingsAnswer = { ...defaultSettings, mycall: 'W9XYZ', mygrid: 'EN52', fdActive: true, fdEvent: 'ilqp' }
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -281,21 +305,46 @@ describe('the main window’s Contest screen takes contacts', () => {
 })
 
 // ── the mode the contest does not permit ────────────────────────────────────────────────────
+//
+// ⭐ A SMALL CHIP ON THE TOP ROW, NOT A BAND (2026-10-12). Benching the Illinois QSO Party on FT8, the
+// operator found the full-width yellow band over the log line's top row "very verbose and yellow and
+// distracting", and picked "A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no
+// credit'; hover it for the full sentence. No yellow band." So the row reads, left to right, CONTEST
+// LOG · DIG · FT8 · no credit · the band line. The screen's banner, further down, and the FT screen's
+// header drew the same sentence as an amber line, and say it with the same chip: "Same small chip with
+// the full sentence on hover, in the Contest banner and the FT screen header".
 
 describe('a mode the contest does not permit', () => {
   const banned = (mode: string) =>
     t('fieldDay.advisory.banned', { mode, event: contestName('ilqp'), year: 2026 })
+  /** What the entry's top row shows right after its mode chip. */
+  const afterMode = (entry: Element) => entry.querySelector('.le-fd-header > .le-fd-mode')!.nextElementSibling!
+  /** What the screen's banner shows right after the contest's window. */
+  const afterWindow = (host: Element) => host.querySelector('.fd-event-banner > .fd-event-subtitle')!.nextElementSibling!
 
-  it('on FT8 the entry says so in words, the header chip shows, and the contact still logs', async () => {
+  it('on FT8 the top row says "FT8 · no credit" right after the mode, the sentence on hover; no band; the contact still logs', async () => {
     operatingMode = 'digital'
     const host = await contestScreen()
-    const entry = host.querySelector('.contest-logger-entry')!
-    expect(entry.querySelector('.fd-advisory.banned')?.textContent).toBe(`⚠ ${banned('FT8')}`)
-    expect(host.querySelector('.fd-event-banner .fd-advisory.banned')?.textContent).toBe(`⚠ ${banned('FT8')}`)
+    const entry = host.querySelector<HTMLElement>('.contest-logger-entry')!
+    expect(entry.querySelector('.le-fd-mode')!.textContent).toBe('DIG')
+    const chip = afterMode(entry)
+    expect(chip.textContent).toBe('FT8 · no credit')
+    expect(chip.getAttribute('title')).toBe(banned('FT8'))
+    // A screen reader is told the same: the chip's words, and the whole sentence as its description.
+    expect(within(entry).getByRole('status', { name: 'FT8 · no credit', description: banned('FT8') })).toBe(chip)
+    // No band: the sentence is not drawn anywhere in the entry.
+    expect(entry.querySelector('.fd-advisory')).toBeNull()
+    expect(entry.textContent).not.toContain(banned('FT8'))
+    // The screen's banner says it with the same chip, where its amber line stood; the line is gone.
+    const banner = host.querySelector<HTMLElement>('.fd-event-banner')!
+    expect(afterWindow(host).textContent).toBe('FT8 · no credit')
+    expect(afterWindow(host).getAttribute('title')).toBe(banned('FT8'))
+    expect(within(banner).getByRole('status', { name: 'FT8 · no credit', description: banned('FT8') })).toBe(afterWindow(host))
+    expect(banner.querySelector('.fd-advisory')).toBeNull()
+    expect(banner.textContent).not.toContain(banned('FT8'))
     // The rules line says what the contest permits, as it always did.
     expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
     // Logging stays allowed: the contact goes, under the digital class.
-    expect(entry.querySelector('.le-fd-mode')!.textContent).toBe('DIG')
     const boxes = await typeContact(entry)
     const from = mark()
     fireEvent.keyDown(boxes[2], { key: 'Enter', code: 'Enter' })
@@ -308,11 +357,89 @@ describe('a mode the contest does not permit', () => {
     })
   })
 
+  it('on FT4 the chip names FT4, the mode the station is on', async () => {
+    operatingMode = 'digital'
+    tier = 'Ft4'
+    const host = await contestScreen()
+    const chip = afterMode(host.querySelector('.contest-logger-entry')!)
+    expect(chip.textContent).toBe('FT4 · no credit')
+    expect(chip.getAttribute('title')).toBe(banned('FT4'))
+    expect(afterWindow(host).textContent).toBe('FT4 · no credit')
+    expect(afterWindow(host).getAttribute('title')).toBe(banned('FT4'))
+  })
+
+  it('on FT8 at a contest that credits it there is no chip: the band line follows the mode', async () => {
+    operatingMode = 'digital'
+    rules = { ...ILQP_RULES, bannedModes: [] }
+    const host = await contestScreen()
+    const entry = host.querySelector('.contest-logger-entry')!
+    expect(afterMode(entry).textContent).toBe(t('logEntry.contest.hint', { band: '20m' }))
+    expect(entry.querySelector('.le-fd-header')!.textContent).not.toContain('no credit')
+    expect(host.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
+  })
+
   it('on phone neither the entry nor the header warns — the FT tier left at FT8 is not the station’s mode', async () => {
     const host = await contestScreen()
-    expect(host.querySelector('.fd-advisory')).toBeNull()
+    const entry = host.querySelector('.contest-logger-entry')!
+    expect(entry.querySelector('.le-fd-mode')!.textContent).toBe('PH')
+    expect(afterMode(entry).textContent).toBe(t('logEntry.contest.hint', { band: '20m' }))
+    expect(entry.querySelector('.le-fd-header')!.textContent).not.toContain('no credit')
+    expect(host.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
     // The rules line still says what the contest permits.
     expect(host.querySelector('.fd-mode-line.banned')?.textContent).toBe(t('fieldDay.mode.rule.banned', { modes: 'FT8, FT4' }))
+  })
+})
+
+// ── the FT screen's header ──────────────────────────────────────────────────────────────────
+//
+// The FT screen is where an FT8 contact is made, and its header drew the same amber sentence while the
+// contest ran. It says it with the log line's chip, right after Hound, where the line stood.
+
+describe('the FT screen’s header: a mode the contest does not permit', () => {
+  const banned = (mode: string) =>
+    t('fieldDay.advisory.banned', { mode, event: contestName('ilqp'), year: 2026 })
+  /** The FT screen's header, in the real App. */
+  async function ftHeader(): Promise<HTMLElement> {
+    await mountOn('operate')
+    return waitFor(
+      () => {
+        const h = document.querySelector<HTMLElement>('.operate-cockpit .cockpit-header')
+        expect(h?.querySelector('.cockpit-specialop'), 'control: the FT screen’s header is on show').toBeTruthy()
+        return h!
+      },
+      { timeout: 15_000 },
+    )
+  }
+  /** What the header shows right after Hound. */
+  const afterHound = (header: Element) => header.querySelector('.cockpit-specialop')!.nextElementSibling!
+
+  it('on FT8 it says "FT8 · no credit", the sentence on hover; the amber line is gone', async () => {
+    operatingMode = 'digital'
+    const header = await ftHeader()
+    await waitFor(() => expect(afterHound(header).textContent).toBe('FT8 · no credit'))
+    expect(afterHound(header).getAttribute('title')).toBe(banned('FT8'))
+    expect(within(header).getByRole('status', { name: 'FT8 · no credit', description: banned('FT8') })).toBe(afterHound(header))
+    expect(header.querySelector('.fd-advisory')).toBeNull()
+    expect(header.textContent).not.toContain(banned('FT8'))
+  })
+
+  it('on FT4 the chip names FT4', async () => {
+    operatingMode = 'digital'
+    tier = 'Ft4'
+    const header = await ftHeader()
+    await waitFor(() => expect(afterHound(header).textContent).toBe('FT4 · no credit'))
+    expect(afterHound(header).getAttribute('title')).toBe(banned('FT4'))
+  })
+
+  it('at a contest that credits FT8 there is none', async () => {
+    operatingMode = 'digital'
+    rules = { ...ILQP_RULES, bannedModes: [] }
+    const header = await ftHeader()
+    // The ruleset is in, so nothing here is a ruleset not yet read.
+    await waitFor(() => expect(bridgeCalls.map((c) => c.cmd)).toContain('get_fd_ruleset'))
+    await settle()
+    expect(afterHound(header).className).toBe('cockpit-meta')
+    expect(document.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
   })
 })
 
@@ -690,5 +817,148 @@ describe('A− / A+ and the app’s Text size', () => {
     expect(fontPx(call(), 1.25)).toBeCloseTo(55, 6)
     // The bar's own buttons stay at the app's size, under the finger pressing them.
     expect(fontPx(larger(), 1.25)).toBe(17.5)
+  })
+})
+
+// ── the no-credit chip's look ───────────────────────────────────────────────────────────────
+//
+// QUIET, AND READABLE. The band lettered the warning amber on a tint of it; the chip is an outline
+// in the de-emphasised state ink with no fill, in the mode chip's face and size, so the row does not
+// grow for it. The amber could not have come along: it reads about 4.2:1 on the light panel, under
+// the 4.5:1 a word needs, which the FIRES control below shows. Computed from the real sheets on the
+// chain this window renders, in every theme and mode cssCascade.ts sweeps.
+
+const LOOK: Rule[] = parseRules(read('styles.css') + '\n' + read('cockpit-panes.css'))
+/** FIRES: the chip lettered in the amber the band was, planted here and never shipped. */
+const AMBER: Rule[] = [...LOOK, ...parseRules('.le-fd-nocredit { color: var(--state-warn); }', { n: LOOK.length + 1 })]
+
+const memo = new Map<Rule[], Map<string, unknown>>()
+function once<T>(rules: Rule[], key: string, make: () => T): T {
+  let byKey = memo.get(rules)
+  if (!byKey) memo.set(rules, (byKey = new Map()))
+  if (!byKey.has(key)) byKey.set(key, make())
+  return byKey.get(key) as T
+}
+const chainKey = (chain: El[]) =>
+  JSON.stringify(chain.map((e) => [e.tag, e.classes, Object.entries(e.attrs).filter(([k]) => !/^(id|title|aria-\w+)$/.test(k))]))
+/** A colour preset declares custom properties only, so the mode without its presets decides a winner. */
+const winnerMode = (mode: Mode): Mode => mode.split(' ').filter((p, i) => i === 0 || p.startsWith('skin=')).join(' ') as Mode
+/** The winning declaration of `props` on the chain's last element, or on the nearest ancestor that has one. */
+function nearest(rules: Rule[], mode: Mode, chain: El[], ...props: string[]): { value: string; at: El[] } | null {
+  for (let i = chain.length; i > 0; i--) {
+    const at = chain.slice(0, i)
+    const w = once(rules, `w|${winnerMode(mode)}|${chainKey(at)}|${props.join()}`, () => winnerAt(rules, winnerMode(mode), at, ...props))
+    if (w && !/^(inherit|transparent|none)$/.test(w.value)) return { value: w.value, at }
+  }
+  return null
+}
+const colourOf = (rules: Rule[], mode: Mode, at: El[], value: string, under: Rgb): Rgb => {
+  const c = toRgb(expandWith(once(rules, `t|${mode}|${chainKey(at)}`, () => tokensAt(rules, mode, at)), value), under)
+  if (!c) throw new Error(`not a colour: "${value}"`)
+  return c
+}
+/** The face the chain's last element sits on: the nearest painted face, laid over the faces beneath
+ *  it, down to the page. */
+function faceOf(rules: Rule[], mode: Mode, chain: El[]): Rgb {
+  const face = nearest(rules, mode, chain, 'background', 'background-color')
+  const page = () => colourOf(rules, mode, chain.slice(0, 1), 'var(--bg)', [0, 0, 0])
+  if (!face) return page()
+  return colourOf(rules, mode, face.at, face.value, face.at.length > 1 ? faceOf(rules, mode, face.at.slice(0, -1)) : page())
+}
+/** Every theme and mode in which the chain's last element letters under 4.5:1 on its face. */
+function unreadable(rules: Rule[], chain: El[]): string[] {
+  const out: string[] = []
+  for (const mode of MODES) {
+    const ink = nearest(rules, mode, chain, 'color')
+    if (!ink) {
+      out.push(`${mode}: no ink from the sheet`)
+      continue
+    }
+    const bg = faceOf(rules, mode, chain)
+    const fg = colourOf(rules, mode, ink.at, ink.value, bg)
+    if (contrast(fg, bg) < 4.5) out.push(`${mode}: ${hex(fg)} on ${hex(bg)} = ${contrast(fg, bg).toFixed(2)}:1`)
+  }
+  return out
+}
+
+describe('the no-credit chip’s look, computed from the real sheets', () => {
+  /** The chip on FT8, read off the main window's Contest screen. */
+  async function chip(): Promise<{ chip: Element; mode: Element }> {
+    operatingMode = 'digital'
+    const host = await contestScreen()
+    const mode = host.querySelector('.contest-logger-entry .le-fd-header > .le-fd-mode')!
+    const chip = mode.nextElementSibling!
+    expect(chip.textContent, 'control: the chip is on show').toBe('FT8 · no credit')
+    return { chip, mode }
+  }
+
+  it('an outline in the de-emphasised state ink, no fill, at the mode chip’s size at every Text size', async () => {
+    const { chip: c, mode } = await chip()
+    const chain = chainOf(c)
+    for (const m of BASE_MODES) {
+      expect(winnerAt(LOOK, m, chain, 'color')?.value, m).toBe('var(--state-pending)')
+      expect(winnerAt(LOOK, m, chain, 'border', 'border-color')?.value, m).toBe('1px solid currentColor')
+      expect(winnerAt(LOOK, m, chain, 'background', 'background-color'), m).toBeNull()
+    }
+    for (const scale of [1, 1.25]) expect(fontPx(c, scale), `Text size ${scale}`).toBe(fontPx(mode, scale))
+  })
+
+  it('reads 4.5:1 or better on its face in every theme and mode, where the band’s amber would not', async () => {
+    const chain = chainOf((await chip()).chip)
+    expect(unreadable(LOOK, chain)).toEqual([])
+    const fires = unreadable(AMBER, chain)
+    expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the light panel').toBeDefined()
+  })
+})
+
+// The same chip where the amber line stood, in the screen's banner and in the FT screen's header: no
+// rule of either host restyles it, and it reads 4.5:1 or better on each host's own face (the banner's
+// accent tint, the header's panel), where the amber would not.
+describe('the chip in the screen’s banner and the FT screen’s header: its look, computed from the real sheets', () => {
+  const hosts: [string, () => Promise<Element>][] = [
+    [
+      'the Contest screen’s banner',
+      async () => {
+        operatingMode = 'digital'
+        const host = await contestScreen()
+        return waitFor(() => {
+          const c = host.querySelector('.fd-event-banner > .fd-event-subtitle')!.nextElementSibling!
+          expect(c.textContent, 'control: the chip is on show').toBe('FT8 · no credit')
+          return c
+        })
+      },
+    ],
+    [
+      'the FT screen’s header',
+      async () => {
+        operatingMode = 'digital'
+        await mountOn('operate')
+        return waitFor(
+          () => {
+            const c = document.querySelector('.operate-cockpit .cockpit-header .cockpit-specialop')!.nextElementSibling!
+            expect(c.textContent, 'control: the chip is on show').toBe('FT8 · no credit')
+            return c
+          },
+          { timeout: 15_000 },
+        )
+      },
+    ],
+  ]
+
+  it.each(hosts)('in %s: the log line’s outline, ink and type, with no fill', async (_, find) => {
+    const chain = chainOf(await find())
+    for (const m of BASE_MODES) {
+      expect(winnerAt(LOOK, m, chain, 'color')?.value, m).toBe('var(--state-pending)')
+      expect(winnerAt(LOOK, m, chain, 'border', 'border-color')?.value, m).toBe('1px solid currentColor')
+      expect(winnerAt(LOOK, m, chain, 'background', 'background-color'), m).toBeNull()
+      expect(winnerAt(LOOK, m, chain, 'font-size')?.value, m).toBe('calc(11px * var(--text-scale))')
+    }
+  })
+
+  it.each(hosts)('in %s: 4.5:1 or better on its face in every theme and mode, where the amber would not', async (_, find) => {
+    const chain = chainOf(await find())
+    expect(unreadable(LOOK, chain)).toEqual([])
+    const fires = unreadable(AMBER, chain)
+    expect(fires.find((f) => f.startsWith('light: ')), 'FIRES: the amber on the light face').toBeDefined()
   })
 })

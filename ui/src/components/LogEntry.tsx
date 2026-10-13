@@ -415,6 +415,13 @@ interface Props {
    */
   scoreChip?: boolean
   /**
+   * CONTEST STRIP ONLY — the chip that says the station's mode earns no credit in the contest
+   * running ("FT8 · no credit", FdAdvisories' `NoCreditChip`), drawn in this strip's header row
+   * right after the mode chip. Only the large log line passes it (`ContestLargeEntry`); every
+   * cockpit's strip is as it was.
+   */
+  noCreditChip?: React.ReactNode
+  /**
    * CONTEST STRIP ONLY — the Contest screen's operator box, drawn in this strip's header row right
    * beside Sending and I moved (ContestView's `OperatorBox`). Only the large log line passes it
    * (`ContestLargeEntry`: the top of the main window's Contest screen and of the logger window);
@@ -458,6 +465,7 @@ export function LogEntry({
   esm,
   sharedEntry,
   scoreChip = true,
+  noCreditChip,
   operatorBox,
 }: Props) {
   const remoteMode = remote != null
@@ -2325,6 +2333,7 @@ export function LogEntry({
             {fdEventIsFieldDay ? t('logEntry.fd.chip') : t('logEntry.contest.chip')}
           </span>
           <span className="le-fd-mode">{fdMode ?? 'PH'}</span>
+          {noCreditChip}
           <span className="le-fd-hint">
             {fdEventIsFieldDay
               ? t('logEntry.fd.hint', { band: snap.radio.band })

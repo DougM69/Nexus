@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the radio reports for it; from then on your mic wins: Nexus drops the message and ends its own
   key, with no alarm (built now, off until then). SSTV and APRS stay refused in Phone and FM.
   NEEDS-BENCH on a FLEX radio.
+- **The FT8/FT4 warning is a small chip.** On a mode the contest does not credit (FT8 or FT4 at the
+  Illinois QSO Party), the large log line on the Contest screen and in the Logger window no longer
+  draws a yellow band across the window above its top row, and the Contest screen's banner and the FT
+  screen's header no longer show the long amber sentence. A small outlined **FT8 · no credit** (or
+  **FT4 · no credit**) chip says it instead, beside the mode on the log line and where the sentence
+  was in the banner (on the Remote page's Contest view too) and the FT header; hovering it shows the
+  whole sentence. It shows on exactly the modes the warning did, and the contact still logs: what is
+  logged and scored is unchanged.
 
 ## [1.18.0] — 2026-10-12
 

@@ -602,17 +602,31 @@ describe('the warn-only FD banned-mode chip in the header (a status line, never 
 
   it('renders in the header for a banned tier (FT8 at WFD), outside every ⊞-removable pane', () => {
     // EVERY vocabulary id removed: the chip lives in the header shell child, so
-    // the screen that remains still carries it — and it is a passive div, so the
+    // the screen that remains still carries it — and it is a passive span, so the
     // stop-line census is untouched.
     const { container } = renderCockpit(ALL_REMOVED, { fdActive: true, fdRuleset: WFD })
-    const chip = container.querySelector('.cockpit-header .fd-advisory.banned')
-    expect(chip, 'FT8 at WFD must warn in the Operate header').not.toBeNull()
-    expect(chip!.textContent).toContain('Winter Field Day')
-    expect(chip!.closest('button, a, [role="button"]'), 'the chip must be passive').toBeNull()
+    const header = container.querySelector<HTMLElement>('.cockpit-header')!
+    // Right after Hound, where the amber line stood: the log line's chip (2026-10-12, the operator's
+    // pick: "Same small chip with the full sentence on hover, in the Contest banner and the FT screen
+    // header").
+    const chip = header.querySelector('.cockpit-specialop')!.nextElementSibling!
+    expect(chip.textContent).toBe('FT8 · no credit')
+    const sentence = 'FT8 is not permitted at Winter Field Day (2026 rules) — you can still log it, but it will not count'
+    expect(chip.getAttribute('title')).toBe(sentence)
+    expect(within(header).getByRole('status', { name: 'FT8 · no credit', description: sentence })).toBe(chip)
+    expect(header.querySelector('.fd-advisory'), 'the amber line is gone').toBeNull()
+    expect(header.textContent).not.toContain(sentence)
+    expect(chip.closest('button, a, [role="button"]'), 'the chip must be passive').toBeNull()
+  })
+
+  it('absent at a contest that credits the mode', () => {
+    const { container } = renderCockpit({}, { fdActive: true, fdRuleset: { ...WFD, event: 'arrlfd', bannedModes: [] } })
+    expect(container.querySelector('.cockpit-specialop')!.nextElementSibling!.className).toBe('cockpit-meta')
+    expect(container.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
   })
 
   it('absent with FD off — the stock header is unchanged', () => {
     const { container } = renderCockpit({})
-    expect(container.querySelector('.fd-advisory')).toBeNull()
+    expect(container.querySelector('.fd-advisory, .le-fd-nocredit')).toBeNull()
   })
 })

@@ -4567,6 +4567,7 @@ export const DE: PartialCatalog = {
   "fieldDay.cabrillo.restart": "Leistungskategorie und Spotting-Unterstützung werden gelesen, wenn der Contest-Modus eingeschaltet wird. Schalte ihn deshalb nach dem Festlegen aus und wieder ein. Deine Verbindungen bleiben im Log.",
   "fieldDay.mode.club": "Club-Sync ist an. Bei ausgeschaltetem Contest-Modus bleibt diese Station im Club-Event und sendet keine Verbindungen, bis der Modus wieder an ist. Im Log geht nichts verloren.",
   "fieldDay.advisory.banned": "{{mode}} ist beim {{event}} nicht zugelassen (Regeln {{year}}) — Sie können es trotzdem loggen, aber es zählt nicht",
+  "fieldDay.advisory.noCredit": "{{mode}} · zählt nicht",
   "fieldDay.advisory.cluster": "DX-Cluster-Unterstützung ist beim {{event}} nicht zugelassen (Regeln {{year}}) — gerade aktiv: {{sources}}",
   "fieldDay.advisory.spotting": "Spotting-Unterstützung ist beim {{event}} nicht zugelassen (Regeln {{year}}) — gerade aktiv: {{sources}}",
   "fieldDay.advisory.spotsRfOnly": "{{event}} erlaubt Spots nur über Amateurfunk, solange es läuft: Nexus sendet bis zum Ende keine PSK-Reporter-Berichte, DX-Cluster-Spots oder POTA-Selbstspots. Empfangene Spots kommen weiter an.",

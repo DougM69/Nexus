@@ -7,7 +7,10 @@
 //
 //   BANNED MODE — the active on-air tier is in the event's `bannedModes` (WFD
 //   bans the WSJT suite; this is the first consumer the data has ever had).
-//   Renders in the ContestView event banner AND the Operate cockpit header.
+//   Said in two words, "FT8 · no credit", with the whole sentence on hover
+//   (`NoCreditChip`, below): in the ContestView event banner AND the Operate
+//   cockpit header, through this component, and on the large log line beside
+//   its mode chip.
 //
 //   ASSISTANCE — the ruleset restricts spotting or cluster use AND the
 //   corresponding assistance source is effectively ON. Banner only
@@ -40,6 +43,17 @@ import { t } from '../i18n'
  */
 const CLUSTER_SOURCES = ['DX cluster / RBN']
 const SPOTTING_SOURCES = ['DX cluster / RBN', 'PSK Reporter needs']
+
+/** The mode the station is on, when the contest does not credit it, and the sentence that says so;
+ *  null when it does (`NoCreditChip`). */
+function bannedMode(ruleset: FdRulesetDto, activeMode: string | undefined): { mode: string; text: string } | null {
+  const mode = (activeMode ?? '').trim().toUpperCase()
+  if (!mode || !ruleset.bannedModes.some((m) => m.toUpperCase() === mode)) return null
+  return {
+    mode,
+    text: t('fieldDay.advisory.banned', { mode, event: contestName(ruleset.event), year: ruleset.rulesYear }),
+  }
+}
 
 export function FdAdvisories({
   fdActive,
@@ -75,15 +89,8 @@ export function FdAdvisories({
   // list, which is a token rather than another contest's name.
   const eventName = contestName(ruleset.event)
   const year = ruleset.rulesYear
-  const mode = (activeMode ?? '').trim().toUpperCase()
 
   const lines: { key: string; text: string }[] = []
-  if (mode && ruleset.bannedModes.some((m) => m.toUpperCase() === mode)) {
-    lines.push({
-      key: 'banned',
-      text: t('fieldDay.advisory.banned', { mode, event: eventName, year }),
-    })
-  }
   if (showAssistance) {
     const live = (want: string[]) => assistanceOn.filter((s) => want.includes(s))
     if (!ruleset.clusterAllowed) {
@@ -118,9 +125,12 @@ export function FdAdvisories({
   ) {
     lines.push({ key: 'spotsRfOnly', text: t('fieldDay.advisory.spotsRfOnly', { event: eventName }) })
   }
-  if (lines.length === 0) return null
   return (
     <>
+      {/* The banned mode is the log line's chip here too, where it was an amber line: the operator's
+          pick (2026-10-12), "Same small chip with the full sentence on hover, in the Contest banner
+          and the FT screen header". */}
+      <NoCreditChip fdActive={fdActive} ruleset={ruleset} activeMode={activeMode} />
       {lines.map((l) => (
         // Ellipsizes in a tight header; the title carries the whole sentence.
         <div key={l.key} className={`fd-advisory ${l.key}`} role="status" title={l.text}>
@@ -129,5 +139,40 @@ export function FdAdvisories({
         </div>
       ))}
     </>
+  )
+}
+
+/**
+ * ⭐ THE NO-CREDIT CHIP. First the large log line's (`ContestLargeEntry` passes it to its strip's top
+ * row, right after the mode chip). That log line used to draw the banned-mode line above as a
+ * full-width band over its boxes, which the operator found "very verbose and yellow and distracting"
+ * (2026-10-12). The pick: "A small outlined chip beside CONTEST LOG / PH that reads 'FT8 · no
+ * credit'; hover it for the full sentence. No yellow band." So it is the mode and two words, and the
+ * line's sentence is its title. The same day, the same chip took the place of the amber line in the
+ * Contest banner and the FT screen's header (`FdAdvisories`, above): "Same small chip with the full
+ * sentence on hover, in the Contest banner and the FT screen header".
+ *
+ * Shown exactly when the contest does not credit the station's mode (`bannedMode`). Its name is its
+ * own words (`aria-label`): a status takes its name from its title otherwise, and the title is left
+ * to be its description, the whole sentence, as a screen reader gives it.
+ */
+export function NoCreditChip({
+  fdActive,
+  ruleset,
+  activeMode,
+}: {
+  fdActive: boolean
+  ruleset: FdRulesetDto | null | undefined
+  /** The mode the station is on (`stationMode`), as for the banned-mode line. */
+  activeMode?: string
+}) {
+  if (!fdActive || !ruleset) return null
+  const banned = bannedMode(ruleset, activeMode)
+  if (!banned) return null
+  const words = t('fieldDay.advisory.noCredit', { mode: banned.mode })
+  return (
+    <span className="le-fd-nocredit" role="status" aria-label={words} title={banned.text}>
+      {words}
+    </span>
   )
 }
