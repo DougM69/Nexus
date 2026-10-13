@@ -495,8 +495,14 @@ export function LogEntry({
   const asksForGrid = exchange === 'satellite' && !fdActive
 
   const [logCall, setLogCall] = useState('')
-  const [logRstSent, setLogRstSent] = useState(defaultRst)
-  const [logRstRcvd, setLogRstRcvd] = useState(defaultRst)
+  // The two reports as set for THIS contact (typed, or the CW decoder's read of theirs), or null for
+  // a box nobody has touched, which shows the report of the mode the strip logs under NOW, as a
+  // contest strip's report box does (`fdValue`). One strip lives across a mode change (the Satellites
+  // strip follows the station's), and a report held from mount kept an FM pass's 59 on a CW contact.
+  const [logRstSent, setLogRstSent] = useState<string | null>(null)
+  const [logRstRcvd, setLogRstRcvd] = useState<string | null>(null)
+  const rstSentShown = logRstSent ?? defaultRst
+  const rstRcvdShown = logRstRcvd ?? defaultRst
   const [logName, setLogName] = useState('')
   const [logQth, setLogQth] = useState('')
   const [logComment, setLogComment] = useState('')
@@ -1255,7 +1261,7 @@ export function LogEntry({
   // and hits Enter. Keyed on `ts` to refire on re-click of the same call.
   useEffect(() => {
     if (!pendingWork) return
-    if (remoteMode && (remote?.pending || remoteDraftContext || logCall.trim() || logName.trim() || logQth.trim() || logComment.trim() || logNotes.trim() || logParkRef.trim() || overrideOpen || logRstSent !== defaultRst || logRstRcvd !== defaultRst)) {
+    if (remoteMode && (remote?.pending || remoteDraftContext || logCall.trim() || logName.trim() || logQth.trim() || logComment.trim() || logNotes.trim() || logParkRef.trim() || overrideOpen || rstSentShown !== defaultRst || rstRcvdShown !== defaultRst)) {
       setRemoteWorkOffer({ ...pendingWork, context: currentDraftContext() })
       onConsumeWork?.()
       return
@@ -1343,7 +1349,7 @@ export function LogEntry({
     }
     if (cwFilledFor.current && !cwRstFilled.current && rst) {
       // The decoder's read of `rst` is the report we RECEIVED from them.
-      setLogRstRcvd((v) => (v.trim() === '' || v === defaultRst ? rst : v))
+      setLogRstRcvd((v) => (v == null || v.trim() === '' || v === defaultRst ? rst : v))
       cwRstFilled.current = true
     }
     if (cwFilledFor.current && !cwNameFilled.current && name) {
@@ -1582,8 +1588,8 @@ export function LogEntry({
     endFill(false)
     setRemoteDraftContext(null)
     setLogCall('')
-    setLogRstSent(defaultRst)
-    setLogRstRcvd(defaultRst)
+    setLogRstSent(null)
+    setLogRstRcvd(null)
     setLogName('')
     setLogQth('')
     setLogComment('')
@@ -1871,8 +1877,8 @@ export function LogEntry({
     }
 
     // Standard logbook path.
-    const rstSent = logRstSent.trim() || defaultRst
-    const rstRcvd = logRstRcvd.trim() || defaultRst
+    const rstSent = rstSentShown.trim() || defaultRst
+    const rstRcvd = rstRcvdShown.trim() || defaultRst
     // Override open → the hand-entered UTC instant (one that is not a real date and time held
     // Log above); closed → now, exactly as before.
     const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : Math.floor(Date.now() / 1000)
@@ -2821,7 +2827,7 @@ export function LogEntry({
           <input
             ref={rstRef}
             className="settings-input mono le-rst"
-            value={logRstSent}
+            value={rstSentShown}
             onChange={(e) => setLogRstSent(e.target.value)}
             onKeyDown={onEnter}
             placeholder={LOG_EXAMPLES.rst}
@@ -2832,7 +2838,7 @@ export function LogEntry({
           <span className="le-rst-cap">{t('logEntry.rstRcvd.label')}</span>
           <input
             className="settings-input mono le-rst"
-            value={logRstRcvd}
+            value={rstRcvdShown}
             onChange={(e) => setLogRstRcvd(e.target.value)}
             onKeyDown={onEnter}
             placeholder={LOG_EXAMPLES.rst}

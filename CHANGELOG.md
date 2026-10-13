@@ -108,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
   asked.
+- **The log line's signal reports change with the mode unless you typed them.** On the Satellites
+  screen the log line stays put while the station changes mode, and its reports kept the mode they
+  started in, so an FM pass and then a CW contact logged the CW contact as 59 and 59. A report you
+  have not typed now follows the mode, 59 on FM or SSB and 599 on CW. One you typed stays with that
+  contact until it is logged or you press Clear.
 
 ## [1.18.0] — 2026-10-12
 
