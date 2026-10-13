@@ -153,28 +153,31 @@ fn whole<R>(
     (out, pairs)
 }
 
-/// The five bulk changes, each as THE implementation runs it, with the text it brings.
+/// The six bulk changes, each as THE implementation runs it, with the text it brings.
 enum Op {
     Import,
     Report,
     Download,
     OtaRefs,
     OwnEcho,
+    LotwReport,
 }
 
 impl Op {
-    const ALL: [Op; 5] = [
+    const ALL: [Op; 6] = [
         Op::Import,
         Op::Report,
         Op::Download,
         Op::OtaRefs,
         Op::OwnEcho,
+        Op::LotwReport,
     ];
 
     fn name(&self) -> &'static str {
         match self {
             Op::Import => "import",
             Op::Report => "report",
+            Op::LotwReport => "LoTW report",
             Op::Download => "download",
             Op::OtaRefs => "ota refs",
             Op::OwnEcho => "own echo",
@@ -186,6 +189,7 @@ impl Op {
         match self {
             Op::Import => "<QSL_RCVD:1>Y<STATE:2>WI",
             Op::Report => "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            Op::LotwReport => "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
             Op::Download => "<APP_QRZLOG_STATUS:1>C",
             Op::OtaRefs => "<SIG:4>POTA<SIG_INFO:6>K-0001",
             Op::OwnEcho => "",
@@ -221,14 +225,19 @@ impl Op {
             }),
             Op::Report => run!(OpClass::Upgrade, &[], |log: &mut Logbook| log
                 .merge_report(text)),
+            Op::LotwReport => run!(OpClass::Upgrade, &[], |log: &mut Logbook| log
+                .merge_lotw_report(text, Some("K2DEF"))),
             Op::Download => run!(OpClass::Upgrade, &ids, |log: &mut Logbook| {
                 let (added, summary) = log.merge_downloaded(text);
                 (added.len(), summary)
             }),
             Op::OtaRefs => run!(OpClass::Upgrade, &[], |log: &mut Logbook| log
                 .stamp_ota_refs(text)),
-            Op::OwnEcho => run!(OpClass::Stamp, &[], |log: &mut Logbook| log
-                .merge_own_echo(text, 7)),
+            Op::OwnEcho => run!(OpClass::Stamp, &[], |log: &mut Logbook| log.merge_own_echo(
+                text,
+                7,
+                Some("K2DEF")
+            )),
         }
     }
 }
@@ -251,7 +260,7 @@ fn memory_plan(rows: &[Arc<QsoRecord>]) -> (StationCore, LogPlan) {
 /// upgraded or appended) in most of them.
 #[test]
 fn every_bulk_change_plans_on_its_candidates_as_on_the_whole_log() {
-    let mut changed = [0usize; 5];
+    let mut changed = [0usize; 6];
     for seed in 0..64u64 {
         for (k, op) in Op::ALL.iter().enumerate() {
             let mut g = Rng(seed * 31 + k as u64);

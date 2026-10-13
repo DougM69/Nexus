@@ -1259,6 +1259,11 @@ export const EN = {
     other:
       '{{count}} contacts marked as uploaded were logged under another call than the one in Settings; this check leaves them alone.',
   },
+  'logbook.confirmations.otherCalls': {
+    one: '{{count}} LoTW record is for a call your log holds no contact under, such as a club call on your LoTW account; this check leaves it alone.',
+    other:
+      '{{count}} LoTW records are for calls your log holds no contact under, such as a club call on your LoTW account; this check leaves them alone.',
+  },
   'logbook.confirmations.cancel': 'Cancel',
   'logbook.confirmations.apply': {
     one: 'Change {{count}} contact',

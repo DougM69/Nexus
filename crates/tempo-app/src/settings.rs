@@ -685,6 +685,16 @@ impl Settings {
     pub fn sat_main_sub_rig(&self) -> bool {
         MAIN_SUB_SAT_RIGS.contains(&self.active_rig_facts().0)
     }
+
+    /// The `qso_qslsince` the next LoTW download asks from: the stored high-water when a download
+    /// of every call on the account made it, else none, a full pull (`lotw_cursor_every_call`).
+    pub fn lotw_sync_cursor(&self) -> &str {
+        if self.lotw_cursor_every_call {
+            self.lotw_last_qsl.trim()
+        } else {
+            ""
+        }
+    }
 }
 
 /// The operator's amateur license class — drives the transmit-privilege lockout + the
@@ -2709,7 +2719,17 @@ pub struct Settings {
     /// Incremental-sync high-water mark: the `APP_LoTW_LASTQSL` timestamp from the
     /// last successful download, passed back as `qso_qslsince`. Empty = full pull.
     /// Reset to empty when `lotw_username` changes (the cursor is query-bound).
+    /// Read through [`Settings::lotw_sync_cursor`].
     pub lotw_last_qsl: String,
+    /// `lotw_last_qsl` was made by a download that asked for every call on the account. LoTW
+    /// lets a high-water stand as `qso_qslsince` only "if the identical query is subsequently
+    /// made", and the download used to ask for the Settings call alone (`qso_owncall`): such a
+    /// cursor would skip, for good, every confirmation of another call on the account that LoTW
+    /// matched before it. So a cursor without this mark is not used, and the first download after
+    /// the update is a full one ([`Settings::lotw_sync_cursor`]). An older file has no key, so
+    /// `false`.
+    #[serde(default)]
+    pub lotw_cursor_every_call: bool,
     /// LoTW **upload** Station Location name (the `-l` arg passed to TQSL). Non-
     /// secret; TQSL owns the certificate. Empty = upload not configured.
     pub lotw_station_location: String,
@@ -5043,6 +5063,7 @@ impl Default for Settings {
             sound_decode_tick: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
+            lotw_cursor_every_call: false,
             lotw_station_location: String::new(),
             lotw_use_adif_location: false,
             tqsl_path: String::new(),

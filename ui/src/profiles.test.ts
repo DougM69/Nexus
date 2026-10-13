@@ -132,6 +132,17 @@ describe('mergeProfile — the profile-load contract', () => {
     expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
+  it('nor does the mark that says a LoTW download of every call made the cursor', () => {
+    // The mark belongs to the cursor beside it. Imported onto an older build's cursor (a download
+    // of the Settings call alone made it), it would let the next sync ask from that cursor, and
+    // skip for good every confirmation of the operator's other calls matched before it.
+    const older = { ...current, lotwCursorEveryCall: false } as unknown as Settings
+    const foreign = { lotwCursorEveryCall: true, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(older, foreign) as unknown as Record<string, unknown>
+    expect(merged.lotwCursorEveryCall).toBe(false)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
   it('a profile value the operator set DOES override the current one', () => {
     const p = { maxPowerDigital: 0.5 } as unknown as Settings
     const merged = mergeProfile(current, p) as unknown as Record<string, unknown>

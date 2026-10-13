@@ -16,13 +16,14 @@
 //! # How a contact is judged
 //!
 //! 1. **Supported**: a row carrying the service's confirmation pairs with it
-//!    (`pair_report`, so a check and a sync never disagree). Nothing more is done; one
-//!    lacking the confirmation is a gain, which merging the download adds.
+//!    (`pair_report`, or LoTW's `pair_lotw`, so a check and a sync never disagree). Nothing more
+//!    is done; one lacking the confirmation is a gain, which merging the download adds.
 //! 2. **Reach**: the confirming rows with its call, band and mode class on its UTC day or the day
 //!    either side, the only rows 1.17.0 could have put on it. A mark no row reaches is not this
 //!    defect's (an import, an older call, a paper card an older Nexus filed as LoTW) and is only
-//!    counted. So is one on a contact logged under another call than the one the download is
-//!    for: the download cannot speak for it.
+//!    counted. So is one on a contact logged under another call than the one in Settings, the
+//!    call the downloads were asked for until LoTW's asked for every call on the account: what
+//!    the check judges, and so may take off, is what it judged then.
 //! 3. **Replay**: 1.17.0's matcher (`pair_report_1_17`) over the same contacts and rows, in the
 //!    service's own row order. It explains the mark when it puts a reaching row here.
 //! 4. **Class**: [`LineClass::Contradicted`] when the service holds this contact itself,
@@ -35,6 +36,11 @@
 //!    nothing), and either the row is the sibling's own record to the minute (LoTW, QRZ) or this
 //!    contact is more than 30 minutes from it, the only form an eQSL card, timed by its sender,
 //!    can meet. An Orphan line never is.
+//!
+//! LoTW's rows each name the call their QSO was made under and pair only with a contact made under
+//! it, as its merges pair them. 1.17.0 asked LoTW for the Settings call's rows alone, so only
+//! those reach a contact or are replayed: a row of another call on the account never explains a
+//! mark.
 //!
 //! LoTW's `Accepted` upload marks are checked the same way, against its own-QSO list and a replay
 //! of 1.17.0's `promote_own_echo`: a contact marked `Accepted` that no own-list row pairs with is
@@ -54,7 +60,10 @@
 //! The replay is an approximation. 1.17.0 merged incremental syncs, not one whole download, and
 //! read the award state the log had then. Every line is the operator's own tick for that reason.
 
-use super::{build_buckets, closeness, key, mode_class, pair_report, Key, MATCH_WINDOW_SECS};
+use super::{
+    build_buckets, closeness, key, mode_class, of_settings_call, pair_lotw, pair_report, Key,
+    MATCH_WINDOW_SECS,
+};
 use crate::logbook::{worked_under, QslRcvd, QsoRecord, RecordId, UploadOutcome};
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -251,8 +260,11 @@ pub struct ConfirmationCheck {
 /// - `own_rows`: the service's own record of the operator's contacts, confirmed or not: LoTW's
 ///   own-QSO list, or QRZ's book, which is `rows` again. Empty for eQSL, whose cards carry
 ///   their sender's times. With [`Channel::Lotw`] they also decide the upload marks.
-/// - `own_call`: the call the download is for; a contact logged under another is counted, not
-///   judged. `None` judges every contact.
+/// - `own_call`: the call in Settings; a contact logged under another is counted, not judged.
+///   `None` judges every contact. LoTW's downloads hold every call on the account: a row pairs
+///   only with a contact made under the call it names, a contact or row naming none taken to be
+///   under this one (`pair_lotw`), and only this call's rows, the ones 1.17.0 downloaded, reach a
+///   contact or are replayed.
 pub fn check_report<R: Borrow<QsoRecord>>(
     local: &[R],
     rows: &[QsoRecord],
@@ -265,19 +277,27 @@ pub fn check_report<R: Borrow<QsoRecord>>(
         .filter(|c| !c.is_empty());
     let own_call = own_call.as_deref();
     let confirms = |row: &QsoRecord| channel.held(&row.qsl_rcvd);
+    let pair = |rows: &[QsoRecord]| match channel {
+        Channel::Lotw => pair_lotw(local, rows, own_call),
+        Channel::Eqsl | Channel::Qrz => pair_report(local, rows),
+    };
+    let downloaded_by_1_17 =
+        |row: &QsoRecord| channel != Channel::Lotw || of_settings_call(row, own_call);
     let mut check = ConfirmationCheck::default();
 
-    let own_pairs = pair_report(local, own_rows);
+    let own_pairs = pair(own_rows);
     let own_of = row_of(local.len(), &own_pairs, |_| true);
 
-    let pairs = pair_report(local, rows);
+    let pairs = pair(rows);
     let supported = row_of(local.len(), &pairs, |j| confirms(&rows[j]));
     let confirmations = Download {
         rows,
-        replayed: row_of(local.len(), &pair_report_1_17(local, rows), |j| {
-            confirms(&rows[j])
-        }),
-        reach: index_rows(rows, confirms),
+        replayed: row_of(
+            local.len(),
+            &pair_report_1_17(local, rows, downloaded_by_1_17),
+            |j| confirms(&rows[j]),
+        ),
+        reach: index_rows(rows, |row| confirms(row) && downloaded_by_1_17(row)),
         pairs,
         own_records: channel.rows_are_own_records(),
     };
@@ -315,10 +335,10 @@ pub fn check_report<R: Borrow<QsoRecord>>(
             rows: own_rows,
             replayed: row_of(
                 local.len(),
-                &pair_own_echo_1_17(local, own_rows, award_then),
+                &pair_own_echo_1_17(local, own_rows, award_then, downloaded_by_1_17),
                 |_| true,
             ),
-            reach: index_rows(own_rows, |_| true),
+            reach: index_rows(own_rows, downloaded_by_1_17),
             pairs: own_pairs,
             own_records: true,
         };
@@ -598,15 +618,23 @@ fn accepted(r: &QsoRecord) -> bool {
 /// Each row took the OLDEST contact left with its call, band and mode class on its own UTC day,
 /// else the day before, else the day after, and never compared times. [`take_match`] is 1.17.0's,
 /// verbatim (`v1.17.0:crates/tempo-core/src/reconcile.rs`); the buckets it pops
-/// ([`build_buckets`], [`key`], [`mode_class`]) are unchanged since that tag.
+/// ([`build_buckets`], [`key`], [`mode_class`]) are unchanged since that tag. Only the rows
+/// `downloaded` admits are 1.17.0's (LoTW's of the Settings call): any other takes nothing.
 fn pair_report_1_17<R: Borrow<QsoRecord>>(
     local: &[R],
     incoming: &[QsoRecord],
+    downloaded: impl Fn(&QsoRecord) -> bool,
 ) -> Vec<Option<usize>> {
     let mut buckets = build_buckets(local);
     incoming
         .iter()
-        .map(|inc| take_match(&mut buckets, inc))
+        .map(|inc| {
+            if downloaded(inc) {
+                take_match(&mut buckets, inc)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -614,11 +642,13 @@ fn pair_report_1_17<R: Borrow<QsoRecord>>(
 /// that were not award-confirmed, which it left out of its buckets (copied from the tag; its row
 /// loop is [`take_match`]'s, written out inline there). It wrote `Accepted` on each contact it
 /// returns. `award_confirmed` says which contacts were award-confirmed when it ran: the log's state
-/// then, which no stored field records, so the caller says how it reads it.
+/// then, which no stored field records, so the caller says how it reads it. Only the rows
+/// `downloaded` admits are 1.17.0's, as in [`pair_report_1_17`].
 fn pair_own_echo_1_17<R: Borrow<QsoRecord>>(
     local: &[R],
     own: &[QsoRecord],
     award_confirmed: impl Fn(usize) -> bool,
+    downloaded: impl Fn(&QsoRecord) -> bool,
 ) -> Vec<Option<usize>> {
     // Index award-unconfirmed local QSOs by match key; reversed so pop() consumes
     // in log order (oldest first), mirroring `reconcile`.
@@ -632,7 +662,13 @@ fn pair_own_echo_1_17<R: Borrow<QsoRecord>>(
         v.reverse();
     }
     own.iter()
-        .map(|inc| take_match(&mut buckets, inc))
+        .map(|inc| {
+            if downloaded(inc) {
+                take_match(&mut buckets, inc)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -671,7 +707,7 @@ pub mod replay {
     /// merge reads them (`crate::logbook::report_rows`).
     pub fn left_by_1_17(mut log: Vec<QsoRecord>, rows: &[QsoRecord]) -> Vec<QsoRecord> {
         let mut sum = ReconcileSummary::default();
-        for (row, pair) in rows.iter().zip(pair_report_1_17(&log, rows)) {
+        for (row, pair) in rows.iter().zip(pair_report_1_17(&log, rows, |_| true)) {
             if let Some(i) = pair {
                 apply_match(&mut log[i], row, &mut sum);
             }
@@ -682,7 +718,7 @@ pub mod replay {
     /// `log` as 1.17.0's own-QSO pull left it after `own`, LoTW's own-QSO list: `Accepted` on
     /// each contact its matcher gave a row, the contacts award-confirmed as it ran left out.
     pub fn echoed_by_1_17(mut log: Vec<QsoRecord>, own: &[QsoRecord]) -> Vec<QsoRecord> {
-        let pairs = pair_own_echo_1_17(&log, own, |i| log[i].award_confirmed);
+        let pairs = pair_own_echo_1_17(&log, own, |i| log[i].award_confirmed, |_| true);
         for i in pairs.into_iter().flatten() {
             log[i].upload.lotw = Some(UploadStatus {
                 outcome: UploadOutcome::Accepted,
@@ -700,7 +736,7 @@ mod tests {
     use super::*;
     use crate::logbook::UploadStatus;
     use crate::reconcile::tests::{lotw_outcome, rec, w1aw_at, with_lotw};
-    use crate::reconcile::{apply_match, reconcile, ReconcileSummary};
+    use crate::reconcile::{apply_match, reconcile, reconcile_lotw, ReconcileSummary};
     use proptest::prelude::*;
 
     /// The day every scene happens on (2024-10-04 UTC).
@@ -1062,35 +1098,38 @@ mod tests {
         let pair = [w1aw_at(D, 6, 0), w1aw_at(D, 18, 0)];
         let row = [w1aw_at(D, 18, 2)];
         assert_eq!(
-            pair_report_1_17(&pair, &row),
+            pair_report_1_17(&pair, &row, |_| true),
             [Some(0)],
             "1.17.0: the oldest contact on the row's day"
         );
         assert_eq!(pair_report(&pair, &row), [Some(1)], "now: the nearest");
         // Two rows, two contacts, consumed oldest first whatever the times.
         assert_eq!(
-            pair_report_1_17(&pair, &[w1aw_at(D, 18, 2), w1aw_at(D, 6, 1)]),
+            pair_report_1_17(&pair, &[w1aw_at(D, 18, 2), w1aw_at(D, 6, 1)], |_| true),
             [Some(0), Some(1)]
         );
         // Its own UTC day first: 00:03 took that day's 00:20 over 23:58, five minutes earlier;
         // with nothing on its day, the day before; then the day after.
         let midnight = [w1aw_at(D - 1, 23, 58), w1aw_at(D, 0, 20)];
-        assert_eq!(pair_report_1_17(&midnight, &[w1aw_at(D, 0, 3)]), [Some(1)]);
+        assert_eq!(
+            pair_report_1_17(&midnight, &[w1aw_at(D, 0, 3)], |_| true),
+            [Some(1)]
+        );
         let either_side = [w1aw_at(D - 1, 12, 0), w1aw_at(D + 1, 12, 0)];
         assert_eq!(
-            pair_report_1_17(&either_side, &[w1aw_at(D, 12, 0)]),
+            pair_report_1_17(&either_side, &[w1aw_at(D, 12, 0)], |_| true),
             [Some(0)]
         );
         // Its own-QSO twin skipped the contacts award-confirmed as it ran.
         let mut confirmed = w1aw_at(D, 6, 0);
         confirmed.award_confirmed = true;
         assert_eq!(
-            pair_own_echo_1_17(&pair, &row, |i| pair[i].award_confirmed),
+            pair_own_echo_1_17(&pair, &row, |i| pair[i].award_confirmed, |_| true),
             [Some(0)]
         );
         let skipped = [confirmed, w1aw_at(D, 18, 0)];
         assert_eq!(
-            pair_own_echo_1_17(&skipped, &row, |i| skipped[i].award_confirmed),
+            pair_own_echo_1_17(&skipped, &row, |i| skipped[i].award_confirmed, |_| true),
             [Some(1)]
         );
     }
@@ -1414,9 +1453,11 @@ mod tests {
             channel in prop::sample::select(vec![Channel::Lotw, Channel::Eqsl, Channel::Qrz]),
             scoped in any::<bool>(),
         ) {
-            let check = check_report(&log, &rows, &own, channel, scoped.then_some("KD9TAW"));
+            let settings_call = scoped.then_some("KD9TAW");
+            let check = check_report(&log, &rows, &own, channel, settings_call);
             // What the merge pairs, read off the merge itself: from a copy holding no
             // confirmation, exactly the contacts a confirming row lands on come out holding one.
+            // LoTW's merge with the same call in Settings, the others' as they always merged.
             let mut bare: Vec<QsoRecord> = log
                 .iter()
                 .cloned()
@@ -1425,7 +1466,10 @@ mod tests {
                     r
                 })
                 .collect();
-            reconcile(&mut bare, &rows);
+            match channel {
+                Channel::Lotw => reconcile_lotw(&mut bare, &rows, settings_call),
+                Channel::Eqsl | Channel::Qrz => reconcile(&mut bare, &rows),
+            };
             let mark = Mark::Confirmation(channel);
             let mut unsupported = 0;
             for (i, r) in log.iter().enumerate() {

@@ -50,6 +50,11 @@ const NEVER_IMPORT: readonly string[] = [
   // the borrowed date, so they never come back on their own. Silent, and it costs award credit
   // the operator already earned.
   'lotwLastQsl',
+  // The mark that a LoTW download of every call on the account made that cursor. It belongs to
+  // the cursor beside it: imported onto an older build's cursor (a download of the Settings call
+  // alone made it), the next sync would ask from that cursor and skip, for good, every
+  // confirmation of the operator's other calls matched before it.
+  'lotwCursorEveryCall',
   // Not a sync cursor but the same hazard: importing a stale "last automatic upload"
   // stamp from another machine makes the next tick immediately due, so loading a profile
   // would fire an unattended TQSL run the operator did not ask for.

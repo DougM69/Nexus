@@ -2041,6 +2041,19 @@ impl Logbook {
         crate::reconcile::reconcile(&mut self.records[..], &report_rows(text))
     }
 
+    /// [`merge_report`](Self::merge_report) for a LoTW report: each row lands only on a contact
+    /// made under the call it names, `settings_call` being the call in Settings, which a contact
+    /// or row naming none of its own is taken to be under ([`crate::reconcile::reconcile_lotw`]).
+    /// LoTW's downloads hold every call on the account. Pure merge — call [`save`](Self::save) to
+    /// persist.
+    pub fn merge_lotw_report(
+        &mut self,
+        text: &str,
+        settings_call: Option<&str>,
+    ) -> crate::reconcile::ReconcileSummary {
+        crate::reconcile::reconcile_lotw(&mut self.records[..], &report_rows(text), settings_call)
+    }
+
     /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
     /// book pulled back down). Unlike [`merge_report`] (confirmations only, unmatched
     /// rows become orphans), this ADDS the QSOs the download has that the local log
@@ -2072,11 +2085,17 @@ impl Logbook {
 
     /// Merge a LoTW **own-QSO** report (`qso_qsl=no` ADIF — your records LoTW holds
     /// but the partner hasn't matched). Promotes matched QSOs' LoTW upload state to
-    /// `Accepted` (your side is on file → "waiting on partner"). Returns the count
-    /// newly promoted. Pure merge — call [`save`](Self::save) to persist.
-    pub fn merge_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
+    /// `Accepted` (your side is on file → "waiting on partner"), each only on a contact made
+    /// under the call its row names (`settings_call`: as [`merge_lotw_report`](Self::merge_lotw_report)).
+    /// Returns the count newly promoted. Pure merge — call [`save`](Self::save) to persist.
+    pub fn merge_own_echo(
+        &mut self,
+        text: &str,
+        when_unix: i64,
+        settings_call: Option<&str>,
+    ) -> usize {
         let own = parse_adif(text);
-        crate::reconcile::promote_own_echo(&mut self.records[..], &own, when_unix)
+        crate::reconcile::promote_own_echo(&mut self.records[..], &own, when_unix, settings_call)
     }
 
     /// Index of the NEWEST logged QSO matching `pushed`'s key (call/band/mode-class/
@@ -5105,7 +5124,7 @@ mod tests {
                 let _ = b.merge_downloaded(&adif_record(&rec("ZL1ABC", "20m", 400)));
             }),
             ("an own-QSO echo merge", |b| {
-                let _ = b.merge_own_echo(&adif_record(&b.records()[0]), 500);
+                let _ = b.merge_own_echo(&adif_record(&b.records()[0]), 500, None);
             }),
             ("a disk reconcile", |b| {
                 b.reconcile_disk(&adif_record(&rec("VK2ABC", "20m", 600)));

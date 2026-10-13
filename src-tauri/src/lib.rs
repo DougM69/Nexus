@@ -21340,13 +21340,14 @@ async fn apply_park_states(
 // check at a time holds what it downloaded, from the check until Apply, Cancel, a new check or
 // the window that ran it closing.
 
-/// What a check asks LoTW with: the account, and the call both downloads are for. Never printed or
-/// logged: it holds the password, as the request URLs built from it do.
+/// What a check asks LoTW with: the account, and the call in Settings. Both downloads ask for every
+/// call on the account. Never printed or logged: it holds the password, as the request URLs built
+/// from it do.
 struct LotwAccess {
     username: String,
     password: String,
-    /// The Settings call (`qso_owncall`), which is also the check's scope; `None` asks LoTW for
-    /// every call on the account, and judges every contact.
+    /// The Settings call: the check's scope, and the call a contact or row naming no call of its
+    /// own is taken to be under; `None` judges every contact.
     owncall: Option<String>,
 }
 
@@ -21505,11 +21506,11 @@ fn whole_qrz_book(answer: &str) -> Result<String, String> {
 }
 
 /// Logbook ▸ Check confirmations, LoTW: its whole confirmation history and its whole own-QSO
-/// list, each asked for once in the form a full re-download asks (`qso_qslsince=1900-01-01`, and
-/// `qso_qsorxsince=1900-01-01` with no start date) and fetched by `fetch`, then checked against
-/// the log read with the Engine lock released ([`tempo_app::station::check_lotw_confirmations`]).
-/// It moves no sync cursor and writes nothing. The confirmation download, which Apply merges, and
-/// the check.
+/// list, of every call on the account, each asked for once in the form a full re-download asks
+/// (`qso_qslsince=1900-01-01`, and `qso_qsorxsince=1900-01-01` with no start date) and fetched by
+/// `fetch`, then checked against the log read with the Engine lock released
+/// ([`tempo_app::station::check_lotw_confirmations`]). It moves no sync cursor and writes nothing.
+/// The confirmation download, which Apply merges, and the check.
 fn lotw_check_on(
     engine: &SharedEngine,
     access: &LotwAccess,
@@ -21518,7 +21519,6 @@ fn lotw_check_on(
     let query = tempo_core::lotw::LotwQuery {
         username: access.username.clone(),
         password: access.password.clone(),
-        owncall: access.owncall.clone(),
         qsl_since: None,
     };
     let report = whole_lotw_download(fetch(&tempo_core::lotw::build_report_url(&query))?)?;
@@ -21872,6 +21872,10 @@ struct ConfirmationCheckDto {
     /// book. Said in the Connections log, where a bench can hold it against the service's own
     /// count.
     records: usize,
+    /// LoTW only: how many of its confirmations are for a call the log holds no contact under (a
+    /// club call on the account, say). They change nothing. Said in the dialog, and in the
+    /// Connections log with `records`.
+    other_call_records: usize,
     /// Newest first; a contact's confirmation line before its upload line.
     lines: Vec<ConfirmationLineDto>,
     /// The contacts the service confirms that lack its confirmation: Apply adds it.
@@ -21904,6 +21908,7 @@ impl ConfirmationCheckDto {
             session,
             service: check_mark_name(tempo_core::reconcile::check::Mark::Confirmation(channel)),
             records,
+            other_call_records: found.other_call_records,
             lines,
             gain_ids: found.gains.iter().map(|id| id.to_string()).collect(),
             unreached: check.flags.unreached,
@@ -22087,8 +22092,13 @@ async fn confirmation_check(
     conn_logged(
         check_connector(channel),
         |c: &ConfirmationCheckDto| {
+            let other_calls = match c.other_call_records {
+                0 => String::new(),
+                n => format!(" ({n} for a call this log holds no contact under, left alone)"),
+            };
             format!(
-                "check confirmations: {} records, {} listed, {} would gain a confirmation",
+                "check confirmations: {} records{other_calls}, {} listed, {} would gain a \
+                 confirmation",
                 c.records,
                 c.lines.len(),
                 c.gain_ids.len()
@@ -24723,7 +24733,9 @@ fn is_complete_lotw_body(body: &str) -> bool {
 /// body is complete, and only while the username and the cursor are still the ones it used. The
 /// fetch runs without the engine lock, for minutes on a full pull, and in that time a username
 /// change or Download everything again ([`reset_lotw_cursor`]) can empty the cursor, and this
-/// download's high-water would put back the incremental cursor that the reset removed.
+/// download's high-water would put back the incremental cursor that the reset removed. The cursor
+/// is the one the download asks from (`Settings::lotw_sync_cursor`): none for one an older build
+/// left, whose full download then moves it.
 fn lotw_cursor_may_advance(
     s: &Settings,
     body: &str,
@@ -24732,7 +24744,7 @@ fn lotw_cursor_may_advance(
 ) -> bool {
     is_complete_lotw_body(body)
         && s.lotw_username.trim() == used_username.trim()
-        && s.lotw_last_qsl.trim() == used_since.trim()
+        && s.lotw_sync_cursor() == used_since.trim()
 }
 
 /// Settings ▸ Confirmations ▸ LoTW ▸ Download everything again: empty the sync cursor, so the
@@ -24783,14 +24795,15 @@ async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSync
 
 fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, String> {
     // Read username + cursor (non-secret) under a brief lock; the network fetch
-    // below must NOT hold the engine lock (a full pull can run for minutes).
-    let (username, owncall, since) = {
+    // below must NOT hold the engine lock (a full pull can run for minutes). Both pulls ask for
+    // every call on the account, and the cursor is one a download of every call made
+    // (`Settings::lotw_sync_cursor`), so the first download after the update is a full one.
+    let (username, since) = {
         let eng = engine_lock(state);
         let s = eng.settings();
         (
             s.lotw_username.trim().to_string(),
-            s.mycall.trim().to_string(),
-            s.lotw_last_qsl.trim().to_string(),
+            s.lotw_sync_cursor().to_string(),
         )
     };
     if username.is_empty() {
@@ -24801,7 +24814,6 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
     let used_username = username.clone(); // for the post-fetch cursor-binding guard
     let used_since = since.clone(); // and the cursor it started from (`lotw_cursor_may_advance`)
-    let owncall = Some(owncall).filter(|c| !c.is_empty());
 
     // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
     // The password stays in scope for the second (own-echo) pull below; never log it.
@@ -24809,7 +24821,6 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         let query = tempo_core::lotw::LotwQuery {
             username: username.clone(),
             password: password.clone(),
-            owncall: owncall.clone(),
             qsl_since: Some(since).filter(|c| !c.is_empty()),
         };
         let url = tempo_core::lotw::build_report_url(&query);
@@ -24898,7 +24909,6 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             let query = tempo_core::lotw::LotwQuery {
                 username,
                 password,
-                owncall,
                 qsl_since: None,
             };
             let url = tempo_core::lotw::build_own_report_url(&query, Some(&start));
@@ -44713,9 +44723,7 @@ mod tests {
         let next = tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
             username: "nt9e".into(),
             password: "x".into(),
-            owncall: None,
-            qsl_since: Some(e.settings().lotw_last_qsl.trim().to_string())
-                .filter(|c| !c.is_empty()),
+            qsl_since: Some(e.settings().lotw_sync_cursor().to_string()).filter(|c| !c.is_empty()),
         });
         assert!(
             next.contains("&qso_qslsince=1900-01-01"),
@@ -44733,9 +44741,14 @@ mod tests {
         let mut s = tempo_app::settings::Settings {
             lotw_username: "nt9e".into(),
             lotw_last_qsl: "2026-08-04 21:12:44".into(),
+            lotw_cursor_every_call: true,
             ..Default::default()
         };
-        let used = s.lotw_last_qsl.clone();
+        let used = s.lotw_sync_cursor().to_string();
+        assert_eq!(
+            used, "2026-08-04 21:12:44",
+            "premise: an incremental download"
+        );
         assert!(
             super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
             "control: nothing moved during the fetch, so its high-water is the new cursor"
@@ -44747,6 +44760,24 @@ mod tests {
         );
         // A full pull already running fetched everything the reset asks for: it may advance.
         assert!(super::lotw_cursor_may_advance(&s, &body, "nt9e", ""));
+    }
+
+    /// ★ The first download after the update asks for every call on the account from 1900, not
+    /// from the cursor an older build left (a download of the Settings call alone made it, and
+    /// LoTW lets a cursor stand only for the identical query), and its high-water then becomes the
+    /// cursor. Were the older cursor still compared, that full download could never move it, and
+    /// every download after would be a full one again.
+    #[test]
+    fn the_first_full_download_after_the_update_moves_the_cursor() {
+        let body = lotw_download();
+        let older: tempo_app::settings::Settings =
+            serde_json::from_str(r#"{"lotwUsername":"nt9e","lotwLastQsl":"2026-08-04 21:12:44"}"#)
+                .unwrap();
+        let since = older.lotw_sync_cursor().to_string();
+        assert_eq!(since, "", "a full download");
+        assert!(super::lotw_cursor_may_advance(
+            &older, &body, "nt9e", &since
+        ));
     }
 
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."
@@ -45858,7 +45889,7 @@ mod tests {
 
     /// ★ The check uploads nothing and moves no cursor, for each service. Each is asked once for
     /// the whole of what it holds: LoTW twice, in the form a full re-download asks (the whole
-    /// confirmation history for the Settings call, and the whole own-QSO list with no start
+    /// confirmation history of every call on the account, and the whole own-QSO list with no start
     /// date); eQSL for its InBox from 1900, said outright, for the QTH Nickname set; QRZ with one
     /// bare FETCH of the whole book. Apply asks nothing (it is handed no transport). Nothing is
     /// queued to a connector, and no sync cursor moves: not LoTW's, eQSL's or QRZ's.
@@ -45951,21 +45982,61 @@ mod tests {
             "&qso_qsl=yes",
             "&qso_qsldetail=yes",
             "&qso_withown=yes",
-            "&qso_owncall=K2DEF",
             "&qso_qslsince=1900-01-01",
         ] {
             assert!(asked[0].contains(part), "the confirmations: {part}");
         }
-        for part in [
-            "&qso_qsl=no",
-            "&qso_owncall=K2DEF",
-            "&qso_qsorxsince=1900-01-01",
-        ] {
+        for part in ["&qso_qsl=no", "&qso_qsorxsince=1900-01-01"] {
             assert!(asked[1].contains(part), "the own-QSO list: {part}");
         }
         assert!(
             !asked[1].contains("qso_startdate"),
             "the whole own-QSO list, from no start date"
+        );
+        for url in asked.iter() {
+            assert!(
+                !url.contains("qso_owncall"),
+                "every call on the account, not the one in Settings alone"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LoTW's check counts its confirmations for a call the log holds no contact under, a club call
+    /// on the same account, which gain no contact; the Settings call's gains the contact naming no
+    /// call of its own.
+    #[test]
+    fn the_lotw_check_counts_the_confirmations_of_a_call_the_log_does_not_hold() {
+        let (dir, engine) = store_holding(
+            "check-other-call",
+            &tempo_core::logbook::parse_adif(&check_row("W1AW", "20m", "FT8", "120000", "")),
+        );
+        let lotw = FakeLotw {
+            report: lotw_answer(&[
+                check_row(
+                    "W1AW",
+                    "20m",
+                    "FT8",
+                    "120000",
+                    "<STATION_CALLSIGN:6>W1CLUB<QSL_RCVD:1>Y",
+                ),
+                check_row(
+                    "W1AW",
+                    "20m",
+                    "FT8",
+                    "120000",
+                    "<STATION_CALLSIGN:5>K2DEF<QSL_RCVD:1>Y",
+                ),
+            ]),
+            own: lotw_answer(&[]),
+            asked: Default::default(),
+        };
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let dto = lotw_checked(&checks, session, &engine, &lotw).expect("the check reads");
+        assert_eq!(
+            (dto.records, dto.other_call_records, dto.gain_ids.len()),
+            (2, 1, 1)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
