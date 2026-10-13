@@ -6196,6 +6196,12 @@ impl Engine {
         let contest_was = crate::settings::ContestBefore::of(&self.settings);
         let contest_was_active = self.settings.fd_active;
         let live_contest_before = self.settings.contest_before.take();
+        // …and the call and class a hosted club's files are written under: the save that turns
+        // the mode off holds them there (`fdevent::ClubLog::note_host_settings`).
+        let hosted_was = (
+            contest_was.mycall.clone(),
+            contest_was.contest_entry_class.clone(),
+        );
         self.settings = s;
         // A settings save can carry a new position id.
         self.sync_log_posid();
@@ -6250,6 +6256,15 @@ impl Engine {
             // A form never writes or wipes the note; the save itself may take it or end it.
             self.settings.contest_before = live_contest_before;
             self.note_contest_before(contest_was, contest_was_active);
+        }
+        if let Some(club) = self.fd_club.as_mut() {
+            club.note_host_settings(
+                (&hosted_was.0, &hosted_was.1),
+                (&self.settings.mycall, &self.settings.contest_entry_class),
+                contest_was_active,
+                self.settings.fd_active,
+                now_unix_secs(),
+            );
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -13047,15 +13062,21 @@ impl Engine {
     /// ([`Self::fd_club_session`]) with the entrant's own header lines. `Err` = not
     /// hosting, a session Settings cannot build, or a log that is not one submittable
     /// Cabrillo entry (§6.2); every reason is named.
+    ///
+    /// ⭐ Under the station call and entry class the club was hosted under, whatever this laptop
+    /// is set to now: "Contest over?" puts the station's own back as the mode goes off, and the
+    /// club's are held from that save on ([`crate::fdevent::ClubLog::note_host_settings`]).
     pub fn fd_club_export(&self, cabrillo: bool) -> Result<String, String> {
         let club = self
             .fd_club
             .as_ref()
             .ok_or_else(|| "this station is not hosting a club event".to_string())?;
-        let mycall = self.settings.mycall.as_str();
+        let mycall = club.hosted_call(&self.settings.mycall);
         let session = self.fd_club_session(club)?;
         if cabrillo {
-            club.export_cabrillo_with(mycall, session, &self.contest_entrant())
+            let mut entrant = self.contest_entrant();
+            entrant.entry_class = club.hosted_class(&entrant.entry_class).to_string();
+            club.export_cabrillo_with(mycall, session, &entrant)
         } else {
             Ok(club.export_adif_with(mycall, session))
         }

@@ -971,6 +971,24 @@ enum JournalNote {
     Remove { pos: String, at: u64 },
     /// …and let it back in ([`ClubLog::allow_back`]).
     AllowBack { pos: String, at: u64 },
+    /// ⭐ The call and entry class the club's files are written under from this line on
+    /// ([`ClubLog::note_host_settings`]), so a host restarted after its Contest mode went off
+    /// still writes the club's. Replayed in journal order. An older Nexus replaying this journal
+    /// skips the line, and writes the files under its Settings, as it always did.
+    Hosted {
+        call: Option<String>,
+        class: Option<String>,
+        at: u64,
+    },
+}
+
+/// ⭐ **The station call and entry class a club's files are written under while the host's own
+/// Settings no longer hold them** ([`ClubLog::note_host_settings`]): each `None` while the files
+/// take the host's Settings, as they always did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Hosted {
+    call: Option<String>,
+    class: Option<String>,
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -1064,6 +1082,10 @@ pub struct ClubLog {
     removed: HashMap<String, u64>,
     /// How many positions this run has heard of ([`ClubPosition::heard`]).
     heard: u64,
+    /// ⭐ The call and entry class the club's files are written under since the host's Contest
+    /// mode went off ([`note_host_settings`](Self::note_host_settings)). Journaled, so a
+    /// restarted host still writes the club's.
+    hosted: Hosted,
     /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
     /// until the event ends ([`kept_out`](Self::kept_out)). Journaled, so a restart keeps them;
     /// one entry per contact, however often its position sends it again; at most
@@ -1587,6 +1609,68 @@ impl ClubLog {
         self.event_id == FdEvent::ArrlFd.code()
     }
 
+    /// ⭐ **A Settings save on the host**: `was` its station call and entry class before the save
+    /// and `is` after it, `active_was` and `active` whether Contest mode was on before it and is
+    /// on after it.
+    ///
+    /// The club's files are written under the host's call and class ([`hosted_call`],
+    /// [`hosted_class`]), and "Contest over?" puts the station's own back in the very save that
+    /// turns Contest mode off, while the Club Cabrillo button shows only with the mode on. So the
+    /// save that turns the mode off HOLDS each at what it was before that save, and from then on
+    /// neither the station's own call put back, nor the mode turned on again under it to reach
+    /// the button, moves the club's. A held one follows the host's Settings again once the mode
+    /// is on with that very value back (a break in the party, or a test the evening before, then
+    /// a class corrected), compared trimmed and case-blind. Each change is journaled, so a
+    /// restarted host still writes the club's.
+    ///
+    /// [`hosted_call`]: Self::hosted_call
+    /// [`hosted_class`]: Self::hosted_class
+    pub fn note_host_settings(
+        &mut self,
+        was: (&str, &str),
+        is: (&str, &str),
+        active_was: bool,
+        active: bool,
+        now: u64,
+    ) {
+        let mut hosted = self.hosted.clone();
+        if active_was && !active {
+            hosted.call.get_or_insert_with(|| was.0.trim().to_string());
+            hosted.class.get_or_insert_with(|| was.1.trim().to_string());
+        } else if active {
+            let back = |held: &Option<String>, set: &str| {
+                held.as_deref()
+                    .is_some_and(|h| h.eq_ignore_ascii_case(set.trim()))
+            };
+            if back(&hosted.call, is.0) {
+                hosted.call = None;
+            }
+            if back(&hosted.class, is.1) {
+                hosted.class = None;
+            }
+        }
+        if hosted != self.hosted {
+            self.journal_note(&JournalNote::Hosted {
+                call: hosted.call.clone(),
+                class: hosted.class.clone(),
+                at: now,
+            });
+            self.hosted = hosted;
+        }
+    }
+
+    /// The station call the club's files are written under: the one held since the host's
+    /// Contest mode went off ([`note_host_settings`](Self::note_host_settings)), else `settings`,
+    /// the host's own.
+    pub fn hosted_call<'a>(&'a self, settings: &'a str) -> &'a str {
+        self.hosted.call.as_deref().unwrap_or(settings)
+    }
+
+    /// …and the entry class, the same way.
+    pub fn hosted_class<'a>(&'a self, settings: &'a str) -> &'a str {
+        self.hosted.class.as_deref().unwrap_or(settings)
+    }
+
     /// Open (creating if absent) the append-only journal at `path`, replaying
     /// any rows already in it — the host-restart recovery. Replayed rows are
     /// NOT re-journaled. Call once, before serving.
@@ -1661,6 +1745,12 @@ impl ClubLog {
                             self.removed.remove(&pos);
                         }
                         JournalNote::Remove { .. } | JournalNote::AllowBack { .. } => {}
+                        // In journal order, the latest standing; a previous event's names no
+                        // call this one is written under.
+                        JournalNote::Hosted { call, class, at } if at >= oldest_unix => {
+                            self.hosted = Hosted { call, class };
+                        }
+                        JournalNote::Hosted { .. } => {}
                     }
                     continue;
                 }
@@ -4566,6 +4656,115 @@ mod tests {
         let s = club.score_with("W9XYZ", session, 1, &[], &[]);
         assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
         assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+    }
+
+    /// ⭐ **The call and class a club's files are written under, through the saves a host makes**
+    /// ([`ClubLog::note_host_settings`]): the host's Settings until Contest mode goes off; from
+    /// that save, what they were before it, so "Contest over?" putting the station's own back
+    /// never reaches the club's files, nor does the mode turned on again under the station's own
+    /// call; each one following Settings again once the mode is on with its very value back. A
+    /// restarted host replays each change.
+    ///
+    /// The club's values (W9XYZ, the classes) and the station's own (K9OWN, no class) disagree
+    /// at every step, so each answer names which side it came from.
+    #[test]
+    fn a_club_holds_the_call_and_class_it_was_hosted_under_from_contest_mode_off() {
+        const LOW: &str = "ILLINOIS FIXED LOW POWER";
+        let dir = std::env::temp_dir().join(format!("nexus-fd-hosted-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_hosted.ilqp.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.attach_journal_since(&path, 0).unwrap();
+        // What the files are written under, with Settings at `(call, class)`.
+        let under = |c: &ClubLog, call: &str, class: &str| {
+            (
+                c.hosted_call(call).to_string(),
+                c.hosted_class(class).to_string(),
+            )
+        };
+        let own = |s: &str| s.to_string();
+        let at = ILQP_START;
+
+        // The class corrected while the party runs: the files follow Settings.
+        club.note_host_settings(("W9XYZ", ""), ("W9XYZ", "UNLIMITED"), true, true, at);
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("K9OWN"), own("")),
+            "CONTROL: nothing held, the files take Settings, whatever they are"
+        );
+
+        // A break: the mode off with nothing put back, then on again, then the class corrected.
+        club.note_host_settings(
+            ("W9XYZ", "UNLIMITED"),
+            ("W9XYZ", "UNLIMITED"),
+            true,
+            false,
+            at + 60,
+        );
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("W9XYZ"), own("UNLIMITED")),
+            "held from the save that turned the mode off"
+        );
+        club.note_host_settings(
+            ("W9XYZ", "UNLIMITED"),
+            ("W9XYZ", "UNLIMITED"),
+            false,
+            true,
+            at + 120,
+        );
+        club.note_host_settings(("W9XYZ", "UNLIMITED"), ("W9XYZ", LOW), true, true, at + 180);
+        assert_eq!(
+            under(&club, "W9XYZ", LOW),
+            (own("W9XYZ"), own(LOW)),
+            "the mode back on under the club's own values: they follow Settings again"
+        );
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("K9OWN"), own("")),
+            "…released, not held at the new class"
+        );
+
+        // "Contest over?": the station's own put back in the save that turns the mode off.
+        club.note_host_settings(("W9XYZ", LOW), ("K9OWN", ""), true, false, at + 240);
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("W9XYZ"), own(LOW)),
+            "the put-back never reaches the club's files"
+        );
+        // The mode on again under the station's own call, to reach the Club Cabrillo button.
+        club.note_host_settings(("K9OWN", ""), ("K9OWN", ""), false, true, at + 300);
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("W9XYZ"), own(LOW)),
+            "nor does the mode turned on again under the station's own call"
+        );
+        // A restarted host holds the same.
+        let mut reborn = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        reborn.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            under(&reborn, "K9OWN", ""),
+            (own("W9XYZ"), own(LOW)),
+            "the journal replays the hold"
+        );
+
+        // The club's call typed back (case-blind) with the mode on: the call follows Settings
+        // again; the class, still the station's own, stays held.
+        club.note_host_settings(("K9OWN", ""), ("w9xyz", ""), true, true, at + 360);
+        assert_eq!(
+            under(&club, "w9xyz", ""),
+            (own("w9xyz"), own(LOW)),
+            "each one is let go on its own value"
+        );
+        let mut reborn = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        reborn.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            under(&reborn, "K9OWN", ""),
+            (own("K9OWN"), own(LOW)),
+            "the journal replays the release too, in order"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `call`'s record in an ADIF file.

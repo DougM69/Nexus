@@ -168,6 +168,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line and in the Cabrillo CLAIMED-SCORE. They now count once there and on the multiplier board,
   where both spellings' cells light together. Each contact is still logged and exported as its
   station sent it, and Prince Edward Island typed by name in the county box is logged as PEI.
+- **At a club, the Club Cabrillo and Club ADIF keep the club's call and entry class once Contest
+  mode goes off.** The host's club files took whatever call and entry class the host laptop had at
+  export, so a host that put its own back with **Contest over?** first got the club's contacts under
+  its own call with no entry class, even with Contest mode turned back on to reach the button. From
+  the moment Contest mode goes off on the host, the club's files keep the call and class it had,
+  whatever the laptop is set to afterwards, and after Nexus restarts. While the mode is on, a class
+  you correct still reaches them, and after a break they follow your Settings again once the mode
+  is back on with the club's call and class.
 
 ## [1.18.0] — 2026-10-12
 

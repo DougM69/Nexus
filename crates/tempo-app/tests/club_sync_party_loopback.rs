@@ -335,6 +335,150 @@ fn an_illinois_qso_party_club_merges_dupes_late_joins_drops_and_a_host_restart()
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The lines of a Cabrillo file that start `{tag}:`.
+fn header<'a>(cab: &'a str, tag: &str) -> Vec<&'a str> {
+    cab.lines()
+        .filter(|l| l.starts_with(&format!("{tag}:")))
+        .collect()
+}
+
+/// ⭐ **The club's files keep the call and the entry class the club was hosted under, whatever
+/// the host laptop is set to afterwards.** "Contest over?" puts back the station's own call and
+/// class in the very save that turns Contest mode off, and the Club Cabrillo button is on the
+/// Contest screen, which shows only with the mode on. The files used to read both at export, so
+/// a host that ended the party before exporting submitted the club's contacts under its
+/// operator's own call, with no class.
+///
+/// CONTROL first: before the put-back the file is the club's, and the put-back really lands in
+/// Settings. Then the file after it, after Contest mode goes back on under the operator's own
+/// call to reach the button, and after the host restarts from its journal so set: each the very
+/// bytes of the file before it, the Club ADIF too.
+#[test]
+fn the_club_files_keep_the_call_and_class_the_club_was_hosted_under() {
+    let dir = std::env::temp_dir().join(format!("ilqp-hosted-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = dir.join("fd_event_event.ilqp.jsonl");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = party_engine("aaaa0001", "HQ", &addr);
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let p2 = party_engine("bbbb0002", "CW tent", &addr);
+    let p2_sd = start_pump(&p2, &addr);
+    log_party(&host, "K9AAA", "COOK", "PH");
+    log_party(&p2, "K9BBB", "KANE", "CW");
+    wait_until("both contacts merged", 10, || club_rows(&host) == 2);
+
+    let cabrillo = |eng: &Shared| {
+        engine_lock(eng)
+            .fd_club_export(true)
+            .expect("club cabrillo")
+    };
+    let adif = |eng: &Shared| engine_lock(eng).fd_club_export(false).expect("club adif");
+    let before = cabrillo(&host);
+    let before_adif = adif(&host);
+    assert_eq!(
+        (header(&before, "CALLSIGN"), header(&before, "ENTRY-CLASS")),
+        (vec!["CALLSIGN: W9XYZ"], vec!["ENTRY-CLASS: UNLIMITED"]),
+        "CONTROL: the club's file before the put-back: {before}"
+    );
+    let lines: Vec<&str> = before.lines().filter(|l| l.starts_with("QSO:")).collect();
+    assert_eq!(lines.len(), 2, "{before}");
+    assert!(
+        lines.iter().all(|l| l.contains(" W9XYZ ")),
+        "CONTROL: every contact sent as the club: {before}"
+    );
+
+    // "Contest over?" → Turn off with the call and the class ticked: ONE save, the mode off.
+    let put_back = |eng: &Shared, active: bool| {
+        let mut e = engine_lock(eng);
+        let mut s = e.settings().clone();
+        s.fd_active = active;
+        s.mycall = "K9OWN".into();
+        s.contest_entry_class = String::new();
+        e.apply_settings(s);
+    };
+    put_back(&host, false);
+    {
+        let e = engine_lock(&host);
+        assert_eq!(
+            (
+                e.settings().mycall.as_str(),
+                e.settings().contest_entry_class.as_str(),
+                e.settings().fd_active,
+                e.fd_hosting(),
+            ),
+            ("K9OWN", "", false, true),
+            "CONTROL: the put-back landed, the mode is off, and the laptop still hosts"
+        );
+    }
+    let after = cabrillo(&host);
+    assert_eq!(
+        (header(&after, "CALLSIGN"), header(&after, "ENTRY-CLASS")),
+        (vec!["CALLSIGN: W9XYZ"], vec!["ENTRY-CLASS: UNLIMITED"]),
+        "the club's call and class after the put-back: {after}"
+    );
+    assert_eq!(after, before, "the club file after the put-back");
+    assert_eq!(adif(&host), before_adif, "the Club ADIF after the put-back");
+
+    // Contest mode back on, to reach the Club Cabrillo button, under the operator's own call.
+    {
+        let mut e = engine_lock(&host);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        e.apply_settings(s);
+        let _ = e.set_mode("fieldday-sp");
+    }
+    {
+        let e = engine_lock(&host);
+        assert_eq!(
+            (
+                e.settings().mycall.as_str(),
+                e.snapshot().field_day.and_then(|f| f.club).is_some()
+            ),
+            ("K9OWN", true),
+            "CONTROL: the mode is back on under the operator's own call, the club block with it"
+        );
+    }
+    assert_eq!(
+        cabrillo(&host),
+        before,
+        "the club file with the mode back on"
+    );
+
+    // The host restarts with the put-back saved, and rebuilds the club from its journal.
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    p2_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    let host2 = party_engine("aaaa0001", "HQ", &addr);
+    put_back(&host2, false);
+    engine_lock(&host2).fd_host_start(journal.clone()).unwrap();
+    assert_eq!(
+        club_rows(&host2),
+        2,
+        "CONTROL: the journal rebuilds the club"
+    );
+    assert_eq!(
+        engine_lock(&host2).settings().mycall,
+        "K9OWN",
+        "CONTROL: the restarted host is on the operator's own call"
+    );
+    assert_eq!(
+        cabrillo(&host2),
+        before,
+        "the club file after the host restarts"
+    );
+    assert_eq!(
+        adif(&host2),
+        before_adif,
+        "the Club ADIF after the host restarts"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// One Field Day contact, so the refused position has a row it would have sent.
 fn log_party_fd(eng: &Shared) {
     assert!(engine_lock(eng)
