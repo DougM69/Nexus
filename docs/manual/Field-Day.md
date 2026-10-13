@@ -484,15 +484,17 @@ Before the party, on every laptop:
 - [ ] Every clock set from one source, to the second; once the positions have joined, the host's club board says each one is in step.
 - [ ] For a TV in the room, **Spectator scoreboard** on the host, and on the laptop the TV is plugged into if that is a position: it shows the host's board, the counties map included.
 - [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: the party's laptops then load none of the rehearsal's contacts, and their Contest screens say how many they kept out. On the host, use a different Event name from the rehearsal's, or its club journal brings the rehearsal's contacts back into the club's log.
+- [ ] **No test contacts from 1700Z on Saturday.** From then on, every contact logged with Contest mode on is in the party's log, and so in the club's file and its claimed score, even before the party starts. If one is logged, take it back at once with **Ctrl+D** twice on the laptop that logged it, while it is still that laptop's newest contact; an older one comes out of the Club Cabrillo file by hand before you send it.
 
 During the party:
 
 - [ ] One transmitted signal per position. Every club chip reads **Synced**; a chip reading Offline or Behind catches up by itself when the network is back.
 - [ ] Whoever takes a seat sets **Operator at the key** first.
 
-After the party, on the host:
+After the party:
 
-- [ ] **Club Cabrillo**, then read the header: `ENTRY-CLASS`, `CLUB`, `OPERATORS`, `IL-COUNTY`, and your address and soapbox if you set them, and send that one file to n9jf@arrl.net by midnight Central Time on 4 November 2026. Export every position's own Cabrillo too, and keep them as a backup.
+- [ ] Every laptop's club chip reads **Synced** before anyone turns Contest mode off, so the club's log has every contact.
+- [ ] On the host, **Club Cabrillo** before **Contest over?**: export it while Contest mode is still on, because its button is on the Contest screen only then. Read the header: `CALLSIGN` (the club's call), `ENTRY-CLASS`, `CLUB`, `OPERATORS`, `IL-COUNTY`, and your address and soapbox if you set them, and send that one file to n9jf@arrl.net by midnight Central Time on 4 November 2026. Export every position's own Cabrillo too, and keep them as a backup.
 
 **Running the Illinois QSO Party as a club, with each position logging on its own** (if club sync is not used):
 
@@ -504,6 +506,7 @@ Before the party, on every laptop:
 - [ ] **Contest mode** on (Settings → Contesting ▸ Contest, or the top of the Contest screen). Leave **Host a club event** off and **Join event at** empty.
 - [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: its contacts then stay out of the party's log, and the Contest screen says how many it kept out.
 - [ ] Rehearse on each position: log a phone contact and a CW contact, log one of them again and see it refused as a dupe, then export a Cabrillo file and read its header.
+- [ ] **No test contacts from 1700Z on Saturday.** From then on, every contact logged with Contest mode on is in the party's log and its Cabrillo file, even before the party starts. If one is logged, take it back at once with **Ctrl+D** twice, while it is still the newest contact; an older one comes out of the file by hand before you send it.
 
 During the party:
 

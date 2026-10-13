@@ -75,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was in the banner (on the Remote page's Contest view too) and the FT header; hovering it shows the
   whole sentence. It shows on exactly the modes the warning did, and the contact still logs: what is
   logged and scored is unchanged.
+- **The manual's Illinois QSO Party club checklists gain three lines.** No test contacts from 1700Z
+  on Saturday: every contact logged with Contest mode on from then is in the party's log, so in the
+  club's file and its claimed score, even before the party starts, and Ctrl+D twice takes back one
+  just made. Every laptop's club chip reads Synced before anyone turns Contest mode off. The host
+  exports the Club Cabrillo before Contest over?, while Contest mode is still on, because its button
+  is on the Contest screen only then. The guide's page on ending a contest now says the last two for
+  every club contest.
 
 ### Fixed
 
