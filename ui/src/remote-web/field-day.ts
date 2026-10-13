@@ -98,10 +98,13 @@ function status(v: unknown): void {
     Number(f.eventEndUnix) <= Number(f.eventStartUnix) || !texts(f.workedSections,2048) || !texts(f.assistanceOn,64) ||
     !Array.isArray(f.log) || f.log.length > 2048 || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
   // `qsoCount` is the contacts that COUNT, the summary sheet's raw non-dupe number, and `log` is
-  // every row; requiring the two to be equal refused the whole capture for one logged dupe. Two
-  // marks take a row out of the station's count, and the rows carry both: `dupe`, a duplicate the
-  // sponsor asked to have logged and scored zero, and `sat`, a contact worked through a bird when
-  // the status says `satelliteCredit: false` (Winter Field Day). Counted over the rows checked below.
+  // every row; requiring the two to be equal refused the whole capture for one logged dupe. Three
+  // marks take a row out of the station's count, and the rows carry them: `dupe`, a duplicate the
+  // sponsor asked to have logged and scored zero, `sat`, a contact worked through a bird when the
+  // status says `satelliteCredit: false` (Winter Field Day), and `banned`, a contact in a mode the
+  // contest bans (FT8 at the Illinois QSO Party), logged and worth nothing. A station older than
+  // `banned` counted that contact and sends no mark, so the mark, never the ruleset's list, is what
+  // is read. Counted over the rows checked below.
   let counted = 0
   for (const raw of f.log) {
     // `mex` is the row's OWN sent exchange, which is where a per-QSO exchange belongs now that
@@ -119,13 +122,16 @@ function status(v: unknown): void {
     // `skip_serializing_if`, so it goes on the wire as ""); a station older than the field never
     // does. Optional for that second reason alone -- this list's whole job is that a payload
     // written by an older station still validates.
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey','dupe','sat'])
+    // `banned` marks a row worked in a mode the contest bans, which counts for nothing. Skipped when
+    // false, like `dupe`.
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey','dupe','sat','banned'])
     if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix) ||
       (q.dkey !== undefined && !texts(q.dkey,DUPE_KEY_MAX)) ||
       (q.dupe !== undefined && typeof q.dupe !== 'boolean') ||
+      (q.banned !== undefined && typeof q.banned !== 'boolean') ||
       (q.sat !== undefined && !text(q.sat)) ||
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
-    if (q.dupe !== true && (f.satelliteCredit !== false || !q.sat)) counted++
+    if (q.dupe !== true && q.banned !== true && (f.satelliteCredit !== false || !q.sat)) counted++
   }
   if (f.qsoCount !== counted) throw new Error('invalidFieldDay')
   if (f.club !== undefined && f.club !== null) {

@@ -734,7 +734,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 &[
                     "call", "class", "section", "band", "mode", "submode", "whenUnix",
                 ],
-                &["mex", "rcvd", "dkey", "dupe", "sat"],
+                &["mex", "rcvd", "dkey", "dupe", "sat", "banned"],
             );
         }
         if let Some(rule) = status.get("dupeRule") {
@@ -966,6 +966,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             rcvd: vec!["2A".into(), "WI".into()],
             dkey: vec!["K1ABC".into(), "20m".into(), "CW".into()],
             dupe: true,
+            banned: true,
             seq: 1,
         }],
         club: Some(FdClubDto {

@@ -357,3 +357,58 @@ fn a_satellite_contact_counts_for_nothing_at_wfd() {
         "ARRL Field Day"
     );
 }
+
+/// ⭐ **A contact in a WSJT mode is logged and filed, and counts for nothing at Winter Field
+/// Day.** The sponsor's rules page (read 2026-10-08): *"All modes, except WSJT modes"* may be
+/// used, and *"WSJT modes include: FT2, FST4, FT4, FT8, JT4, JT9, JT65, Q65, MSK144, WSPR,
+/// FST4W, and Echo."* Each of the twelve, whatever case it was recorded in, adds a row to the
+/// log and a line to the file and nothing to the points, the contacts or the sections, as a
+/// logged duplicate does. RTTY, which the sponsor keeps legal as digital, counts.
+#[test]
+fn a_wsjt_mode_contact_is_logged_and_filed_and_counts_for_nothing_at_wfd() {
+    let run = |event: &str, class: &str, submodes: &[String]| {
+        let mut log = fixture(event, "LOW");
+        log.band = "20m".into();
+        for (i, submode) in submodes.iter().enumerate() {
+            let call = format!("K1W{}", char::from(b'A' + i as u8));
+            assert!(
+                log.log_submode_at(&call, class, "ENY", "DIG", submode, 0, DURING + 60),
+                "{call} on {submode} is logged under {event}"
+            );
+        }
+        let cab = log
+            .cabrillo_with(14_000, &CabrilloEntrant::default())
+            .expect("one entry");
+        (
+            log.qsos().len(),
+            log.qso_count(),
+            log.qso_points(),
+            log.worked_sections().join(" "),
+            cab.matches(" K1W").count(),
+        )
+    };
+    let wfd = ruleset_by_id("wfd", CURRENT_RULES_YEAR).expect("shipped");
+    let wsjt: Vec<String> = wfd
+        .banned_modes
+        .iter()
+        .map(|m| m.to_ascii_lowercase())
+        .collect();
+    assert_eq!(wsjt.len(), 12, "PREMISE: the sponsor's twelve");
+    assert_eq!(
+        run("wfd", "1H", &wsjt),
+        (15, 3, 5, "AZ CT MN".to_string(), 12),
+        "Winter Field Day: (rows, contacts counted, QSO points, sections, the twelve's \
+         Cabrillo lines)"
+    );
+    // RTTY counts: one more contact, 2 more points, and its section.
+    assert_eq!(
+        run("wfd", "1H", &["RTTY".to_string()]),
+        (4, 4, 7, "AZ CT ENY MN".to_string(), 1)
+    );
+    // CONTROL: ARRL Field Day bans no mode, so the same FT2 contact counts there.
+    assert_eq!(
+        run("arrlfd", "1D", &["FT2".to_string()]),
+        (4, 4, 7, "AZ CT ENY MN".to_string(), 1),
+        "ARRL Field Day"
+    );
+}

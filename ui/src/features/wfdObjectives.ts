@@ -103,14 +103,15 @@ export function wfdObjectiveTally(earned: readonly string[], planned: readonly s
  *  `bands` counts the bands holding at least three counting contacts ("Log at least three QSOs
  *  on at least six different bands", p.7); `modes` counts the mode classes worked ("at least
  *  one QSO on multiple modes … Phone and CW, CW and Digital, or Phone and Digital", p.7). A
- *  duplicate is logged but counts for nothing, so it counts for neither. */
+ *  duplicate is logged but counts for nothing, so it counts for neither, and so does a contact
+ *  in a WSJT mode, which the sponsor does not allow ("All modes, except WSJT modes"). */
 export function wfdLogHints(log: readonly FieldDayQso[]): { bands: number; modes: number } {
   const perBand = new Map<string, number>()
   const modes = new Set<string>()
   for (const q of log) {
     // A satellite contact counts for nothing at Winter Field Day ("Cross-band, repeated,
     // relayed … contacts do not count", p.5), so it is no evidence for these either.
-    if (q.dupe || (q.sat ?? '') !== '') continue
+    if (q.dupe || q.banned || (q.sat ?? '') !== '') continue
     const band = q.band.trim().toLowerCase()
     if (band) perBand.set(band, (perBand.get(band) ?? 0) + 1)
     const mode = (q.mode ?? '').trim().toUpperCase()

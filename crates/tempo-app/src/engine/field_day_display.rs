@@ -430,6 +430,8 @@ pub(super) fn field_day_qso(
         // ⭐ The engine's own answer about this row, so the log table marks a
         // zero-scoring dupe instead of guessing at one from a repeated callsign.
         dupe: q.dupe,
+        // …and whether it was worked in a mode the contest bans, which counts for nothing.
+        banned: q.banned_under(rs),
         seq: q.seq,
     }
 }
@@ -1148,6 +1150,66 @@ mod tests {
         assert_eq!(wire["log"].as_array().unwrap().len(), before + 1);
         assert_eq!(wire["log"][before]["dupe"], true, "{}", wire["log"][before]);
         assert!(wire["log"][0].get("dupe").is_none(), "{}", wire["log"][0]);
+    }
+
+    /// ⭐ **A contact in a mode the contest bans says so on the row, and the count leaves it out.**
+    /// The Illinois QSO Party gives FT8 *"no contact credit"*, so the contact is logged and worth
+    /// nothing, and the hosted Remote page, which recounts `qsoCount` from the rows and refuses a
+    /// capture whose count it cannot reproduce, has to be able to tell it from a contact that
+    /// counts. Skipped when false, like `dupe`.
+    #[test]
+    fn a_banned_mode_contact_says_so_on_the_row_and_counts_for_nothing() {
+        let mut e = Engine::with_settings(crate::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_active: true,
+            fd_event: "ilqp".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "MCLN".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        let ex = |qth: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K9AAA", &ex("COOK"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9FT8", &ex("LAKE"), "DIG", Some("FT8"))
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        let county: Vec<&str> = fd
+            .boards
+            .iter()
+            .find(|b| b.domain.as_deref() == Some("il_counties"))
+            .expect("the county board")
+            .worked
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            (fd.log.len(), fd.qso_count, fd.total_score, county),
+            (2, 1, 2, vec!["COOK"]),
+            "(rows, contacts, score, the county board): the FT8 contact is logged and worth nothing"
+        );
+        let wire = serde_json::to_value(&fd).unwrap();
+        assert_eq!(wire["log"][1]["banned"], true, "{}", wire["log"][1]);
+        assert!(
+            wire["log"][0].get("banned").is_none(),
+            "the CW contact says nothing: {}",
+            wire["log"][0]
+        );
+        // CONTROL: the same contact on RTTY counts, and its row carries no mark.
+        assert!(e
+            .contest_log_manual("K9RTY", &ex("LAKE"), "DIG", Some("RTTY"))
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!((fd.log.len(), fd.qso_count), (3, 2));
+        let wire = serde_json::to_value(&fd).unwrap();
+        assert!(wire["log"][2].get("banned").is_none(), "{}", wire["log"][2]);
     }
 
     /// ⭐ **THE SIZE BOUND COUNTS THE ROWS IT WOULD SEND.** The browser refuses a capture of more

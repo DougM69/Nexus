@@ -704,6 +704,148 @@ fn the_wsjt_modes_are_banned_and_the_bands_are_the_sponsors() {
     );
 }
 
+/// 1700Z on the party's Sunday, 18 October 2026.
+const PARTY: u64 = 1_792_342_800;
+
+/// A McLean County log with K9AAA on 20 m CW from Cook, then `call` on 20 m in the digital mode
+/// `submode`, from `qth`.
+fn cook_then_digital(call: &str, qth: &str, submode: &str) -> FieldDayLog {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("IL", "MCLN")), "20m");
+    let cook = fields(&[("RST", "599"), ("QTH", "COOK")]);
+    assert!(log.log_fields_at("K9AAA", &cook, "CW", "", 0, PARTY + 60));
+    let theirs = fields(&[("RST", "599"), ("QTH", qth)]);
+    assert!(
+        log.log_fields_at(call, &theirs, "DIG", submode, 0, PARTY + 120),
+        "{call} on {submode:?} is logged"
+    );
+    log
+}
+
+/// ⭐ **An FT8 contact is logged and filed, and scores nothing** — *"FT4 and FT8 contacts will
+/// receive no contact credit"*: no points, no multiplier and no cell on the county board, and
+/// the contact stays in the log, the Cabrillo and the ADIF, as a logged duplicate does.
+///
+/// Measured before (the readiness audit): K9AAA on CW from Cook and K9FT8 on FT8 from Lake
+/// claimed 8, both contacts' points times both counties, where the sponsor credits 2.
+#[test]
+fn a_contact_in_a_banned_mode_is_logged_and_filed_and_scores_nothing() {
+    use tempo_core::contest::CabrilloEntrant;
+    let log = cook_then_digital("K9FT8", "LAKE", "FT8");
+    assert_eq!(
+        calls(&log),
+        ["K9AAA", "K9FT8"],
+        "both contacts are in the log"
+    );
+    assert_eq!(
+        (score(&log), log.qso_count(), log.worked_values("QTH")),
+        ((2, 2, Some(1), 2), 1, vec!["COOK".to_string()]),
+        "((QSO points, powered, multipliers, total), contacts, the county board): K9AAA alone"
+    );
+    let cab = log
+        .cabrillo_with(14_000, &CabrilloEntrant::default())
+        .expect("one entry");
+    assert!(cab.contains("CLAIMED-SCORE: 2\n"), "{cab}");
+    assert!(
+        cab.contains(" W9XYZ 599 MCLN K9FT8 599 LAKE\n"),
+        "the FT8 contact is still a line of the file:\n{cab}"
+    );
+    assert!(
+        log.submission_adif().contains("<CALL:5>K9FT8"),
+        "…and a record of the ADIF"
+    );
+    // CONTROL: the same contact on RTTY, the digital mode the sponsor encourages, counts:
+    // (2 + 2) points × 2 counties.
+    let rtty = cook_then_digital("K9FT8", "LAKE", "RTTY");
+    assert_eq!(
+        (score(&rtty), rtty.qso_count(), rtty.worked_values("QTH")),
+        (
+            (4, 4, Some(2), 8),
+            2,
+            vec!["COOK".to_string(), "LAKE".to_string()]
+        )
+    );
+    assert!(rtty
+        .cabrillo_with(14_000, &CabrilloEntrant::default())
+        .expect("one entry")
+        .contains("CLAIMED-SCORE: 8\n"));
+    // CONTROL: a party that bans no mode scores the same FT8 contact.
+    let mut oh = FieldDayLog::new(
+        "W8XYZ",
+        ContestSession::for_ruleset(
+            ruleset_by_id("ohqp", CURRENT_RULES_YEAR).expect("shipped"),
+            &station("OH", "FRAN"),
+        )
+        .expect("ohqp session"),
+        "20m",
+    );
+    assert!(oh.log_fields_at(
+        "K8AAA",
+        &fields(&[("RST", "599"), ("QTH", "DELA")]),
+        "CW",
+        "",
+        0,
+        PARTY + 60
+    ));
+    assert!(oh.log_fields_at(
+        "K8FT8",
+        &fields(&[("RST", "599"), ("QTH", "LICK")]),
+        "DIG",
+        "FT8",
+        0,
+        PARTY + 120
+    ));
+    assert_eq!(
+        (oh.qso_count(), oh.worked_values("QTH")),
+        (2, vec!["DELA".to_string(), "LICK".to_string()]),
+        "OhQP bans no mode"
+    );
+}
+
+/// ⭐ **A bonus station worked only on FT8 earns no bonus.** The sponsor adds its 100 points
+/// for *"contacting these stations"*, and an FT8 contact is one it gives no credit.
+///
+/// Measured before (the readiness audit): an FT8-only W9OAB took a club's claimed score from 32
+/// to 150, its points, its county and the 100.
+#[test]
+fn a_bonus_station_worked_only_in_a_banned_mode_earns_no_bonus() {
+    use tempo_core::contest::CabrilloEntrant;
+    let log = cook_then_digital("W9OAB", "ADAM", "FT4");
+    assert_eq!(
+        (log.bonus_station_points(), score(&log).3),
+        (0, 2),
+        "(bonus, score): K9AAA's 2 points × Cook, and nothing for W9OAB"
+    );
+    assert!(log
+        .cabrillo_with(14_000, &CabrilloEntrant::default())
+        .expect("one entry")
+        .contains("CLAIMED-SCORE: 2\n"));
+    // CONTROL: on RTTY the same contact earns the bonus, its points and Adams.
+    let rtty = cook_then_digital("W9OAB", "ADAM", "RTTY");
+    assert_eq!((rtty.bonus_station_points(), score(&rtty).3), (100, 8));
+    assert!(rtty
+        .cabrillo_with(14_000, &CabrilloEntrant::default())
+        .expect("one entry")
+        .contains("CLAIMED-SCORE: 108\n"));
+}
+
+/// A digital contact that recorded no on-air mode, as a row from before the mode was recorded,
+/// is not read as FT8 (which is what its export falls back to calling it): a mode nobody
+/// recorded is never a banned one, and the contact counts as it always has.
+#[test]
+fn a_digital_contact_with_no_recorded_mode_still_counts() {
+    let log = cook_then_digital("K9OLD", "LAKE", "");
+    assert_eq!(
+        log.qsos()[1].recorded_mode(),
+        "FT8",
+        "PREMISE: its export says FT8"
+    );
+    assert_eq!(
+        (score(&log).3, log.qso_count()),
+        (8, 2),
+        "(2 + 2) points × Cook and Lake"
+    );
+}
+
 // ---- the journal restore: this running of this contest, and nothing else -------------
 
 /// 2026-10-14T23:00:00Z — the Wednesday evening of a club's rehearsal, four days before the

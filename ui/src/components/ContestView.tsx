@@ -322,8 +322,11 @@ const EXT: Record<ExportFormat, string> = {
 export function annotate(log: FieldDayQso[]): LogRowMeta[] {
   const seenSections = new Set<string>()
   return log.map((q) => {
-    const isNewSection = !seenSections.has(q.section)
-    seenSections.add(q.section)
+    // A contact in a mode the contest bans counts for nothing (the engine's mark, as `dupe`
+    // is), so it brings no section: the next contact from it is the section's first.
+    const counts = q.banned !== true
+    const isNewSection = counts && !seenSections.has(q.section)
+    if (counts) seenSections.add(q.section)
     return {
       qso: q,
       isNewSection,
@@ -639,6 +642,12 @@ export function buildSummaryText(a: SummaryArgs): string {
   const dupes = a.log.filter((q) => q.dupe === true).length
   if (dupes > 0) {
     L.push(`  Counted above: ${dupes} duplicate contact${dupes === 1 ? '' : 's'} logged at zero points.`)
+  }
+  // …and the contacts in a mode the contest bans (FT8 at the Illinois QSO Party), logged and
+  // worth nothing, as the engine marked them.
+  const banned = a.log.filter((q) => q.banned === true).length
+  if (banned > 0) {
+    L.push(`  Counted above: ${banned} contact${banned === 1 ? '' : 's'} in a mode this contest does not allow, logged at zero points.`)
   }
   L.push('')
   if (a.contest) {

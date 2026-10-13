@@ -168,6 +168,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line and in the Cabrillo CLAIMED-SCORE. They now count once there and on the multiplier board,
   where both spellings' cells light together. Each contact is still logged and exported as its
   station sent it, and Prince Edward Island typed by name in the county box is logged as PEI.
+- **A contact in a mode the contest does not allow now scores nothing.** FT8 and FT4 at the Illinois
+  QSO Party, and the WSJT modes at Winter Field Day, were scored like any other contact although the
+  chip beside the mode said no credit: their points, their county or section, and a bonus station's
+  100 points went into the score on screen, the club line, the club TV scoreboard and the Cabrillo
+  CLAIMED-SCORE. An FT8 contact from Lake beside a CW one from Cook claimed 8 where the sponsor
+  credits 2. Such a contact now adds nothing to any of them, is not counted among your contacts and
+  lights no cell on any laptop's board. It is still logged and still in the Cabrillo and ADIF files,
+  as a dupe is, and contests that allow every mode score as before.
 
 ## [1.18.0] — 2026-10-12
 
