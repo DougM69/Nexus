@@ -951,8 +951,8 @@ pub struct ClubLogEntry<'a> {
 /// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
 /// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
 /// `call` are required) and skips it, as it skips a torn line; this build reads each before
-/// trying a row. `at` is this host's clock, and a note from a previous event ages out with
-/// that event's rows ([`ClubLog::attach_journal_since`]).
+/// trying a row. `at` is this host's clock, and a note from an earlier running stays out with
+/// that running's rows ([`ClubLog::attach_journal`]).
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum JournalNote {
@@ -1136,10 +1136,6 @@ struct Aside {
     /// When it arrived on this run, for the rate meter it rejoins when put back.
     arrived: Option<u64>,
 }
-
-/// How far back a host journal replay reaches: four days, the position ADIF journal's window —
-/// see `ClubLog::attach_journal_since` for why.
-const STALE_EVENT_SECS: u64 = 4 * 86_400;
 
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
@@ -1741,21 +1737,26 @@ impl ClubLog {
     /// Event name, so a club that rehearsed under the name it hosts the contest with would begin
     /// the contest with the rehearsal in its club log, its score and its files. A running's day
     /// begins a day before the contest starts, so a rehearsal on an earlier day belongs to the
-    /// running before, and so does every note made with it. The four days still hold too.
+    /// running before, and so does every note made with it.
+    ///
+    /// ⭐ **And the whole of that running, whatever its age**, as a position's own restore keeps
+    /// its own: a host relaunched the week after the contest to export the club's files replays
+    /// every contact and note of it, the call and class the club was hosted under among them. A
+    /// running lasts until the next one's day begins, so a host relaunched from then starts that
+    /// running's club empty, under its own call and class.
     pub fn attach_journal(&mut self, path: &PathBuf) -> std::io::Result<()> {
         self.attach_journal_at(path, now_unix())
     }
 
     /// [`Self::attach_journal`] at `now_unix`, so a test can stand on a contest's own day.
     pub fn attach_journal_at(&mut self, path: &PathBuf, now_unix: u64) -> std::io::Result<()> {
-        let oldest = now_unix.saturating_sub(STALE_EVENT_SECS);
         let rs = self.ruleset();
         let running = rs.running_of(now_unix);
-        self.replay_journal(path, |at| at >= oldest && rs.running_of(at) == running)
+        self.replay_journal(path, |at| rs.running_of(at) == running)
     }
 
-    /// [`Self::attach_journal`] with the cutoff exposed, so a test can age a journal
-    /// without waiting days.
+    /// Every row and note of the journal from `oldest_unix` on, whatever its running: a test's
+    /// replay of a whole journal (`0`), or of one aged without waiting days.
     ///
     /// ⚠️ THE CUTOFF EXISTS BECAUSE ITS ABSENCE SILENTLY ATE A WHOLE POSITION'S LOG, on
     /// the DEFAULT settings. The host journal is named from the event name, and the shipped
@@ -1771,8 +1772,9 @@ impl ClubLog {
     /// Four days was the position journal's own expiry (see `restore_field_day_if_enabled`),
     /// deliberately: the two halves of the same event must age out together or the watermark
     /// outlives the log it describes, which is exactly this bug. The position's journal now keeps
-    /// its running's rows whatever their age and numbers on from them, so inside a running the
-    /// watermark cannot outlive them; the cutoff still keeps an earlier event's out.
+    /// its running's rows whatever their age and numbers on from them, and so does the host's
+    /// replay ([`Self::attach_journal`]): inside a running the watermark cannot outlive them, and
+    /// the running keeps an earlier event's out.
     pub fn attach_journal_since(
         &mut self,
         path: &PathBuf,
@@ -3620,7 +3622,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("fd_event_event.jsonl");
         let now = now_unix();
-        let last_year = now - 365 * 86_400;
+        // Last year's Field Day: the running before this one, whatever today's date.
+        let fd = party("arrlfd");
+        let last_year = fd.event_window(fd.running_of(now) - 1).start_unix;
         {
             let mut old = ClubLog::new(FdEvent::ArrlFd, "event");
             old.attach_journal_since(&path, 0).unwrap();
@@ -3785,7 +3789,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("fd_event_event.jsonl");
         let now = now_unix();
-        let last_year = now - 365 * 86_400;
+        // Last year's Field Day: the running before this one, whatever today's date.
+        let fd = party("arrlfd");
+        let last_year = fd.event_window(fd.running_of(now) - 1).start_unix;
 
         // Last year's host wrote five rows for this position.
         {
@@ -3818,8 +3824,7 @@ mod tests {
 
         // This year's host replays the SAME file.
         let mut host = ClubLog::new(FdEvent::ArrlFd, "event");
-        host.attach_journal_since(&path, now.saturating_sub(STALE_EVENT_SECS))
-            .unwrap();
+        host.attach_journal(&path).unwrap();
         assert_eq!(
             host.rows().len(),
             0,
@@ -5024,6 +5029,131 @@ mod tests {
                 true
             ),
             "on its own evening the host replays the rehearsal and its removal"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A host relaunched days after the party replays the whole party, and nothing of the
+    /// running before it.** The host replayed only the last four days of its journal, so one
+    /// relaunched the next weekend to export, or days on after a crash, began with an empty club
+    /// log under the operator's own call: its Club Cabrillo and Club ADIF held none of the party
+    /// (measured: 3 of 3 contacts one and three days on, 0 of 3 five and ten days on). It now
+    /// replays the running its clock is in whatever the age, as a position's own journal restore
+    /// does, and the notes with the rows: the call and class the club was hosted under among them.
+    ///
+    /// By value, in one journal: a rehearsal on the Saturday morning under the same Event name,
+    /// two hours before the party's running begins; a laptop removed at it; the party's three
+    /// contacts; and the hold "Contest over?" made at the party's end. Relaunched one, five and
+    /// ten days after the start, the host holds the party alone, under the club's call and class,
+    /// with the rehearsal's contact and removal out, the first time where the four days would have
+    /// kept them. The running ends when the next one's day begins: a second before, the same;
+    /// from then, an empty club under the host's own call and class, so a laptop on the club's
+    /// call meets the sentence a laptop on another call always has.
+    #[test]
+    fn a_host_relaunched_days_after_the_party_replays_its_whole_running() {
+        let dir =
+            std::env::temp_dir().join(format!("nexus-fd-whole-running-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_ilqp-2026.ilqp.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let rehearsal = ILQP_START - 26 * 3600;
+        let end = party("ilqp").event_window(2026).end_unix;
+        {
+            let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+            club.attach_journal_since(&path, 0).unwrap();
+            let rows = [
+                ("bbbb0002", 1, "K9REH", "COOK", rehearsal),
+                ("bbbb0002", 2, "K9AAA", "COOK", ILQP_START + 60),
+                ("cccc0003", 1, "K9BBB", "KANE", ILQP_START + 3600),
+                ("aaaa0001", 1, "K9CCC", "LAKE", end - 60),
+            ];
+            for (pos, seq, call, qth, when) in rows {
+                let q = ilqp_row(pos, seq, call, "40m", "CW", "", qth, "MCLN", when);
+                club.merge(&q, when);
+            }
+            club.remove("cccc0003", "aaaa0001", rehearsal + 180)
+                .unwrap();
+            // "Contest over?" at the party's end puts the operator's own call back, and no class.
+            club.note_host_settings(
+                ("W9XYZ", "UNLIMITED"),
+                ("K9OWN", ""),
+                true,
+                false,
+                end + 600,
+            );
+        }
+        let replay = |now: u64| {
+            let mut host = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+            host.attach_journal_at(&path, now).unwrap();
+            host
+        };
+        // The calls the club log holds, whether the rehearsal's removal stands, and the call and
+        // class its files are written under, the host's Settings being the operator's own.
+        let held = |c: &ClubLog| {
+            (
+                c.rows().iter().map(|r| r.call.clone()).collect::<Vec<_>>(),
+                c.is_removed("cccc0003"),
+                c.hosted_call("K9OWN").to_string(),
+                c.hosted_class("").to_string(),
+            )
+        };
+        let party_held = (
+            vec!["K9AAA".to_string(), "K9BBB".into(), "K9CCC".into()],
+            false,
+            "W9XYZ".to_string(),
+            "UNLIMITED".to_string(),
+        );
+        // Each QSO line's call sent and call worked.
+        let worked = |cab: &str| {
+            cab.lines()
+                .filter(|l| l.starts_with("QSO:"))
+                .map(|l| {
+                    let f: Vec<&str> = l.split_whitespace().collect();
+                    (f[5].to_string(), f[f.len() - 3].to_string())
+                })
+                .collect::<Vec<_>>()
+        };
+        let session = party_session("ilqp", "IL", "MCLN");
+        for days in [1, 5, 10] {
+            let host = replay(ILQP_START + days * 86_400);
+            assert_eq!(
+                held(&host),
+                party_held,
+                "relaunched {days} days after the start"
+            );
+            let cab = host
+                .export_cabrillo_with(
+                    host.hosted_call("K9OWN"),
+                    session.clone(),
+                    &CabrilloEntrant::default(),
+                )
+                .unwrap();
+            assert_eq!(
+                worked(&cab),
+                ["K9AAA", "K9BBB", "K9CCC"].map(|c| ("W9XYZ".to_string(), c.to_string())),
+                "the Club Cabrillo {days} days on: {cab}"
+            );
+        }
+
+        let next = party("ilqp").event_window(2027).start_unix
+            - tempo_core::fd_rules::RUNNING_DAY_LEAD_SECS;
+        assert_eq!(
+            held(&replay(next - 1)),
+            party_held,
+            "a second before the next running's day begins"
+        );
+        let later = replay(next);
+        assert_eq!(
+            held(&later),
+            (Vec::new(), false, "K9OWN".to_string(), String::new()),
+            "from the second the next running's day begins: an empty club, under the host's own \
+             call and class"
+        );
+        assert_eq!(
+            later.call_refusal(later.hosted_call("K9OWN"), "W9XYZ"),
+            Some(call_mismatch(&later.contest_id, "K9OWN", "W9XYZ")),
+            "a laptop still on the club's call then meets the sentence a laptop on another call \
+             always has"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

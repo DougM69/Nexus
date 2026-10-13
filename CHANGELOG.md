@@ -190,6 +190,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out everything from an earlier running of the contest, as each laptop's own log already does, and
   a laptop removed at the rehearsal is not turned away at the party. A running begins a day before
   the contest starts, so a test contact made that day still counts unless you take it back.
+- **At a club, a host reopened days after the contest still has the whole contest.** The host
+  rebuilt its club log from the last four days of its journal only, so a host reopened the next
+  weekend to export the club's files, or days after a crash, wrote an empty Club Cabrillo and Club
+  ADIF under its operator's own call. It now rebuilds every contact of the contest's running
+  whatever its age, as each laptop's own log already does, under the club's call and class, until
+  the day before the contest is next held.
 
 ## [1.18.0] — 2026-10-12
 
