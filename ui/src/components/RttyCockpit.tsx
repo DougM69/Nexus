@@ -20,6 +20,8 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
+import type { MacroEditorFocus } from './MacroEditor'
+import { macroEditChordKey } from '../features/macroSets'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, RTTY_PANELS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -584,17 +586,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     }
     return { onAir: macro ? frameForAir(expanded.text) : expanded.text }
   }
-  const send = (line: string, macro = false) => {
-    if (!control) return
-    if (!line.trim()) return
+  // It answers whether the line went to `rtty_send` (true) or was refused here (false), for the
+  // editor's Send once, which keeps the operator's draft open when the send was refused.
+  const send = (line: string, macro = false): boolean => {
+    if (!control) return false
+    if (!line.trim()) return false
     const ready = prepare(line, macro, hisCall)
     if ('refusal' in ready) {
       pushToast(ready.refusal, 'info', ready.ms)
-      return
+      return false
     }
     void withErrorToast(() => rttySend(ready.onAir), t('rtty.send.failed')).then((s) => {
       if (s) setRtty(s)
     })
+    return true
   }
   const sendTyped = () => {
     if (!control) return
@@ -714,17 +719,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   })
   const esmLit = esmLitKeys(esm.preview)
   const [editing, setEditing] = useState<RttyMacroKey | null>(null)
+  const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
   const [confirmSetReset, setConfirmSetReset] = useState(false)
   const [savingMacros, setSavingMacros] = useState(false)
   const dockRef = useRef<HTMLDivElement | null>(null)
-  const openEditor = (key: RttyMacroKey) => {
+  const openEditor = (key: RttyMacroKey, focus: MacroEditorFocus = 'title') => {
     if (!control) return
     // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
     // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
     const el = dockRef.current?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"]`)
     setEditorLeft(el?.offsetLeft ?? 0)
     setConfirmSetReset(false)
+    setEditorFocus(focus)
     setEditing(key)
   }
   const closeEditor = () => {
@@ -772,10 +779,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setEditing(null)
     void saveMacroSets(withRttySetReset(macroSets.profiles, macroSet), macroSets.active)
   }
-  const sendMacro = (slot: RttyMacroSlot) => {
-    if (!control || isEmptyRttySlot(slot)) return
-    send(slot.text, true)
+  const sendMacro = (slot: RttyMacroSlot): boolean => {
+    if (!control || isEmptyRttySlot(slot)) return false
+    const sent = send(slot.text, true)
     esm.noteKey(slot.key)
+    return sent
+  }
+  // SEND ONCE, from the editor: the message as it stands, through `sendMacro` exactly as the key
+  // goes (its tokens, its framing, every refusal, the engine's every TX gate, Enter Sends
+  // Message hearing the key), and the saved key left as it was. Sent, the editor closes; refused,
+  // it stays open with the draft, as a failed Save does.
+  const sendOnce = (key: RttyMacroKey, message: string) => {
+    const slot = slots.find((s) => s.key === key)
+    if (slot && sendMacro({ ...slot, text: message })) closeEditor()
   }
   /** A key's hover text: the message with what is known filled in, tokens left where not. */
   const macroTitle = (message: string) => {
@@ -805,14 +821,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // with the caret in the compose bar, the Call box or the log strip; not while the editor is
   // open; not on a held key's repeats (one press, one over); and never with Alt, Ctrl or Cmd,
   // which belong to the system (Alt+F4). A bound F-key's default is cancelled even while the
-  // editor is open, so the webview's own F-key actions never fire from this view.
-  const keys = useRef({ editorOpen: false, live: false, slots, closeEditor, sendMacro })
+  // editor is open, so the webview's own F-key actions never fire from this view. The one chord
+  // taken from the system is Ctrl+Shift with an F-key (`macroEditChordKey`, which says why it is
+  // free): it opens that key's editor with the caret in the message, and never sends.
+  const keys = useRef({ editorOpen: false, live: false, slots, closeEditor, sendMacro, openEditor })
   keys.current = {
     editorOpen: editing !== null || confirmSetReset,
     live: sending || latched || (auto && seqState !== 'idle' && seqState !== 'done'),
     slots,
     closeEditor,
     sendMacro,
+    openEditor,
   }
   // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
   // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
@@ -828,6 +847,12 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       const k = keys.current
       if (e.key === 'Escape') {
         e.preventDefault()
+        return
+      }
+      const chord = macroEditChordKey(e)
+      if (chord) {
+        e.preventDefault()
+        if (!e.repeat) k.openEditor(chord, 'message')
         return
       }
       if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
@@ -1390,7 +1415,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             lit={esmLit.includes(slot.key)}
             title={macroTitle(slot.text)}
             onSend={() => sendMacro(slot)}
-            onEdit={() => openEditor(slot.key)}
+            onEdit={(focus) => openEditor(slot.key, focus)}
           />
         ))}
       </div>
@@ -1476,9 +1501,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           slot={slots.find((s) => s.key === editing)!}
           left={editorLeft}
           saving={savingMacros}
+          focus={editorFocus}
           onSave={(label, message) =>
             void saveMacro(slots.find((s) => s.key === editing)!, label, message)
           }
+          onSendOnce={(message) => sendOnce(editing, message)}
           onCancel={closeEditor}
           onReset={() => void resetMacro(editing)}
         />

@@ -249,6 +249,7 @@ them is the moment your hands are in a field. Those are called out below.
 | `Alt+W` (`⌥+W` on macOS) | Any cockpit showing the contest log strip, the Contest screen while a contest runs, and the logger window — **fires while typing too** | Wipe the log line: the call and every exchange box. Pressed again right after, with no other key between, it puts the line back. It never keys or stops TX. |
 | `Ctrl+O` | Any cockpit showing the contest log strip, the Contest screen while a contest runs, and the logger window — **fires while typing too** | Put the cursor in the operator box: the Contest screen opens with it, or in the logger window its own. The mode and the radio stay as they are. |
 | `Esc` | RTTY / PSK / JS8 | Stop TX: drops the queue, drops the continuous-TX latch and unkeys. |
+| `Ctrl+Shift+F1`–`Ctrl+Shift+F8` | RTTY / PSK — **fire while typing too** | Open that macro's editor, with the cursor in its message. It never sends; the editor's **Send once** does, through the key's own checks. |
 | `Esc` | Tempo, SSTV, APRS, Satellites — **fires while typing too** | Halt TX, as **Stop TX** does (on Tempo, the top bar's). APRS and Satellites draw no Stop TX; this is their stop. |
 | `Esc` | Contest screen, while a contest runs — **fires while typing too** | Halt TX, as the top bar's **Stop TX** does. The log line keeps what it holds. (In the logger window Esc clears the log line instead, and never touches TX.) |
 | `↑` `↓` `Home` `End` | List | Move between rows. The list is one Tab stop. |
@@ -258,9 +259,9 @@ them is the moment your hands are in a field. Those are called out below.
 **Mac keyboards eat bare F-keys as media keys.** Hold `fn`, or turn on "Use F1,
 F2, etc. as standard function keys" in macOS keyboard settings.
 
-**Macro buttons labelled `F1`–`F4` in RTTY and PSK are click-only.** The caption
-names the slot; the key is not bound in those two cockpits. CW's `F1`–`F8` and
-Phone's voice-keyer `F1`–`F6` are bound.
+**RTTY's and PSK's macro keys are bound too.** `F1`–`F8` send that macro while the
+cockpit is on screen and its macro editor is closed, as CW's do; Phone's voice-keyer
+`F1`–`F6` and `F8` are bound as well.
 
 ## Windows you can tear off
 

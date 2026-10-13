@@ -105,6 +105,12 @@ Put their call in the **{CALL}** field, then use the macros: **Answer** calls th
 **Exchange** sends a report, **73** signs. The macros expand `{MYCALL}` and `{CALL}` as they
 are sent. Anything you type in the compose bar and send with Enter goes out as typed.
 
+To change what a macro sends, click **✎** on it, right-click it, or press **Ctrl+Shift**
+with its F-key (**Ctrl+Shift+F2** for F2). None of these sends anything. The editor is
+RTTY's ([RTTY ▸ the TX dock](rtty.md)): **Save** keeps your change on the key, and
+**Send once** sends the message as you changed it, one time, through the same checks the
+key gets, and leaves the key as it was.
+
 Every send is checked before anything is queued, and a refusal names the reason:
 
 - a macro carrying `{MYCALL}` needs your callsign set in
