@@ -4410,6 +4410,7 @@ export const DE: PartialCatalog = {
   "contestLogger.size.smaller": "Kleinere Schrift",
   "contestLogger.size.larger": "Größere Schrift",
   "contestLogger.recent.title": "Last contacts",
+  "contestLogger.satellite.note": "{{bird}} is picked on the Satellites screen. Log its pass contacts there: this window logs them as ordinary contacts.",
   "contestScreen.entry.title": "Kontakt loggen",
   "contestScreen.popOut.aria": "Contest-Bildschirm ausklinken",
   "contestScreen.popOut.title": "Den Contest-Bildschirm in einem eigenen Fenster öffnen, für einen weiteren Monitor: Contest-Schalter, Bedienelemente, Club-Bandtafel, Punkte, Sektionen, Boni und Log. Während ein Contest läuft, bleiben seine Logzeile und deine letzten Kontakte hier.",

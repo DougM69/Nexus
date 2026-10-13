@@ -2627,6 +2627,7 @@ export const JA: PartialCatalog = {
   "contestLogger.size.smaller": "文字を小さく",
   "contestLogger.size.larger": "文字を大きく",
   "contestLogger.recent.title": "Last contacts",
+  "contestLogger.satellite.note": "{{bird}} is picked on the Satellites screen. Log its pass contacts there: this window logs them as ordinary contacts.",
   "contestScreen.entry.title": "交信を記録",
   "contestScreen.popOut.aria": "コンテスト画面を別ウィンドウで開く",
   "contestScreen.popOut.title": "コンテスト画面を別ウィンドウで開きます（別のモニター用）：コンテストのスイッチ、操作ボタン、クラブのボード、スコア、セクション、ボーナス、ログ。コンテスト中は、ログ欄と最近の交信はここに残ります。",

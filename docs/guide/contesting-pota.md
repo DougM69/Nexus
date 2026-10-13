@@ -174,6 +174,12 @@ and drag the window to the logger's monitor. It opens on that monitor again next
 - It logs as this computer's own position, under the mode you are operating (phone, CW, RTTY or
   digital), so club sync, N3FJP and your exports see one station. A Remote viewer sees only the
   main window.
+- **A satellite pass's contacts go on the Satellites screen.** The logger window logs every contact
+  on the band the radio is on, with no satellite, so at ARRL Field Day a pass contact logged there
+  would count as an ordinary 2 m or 70 cm contact. While a satellite's transponder is picked on the
+  Satellites screen, one line under the logger window's title names the bird and says to log its
+  pass contacts there: that screen's log strip takes the band and the satellite from the pass.
+  Nothing is blocked, and a contact logged in the logger window is logged as before.
 
 ### The Contest screen on another monitor
 

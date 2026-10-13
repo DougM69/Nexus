@@ -50,6 +50,9 @@ const bridgeCalls: string[] = []
 const ALLOWED = new Set([
   // the polls every pop-out runs
   'get_snapshot', 'get_settings', 'get_propagation', 'get_need_alerts', 'get_band_plan', 'get_fd_ruleset',
+  // this window's read of the satellite the engine holds, for the line that sends a pass's contacts to
+  // the Satellites screen: a read of the hold, which keys, tunes and holds nothing
+  'get_sat_transponder',
   // the contest screen: its log, the removed list, the operator box, exports, merge, upload, club
   'contest_removed', 'contest_remove_last', 'contest_restore', 'set_fd_operator', 'export_log',
   // a contact's edit, which writes the contest log and its journal and nothing else

@@ -3945,6 +3945,11 @@ export const EN = {
   'contestLogger.size.smaller': 'Smaller text',
   'contestLogger.size.larger': 'Larger text',
   'contestLogger.recent.title': 'Last contacts',
+  // The logger window's one line under its bar while the engine holds a satellite's transponder: its
+  // log line logs every contact the ordinary way (the radio's band, no bird), so a pass's contacts go
+  // on the Satellites screen. `{{bird}}` is the satellite's own name (AO-91, ISS), never translated.
+  'contestLogger.satellite.note':
+    '{{bird}} is picked on the Satellites screen. Log its pass contacts there: this window logs them as ordinary contacts.',
   // The same bar over the same log line at the top of the main window's Contest screen
   // (ContestLargeEntry, App.tsx): the screen's name for it.
   'contestScreen.entry.title': 'Log a contact',
