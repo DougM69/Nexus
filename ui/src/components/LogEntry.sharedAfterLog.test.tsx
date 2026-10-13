@@ -9,8 +9,8 @@
 // it again.
 //
 // The engine is stood in for by `engine` below, as in LogEntry.sharedEntry.test.tsx: a put replaces the
-// entry, a log moves it on (the call and the marks go, the boxes stay) and checks the claim as the
-// engine does. Each window polls on its own: a poll is a re-render of THAT window with the snapshot the
+// entry (one made on a contact already logged is refused), a log moves it on to the next contact (the
+// call and the marks go, the boxes stay) and checks the claim as the engine does. Each window polls on its own: a poll is a re-render of THAT window with the snapshot the
 // engine would hand it, and when it lands is chosen here, by the test. `engine.atLog` is the snapshot a
 // window would get if its poll was built at the moment of the log, before any window put again.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
@@ -104,7 +104,7 @@ const upper = (o: Record<string, string>) =>
 const engine = {
   open: true,
   session: ilqp as (log: FieldDayQso[]) => FieldDayStatus,
-  entry: { rev: 1, call: '', fields: {}, marks: null } as ContestEntryShared,
+  entry: { rev: 1, contact: 0, call: '', fields: {}, marks: null } as ContestEntryShared,
   /** The last contact logged from the entry, as its claim showed it, and the rev that log left. */
   logged: null as { call: string; fields: string; at: number } | null,
   log: [] as FieldDayQso[],
@@ -112,9 +112,10 @@ const engine = {
   rows: [] as { call: string; ex: [string, string][]; mode: string }[],
   /** The snapshot a poll built at the moment of the last log, before any window put again. */
   atLog: null as AppSnapshot | null,
-  put(call: string, fields: Record<string, string>, marks: unknown): number {
+  put(call: string, fields: Record<string, string>, marks: unknown, contact: number): number {
     if (!this.open) throw new Error('contestEntryClosed')
-    this.entry = { rev: this.entry.rev + 1, call, fields, marks }
+    if (contact < this.entry.contact) throw ENTRY_LOGGED
+    this.entry = { rev: this.entry.rev + 1, contact: this.entry.contact, call, fields, marks }
     return this.entry.rev
   },
   /** `Engine::contest_log_entry`: the claim is checked (`admits`), the row written, the entry moved
@@ -144,10 +145,15 @@ const engine = {
       } as FieldDayQso,
     ]
     if (claim && this.open) {
-      this.entry = { ...this.entry, rev: this.entry.rev + 1, call: '', marks: null }
+      this.entry = { ...this.entry, rev: this.entry.rev + 1, contact: this.entry.contact + 1, call: '', marks: null }
       this.logged = { call: claim.call.trim().toUpperCase(), fields: upper(claim.fields), at: this.entry.rev }
     }
     this.atLog = snapshot()
+  },
+  /** A county line (`contest_log_manual_rows`): one claim, a row per county, the entry moved on once. */
+  writeRows(call: string, rows: [string, string][][], mode: string, claim?: EntryClaim): boolean[] {
+    rows.forEach((ex, i) => this.write(call, ex, mode, i === 0 ? claim : undefined))
+    return rows.map(() => true)
   },
 }
 
@@ -253,13 +259,14 @@ function expectTheNextContact(when: string) {
 beforeEach(() => {
   engine.open = true
   engine.session = ilqp
-  engine.entry = { rev: 1, call: '', fields: {}, marks: null }
+  engine.entry = { rev: 1, contact: 0, call: '', fields: {}, marks: null }
   engine.logged = null
   engine.log = []
   engine.rows = []
   engine.atLog = null
-  api.contestEntryPut.mockImplementation((call: string, fields: Record<string, string>, marks: unknown) =>
-    Promise.resolve(engine.put(call, fields, marks)),
+  api.contestEntryPut.mockImplementation(
+    (call: string, fields: Record<string, string>, marks: unknown, contact: number) =>
+      Promise.resolve(engine.put(call, fields, marks, contact)),
   )
   api.contestLogManual.mockImplementation(
     (call: string, ex: [string, string][], mode: string, _sub: unknown, claim?: EntryClaim) =>
@@ -267,6 +274,16 @@ beforeEach(() => {
         try {
           engine.write(call, ex, mode, claim)
           ok({})
+        } catch (e) {
+          refuse(e)
+        }
+      }),
+  )
+  api.contestLogManualRows.mockImplementation(
+    (call: string, rows: [string, string][][], mode: string, _sub: unknown, claim?: EntryClaim) =>
+      new Promise((ok, refuse) => {
+        try {
+          ok(engine.writeRows(call, rows, mode, claim))
         } catch (e) {
           refuse(e)
         }
@@ -400,13 +417,13 @@ describe('a logged contact’s county never carries into the next contact, with 
     await settle()
     await settle()
     // The logger window has not polled since the contact went in. Its Esc clears the line it still
-    // shows and puts it; Clear keeps the boxes, so the logged contact's county goes with it.
+    // shows and puts it with the logged contact's county (Clear keeps the boxes): a put made on a
+    // contact already logged, which the engine refuses, so the entry stays the next contact.
     fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' })
     await settle()
     expect(callIn('logger').value, 'CONTROL: the logger window cleared its line').toBe('')
-    expect(engine.entry.fields.QTH, 'CONTROL: what the logger window put').toBe('LAKE')
-    // The main window takes that up (the engine's last writer wins), then the logger window sees
-    // the contact, and its own after-log clear ends the county in both.
+    expect(engine.entry.fields.QTH, 'the logger window’s Esc, refused: the next contact’s county').toBe('')
+    // Each window then sees the contact, and the county ends in both.
     poll('main')
     await settle()
     poll('logger')
@@ -483,5 +500,136 @@ describe('a logged contact’s county never carries into the next contact, with 
       expect(box(w, 1).value, `${w}: the class carried`).toBe('3A')
       expect(box(w, 2).value, `${w}: the section carried`).toBe('WI')
     }
+  })
+})
+
+// TWO PEOPLE AT ONE MOMENT. A window that changes the line before it shows the log is changing a
+// contact already logged: the engine refuses that change, so the logged call never comes back to
+// both windows, where a county and Enter would log it a second time.
+describe('a change made in one window before it shows the log never brings the logged contact back', () => {
+  it('an edit in the logger window as the main window logs: the shared entry stays the next contact', async () => {
+    await aContactInProgress()
+    enter('main')
+    await settle()
+    await settle()
+    // The logger window has not polled since the contact went in; its operator corrects the county.
+    type(qthIn('logger'), 'COOK')
+    await settle()
+    expect(engine.entry.call, 'the shared entry’s call, after the logger window’s edit').toBe('')
+    expect(engine.entry.fields.QTH ?? '', 'the shared entry’s county, after the logger window’s edit').toBe('')
+    poll('main')
+    await settle()
+    expect(callIn('main').value, 'the main window, at its next snapshot').toBe('')
+    poll('logger')
+    await settle()
+    expect(callIn('logger').value, 'the logger window, at its first snapshot after the contact').toBe('')
+    await pollsSettle()
+    expect(callIn('main').value, 'the main window, after the polls').toBe('')
+    expect(callIn('logger').value, 'the logger window, after the polls').toBe('')
+    expectTheNextContact('after the polls')
+  })
+
+  it('the same edit, then a county and Enter in the main window: no second row for the logged call', async () => {
+    await aContactInProgress()
+    enter('main')
+    await settle()
+    await settle()
+    type(qthIn('logger'), 'COOK')
+    await settle()
+    poll('main')
+    await settle()
+    poll('logger')
+    await settle()
+    await pollsSettle()
+    type(qthIn('main'), 'DUPA')
+    await settle()
+    expect(qthIn('main').value, 'CONTROL: the county typed in the main window').toBe('DUPA')
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9BBB'), 'the one row K9BBB was logged as').toEqual([[['RST', '57'], ['QTH', 'LAKE']]])
+  })
+
+  it('the logger window’s first snapshot after the contact lands while its refused edit is on its way: it shows the next contact', async () => {
+    await aContactInProgress()
+    enter('main')
+    await settle()
+    await settle()
+    type(qthIn('logger'), 'COOK')
+    // Before that edit is answered.
+    poll('logger')
+    await settle()
+    await settle()
+    expect(callIn('logger').value, 'the logger window, once its edit is answered').toBe('')
+    expect(qthIn('logger').value, 'the logger window’s county, then').toBe('')
+    expect(engine.entry.call, 'the shared entry').toBe('')
+    await pollsSettle()
+    expectTheNextContact('after the polls')
+  })
+
+  it('Enter in the logger window, an edit in the main window at that moment: the same', async () => {
+    await aContactInProgress('logger')
+    enter('logger')
+    await settle()
+    await settle()
+    expect(loggedAs('K9BBB'), 'logged as typed').toEqual([[['RST', '57'], ['QTH', 'LAKE']]])
+    // The main window has not polled since the contact went in; its operator corrects the county.
+    type(qthIn('main'), 'COOK')
+    await settle()
+    expect(engine.entry.call, 'the shared entry’s call, after the main window’s edit').toBe('')
+    poll('logger')
+    await settle()
+    poll('main')
+    await settle()
+    await pollsSettle()
+    expect(callIn('main').value, 'the main window, after the polls').toBe('')
+    expect(callIn('logger').value, 'the logger window, after the polls').toBe('')
+    expectTheNextContact('after the polls')
+  })
+
+  it('CONTROL: the main window’s own typing straight after its Enter lands, reaches the logger window and logs', async () => {
+    await aContactInProgress()
+    enter('main')
+    await settle()
+    await settle()
+    // No snapshot has shown the contact yet: the main operator types the next call at once.
+    type(callIn('main'), 'K9CCC')
+    await settle()
+    expect(engine.entry.call, 'the shared entry, as the main window typed it').toBe('K9CCC')
+    await pollsSettle()
+    expect(callIn('logger').value, 'the next call, logger window').toBe('K9CCC')
+    type(qthIn('main'), 'COOK')
+    await settle()
+    await pollsSettle()
+    for (const w of ['main', 'logger'] as const) {
+      expect(callIn(w).value, `${w}: the next call`).toBe('K9CCC')
+      expect(qthIn(w).value, `${w}: the next county`).toBe('COOK')
+    }
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9CCC'), 'the next contact, as typed').toEqual([[['RST', '59'], ['QTH', 'COOK']]])
+  })
+
+  it('CONTROL: the same after a county-line contact, logged as one row per county', async () => {
+    open()
+    await settle()
+    type(callIn('main'), 'K9LLL')
+    type(qthIn('main'), 'COOK/DUPG')
+    await settle()
+    poll('main', 'logger')
+    await settle()
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9LLL'), 'CONTROL: one row per county').toEqual([
+      [['RST', '59'], ['QTH', 'COOK']],
+      [['RST', '59'], ['QTH', 'DUPG']],
+    ])
+    type(callIn('main'), 'K9CCC')
+    await settle()
+    expect(engine.entry.call, 'the shared entry, as the main window typed it').toBe('K9CCC')
+    await pollsSettle()
+    expect(callIn('logger').value, 'the next call, logger window').toBe('K9CCC')
   })
 })

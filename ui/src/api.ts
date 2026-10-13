@@ -755,14 +755,17 @@ export interface EntryClaim {
 }
 
 /** The contest strip changed in one window while the contest logger window is open: what it now
- *  shows becomes the entry both windows show. Answers the entry's new rev. Rejects with the logger
- *  window closed. Text in memory only — nothing is logged, written or sent. */
+ *  shows becomes the entry both windows show. `contact` is the contact the strip showed as it
+ *  changed (`ContestEntryShared.contact`). Answers the entry's new rev. Rejects with the logger
+ *  window closed, and with `contestEntryLogged` when that contact has since been logged. Text in
+ *  memory only — nothing is logged, written or sent. */
 export async function contestEntryPut(
   call: string,
   fields: Record<string, string>,
   marks: unknown,
+  contact: number,
 ): Promise<number> {
-  return invoke<number>('contest_entry_put', { call, fields, marks })
+  return invoke<number>('contest_entry_put', { call, fields, marks, contact })
 }
 
 /** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO

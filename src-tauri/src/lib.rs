@@ -28957,16 +28957,18 @@ fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
 
 /// ⭐ **The contest strip changed in one window** while the contest logger window is open: what
 /// it now shows becomes the entry both windows show ([`Engine::contest_entry_put`]). The answer
-/// is the entry's new rev. Refused with the logger window closed, and for an entry larger than
-/// any strip writes. Text in memory only: nothing is logged, written to disk or sent.
+/// is the entry's new rev. `contact` is the contact the strip showed as it changed. Refused with
+/// the logger window closed, for an entry larger than any strip writes, and when made on a
+/// contact already logged. Text in memory only: nothing is logged, written to disk or sent.
 #[tauri::command(async)]
 fn contest_entry_put(
     state: State<'_, SharedEngine>,
     call: String,
     fields: std::collections::BTreeMap<String, String>,
     marks: serde_json::Value,
+    contact: u64,
 ) -> Result<u64, String> {
-    engine_lock(&state).contest_entry_put(&call, fields, marks)
+    engine_lock(&state).contest_entry_put(&call, fields, marks, contact)
 }
 
 /// A contest contact the operator removed, as the contest screen lists it: its rows as the log

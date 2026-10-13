@@ -13,7 +13,7 @@
 //
 // ⛔ NOTHING HERE TRANSMITS. It moves text between two windows through the engine.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { contestEntryPut, type EntryClaim } from '../api'
 import type { ContestEntryShared } from '../types'
 import { EMPTY_FILL, type FillState } from './callHistoryFill'
@@ -110,6 +110,12 @@ function blankStrip(c: StripContent): boolean {
  *  - an entry newer than the last one this strip agreed with is taken up (`adopt`), unless a put
  *    of this strip's own is still on its way, whose answer moves it on.
  *
+ * ⭐ A LOGGED CONTACT NEVER COMES BACK. Each put names the contact the strip showed as it changed:
+ * the entry's `contact` as this strip last took it up, moved on by each contact its own Enter
+ * logged (`logged`). A change made here at the moment the other window's Enter logged the contact,
+ * before this strip showed the log, is refused by the engine (`ENTRY_LOGGED`), and the strip then
+ * takes the entry up as it stands: the next contact, never the logged call back in both windows.
+ *
  * ⭐ A LOGGED CONTACT'S BOXES END WITH IT. The strip's own after-log clear ends them when its
  * snapshot shows the contact. The entry the log left still holds them (`holdsLoggedBoxes`), so it
  * is taken up through that same clear (`afterLog`), whichever of the two lands first. Taken as it
@@ -120,6 +126,8 @@ function blankStrip(c: StripContent): boolean {
  * `claim` is Enter's half: what is on screen goes first, then the answer is the entry Enter saw,
  * for the log command to name. `undefined` while not sharing: log as always. `sharing` says
  * whether this strip takes part now, so a strip that does not can skip the claim altogether.
+ * `logged` is said once the log that named a claim has landed, before the strip starts the next
+ * contact, so its changes from then on are the next contact's.
  */
 export function useSharedEntry(opts: {
   entry: ContestEntryShared | undefined
@@ -130,7 +138,7 @@ export function useSharedEntry(opts: {
   /** The boxes the next contact starts with once a contact is logged: the strip's own after-log
    *  clear, applied to the boxes it is handed. */
   afterLog: (fields: Record<string, string>) => Record<string, string>
-}): { sharing: boolean; claim: (c: StripContent) => Promise<EntryClaim | undefined> } {
+}): { sharing: boolean; claim: (c: StripContent) => Promise<EntryClaim | undefined>; logged: () => void } {
   const { entry, content } = opts
   const live = opts.on && entry !== undefined
   const liveRef = useRef(live)
@@ -141,8 +149,14 @@ export function useSharedEntry(opts: {
   adoptRef.current = opts.adopt
   const afterLogRef = useRef(opts.afterLog)
   afterLogRef.current = opts.afterLog
-  /** The entry this strip last agreed with: its rev, and the content as this strip shows it. */
-  const synced = useRef<{ rev: number; key: string } | null>(null)
+  /** The entry this strip last agreed with: its rev, the content as this strip shows it, and the
+   *  contact it holds. */
+  const synced = useRef<{ rev: number; key: string; contact: number } | null>(null)
+  /** The contact the last claim was made on, until its log lands (`logged`). */
+  const claimedOn = useRef<number | null>(null)
+  /** Bumped when the engine refuses a put of this strip's as made on a contact already logged, so
+   *  the entry is taken up as it stands even if its rev arrived while that put was on its way. */
+  const [refused, setRefused] = useState(0)
   const chain = useRef<Promise<unknown>>(Promise.resolve())
   const pending = useRef(0)
   /** Which render this is, and the render whose effects took the entry up: in that same pass
@@ -153,18 +167,24 @@ export function useSharedEntry(opts: {
   const thisRender = renders.current
   const tookUpAt = useRef(0)
 
-  const put = (c: StripContent) => {
-    synced.current = { rev: synced.current?.rev ?? 0, key: contentKey(c) }
+  /** Put `c`, made on `contact`: named as the strip changed, so a put queued behind another still
+   *  names the contact it was typed on. */
+  const put = (c: StripContent, contact: number) => {
+    synced.current = { rev: synced.current?.rev ?? 0, key: contentKey(c), contact }
     const { fill, take } = c
+    let loggedSince = false
     pending.current += 1
     chain.current = chain.current
-      .then(() => contestEntryPut(c.call, c.fields, { fill, take }))
+      .then(() => contestEntryPut(c.call, c.fields, { fill, take }, contact))
       .then((rev) => {
         if (synced.current) synced.current = { ...synced.current, rev: Math.max(synced.current.rev, rev) }
       })
-      .catch(() => {})
+      .catch((err) => {
+        loggedSince = err === ENTRY_LOGGED
+      })
       .finally(() => {
         pending.current -= 1
+        if (loggedSince) setRefused((n) => n + 1)
       })
   }
 
@@ -172,36 +192,47 @@ export function useSharedEntry(opts: {
   useEffect(() => {
     if (!live || entry === undefined) {
       synced.current = null
+      claimedOn.current = null
       return
     }
     if (synced.current === null && opts.seeds && blankEntry(entry) && !blankStrip(contentRef.current)) {
-      put(contentRef.current)
+      put(contentRef.current, entry.contact)
       return
     }
     if (synced.current !== null && (pending.current > 0 || entry.rev <= synced.current.rev)) return
     const next = takeUp(contentRef.current, entry)
-    synced.current = { rev: entry.rev, key: contentKey(next) }
+    synced.current = { rev: entry.rev, key: contentKey(next), contact: entry.contact }
     tookUpAt.current = thisRender
     // The entry a log left: the strip shows its boxes as the after-log clear leaves them, which
     // differ from `synced`, so it puts them at its next render.
     adoptRef.current(holdsLoggedBoxes(entry) ? { ...next, fields: afterLogRef.current(next.fields) } : next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, rev])
+  }, [live, rev, refused])
 
   const key = contentKey(content)
   useEffect(() => {
     if (tookUpAt.current === thisRender) return
     if (!live || synced.current === null || key === synced.current.key) return
-    put(contentRef.current)
+    put(contentRef.current, synced.current.contact)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, key])
 
   const claim = async (c: StripContent): Promise<EntryClaim | undefined> => {
     if (!liveRef.current || synced.current === null) return undefined
-    if (contentKey(c) !== synced.current.key) put(c)
+    if (contentKey(c) !== synced.current.key) put(c, synced.current.contact)
     await chain.current
     if (!liveRef.current || synced.current === null) return undefined
+    claimedOn.current = synced.current.contact
     return { rev: synced.current.rev, call: c.call, fields: c.fields }
   }
-  return { sharing: live, claim }
+  /** The log that named the last claim landed: the entry is on the next contact, and so is every
+   *  change this strip makes from now on. A take-up since may already have moved it on. */
+  const logged = () => {
+    const on = claimedOn.current
+    claimedOn.current = null
+    if (on !== null && synced.current) {
+      synced.current = { ...synced.current, contact: Math.max(synced.current.contact, on + 1) }
+    }
+  }
+  return { sharing: live, claim, logged }
 }

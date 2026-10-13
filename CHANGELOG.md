@@ -108,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
   asked.
+- **With the contest logger window open, a contact you just logged no longer comes back.** When one
+  person typed into the log line at the moment the other pressed Enter in the other window, the
+  logged call came back in both windows, and a county and Enter logged it again, as a dupe. A change
+  typed in a window that has not yet shown the contact as logged is now dropped, and that window
+  shows the next contact a moment later. Typing after the log, in either window, works as before.
 
 ## [1.18.0] — 2026-10-12
 

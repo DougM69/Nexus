@@ -1829,6 +1829,8 @@ export function LogEntry({
           // The contact is in the log once any county entered it; a line that was all dupes
           // leaves the entry on screen, as a refused single contact does.
           if (logged.length > 0) {
+            // Logged through the shared entry: this strip's changes from here are the next contact's.
+            if (entry) share.logged()
             endFill(true)
             setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
             reset()
@@ -1863,6 +1865,7 @@ export function LogEntry({
           }),
           'success',
         )
+        if (entry) share.logged()
         endFill(true)
         setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
         reset()
