@@ -79,8 +79,12 @@ key as the headline. It is descriptive, not award credit — an entity counts
 here the moment you work it, confirmed or not.
 
 **Most-worked states (WAS)** is the top 12 states, and it counts a QSO only if
-the record's country is United States, Alaska or Hawaii *and* its ADIF `STATE`
-is one of the 50 WAS codes. That gate is the point: without it an Australian
+its DXCC entity is the United States, Alaska or Hawaii *and* its ADIF `STATE`
+is one of the 50 WAS codes. The entity is the one its callsign resolves to, the
+same one the headline and the WAS award count, so the QSO counts however the
+record spells its country (LoTW and DXKeeper write `UNITED STATES OF AMERICA`,
+some loggers write none). Only a callsign that resolves to no entity is judged
+by the record's country instead. That gate is the point: without it an Australian
 `WA` (Western Australia) and a Brazilian `SC` (Santa Catarina) would pile into
 Washington and South Carolina. Casing is folded, so an external logger's `ct`
 lands in the `CT` bucket.
