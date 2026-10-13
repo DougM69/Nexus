@@ -411,6 +411,10 @@ const INDEXES: [&str; 9] = [
 mod query_reads;
 pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
 
+/// A store written before contacts were held in one form, read back through every decoder.
+#[cfg(test)]
+mod held_form_tests;
+
 /// Every `qso` column the store writes, **in bind order**.
 ///
 /// ⭐ The write list and the read list are ONE list, exactly as `contest_fields` and
@@ -1356,6 +1360,10 @@ impl LogDb {
             if rec.contest.as_deref().is_some_and(contest_is_empty) {
                 rec.contest = None;
             }
+            // A row a build before this stored in its source's spelling is read in the log's one
+            // form (`20M` as `20m`, a sideband in MODE as SSB's SUBMODE) — and left on disk as it
+            // is until a change writes it ([`super::canonical`]).
+            super::canonical::contact(&mut rec);
             out.push(rec);
         }
         Ok(out)
@@ -1564,6 +1572,9 @@ impl LogDb {
                 if rec.contest.as_deref().is_some_and(contest_is_empty) {
                     rec.contest = None;
                 }
+                // And the same form: the hot index holds narrow rows and compares them with the
+                // whole ones `decode` hands a plan.
+                super::canonical::contact(&mut rec);
                 current = Some((rowid, rec));
             }
             if narrow.uploads {
@@ -3219,6 +3230,12 @@ mod tests {
             hash: 2,
             ordinal: 0,
         });
+        // The reader holds that MODE as SSB with the sideband as SUBMODE (`canonical`); the
+        // record here keeps the sideband as its mode, as a build before that held it, because
+        // only such a record shows the plain case fold, the dedup fold and the class apart.
+        assert_eq!(rec.mode, "SSB", "premise: the reader's form");
+        rec.mode = "USB".into();
+        rec.extra.retain(|(k, _)| k != "SUBMODE");
         db.insert(
             &rec,
             Resolved {

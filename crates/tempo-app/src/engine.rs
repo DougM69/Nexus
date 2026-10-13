@@ -64,6 +64,9 @@ mod contest_removal_tests;
 mod contest_setup_tests;
 pub mod contest_unmerged;
 mod field_day_display;
+/// Every contact held in one form: one band, one phone mode, whichever way it came in.
+#[cfg(test)]
+mod held_form_tests;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
 mod kept_files_tests;
@@ -14148,6 +14151,13 @@ impl Engine {
         source: StateSource,
         park_places: Vec<String>,
     ) -> LogWriteOutcome {
+        // The contact in the log's one form before anything here reads it — the band in the
+        // ADIF enumeration's lower case, a phone sideband as SSB's SUBMODE
+        // (`tempo_core::logbook::canonical`). FIRST, because the duplicate guard below compares
+        // the band and the mode as given: the log holds a phone contact as SSB, and the same
+        // contact handed in again as "USB" must still read as that contact. An FT contact is
+        // already in that form (its band is the band plan's, its mode the tier's) and is untouched.
+        tempo_core::logbook::canonical::contact(&mut rec);
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);

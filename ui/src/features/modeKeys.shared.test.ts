@@ -116,7 +116,8 @@ describe('a "new mode" chip shows only where the surface is that mode', () => {
 
   it.each(rows)('$headline', (row) => {
     // Every mode the table names, as a surface: the chip is there exactly where the key is the need's.
-    for (const surface of TABLE.folds.map((f) => f.stored)) {
+    // The MODE as a file writes it too, which is how the Phone cockpit's surface names its sideband.
+    for (const surface of TABLE.folds.flatMap((f) => [f.mode, f.stored])) {
       const shown = tagsForSurface(row, row.band, surface).includes('NewMode')
       expect(shown, `on a ${surface} surface`).toBe(modeKey(surface) === modeKey(row.exactMode))
     }

@@ -231,15 +231,172 @@ fn normalise(q: &Value, a: Value) -> Value {
 
 // ── the goldens ─────────────────────────────────────────────────────────────────────────────────
 
+/// The answer to a golden question from the reference over `log`, in the form the golden file
+/// stores it: a row as its fixture id, a page as its numbers and keys, the statistics as their
+/// counts. The UI's reading of each question, so that over the golden log as written it IS the
+/// golden answer — which [`every_golden_answer_on_both_homes_of_the_log`] checks first.
+fn reference_answer(
+    log: &[QsoRecord],
+    q: &Value,
+    entities: &HashMap<String, Option<String>>,
+) -> Value {
+    let name = |i: usize| json!(golden_name(&log[i].id.expect("an id").to_string()));
+    let resolve = |call: &str| entities.get(call).cloned().flatten();
+    let calls = || -> Vec<String> { serde_json::from_value(q["calls"].clone()).expect("calls") };
+    let query = || -> LogQuery { serde_json::from_value(q["query"].clone()).expect("a query") };
+    match q["kind"].as_str().expect("kind") {
+        "page" => {
+            let order = reference::order(log, &query());
+            let (offset, limit) = (
+                q["offset"].as_u64().expect("offset") as usize,
+                q["limit"].as_u64().expect("limit") as usize,
+            );
+            json!({
+                "total": order.len(),
+                "logSize": log.len(),
+                "offset": offset,
+                "keys": order.iter().skip(offset).take(limit).map(|&i| name(i)).collect::<Vec<_>>(),
+            })
+        }
+        "locate" => {
+            let id = golden_id_text(q["id"].as_str().expect("id"));
+            let order = reference::order(log, &query());
+            json!({"index": order.iter().position(|&i| log[i].id.map(|r| r.to_string()) == Some(id.clone()))})
+        }
+        "callHistory" => {
+            let text = |k: &str| q[k].as_str().expect("text").to_string();
+            let h = reference::call_history(
+                log,
+                &text("call"),
+                &text("band"),
+                &text("mode"),
+                q["matchMode"].as_bool().expect("matchMode"),
+            );
+            json!({
+                "count": h.count, "workedBefore": h.worked_before, "dupeThisBand": h.dupe_this_band,
+                "lastUnix": h.last_unix, "confirmedCount": h.confirmed_count,
+                "bands": h.bands, "modes": h.modes,
+                "qsos": h.qsos.iter().map(|&i| name(i)).collect::<Vec<_>>(),
+            })
+        }
+        "entity" => {
+            let of = |r: &QsoRecord| resolve(&r.call);
+            let entity = q["entity"].as_str().expect("entity");
+            serde_json::to_value(reference::entity(log, entity, &of)).expect("json")
+        }
+        "callsSummary" => Value::Object(
+            query::calls_summary(log, &calls())
+                .into_iter()
+                .map(|(c, s)| (c, serde_json::to_value(s).expect("json")))
+                .collect(),
+        ),
+        "workedCalls" => json!(reference::worked_calls(log, &calls())),
+        "workedGrids" => json!(reference::fold(log, WorkedGrids::default())),
+        "gridPoints" => json!(reference::fold(
+            log,
+            GridCounts::new(q["band"].as_str().expect("band"))
+        )),
+        "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
+        "statistics" => json!(reference::fold(log, LogStatCounter::new(&resolve))),
+        "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
+        "rowsAt" => json!(q["indices"]
+            .as_array()
+            .expect("indices")
+            .iter()
+            .map(|i| match i.as_i64() {
+                Some(i) if i >= 0 && (i as usize) < log.len() => name(i as usize),
+                _ => Value::Null,
+            })
+            .collect::<Vec<_>>()),
+        "row" => {
+            let id = q["id"].as_str().expect("id");
+            match log
+                .iter()
+                .position(|r| r.id.map(|i| i.to_string()) == Some(golden_id_text(id)))
+            {
+                Some(i) => name(i),
+                None => Value::Null,
+            }
+        }
+        "logSize" => json!(log.len()),
+        other => panic!("a golden question this reading does not know: {other}"),
+    }
+}
+
+/// A fixture id as the record id text the engine holds it under, or the text itself for an id
+/// that is not a fixture's (`no-such-id`).
+fn golden_id_text(name: &str) -> String {
+    if name.starts_with("fx") {
+        golden_id(name).to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 /// ★ THE ENGINE ANSWERS WHAT THE UI ANSWERED. Every golden question, sent as the UI sends it (the
 /// question JSON, parsed as the command parses it), is answered exactly as the golden file froze
 /// it — the statistics as the counts the window finishes into it — with the log in the store, and
 /// on the 1.13 path, where since SPEC-2 v3 C19 (D1-A) it is in a store in memory beside
 /// `log.adi`.
+///
+/// ⭐ **Over the log as the engine holds it.** The golden log carries three rows in a form the log
+/// no longer holds — fx15's band `20M`, and fx03 and fx04 with the sideband in MODE (`USB`,
+/// `LSB`) — and taken in they are `20m`, and SSB with the sideband as SUBMODE
+/// (`tempo_core::logbook::canonical`). So each question is answered first by the reference over
+/// the log as written, which must give the golden answer (this reading of every question is the
+/// UI's), then by the reference over the log as held, which the engine must give. The answers
+/// the holding moves are named below; every other one is the frozen golden, unchanged.
 #[test]
 fn every_golden_answer_on_both_homes_of_the_log() {
     let (records, entities) = golden_log();
     let resolve = |call: &str| entities.get(call).cloned().flatten();
+    let held: Vec<QsoRecord> = records
+        .iter()
+        .cloned()
+        .map(|mut r| {
+            tempo_core::logbook::canonical::contact(&mut r);
+            r
+        })
+        .collect();
+    let mut moved = Vec::new();
+    let mut expected = Vec::new();
+    for (q, a) in golden_answers() {
+        let want = if q["kind"] == "statistics" {
+            golden_statistics()
+        } else {
+            a
+        };
+        assert_eq!(
+            reference_answer(&records, &q, &entities),
+            want,
+            "the reference over the golden log as written: {q}"
+        );
+        let as_held = reference_answer(&held, &q, &entities);
+        if as_held != want {
+            moved.push(q.to_string());
+        }
+        expected.push((q, as_held));
+    }
+    // Each for a reason a reader can check against the three rows: fx03 and fx04 sort, search
+    // and list as SSB, and K1ABC's history lists one mode; fx15's square is a 20 m square, its
+    // band is one of the log's bands, and the statistics count it under 20 m.
+    assert_eq!(
+        moved,
+        [
+            r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":true,"needsConfirmOnly":false,"search":"","sort":"mode"}}"#,
+            r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":false,"needsConfirmOnly":false,"search":"","sort":"mode"}}"#,
+            r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":false,"needsConfirmOnly":false,"search":"usb","sort":"time"}}"#,
+            r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":false,"needsConfirmOnly":false,"search":"ssb","sort":"mode"}}"#,
+            r#"{"band":"40M","call":" k1abc ","kind":"callHistory","matchMode":true,"mode":"SSB"}"#,
+            r#"{"band":"40m","call":"K1ABC","kind":"callHistory","matchMode":true,"mode":"CW"}"#,
+            r#"{"band":"40m","call":"K1ABC","kind":"callHistory","matchMode":false,"mode":"CW"}"#,
+            r#"{"band":"all","kind":"gridPoints"}"#,
+            r#"{"band":"20m","kind":"gridPoints"}"#,
+            r#"{"kind":"bandsInLog"}"#,
+            r#"{"kind":"statistics"}"#,
+        ],
+        "the answers holding the log in one form moves, and no other"
+    );
     for (home, d) in [
         ("store", Dir::new("golden-store")),
         ("1.13 path", Dir::new("golden-mem")),
@@ -256,12 +413,7 @@ fn every_golden_answer_on_both_homes_of_the_log() {
         );
         let queries = LogQueries::default();
         let mut answered = 0;
-        for (q, a) in golden_answers() {
-            let want = if q["kind"] == "statistics" {
-                golden_statistics()
-            } else {
-                a
-            };
+        for (q, want) in &expected {
             // A question naming a row names it by the fixture's id; the engine holds it under
             // the record id that id stands for.
             let mut asked = q.clone();
@@ -269,7 +421,7 @@ fn every_golden_answer_on_both_homes_of_the_log() {
                 asked["id"] = json!(golden_id(name).to_string());
             }
             let got = ask(&queries, &engine, asked, &resolve);
-            assert_eq!(normalise(&q, got), want, "{home}: {q}");
+            assert_eq!(&normalise(q, got), want, "{home}: {q}");
             answered += 1;
         }
         assert_eq!(answered, 78, "{home}: every question in the golden file");

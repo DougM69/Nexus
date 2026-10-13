@@ -452,10 +452,11 @@ pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, gri
 
 /// Canonical band key for the per-band worked indices.
 ///
-/// Lower-cased, because the band spellings that actually reach the log differ by
-/// source (Nexus writes "20m", a LoTW export "20M", and `parse_adif` passes BAND
-/// through verbatim), and with the band-plan's FM channel suffix stripped
-/// ("2m-fm" → "2m") since FM on 2 m is still 2 m for award purposes. The result is
+/// Lower-cased, because the band spellings sources write differ (Nexus writes "20m", a
+/// LoTW export "20M"); the log holds one (`tempo_core::logbook::canonical`), and the fold
+/// stays because it is right on any input, the live band included. The band-plan's FM
+/// channel suffix is stripped ("2m-fm" → "2m") since FM on 2 m is still 2 m for award
+/// purposes. The result is
 /// byte-identical to `propagation::Band::label()` for every band that crate models,
 /// so this side and the awards/needs side agree on what "2 m" is without tempo-app
 /// having to depend on the propagation crate (it deliberately does not — see
@@ -2848,6 +2849,11 @@ impl StationCore {
             if r.id.is_none() {
                 r.id = Some(self.minter.mint());
             }
+            // In the log's one form whoever hands the row over (`Engine::log_qso` has already
+            // made it so, for its duplicate guard): the hot index holds the row as the writer
+            // stores it, and the store reads every row back in that form, so a row taken in any
+            // other way would be held one way here and read another there.
+            tempo_core::logbook::canonical::contact(r);
         }
         let rows: Vec<Arc<QsoRecord>> = recs.iter().cloned().map(Arc::new).collect();
         let (marks, _) = self.make(&RowChange {

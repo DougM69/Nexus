@@ -99,6 +99,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One band is one band, whatever its letter case.** Contacts imported from another logger kept
+  that logger's spelling of the band, so a log with `20M` from an import and `20m` from Nexus
+  showed 20 m twice in the statistics' By band, listed both on the QSO globe, and the globe's 20 m
+  view left the imported contacts out. Every contact is now held with its band in lower case,
+  however it came in: an import, a confirmation download, or a log stored by an earlier version,
+  which is read that way without being rewritten. A phone contact whose sideband was written as
+  its mode is held as SSB with the sideband kept as its submode, as ADIF writes it, so USB and LSB
+  contacts count as SSB everywhere a mode is counted. The Logbook shows a contact's country as its
+  DXCC entity, so an imported "UNITED STATES" and Nexus's own "United States" read the same; the
+  imported text is still on the tooltip. Awards and confirmations already treated the spellings as
+  one band, so no credit changes.
 - **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
   read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
   re-enter a password that was right. Nexus now says the contact is outside your eQSL account's

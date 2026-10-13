@@ -17,8 +17,8 @@
     { "mode": "SSB", "submode": null, "stored": "SSB", "key": "SSB" },
     { "mode": "SSB", "submode": "USB", "stored": "SSB", "key": "SSB", "note": "the sideband in SUBMODE, as Log4OM writes it" },
     { "mode": "SSB", "submode": "LSB", "stored": "SSB", "key": "SSB" },
-    { "mode": "USB", "submode": null, "stored": "USB", "key": "SSB", "note": "both sidebands are one mode, SSB" },
-    { "mode": "LSB", "submode": null, "stored": "LSB", "key": "SSB" },
+    { "mode": "USB", "submode": null, "stored": "SSB", "key": "SSB", "note": "both sidebands are one mode, SSB: held as SSB with the sideband as its SUBMODE" },
+    { "mode": "LSB", "submode": null, "stored": "SSB", "key": "SSB" },
     { "mode": "PH", "submode": null, "stored": "PH", "key": "PH", "note": "N3FJP's generic phone token may have been FM or AM: left as it is, never guessed" },
     { "mode": "AM", "submode": null, "stored": "AM", "key": "AM" },
     { "mode": "FM", "submode": null, "stored": "FM", "key": "FM" },
@@ -41,6 +41,8 @@
   "spellings": [
     { "stored": " ft8 ", "key": "FT8", "note": "surrounding space and case" },
     { "stored": "usb", "key": "SSB" },
+    { "stored": "USB", "key": "SSB", "note": "a sideband named as a mode: a spot, a radio's own mode, a log written before" },
+    { "stored": "LSB", "key": "SSB" },
     { "stored": "﻿FT4", "key": "FT4", "note": "ECMAScript's trim() removes U+FEFF" },
     { "stored": "FT8\u0085", "key": "FT8\u0085", "note": "and keeps U+0085, which Rust's str::trim would remove" }
   ],
