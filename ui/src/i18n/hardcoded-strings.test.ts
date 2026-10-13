@@ -123,6 +123,9 @@ const MIGRATED = [
   'components/MacroEditor.tsx',
   'components/PskMacroEditor.tsx',
   'features/pskMacros.ts',
+  // CW's half of the same surface: its keys and their editor, captioned from CW's own catalog
+  // keys. It stops nothing; CwCockpit.tsx's Esc and Stop TX are the stops.
+  'components/CwMacroEditor.tsx',
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',

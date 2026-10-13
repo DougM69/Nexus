@@ -173,6 +173,30 @@ Macros expand `{MYCALL}`, `{NAME}`, `{RST}`, and his-call tokens, and **599 is
 cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
 [Settings ▸ Station](settings-reference.md#station).
 
+**To change a macro** from the cockpit, hover it (or tab to it) and click **✎**,
+right-click it, or press **Ctrl+Shift** with its F-key (**Ctrl+Shift+F3** for F3,
+wherever the cursor is in the cockpit). None of these sends anything. The editor is the
+one RTTY and PSK use: **Title**, **Message** (a right-click or the shortcut puts the
+cursor at its end), the tokens (click one to insert it; `!` is the worked station's
+call), **Save**, **Send once**, **Cancel** and **Reset this button**. The F-keys do
+not send while it is open.
+
+- **Save** keeps the change on the key, in the active macro profile: the same keys
+  [Settings ▸ CW](settings-reference.md#cw) ▸ Macros shows and edits. A profile still on
+  the built-in keys becomes your own set the first time you save one: the eight keys the
+  dock showed (the contest's set during a contest) with yours changed, exactly as
+  **Customize** in Settings makes it, and Enter Sends Message keeps sending the same keys
+  for the same steps. **Reset to defaults** in Settings puts the built-in keys back.
+- **Send once** sends the message as it stands, one time, exactly as the key sends its
+  own: the tokens are filled in from the same places, a call you typed in His call is
+  taken first, and outside your license it is refused as the key is. The key keeps its
+  message.
+- **Reset this button** puts back the built-in key the dock would show (the contest's
+  during a contest).
+- **Esc** closes the editor when nothing is on the air and leaves TX on. With an over
+  going out, a tune carrier or anything else keying, it stops as it always does, and the
+  editor stays open.
+
 ## Core workflows
 
 ### Keying backends, and what each one puts the rig into

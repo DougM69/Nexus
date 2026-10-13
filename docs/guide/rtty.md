@@ -193,9 +193,17 @@ in, so you can read what will key before you click it. The tokens also expand in
 compose bar, where **Enter** sends.
 
 **To change a macro**, hover it (or tab to it) and click **✎**, or click an empty
-key. The editor opens over the dock with **Title**, **Message**, the tokens (click
-one to insert it), **Save**, **Cancel** and **Reset this button**. Save takes effect
-at once and is kept with that set — there is no separate Settings save. Titles and
+key. To change what a key sends on the fly, right-click it, or press **Ctrl+Shift**
+with its F-key (**Ctrl+Shift+F3** for F3, wherever the cursor is in the cockpit): the
+same editor opens with the cursor at the end of **Message**. None of these sends
+anything. The editor opens over the dock with **Title**, **Message**, the tokens (click
+one to insert it), **Save**, **Send once**, **Cancel** and **Reset this button**. Save takes effect
+at once and is kept with that set — there is no separate Settings save.
+**Send once** sends the message as it stands in the editor, one time, exactly as the
+key would send it: the tokens are filled in and every check the key gets applies (no
+call in Their call…, no contest for `{EXCH}`, outside your license, TX off). The key
+keeps the message it had. When the message goes, the editor closes; when the cockpit
+refuses it, a toast says why and the editor stays open with what you wrote. Titles and
 messages you write are shown as you wrote them, in any language; the built-in
 titles follow the app's language. A token Nexus does not know is flagged and cannot
 be saved (RTTY has no braces, so it would go out as a bare word), and a macro may
@@ -405,7 +413,8 @@ spot so you can work it from wherever you are.
 ## Honest limits
 
 - **F1–F8 are bound only while this cockpit is on screen**, and not while the
-  macro editor is open. Alt, Ctrl and Cmd with an F-key are left to your system.
+  macro editor is open. **Ctrl+Shift** with an F-key opens that key's editor; any
+  other Alt, Ctrl or Cmd with an F-key is left to your system.
 - **A contact you work by hand you also log by hand.** The **LOG** pane under the
   transcript is the strip for it — call, sent and received report, name, QTH,
   state, country, POTA reference and notes, with a **Log** button. A double-click

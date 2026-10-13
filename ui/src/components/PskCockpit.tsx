@@ -53,6 +53,8 @@ import { useStationCapability, useStationControl, useStationData } from '../stat
 import { useEscStop } from '../useEscStop'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
+import type { MacroEditorFocus } from './MacroEditor'
+import { macroEditChordKey } from '../features/macroSets'
 import {
   expandPskMacro,
   pskSetId,
@@ -285,21 +287,24 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   snapRef.current = snap
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else (the RTTY cockpit reads the same).
-  const send = (line: string) => {
-    if (!control) return
-    if (!line.trim()) return
+  //
+  // It answers whether the line went to `psk_send` (true) or was refused here (false), for the
+  // editor's Send once, which keeps the operator's draft open when the send was refused.
+  const send = (line: string): boolean => {
+    if (!control) return false
+    if (!line.trim()) return false
     const mycall = snapRef.current?.mycall?.trim() ?? ''
     if (line.includes('{MYCALL}') && !mycall) {
       pushToast(t('psk.send.noCallsign'), 'info', 3500)
-      return
+      return false
     }
     if (line.includes('{CALL}') && !hisCall.trim()) {
       pushToast(t('psk.send.noTheirCall'), 'info', 3000)
-      return
+      return false
     }
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
       pushToast(snapRef.current.radio.txRefusal ?? t('psk.send.txLocked'), 'info', 3500)
-      return
+      return false
     }
     const expanded = line
       .replace(/\{MYCALL\}/g, mycall)
@@ -307,6 +312,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     void withErrorToast(() => pskSend(expanded), t('psk.send.failed')).then((s) => {
       if (s) setPsk(s)
     })
+    return true
   }
   const sendTyped = () => {
     if (!control) return
@@ -410,17 +416,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const macroSet = pskSetId(macroSets.active)
   const slots = resolvePskSet(macroSets.profiles, macroSet, t)
   const [editing, setEditing] = useState<PskMacroKey | null>(null)
+  const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
   const [confirmSetReset, setConfirmSetReset] = useState(false)
   const [savingMacros, setSavingMacros] = useState(false)
   const dockRef = useRef<HTMLDivElement | null>(null)
-  const openEditor = (key: PskMacroKey) => {
+  const openEditor = (key: PskMacroKey, focus: MacroEditorFocus = 'title') => {
     if (!control) return
     // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
     // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
     const el = dockRef.current?.querySelector<HTMLElement>(`[data-psk-macro="${key}"]`)
     setEditorLeft(el?.offsetLeft ?? 0)
     setConfirmSetReset(false)
+    setEditorFocus(focus)
     setEditing(key)
   }
   const closeEditor = () => {
@@ -473,8 +481,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // is the one deliberate difference from RTTY: PSK31's varicode carries braces, so text typed
   // in the compose bar has always gone on the air exactly as typed, braces and all, and it still
   // does. Only a macro is token-checked, because only a macro's braces were meant as tokens.
-  const sendMacro = (slot: PskMacroSlot) => {
-    if (!control || isEmptyPskSlot(slot)) return
+  const sendMacro = (slot: PskMacroSlot): boolean => {
+    if (!control || isEmptyPskSlot(slot)) return false
     // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
     // two Settings fields. Empty outside a contest, so an empty one is "there is none": refused
     // like a missing {CALL}, rather than sent as a message with a hole where the exchange goes.
@@ -486,15 +494,23 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     })
     if ('unknown' in expanded) {
       pushToast(t('psk.send.unknownToken', { token: expanded.unknown }), 'info', 3500)
-      return
+      return false
     }
     if ('missing' in expanded) {
       if (expanded.missing === 'mycall') pushToast(t('psk.send.noCallsign'), 'info', 3500)
       else if (expanded.missing === 'call') pushToast(t('psk.send.noTheirCall'), 'info', 3000)
       else pushToast(t('psk.send.noExchange'), 'info', 3500)
-      return
+      return false
     }
-    send(expanded.text)
+    return send(expanded.text)
+  }
+  // SEND ONCE, from the editor: the message as it stands, through `sendMacro` exactly as the key
+  // goes (its tokens, every refusal, `send()`'s guards and the engine's every TX gate), and the
+  // saved key left as it was. Sent, the editor closes; refused, it stays open with the draft, as
+  // a failed Save does.
+  const sendOnce = (key: PskMacroKey, message: string) => {
+    const slot = slots.find((s) => s.key === key)
+    if (slot && sendMacro({ ...slot, text: message })) closeEditor()
   }
   /** A key's hover text: the message with what is known filled in, tokens left where not. */
   const macroTitle = (message: string) => {
@@ -524,14 +540,17 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // bar, the Call box or the log strip; not while the editor is open; not on a held key's repeats
   // (one press, one over); and never with Alt, Ctrl or Cmd, which belong to the system (Alt+F4).
   // A bound F-key's default is cancelled even while the editor is open, so the webview's own
-  // F-key actions never fire from this view.
-  const keys = useRef({ editorOpen: false, live: false, slots, closeEditor, sendMacro })
+  // F-key actions never fire from this view. The one chord taken from the system is RTTY's:
+  // Ctrl+Shift with an F-key opens that key's editor with the caret in the message, and never
+  // sends (`macroEditChordKey` says why it is free).
+  const keys = useRef({ editorOpen: false, live: false, slots, closeEditor, sendMacro, openEditor })
   keys.current = {
     editorOpen: editing !== null || confirmSetReset,
     live: sending || latched,
     slots,
     closeEditor,
     sendMacro,
+    openEditor,
   }
   // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
   // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
@@ -547,6 +566,12 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       const k = keys.current
       if (e.key === 'Escape') {
         e.preventDefault()
+        return
+      }
+      const chord = macroEditChordKey(e)
+      if (chord) {
+        e.preventDefault()
+        if (!e.repeat) k.openEditor(chord, 'message')
         return
       }
       if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
@@ -1008,7 +1033,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             editing={editing === slot.key}
             title={macroTitle(slot.text)}
             onSend={() => sendMacro(slot)}
-            onEdit={() => openEditor(slot.key)}
+            onEdit={(focus) => openEditor(slot.key, focus)}
           />
         ))}
       </div>
@@ -1081,9 +1106,11 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           slot={slots.find((s) => s.key === editing)!}
           left={editorLeft}
           saving={savingMacros}
+          focus={editorFocus}
           onSave={(label, message) =>
             void saveMacro(slots.find((s) => s.key === editing)!, label, message)
           }
+          onSendOnce={(message) => sendOnce(editing, message)}
           onCancel={closeEditor}
           onReset={() => void resetMacro(editing)}
         />

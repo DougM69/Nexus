@@ -503,7 +503,7 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
 describe('Esc is a stop on every operating screen and on Satellites', () => {
   const ESC: Record<string, string> = {
     operate: 'OperateCockpit, on the shared capture listener (useEscStop) while on show → App handleHaltTx (halt_tx)',
-    cw: 'CwCockpit, on the shared capture listener → the abort() its Stop TX calls (stop_cw, halt_tx)',
+    cw: 'CwCockpit, on the shared capture listener → the abort() its Stop TX calls (stop_cw, halt_tx); an open F-key editor closes instead while nothing is live, still sending stop_cw',
     rtty: 'RttyCockpit, on the shared capture listener → stop() (rtty_stop, halt_tx); an open F-key editor closes instead while nothing is on the air',
     psk: 'PskCockpit, as RTTY (psk_stop, halt_tx)',
     js8: 'Js8Cockpit, on the shared capture listener → stop() (halt_tx)',

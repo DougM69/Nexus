@@ -17,6 +17,13 @@
 // "cancel". Esc is decided in ONE place — the cockpit — against the Esc/Stop macro's own
 // predicate: an over on the air or a latched transmitter stops, an idle one only closes.
 //
+// THREE WAYS IN, ONE WAY OUT TO THE AIR. The ✎ (or a click on an empty key) opens a key's editor
+// with the caret in Title; a right-click on the key, or Ctrl+Shift with its F-key (the cockpit's
+// keyboard handler, `macroEditChordKey`), opens it with the caret in Message, to change what the
+// key sends on the fly as N1MM and fldigi let you. None of them sends. The editor's Send once
+// hands the message to the cockpit's `onSendOnce`, which sends it through the key's own path and
+// leaves the saved key as it was: this file still keys nothing.
+//
 // ⚠️ THE `rtty-macro-*` CLASS NAMES ARE SHARED, NOT COPIED. They are the keyboard dock's
 // vocabulary, measured in a real browser for RTTY's eight-key row (styles.css
 // `.rtty-dock-keys`); PSK's dock already reuses `rtty-hiscall`, `rtty-tx-latch`, `rtty-stop` and
@@ -24,7 +31,17 @@
 // cannot see.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { isEmptyMacroSlot, isStopLikeLabel, type MacroSetId, type MacroSlot } from '../features/macroSets'
+import {
+  isEmptyMacroSlot,
+  isStopLikeLabel,
+  macroEditShortcut,
+  type MacroSetId,
+  type MacroSlot,
+} from '../features/macroSets'
+
+/** Where the editor puts the caret when it opens: Title for the ✎, Message for a right-click
+ *  or the shortcut. */
+export type MacroEditorFocus = 'title' | 'message'
 
 interface ButtonProps {
   slot: MacroSlot
@@ -44,12 +61,17 @@ interface ButtonProps {
   emptyLabel: string
   emptyTitle: string
   editAria: string
+  /** The ✎'s tooltip: what it does, and the right-click and the shortcut that do the same. */
+  editTitle: string
   onSend: () => void
-  onEdit: () => void
+  /** Open this key's editor, with the caret where `focus` says. */
+  onEdit: (focus: MacroEditorFocus) => void
 }
 
 /** One F-key macro. The ✎ beside it shows on hover or keyboard focus; an empty key opens the
- *  editor when clicked, because there is nothing to send. */
+ *  editor when clicked, because there is nothing to send. A right-click anywhere on the key opens
+ *  its editor too, and never the browser's menu: a key that transmits on a left click must not
+ *  answer a right one with anything that can be mistaken for it. */
 export function MacroButton({
   slot,
   slotAttr,
@@ -60,17 +82,25 @@ export function MacroButton({
   emptyLabel,
   emptyTitle,
   editAria,
+  editTitle,
   onSend,
   onEdit,
 }: ButtonProps) {
   const empty = isEmptyMacroSlot(slot)
   return (
-    <div className="rtty-macro-slot" {...{ [slotAttr]: slot.key }}>
+    <div
+      className="rtty-macro-slot"
+      {...{ [slotAttr]: slot.key }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (control) onEdit('message')
+      }}
+    >
       <button
         type="button"
         className={`cw-macro${empty ? ' rtty-macro-empty' : ''}${lit ? ' esm-lit' : ''}`}
         disabled={!control}
-        onClick={empty ? onEdit : onSend}
+        onClick={empty ? () => onEdit('title') : onSend}
         title={empty ? emptyTitle : title}
       >
         <span className="cw-macro-key">{slot.key}</span>
@@ -83,9 +113,10 @@ export function MacroButton({
           type="button"
           className="rtty-macro-edit"
           aria-label={editAria}
-          title={editAria}
+          aria-keyshortcuts={macroEditShortcut(slot.key)}
+          title={editTitle}
           aria-expanded={editing}
-          onClick={onEdit}
+          onClick={() => onEdit('title')}
         >
           ✎
         </button>
@@ -108,6 +139,9 @@ export interface MacroEditorLabels {
   stopTitle: string
   unknownToken: (tokens: string) => string
   save: string
+  /** Send once, and its tooltip: sends the message as it stands, this one time. */
+  sendOnce: string
+  sendOnceTitle: string
   cancel: string
   resetButton: string
 }
@@ -121,23 +155,31 @@ interface EditorProps {
   labels: MacroEditorLabels
   /** The mode's own scan for tokens its expander cannot fill. */
   unknownTokens: (text: string) => string[]
+  /** Where the caret starts (Title unless said otherwise). */
+  focus?: MacroEditorFocus
   onSave: (label: string, text: string) => void
+  /** Send what Message holds, once, through the cockpit's own send for this key: the path the
+   *  key itself takes, every check and transmit guard included. The saved key is not touched. */
+  onSendOnce: (text: string) => void
   onCancel: () => void
   /** Put the built-in back for this key. Offered only when the key holds the operator's own. */
   onReset: () => void
 }
 
-/** The inline editor for one key: Title, Message, the tokens, Save / Cancel / Reset this button.
- *  It refuses a caption that reads as a stop and a token the expander does not know — the one
- *  would dress a transmit key as the operator's way out, the other would put text on the air
- *  that the operator did not mean to send. */
+/** The inline editor for one key: Title, Message, the tokens, Save / Send once / Cancel / Reset
+ *  this button. It refuses a caption that reads as a stop and a token the expander does not know
+ *  — the one would dress a transmit key as the operator's way out, the other would put text on
+ *  the air that the operator did not mean to send. Send once is refused on the token alone: it
+ *  sends the message and never the caption. */
 export function MacroEditor({
   slot,
   left,
   saving,
   labels,
   unknownTokens,
+  focus = 'title',
   onSave,
+  onSendOnce,
   onCancel,
   onReset,
 }: EditorProps) {
@@ -147,8 +189,16 @@ export function MacroEditor({
   const titleRef = useRef<HTMLInputElement>(null)
   const messageRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
+    if (focus === 'message') {
+      // The caret at the end of the message, to add to it or change it on the fly.
+      const el = messageRef.current
+      el?.focus({ preventScroll: true })
+      el?.setSelectionRange(el.value.length, el.value.length)
+      return
+    }
     titleRef.current?.focus({ preventScroll: true })
     titleRef.current?.select()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   // Over F8 at a narrow width the key's own offset would run the editor off the dock's right
   // edge; slide it back in. Layout units throughout (`offset*`), so the app's zoom cancels out.
@@ -165,6 +215,7 @@ export function MacroEditor({
   const save = () => {
     if (!blocked) onSave(label.trim(), text.trim())
   }
+  const sendable = text.trim() !== '' && unknown.length === 0
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -238,6 +289,17 @@ export function MacroEditor({
       <div className="rtty-macro-editor-actions">
         <button type="button" className="le-log-btn" disabled={blocked} onClick={save}>
           {labels.save}
+        </button>
+        <button
+          type="button"
+          className="le-qrz"
+          disabled={!sendable}
+          title={labels.sendOnceTitle}
+          onClick={() => {
+            if (sendable) onSendOnce(text.trim())
+          }}
+        >
+          {labels.sendOnce}
         </button>
         <button type="button" className="le-qrz" onClick={onCancel}>
           {labels.cancel}

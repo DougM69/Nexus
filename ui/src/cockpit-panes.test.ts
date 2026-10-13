@@ -868,6 +868,22 @@ describe('panes are sized by the grid, never by themselves', () => {
     expect(decl('background')).toBe('var(--panel)')
     expect(Number(decl('z-index'))).toBeGreaterThanOrEqual(1)
   })
+
+  // THE MACRO EDITOR stands on the dock's top edge, over the pane region, so it paints at the
+  // dock's level; a column divider (`.pane-splitter`, styles.css) that outranks the dock took the
+  // click on a strip of it, measured in Chrome. The dock is lifted while an editor is open.
+  it('a dock with its macro editor open stacks above the pane region’s dividers', () => {
+    const z = (rules: Rule[], selector: string) => {
+      const r = rules.filter((x) => x.selector === selector)
+      expect(r.length, `exactly one ${selector} rule`).toBe(1)
+      const m = /(?:^|;)\s*z-index\s*:\s*(-?\d+)\s*(?:;|$)/.exec(r[0].body)
+      expect(m, `${selector} declares a z-index`).not.toBeNull()
+      return Number(m![1])
+    }
+    const lifted = z(RULES, '.cockpit-txdock-editing')
+    expect(lifted).toBeGreaterThan(z(STYLES_RULES, '.pane-splitter'))
+    expect(lifted).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+  })
 })
 
 describe('styles.css cannot size a pane frame either (the fence has two sides)', () => {
