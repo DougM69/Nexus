@@ -9,14 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The setup wizard no longer puts PTT on CAT for a radio Hamlib cannot key that way.** Hamlib
-  cannot key the Icom IC-706, IC-706MKII, IC-706MKIIG, IC-718, IC-725, IC-726, IC-728, IC-729,
-  IC-735 and IC-756, the Ten-Tec TT-585 Paragon, the Alinco DX-77 or the Malachite DSP SDR over
-  CAT: with PTT on CAT, Nexus showed TX while the radio stayed on receive. The wizard switched PTT
-  to CAT for any rig it could name. For these radios it now leaves PTT on VOX, or on your
-  interface's keying line when it recognises the interface. Settings ▸ Radio says so when you save
-  one of them with PTT on CAT, and keeps your choice: an interface that keys the radio on audio,
-  such as a SignaLink, transmits whatever PTT is set to.
+- **The setup wizard asks how your interface keys a radio Hamlib cannot key over CAT.** Hamlib
+  has no way to key the Icom IC-706, IC-706MKII, IC-706MKIIG, IC-718, IC-725, IC-726, IC-728,
+  IC-729, IC-735 and IC-756, the Ten-Tec TT-585 Paragon or the Alinco DX-77 over CAT. With PTT on
+  CAT, Nexus showed TX while the radio stayed on receive, and the wizard put PTT on CAT for any rig
+  it could name. For these radios the wizard asks how your interface keys the radio: VOX if it
+  keys on audio, like a SignaLink, or Serial RTS or Serial DTR if it keys on a serial line, on the
+  CAT port or on another port you pick. A Digirig Mobile or a RIGblaster it recognises answers for
+  you, and the wizard does not finish until there is an answer. Prove TX sits beside the choice:
+  it asks first, saves your answer and keys the radio for about two seconds, so you can see it
+  transmit. In the wizard, Prove TX saves what you have picked before it keys, for every radio.
+  Settings ▸ Radio shows the same note under PTT Method for these radios, and still warns when you
+  save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
+  Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
+  asked.
 
 ## [1.18.0] — 2026-10-12
 

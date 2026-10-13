@@ -144,37 +144,45 @@ export function SetupHealth({
             ? t('setup.health.tx.on')
             : t('setup.health.tx.off')}
       </span>
-      {/* ⚠️ NOT MIGRATED, DELIBERATELY. Prove TX keys a bounded tune carrier (`apiSetTune`) —
-          it is a transmit-path control, so its label, its tooltip and the consent prompt in
-          front of it stay exactly as written until the transmit-path batch moves them with the
-          stop-line sweeps re-run. This is why the file sits on the guard's PARTIAL list. */}
-      {onProveTx && !tuning && (
-        <button
-          type="button"
-          className="np-chip health-prove"
-          onClick={() => {
-            // ⚠️ The consent prompt is UNCHANGED in substance — same question, same warning, same
-            // "asks first, every time". Only the MECHANISM moved: `window.confirm` is inert in
-            // this webview (wry implements no `runJavaScriptConfirmPanel`), so it returned false
-            // instantly and Prove TX was a DEAD BUTTON on macOS for 32 days. It failed closed, so
-            // nothing ever keyed unasked — the loss was the feature, not the guard.
-            // Still fail-closed: `confirmDialog` resolves false with no host mounted, and the
-            // key only happens inside the `ok` branch.
-            void confirmDialog({
-              title: 'Prove the transmit path?',
-              body:
-                'This keys your transmitter for ~2 seconds at your tune power. Make sure an ' +
-                'antenna or dummy load is connected.',
-              confirmLabel: 'Prove TX',
-            }).then((ok) => {
-              if (ok) onProveTx()
-            })
-          }}
-          title="Key a 2 s tune carrier to verify CAT → PTT → RF (asks first, every time)"
-        >
-          Prove TX
-        </button>
-      )}
+      {onProveTx && !tuning && <ProveTxButton onProveTx={onProveTx} />}
     </div>
+  )
+}
+
+/** Prove TX: a bounded tune carrier, keyed only once its consent prompt says yes. Exported so the
+ * setup wizard can put it beside its keying choice as well as in this strip: one control and one
+ * prompt, written once.
+ *
+ * ⚠️ NOT MIGRATED, DELIBERATELY. Prove TX keys a bounded tune carrier (`apiSetTune`) — it is a
+ * transmit-path control, so its label, its tooltip and the consent prompt in front of it stay
+ * exactly as written until the transmit-path batch moves them with the stop-line sweeps re-run.
+ * This is why the file sits on the guard's PARTIAL list. */
+export function ProveTxButton({ onProveTx }: { onProveTx: () => void }) {
+  return (
+    <button
+      type="button"
+      className="np-chip health-prove"
+      onClick={() => {
+        // ⚠️ The consent prompt is UNCHANGED in substance — same question, same warning, same
+        // "asks first, every time". Only the MECHANISM moved: `window.confirm` is inert in
+        // this webview (wry implements no `runJavaScriptConfirmPanel`), so it returned false
+        // instantly and Prove TX was a DEAD BUTTON on macOS for 32 days. It failed closed, so
+        // nothing ever keyed unasked — the loss was the feature, not the guard.
+        // Still fail-closed: `confirmDialog` resolves false with no host mounted, and the
+        // key only happens inside the `ok` branch.
+        void confirmDialog({
+          title: 'Prove the transmit path?',
+          body:
+            'This keys your transmitter for ~2 seconds at your tune power. Make sure an ' +
+            'antenna or dummy load is connected.',
+          confirmLabel: 'Prove TX',
+        }).then((ok) => {
+          if (ok) onProveTx()
+        })
+      }}
+      title="Key a 2 s tune carrier to verify CAT → PTT → RF (asks first, every time)"
+    >
+      Prove TX
+    </button>
   )
 }

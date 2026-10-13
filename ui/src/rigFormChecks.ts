@@ -274,6 +274,20 @@ export const NO_CAT_PTT_MODELS: readonly number[] = [
   2049, 3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3026, 16009, 17001,
 ]
 
+/**
+ * The transceivers among `NO_CAT_PTT_MODELS`: everything on that list except the Malachite DSP SDR
+ * (2049), a receiver. Something other than CAT has to key these, so the setup wizard asks how the
+ * owner's interface keys the radio (VOX, Serial RTS or Serial DTR) with Prove TX beside the answer,
+ * and Settings ▸ Radio explains it under PTT Method whatever the method.
+ *
+ * ⚠️ GENERATED FACTS, like the list above: `scripts/gen-hamlib-cat-ptt.mjs` records whether each
+ * model's `Rig type:` names a Transmitter, and `rigFormChecks.catptt.test.ts` fails unless this is
+ * exactly the fixture's rows with `setPtt: false` and `transmitter: true`.
+ */
+export const NO_CAT_PTT_TRANSCEIVERS: readonly number[] = [
+  3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3026, 16009, 17001,
+]
+
 /** Convenience: does anything here stop a save? */
 export function blocks(checks: RigCheck[]): boolean {
   return checks.some((c) => c.level === 'error')

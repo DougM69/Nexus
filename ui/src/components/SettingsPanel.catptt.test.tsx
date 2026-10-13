@@ -8,7 +8,7 @@
 // the pre-save checks' warning line. `rigFormChecks.catptt.test.ts` decides when; this file pins
 // that the operator SEES it, which no other test reads off the panel for any rig check.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -155,5 +155,60 @@ describe('Settings ▸ Radio on a radio Hamlib cannot key over CAT', () => {
   it('IC-706MKIIG on VOX: it saves, and there is no hint', async () => {
     await saveRadio({ ...IC706, pttMethod: 'vox' })
     expect(screen.queryByText(HINT)).toBeNull()
+  })
+})
+
+// The note under PTT Method, the same sentence the setup wizard shows beside its keying choice. It
+// is there whatever the method, as you look, not on Save: on VOX, RTS or DTR it says what the choice
+// has to match, and on CAT it says why CAT keys nothing. Only for the transceivers among these
+// radios (`NO_CAT_PTT_TRANSCEIVERS`): Hamlib keys an IC-7300 itself, and the Malachite DSP is a
+// receiver with nothing to key.
+describe('Settings ▸ Radio explains the keying under PTT Method, live', () => {
+  const NOTE = /^Hamlib has no way to key this radio over CAT\./
+
+  async function openRadio(radio: typeof IC706) {
+    api.get('getSettings').mockImplementation(() => Promise.resolve(settingsWith(radio)))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    await screen.findByText('Connection')
+  }
+
+  it.each(['vox', 'rts', 'cat'])('IC-706MKIIG on %s: the note sits under PTT Method', async (ptt) => {
+    await openRadio({ ...IC706, pttMethod: ptt })
+    const note = await screen.findByText(NOTE)
+    const field = note.closest('.settings-field') as HTMLElement
+    expect(within(field).getByText('PTT Method')).toBeTruthy()
+    // Nothing was saved: the note is not the save-time warning.
+    expect(api.get('setSettings')).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [3073, 'Icom IC-7300'],
+    [2049, 'Malachite DSP SDR'],
+  ])('no note for model %s (%s)', async (rigModel, rigModelName) => {
+    // RTS and CAT both show the note on the IC-706MKIIG above; the model is the only difference.
+    for (const pttMethod of ['rts', 'cat']) {
+      await openRadio({ ...IC706, rigModel, rigModelName, pttMethod })
+      // The panel is up with the PTT Method field on screen, so a missing note is a real absence.
+      expect(screen.getByText('PTT Method')).toBeTruthy()
+      expect(screen.queryByText(NOTE)).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('appears the moment the IC-706MKIIG is picked, before any Save', async () => {
+    api.get('getRigModels').mockImplementation(() =>
+      Promise.resolve([
+        [3011, 'Icom IC-706MKIIG'],
+        [3073, 'Icom IC-7300'],
+      ]),
+    )
+    await openRadio({ ...IC706, rigModel: 3073, rigModelName: 'Icom IC-7300', pttMethod: 'vox' })
+    expect(screen.queryByText(NOTE)).toBeNull()
+    const model = screen.getByRole('combobox', { name: 'Rig Model' }) as HTMLSelectElement
+    await waitFor(() => expect(within(model).getByText(/IC-706MKIIG/)).toBeTruthy())
+    fireEvent.change(model, { target: { value: '3011' } })
+    expect(await screen.findByText(NOTE)).toBeTruthy()
+    expect(api.get('setSettings')).not.toHaveBeenCalled()
   })
 })

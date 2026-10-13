@@ -17,12 +17,19 @@
 // Not the dump's `PTT type:` line: rigctl writes its own `-P` option into the caps before dumping,
 // so every model reads `None` there (see `gen-hamlib-ptt-micdata.mjs`).
 //
+// A second fact per model, `transmitter`: whether the dump's `Rig type:` line carries the word
+// `Transmitter` (the flags Hamlib prints there, `Other Receiver Transmitter Transceiver` for an
+// IC-7300). A radio that cannot key over CAT but does transmit needs another way to key, so the
+// setup wizard asks how the interface keys it (`NO_CAT_PTT_TRANSCEIVERS`). The Malachite DSP
+// (2049) reads `Other Receiver`: a receiver, with nothing to key and nothing to ask.
+//
 // Output (deterministic, no timestamp, so regenerating an unchanged tree is a no-op diff):
 //   ui/src/components/__fixtures__/hamlibCatPtt.json
-//     { hamlib, catalog, rigs: [{ model, name, setPtt }, …], missing, needsDaemon }
+//     { hamlib, catalog, rigs: [{ model, name, setPtt, transmitter }, …], missing, needsDaemon }
 //   `rigFormChecks.catptt.test.ts` pins `NO_CAT_PTT_MODELS` to exactly the rigs with
-//   `setPtt: false`. NET rigctl (model 2) dumps nothing without a live daemon and lands in
-//   `needsDaemon`; its keying belongs to the rigctld it reaches, so it is never on the list.
+//   `setPtt: false`, and `NO_CAT_PTT_TRANSCEIVERS` to those of them with `transmitter: true`. NET
+//   rigctl (model 2) dumps nothing without a live daemon and lands in `needsDaemon`; its keying
+//   belongs to the rigctld it reaches, so it is never on either list.
 //
 // Run:  node scripts/gen-hamlib-cat-ptt.mjs [path/to/rigctl]
 //   Default binary is the bundled `rigctl.exe`, which runs under WSL interop on the dev box; pass a
@@ -72,7 +79,14 @@ for (const model of uniq) {
   const name = `${caps.match(/^Mfg name:\s*(.+)$/m)?.[1].trim() ?? ''} ${caps.match(/^Model name:\s*(.+)$/m)?.[1].trim() ?? ''}`
   const setPtt = caps.match(/^Can set PTT:\s*([YN])\b/m)
   if (!setPtt) throw new Error(`no "Can set PTT:" line in the caps dump for ${model} — the format moved`)
-  rigs.push({ model, name: name.trim(), setPtt: setPtt[1] === 'Y' })
+  const rigType = caps.match(/^Rig type:(.*)$/m)
+  if (!rigType) throw new Error(`no "Rig type:" line in the caps dump for ${model} — the format moved`)
+  rigs.push({
+    model,
+    name: name.trim(),
+    setPtt: setPtt[1] === 'Y',
+    transmitter: /\bTransmitter\b/.test(rigType[1]),
+  })
 }
 
 writeFileSync(
@@ -82,5 +96,6 @@ writeFileSync(
 const noPtt = rigs.filter((r) => !r.setPtt)
 console.log(`${out}: ${rigs.length} rigs dumped, ${noPtt.length} with Can set PTT: N (${hamlib})`)
 console.log(`NO_CAT_PTT_MODELS: [${noPtt.map((r) => r.model).join(', ')}]`)
+console.log(`NO_CAT_PTT_TRANSCEIVERS: [${noPtt.filter((r) => r.transmitter).map((r) => r.model).join(', ')}]`)
 if (needsDaemon.length) console.log(`present but needs a live daemon to dump: ${needsDaemon.join(' ')}`)
 if (missing.length) console.log(`not in this Hamlib: ${missing.join(' ')}`)

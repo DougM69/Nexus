@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import { useState } from 'react'
 import { SetupWizard } from './SetupWizard'
+import { ConfirmHost } from '../confirm'
 import * as api from '../api'
 import { memoriesStore, emptyBank, addMemory } from '../features/memories'
 
@@ -23,21 +24,35 @@ const importAdif = api.importAdif as ReturnType<typeof vi.fn>
 
 /** `guide: true` supplies onOpenGuide, which is what makes the last step offer
  *  the Getting started walkthrough. Omitted, the offer must not appear at all.
- *  `settings` is what the wizard prefills from and diffs its draft against. */
-function renderWizard(opts: { guide?: boolean; settings?: Record<string, unknown> } = {}) {
+ *  `settings` is what the wizard prefills from and diffs its draft against.
+ *  `onTestCat` / `onProveTx` stand in for App's; the confirm host is App's too, so Prove TX
+ *  can ask its question here as it does there. */
+function renderWizard(
+  opts: {
+    guide?: boolean
+    settings?: Record<string, unknown>
+    onTestCat?: ReturnType<typeof vi.fn>
+    onProveTx?: () => void
+  } = {},
+) {
   const onApply = vi.fn()
   const onSkip = vi.fn()
   const onOpenGuide = vi.fn()
+  const onTestCat = opts.onTestCat ?? vi.fn(() => Promise.resolve({} as never))
   render(
-    <SetupWizard
-      settings={(opts.settings ?? null) as never}
-      onApply={onApply}
-      onTestCat={vi.fn(() => Promise.resolve({} as never))}
-      onSkip={onSkip}
-      onOpenGuide={opts.guide ? onOpenGuide : undefined}
-    />,
+    <>
+      <SetupWizard
+        settings={(opts.settings ?? null) as never}
+        onApply={onApply}
+        onTestCat={onTestCat as never}
+        onProveTx={opts.onProveTx}
+        onSkip={onSkip}
+        onOpenGuide={opts.guide ? onOpenGuide : undefined}
+      />
+      <ConfirmHost />
+    </>,
   )
-  return { onApply, onSkip, onOpenGuide }
+  return { onApply, onSkip, onOpenGuide, onTestCat }
 }
 
 const clickNext = () => fireEvent.click(screen.getByRole('button', { name: /Next/ }))
@@ -275,6 +290,11 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
   // while it stays on receive. The wizard switched PTT to CAT for any rig it could name, so Nexus
   // showed TX and nothing went out. The draft holds only what changed: a draft with no
   // `pttMethod` leaves PTT as saved (VOX when nothing is).
+  //
+  // The twelve transceivers among them also ask how the interface keys the radio, and the wizard
+  // cannot finish until that is answered. So the tests below that stop at a pick read the draft
+  // the way Test CAT sends it (the same `draft()` Finish sends): nothing has been picked for the
+  // keying yet, so a `pttMethod` there could only have come from the model pick itself.
   const BRIDGE = {
     portName: 'COM4',
     suggestedModel: null,
@@ -310,6 +330,7 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
     vi.mocked(api.getRigModels).mockResolvedValue([
       [3011, 'Icom IC-706MKIIG'],
       [3073, 'Icom IC-7300'],
+      [2049, 'Malachite DSP SDR'],
     ] as never)
     vi.mocked(api.detectRigs).mockResolvedValue([BRIDGE] as never)
     vi.mocked(api.probeCatPorts).mockReset()
@@ -338,12 +359,19 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
     fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
     return onApply.mock.calls[0][4]
   }
+  /** The draft as Test CAT sends it, for a radio the wizard will not finish on until the keying
+   *  is picked. */
+  async function testCatDraft(onTestCat: ReturnType<typeof vi.fn>) {
+    fireEvent.click(screen.getByRole('button', { name: /Test CAT/ }))
+    await waitFor(() => expect(onTestCat).toHaveBeenCalledTimes(1))
+    return onTestCat.mock.calls[0][0]
+  }
 
   it('a pick of the IC-706MKIIG leaves PTT on VOX', async () => {
-    const { onApply } = renderWizard()
+    const { onTestCat } = renderWizard()
     await chooseRow(/COM4/)
     await pick(3011)
-    const draft = finishDraft(onApply)
+    const draft = await testCatDraft(onTestCat)
     expect(draft.rigModel).toBe(3011)
     expect(draft.pttMethod).toBeUndefined()
   })
@@ -358,20 +386,20 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
   })
 
   it('correcting a pick to the IC-706MKIIG undoes the CAT the first pick chose', async () => {
-    const { onApply } = renderWizard()
+    const { onTestCat } = renderWizard()
     await chooseRow(/COM4/)
     await pick(3073)
     await pick(3011)
-    const draft = finishDraft(onApply)
+    const draft = await testCatDraft(onTestCat)
     expect(draft.rigModel).toBe(3011)
     expect(draft.pttMethod).toBeUndefined()
   })
 
   it('a saved CAT stays: an interface that keys on audio (a SignaLink) transmits on CAT', async () => {
-    const { onApply } = renderWizard({ settings: { pttMethod: 'cat' } })
+    const { onTestCat } = renderWizard({ settings: { pttMethod: 'cat' } })
     await chooseRow(/COM4/)
     await pick(3011)
-    const draft = finishDraft(onApply)
+    const draft = await testCatDraft(onTestCat)
     expect(draft.rigModel).toBe(3011)
     // Unchanged from the saved CAT. Rewritten to VOX, the draft would carry `pttMethod: 'vox'`.
     expect(draft.pttMethod).toBeUndefined()
@@ -394,9 +422,9 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
     vi.mocked(api.detectRigs).mockResolvedValue([
       { ...BRIDGE, suggestedModel: 3011, suggestedModelName: 'Icom IC-706MKIIG' },
     ] as never)
-    const { onApply } = renderWizard()
+    const { onTestCat } = renderWizard()
     await chooseRow(/COM4/)
-    const draft = finishDraft(onApply)
+    const draft = await testCatDraft(onTestCat)
     expect(draft.rigModel).toBe(3011)
     expect(draft.pttMethod).toBeUndefined()
   })
@@ -421,6 +449,177 @@ describe('SetupWizard keying on a radio Hamlib cannot key over CAT', () => {
     expect(id).toBe(1)
     expect(patch.rigModel).toBe(3011)
     expect(patch.pttMethod).toBe('vox')
+  })
+
+  // ── How the interface keys the radio: the twelve transceivers among the thirteen ──────────
+  // For these the wizard asks VOX, Serial RTS or Serial DTR, says in a line what each means, and
+  // puts Prove TX beside the answer. The Malachite DSP can set no PTT either, but it is a receiver.
+  const NOTE = /^Hamlib has no way to key this radio over CAT\./
+  const keying = () => screen.queryByRole('group', { name: 'How does your interface key the radio?' })
+  const option = (name: RegExp) => within(keying()!).getByRole('button', { name })
+  /** The options shown as picked, by their text. */
+  const pressed = () =>
+    within(keying()!)
+      .getAllByRole('button')
+      .filter((b) => b.getAttribute('aria-pressed') === 'true')
+      .map((b) => b.textContent)
+
+  it('asks for the IC-706MKIIG, not for the IC-7300 (Hamlib keys it) or the Malachite DSP (a receiver)', async () => {
+    renderWizard()
+    await chooseRow(/COM4/)
+    await pick(3011)
+    expect(keying()).not.toBeNull()
+    await pick(3073)
+    expect(keying()).toBeNull()
+    await pick(2049)
+    expect(keying()).toBeNull()
+    // Control: the same select brings it back, so each absence above is the model's doing.
+    await pick(3011)
+    expect(keying()).not.toBeNull()
+  })
+
+  it.each([
+    [/Serial RTS/, 'rts'],
+    [/Serial DTR/, 'dtr'],
+    [/VOX/, 'vox'],
+  ])('picking %s drafts %s', async (name, value) => {
+    // Saved on CAT, so every pick disagrees with what is saved, and RTS and DTR with the default.
+    const { onApply } = renderWizard({ settings: { pttMethod: 'cat' } })
+    await chooseRow(/COM4/)
+    await pick(3011)
+    expect(pressed()).toEqual([])
+    fireEvent.click(option(name))
+    expect(option(name).getAttribute('aria-pressed')).toBe('true')
+    expect(finishDraft(onApply).pttMethod).toBe(value)
+  })
+
+  it('a recognised Digirig pre-picks RTS on the IC-706MKIIG, and the wizard can finish', async () => {
+    vi.mocked(api.detectRigs).mockResolvedValue([DIGIRIG] as never)
+    // Saved on DTR: the RTS below can only have come from the interface.
+    const { onApply } = renderWizard({ settings: { pttMethod: 'dtr' } })
+    await chooseRow(/COM6/)
+    await pick(3011)
+    expect(pressed()).toEqual([expect.stringMatching(/^Serial RTS/)])
+    expect(screen.getByText(NOTE).getAttribute('role')).toBeNull()
+    expect(finishDraft(onApply).pttMethod).toBe('rts')
+  })
+
+  it('cannot finish on the IC-706MKIIG until the keying is picked', async () => {
+    // A bare bridge chip: no recognised interface answers for the owner, and VOX is only the
+    // default, which is no answer.
+    const { onApply } = renderWizard()
+    await chooseRow(/COM4/)
+    await pick(3011)
+    expect(pressed()).toEqual([])
+    // Required reading, as a guessed model is: the note is an alert and nothing moves on.
+    expect(screen.getByText(NOTE).getAttribute('role')).toBe('alert')
+    const next = () => screen.getByRole('button', { name: /Next/ }) as HTMLButtonElement
+    const dots = () => [...document.querySelectorAll<HTMLButtonElement>('.wizard-dot')]
+    expect(next().disabled).toBe(true)
+    expect(dots().map((d) => d.disabled)).toEqual([false, false, true, true])
+    // Nor from the step before: the dots still stop at the radio step.
+    fireEvent.click(screen.getByRole('button', { name: /Back/ }))
+    expect(dots().map((d) => d.disabled)).toEqual([false, false, true, true])
+    fireEvent.click(dots()[3])
+    expect(screen.queryByRole('button', { name: /Finish — everything on/ })).toBeNull()
+    expect(onApply).not.toHaveBeenCalled()
+    // Control: one pick, and the same wizard finishes. VOX was already the setting, so nothing is
+    // rewritten.
+    fireEvent.click(dots()[1])
+    fireEvent.click(option(/VOX/))
+    expect(next().disabled).toBe(false)
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    expect(draft.pttMethod).toBeUndefined()
+  })
+
+  it('a saved RTS shows as picked, with its keying port, and stays as saved', async () => {
+    const { onApply } = renderWizard({ settings: { pttMethod: 'rts', pttSerialPort: 'COM9' } })
+    await chooseRow(/COM4/)
+    await pick(3011)
+    expect(pressed()).toEqual([expect.stringMatching(/^Serial RTS/)])
+    expect((screen.getByLabelText(/PTT Serial Port/) as HTMLInputElement).value).toBe('COM9')
+    const draft = finishDraft(onApply)
+    expect(draft.rigModel).toBe(3011)
+    // Neither is rewritten: a draft carries only what changed.
+    expect(draft.pttMethod).toBeUndefined()
+    expect(draft.pttSerialPort).toBeUndefined()
+  })
+
+  it('Serial RTS or DTR keys on the CAT port unless another port is picked', async () => {
+    const { onApply } = renderWizard({ settings: { pttMethod: 'vox', pttSerialPort: '' } })
+    await chooseRow(/COM4/)
+    await pick(3011)
+    expect(screen.queryByLabelText(/PTT Serial Port/)).toBeNull() // VOX keys no line
+    fireEvent.click(option(/Serial DTR/))
+    const port = screen.getByLabelText(/PTT Serial Port/) as HTMLInputElement
+    expect(port.value).toBe('')
+    expect(port.placeholder).toMatch(/blank = use the CAT port/)
+    fireEvent.change(port, { target: { value: 'COM9' } })
+    const draft = finishDraft(onApply)
+    expect(draft.pttMethod).toBe('dtr')
+    expect(draft.pttSerialPort).toBe('COM9')
+  })
+
+  /** A stand-in for App: `onTestCat` saves the draft it is given, as App's does, and `onProveTx`
+   *  notes the method saved at the moment it is called, which is the moment App keys the tune
+   *  carrier: the radio loop keys with what is saved. */
+  function station(saved: Record<string, unknown>) {
+    const keyedWith: unknown[] = []
+    const onTestCat = vi.fn(async (d: Record<string, unknown>) => {
+      Object.assign(saved, d)
+      return { ok: true, detail: 'the radio answered' }
+    })
+    const onProveTx = vi.fn(() => {
+      keyedWith.push(saved.pttMethod)
+    })
+    return { keyedWith, onTestCat, onProveTx }
+  }
+  async function proveTx(from: HTMLElement) {
+    fireEvent.click(within(from).getByRole('button', { name: 'Prove TX' }))
+    const ask = await screen.findByRole('dialog', { name: 'Prove the transmit path?' })
+    return () => fireEvent.click(within(ask).getByRole('button', { name: 'Prove TX' }))
+  }
+
+  it('Prove TX beside the choice keys with the method just picked', async () => {
+    const st = station({ pttMethod: 'vox' })
+    renderWizard({ settings: { pttMethod: 'vox' }, onTestCat: st.onTestCat, onProveTx: st.onProveTx })
+    await chooseRow(/COM4/)
+    await pick(3011)
+    fireEvent.click(option(/Serial RTS/))
+    const agree = await proveTx(keying()!)
+    // Nothing is saved or keyed on the ask.
+    expect(st.onTestCat).not.toHaveBeenCalled()
+    expect(st.onProveTx).not.toHaveBeenCalled()
+    agree()
+    await waitFor(() => expect(st.onProveTx).toHaveBeenCalledTimes(1))
+    expect(st.keyedWith).toEqual(['rts'])
+  })
+
+  it("the health strip's Prove TX keys with the wizard's draft too", async () => {
+    // An IC-7300 picked: the wizard drafts CAT over the saved VOX, and the strip has to key that.
+    const st = station({ pttMethod: 'vox' })
+    renderWizard({ settings: { pttMethod: 'vox' }, onTestCat: st.onTestCat, onProveTx: st.onProveTx })
+    await chooseRow(/COM4/)
+    await pick(3073)
+    const agree = await proveTx(screen.getByRole('status', { name: 'Setup health' }))
+    agree()
+    await waitFor(() => expect(st.onProveTx).toHaveBeenCalledTimes(1))
+    expect(st.keyedWith).toEqual(['cat'])
+  })
+
+  it('Prove TX keys nothing when saving the pick fails', async () => {
+    const onTestCat = vi.fn(() => Promise.reject(new Error('settings write failed')))
+    const onProveTx = vi.fn()
+    renderWizard({ onTestCat, onProveTx })
+    await chooseRow(/COM4/)
+    await pick(3011)
+    fireEvent.click(option(/Serial DTR/))
+    const agree = await proveTx(keying()!)
+    agree()
+    await screen.findByText(/settings write failed/)
+    expect(onTestCat).toHaveBeenCalledTimes(1)
+    expect(onProveTx).not.toHaveBeenCalled()
   })
 })
 

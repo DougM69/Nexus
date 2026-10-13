@@ -9,7 +9,13 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { blocks, checkRigForm, NO_CAT_PTT_MODELS, type RigFormFacts } from './rigFormChecks'
+import {
+  blocks,
+  checkRigForm,
+  NO_CAT_PTT_MODELS,
+  NO_CAT_PTT_TRANSCEIVERS,
+  type RigFormFacts,
+} from './rigFormChecks'
 import hamlibCatPtt from './components/__fixtures__/hamlibCatPtt.json'
 
 describe("the list is the bundled Hamlib's answer, not a hand list", () => {
@@ -46,6 +52,20 @@ describe("the list is the bundled Hamlib's answer, not a hand list", () => {
     // Control: the fixture really holds such rows, so the equality below is not [] against [].
     expect(cannot.length).toBeGreaterThan(0)
     expect([...NO_CAT_PTT_MODELS].sort((a, b) => a - b)).toEqual(cannot.sort((a, b) => a - b))
+  })
+
+  it('NO_CAT_PTT_TRANSCEIVERS is exactly the rigs that cannot set PTT and can transmit', () => {
+    // The radios the wizard asks how the interface keys them, and Settings explains under PTT
+    // Method. A receiver among the `Can set PTT: N` rows has nothing to key: the Malachite DSP's
+    // caps say `Rig type: Other Receiver`, with no Transmitter in the line.
+    expect(hamlibCatPtt.rigs.every((r) => typeof r.transmitter === 'boolean')).toBe(true)
+    const asks = hamlibCatPtt.rigs.filter((r) => !r.setPtt && r.transmitter).map((r) => r.model)
+    const receivers = hamlibCatPtt.rigs.filter((r) => !r.setPtt && !r.transmitter).map((r) => r.model)
+    // Controls: both kinds are in the fixture, so the equality below is not [] against [], and the
+    // transmitter fact really takes a radio off NO_CAT_PTT_MODELS.
+    expect(asks.length).toBeGreaterThan(0)
+    expect(receivers.length).toBeGreaterThan(0)
+    expect([...NO_CAT_PTT_TRANSCEIVERS].sort((a, b) => a - b)).toEqual(asks.sort((a, b) => a - b))
   })
 })
 
