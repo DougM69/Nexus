@@ -523,13 +523,13 @@ pub fn score_slots(
         // "RTTY" is carried through as a DISPLAY/ROUTING submode (never a ModeClass
         // variant): it lets the row read "RTTY" and route to the RTTY cockpit, and keeps
         // an RTTY row distinct from an FT8 row of the same call/band in rank()'s dedup.
-        // Carry the SPECIFIC digital submode (RTTY/FT8/FT4) as the display+routing label so the
-        // Needed board designates the exact mode and keeps them as distinct rows in rank()'s
+        // Carry the SPECIFIC digital submode (RTTY/FT8/FT4/JTTY) as the display+routing label so
+        // the Needed board designates the exact mode and keeps them as distinct rows in rank()'s
         // dedup. A label only: the mode need above was judged on the exact mode, which rides
-        // in `exact_mode`. Everything else keeps its class.
+        // in `exact_mode`. Everything else keeps its class. JTTY's row opens the JTTY cockpit.
         mode: {
             let up = mode.to_ascii_uppercase();
-            if up == "RTTY" || up == "FT8" || up == "FT4" {
+            if up == "RTTY" || up == "FT8" || up == "FT4" || up == "JTTY" {
                 up
             } else {
                 ModeClass::from_adif(mode).label().to_string()
@@ -704,7 +704,7 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         // fabricate a NewMode. Spell the tiers in upper case with the rest.
         "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "Q65" | "FST4"
         | "RTTY" | "PSK" | "PSK31" | "PSK63" | "PSK125" | "QPSK31" | "JT65" | "JT9" | "JS8"
-        | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
+        | "JTTY" | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
         _ => crate::model::classify_spot_mode(freq_mhz),
     }
 }
@@ -2286,6 +2286,53 @@ mod tests {
         );
     }
 
+    /// A station heard in JTTY reads "JTTY" on its row and routes to the JTTY cockpit, as an RTTY
+    /// row reads RTTY, and it still scores as a Digital award. A JTTY row and an FT8 row of the
+    /// same call and band are two rows (two cockpits), and a PSK31 row keeps its class label:
+    /// only the modes with a cockpit of their own on that list carry their name.
+    #[test]
+    fn jtty_carries_its_own_label_and_still_scores_as_a_digital_award() {
+        let needs = LogNeeds::new(); // empty log → any DX is a new one
+        let alert = |mode: &str| {
+            score(
+                "3Y0J",
+                "20m",
+                mode,
+                None,
+                None,
+                &needs,
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .unwrap()
+        };
+        let a = alert("JTTY");
+        assert_eq!(a.mode, "JTTY", "display/routing label");
+        assert_eq!(a.exact_mode.as_deref(), Some("JTTY"));
+        assert!(a.tags.contains(&NeedTag::NewEntity), "{:?}", a.tags);
+        assert_eq!(alert("jtty").mode, "JTTY", "any case");
+        assert_eq!(alert("PSK31").mode, "Digital", "control: the class label");
+        let heard = |mode: &str, mhz: f64| Heard {
+            call: "3Y0J".into(),
+            band: "20m".into(),
+            mode: mode.into(),
+            freq_mhz: Some(mhz),
+            admitted_at: None,
+            evidence: None,
+            grid: None,
+            us_state: None,
+        };
+        let ranked = rank(
+            &[heard("JTTY", 14.0915), heard("FT8", 14.074)],
+            &needs,
+            &slots(&HashSet::new(), &HashSet::new(), &HashSet::new()),
+        );
+        let mut modes: Vec<&str> = ranked.iter().map(|a| a.mode.as_str()).collect();
+        modes.sort_unstable();
+        assert_eq!(modes, ["FT8", "JTTY"]);
+    }
+
     #[test]
     fn rank_keeps_rtty_and_ft8_of_the_same_call_band_as_two_rows() {
         // The (call, band, mode) dedup key must treat RTTY and FT8 as DISTINCT
@@ -3029,6 +3076,7 @@ mod tests {
             "JT65",
             "JT9",
             "JS8",
+            "JTTY",
             "MFSK",
             "MSK144",
             "OLIVIA",
@@ -3054,7 +3102,7 @@ mod tests {
             }
         }
         assert_eq!(
-            named, 26,
+            named, 27,
             "control: the tokens the feed names were all reached"
         );
     }

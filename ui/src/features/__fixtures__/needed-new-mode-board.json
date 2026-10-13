@@ -47,7 +47,7 @@
     "freqMhz": null,
     "gridRarity": null,
     "headline": "New mode — JTTY United States (any band)",
-    "mode": "Digital",
+    "mode": "JTTY",
     "park": null,
     "priority": 30,
     "stateFrom": null,

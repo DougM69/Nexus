@@ -133,7 +133,7 @@ describe('the New mode need, on the report’s log and the stations heard near E
     expect(newModeBoard()).toEqual([
       'DL1ABC, Fed. Rep. of Germany, 20m FT8, needed NewMode | New mode — FT8 Fed. Rep. of Germany (any band)',
       'K1JSE, United States, 20m Digital, needed NewMode | New mode — JS8 United States (any band)',
-      'K4JTY, United States, 20m Digital, needed NewMode | New mode — JTTY United States (any band)',
+      'K4JTY, United States, 20m JTTY, needed NewMode | New mode — JTTY United States (any band)',
     ])
   })
 
