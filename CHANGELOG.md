@@ -135,6 +135,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started in, so an FM pass and then a CW contact logged the CW contact as 59 and 59. A report you
   have not typed now follows the mode, 59 on FM or SSB and 599 on CW. One you typed stays with that
   contact until it is logged or you press Clear.
+- **The contest logger window logs a JS8 contact as JS8, and each digital mode as itself.** With
+  the station on JS8, FT4 or another digital mode, a contact typed into the contest logger window,
+  or into the log line at the top of the Contest screen, named no mode, so the contest log, its
+  ADIF export and the contacts merged into your logbook called it FT8. The Illinois and New York QSO
+  parties and Winter Field Day give FT8 no credit. The log line now names the mode the station
+  runs, as the JS8 screen's own log line does.
 
 ## [1.18.0] — 2026-10-12
 
