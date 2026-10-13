@@ -34634,7 +34634,7 @@ fn start_on_the_logbook(
                                             e.fd_note_host_lan(lan);
                                             (
                                                 e.fd_event_label().unwrap_or_default(),
-                                                e.settings().mycall.clone(),
+                                                e.fd_club_call(),
                                             )
                                         };
                                         if let Ok(sock) = &sock {

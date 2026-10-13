@@ -12791,6 +12791,20 @@ impl Engine {
         self.fd_club.as_ref().map(|c| c.event_name.clone())
     }
 
+    /// ⭐ **The call the club is on the air under** (beacon + welcome + the JOIN's call gate): the
+    /// one its files are written under, held from the save that turned this host's Contest mode
+    /// off ([`crate::fdevent::ClubLog::hosted_call`]), else this station's own. So "Contest over?"
+    /// here, which puts the operator's own call back, does not turn away a laptop of the club
+    /// still on the club's call: it rejoins and sends what it still owes. While not hosting, this
+    /// station's own.
+    pub fn fd_club_call(&self) -> String {
+        let own = self.settings.mycall.as_str();
+        self.fd_club
+            .as_ref()
+            .map_or(own, |club| club.hosted_call(own))
+            .to_string()
+    }
+
     // --- host half (the ClubBackend impl calls these) ----------------------
 
     /// A position joined. Err when not hosting (a race with the toggle), Err when its position
@@ -12799,8 +12813,10 @@ impl Engine {
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
     /// rules-file id — Err when it is set up in another exchange ROLE than the club's
     /// (`role`, the JOIN's: in a QSO party, inside the state against outside it), and Err
-    /// when it is on another station CALL than this host's, outside ARRL Field Day (`call`,
-    /// the JOIN's, against the call the club's file is written under). The wording lives on
+    /// when it is on another station CALL than the club's, outside ARRL Field Day (`call`, the
+    /// JOIN's, against the call the club's file is written under, [`Self::fd_club_call`], which
+    /// "Contest over?" on this host does not move; this laptop's own position, which joins on
+    /// this laptop's call, against that call, as it always was). The wording lives on
     /// `ClubLog` and in `fdevent` because only they know the contest to name. Every refusal
     /// is noted for the host's own screen too.
     ///
@@ -12833,6 +12849,8 @@ impl Engine {
             .and_then(|club| self.fd_club_session(club).ok())
             .map(|session| session.role().id.to_string())
             .unwrap_or_default();
+        // …and the call it is on the air under.
+        let club_call = self.fd_club_call();
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
@@ -12857,7 +12875,16 @@ impl Engine {
                 (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
                     .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
             })
-            .or_else(|| club.call_refusal(&self.settings.mycall, call));
+            .or_else(|| {
+                // This laptop's own position joins on this laptop's call, which "Contest over?"
+                // here puts back; every other laptop of the club is on the club's.
+                let on = if pos == self.settings.fd_position_id {
+                    &self.settings.mycall
+                } else {
+                    &club_call
+                };
+                club.call_refusal(on, call)
+            });
         if let Some(msg) = refusal {
             club.note_refused(pos, key_hash, name, call, &msg, now);
             return Err(msg);
@@ -12866,7 +12893,7 @@ impl Engine {
         club.pin(pos, key_hash, now);
         Ok(tempo_net::fdsync::JoinAccept {
             event: club.event_name.clone(),
-            host_call: self.settings.mycall.clone(),
+            host_call: club_call,
             acked,
             contest: club.event_id.clone(),
             hold: club.hold(pos),
