@@ -176,6 +176,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatever the laptop is set to afterwards, and after Nexus restarts. While the mode is on, a class
   you correct still reaches them, and after a break they follow your Settings again once the mode
   is back on with the club's call and class.
+- **At a club, a rehearsal under the same Event name stays out of the party.** The host rebuilt its
+  club log from the last four days of its journal, which is named from the Event name, so a club
+  that rehearsed under the name it then hosted the party with began the party with the rehearsal's
+  contacts on every laptop's club line, in the score and in the Club Cabrillo. The host now leaves
+  out everything from an earlier running of the contest, as each laptop's own log already does, and
+  a laptop removed at the rehearsal is not turned away at the party. A running begins a day before
+  the contest starts, so a test contact made that day still counts unless you take it back.
 
 ## [1.18.0] — 2026-10-12
 

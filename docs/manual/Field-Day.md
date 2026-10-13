@@ -50,7 +50,7 @@ The 2027 event is **23 and 24 January**, 1600 UTC Saturday to 21:59 UTC Sunday. 
 - [ ] **Only direct contacts count**: one band, one mode, simplex, station to station. No cross-band, repeater, relayed, meshed or internet-linked contact counts; a satellite contact is logged and kept, and scores nothing (see [Winter Field Day Scoring](#winter-field-day-scoring)).
 - [ ] **Spot and solicit only over amateur RF.** While the event runs Nexus posts no spot over the internet (see [Winter Field Day Spotting](#winter-field-day-spotting)).
 - [ ] For a club: on each Windows laptop press **Allow Nexus through Windows Firewall** in Settings ▸ Contesting (club sync uses TCP 42073 and UDP 42074, the club TV scoreboard TCP 7373; the button allows them on Private and Public networks), and set **every clock from one source**, to the second. Nexus warns a position more than 30 seconds off the host's clock when it joins, and never sets a clock.
-- [ ] Rehearse on an earlier day than the day before the event: entering the event loads only the contacts logged from 24 hours before it starts, keeps a rehearsal's out of its log by itself and deletes nothing (see [Contest Log Persistence](#contest-log-persistence)). On a host, use a different Event name from the rehearsal's, so the club journal starts fresh.
+- [ ] Rehearse on an earlier day than the day before the event: entering the event loads only the contacts logged from 24 hours before it starts, keeps a rehearsal's out of its log by itself and deletes nothing (see [Contest Log Persistence](#contest-log-persistence)). A host leaves the rehearsal out of the club's log the same way, whatever its Event name.
 
 During the event, tick each objective on the contest screen as you complete it. After it, export the Cabrillo or ADIF file and submit it as [Exports](#exports-cabrillo-adif-summary-and-dupe-sheet) describes, by **23:59 UTC on 1 March 2027**.
 
@@ -483,7 +483,7 @@ Before the party, on every laptop:
 - [ ] **The same Nexus on every laptop.** The host turns away an older Nexus by name ("Update Nexus on this laptop"), and an older host turns away this one. Set each laptop up on its own rather than copying one laptop's settings folder to another: each Nexus makes its own club position and key the first time it starts, and the host takes each position only from the laptop that first joined as it.
 - [ ] Every clock set from one source, to the second; once the positions have joined, the host's club board says each one is in step.
 - [ ] For a TV in the room, **Spectator scoreboard** on the host, and on the laptop the TV is plugged into if that is a position: it shows the host's board, the counties map included.
-- [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: the party's laptops then load none of the rehearsal's contacts, and their Contest screens say how many they kept out. On the host, use a different Event name from the rehearsal's, or its club journal brings the rehearsal's contacts back into the club's log.
+- [ ] Rehearse before 1700Z on Saturday 17 October, a day before the party: the party's laptops then load none of the rehearsal's contacts, and their Contest screens say how many they kept out. The host leaves them out of the club's log too, whatever its Event name.
 
 During the party:
 

@@ -1674,8 +1674,23 @@ impl ClubLog {
     /// Open (creating if absent) the append-only journal at `path`, replaying
     /// any rows already in it — the host-restart recovery. Replayed rows are
     /// NOT re-journaled. Call once, before serving.
+    ///
+    /// ⭐ **Only the running of the contest the host's clock is in** ([`FdRuleset::running_of`]),
+    /// as a position's own journal restore reads its journal: the journal is named from the
+    /// Event name, so a club that rehearsed under the name it hosts the contest with would begin
+    /// the contest with the rehearsal in its club log, its score and its files. A running's day
+    /// begins a day before the contest starts, so a rehearsal on an earlier day belongs to the
+    /// running before, and so does every note made with it. The four days still hold too.
     pub fn attach_journal(&mut self, path: &PathBuf) -> std::io::Result<()> {
-        self.attach_journal_since(path, now_unix().saturating_sub(STALE_EVENT_SECS))
+        self.attach_journal_at(path, now_unix())
+    }
+
+    /// [`Self::attach_journal`] at `now_unix`, so a test can stand on a contest's own day.
+    pub fn attach_journal_at(&mut self, path: &PathBuf, now_unix: u64) -> std::io::Result<()> {
+        let oldest = now_unix.saturating_sub(STALE_EVENT_SECS);
+        let rs = self.ruleset();
+        let running = rs.running_of(now_unix);
+        self.replay_journal(path, |at| at >= oldest && rs.running_of(at) == running)
     }
 
     /// [`Self::attach_journal`] with the cutoff exposed, so a test can age a journal
@@ -1702,6 +1717,16 @@ impl ClubLog {
         path: &PathBuf,
         oldest_unix: u64,
     ) -> std::io::Result<()> {
+        self.replay_journal(path, |at| at >= oldest_unix)
+    }
+
+    /// The replay itself: every row and note of the journal at `path` that `keep` takes by its
+    /// time, in journal order, then the journal opened for appending.
+    fn replay_journal(
+        &mut self,
+        path: &PathBuf,
+        keep: impl Fn(u64) -> bool,
+    ) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -1711,43 +1736,43 @@ impl ClubLog {
                     match note {
                         // A pin from a previous event pins nothing in this one, and the first
                         // pin of a position wins, as it does live.
-                        JournalNote::Pin { pos, key_hash, at } if at >= oldest_unix => {
+                        JournalNote::Pin { pos, key_hash, at } if keep(at) => {
                             self.pins.entry(pos).or_insert(key_hash);
                         }
                         JournalNote::Pin { .. } => {}
                         // A previous event's are as stale as its rows; a contact a later row
                         // merged under the same id is in the club's log after all.
-                        JournalNote::KeptOut(k) if k.at >= oldest_unix => {
+                        JournalNote::KeptOut(k) if keep(k.at) => {
                             self.list_kept_out(k);
                         }
                         JournalNote::KeptOut(_) => {}
                         // In journal order: the rows above it under that position were the
                         // laptop it was given away from, and leave the club's log as they did.
-                        JournalNote::Give { pos, key_hash, at } if at >= oldest_unix => {
+                        JournalNote::Give { pos, key_hash, at } if keep(at) => {
                             self.hand_over(&pos, &key_hash);
                         }
                         JournalNote::Give { .. } => {}
                         // In journal order, as they were made; a previous event's are as stale
                         // as its rows, and must not keep this event's same seq out.
-                        JournalNote::TakeBack { pos, seq, at } if at >= oldest_unix => {
+                        JournalNote::TakeBack { pos, seq, at } if keep(at) => {
                             self.take_back(&pos, seq, at);
                         }
-                        JournalNote::PutBack { pos, seq, at } if at >= oldest_unix => {
+                        JournalNote::PutBack { pos, seq, at } if keep(at) => {
                             self.put_back(&pos, seq, at);
                         }
                         JournalNote::TakeBack { .. } | JournalNote::PutBack { .. } => {}
                         // In journal order, as the host's operator pressed them; a previous
                         // event's keeps nobody out of this one.
-                        JournalNote::Remove { pos, at } if at >= oldest_unix => {
+                        JournalNote::Remove { pos, at } if keep(at) => {
                             self.removed.insert(pos, at);
                         }
-                        JournalNote::AllowBack { pos, at } if at >= oldest_unix => {
+                        JournalNote::AllowBack { pos, at } if keep(at) => {
                             self.removed.remove(&pos);
                         }
                         JournalNote::Remove { .. } | JournalNote::AllowBack { .. } => {}
                         // In journal order, the latest standing; a previous event's names no
                         // call this one is written under.
-                        JournalNote::Hosted { call, class, at } if at >= oldest_unix => {
+                        JournalNote::Hosted { call, class, at } if keep(at) => {
                             self.hosted = Hosted { call, class };
                         }
                         JournalNote::Hosted { .. } => {}
@@ -1763,7 +1788,7 @@ impl ClubLog {
                     // A row with NO timestamp (0) is kept. It cannot be aged, and silently
                     // dropping a contact we merely cannot date is the same class of mistake
                     // this cutoff exists to fix — an undateable row is a row somebody worked.
-                    if row.when_unix != 0 && row.when_unix < oldest_unix {
+                    if row.when_unix != 0 && !keep(row.when_unix) {
                         continue;
                     }
                     self.merge_row(row, 0);
@@ -4763,6 +4788,101 @@ mod tests {
             under(&reborn, "K9OWN", ""),
             (own("K9OWN"), own(LOW)),
             "the journal replays the release too, in order"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A rehearsal under the same Event name stays out of the party's club log.** The host's
+    /// journal is named from the Event name, and the host replayed the last four days of it, so a
+    /// club that rehearsed on the Wednesday under the name it hosts the party with began the
+    /// party with the rehearsal in its club log: on the club line of every laptop, in the score
+    /// and in the Club Cabrillo, before the first contact of the day (measured: 18 points, 3
+    /// contacts, `CLAIMED-SCORE: 18`, QSO lines dated four days early). The host now replays the
+    /// running of the contest its clock is in ([`FdRuleset::running_of`]), as a position's own
+    /// journal restore does, and the notes with the rows: a laptop removed at the rehearsal is
+    /// not turned away at the party.
+    ///
+    /// By value: the rehearsal's three contacts 3.5 days before the start, inside the four days;
+    /// two rows a second either side of the moment the party's running begins (a day before the
+    /// start); the party's first contact. CONTROL: replayed whole, the journal holds all six and
+    /// the removal. And on the rehearsal's own evening the host replays the rehearsal: the rule is
+    /// the running, not the age.
+    #[test]
+    fn a_rehearsal_under_the_same_event_name_stays_out_of_the_party() {
+        let dir = std::env::temp_dir().join(format!("nexus-fd-rehearsal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_ilqp-2026.ilqp.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let rehearsal = ILQP_START - (3 * 86_400 + 12 * 3600);
+        let day_begins = ILQP_START - tempo_core::fd_rules::RUNNING_DAY_LEAD_SECS;
+        {
+            let mut wed = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+            wed.attach_journal_since(&path, 0).unwrap();
+            let rows = [
+                ("bbbb0002", 1, "K9AAA", "COOK", rehearsal),
+                ("bbbb0002", 2, "K9BBB", "KANE", rehearsal + 60),
+                ("cccc0003", 1, "K9CCC", "DUPG", rehearsal + 120),
+                ("bbbb0002", 3, "K9EVE", "LAKE", day_begins - 1),
+                ("bbbb0002", 4, "K9DAY", "WILL", day_begins),
+                ("aaaa0001", 1, "K9PTY", "COOK", ILQP_START + 60),
+            ];
+            for (pos, seq, call, qth, when) in rows {
+                let q = ilqp_row(pos, seq, call, "40m", "CW", "", qth, "MCLN", when);
+                wed.merge(&q, when);
+            }
+            wed.remove("cccc0003", "aaaa0001", rehearsal + 180).unwrap();
+        }
+        let calls = |c: &ClubLog| c.rows().iter().map(|r| r.call.clone()).collect::<Vec<_>>();
+
+        let mut whole = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+        whole.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            (calls(&whole).len(), whole.is_removed("cccc0003")),
+            (6, true),
+            "CONTROL: the journal holds the six contacts and the removal"
+        );
+
+        let mut party_day = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+        party_day
+            .attach_journal_at(&path, ILQP_START + 1800)
+            .unwrap();
+        assert_eq!(
+            calls(&party_day),
+            vec!["K9DAY".to_string(), "K9PTY".into()],
+            "the party's club log holds the party's running alone, from the second its day begins"
+        );
+        assert!(
+            !party_day.is_removed("cccc0003"),
+            "a laptop removed at the rehearsal is not turned away at the party"
+        );
+        let session = party_session("ilqp", "IL", "MCLN");
+        let cab = party_day
+            .export_cabrillo_with("W9XYZ", session, &CabrilloEntrant::default())
+            .unwrap();
+        assert_eq!(
+            cab.lines().filter(|l| l.starts_with("QSO:")).count(),
+            2,
+            "{cab}"
+        );
+        assert!(
+            !cab.contains("K9AAA") && !cab.contains("K9EVE"),
+            "no rehearsal contact in the party's club file: {cab}"
+        );
+
+        let mut eve = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+        eve.attach_journal_at(&path, rehearsal + 3600).unwrap();
+        assert_eq!(
+            (calls(&eve), eve.is_removed("cccc0003")),
+            (
+                vec![
+                    "K9AAA".to_string(),
+                    "K9BBB".into(),
+                    "K9CCC".into(),
+                    "K9EVE".into()
+                ],
+                true
+            ),
+            "on its own evening the host replays the rehearsal and its removal"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
