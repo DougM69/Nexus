@@ -32375,20 +32375,35 @@ fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-/// A callsign's QRZ.com profile URL. The call is sanitized to callsign characters
-/// so a crafted string can never smuggle a different URL through; a portable suffix
-/// ("PJ4/K1ABC") keeps only its base call, which is what QRZ's db pages key on.
-/// `None` when nothing callsign-shaped survives.
+/// A callsign's QRZ.com profile URL. QRZ has one page per callsign, so only the callsign
+/// is kept: an APRS SSID ("PI1UTR-10"; a callsign never contains a `-`) and a D-STAR
+/// module letter after a space ("PI1UTR B") name one of the station's transmitters and
+/// are dropped, and a portable form ("PJ4/K1ABC", "K1ABC/P") keeps only its base call,
+/// which is what QRZ's db pages key on. The call is sanitized to callsign characters
+/// so a crafted string can never smuggle a different URL through. `None` when nothing
+/// callsign-shaped survives.
+///
+/// The hosted Remote page and the DXpedition link build the same URL in the browser
+/// (`ui/src/qrzUrl.ts`); `ui/src/__fixtures__/qrz-urls.json` holds both to one table.
 fn qrz_url(call: &str) -> Option<String> {
+    let station = call
+        .trim_start()
+        .split(|c: char| c.is_whitespace() || c == '-')
+        .next()
+        .unwrap_or("");
     // Longest slash-separated token = the base call (portable prefixes/suffixes are
-    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P).
-    let base = call
+    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P), the last of equal
+    // ones. Each is sanitized BEFORE it is measured: the browser's copy counts UTF-16
+    // units, not bytes, so measuring the raw text could pick a different token there.
+    let base = station
         .split('/')
-        .max_by_key(|t| t.len())
-        .unwrap_or("")
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect::<String>()
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .max_by_key(String::len)
+        .unwrap_or_default()
         .to_ascii_uppercase();
     (!base.is_empty()).then(|| format!("https://www.qrz.com/db/{base}"))
 }
@@ -44628,6 +44643,28 @@ mod tests {
     fn dxped_page_gives_up_when_there_is_nothing_to_open() {
         assert_eq!(dxped_page_url("", None), None);
         assert_eq!(dxped_page_url("///", Some("nonsense")), None);
+    }
+
+    /// Every QRZ button opens one page per station: `qrz_url` against each row of the table
+    /// the browser's copy (the hosted Remote page's QRZ button, the DXpedition link) is held
+    /// to as well, by `ui/src/qrzUrl.shared.test.ts`. Every wrong row is listed, by value.
+    #[test]
+    fn qrz_url_is_the_shared_tables() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../ui/src/__fixtures__/qrz-urls.json"))
+                .expect("qrz-urls.json parses");
+        let cases = table["cases"].as_array().expect("cases is a list");
+        assert!(!cases.is_empty());
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|row| {
+                let call = row["call"].as_str().expect("every row has a call");
+                let want = row.get("url").expect("every row has a url").as_str();
+                let got = super::qrz_url(call);
+                (got.as_deref() != want).then(|| format!("{call:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     // ---- LoTW download → award credit, end to end -------------------------

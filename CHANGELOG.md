@@ -334,6 +334,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RELAY needs AUTOREPLY to relay by itself, or a heartbeat or CQ sent once at interval 0 has
   nothing more scheduled. The Remote page shows the same. When and what Nexus transmits is
   unchanged.
+- **QRZ opens the station's own callsign page, without the APRS SSID.** On an APRS station's card,
+  the QRZ button for PI1UTR-10 opened PI1UTR10, which is a different callsign. Every QRZ button, in
+  the app and on Remote, now opens the callsign alone (PI1UTR), and drops a D-STAR module letter
+  (PI1UTR B) the same way. The aprs.fi link still opens that exact station, SSID included.
 
 ## [1.18.0] — 2026-10-12
 

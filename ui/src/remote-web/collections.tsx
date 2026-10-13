@@ -2,6 +2,7 @@ import { createContext, useContext, useSyncExternalStore } from 'react'
 import type { ApplicationTransport } from '../applicationTransport'
 import type { DecodeRow, Tier } from '../types'
 import { t } from '../i18n'
+import { qrzUrl } from '../qrzUrl'
 import type { Json } from './application-protocol'
 import { ROTATOR_COMMAND, POUNCE_COMMAND, PARKS_COMMAND, CONFIRMATIONS_COMMAND, parkSearch, CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 import type { Collection, QueryArgs, QueryPage } from './application-query-protocol'
@@ -36,9 +37,9 @@ export class RemoteCollections implements ApplicationTransport {
     // This is the existing QRZ navigation gesture, handled in the user's browser.
     // It never reaches the station, its credential store, or a generic URL opener.
     if (command === 'open_qrz_page' && this.client.getPhase() === 'ready' && args && Object.keys(args).length === 1 && typeof args.call === 'string' && args.call.length <= 64) {
-      const base = args.call.split('/').reduce((a, b) => b.length >= a.length ? b : a, '').replace(/[^a-z0-9]/gi, '').toUpperCase()
-      if (!base) throw new Error('applicationUnsupported')
-      window.open(`https://www.qrz.com/db/${base}`, '_blank', 'noopener,noreferrer')
+      const url = qrzUrl(args.call)
+      if (!url) throw new Error('applicationUnsupported')
+      window.open(url, '_blank', 'noopener,noreferrer')
       return undefined as T
     }
     // The log form's park suggestions and detail chip, answered from the station's offline

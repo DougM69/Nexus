@@ -8,6 +8,7 @@
 // silently delivering something else.
 import type { CalendarEntry } from '../../types'
 import { t } from '../../i18n'
+import { qrzUrl } from '../../qrzUrl'
 
 /** QRZ is the site's name, not a word — it is the same four letters in every language. */
 const QRZ_LABEL = 'QRZ'
@@ -20,14 +21,6 @@ export interface DxpedLink {
   url: string
   /** Short human label for the affordance. */
   label: string
-}
-
-/** The base call QRZ's db pages key on — a portable prefix/suffix is dropped
- * ("PJ4/K1ABC" → "K1ABC"), matching `qrz_url` in src-tauri. */
-export function baseCall(call: string): string {
-  return (call.split('/').reduce((a, b) => (b.length > a.length ? b : a), '').match(/[a-zA-Z0-9]/g) ?? [])
-    .join('')
-    .toUpperCase()
 }
 
 /** Only http/https ever opens. The site comes from third-party HTML, so a
@@ -47,9 +40,10 @@ export function dxpedLink(
 ): DxpedLink | null {
   const site = usableSite(entry.website)
   if (site) return { kind: 'site', url: site, label: t('dxped.link.website') }
-  const base = baseCall(entry.call)
-  if (!base) return null
-  return { kind: 'qrz', url: `https://www.qrz.com/db/${base}`, label: QRZ_LABEL }
+  // The page `qrz_url` in src-tauri builds too: one rule, held to one table (see `qrzUrl.ts`).
+  const url = qrzUrl(entry.call)
+  if (!url) return null
+  return { kind: 'qrz', url, label: QRZ_LABEL }
 }
 
 /** Tooltip text — always names the actual destination, and says plainly when it

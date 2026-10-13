@@ -1,7 +1,7 @@
 // The destination a calendar entry opens. Getting this wrong is worse than a
 // dead button: it sends the operator somewhere and claims it is the expedition.
 import { describe, it, expect } from 'vitest'
-import { dxpedLink, dxpedLinkTitle, baseCall } from './dxpedLink'
+import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
 
 describe('dxpedLink', () => {
   it('prefers the operation\'s own site when the feed published one', () => {
@@ -40,12 +40,8 @@ describe('dxpedLink', () => {
   })
 })
 
-describe('baseCall', () => {
-  it('keeps the longest slash-separated token and strips punctuation', () => {
-    expect(baseCall('3Y0J/MM')).toBe('3Y0J')
-    expect(baseCall('vk9cm')).toBe('VK9CM')
-  })
-})
+// The callsign rule itself (3Y0J/MM → 3Y0J, vk9cm → VK9CM, an APRS SSID, a D-STAR module) is
+// one table for every QRZ link: ui/src/__fixtures__/qrz-urls.json, in qrzUrl.shared.test.ts.
 
 describe('dxpedLinkTitle', () => {
   it('names the destination, and says when it is the fallback', () => {
