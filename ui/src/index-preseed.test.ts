@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
@@ -12,6 +12,7 @@ import { useSkin } from './useSkin'
 import { PALETTE_ROLES, attrValueOf } from './features/paletteRoles'
 import { SKINS } from './features/skins'
 import { usePaneWidths } from './usePaneWidths'
+import { offPlatform, onPlatform, PLATFORM_NAMES } from './webviewPlatforms.testkit'
 
 // THE BUDGET (2026-10-09). The slowest case here, "seeds exactly the widths the hook publishes, for every…", takes
 // 0.28 s and 0.25 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -385,7 +386,8 @@ describe('index.html preseed: the theme, System included', () => {
   // System resolves through prefers-color-scheme, in the seed and in useTheme alike. A seed that
   // disagreed would paint the first frame in one theme and snap to the other. The page's own
   // <html data-theme="dark"> is the default when the seed writes nothing, so "what the seed
-  // leaves" is the attribute or, absent that, dark.
+  // leaves" is the attribute or, absent that, dark. Nothing stored is System in the desktop app on
+  // Windows only, so the two copies are held together platform by platform (webviewPlatforms.testkit).
   const QUERY = '(prefers-color-scheme: dark)'
   const root = document.documentElement
   const os = (setting: 'dark' | 'light' | 'none') => {
@@ -401,53 +403,96 @@ describe('index.html preseed: the theme, System included', () => {
     })) as unknown as typeof window.matchMedia
   }
   const painted = () => root.getAttribute('data-theme') ?? 'dark'
+  afterEach(offPlatform)
 
-  it('seeds the theme useTheme paints, for every stored value and OS setting', () => {
+  it('seeds the theme useTheme paints, for every platform, stored value and OS setting', () => {
     const bad: string[] = []
-    for (const stored of [null, 'light', 'dark', 'system', 'amber', 'sepia']) {
-      for (const setting of ['dark', 'light', 'none'] as const) {
-        os(setting)
-        localStorage.clear()
-        if (stored !== null) localStorage.setItem('tempo-theme', stored)
-        root.removeAttribute('data-theme')
-        runPreseed()
-        const seeded = painted()
-        localStorage.clear()
-        if (stored !== null) localStorage.setItem('tempo-theme', stored)
-        root.removeAttribute('data-theme')
-        const hook = renderHook(() => useTheme())
-        const written = root.getAttribute('data-theme')
-        hook.unmount()
-        if (seeded !== written) bad.push(`stored=${stored} os=${setting}: seed ${seeded} ≠ hook ${written}`)
+    let compared = 0
+    for (const platform of PLATFORM_NAMES) {
+      onPlatform(platform)
+      for (const stored of [null, 'light', 'dark', 'system', 'amber', 'sepia']) {
+        for (const setting of ['dark', 'light', 'none'] as const) {
+          os(setting)
+          localStorage.clear()
+          if (stored !== null) localStorage.setItem('tempo-theme', stored)
+          root.removeAttribute('data-theme')
+          runPreseed()
+          const seeded = painted()
+          localStorage.clear()
+          if (stored !== null) localStorage.setItem('tempo-theme', stored)
+          root.removeAttribute('data-theme')
+          const hook = renderHook(() => useTheme())
+          const written = root.getAttribute('data-theme')
+          hook.unmount()
+          compared++
+          if (seeded !== written) bad.push(`${platform} stored=${stored} os=${setting}: seed ${seeded} ≠ hook ${written}`)
+        }
       }
     }
     delete (window as { matchMedia?: unknown }).matchMedia
     root.removeAttribute('data-theme')
+    expect(compared).toBe(PLATFORM_NAMES.length * 6 * 3)
     expect(bad).toEqual([])
   })
 
-  it('System seeds the OS setting (the case parity could share a bug with), and so does nothing stored', () => {
-    // A computer that never chose follows the computer from the FIRST frame (operator, 2026-10-13):
-    // no dark flash on a light computer, no light flash on a dark one. A platform that cannot say
-    // keeps the page's own dark.
-    for (const stored of ['system', null]) {
+  it('System seeds the OS setting on every platform (the case parity could share a bug with)', () => {
+    // A platform that cannot say keeps the page's own dark.
+    for (const platform of PLATFORM_NAMES) {
+      onPlatform(platform)
       for (const [setting, want] of [['light', 'light'], ['dark', 'dark'], ['none', 'dark']] as const) {
         os(setting)
         localStorage.clear()
-        if (stored) localStorage.setItem('tempo-theme', stored)
+        localStorage.setItem('tempo-theme', 'system')
         root.removeAttribute('data-theme')
         runPreseed()
-        expect(painted(), `stored ${stored}, OS ${setting}`).toBe(want)
+        expect(painted(), `${platform}, OS ${setting}`).toBe(want)
       }
     }
-    // A pick is a pick: Dark stays dark on a light computer, Light stays light on a dark one.
-    for (const [stored, setting] of [['dark', 'light'], ['light', 'dark']] as const) {
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
+  })
+
+  it('nothing stored seeds the OS setting in the desktop app on Windows, from the first frame', () => {
+    // A Windows computer that never chose follows the computer from the FIRST frame (operator,
+    // 2026-10-13): no dark flash on a light computer, no light flash on a dark one.
+    onPlatform('windows')
+    for (const [setting, want] of [['light', 'light'], ['dark', 'dark'], ['none', 'dark']] as const) {
       os(setting)
       localStorage.clear()
-      localStorage.setItem('tempo-theme', stored)
       root.removeAttribute('data-theme')
       runPreseed()
-      expect(painted(), `stored ${stored}, OS ${setting}`).toBe(stored)
+      expect(painted(), `OS ${setting}`).toBe(want)
+    }
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
+  })
+
+  it('nothing stored seeds Dark on Linux, the Raspberry Pi, macOS and in a browser, on a light computer too', () => {
+    for (const platform of PLATFORM_NAMES.filter((p) => p !== 'windows')) {
+      onPlatform(platform)
+      for (const setting of ['light', 'dark'] as const) {
+        os(setting)
+        localStorage.clear()
+        root.removeAttribute('data-theme')
+        runPreseed()
+        expect(painted(), `${platform}, OS ${setting}`).toBe('dark')
+      }
+    }
+    delete (window as { matchMedia?: unknown }).matchMedia
+    root.removeAttribute('data-theme')
+  })
+
+  it('a pick is a pick on every platform: Dark stays dark on a light computer, Light stays light on a dark one', () => {
+    for (const platform of PLATFORM_NAMES) {
+      onPlatform(platform)
+      for (const [stored, setting] of [['dark', 'light'], ['light', 'dark']] as const) {
+        os(setting)
+        localStorage.clear()
+        localStorage.setItem('tempo-theme', stored)
+        root.removeAttribute('data-theme')
+        runPreseed()
+        expect(painted(), `${platform}, stored ${stored}, OS ${setting}`).toBe(stored)
+      }
     }
     delete (window as { matchMedia?: unknown }).matchMedia
     root.removeAttribute('data-theme')
@@ -564,12 +609,16 @@ describe('index.html preseed: the built-in themes', () => {
     root.removeAttribute('data-theme')
   }
   beforeEach(reset)
+  afterEach(offPlatform)
 
   it('seeds exactly the attribute useSkin writes, theme by theme, for every stored theme and OS setting', () => {
+    // On Windows nothing stored is System, so a light computer seeds the light themes; on Linux it is
+    // Dark, so it seeds the dark ones.
     const bad: string[] = []
     for (const stored of [...SKINS.map((x) => x.id), 'silver', 'no-such-theme', null]) {
       for (const theme of [null, 'dark', 'light', 'system']) {
-        for (const setting of ['dark', 'light'] as const) {
+        for (const [platform, setting] of [['windows', 'dark'], ['windows', 'light'], ['linux', 'dark'], ['linux', 'light']] as const) {
+          onPlatform(platform)
           const seed = () => {
             localStorage.clear()
             if (stored !== null) localStorage.setItem('nexus-skin', stored)
@@ -588,7 +637,7 @@ describe('index.html preseed: the built-in themes', () => {
           })
           const written = root.getAttribute('data-skin')
           hook.unmount()
-          if (seeded !== written) bad.push(`skin=${stored} theme=${theme} os=${setting}: seed ${JSON.stringify(seeded)} ≠ hook ${JSON.stringify(written)}`)
+          if (seeded !== written) bad.push(`${platform} skin=${stored} theme=${theme} os=${setting}: seed ${JSON.stringify(seeded)} ≠ hook ${JSON.stringify(written)}`)
         }
       }
     }

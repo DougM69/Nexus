@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 //
-// THE THEME — Light / Dark / System. A machine that never chose FOLLOWS THE COMPUTER (the operator's
-// pick of 2026-10-13, reversing 2026-09-26's "System is a choice, not the default"): the default is
-// System for a new install and for any webview that has no stored choice. A stored choice is kept
-// exactly — Dark and Light alike — and only a PICK writes one: Nexus saved its old Dark default on
-// every launch since the first release, which is why a saved Dark cannot be told from a picked one,
-// and storing nothing until the operator picks is what keeps "never chose" readable from now on.
+// THE THEME — Light / Dark / System. A computer that never chose FOLLOWS THE COMPUTER in the desktop
+// app on Windows (the operator's pick of 2026-10-13, reversing 2026-09-26's "System is a choice, not
+// the default", narrowed the same day to Windows): the default there is System for a new install and
+// for any webview that has no stored choice. On Linux, the Raspberry Pi and macOS, and on the hosted
+// Remote page in any browser, it opens Dark until a pick, as it always did; System is a pick on every
+// platform. A stored choice is kept exactly — Dark and Light alike — and only a PICK writes one: Nexus
+// saved its old Dark default on every launch since the first release, which is why a saved Dark cannot
+// be told from a picked one, and storing nothing until the operator picks is what keeps "never chose"
+// readable from now on.
 //
 // The shape that keeps every [data-theme] selector and every theme-keyed canvas cache as it is:
 // the operator's CHOICE ('system' included) is what is stored in `tempo-theme`, and the theme
@@ -14,6 +17,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useTheme } from './useTheme'
+import { offPlatform, onPlatform, PLATFORM_NAMES } from './webviewPlatforms.testkit'
 
 const QUERY = '(prefers-color-scheme: dark)'
 const attr = () => document.documentElement.getAttribute('data-theme')
@@ -47,10 +51,15 @@ afterEach(() => {
   localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
   delete (window as { matchMedia?: unknown }).matchMedia
+  offPlatform()
 })
 
-describe('useTheme: a machine that never chose follows the computer', () => {
-  it('nothing stored paints what the computer prefers, light or dark, and the choice is System', () => {
+/** Every webview but the Windows desktop app's: Linux, the Pi and macOS, and the hosted page's browsers. */
+const OPENS_DARK = PLATFORM_NAMES.filter((p) => p !== 'windows')
+
+describe('useTheme: a computer that never chose a theme', () => {
+  it('the desktop app on Windows paints what the computer prefers, light or dark, and the choice is System', () => {
+    onPlatform('windows')
     for (const os of ['light', 'dark'] as const) {
       osPrefers(os)
       const { result, unmount } = renderHook(() => useTheme())
@@ -61,20 +70,45 @@ describe('useTheme: a machine that never chose follows the computer', () => {
     }
   })
 
-  it('opening the app stores nothing: only a pick writes the choice', () => {
+  it('Linux, the Raspberry Pi, macOS and the hosted Remote page in any browser open Dark, on a light computer too', () => {
+    // Follow the computer on Windows only, and let operators elsewhere pick (System is one of the
+    // picks). A browser on Windows is the hosted page, not the desktop app: its "Windows NT" alone
+    // does not make it follow.
+    expect(OPENS_DARK).toEqual(['linux', 'pi', 'mac', 'windowsBrowser', 'iphoneBrowser'])
+    for (const platform of OPENS_DARK) {
+      onPlatform(platform)
+      for (const os of ['light', 'dark'] as const) {
+        osPrefers(os)
+        document.documentElement.removeAttribute('data-theme')
+        const { result, unmount } = renderHook(() => useTheme())
+        expect(result.current[0], `${platform}, ${os} computer`).toBe('dark')
+        expect(result.current[2], `${platform}, ${os} computer: the choice`).toBe('dark')
+        expect(attr(), `${platform}, ${os} computer`).toBe('dark')
+        unmount()
+      }
+    }
+  })
+
+  it('opening the app stores nothing on any platform: only a pick writes the choice', () => {
     // The old hook stored its default on mount, so every install that ever ran holds a Dark it may
     // never have picked. Nothing stored is the only mark of "never chose" there is.
     osPrefers('light')
     const set = vi.spyOn(Storage.prototype, 'setItem')
+    for (const platform of PLATFORM_NAMES) {
+      onPlatform(platform)
+      const { unmount } = renderHook(() => useTheme())
+      expect(set, platform).not.toHaveBeenCalled()
+      expect(localStorage.getItem('tempo-theme'), platform).toBeNull()
+      unmount()
+    }
     const { result } = renderHook(() => useTheme())
-    expect(set).not.toHaveBeenCalled()
-    expect(localStorage.getItem('tempo-theme')).toBeNull()
     act(() => result.current[1]('light'))
     expect(localStorage.getItem('tempo-theme')).toBe('light')
     set.mockRestore()
   })
 
-  it('follows a change of the computer\'s setting from the default, as a picked System does', () => {
+  it('on Windows the default follows a change of the computer\'s setting, as a picked System does', () => {
+    onPlatform('windows')
     const os = osPrefers('light')
     const { result } = renderHook(() => useTheme())
     expect(attr()).toBe('light')
@@ -84,32 +118,61 @@ describe('useTheme: a machine that never chose follows the computer', () => {
     expect(localStorage.getItem('tempo-theme')).toBeNull()
   })
 
-  it('a stored value this build does not know follows the computer too', () => {
-    osPrefers('light')
-    localStorage.setItem('tempo-theme', 'sepia')
-    const { result } = renderHook(() => useTheme())
-    expect(result.current[0]).toBe('light')
-    expect(result.current[2]).toBe('system')
+  it('elsewhere the default Dark holds when the computer changes, and nothing listens to it', () => {
+    onPlatform('linux')
+    const os = osPrefers('dark')
+    renderHook(() => useTheme())
+    expect(attr()).toBe('dark')
+    expect(os.listeners.size, 'a default Dark listens to the computer').toBe(0)
+    os.flip('light')
+    expect(attr(), 'a default Dark followed the computer going light').toBe('dark')
   })
 
-  it('a saved Light or Dark is kept exactly, whatever the computer prefers', () => {
-    for (const saved of ['light', 'dark'] as const) {
-      osPrefers(saved === 'light' ? 'dark' : 'light')
-      localStorage.setItem('tempo-theme', saved)
+  it('a stored value this build does not know is nothing stored: System on Windows, Dark elsewhere', () => {
+    for (const [platform, theme, choice] of [['windows', 'light', 'system'], ['linux', 'dark', 'dark'], ['mac', 'dark', 'dark']] as const) {
+      onPlatform(platform)
+      osPrefers('light')
+      localStorage.setItem('tempo-theme', 'sepia')
       const { result, unmount } = renderHook(() => useTheme())
-      expect(result.current[0], `saved ${saved}`).toBe(saved)
-      expect(result.current[2], `saved ${saved}`).toBe(saved)
-      expect(attr()).toBe(saved)
-      expect(localStorage.getItem('tempo-theme')).toBe(saved)
+      expect(result.current[0], platform).toBe(theme)
+      expect(result.current[2], platform).toBe(choice)
       unmount()
+      localStorage.clear()
     }
   })
 
-  it('the removed Amber theme still migrates to Dark', () => {
-    localStorage.setItem('tempo-theme', 'amber')
-    const { result } = renderHook(() => useTheme())
-    expect(result.current[0]).toBe('dark')
-    expect(localStorage.getItem('tempo-theme')).toBe('dark')
+  it('a saved Light, Dark or System is kept exactly on every platform, whatever the computer prefers (controls)', () => {
+    for (const platform of PLATFORM_NAMES) {
+      onPlatform(platform)
+      for (const saved of ['light', 'dark', 'system'] as const) {
+        // The computer disagrees with a fixed pick; System is a pick everywhere and follows it.
+        const os = saved === 'light' ? 'dark' : 'light'
+        const want = saved === 'system' ? os : saved
+        osPrefers(os)
+        localStorage.setItem('tempo-theme', saved)
+        document.documentElement.removeAttribute('data-theme')
+        const { result, unmount } = renderHook(() => useTheme())
+        expect(result.current[0], `${platform}, saved ${saved}`).toBe(want)
+        expect(result.current[2], `${platform}, saved ${saved}`).toBe(saved)
+        expect(attr(), `${platform}, saved ${saved}`).toBe(want)
+        expect(localStorage.getItem('tempo-theme'), `${platform}, saved ${saved}`).toBe(saved)
+        unmount()
+        localStorage.clear()
+      }
+    }
+  })
+
+  it('the removed Amber theme still migrates to Dark, on Windows too', () => {
+    for (const platform of ['windows', 'linux'] as const) {
+      onPlatform(platform)
+      osPrefers('light')
+      localStorage.setItem('tempo-theme', 'amber')
+      const { result, unmount } = renderHook(() => useTheme())
+      expect(result.current[0], platform).toBe('dark')
+      expect(localStorage.getItem('tempo-theme'), platform).toBe('dark')
+      unmount()
+      localStorage.clear()
+    }
   })
 })
 
@@ -166,6 +229,8 @@ describe('useTheme: System follows the computer', () => {
   })
 
   it('a platform that cannot say resolves System to Dark, picked or by default', () => {
+    // By default is the Windows desktop app's System; picked is System anywhere.
+    onPlatform('windows')
     for (const stored of ['system', null]) {
       if (stored) localStorage.setItem('tempo-theme', stored)
       const { result, unmount } = renderHook(() => useTheme())

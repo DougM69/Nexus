@@ -34,7 +34,7 @@ it('renders native state and its actual UI interactions can only reach the obser
   await screen.findByText('14.074000')
   fireEvent.click(screen.getByRole('button', { name: /SPE/ }))
   expect(screen.getByText('41°')).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Use dark theme' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Use light theme' }))
   fireEvent.click(screen.getByRole('button', { name: /SPE/ }))
   expect(new Set(invoke.mock.calls.map(([command]) => command))).toEqual(new Set(['get_remote_monitor_frame']))
   expect(rejected).toEqual([])
@@ -72,11 +72,9 @@ it('preserves first-miss absence, KPA units, unknown faults and radio changes in
   expect(screen.queryByRole('button', { name: /SPE|KPA/ })).toBeNull()
 })
 
-it('the theme starts on System, following the computer, and the button cycles System → Dark → Light → System', async () => {
+it('the theme button cycles Dark → Light → System → Dark, and System follows the computer', async () => {
   // The monitor keeps its own theme (it is not the app's Settings), so the third choice lives
-  // on the same one button: each press names the NEXT theme, as the Sun/Moon did. It stores no
-  // choice, so every visit starts as a computer that never chose does in the app: on System
-  // (operator, 2026-10-13), whatever the page was painted before.
+  // on the same one button: each press names the NEXT theme, as the Sun/Moon did.
   let dark = false
   const listeners = new Set<() => void>()
   window.matchMedia = ((q: string) => ({
@@ -88,13 +86,17 @@ it('the theme starts on System, following the computer, and the button cycles Sy
     removeEventListener: (_t: string, f: () => void) => listeners.delete(f),
   })) as unknown as typeof window.matchMedia
   const theme = () => document.documentElement.dataset.theme
-  // The page's own starting theme (monitor.html and the hosted page are data-theme="dark"): a light
-  // computer still starts the monitor light.
+  // The page's own starting theme (monitor.html is data-theme="dark"); an earlier case in this
+  // file leaves it light.
   document.documentElement.dataset.theme = 'dark'
   try {
     render(<MonitorApp source={source('spe')} />)
     await screen.findByText('14.074000')
-    expect(theme(), 'the monitor did not start on the computer’s light setting').toBe('light')
+    expect(theme()).toBe('dark')
+    fireEvent.click(screen.getByRole('button', { name: EN['monitor.light'] }))
+    expect(theme()).toBe('light')
+    fireEvent.click(screen.getByRole('button', { name: EN['monitor.system'] }))
+    expect(theme(), 'System did not take the computer’s light setting').toBe('light')
     dark = true
     act(() => listeners.forEach((f) => f()))
     expect(theme(), 'System did not follow the computer going dark').toBe('dark')
@@ -103,15 +105,31 @@ it('the theme starts on System, following the computer, and the button cycles Sy
     dark = false
     act(() => listeners.forEach((f) => f()))
     expect(theme(), 'a pinned Dark followed the computer').toBe('dark')
-    fireEvent.click(screen.getByRole('button', { name: EN['monitor.light'] }))
-    expect(theme()).toBe('light')
-    dark = true
-    act(() => listeners.forEach((f) => f()))
-    expect(theme(), 'a pinned Light followed the computer').toBe('light')
-    fireEvent.click(screen.getByRole('button', { name: EN['monitor.system'] }))
-    expect(theme(), 'System did not take the computer’s dark setting').toBe('dark')
   } finally {
     delete (window as { matchMedia?: unknown }).matchMedia
     document.documentElement.dataset.theme = 'dark'
+  }
+})
+
+it('the monitor starts from the page’s own theme, whatever the computer prefers', async () => {
+  // The hosted page's station monitor is as it was before Nexus followed the computer on Windows: it
+  // keeps no choice and starts in the theme the page is painted (monitor.html and the hosted page are
+  // data-theme="dark"); System is the third press of its one button.
+  for (const [page, computer, next] of [['dark', 'light', EN['monitor.light']], ['light', 'dark', EN['monitor.system']]] as const) {
+    window.matchMedia = ((q: string) => ({
+      matches: q === '(prefers-color-scheme: dark)' && computer === 'dark', media: q,
+      addEventListener() {}, removeEventListener() {},
+    })) as unknown as typeof window.matchMedia
+    document.documentElement.dataset.theme = page
+    try {
+      const { unmount } = render(<MonitorApp source={source('spe')} />)
+      await screen.findByText('14.074000')
+      expect(document.documentElement.dataset.theme, `a ${page} page on a ${computer} computer`).toBe(page)
+      expect(screen.getByRole('button', { name: next }), `a ${page} page`).toBeTruthy()
+      unmount()
+    } finally {
+      delete (window as { matchMedia?: unknown }).matchMedia
+      document.documentElement.dataset.theme = 'dark'
+    }
   }
 })

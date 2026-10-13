@@ -423,10 +423,12 @@ them before assuming something's broken:
 
 - **Three theme choices** live in Settings ▸ Appearance ▸ Theme: **Dark**,
   **Light**, and **System**, which follows your computer's light or dark setting.
-  System is the default until you pick one. They apply instantly, no restart.
+  On Windows, System is the default until you pick one; on Linux, the Raspberry Pi
+  and macOS, Nexus opens Dark until you pick. They apply instantly, no restart.
 - **Nexus is dark on a computer set to light (or the other way round)?** A theme you
-  picked stays picked, and earlier versions saved Dark for everyone who never picked
-  one. Pick **System** in Settings ▸ Appearance ▸ Theme. On Linux, Nexus learns
+  picked stays picked, earlier versions saved Dark for everyone who never picked one,
+  and on Linux, the Raspberry Pi and macOS Nexus opens Dark until you pick. Pick
+  **System** in Settings ▸ Appearance ▸ Theme. On Linux, Nexus learns
   the setting from your desktop's colour-scheme preference (GNOME, KDE) or from a GTK
   theme whose name ends in `-dark`; a desktop that offers neither reads as light, so
   pick **Dark** there.

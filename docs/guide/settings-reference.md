@@ -2365,11 +2365,12 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   (pale silver front, white panels, dark scopes and meters), **Dark** (dark panel, lit
   dials and meters) and **System**. Light reads best outdoors in daylight.
   **System** follows your computer's own light or dark setting and changes when it
-  does, and it is the default: until you pick a theme, Nexus looks the way your
-  computer is set. A theme you picked stays picked. Earlier versions saved Dark for
-  everyone who never picked one, so a computer that ran one of them keeps Dark; pick
-  **System** there to follow your computer. Either way, the top bar's **Field**
-  chip boosts contrast and size on top of the theme you picked.
+  does, on every computer. On Windows it is the default: until you pick a theme,
+  Nexus looks the way Windows is set. On Linux, the Raspberry Pi and macOS, Nexus
+  opens Dark until you pick one. A theme you picked stays picked. Earlier versions
+  saved Dark for everyone who never picked one, so a computer that ran one of them
+  keeps Dark; pick **System** there to follow your computer. Either way, the top
+  bar's **Field** chip boosts contrast and size on top of the theme you picked.
   **Light** has the warmer, softer look that was the Silver chassis theme. If you had
   Silver chassis picked, you now see Light, which looks the same. The brighter Light of
   earlier versions is the **Bright** theme below.

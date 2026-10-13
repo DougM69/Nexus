@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 //
-// THE REAL APP ON A COMPUTER THAT NEVER CHOSE A THEME (operator, 2026-10-13): Nexus follows the
-// computer's light or dark setting, so the page paints light on a light computer and dark on a dark
-// one, and opening the app stores no choice — only a pick does. A stored pick is kept whatever the
-// computer says (the controls). useTheme.test.ts holds the hook; this mounts App, the hook's owner, so
-// a second writer or a default set somewhere else in the tree would show here.
+// THE REAL APP ON A COMPUTER THAT NEVER CHOSE A THEME (operator, 2026-10-13): in the desktop app on
+// Windows Nexus follows the computer's light or dark setting, so the page paints light on a light
+// computer and dark on a dark one; on Linux, the Raspberry Pi and macOS it opens Dark until a pick, as
+// it always did. Opening the app stores no choice — only a pick does. A stored pick is kept whatever
+// the computer says, System included, on every platform (the controls). useTheme.test.ts holds the
+// hook; this mounts App, the hook's owner, so a second writer or a default set somewhere else in the
+// tree would show here.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { EN } from './i18n'
+import { offPlatform, onPlatform } from './webviewPlatforms.testkit'
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -76,42 +79,64 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   delete (window as { matchMedia?: unknown }).matchMedia
+  offPlatform()
 })
 
 describe('the app on a computer that never chose a theme', () => {
-  it('paints light on a light computer, and stores no choice', async () => {
+  it('on Windows paints light on a light computer, and stores no choice', async () => {
+    onPlatform('windows')
     computerPrefers('light')
     expect(await mounted()).toBe('light')
     expect(localStorage.getItem('tempo-theme')).toBeNull()
   })
 
-  it('paints dark on a dark computer, and stores no choice', async () => {
+  it('on Windows paints dark on a dark computer, and stores no choice', async () => {
+    onPlatform('windows')
     computerPrefers('dark')
+    expect(await mounted()).toBe('dark')
+    expect(localStorage.getItem('tempo-theme')).toBeNull()
+  })
+
+  it.each(['linux', 'pi', 'mac'] as const)('on %s paints Dark on a light computer, and stores no choice', async (platform) => {
+    onPlatform(platform)
+    computerPrefers('light')
     expect(await mounted()).toBe('dark')
     expect(localStorage.getItem('tempo-theme')).toBeNull()
   })
 })
 
 describe('a stored pick is kept, whatever the computer says (controls)', () => {
-  it('Dark on a light computer', async () => {
+  it('Dark on a light Windows computer', async () => {
+    onPlatform('windows')
     computerPrefers('light')
     localStorage.setItem('tempo-theme', 'dark')
     expect(await mounted()).toBe('dark')
     expect(localStorage.getItem('tempo-theme')).toBe('dark')
   })
 
-  it('Light on a dark computer', async () => {
+  it('Light on a dark Linux computer', async () => {
+    onPlatform('linux')
     computerPrefers('dark')
     localStorage.setItem('tempo-theme', 'light')
     expect(await mounted()).toBe('light')
     expect(localStorage.getItem('tempo-theme')).toBe('light')
   })
+
+  it('System on a light Mac: System is a pick on every platform', async () => {
+    onPlatform('mac')
+    computerPrefers('light')
+    localStorage.setItem('tempo-theme', 'system')
+    expect(await mounted()).toBe('light')
+    expect(localStorage.getItem('tempo-theme')).toBe('system')
+  })
 })
 
 describe('Settings ▸ Colours names the colours the page paints (the seam App → Settings → Colours)', () => {
   // The standard Light's accent is its own steel blue now, not cyan, so the Accent row's default says
-  // "Theme's own" there; on a dark computer the same install shows the standard Cyan.
+  // "Theme's own" there; on a dark computer the same install shows the standard Cyan. On Windows, where
+  // a computer that never chose follows the computer.
   beforeEach(() => {
+    onPlatform('windows')
     // A station past the first-run wizard, so nothing covers Settings; jsdom cannot scroll.
     localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: {} }))
     localStorage.setItem('nexus.features.wizardSeen', '1')

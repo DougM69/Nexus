@@ -11404,7 +11404,7 @@ export const EN = {
   'theme.dark.title': 'Dark (shack)',
   'theme.dark.line': 'Dark panel, lit dials and meters',
   // System: follow the computer's own light/dark setting (useTheme.ts). The default for a
-  // computer that never chose a theme.
+  // computer that never chose a theme in the desktop app on Windows; Dark stays the default elsewhere.
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
   'theme.system.line': 'Follows your computer, light or dark',
