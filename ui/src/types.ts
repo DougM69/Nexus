@@ -1856,15 +1856,29 @@ export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
 /** Inbox row state, lowercase on the wire. */
 export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
 
-/** Which automatic origins may key RIGHT NOW: `switch && txEnabled && !idleTripped`. Paint
+/** Which automatic origins may key RIGHT NOW: the switch on and the station's own answer that
+ * it would act (no idle trip, TX on, and what the origin needs besides its switch: HB and
+ * AUTOREPLY for HB ACK, AUTOREPLY for a relay, a schedule for HB and the repeating CQ). Paint
  * "armed" from THIS, never from the persisted switch alone. */
 export interface Js8Armed {
   autoreply: boolean
-  /** The repeating CQ — the session switch AND the TX latch AND no idle trip. */
+  /** The repeating CQ — the session switch AND the TX latch AND no idle trip AND a call scheduled. */
   cq: boolean
   relay: boolean
   hbAck: boolean
   hb: boolean
+}
+
+/** Why an automatic origin whose switch is on is not armed: the station's own reason. */
+export type Js8Unarmed = 'idle' | 'txOff' | 'needsHb' | 'needsAuto' | 'needsHbAndAuto' | 'unscheduled'
+
+/** Per origin, why it is not armed while its switch is on; null when it is armed or off. */
+export interface Js8NotArmed {
+  autoreply: Js8Unarmed | null
+  cq: Js8Unarmed | null
+  relay: Js8Unarmed | null
+  hbAck: Js8Unarmed | null
+  hb: Js8Unarmed | null
 }
 
 /** One activity-pane row: a decoded frame (or a reassembled multi-frame message). */
@@ -1962,6 +1976,9 @@ export interface Js8State {
   relay: boolean
   hbAck: boolean
   armed: Js8Armed
+  /** Why each switch that is on is not armed, named on its chip. Absent from an older station's
+   * sample on the Remote page: that station's `armed` is the switch with TX on and no idle trip. */
+  notArmed?: Js8NotArmed
   idleMinutes: number
   idleLimitMin: number
   idleTripped: boolean

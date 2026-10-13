@@ -27130,8 +27130,9 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   width: auto;
 }
-/* Three faces for a second-act chip: off · on-but-not-armed (the switch is on, the session
-   TX latch is off — nothing keys) · ARMED (both acts agree). Auto-armed must never LOOK
+/* Three faces for a second-act chip: off · on-but-not-armed (the switch is on but something
+   else it needs is not: the session TX latch, a clear idle watchdog, HB or AUTOREPLY — nothing
+   keys, and its title says which) · ARMED (it can go out now). Auto-armed must never LOOK
    ack-capable — the APRS rule. */
 .js8-arm.on {
   border-color: var(--snr-marginal);

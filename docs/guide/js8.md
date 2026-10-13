@@ -84,9 +84,12 @@ and acknowledges with an ACK a MSG to you or to a group you joined, or a MSG TO:
 another station, as JS8Call does; with it off, the answer, the ACK or a relay is put in the
 message box for you to send instead, and nothing keys by itself),
 **RELAY** (passes on messages routed through your callsign and holds MSG TO: traffic),
-**HB ACK** (answers heartbeats with your report) — those three persist in Settings, at
+**HB ACK** (answers heartbeats with your report, but only while **HB** and **AUTOREPLY** are on
+as well, as in JS8Call) — those three persist in Settings, at
 JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which is
-session-only. A chip that is on while TX is off shows it plainly, and nothing keys.
+session-only. A chip lights only when what it switches can go out now. One that is on but
+cannot says why when you point at it (TX is off, the idle watchdog holds it, or it needs
+another switch), and nothing keys.
 Every automatic reply first asks in the dock, as JS8Call asks: "A transmission is queued for
 autoreply … would you like to send this transmission?" **Yes** sends it in the next period; **No**
 sends nothing, and so does no answer, which is No after 89 seconds. A message you hold for
