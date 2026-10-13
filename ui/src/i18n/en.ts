@@ -1871,6 +1871,10 @@ export const EN = {
   'logEntry.fd.needField': 'Enter their {{field}} to log.',
   'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',
   'logEntry.fd.badNumber': '{{field}} must be a number from {{min}} to {{max}}.',
+  // A QSO party's QTH box, from a call in the USA or Canada: a value on none of the contest's lists
+  // (`fdVerdict`). The codes are invariant tokens, joined as the language joins a choice.
+  'logEntry.fd.notOnList': "{{value}} is not a county, state or province on this contest's list.",
+  'logEntry.fd.didYouMean': "{{value}} is not a code on this contest's list. Did you mean {{codes}}?",
   'logEntry.fd.zone.label': 'Zone',
   'logEntry.fd.zone.title': 'Their CQ zone, 1–40',
   // A received box says what it holds for this station's role (`receivedCaption` in

@@ -10,7 +10,7 @@
 // drops them, because the space bar is the phone position's push-to-talk.
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { contestEdit } from '../api'
+import { contestEdit, resolveEntity } from '../api'
 import type { ContestFieldSpec, FieldDayQso } from '../types'
 import { t } from '../i18n'
 import { isStreamInput } from '../remote-native/stream-input'
@@ -46,6 +46,25 @@ export function ContestContactEdit({
   const [why, setWhy] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const callRef = useRef<HTMLInputElement>(null)
+  // The country of the call in the form, as the strip resolves its own: from a station in the USA
+  // or Canada a QSO party's QTH box takes only what is on the contest's lists (`editOf`).
+  const [entity, setEntity] = useState<string | null>(null)
+  useEffect(() => {
+    const call = form.call.trim()
+    if (!call) {
+      setEntity(null)
+      return
+    }
+    let stale = false
+    void resolveEntity(call)
+      .then((e) => {
+        if (!stale) setEntity(e)
+      })
+      .catch(() => {})
+    return () => {
+      stale = true
+    }
+  }, [form.call])
   // The keyboard goes to the call, where an edit almost always starts, its caret at the end.
   useEffect(() => {
     const el = callRef.current
@@ -62,7 +81,7 @@ export function ContestContactEdit({
       onDone({ text: t('contest.edit.remote'), alert: true })
       return
     }
-    const made = editOf(form, rows, receives, role)
+    const made = editOf(form, rows, receives, role, entity)
     if ('why' in made) {
       setWhy(made.why)
       return

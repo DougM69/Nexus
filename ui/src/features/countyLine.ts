@@ -109,3 +109,9 @@ const ListFormat = (
 export function countyList(codes: string[]): string {
   return ListFormat ? new ListFormat(getLocale(), { style: 'long', type: 'conjunction' }).format(codes) : codes.join(', ')
 }
+
+/** Codes offered as a choice, `WASH or WA`, joined as the interface's language joins one. Never
+ *  with `/`, which in a county box joins a county line. */
+export function codeChoice(codes: string[]): string {
+  return ListFormat ? new ListFormat(getLocale(), { style: 'long', type: 'disjunction' }).format(codes) : codes.join(', ')
+}

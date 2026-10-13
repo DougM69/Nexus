@@ -2643,6 +2643,8 @@ export const DE: PartialCatalog = {
   "logEntry.fd.needField": "Zum Loggen {{field}} der Gegenstation eingeben.",
   "logEntry.fd.badField": "{{field}} „{{value}}“ ist kein bekannter Wert — zum Loggen erforderlich.",
   "logEntry.fd.badNumber": "{{field}} muss eine Zahl von {{min}} bis {{max}} sein.",
+  "logEntry.fd.notOnList": "{{value}} ist kein County, kein Bundesstaat und keine Provinz auf der Liste dieses Contests.",
+  "logEntry.fd.didYouMean": "{{value}} ist kein Kürzel auf der Liste dieses Contests. Meintest du {{codes}}?",
   "logEntry.fd.zone.label": "Zone",
   "logEntry.fd.zone.title": "CQ-Zone der Gegenstation, 1–40",
   "logEntry.fd.county.label": "County",

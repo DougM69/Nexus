@@ -755,3 +755,32 @@ describe('Enter Sends Message — off, and from afar, Enter is what it always wa
     focus.mockRestore()
   })
 })
+
+// ⭐ A QTH ON NO LIST, FROM A CALL IN THE USA OR CANADA, IS NOT A COPIED EXCHANGE. The strip will not
+// log it (`fdFieldOk`, and LogEntry.countyTypeahead's tests), so ESM reads it as not copied: the press
+// that would send my exchange and log the contact sends my call, and nothing logs.
+describe('Enter Sends Message and a QTH on no list', () => {
+  it('in S&P, COKO from a US call sends my call and logs nothing; the real county sends my exchange and logs', async () => {
+    api.resolveEntity.mockImplementation(() => Promise.resolve('United States'))
+    try {
+      const receives = [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+      ]
+      render(<Strip fieldDay={party([], { receives })} />)
+      type(callBox(), 'K9AAA')
+      await act(async () => {})
+      type(qthBox(), 'COKO')
+      await enter(qthBox())
+      expect(harness.sent.map((m) => m.role)).toEqual(['myCall'])
+      expect(logged()).toEqual([])
+      // CONTROL: the same press once the county is real.
+      type(qthBox(), 'COOK')
+      await enter(qthBox())
+      expect(harness.sent.map((m) => m.role)).toEqual(['myCall', 'exch'])
+      expect(logged()).toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
+    } finally {
+      api.resolveEntity.mockImplementation(() => Promise.resolve(null))
+    }
+  })
+})

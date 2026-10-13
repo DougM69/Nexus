@@ -99,6 +99,26 @@ describe('what an edit sends', () => {
     // CONTROL: the same form, right, is an edit.
     expect('edit' in editOf(form, one, PARTY)).toBe(true)
   })
+
+  it('refuses a QTH on no list from a call in the USA or Canada, as the strip does; a DX call sends its country', () => {
+    // The Illinois QSO Party's box: the county list, the state and province list, and the free-text
+    // arm a DX station's country goes in.
+    const qth: ContestFieldSpec[] = [
+      { key: 'RST', kind: 'rst', required: true },
+      { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+    ]
+    const one = [row('K9AAA', 'COOK')]
+    const form = { call: 'K9AAA', fields: { RST: '599', QTH: 'GERMANY' }, band: '20m', mode: '' }
+    expect(editOf(form, one, qth, 'in_state', 'United States')).toEqual({
+      why: "GERMANY is not a county, state or province on this contest's list.",
+    })
+    expect(editOf(form, one, qth, 'in_state', 'Fed. Rep. of Germany')).toEqual({
+      edit: { call: 'K9AAA', rows: [[['RST', '599'], ['QTH', 'GERMANY']]], band: '20m', mode: '' },
+    })
+    // A box naming no list at all has no list to be off, so it refuses nothing, whoever sends.
+    const bare: ContestFieldSpec[] = [qth[0], { key: 'QTH', kind: 'oneOf', required: true }]
+    expect('edit' in editOf(form, one, bare, 'in_state', 'United States')).toBe(true)
+  })
 })
 
 describe('Ctrl+Y is the key, as N1MM binds it', () => {

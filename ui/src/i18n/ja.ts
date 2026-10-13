@@ -1268,6 +1268,8 @@ export const JA: PartialCatalog = {
   "logEntry.fd.needField": "ログするには相手局の{{field}}を入力してください。",
   "logEntry.fd.badField": "{{field}}「{{value}}」は既知の値ではありません — ログに必須です。",
   "logEntry.fd.badNumber": "{{field}}は{{min}}から{{max}}までの数字で入力してください。",
+  "logEntry.fd.notOnList": "{{value}} はこのコンテストのカウンティ・州・準州の一覧にありません。",
+  "logEntry.fd.didYouMean": "{{value}} はこのコンテストの一覧にあるコードではありません。{{codes}} のことですか？",
   "logEntry.fd.zone.label": "ゾーン",
   "logEntry.fd.zone.title": "相手局のCQゾーン（1–40）",
   "logEntry.fd.county.label": "カウンティ",

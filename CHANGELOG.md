@@ -168,6 +168,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line and in the Cabrillo CLAIMED-SCORE. They now count once there and on the multiplier board,
   where both spellings' cells light together. Each contact is still logged and exported as its
   station sent it, and Prince Edward Island typed by name in the county box is logged as PEI.
+- **At the Illinois QSO Party, the county box no longer logs a county that is on no list.** From a
+  station in the USA or Canada, a value that is not a county, state or province on the sponsor's
+  lists, such as COKO, DUP, IL or Washington (a county and a state), went into the log as typed and
+  counted no county for either station. A line under the box now says so, and Log stays off until
+  the box holds a real one. A name or the start of one gets the codes it may mean: Washington is
+  WASH or WA, and ST may be STAR, STEP or SCLA (St. Clair). Enter Sends Message does not send your
+  exchange for such a value, and an edit of a logged contact refuses it too. A DX station's country
+  still logs as typed. Nexus tells where a station is from its call, and a call it cannot place is
+  taken as before. The manual now says to type a two-word county without its space (stclair):
+  Space moves on to the Call box.
 
 ## [1.18.0] — 2026-10-12
 

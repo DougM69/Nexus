@@ -2300,6 +2300,8 @@ export const FR: PartialCatalog = {
   "logEntry.fd.needField": "Saisis {{field}} de l'autre station pour enregistrer.",
   "logEntry.fd.badField": "{{field}} « {{value}} » n'est pas une valeur connue — obligatoire pour enregistrer.",
   "logEntry.fd.badNumber": "{{field}} doit être un nombre de {{min}} à {{max}}.",
+  "logEntry.fd.notOnList": "{{value}} n'est ni un comté, ni un État, ni une province de la liste de ce concours.",
+  "logEntry.fd.didYouMean": "{{value}} n'est pas un code de la liste de ce concours. Voulais-tu dire {{codes}} ?",
   "logEntry.fd.zone.label": "Zone",
   "logEntry.fd.zone.title": "Leur zone CQ, 1–40",
   "logEntry.fd.county.label": "Comté",
