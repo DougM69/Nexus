@@ -296,6 +296,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field that fills it, with a button to Settings ▸ Contesting ▸ Your entry, as it does for the CQ
   contests' category lines. An Entry class counts only when it is one of the party's own classes,
   and the file still exports either way.
+- **QRZ opens the station's own callsign page, without the APRS SSID.** On an APRS station's card,
+  the QRZ button for PI1UTR-10 opened PI1UTR10, which is a different callsign. Every QRZ button, in
+  the app and on Remote, now opens the callsign alone (PI1UTR), and drops a D-STAR module letter
+  (PI1UTR B) the same way. The aprs.fi link still opens that exact station, SSID included.
 
 ## [1.18.0] — 2026-10-12
 
