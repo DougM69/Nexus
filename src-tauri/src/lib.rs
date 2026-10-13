@@ -16873,13 +16873,28 @@ async fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, St
 // command here can key anything. Every command answers the whole `JttyState`, the DTO serialised
 // directly (the JS8 shape). ----
 
-/// The live JTTY receive state (poll while the JTTY cockpit is visible).
+/// The live JTTY state (poll while the JTTY cockpit is visible). The JTTY serial number moves on
+/// by itself after a "TU " message goes out, so a changed one is handed to the settings writer
+/// here, as WSJT-X keeps it (`SerialNumberJTTY`).
 #[tauri::command]
 async fn get_jtty_state(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::dto::JttyState, String> {
-    with_engine(&state, |eng| eng.jtty_state()).await
+    with_engine(&state, |eng| {
+        let serial = eng.settings().jtty_serial;
+        if JTTY_SERIAL_KEPT.swap(serial, std::sync::atomic::Ordering::Relaxed) != serial {
+            persist_settings(eng.settings().clone(), |e| {
+                eprintln!("tempo: failed to persist the JTTY serial number: {e}")
+            });
+        }
+        eng.jtty_state()
+    })
+    .await
 }
+
+/// The JTTY serial number last handed to the settings writer (see `get_jtty_state`). 0 is no
+/// serial (they start at 1), so the first poll writes once.
+static JTTY_SERIAL_KEPT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Arm/disarm the JTTY decoder by an EXPLICIT operator act (session-only, never persisted, so the
 /// app never launches armed). A stop is remembered for the session: `jtty_auto_arm` will not
@@ -16938,6 +16953,151 @@ fn jtty_set_band(
 fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
     let mut eng = engine_lock(&state);
     eng.jtty_clear();
+    Ok(eng.jtty_state())
+}
+
+// ---- JTTY transmit (`tempo_app::engine::jtty_tx`). ⛔ SWITCHED OFF in every build: every send
+// command answers the engine's refusal, "JTTY transmit is not switched on in this build", and
+// nothing reaches the radio. A send is planned under the engine lock, rendered with it released
+// (the modem lock, which a decode can hold for seconds) and committed under it again: on the
+// blocking pool, never on a runtime worker. Stop is never refused. ----
+
+/// What a JTTY send did, for the compose bar: how much of the typed text it took (UTF-16 units)
+/// and what goes in its place, and the state after it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JttySentDto {
+    consumed: usize,
+    sent: String,
+    state: tempo_app::dto::JttyState,
+}
+
+/// Run one JTTY send on the blocking pool and answer the state after it.
+async fn jtty_send_with(
+    engine: &SharedEngine,
+    send: impl FnOnce(
+            &std::sync::Mutex<tempo_app::engine::Engine>,
+        ) -> Result<tempo_app::engine::jtty_tx::JttySent, String>
+        + Send
+        + 'static,
+) -> Result<JttySentDto, String> {
+    let engine = Arc::clone(engine);
+    tauri::async_runtime::spawn_blocking(move || {
+        let done = send(&engine)?;
+        Ok(JttySentDto {
+            consumed: done.consumed,
+            sent: done.sent,
+            state: engine_lock(&engine).jtty_state(),
+        })
+    })
+    .await
+    .map_err(|e| format!("engine task failed: {e}"))?
+}
+
+/// Send typed text (WSJT-X's Send): all of it, the macros in it expanded, ending the message (and
+/// a live session, if one runs). `his_call` is the log strip's Call (`%H`).
+#[tauri::command]
+async fn jtty_send(
+    state: State<'_, SharedEngine>,
+    text: String,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::send_text(e, &text, &his_call)
+    })
+    .await
+}
+
+/// F-key `n` (1..8): WSJT-X's Contest template, compiled into JTTY's atoms.
+#[tauri::command]
+async fn jtty_fkey(
+    state: State<'_, SharedEngine>,
+    n: u8,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::send_fkey(e, n, &his_call)
+    })
+    .await
+}
+
+/// Start live entry with what is typed so far (WSJT-X's Alt+J).
+#[tauri::command]
+async fn jtty_live_start(
+    state: State<'_, SharedEngine>,
+    typed: String,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::live_start(e, &typed, &his_call)
+    })
+    .await
+}
+
+/// Commit live typing: `flush` after a pause (everything typed), otherwise only once five words
+/// are complete beyond the three held back.
+#[tauri::command]
+async fn jtty_live_commit(
+    state: State<'_, SharedEngine>,
+    typed: String,
+    his_call: String,
+    flush: bool,
+) -> Result<JttySentDto, String> {
+    let how = if flush {
+        tempo_app::engine::jtty_tx::JttyCommit::Flush
+    } else {
+        tempo_app::engine::jtty_tx::JttyCommit::Advance
+    };
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::live_commit(e, &typed, &his_call, how)
+    })
+    .await
+}
+
+/// Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed, and the session ends.
+#[tauri::command]
+async fn jtty_sign_off(
+    state: State<'_, SharedEngine>,
+    typed: String,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::sign_off(e, &typed, &his_call)
+    })
+    .await
+}
+
+/// Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. Never
+/// refused.
+#[tauri::command(async)]
+fn jtty_stop(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_stop();
+    Ok(eng.jtty_state())
+}
+
+/// JTTY's Tx frequency (WSJT-X's Tx spin box for JTTY): refused while JTTY transmits.
+#[tauri::command(async)]
+fn jtty_set_tx(
+    state: State<'_, SharedEngine>,
+    tx_hz: f32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_tx(tx_hz)?;
+    Ok(eng.jtty_state())
+}
+
+/// The JTTY contest serial number (`%E`, `%N`); kept in Settings, as WSJT-X keeps it.
+#[tauri::command(async)]
+fn jtty_set_serial(
+    state: State<'_, SharedEngine>,
+    serial: u32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_serial(serial)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist the JTTY serial number: {e}")
+    });
     Ok(eng.jtty_state())
 }
 
@@ -35512,6 +35672,14 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             jtty_set_rx,
             jtty_set_band,
             jtty_clear,
+            jtty_send,
+            jtty_fkey,
+            jtty_live_start,
+            jtty_live_commit,
+            jtty_sign_off,
+            jtty_stop,
+            jtty_set_tx,
+            jtty_set_serial,
             js8_enter,
             get_js8_state,
             js8_locator_refusal,
