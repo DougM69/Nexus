@@ -289,13 +289,17 @@ export const jtty: Case<(typeof JTTY_PANEL_IDS)[number]> = {
   cockpit: 'JTTY',
   view: 'jtty',
   ids: JTTY_PANEL_IDS,
-  // The TX strip carries the whole census in this receive-only build (the dock's compose bar is
-  // drawn disabled and wired to nothing): Stop TX (→ halt_tx), Tune (the carrier it started) and
-  // the TX-enable latch, a stop here as in PSK — TX Off drops PSK's queue and arms its abort, which
-  // ends a PSK over still on the air from the PSK cockpit, the same Keyboard section. Esc is
-  // App-bound, keyboard-only and census-only.
+  // The TX strip's Stop TX (→ halt_tx, which stops JTTY too), Tune (the carrier it started) and
+  // the TX-enable latch, a stop here as in PSK — TX Off stops JTTY, and drops PSK's queue and arms
+  // its abort, which ends a PSK over still on the air from the PSK cockpit, the same Keyboard
+  // section; and the dock's Esc/Stop (→ jtty_stop), PSK's shape and predicate, labelled by its
+  // content spans with no whitespace, hence \s*. The dock's Live key is a SENDER, not a stop (the
+  // RTTY "TX" ruling), and must never be added here. Esc is App-bound, keyboard-only and
+  // census-only. (JTTY transmit is switched off in every build: the dock is drawn, its senders
+  // disabled, and the stops are swept all the same.)
   stopControls: [
     ['Stop TX', /^stop tx$/i],
+    ['Stop (JTTY abort)', /^esc\s*stop$/i],
     ['Tune', /^tune$|^tuning…$/i],
     TX_LATCH,
   ],

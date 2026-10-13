@@ -41,6 +41,7 @@ import type {
   JourneySummary,
   Js8ComposerPrefill,
   Js8State,
+  JttySent,
   JttyState,
   Js8InboxState,
   Js8Switch,
@@ -3369,8 +3370,9 @@ export async function pskStop(): Promise<PskState> {
   return invoke<PskState>('psk_stop')
 }
 
-// ---- JTTY (WSJT-X's keyboard mode). RECEIVE ONLY: no command here can key anything, and every
-// one answers the whole JttyState. ----
+// ---- JTTY (WSJT-X's keyboard mode). Every command answers the whole JttyState (a send, with what
+// it did). The transmit commands are SWITCHED OFF in every build (the engine's
+// `jtty_tx::SWITCHED_ON`): each answers "JTTY transmit is not switched on in this build". ----
 
 /** Live JTTY state (poll while the JTTY cockpit is visible). */
 export async function getJttyState(): Promise<JttyState> {
@@ -3403,6 +3405,48 @@ export async function jttySetBand(lowHz: number, highHz: number): Promise<JttySt
 /** Empty the JTTY receive window (WSJT-X's Erase). */
 export async function jttyClear(): Promise<JttyState> {
   return invoke<JttyState>('jtty_clear')
+}
+
+/** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
+ * session). `hisCall` is the dock's Call (`%H`). */
+export async function jttySend(text: string, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_send', { text, hisCall })
+}
+
+/** F-key `n` (1–8): WSJT-X's Contest template, compiled into JTTY's atoms. */
+export async function jttyFkey(n: number, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_fkey', { n, hisCall })
+}
+
+/** Start live entry with what is typed so far (WSJT-X's Alt+J). */
+export async function jttyLiveStart(typed: string, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_start', { typed, hisCall })
+}
+
+/** Commit live typing: `flush` after a pause (all of it), otherwise once five words are complete
+ * beyond the three WSJT-X holds back. */
+export async function jttyLiveCommit(typed: string, hisCall: string, flush: boolean): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush })
+}
+
+/** Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed; the session ends. */
+export async function jttySignOff(typed: string, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_sign_off', { typed, hisCall })
+}
+
+/** Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. */
+export async function jttyStop(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_stop')
+}
+
+/** JTTY's Tx frequency (Hz): refused while JTTY transmits. */
+export async function jttySetTx(txHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_tx', { txHz })
+}
+
+/** The JTTY contest serial number (`%E`, `%N`), kept in Settings as WSJT-X keeps it. */
+export async function jttySetSerial(serial: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_serial', { serial })
 }
 
 // ---- JS8 (interfaces.md §3.6 — every command answers the whole Js8State, the PSK shape) ----

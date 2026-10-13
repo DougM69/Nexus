@@ -1862,6 +1862,9 @@ export interface JttyLine {
   /** The calls in this line decoded in two separate messages a short time apart: the only
    *  ones a click may look up. A call not listed here has been heard once. */
   confirmedCalls: string[]
+  /** A message this station SENT (WSJT-X shows it in the QSO Frequency pane, its SNR blank);
+   *  absent on a received one. */
+  tx?: boolean
 }
 
 /** A JTTY station decoded in two separate messages (`tempo_app::dto::JttyHeard`). */
@@ -1890,6 +1893,39 @@ export interface JttyState {
   heard: JttyHeard[]
   /** Why receiving stopped or restarted, to show the operator; null when there is nothing. */
   notice: string | null
+  /** The transmitter (`tempo_app::dto::JttyTxState`). The engine always sends it; a state without
+   *  it (an older fixture) reads as switched off. */
+  tx?: JttyTxState
+}
+
+/** What JTTY's transmitter is doing. ⛔ `switchedOn` is false in every build today: the dock is
+ *  drawn, and every send is refused. */
+export interface JttyTxState {
+  switchedOn: boolean
+  /** Why a send would be refused right now (the switch's reason first); null when it would go. */
+  refusal: string | null
+  /** The Tx frequency, Hz. */
+  txHz: number
+  /** The contest serial number. */
+  serial: number
+  /** JTTY audio is on the air. */
+  sending: boolean
+  /** A live session is running. */
+  live: boolean
+  /** Segments still to go, the one on the air included ("Send (3 left)"). */
+  left: number
+  /** Their text, one per line. */
+  pending: string
+  /** WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped. */
+  notice: string | null
+}
+
+/** What a JTTY send did: how much of the typed text it took (UTF-16 units), what goes in its
+ *  place (the macros expanded), and the state after it. */
+export interface JttySent {
+  consumed: number
+  sent: string
+  state: JttyState
 }
 
 // ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----

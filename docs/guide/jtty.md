@@ -5,8 +5,11 @@ contest text, sent in 1.9-second frames of 4-tone FSK about 127 Hz wide, with er
 that copies far below where RTTY gives up. There are no time slots; a station starts sending
 whenever it likes, and the text prints as each frame decodes.
 
-**This build receives JTTY. It does not transmit it.** The compose bar at the bottom of the
-screen is drawn disabled, and nothing on this screen keys the rig for JTTY.
+**This build receives JTTY. Its transmitter is built but switched off:** every send is refused
+with "JTTY transmit is not switched on in this build", and nothing on this screen keys the rig
+for JTTY. The dock at the bottom of the screen shows WSJT-X's transmit controls (the compose bar
+and Send, the F1–F8 messages, the Call box, the serial number and Live) drawn disabled, with that
+sentence under them.
 
 JTTY sits in the Keyboard section beside [PSK](psk.md): the same data privileges, the same
 power cap and the same USB data mode. Opening the JTTY screen makes JTTY the section's modem,
@@ -20,11 +23,14 @@ serves WSJT-X's JTTY frequencies, eleven of them from 160 m (1.839) to 2 m (144.
 Opening the JTTY screen from another mode moves the dial to JTTY's frequency on the band you
 are on, if your class may send data there.
 
-Beside them are the two receive controls WSJT-X has for JTTY:
+Beside them are the frequency controls WSJT-X has for JTTY:
 
 - **Rx** — the audio frequency the decoder always searches. Type a value and press Enter, or
   click a signal on the waterfall. As in WSJT-X, it goes back to 1500 Hz each time JTTY is
   opened from another mode.
+- **Tx** — where JTTY would transmit: its lowest tone, the other three above it. As in WSJT-X,
+  it goes back to 1500 Hz each time JTTY is opened from another mode. The license check judges
+  the whole signal at this offset.
 - **F Tol** — how far either side of Rx the decoder always searches, from WSJT-X's list
   (2 to 500 Hz). It is kept between sessions, as in WSJT-X; a new install starts at 20 Hz.
 
@@ -32,7 +38,8 @@ The decoder also searches the fixed 1200–1500 Hz and 1500–1800 Hz channels, 
 they fall inside the waterfall's visible range, as WSJT-X searches them inside its wide graph.
 Zooming the waterfall in narrows that range.
 
-**The waterfall.** A green **RX** cursor marks Rx; a click on a signal moves Rx there.
+**The waterfall.** A green **RX** cursor marks Rx and a red **TX** cursor marks Tx; a click on
+a signal moves Rx there, Shift+click (or a right-click) moves Tx, and Ctrl+click moves both.
 
 **The TX strip** under the waterfall carries **TX On / TX Off**, **Tune**, **ATU** and
 **Stop TX**, as on every cockpit. Stop TX, and Esc, stop whatever is on the air.

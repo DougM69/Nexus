@@ -32,14 +32,15 @@ export function jttyPaneText(line: Pick<JttyLine, 'line' | 'startUtcMs'>, o: Jtt
   return o.includeTime ? `${jttyTimeLabel(line.startUtcMs)} ${text}` : text
 }
 
-/** WSJT-X's All Decodes pane: every message, in the order they STARTED (a message found late by
- *  a retro search still lands where it began), ties by message id. */
+/** WSJT-X's All Decodes pane: every message received, in the order they STARTED (a message found
+ *  late by a retro search still lands where it began), ties by message id. What this station
+ *  sent is not among them: WSJT-X shows it in the QSO Frequency pane only. */
 export function jttyAllPane(lines: readonly JttyLine[]): JttyLine[] {
-  return [...lines].sort((a, b) => a.startUtcMs - b.startUtcMs || a.id - b.id)
+  return lines.filter((l) => !l.tx).sort((a, b) => a.startUtcMs - b.startUtcMs || a.id - b.id)
 }
 
 /** WSJT-X's QSO Frequency pane: the messages first heard within F Tol of Rx, in the order they
- *  arrived. */
+ *  arrived, and what this station sent, as it went out (`updateJttyTransmitDisplay`). */
 export function jttyRxPane(lines: readonly JttyLine[]): JttyLine[] {
   return lines.filter((l) => l.rx)
 }

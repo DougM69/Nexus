@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 //
-// THE JTTY SCREEN, AS THE ENGINE FEEDS IT. Receive only: the cockpit shows the engine's lines in
-// WSJT-X's two panes (All Decodes: every message where it started; QSO Frequency: the ones first
-// heard within F Tol of Rx), WSJT-X's two display options (lower case, the start time in front),
-// the engine's notice, and sends the receive controls the engine owns (auto-arm on entry, Arm,
-// Erase, Rx and F Tol, the waterfall's range). The dock's compose bar is drawn disabled.
+// THE JTTY SCREEN, AS THE ENGINE FEEDS IT. The cockpit shows the engine's lines in WSJT-X's two
+// panes (All Decodes: every message received, where it started; QSO Frequency: the ones first
+// heard within F Tol of Rx, and what this station sent), WSJT-X's two display options (lower case,
+// the start time in front), the engine's notice, and sends the receive controls the engine owns
+// (auto-arm on entry, Arm, Erase, Rx and F Tol, the waterfall's range). The dock is WSJT-X's
+// transmitter, SWITCHED OFF in every build: drawn disabled with the reason while the engine says
+// it is off, and wired to the engine's send commands (tested here with a state saying it is on).
 //
 // The log strip is a stub here that shows what the cockpit hands it; the lookup it then makes is
 // JttyCockpit.lookup.test.tsx's, with the real strip.
@@ -38,9 +40,17 @@ vi.mock('./CockpitHeader', () => ({
   ),
 }))
 /** The waterfall's props as last rendered: the test plays the strip's part (a click, a zoom). */
-const wf = vi.hoisted(() => ({ props: null as null | { onTune?: (hz: number) => void; onViewChange?: (lo: number, hi: number) => void; rxOffsetHz: number } }))
+type WfTarget = 'tx' | 'rx' | 'both'
+const wf = vi.hoisted(() => ({
+  props: null as null | {
+    onTune?: (hz: number, target: 'tx' | 'rx' | 'both') => void
+    onViewChange?: (lo: number, hi: number) => void
+    rxOffsetHz: number
+    txOffsetHz: number
+  },
+}))
 vi.mock('./Waterfall', () => ({
-  Waterfall: (p: { onTune?: (hz: number) => void; onViewChange?: (lo: number, hi: number) => void; rxOffsetHz: number }) => {
+  Waterfall: (p: { onTune?: (hz: number, target: WfTarget) => void; onViewChange?: (lo: number, hi: number) => void; rxOffsetHz: number; txOffsetHz: number }) => {
     wf.props = p
     return <div className="waterfall-wrap" />
   },
@@ -213,8 +223,28 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     fireEvent.change(ftol, { target: { value: '50' } })
     expect(m('jttySetRx')).toHaveBeenLastCalledWith(1500, 50)
     await waitFor(() => expect(wf.props).not.toBeNull())
-    act(() => wf.props!.onTune!(1312.6))
+    act(() => wf.props!.onTune!(1312.6, 'rx'))
     expect(m('jttySetRx')).toHaveBeenLastCalledWith(1313, 20)
+    expect(m('jttySetTx')).not.toHaveBeenCalled()
+  })
+
+  it('Tx: typed on Enter, Shift+click (or right-click) on the waterfall sets it, Ctrl+click both', async () => {
+    await mount(state({ tx: txState({ txHz: 1500 }) }))
+    m('jttySetTx').mockResolvedValue(state({ tx: txState({ txHz: 1700 }) }))
+    const tx = screen.getByRole('spinbutton', { name: t('jtty.tx.aria') }) as HTMLInputElement
+    expect(tx.value).toBe('1500')
+    fireEvent.focus(tx)
+    fireEvent.change(tx, { target: { value: '1700' } })
+    fireEvent.keyDown(tx, { key: 'Enter' })
+    expect(m('jttySetTx')).toHaveBeenLastCalledWith(1700)
+    await waitFor(() => expect(wf.props).not.toBeNull())
+    expect(wf.props!.txOffsetHz).toBe(1700)
+    act(() => wf.props!.onTune!(1622.4, 'tx'))
+    expect(m('jttySetTx')).toHaveBeenLastCalledWith(1622)
+    expect(m('jttySetRx')).not.toHaveBeenCalled()
+    act(() => wf.props!.onTune!(1405, 'both'))
+    expect(m('jttySetTx')).toHaveBeenLastCalledWith(1405)
+    expect(m('jttySetRx')).toHaveBeenLastCalledWith(1405, 20)
   })
 
   it('hands the waterfall’s visible range to the decoder, and again when it moves', async () => {
@@ -226,14 +256,144 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     expect(m('jttySetBand')).toHaveBeenLastCalledWith(1012, 1613)
   })
 
-  it('the dock’s compose bar is drawn disabled, and nothing in the cockpit can send', async () => {
-    await mount(state())
-    expect((screen.getByRole('textbox', { name: t('jtty.compose.aria') }) as HTMLInputElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: t('jtty.compose.send.label') }) as HTMLButtonElement).disabled).toBe(true)
-    for (const k of Object.keys(api) as (keyof typeof api)[]) {
-      if (/send|^psk|^rtty|^js8|setPtt|setTxEnabled|startCq|callStation/i.test(String(k)) && typeof api[k] === 'function') {
-        expect(m(k), `${String(k)} was called`).not.toHaveBeenCalled()
+  it('the transmitter switched off: every sender drawn disabled with the reason, and nothing in the cockpit can send', async () => {
+    for (const s of [state(), state({ tx: txState({ switchedOn: false, refusal: 'JTTY transmit is not switched on in this build' }) })]) {
+      await mount(s)
+      expect((screen.getByRole('textbox', { name: t('jtty.compose.aria') }) as HTMLInputElement).disabled).toBe(true)
+      expect((screen.getByRole('button', { name: t('jtty.compose.send.label') }) as HTMLButtonElement).disabled).toBe(true)
+      for (const key of ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8']) {
+        expect((screen.getByRole('button', { name: new RegExp(`^${key}`) }) as HTMLButtonElement).disabled, key).toBe(true)
+        fireEvent.keyDown(window, { key })
       }
+      expect(liveKey().disabled, 'Live').toBe(true)
+      expect(document.querySelector('.cockpit-txdock [role="status"]')?.textContent).toBe(t('jtty.compose.off'))
+      for (const k of Object.keys(api) as (keyof typeof api)[]) {
+        if (/send|fkey|live|signoff|^psk|^rtty|^js8|setPtt|setTxEnabled|startCq|callStation/i.test(String(k)) && typeof api[k] === 'function') {
+          expect(m(k), `${String(k)} was called`).not.toHaveBeenCalled()
+        }
+      }
+      cleanup()
     }
+  })
+})
+
+/** A transmitter state, as the engine reports it. */
+function txState(over: Partial<NonNullable<JttyState['tx']>> = {}): NonNullable<JttyState['tx']> {
+  return { switchedOn: true, refusal: null, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null, ...over }
+}
+
+const sent = (consumed: number, text: string, s: JttyState) => ({ consumed, sent: text, state: s })
+/** The dock's Live key (a sender), by its name: `TX` and Live, or Sign off while a session runs. */
+const liveKey = () =>
+  screen.getByRole('button', { name: new RegExp(`^TX\\s*(${t('jtty.live.on.label')}|${t('jtty.live.off.label')})$`) }) as HTMLButtonElement
+const compose = () => screen.getByRole('textbox', { name: t('jtty.compose.aria') }) as HTMLInputElement
+const flush = () =>
+  act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+describe('the JTTY dock, wired to the engine (a state saying the transmitter is on)', () => {
+  it('Send sends the typed text with the Call box, takes it out of the box and shows it sent', async () => {
+    const on = state({ tx: txState() })
+    await mount(on)
+    fireEvent.change(screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }), { target: { value: 'w1aw' } })
+    m('jttySend').mockResolvedValue(sent(14, 'CQ CQ DE KD9TAW', state({ tx: txState({ left: 1, sending: true, pending: 'CQ CQ DE KD9TAW' }) })))
+    fireEvent.change(compose(), { target: { value: 'cq cq de %M' } })
+    fireEvent.keyDown(compose(), { key: 'Enter' })
+    expect(m('jttySend')).toHaveBeenCalledWith('cq cq de %M', 'W1AW')
+    await flush()
+    expect(compose().value).toBe('')
+    expect(document.querySelector('.jtty-committed')?.textContent).toBe('CQ CQ DE KD9TAW')
+    expect(screen.getByRole('button', { name: t('jtty.compose.send.left', { n: 1 }) })).toBeTruthy()
+  })
+
+  it('F1–F8, clicked or pressed, send WSJT-X’s templates with the Call box; Alt/Ctrl/Cmd never', async () => {
+    await mount(state({ tx: txState() }))
+    m('jttyFkey').mockResolvedValue(sent(0, 'W1AW 599 001', state({ tx: txState() })))
+    fireEvent.change(screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }), { target: { value: 'W1AW' } })
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW')
+    await flush()
+    fireEvent.keyDown(window, { key: 'F6' })
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(6, 'W1AW')
+    await flush()
+    m('jttyFkey').mockClear()
+    fireEvent.keyDown(window, { key: 'F1', altKey: true })
+    fireEvent.keyDown(window, { key: 'F1', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'F1', repeat: true })
+    expect(m('jttyFkey')).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /^F3/ }).textContent).toBe('F3%H TU CQ %M CQ')
+  })
+
+  it('live entry: started with what is typed, typing commits as the engine decides, a pause flushes, Sign off ends it', async () => {
+    vi.useFakeTimers()
+    try {
+      await mount(state({ tx: txState() }))
+      const liveOn = state({ tx: txState({ live: true, sending: true }) })
+      m('jttyLiveStart').mockResolvedValue(sent(6, 'HELLO ', liveOn))
+      fireEvent.change(compose(), { target: { value: 'HELLO ' } })
+      fireEvent.click(liveKey())
+      expect(m('jttyLiveStart')).toHaveBeenCalledWith('HELLO ', '')
+      await flush()
+      expect(compose().value).toBe('')
+      m('jttyLiveCommit').mockResolvedValue(sent(0, '', liveOn))
+      fireEvent.change(compose(), { target: { value: 'HOW ARE' } })
+      expect(m('jttyLiveCommit')).toHaveBeenLastCalledWith('HOW ARE', '', false)
+      await flush()
+      m('jttyLiveCommit').mockResolvedValue(sent(7, 'HOW ARE', liveOn))
+      await act(async () => {
+        vi.advanceTimersByTime(1_500)
+      })
+      expect(m('jttyLiveCommit')).toHaveBeenLastCalledWith('HOW ARE', '', true)
+      await flush()
+      expect(compose().value).toBe('')
+      expect(document.querySelector('.jtty-committed')?.textContent).toBe('HELLO HOW ARE')
+      m('jttySignOff').mockResolvedValue(sent(0, 'DE KD9TAW K', state({ tx: txState({ left: 1, sending: true }) })))
+      fireEvent.click(liveKey())
+      expect(m('jttySignOff')).toHaveBeenCalledWith('', '')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Esc/Stop is live exactly while JTTY is on the air, queued or live, and calls jtty_stop', async () => {
+    const stopKey = () => screen.getByRole('button', { name: /^esc\s*stop$/i }) as HTMLButtonElement
+    await mount(state({ tx: txState() }))
+    expect(stopKey().disabled, 'nothing going').toBe(true)
+    cleanup()
+    for (const going of [{ sending: true }, { left: 2 }, { live: true }]) {
+      await mount(state({ tx: txState(going) }))
+      m('jttyStop').mockResolvedValue(state({ tx: txState() }))
+      expect(stopKey().disabled, JSON.stringify(going)).toBe(false)
+      fireEvent.click(stopKey())
+      expect(m('jttyStop')).toHaveBeenCalledTimes(1)
+      cleanup()
+      vi.clearAllMocks()
+    }
+  })
+
+  it('the serial is typed and sent on Enter; the notice or the refusal shows under the dock', async () => {
+    await mount(state({ tx: txState({ serial: 7, refusal: 'TX is off — enable TX first' }) }))
+    expect(document.querySelector('.cockpit-txdock [role="status"]')?.textContent).toBe('TX is off — enable TX first')
+    const serial = screen.getByRole('spinbutton', { name: t('jtty.serial.aria') }) as HTMLInputElement
+    expect(serial.value).toBe('7')
+    fireEvent.focus(serial)
+    fireEvent.change(serial, { target: { value: '12' } })
+    fireEvent.keyDown(serial, { key: 'Enter' })
+    expect(m('jttySetSerial')).toHaveBeenLastCalledWith(12)
+    cleanup()
+    await mount(state({ tx: txState({ notice: 'JTTY transmission complete.' }) }))
+    expect(document.querySelector('.cockpit-txdock [role="status"]')?.textContent).toBe('JTTY transmission complete.')
+  })
+
+  it('what this station sent shows in the QSO frequency pane only', async () => {
+    const lines = [
+      line({ id: 3, line: '1500 -12  CQ K1ABC CQ', rx: true }),
+      line({ id: -1, startUtcMs: T0 + 5_000, line: '1500      W1AW TU', rx: true, tx: true }),
+    ]
+    await mount(state({ lines, tx: txState() }))
+    await waitFor(() => expect(paneLines('rx')).toEqual(['1500 -12  CQ K1ABC CQ', '1500      W1AW TU']))
+    expect(paneLines('all')).toEqual(['1500 -12  CQ K1ABC CQ'])
   })
 })
