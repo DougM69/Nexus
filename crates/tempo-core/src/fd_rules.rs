@@ -407,12 +407,14 @@ pub struct FdRuleset {
     /// entry picked and never a reading of its rows. `""` writes what `CATEGORY-MODE` in
     /// [`cabrillo_headers`](Self::cabrillo_headers) says (the log's mode), or none.
     pub cabrillo_mode_category: &'static str,
-    /// ⭐ **The header lines the sponsor requires**, from
-    /// [`CABRILLO_REQUIRABLE`]: what the Contest screen names when the entry has left one out,
-    /// before the export (CQ's rules: *"Failure to fill out the header correctly may result in the
-    /// entry being placed in the wrong category or reclassified as a Checklog"*). Never a refusal:
-    /// the file is the entrant's to send. `CATEGORY-TRANSMITTER` and `OPERATORS` are required of a
-    /// `MULTI-OP` entry only, and nothing of a `CHECKLOG`
+    /// ⭐ **The header lines the sponsor requires**: the file's `cabrillo.required`, from
+    /// [`CABRILLO_REQUIRABLE`], then its `cabrillo.entry_required`, from
+    /// [`CABRILLO_ENTRY_REQUIRABLE`] (the Illinois QSO Party's entry class and email). What the
+    /// Contest screen names when the entry has left one out, before the export (CQ's rules:
+    /// *"Failure to fill out the header correctly may result in the entry being placed in the wrong
+    /// category or reclassified as a Checklog"*). Never a refusal: the file is the entrant's to
+    /// send. `CATEGORY-TRANSMITTER` and `OPERATORS` are required of a `MULTI-OP` entry only, and
+    /// nothing of a `CHECKLOG`
     /// ([`FieldDayLog::cabrillo_missing`](crate::fieldday::FieldDayLog::cabrillo_missing)).
     pub cabrillo_required: &'static [&'static str],
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
@@ -1175,6 +1177,11 @@ struct CabrilloSpec {
     /// writes.
     #[serde(default)]
     required: Vec<String>,
+    /// The entrant's own lines the sponsor requires, from [`CABRILLO_ENTRY_REQUIRABLE`]; each one
+    /// this ruleset writes. A key of its own, never names in `required`, so a build that predates
+    /// them still loads this file (see [`CABRILLO_ENTRY_REQUIRABLE`]).
+    #[serde(default)]
+    entry_required: Vec<String>,
 }
 
 /// One column of [`CabrilloSpec`].
@@ -1270,6 +1277,19 @@ pub const CABRILLO_REQUIRABLE: &[&str] = &[
     "CATEGORY-TRANSMITTER",
     "OPERATORS",
 ];
+
+/// ⭐ **The entrant's own lines a ruleset's `cabrillo.entry_required` may name**: the sponsor's
+/// entry class and the entrant's email, each written from the entry's own Settings, which is where
+/// the Contest screen points. The Illinois QSO Party's 2026 rules: *"make sure entry class,
+/// personal information, call sign, station location, and club affiliation are correctly shown.
+/// The header information is automatically pulled and used by the processing software."*
+///
+/// ⚠️ **A list and a key of their own, never names in `cabrillo.required`, because the rules file
+/// reaches installed builds.** 1.18.0 refuses the whole file over a `required` line outside its own
+/// [`CABRILLO_REQUIRABLE`] (measured with its loader: *`ruleset ilqp/2026: cabrillo required line
+/// "ENTRY-CLASS" is not one this build can name as missing`*), so every install still on it would
+/// stop receiving rules updates, while every build ignores a key it does not know.
+const CABRILLO_ENTRY_REQUIRABLE: &[&str] = &["EMAIL", "ENTRY-CLASS"];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -2635,6 +2655,29 @@ mode class ({})",
                 }
                 required.push(h);
             }
+            // …and the entrant's own lines, on a key of their own (`CABRILLO_ENTRY_REQUIRABLE`):
+            // each one this build can name, that this ruleset writes, and once.
+            for h in &r.cabrillo.entry_required {
+                if !CABRILLO_ENTRY_REQUIRABLE.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo required entry line {h:?} is not one this build can \
+                         name as missing"
+                    ));
+                }
+                let written = match h.as_str() {
+                    "ENTRY-CLASS" => listed(&r.cabrillo.entry_headers, h),
+                    _ => listed(&r.cabrillo.headers, h),
+                };
+                if !written {
+                    return Err(format!(
+                        "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
+                    ));
+                }
+                if required.contains(&h.as_str()) {
+                    return Err(format!("{tag}: cabrillo requires {h:?} twice"));
+                }
+                required.push(h);
+            }
         }
         // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
         // lists — otherwise it silently selects nothing — and it must not re-point a code
@@ -3317,7 +3360,14 @@ fn build(spec: FileSpec) -> RulesTable {
                 cabrillo_soapbox: r.cabrillo.soapbox,
                 cabrillo_band_categories: leak_keys(r.cabrillo.band_categories),
                 cabrillo_mode_category: leak_str(r.cabrillo.mode_category),
-                cabrillo_required: leak_keys(r.cabrillo.required),
+                // The lines the Contest screen names: `required`'s, then the entrant's own.
+                cabrillo_required: leak_keys(
+                    r.cabrillo
+                        .required
+                        .into_iter()
+                        .chain(r.cabrillo.entry_required)
+                        .collect(),
+                ),
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location
@@ -4977,6 +5027,14 @@ mod tests {
                     cq += 1;
                     continue;
                 }
+                // The Illinois QSO Party declares no category line, and requires the entrant's
+                // own two (`entry_required`): the sponsor's software reads both.
+                "ilqp" => {
+                    let none: &[&str] = &[];
+                    let entrant: &[&str] = &["ENTRY-CLASS", "EMAIL"];
+                    assert_eq!(got, (none, "", entrant), "ilqp");
+                    continue;
+                }
                 _ => {
                     let none: &[&str] = &[];
                     assert_eq!(got, (none, "", none), "{}", rs.event);
@@ -5062,6 +5120,65 @@ mod tests {
             "required": ["CATEGORY-BAND", "CATEGORY-MODE", "CATEGORY-POWER", "OPERATORS"]
         }))
         .is_ok());
+    }
+
+    /// ⭐ **The entrant's own required lines ride `entry_required`, a key of their own**: each one
+    /// this build can name, that this ruleset writes, and once, each refusal by name; and the
+    /// Contest screen names them after `required`'s. CONTROL: the same names under `required`,
+    /// whose list is 1.18.0's, are refused (which is why they cannot go there).
+    #[test]
+    fn the_entrants_required_lines_ride_a_key_of_their_own() {
+        let with = |cabrillo: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["cabrillo"] = cabrillo;
+            parse_spec(&v.to_string())
+        };
+        let refused = |cabrillo: serde_json::Value| with(cabrillo).expect_err("refused");
+        let spec = with(serde_json::json!({
+            "headers": ["CATEGORY-POWER", "EMAIL"],
+            "entry_headers": ["ENTRY-CLASS"],
+            "entry_classes": ["UNLIMITED"],
+            "required": ["CATEGORY-POWER"],
+            "entry_required": ["ENTRY-CLASS", "EMAIL"],
+        }))
+        .expect("the entrant's lines load");
+        assert_eq!(
+            build(spec).rulesets[0].cabrillo_required,
+            ["CATEGORY-POWER", "ENTRY-CLASS", "EMAIL"],
+            "`required`'s lines, then the entrant's"
+        );
+        assert!(
+            refused(serde_json::json!({"soapbox": true, "entry_required": ["SOAPBOX"]})).contains(
+                "cabrillo required entry line \"SOAPBOX\" is not one this build can name as \
+                 missing"
+            )
+        );
+        // Each is written from its own list: EMAIL from `headers`, ENTRY-CLASS from `entry_headers`.
+        assert!(refused(serde_json::json!({
+            "entry_headers": ["ENTRY-CLASS"],
+            "entry_classes": ["UNLIMITED"],
+            "entry_required": ["EMAIL"]
+        }))
+        .contains("cabrillo requires \"EMAIL\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({
+            "headers": ["EMAIL"],
+            "entry_required": ["ENTRY-CLASS"]
+        }))
+        .contains("cabrillo requires \"ENTRY-CLASS\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({
+            "headers": ["EMAIL"],
+            "entry_required": ["EMAIL", "EMAIL"]
+        }))
+        .contains("cabrillo requires \"EMAIL\" twice"));
+        // CONTROL: under `required` the same line is refused, as 1.18.0's loader refuses it.
+        assert!(refused(serde_json::json!({
+            "entry_headers": ["ENTRY-CLASS"],
+            "entry_classes": ["UNLIMITED"],
+            "required": ["ENTRY-CLASS"]
+        }))
+        .contains(
+            "cabrillo required line \"ENTRY-CLASS\" is not one this build can name as missing"
+        ));
     }
 
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing

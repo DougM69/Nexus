@@ -269,6 +269,8 @@ function cabrilloLineWords(line: string): string {
     'CATEGORY-POWER': t('settings.contestPick.power.label'),
     'CATEGORY-TRANSMITTER': t('settings.contestPick.transmitter.label'),
     OPERATORS: t('settings.contestPick.operators.label'),
+    'ENTRY-CLASS': t('settings.contestPick.entryClass.label'),
+    EMAIL: t('settings.contestPick.email.label'),
   }
   return control[line] ? `${control[line]} (${line})` : line
 }

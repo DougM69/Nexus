@@ -553,6 +553,68 @@ fn the_entry_lines_the_sponsors_software_reads_are_written() {
     }
 }
 
+/// ⭐ **A blank entry class or email is named on the Contest screen before the export.** The 2026
+/// rules: *"make sure entry class, personal information, call sign, station location, and club
+/// affiliation are correctly shown. The header information is automatically pulled and used by
+/// the processing software."* With either left blank the file goes without the line, so each is
+/// named until it is set; a class is set only when it is one of this sponsor's, because a pick
+/// left over from another contest writes no line. Never a refusal: the file still exports.
+#[test]
+fn a_blank_entry_class_or_email_is_named_before_the_export() {
+    use tempo_core::contest::{CabrilloEntrant, OperatorCategory};
+    let rs = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("shipped");
+    assert_eq!(rs.cabrillo_required, ["ENTRY-CLASS", "EMAIL"]);
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("IL", "ADAM")), "40m");
+    assert!(log.log_fields_at(
+        "K9NR",
+        &fields(&[("RST", "599"), ("QTH", "KANK")]),
+        "CW",
+        "",
+        0,
+        1_792_342_800
+    ));
+    let entrant = |entry_class: &str, email: &str| CabrilloEntrant {
+        entry_class: entry_class.into(),
+        email: email.into(),
+        ..Default::default()
+    };
+    let none: [&str; 0] = [];
+    assert_eq!(
+        log.cabrillo_missing(&entrant("", "")),
+        ["ENTRY-CLASS", "EMAIL"]
+    );
+    assert_eq!(log.cabrillo_missing(&entrant("UNLIMITED", "")), ["EMAIL"]);
+    assert_eq!(
+        log.cabrillo_missing(&entrant("MULTI-OP", "op@example.com")),
+        ["ENTRY-CLASS"],
+        "a class from another contest writes no ENTRY-CLASS line"
+    );
+    assert_eq!(
+        log.cabrillo_missing(&entrant("unlimited", "op@example.com")),
+        none
+    );
+    assert!(
+        log.cabrillo_with(7_000, &entrant("", "")).is_ok(),
+        "named, never refused"
+    );
+    // A checklog is placed in no class, so nothing is named for it.
+    let mut checking = select(&station("IL", "ADAM"));
+    checking.entry_category = OperatorCategory::Checklog;
+    let checklog = FieldDayLog::new("W9XYZ", checking, "40m");
+    assert_eq!(checklog.cabrillo_missing(&entrant("", "")), none);
+    // CONTROL: a party whose rules data requires nothing names nothing, whatever is blank.
+    let ny = FieldDayLog::new(
+        "W2XYZ",
+        ContestSession::for_ruleset(
+            ruleset_by_id("nyqp", CURRENT_RULES_YEAR).expect("shipped"),
+            &station("NY", "ALB"),
+        )
+        .expect("nyqp starts"),
+        "40m",
+    );
+    assert_eq!(ny.cabrillo_missing(&entrant("", "")), none);
+}
+
 /// ⭐ **Who was at the key survives a restart.** The journal is the only copy of a contest
 /// contact on disk, so each row's operator rides it as ADIF's own `OPERATOR`, and a club
 /// position that crashes at hour five still heads its file with everyone who operated it.

@@ -289,6 +289,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credits 2. Such a contact now adds nothing to any of them, is not counted among your contacts and
   lights no cell on any laptop's board. It is still logged and still in the Cabrillo and ADIF files,
   as a dupe is, and contests that allow every mode score as before.
+- **At the Illinois QSO Party, the Contest screen names a blank Entry class or Email before you
+  export.** The sponsor's processing software reads both from the Cabrillo header, and a file with
+  either left blank went out without the line and with nothing said, a position's own file and the
+  host's Club Cabrillo alike. The Contest screen now names each one that is missing as the Settings
+  field that fills it, with a button to Settings ▸ Contesting ▸ Your entry, as it does for the CQ
+  contests' category lines. An Entry class counts only when it is one of the party's own classes,
+  and the file still exports either way.
 
 ## [1.18.0] — 2026-10-12
 

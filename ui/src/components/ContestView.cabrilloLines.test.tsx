@@ -138,6 +138,24 @@ describe('what the sponsor requires and the entry left out, named before the exp
     expect(missingLine()?.textContent).toBe(NAMED)
   })
 
+  it('the Illinois QSO Party: a blank entry class or email, each as the Settings field that fills it', async () => {
+    const onOpenSettings = vi.fn()
+    render(
+      <ContestView
+        fieldDay={{ ...ssb(['ENTRY-CLASS', 'EMAIL']), event: 'ilqp' } as FieldDayStatus}
+        onSetMode={() => {}}
+        onOpenSettings={onOpenSettings}
+      />,
+    )
+    await settle()
+    expect(missingLine()?.textContent).toBe(
+      'Before you export, set what Illinois QSO Party requires in its Cabrillo file under Settings ▸ Contesting ▸ Your entry: ' +
+        'Entry class (ENTRY-CLASS), Email for contest logs (EMAIL). Open in Settings',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Settings' }))
+    expect(onOpenSettings).toHaveBeenCalledWith('contest-category')
+  })
+
   it('nothing missing, nothing said', async () => {
     render(<ContestView fieldDay={ssb(undefined)} onSetMode={() => {}} />)
     await settle()
