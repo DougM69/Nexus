@@ -7,9 +7,10 @@ whenever it likes, and the text prints as each frame decodes.
 
 **This build receives JTTY. Its transmitter is built but switched off:** every send is refused
 with "JTTY transmit is not switched on in this build", and nothing on this screen keys the rig
-for JTTY. The dock at the bottom of the screen shows WSJT-X's transmit controls (the compose bar
-and Send, the F1–F8 messages, the Call box, the serial number and Live) drawn disabled, with that
-sentence under them.
+for JTTY. The dock at the bottom of the screen is one row, the compose bar with Send and
+Esc/Stop, drawn disabled and saying so. WSJT-X's other transmit controls (the F1–F8 messages, the
+Call box, the serial number and Live) appear above it only in a build with the transmitter
+switched on.
 
 JTTY sits in the Keyboard section beside [PSK](psk.md): the same data privileges, the same
 power cap and the same USB data mode. Opening the JTTY screen makes JTTY the section's modem,

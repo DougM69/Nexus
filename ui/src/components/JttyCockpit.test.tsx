@@ -256,17 +256,21 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     expect(m('jttySetBand')).toHaveBeenLastCalledWith(1012, 1613)
   })
 
-  it('the transmitter switched off: every sender drawn disabled with the reason, and nothing in the cockpit can send', async () => {
+  it('the transmitter switched off: the dock is its compose row alone, saying why, and nothing in the cockpit can send', async () => {
     for (const s of [state(), state({ tx: txState({ switchedOn: false, refusal: 'JTTY transmit is not switched on in this build' }) })]) {
       await mount(s)
-      expect((screen.getByRole('textbox', { name: t('jtty.compose.aria') }) as HTMLInputElement).disabled).toBe(true)
+      expect(compose().disabled).toBe(true)
+      expect(compose().placeholder).toBe(t('jtty.compose.off'))
       expect((screen.getByRole('button', { name: t('jtty.compose.send.label') }) as HTMLButtonElement).disabled).toBe(true)
+      expect((screen.getByRole('button', { name: /^esc\s*stop$/i }) as HTMLButtonElement).disabled, 'Esc/Stop, nothing going').toBe(true)
       for (const key of ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8']) {
-        expect((screen.getByRole('button', { name: new RegExp(`^${key}`) }) as HTMLButtonElement).disabled, key).toBe(true)
+        expect(screen.queryByRole('button', { name: new RegExp(`^${key}`) }), key).toBeNull()
         fireEvent.keyDown(window, { key })
       }
-      expect(liveKey().disabled, 'Live').toBe(true)
-      expect(document.querySelector('.cockpit-txdock [role="status"]')?.textContent).toBe(t('jtty.compose.off'))
+      expect(screen.queryByRole('button', { name: new RegExp(`^TX\\s*${t('jtty.live.on.label')}$`) }), 'Live').toBeNull()
+      expect(screen.queryByRole('textbox', { name: t('jtty.hisCall.aria') }), 'the Call box').toBeNull()
+      expect(screen.queryByRole('spinbutton', { name: t('jtty.serial.aria') }), 'the serial').toBeNull()
+      expect(document.querySelector('.cockpit-txdock [role="status"]'), 'a line under the dock').toBeNull()
       for (const k of Object.keys(api) as (keyof typeof api)[]) {
         if (/send|fkey|live|signoff|^psk|^rtty|^js8|setPtt|setTxEnabled|startCq|callStation/i.test(String(k)) && typeof api[k] === 'function') {
           expect(m(k), `${String(k)} was called`).not.toHaveBeenCalled()

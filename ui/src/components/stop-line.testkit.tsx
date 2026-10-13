@@ -295,8 +295,8 @@ export const jtty: Case<(typeof JTTY_PANEL_IDS)[number]> = {
   // section; and the dock's Esc/Stop (→ jtty_stop), PSK's shape and predicate, labelled by its
   // content spans with no whitespace, hence \s*. The dock's Live key is a SENDER, not a stop (the
   // RTTY "TX" ruling), and must never be added here. Esc is App-bound, keyboard-only and
-  // census-only. (JTTY transmit is switched off in every build: the dock is drawn, its senders
-  // disabled, and the stops are swept all the same.)
+  // census-only. (JTTY transmit is switched off in every build: the dock is then its compose row
+  // alone, Send disabled and Esc/Stop at its end, and the stops are swept all the same.)
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (JTTY abort)', /^esc\s*stop$/i],
