@@ -29,6 +29,15 @@
 // contact in progress through the engine (`features/contestEntryShare`): what is typed in either
 // shows in both as it is typed, every hint follows it in both, and Enter in either logs it once.
 //
+// ⭐ A PASS'S CONTACTS GO ON THE SATELLITES SCREEN (the operator's pick, 2026-10-13: "Say to use the
+// Satellites screen", while a bird is held). This log line logs every contact the ordinary way, on the
+// band the radio is on and with no bird (`contestLogManual`); only the Satellites screen's strip takes a
+// contact's band and bird from the pass (`contestLogSatellite`). So while the engine holds a bird's
+// transponder, read every 2 s as the Satellites screen and the cockpits' rotor strip read it
+// (`getSatTransponder`), one line under the bar names the bird and says to log its pass contacts there.
+// It blocks nothing. It is this window's alone: the main window's Contest screen tops itself with the
+// same entry and was not part of the pick, so it draws no such line and asks nothing about a bird.
+//
 // ⛔ NOTHING IN THIS WINDOW TRANSMITS. No PTT, no F-key messages, no Tune, no Enter Sends Message:
 // the log line here gets no `esm`; the screen's contest switch, Running / S&P and scoring are
 // read-only (`ContestView`'s `logger`); the F-keys do nothing (the webview's own as well, so F5
@@ -44,11 +53,12 @@
 // never sees this window: the stream is the main window's picture.
 
 import { useEffect, useId, useMemo, useState, type CSSProperties } from 'react'
-import type { FdRulesetDto } from '../api'
+import { getSatTransponder, type FdRulesetDto } from '../api'
 import { isFieldDay } from '../fdEvent'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP, boxScaleValue } from '../features/panelState'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
+import { pollSingleFlight } from '../singleFlight'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import { useContestSwitch } from '../contestSwitch'
 import { useOperatorBoxAsk } from '../features/contestKeys'
@@ -118,6 +128,9 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
  * (`stationMode`). A chip and not a band over the boxes, the operator's pick (2026-10-12). Logging
  * stays allowed; the contact is the sponsor's to score.
  *
+ * Given `satellite`, the bird whose transponder the engine holds, one plain line under the bar says
+ * to log that pass's contacts on the Satellites screen. Only the logger window passes it.
+ *
  * ⛔ NOTHING HERE TRANSMITS: the strip gets no `esm`, and A− / A+ only size the text. `sharedEntry`
  * is the logger window's (`LogEntry`): there Esc clears the entry. Absent, in the main window, Esc
  * stays the window's stop (App's), and the strip takes part in the shared contact as the cockpits'
@@ -134,6 +147,7 @@ export function ContestLargeEntry({
   onSaveOperator,
   operatorAsk,
   onOperatorFocused,
+  satellite,
 }: {
   snap: AppSnapshot
   fieldDay: FieldDayStatus
@@ -150,6 +164,9 @@ export function ContestLargeEntry({
   /** Ctrl+O: the asks the operator box has not answered (`features/contestKeys.ts`). */
   operatorAsk?: number
   onOperatorFocused?: () => void
+  /** The bird whose transponder the engine holds, while one is held (the logger window's read of
+   *  `getSatTransponder`); null while none is. Absent in the main window, which draws no such line. */
+  satellite?: string | null
 }) {
   const section = snap.radio.operatingMode
   const pskName = usePskName(section)
@@ -195,6 +212,11 @@ export function ContestLargeEntry({
             A+
           </button>
         </div>
+        {satellite != null && (
+          <p className="contest-logger-sat" role="status">
+            {t('contestLogger.satellite.note', { bird: satellite })}
+          </p>
+        )}
         <div className="contest-logger-scaled" style={scaled}>
           <LogEntry
             snap={snap}
@@ -259,6 +281,19 @@ export function ContestLogger({
   // A contest switched by a pick saved in the main window: this copy of the Contest screen says
   // so too.
   const contestSwitch = useContestSwitch(fd)
+  // THE BIRD HELD, for the line under the entry's bar: the engine's own hold, read every 2 s as the
+  // Satellites screen and the rotor strip read it (one call at a time: it takes the engine mutex). A
+  // read that fails keeps the last answer, as theirs do.
+  const [satellite, setSatellite] = useState<string | null>(null)
+  useEffect(
+    () =>
+      pollSingleFlight('contest logger satellite', 2_000, (owns) =>
+        getSatTransponder()
+          .then((h) => owns() && setSatellite(h?.name ?? null))
+          .catch(() => {}),
+      ),
+    [],
+  )
   return (
     <>
       {fd && (
@@ -273,6 +308,7 @@ export function ContestLogger({
           onSaveOperator={onSaveOperator}
           operatorAsk={operatorAsk}
           onOperatorFocused={() => setOperatorAsk(0)}
+          satellite={satellite}
         />
       )}
       <main className="layout single">

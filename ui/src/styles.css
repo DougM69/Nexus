@@ -19404,6 +19404,7 @@ button.cq-skiptx1.on {
    and the last contacts "the right size", so they stay it. Below md the window is narrower than
    the cap, so the floor is untouched. */
 .contest-logger-bar,
+.contest-logger-sat,
 .contest-logger-scaled > .log-entry-fd,
 .contest-logger-recent-body {
   max-width: 1600px;
@@ -19445,6 +19446,15 @@ button.cq-skiptx1.on {
 }
 .contest-logger-step:disabled {
   opacity: 0.4;
+}
+/* THE SATELLITE LINE (the logger window's only, while the engine holds a bird): log the pass's
+   contacts on the Satellites screen. A plain line under the bar, on its measure and inset and at the
+   app's own size, as the bar is; part of the entry, so it never shrinks and never scrolls either. */
+.contest-logger-sat {
+  margin-block: 0;
+  padding: var(--space-1) var(--space-4) 0;
+  font-size: var(--fs-body);
+  color: var(--text);
 }
 /* THE SIZE. A− / A+ is a factor on the app's Text size, a Connect box's range (80–160 %), written
    inline as `--logger-text-scale` on the two blocks it sizes. Each multiplies the inherited

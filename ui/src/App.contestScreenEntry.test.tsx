@@ -137,6 +137,8 @@ let tier = 'Ft8'
 let fieldDay: unknown = ILQP
 let rules: Record<string, unknown> = ILQP_RULES
 let settingsAnswer: Record<string, unknown> = {}
+/** The satellite the engine holds a transponder of (`get_sat_transponder`), when a case sets one. */
+let held: unknown = null
 
 const snapshot = () => ({
   mycall: 'W9XYZ',
@@ -184,6 +186,8 @@ function respond(cmd: string): unknown {
   if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log|contest_removed|contest_unmerged|get_scp_calls)$/.test(cmd)) return []
   if (/^(get_propagation|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
   if (cmd === 'ask_log') throw new Error('no log in this test')
+  // Only a case that holds a bird answers with one; every other case gets what it always got.
+  if (cmd === 'get_sat_transponder' && held) return held
   return {}
 }
 
@@ -196,6 +200,7 @@ beforeEach(() => {
   tier = 'Ft8'
   fieldDay = ILQP
   rules = ILQP_RULES
+  held = null
   settingsAnswer = { ...defaultSettings, mycall: 'W9XYZ', mygrid: 'EN52', fdActive: true, fdEvent: 'ilqp' }
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -604,6 +609,38 @@ describe('the Logger window is unchanged: one entry, its own', () => {
     await settle()
     expect(keyingSince(from), 'the logger window sends no stop').toEqual([])
     expect(boxesIn(app)[0].value, 'its Esc clears the entry, as it always did').toBe('')
+  })
+})
+
+// ── a satellite held: the logger window's line, not this screen's ───────────────────────────
+//
+// While the engine holds a bird, the logger window says to log the pass's contacts on the Satellites
+// screen (ContestLogger.satellite.test.tsx). The pick was made for the logger window (2026-10-13), so
+// this screen, topped with the same log line, stays as it was.
+
+describe('a satellite held: the line is the logger window’s', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('the Contest screen says nothing about it; the logger window, on the same answers, does', async () => {
+    held = { name: 'AO-91', index: 0, description: 'FM transponder', binding: null }
+    const host = await contestScreen()
+    // Past the next read the logger window would make of the hold (every 2 s).
+    await act(async () => new Promise((r) => setTimeout(r, 2_200)))
+    const entry = host.querySelector('.contest-logger-entry')!
+    expect(entry.querySelector('.le-fd-input-call'), 'control: the entry is on show').not.toBeNull()
+    expect(entry.textContent).not.toContain('Satellites screen')
+    expect(entry.textContent).not.toContain('AO-91')
+    // Control: the same answers in the logger window draw the line.
+    cleanup()
+    window.history.replaceState(null, '', '/?panel=contestlog')
+    render(<DetachedPanel panel="contestlog" />)
+    await waitFor(
+      () =>
+        expect(document.querySelector('.contest-logger-entry')?.textContent).toContain(
+          t('contestLogger.satellite.note', { bird: 'AO-91' }),
+        ),
+      { timeout: 15_000 },
+    )
   })
 })
 

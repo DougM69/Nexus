@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   works with one on this one as before, and shows its own board. The hosted Remote page is sent
   nothing new and shows the station's own board, and the score is unchanged (the club score was
   already the club's).
+- **The contest logger window says to log a satellite pass's contacts on the Satellites screen.**
+  Its log line logs every contact on the band the radio is on, with no satellite, so at ARRL Field
+  Day a pass contact logged there would count as an ordinary 2 m or 70 cm contact, and Winter Field
+  Day would credit it. While a satellite's transponder is picked on the Satellites screen, one line
+  under the logger window's title names the bird and says to log its pass contacts there, where the
+  log strip takes the band and the satellite from the pass. It blocks nothing: a contact logged in
+  the logger window is logged as before. The main window's Contest screen is unchanged.
 
 ### Changed
 
