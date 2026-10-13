@@ -115,6 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. With them, Ctrl+P no longer prints the window and Ctrl+F no longer opens a find bar. Copy,
   paste, cut, undo and select all work as before, and so do Nexus's own F-keys. Not yet tried on
   Windows.
+- **The Contest screen's Export ADIF and Club ADIF files have the report you sent.** They had the
+  report you received on each contact but not the one you sent, so a program reading them found no
+  sent report. Each contact now carries its own, the one its Cabrillo line and the Logbook show: 59
+  on phone, 599 on CW and digital. In the Club ADIF that is the report sent by the laptop that
+  logged the contact. A contest whose exchange has no report, such as Field Day, writes none.
 
 ## [1.18.0] — 2026-10-12
 

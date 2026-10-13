@@ -1781,6 +1781,10 @@ impl FieldDayLog {
     /// export is built from, and the rows the journal writes
     /// ([`journal_adif`](Self::journal_adif)), which gives each one its sent exchange as well.
     ///
+    /// A row that sent a report writes it as `RST_SENT`, the tag another program reads, as the
+    /// submitted file's rows do ([`submission_adif`](Self::submission_adif)): for a club this is
+    /// the file its entry submits. The journal writes none.
+    ///
     /// ⚠️ **Live rows first, and that order is the downgrade's.** A build that predates the
     /// tag reads a removed row as an ordinary contact (the safe direction: nothing is lost),
     /// and admits rows in file order — so where a removed contact's station was worked again,
@@ -1802,16 +1806,17 @@ impl FieldDayLog {
             "",
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             sent_moved,
+            true,
         )
     }
 
     /// ⭐ **The ADIF the entry submits**: the live rows (a removed contact is not submitted)
     /// without the satellite contacts a ruleset gives no credit (Winter Field Day: *"Do not
-    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif) is the journal and keeps
+    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif), the club's export, keeps
     /// every row.
     pub fn submission_adif(&self) -> String {
         let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
-        self.adif_of("", self.submitted().map(|q| (q, None)), sent_moved)
+        self.adif_of("", self.submitted().map(|q| (q, None)), sent_moved, true)
     }
 
     /// `header`: the journal's own header fields, before `<EOH>` (an export has none).
@@ -1821,11 +1826,18 @@ impl FieldDayLog {
     /// it today. The journal always asks for it ([`journal_adif`](Self::journal_adif));
     /// [`adif`](Self::adif) and the submitted file once the sent exchange has moved in the rows
     /// they hold.
+    ///
+    /// `rst_sent`: each row's own sent report under ADIF's `RST_SENT`, the tag another program
+    /// reads. Both exports ask for it, the submitted file
+    /// ([`submission_adif`](Self::submission_adif)) and the club's ([`adif`](Self::adif)). The
+    /// journal does not: a restore reads the sent side from `APP_NEXUS_MYEX`, so the journal's
+    /// bytes stay as they were.
     fn adif_of<'a>(
         &'a self,
         header: &str,
         rows: impl Iterator<Item = (&'a LoggedQso, Option<u64>)>,
         sent_moved: bool,
+        rst_sent: bool,
     ) -> String {
         let mut s = format!("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n{header}<EOH>\n");
         for (q, removed_unix) in rows {
@@ -1936,6 +1948,15 @@ impl FieldDayLog {
                 .collect();
             for (tag, val) in &standard {
                 s.push_str(&adif_field(tag, val));
+            }
+            // ⭐ The report this row SENT, read off the row by the merged Logbook's own function,
+            // so the two files cannot disagree: never the session's report, and nothing for a
+            // row that sent none or an exchange that has none (both Field Day events).
+            if rst_sent {
+                let sent = crate::contest::sent_exchange(q, spec);
+                if let Some(rst) = crate::contest::merge::rst_of(&sent, spec) {
+                    s.push_str(&adif_field("RST_SENT", &rst));
+                }
             }
             // ⭐ The private carrier rides ONLY when the standard tags cannot give the
             // row back — and that condition is not a guess, it is the restore run
@@ -2158,6 +2179,7 @@ impl FieldDayLog {
             &self.spent.header(),
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             true,
+            false,
         );
         for h in &self.held {
             s.push_str(&h.adif);
@@ -6475,6 +6497,138 @@ mod tests {
                 &log
             ),
             "a move must not un-dupe a station under a rule that names no sent slot"
+        );
+    }
+
+    /// The Illinois QSO Party from Kane County: an exchange that SENDS a report (RST and
+    /// county), where Field Day's sends none.
+    fn ilqp_from_kane() -> FieldDayLog {
+        let rs = crate::fd_rules::ruleset_by_id("ilqp", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = crate::contest::StationData {
+            mycall: "W9XYZ".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "KANE".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        FieldDayLog::new("W9XYZ", session, "20m")
+    }
+
+    /// One ILQP contact in `mode`: the report and county `call` sent me.
+    fn ilqp_contact(log: &mut FieldDayLog, call: &str, rst: &str, county: &str, mode: &str) {
+        let rx = [
+            ("RST".to_string(), rst.to_string()),
+            ("QTH".to_string(), county.to_string()),
+        ];
+        let when = 1_792_000_000 + 60 * log.qsos().len() as u64;
+        assert!(log.log_fields_at(call, &rx, mode, "", 0, when), "{call}");
+    }
+
+    /// What `call`'s row sent as its report, set on the row: no session or other row holds it.
+    fn set_sent_rst(log: &mut FieldDayLog, call: &str, rst: &str) {
+        let row = log
+            .qsos_mut()
+            .iter_mut()
+            .find(|q| q.call == call)
+            .expect("the row");
+        row.tx
+            .iter_mut()
+            .find(|v| v.key == "RST")
+            .expect("an ILQP row sends a report")
+            .raw = rst.to_string();
+    }
+
+    /// `call`'s record in an ADIF file.
+    fn record_for<'a>(adif: &'a str, call: &str) -> &'a str {
+        let tag = format!("<CALL:{}>{call} ", call.len());
+        adif.split("<EOR>")
+            .find(|r| r.contains(&tag))
+            .unwrap_or_else(|| panic!("no record for {call} in\n{adif}"))
+    }
+
+    /// ⭐ **The submitted ADIF writes each row's OWN sent report as `RST_SENT`**, the tag
+    /// another program reads. The report rode only in the private `APP_NEXUS_MYEX` carrier, so
+    /// a file imported elsewhere had none, while the merged Logbook's ADIF had it.
+    ///
+    /// By value, on data that disagrees wherever a wrong source could pass: the two rows sent
+    /// different reports, neither is the session's `599`, and each received another value.
+    #[test]
+    fn the_submitted_adif_writes_each_rows_own_sent_report() {
+        let mut log = ilqp_from_kane();
+        ilqp_contact(&mut log, "K9AAA", "559", "COOK", "CW");
+        ilqp_contact(&mut log, "K9BBB", "579", "LAKE", "CW");
+        set_sent_rst(&mut log, "K9AAA", "449");
+        set_sent_rst(&mut log, "K9BBB", "339");
+        let adif = log.submission_adif();
+        for (call, want) in [("K9AAA", "<RST_SENT:3>449 "), ("K9BBB", "<RST_SENT:3>339 ")] {
+            let r = record_for(&adif, call);
+            assert!(r.contains(want), "{call} does not carry {want:?}: {r}");
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{call}: {r}");
+        }
+    }
+
+    /// ⭐ **…and nothing else in the file moves**: a whole submitted file, byte for byte, which is
+    /// the file this build wrote before with the one tag added. A phone contact, so the row's
+    /// `59` is neither the session's `599` nor the `57` it received, and the carrier is written
+    /// beside it as before.
+    #[test]
+    fn a_submitted_record_gains_its_sent_report_and_nothing_else() {
+        let mut log = ilqp_from_kane();
+        log.dial_khz = 14_250;
+        log.on_air_hz = 14_250_000;
+        ilqp_contact(&mut log, "K9AAA", "57", "COOK", "PH");
+        assert_eq!(
+            log.submission_adif(),
+            "ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n\
+             <CALL:5>K9AAA <MODE:3>SSB <BAND:3>20m <FREQ:9>14.250000 \
+             <APP_NEXUS_DIALKHZ:5>14250 <QSO_DATE:8>20261014 <TIME_ON:6>174640 \
+             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 <RST_SENT:2>59 \
+             <APP_NEXUS_EX:28>RST::57;QTH:il_counties:COOK \
+             <APP_NEXUS_MYEX:28>RST::59;QTH:il_counties:KANE <APP_NEXUS_QSEQ:1>1 <EOR>\n"
+        );
+    }
+
+    /// A row that sent no report writes no `RST_SENT`, never the session's `599` in its place, and
+    /// an exchange that declares no report (Field Day) writes none on any row. No shipped path
+    /// logs a QSO-party row without a report, so this one is built by hand.
+    #[test]
+    fn a_row_without_a_sent_report_writes_no_rst_sent() {
+        let mut log = ilqp_from_kane();
+        ilqp_contact(&mut log, "K9AAA", "559", "COOK", "CW");
+        ilqp_contact(&mut log, "K9BBB", "579", "LAKE", "CW");
+        set_sent_rst(&mut log, "K9AAA", "");
+        let adif = log.submission_adif();
+        // The control first: the row beside it sent the session's report, and writes it.
+        let with = record_for(&adif, "K9BBB");
+        assert!(with.contains("<RST_SENT:3>599 "), "the control: {with}");
+        let without = record_for(&adif, "K9AAA");
+        assert!(!without.contains("<RST_SENT:"), "{without}");
+        let field_day = moved_log().submission_adif();
+        assert!(!field_day.contains("<RST_SENT:"), "{field_day}");
+    }
+
+    /// ⭐ **The journal keeps its bytes, and the club's export gains the sent report.** One log,
+    /// two whole files: `journal_adif` writes no `RST_SENT`, as before, because a restore reads a
+    /// row's sent side from `APP_NEXUS_MYEX`; `adif`, the export a club's file is written from,
+    /// is the same bytes with the one tag added. The phone row's `59` is neither the session's
+    /// `599` nor the `57` it received, so a journal that wrote the tag would show it here.
+    #[test]
+    fn the_journal_keeps_its_bytes_where_the_club_export_gains_the_sent_report() {
+        let mut log = ilqp_from_kane();
+        log.dial_khz = 14_250;
+        log.on_air_hz = 14_250_000;
+        ilqp_contact(&mut log, "K9AAA", "57", "COOK", "PH");
+        let journal = "ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n\
+             <CALL:5>K9AAA <MODE:3>SSB <BAND:3>20m <FREQ:9>14.250000 \
+             <APP_NEXUS_DIALKHZ:5>14250 <QSO_DATE:8>20261014 <TIME_ON:6>174640 \
+             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 \
+             <APP_NEXUS_EX:28>RST::57;QTH:il_counties:COOK \
+             <APP_NEXUS_MYEX:28>RST::59;QTH:il_counties:KANE <APP_NEXUS_QSEQ:1>1 <EOR>\n";
+        assert_eq!(log.journal_adif(), journal);
+        assert_eq!(
+            log.adif(),
+            journal.replace("<RST_RCVD:2>57 ", "<RST_RCVD:2>57 <RST_SENT:2>59 ")
         );
     }
 }
