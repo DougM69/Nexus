@@ -362,6 +362,22 @@ impl LoggedQso {
         }
     }
 
+    /// ⭐ **Worked in a mode `rs` bans** ([`FdRuleset::banned_modes`](crate::fd_rules::FdRuleset::banned_modes):
+    /// FT8 and FT4 at the Illinois QSO Party, the WSJT modes at Winter Field Day). Such a contact
+    /// is logged and written to the files like any other, and counts for nothing
+    /// ([`FieldDayLog::counts`]).
+    ///
+    /// ⚠️ **The RECORDED mode, never [`recorded_mode`](Self::recorded_mode).** A row that recorded
+    /// none exports as `FT8` for want of anything better, and a guess is not a contact in a banned
+    /// mode: an empty mode is never banned, as `FdRuleset::mode_banned` says.
+    ///
+    /// The same answer as `FdRuleset::mode_banned(&self.submode)` without its allocation, which the
+    /// scorer's walk of every row on every snapshot must not make: the row's mode is stored trimmed
+    /// and uppercase, and the loader takes a banned mode only uppercase and non-empty.
+    pub fn banned_under(&self, rs: &crate::fd_rules::FdRuleset) -> bool {
+        rs.banned_modes.iter().any(|&m| m == self.submode)
+    }
+
     /// ⭐ **What the dupe key needs to know about this row's bird** — [`SatKey`]'s
     /// default (a terrestrial contact) for every row that has no [`sat`](Self::sat).
     ///
@@ -413,6 +429,13 @@ fn field_raw<'a>(vals: &'a [crate::contest::FieldValue], key: &str) -> &'a str {
         .find(|v| v.key == key)
         .map(|v| v.raw.as_str())
         .unwrap_or("")
+}
+
+/// Whether `q` counts under `rs` ([`FieldDayLog::counts`]): not a duplicate, not a satellite
+/// contact the ruleset gives no credit (Winter Field Day), and not worked in a mode it bans.
+/// Over a ruleset already in hand, because the scorer asks it of every row on every snapshot.
+fn counts_under(rs: &crate::fd_rules::FdRuleset, q: &LoggedQso) -> bool {
+    !q.dupe && (rs.satellite_credit || q.sat.is_none()) && !q.banned_under(rs)
 }
 
 /// What [`FieldDayLog::merge_adif`] found in a journal.
@@ -1640,21 +1663,32 @@ impl FieldDayLog {
     /// yields the whole log, and every number below is bit-identical to what it always
     /// was.
     ///
+    /// ⭐ **A contact in a mode the contest bans is left out the same way** (FT8 at the
+    /// Illinois QSO Party: *"FT4 and FT8 contacts will receive no contact credit"*): logged,
+    /// in the files, and worth no point, multiplier, bonus or board cell
+    /// ([`LoggedQso::banned_under`]). It still keys the dupe index like any row, so whether a
+    /// later contact is a duplicate is what it always was, and the FT sequencer, which asks
+    /// that index whether a station was worked, is not touched by it.
+    ///
     /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
-    /// is sent**, by the marks a row carries (its `dupe`, and its `sat` when the status says
-    /// the contest gives a satellite no credit), and refuses a capture whose count it cannot
-    /// reproduce. A row left out here for any other reason has to carry a mark the page
-    /// reads first, or that page's contest view goes blank.
+    /// is sent**, by the marks a row carries (its `dupe`, its `sat` when the status says
+    /// the contest gives a satellite no credit, and its `banned`), and refuses a capture whose
+    /// count it cannot reproduce. A row left out here for any other reason has to carry a
+    /// mark the page reads first, or that page's contest view goes blank.
     ///
     /// `+ Clone` because [`score_rows`](Self::score_rows) must stay clonable — the
     /// scorer walks its rows twice, once for points and once for multipliers.
     fn counting(&self) -> impl Iterator<Item = &LoggedQso> + Clone {
-        // ⭐ …and except a satellite contact the ruleset gives no credit (Winter Field Day):
-        // a row in the log, and in the general log after the merge, worth nothing here.
-        let credit = self.ruleset().satellite_credit;
-        self.qsos
-            .iter()
-            .filter(move |q| !q.dupe && (credit || q.sat.is_none()))
+        let rs = self.ruleset();
+        self.qsos.iter().filter(move |q| counts_under(rs, q))
+    }
+
+    /// ⭐ **Does this row COUNT?** The one predicate [`counting`](Self::counting) filters by,
+    /// for a surface that walks [`qsos`](Self::qsos) itself and must leave out exactly the rows
+    /// the score does: the club TV board, which attributes each counting contact to the
+    /// position that logged it.
+    pub fn counts(&self, q: &LoggedQso) -> bool {
+        counts_under(self.ruleset(), q)
     }
 
     /// ⭐ **The rows the entry SUBMITS** — every row except a satellite contact the ruleset

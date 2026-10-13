@@ -2276,6 +2276,16 @@ pub struct FieldDayQso {
     /// `"dupe":false` on every ordinary row spends ~28 KB of it saying nothing.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dupe: bool,
+    /// ⭐ **This row was worked in a mode the running contest bans** (FT8 at the Illinois QSO
+    /// Party, the WSJT modes at Winter Field Day): logged and filed, and counted for nothing
+    /// (`LoggedQso::banned_under`), so [`FieldDayStatus::qso_count`] leaves it out.
+    ///
+    /// It is the hosted Remote page's to read: that page recounts the contacts from the rows by
+    /// their marks ([`dupe`](Self::dupe), [`sat`](Self::sat) under `satellite_credit: false`, and
+    /// this) and refuses a capture whose count it cannot reproduce, so a row the count leaves out
+    /// says so here or that page's contest view goes blank. Skipped when false, as `dupe` is.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub banned: bool,
     /// The row's contest seq — what the slot loop's forwarder names a row by when it pushes new
     /// contacts to N3FJP, the N1MM broadcast and WSJT-X listeners. Named, not counted: a
     /// removal and a new contact inside one slot leave the count where it was.

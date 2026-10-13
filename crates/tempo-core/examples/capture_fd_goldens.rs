@@ -92,7 +92,13 @@ pub fn wfd_class_log_n(rows: usize) -> FieldDayLog {
             "fixture row {call} must log — a refused row would silently shorten the golden"
         );
     }
-    assert_eq!(log.qso_count(), rows, "every fixture row landed");
+    // Every row LANDED: logged, and none of them a duplicate. Not `qso_count`, which is the
+    // contacts that COUNT: at Winter Field Day the fixture's FT8 contact lands and counts for
+    // nothing, a WSJT mode the sponsor does not allow.
+    assert!(
+        log.qsos().len() == rows && log.qsos().iter().all(|q| !q.dupe),
+        "every fixture row landed"
+    );
     log
 }
 
@@ -136,7 +142,13 @@ pub fn golden_log_n(event: FdEvent, rows: usize) -> FieldDayLog {
             "fixture row {call} must log — a refused row would silently shorten the golden"
         );
     }
-    assert_eq!(log.qso_count(), rows, "every fixture row landed");
+    // Every row LANDED: logged, and none of them a duplicate. Not `qso_count`, which is the
+    // contacts that COUNT: at Winter Field Day the fixture's FT8 contact lands and counts for
+    // nothing, a WSJT mode the sponsor does not allow.
+    assert!(
+        log.qsos().len() == rows && log.qsos().iter().all(|q| !q.dupe),
+        "every fixture row landed"
+    );
     log
 }
 

@@ -75,3 +75,15 @@ describe('the log hints and satellites', () => {
     expect(wfdLogHints([pass('K1ABC'), pass('W1AW'), pass('N0XYZ')])).toEqual({ bands: 0, modes: 0 })
   })
 })
+
+describe('the log hints and the WSJT modes', () => {
+  it('leave out a contact the station marked as in a banned mode, which counts for nothing', () => {
+    // Three FT8 contacts on 20 m and one CW contact on 40 m: no band holds three counting
+    // contacts and one mode class was worked.
+    const ft8 = (call: string): FieldDayQso => ({ ...q('20m', 'DIG'), call, submode: 'FT8', banned: true })
+    expect(wfdLogHints([ft8('K1ABC'), ft8('W1AW'), ft8('N0XYZ'), q('40m', 'CW')])).toEqual({ bands: 0, modes: 1 })
+    // CONTROL: the same three on RTTY are a band and a second mode.
+    const rtty = (call: string): FieldDayQso => ({ ...q('20m', 'DIG'), call, submode: 'RTTY' })
+    expect(wfdLogHints([rtty('K1ABC'), rtty('W1AW'), rtty('N0XYZ'), q('40m', 'CW')])).toEqual({ bands: 1, modes: 2 })
+  })
+})

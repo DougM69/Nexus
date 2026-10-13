@@ -16166,6 +16166,8 @@ mod tests {
             // verdict it did not compute is asserting something it does not model.
             dkey: Vec::new(),
             dupe: false,
+            // FT8 at Field Day, a mode it does not ban; read nowhere this helper feeds either.
+            banned: false,
             // The forwarder's cursor reads it; the emitter tests this helper feeds do not.
             seq: 0,
         }

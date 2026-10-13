@@ -3253,6 +3253,11 @@ export interface FieldDayQso {
    *  under the ruleset's own key; a client-side guess got both the key and the semantics
    *  wrong. **Absent means false** — it is skipped on the wire for ordinary rows. */
   dupe?: boolean
+  /** ⭐ This row was worked in a mode the running contest BANS (FT8 at the Illinois QSO Party,
+   *  the WSJT modes at Winter Field Day): logged and in the files, and it counts for nothing,
+   *  so `qsoCount` leaves it out. The engine's answer from the row, never re-derived here.
+   *  **Absent means false**, as for `dupe`, and on a station older than the mark. */
+  banned?: boolean
 }
 
 /** ⭐ The running ruleset's DUPE RULE — what makes a contact count again.

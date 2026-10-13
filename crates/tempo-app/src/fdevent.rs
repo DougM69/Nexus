@@ -1990,26 +1990,34 @@ impl ClubLog {
         // any row, but it counts for nothing in the club: no dupe key and no section, so it
         // never stands in the way of a contact that does count.
         let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
+        // ⭐ …and a contact in a mode the contest bans (FT8 at the Illinois QSO Party) keys the
+        // club's dupes like any row, so whether a later contact is a duplicate is what it always
+        // was, but brings no section and no multiplier value: it scores nothing in the club's
+        // file, so it lights no cell on any laptop's board.
+        let credited = counts && !self.ruleset().mode_banned(&row.submode);
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
         if counts && self.dkeys_set.insert(dkey.clone()) {
             let at = self.dkeys_list.len();
             self.dkeys_list.push(dkey);
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
-            for slot in self.mult_slots() {
-                let value = row
-                    .ex
-                    .iter()
-                    .find(|f| f.k == slot)
-                    .map(|f| f.r.trim().to_ascii_uppercase())
-                    .unwrap_or_default();
-                if !value.is_empty() && self.mults_set.insert((slot.to_string(), value.clone())) {
-                    self.mults_list.push((at, slot.to_string(), value));
+            if credited {
+                for slot in self.mult_slots() {
+                    let value = row
+                        .ex
+                        .iter()
+                        .find(|f| f.k == slot)
+                        .map(|f| f.r.trim().to_ascii_uppercase())
+                        .unwrap_or_default();
+                    if !value.is_empty() && self.mults_set.insert((slot.to_string(), value.clone()))
+                    {
+                        self.mults_list.push((at, slot.to_string(), value));
+                    }
                 }
             }
         }
         let sect = row.section.trim().to_ascii_uppercase();
-        if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
+        if credited && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
         let pos = self.position(&row.posid);
@@ -2624,10 +2632,14 @@ impl ClubLog {
     /// The band-board rows (one per known position), stalest-last untouched —
     /// display order is the UI's business. `age` is seconds since last heard.
     pub fn board_rows(&self, now: u64) -> Vec<WireBoardRow> {
-        // Per-position uniq + rate in one pass each.
+        // Per-position uniq + rate in one pass each. A contact in a mode the contest bans is one
+        // of the files' rows and scores nothing, so it is not one that scores here.
+        let rs = self.ruleset();
         let mut uniq: HashMap<&str, u64> = HashMap::new();
         for i in self.earliest_unique_indices() {
-            *uniq.entry(self.rows[i].posid.as_str()).or_insert(0) += 1;
+            if !rs.mode_banned(&self.rows[i].submode) {
+                *uniq.entry(self.rows[i].posid.as_str()).or_insert(0) += 1;
+            }
         }
         let mut rate: HashMap<&str, u64> = HashMap::new();
         for (t, p, _) in &self.arrivals {
@@ -5173,6 +5185,162 @@ mod tests {
              always has"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An Illinois QSO Party club whose CW tent worked K9AAA from Cook and whose second laptop
+    /// then worked `call` from `theirs` on 20 m in the digital mode `sub`.
+    fn ilqp_club_with_digital(call: &str, theirs: &str, sub: &str) -> ClubLog {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "K9AAA",
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + 180,
+            ),
+            1,
+        );
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                1,
+                call,
+                "20m",
+                "DIG",
+                sub,
+                theirs,
+                "MCLN",
+                ILQP_START + 240,
+            ),
+            2,
+        );
+        club
+    }
+
+    /// What a club's FT8 contact comes to: `(rows, QSO points, multipliers, bonus, total)`,
+    /// the counties every laptop's board lights, the second laptop's scoring rows on the band
+    /// board, and the club Cabrillo.
+    #[allow(clippy::type_complexity)] // one tuple, read whole by one assertion
+    fn club_outcome(
+        club: &ClubLog,
+    ) -> ((u64, u32, Option<u32>, u32, u32), Vec<String>, u64, String) {
+        let session = party_session("ilqp", "IL", "MCLN");
+        let s = club.score_with("W9XYZ", session.clone(), 1, &[], &[]);
+        let uniq = club
+            .board_rows(ILQP_START + 300)
+            .iter()
+            .find(|r| r.pos == "bbbb")
+            .map(|r| r.uniq)
+            .expect("the second laptop's line");
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session, &CabrilloEntrant::default())
+            .expect("one entry");
+        (
+            (club.qsos_raw(), s.qso_points, s.mults, s.bonus, s.total),
+            club.worked_mults("QTH"),
+            uniq,
+            cab,
+        )
+    }
+
+    /// ⭐ **A club's FT8 contact is in the club's log and file, and scores nothing** — no points,
+    /// no county on any laptop's board, no count on its position's line. The sponsor: *"FT4 and
+    /// FT8 contacts will receive no contact credit."*
+    ///
+    /// Measured before (the readiness audit, two laptops over loopback): K9AAA on CW from Cook
+    /// and an FT8 K9FT8 from Lake gave a club line and CLAIMED-SCORE of 8 where the credited
+    /// score is 2, and Lake lit on every laptop's board.
+    #[test]
+    fn a_clubs_ft8_contact_is_filed_and_scores_nothing() {
+        let (numbers, board, uniq, cab) =
+            club_outcome(&ilqp_club_with_digital("K9FT8", "LAKE", "FT8"));
+        assert_eq!(
+            (numbers, board, uniq),
+            ((2, 2, Some(1), 0, 2), vec!["COOK".to_string()], 0),
+            "((rows, points, multipliers, bonus, total), the board, the FT8 laptop's scoring rows)"
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 2\n"), "{cab}");
+        assert!(
+            cab.contains(" W9XYZ 599 MCLN K9FT8 599 LAKE\n"),
+            "the contact is still a line of the club's file:\n{cab}"
+        );
+        // CONTROL: the same contact on RTTY scores (2 + 2) × 2 and lights Lake.
+        let (numbers, board, uniq, cab) =
+            club_outcome(&ilqp_club_with_digital("K9FT8", "LAKE", "RTTY"));
+        assert_eq!(
+            (numbers, board, uniq),
+            (
+                (2, 4, Some(2), 0, 8),
+                vec!["COOK".to_string(), "LAKE".to_string()],
+                1
+            )
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+    }
+
+    /// ⭐ **A Winter Field Day club's FT8 contact brings its section to no laptop's board.** The
+    /// sponsor allows *"All modes, except WSJT modes"*, so the contact is in the club's rows and
+    /// scores nothing, and the sections every position is sent leave its section out. CONTROL:
+    /// ARRL Field Day bans no mode, and the same rows bring both sections and both contacts'
+    /// points.
+    #[test]
+    fn a_winter_field_day_clubs_ft8_contact_brings_no_section() {
+        let club_of = |event: FdEvent| {
+            let mut club = ClubLog::new(event, "TEST CLUB");
+            club.merge(&wq("aaaa", 1, "W1AW", "20m", "CW", "CT", 100), 1);
+            // `wq` gives a digital row FT8, as an FT8 position's row is.
+            club.merge(&wq("bbbb", 1, "K1ABC", "20m", "DIG", "EMA", 200), 2);
+            club
+        };
+        let wfd = club_of(FdEvent::WinterFd);
+        assert_eq!(
+            (
+                wfd.qsos_raw(),
+                wfd.sections(),
+                wfd.scored("W9ABC", "2O", "WI", 1, &[]).0
+            ),
+            (2, &["CT".to_string()][..], 2),
+            "(rows, the sections sent, QSO points): W1AW's CW contact alone"
+        );
+        let arrl = club_of(FdEvent::ArrlFd);
+        assert_eq!(
+            (
+                arrl.qsos_raw(),
+                arrl.sections(),
+                arrl.scored("W9ABC", "2A", "WI", 1, &[]).0
+            ),
+            (2, &["CT".to_string(), "EMA".to_string()][..], 4)
+        );
+    }
+
+    /// ⭐ **…and a bonus station a club worked only on FT4 adds nothing.** Measured before (the
+    /// readiness audit): an FT8-only W9OAB took a club line from 32 to 150, its points, its
+    /// county and the 100.
+    #[test]
+    fn a_bonus_station_a_club_worked_only_on_ft4_adds_nothing() {
+        let (numbers, board, _, cab) =
+            club_outcome(&ilqp_club_with_digital("W9OAB", "ADAM", "FT4"));
+        assert_eq!(
+            (numbers, board),
+            ((2, 2, Some(1), 0, 2), vec!["COOK".to_string()])
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 2\n"), "{cab}");
+        // CONTROL: worked on RTTY, W9OAB is its 2 points, Adams and the 100.
+        let (numbers, board, _, cab) =
+            club_outcome(&ilqp_club_with_digital("W9OAB", "ADAM", "RTTY"));
+        assert_eq!(
+            (numbers, board),
+            (
+                (2, 4, Some(2), 100, 108),
+                vec!["ADAM".to_string(), "COOK".to_string()]
+            )
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 108\n"), "{cab}");
     }
 
     /// `call`'s record in an ADIF file.
