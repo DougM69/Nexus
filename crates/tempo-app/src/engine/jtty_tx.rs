@@ -1722,6 +1722,29 @@ mod tests {
         );
     }
 
+    /// A line break ends a message even when what is committed leaves the message open (a live
+    /// commit): the line before it goes with end-of-message, the line after it open
+    /// (`execute_jtty_tx`: every line but the last ends its message).
+    #[test]
+    fn a_line_break_ends_a_message_even_in_a_live_commit() {
+        let e = jtty_engine(true);
+        live_start(&e, "", "").unwrap();
+        live_commit(&e, "LINE ONE\nLINE TWO", "", JttyCommit::Flush).unwrap();
+        let segs: Vec<(String, bool)> = engine_lock(&e)
+            .jtty_tx
+            .queue
+            .iter()
+            .map(|s| (s.text.clone(), s.last))
+            .collect();
+        assert_eq!(
+            segs,
+            vec![
+                ("LINE ONE".to_string(), true),
+                ("LINE TWO".to_string(), false)
+            ]
+        );
+    }
+
     /// WSJT-X's live commits: while typing, nothing until five words are complete beyond the
     /// three held back, then those five; after a pause, all of it, the word in progress too.
     #[test]

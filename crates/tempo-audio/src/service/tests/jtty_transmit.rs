@@ -234,12 +234,13 @@ fn what_the_loop_plays_reads_back_as_sent_on_one_key() {
 }
 
 /// STOP DRAIN, at the loop: Stop TX (the universal halt, Esc's too), TX Off, leaving the JTTY
-/// screen (for PSK, the same section, and for FT8), and the loop losing the radio (a CAT hold)
-/// each cut a JTTY transmission on the next tick — the output flushed, PTT down — and nothing more
-/// is played after.
+/// screen (for PSK, the same section, and for FT8), and the loop no longer owning the radio (a
+/// radio switch waiting for its handoff: `may_key`, the one gate the engine cannot see) each cut a
+/// JTTY transmission on the next tick — the output flushed, PTT down — and nothing more is played
+/// after.
 #[test]
 fn every_stop_cuts_jtty_on_the_next_tick() {
-    for stop in ["halt", "tx off", "psk screen", "ft8 screen", "cat hold"] {
+    for stop in ["halt", "tx off", "psk screen", "ft8 screen", "handoff"] {
         let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
         jtty_tx::send_text(&engine, "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ W9XYZ PSE K", "").unwrap();
         let mut t = 100.0;
@@ -252,7 +253,7 @@ fn every_stop_cuts_jtty_on_the_next_tick() {
                 "tx off" => e.set_tx_enabled(false),
                 "psk screen" => e.set_operating_mode("keyboard", false),
                 "ft8 screen" => e.set_operating_mode("digital", false),
-                _ => state.cat_hold_active = true,
+                _ => state.handoff_deferred = true,
             }
         }
         let (played, flushed) = (backend.played.len(), backend.flush_calls);
@@ -350,5 +351,123 @@ fn a_psk_over_typed_ahead_never_keys_from_the_jtty_screen() {
                 "control: it keys on the PSK screen"
             );
         }
+    }
+}
+
+/// LAB SUPPORT, run by hand: `cargo test -p tempo-audio --features device,serial --lib --
+/// --ignored dump_what_the_loop_plays_for_the_lab` with `JTTY_LAB_DIR` set. What the loop plays
+/// for each scene below, through the test door, written as a 12 kHz 16-bit WAV (a second of
+/// silence before, three after) for the parity lab to decode with stock WSJT-X `rjtty` and with
+/// Nexus's own decoder: the transmitter's real output, not a re-encoding of it. Without the
+/// variable it writes nothing.
+#[test]
+#[ignore]
+fn dump_what_the_loop_plays_for_the_lab() {
+    let Ok(dir) = std::env::var("JTTY_LAB_DIR") else {
+        return;
+    };
+    type Step = Box<dyn Fn(&Arc<Mutex<Engine>>)>;
+    let send = |text: &'static str| -> Step {
+        Box::new(move |e| {
+            jtty_tx::send_text(e, text, "W1AW").unwrap();
+        })
+    };
+    let fkey = |n: u8| -> Step {
+        Box::new(move |e| {
+            jtty_tx::send_fkey(e, n, "W1AW").unwrap();
+        })
+    };
+    let live = |typed: &'static str, flush: bool| -> Step {
+        Box::new(move |e| {
+            let how = if flush {
+                jtty_tx::JttyCommit::Flush
+            } else {
+                jtty_tx::JttyCommit::Advance
+            };
+            jtty_tx::live_commit(e, typed, "W1AW", how).unwrap();
+        })
+    };
+    // (name, steps, each run at the time given, ms from the start)
+    let scenes: Vec<(&str, Vec<(f64, Step)>)> = vec![
+        ("send", vec![(0.0, send("CQ CQ DE W9XYZ W9XYZ K"))]),
+        (
+            "queue",
+            vec![
+                (0.0, send("CQ W9XYZ")),
+                (0.0, fkey(2)),
+                (0.0, send("QRZ? %H DE %M")),
+            ],
+        ),
+        ("fkeys", (1..=8).map(|n| (0.0, fkey(n))).collect()),
+        (
+            "long_line",
+            vec![(
+                0.0,
+                send(
+                    "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ PSE K THIS IS A LONGER LINE THAN EIGHTY CHARS \
+                     SO IT SPLITS\nTU 73",
+                ),
+            )],
+        ),
+        (
+            "live",
+            vec![
+                (
+                    0.0,
+                    Box::new(|e: &Arc<Mutex<Engine>>| {
+                        jtty_tx::live_start(e, "HELLO THERE ", "W1AW").unwrap();
+                    }) as Step,
+                ),
+                (9_000.0, live("HOW ARE YOU ", true)),
+                (
+                    14_000.0,
+                    Box::new(|e: &Arc<Mutex<Engine>>| {
+                        jtty_tx::sign_off(e, "", "W1AW").unwrap();
+                    }) as Step,
+                ),
+            ],
+        ),
+        // Past 16 frames: WSJT-X 3.3.0-beta1's receiver keeps 16 frames of one message.
+        (
+            "live_long",
+            vec![
+                (
+                    0.0,
+                    Box::new(|e: &Arc<Mutex<Engine>>| {
+                        jtty_tx::live_start(e, "HELLO THERE ", "W1AW").unwrap();
+                    }) as Step,
+                ),
+                (24_000.0, live("HOW ARE YOU ", true)),
+                (
+                    30_000.0,
+                    Box::new(|e: &Arc<Mutex<Engine>>| {
+                        jtty_tx::sign_off(e, "", "W1AW").unwrap();
+                    }) as Step,
+                ),
+            ],
+        ),
+    ];
+    for (name, steps) in scenes {
+        let (engine, mut state, mut backend, mut rig, _log) = jtty_scene(true);
+        let mut t = 100.0;
+        for (at, step) in &steps {
+            step_to(
+                &engine,
+                &mut state,
+                &mut backend,
+                &mut rig,
+                &mut t,
+                100.0 + at,
+            );
+            step(&engine);
+        }
+        let until = t + 120_000.0;
+        step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, until);
+        assert!(!rig.keyed, "{name}: still keyed");
+        let mut pcm = vec![0i16; 12_000];
+        pcm.extend(backend.played.iter().map(|s| (s * 20_000.0) as i16));
+        pcm.extend(vec![0i16; 36_000]);
+        let path = std::path::Path::new(&dir).join(format!("{name}.wav"));
+        tempo_core::wavfile::write_wav_i16(&path, &pcm, 12_000).unwrap();
     }
 }
