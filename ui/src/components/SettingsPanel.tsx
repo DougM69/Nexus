@@ -12,7 +12,7 @@ import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
-import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -940,8 +940,9 @@ const CONFIRMATION_EXAMPLES = {
  * platform — same rule as `LOGGER_EXAMPLES`. A device name is whatever the OS enumerated, so a
  * "localised" `COM16` or `/dev/cu.usbserial-1420` names no port on any machine; the prose
  * around them ("Select or type, e.g. …") is a catalog entry that interpolates one of these.
+ * The setup wizard's PTT Serial Port field reads them too.
  */
-const RIG_EXAMPLES = {
+export const RIG_EXAMPLES = {
   macSerialPort: '/dev/cu.usbserial-1420',
   serialPort: 'COM16',
 } as const
@@ -5311,6 +5312,14 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
+                {/* A radio Hamlib cannot key over CAT, as you look and whatever the method: the
+                    setup wizard's sentence under its keying choice. Not over OmniRig (its own rig
+                    file keys the radio) or the Icom network connection, as checkRigForm's
+                    save-time warning is not. */}
+                {form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' &&
+                  NO_CAT_PTT_TRANSCEIVERS.includes(form.rigModel) && (
+                    <span className="settings-hint">{t('settings.rigControl.ptt.noCatPtt')}</span>
+                  )}
               </label>
 
               {/* #381: which input a CAT key-down selects. Offered where Rust's `cat_ptt_mode` can

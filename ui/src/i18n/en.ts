@@ -6143,6 +6143,8 @@ export const EN = {
   // ⚠️ `{{port}}` is the device name exactly as the OS enumerated it (`COM5`,
   // `/dev/cu.usbserial-A`), and `/dev/cu.…`, CAT, PTT and None/VOX are the settings' own
   // vocabulary — every one of them names a thing the operator has to pick by that name.
+  // `noCatPtt` names PTT Method's own choices (VOX, Serial RTS, Serial DTR): use the words the
+  // catalog gives those options.
   'settings.radio.check.noPort': 'No serial port chosen — a rig model is set, so CAT needs a port.',
   'settings.radio.check.portMissing':
     '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
@@ -6150,6 +6152,8 @@ export const EN = {
     '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
+  'settings.radio.check.noCatPtt':
+    "Hamlib can't key this radio over CAT, so PTT on CAT won't put it in transmit. Choose VOX if your interface keys the radio on audio, or Serial RTS or DTR if it keys on a serial line.",
 
   // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
   // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
@@ -6498,6 +6502,11 @@ export const EN = {
   'settings.rigControl.ptt.rts': 'Serial RTS',
   'settings.rigControl.ptt.dtr': 'Serial DTR',
   'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  // Under PTT Method, whatever the method, on a radio Hamlib cannot key over CAT; the setup wizard
+  // shows the same sentence under its keying choice. VOX, Serial RTS and Serial DTR are the
+  // options' own names above; SignaLink is an interface.
+  'settings.rigControl.ptt.noCatPtt':
+    'Hamlib has no way to key this radio over CAT. Pick how your interface keys it: VOX if it keys on audio, like a SignaLink, or Serial RTS or Serial DTR if it keys on a serial line.',
   // #381. Front/Mic and Rear/Data name the radio's two audio inputs and are prose; CAT, PTT, VOX,
   // USB, the jack labels DATA and ACC, and SignaLink (an interface) are invariant tokens.
   'settings.rigControl.txAudio.label': 'Transmit audio source (CAT PTT)',
@@ -7079,6 +7088,13 @@ export const EN = {
     'The port answered, but the exact model is a guess ({{radio}} responded). Pick your radio so its real command set is used.',
   'setup.rig.model.confirm':
     'Confirm the exact model — fixed-rate rigs get their baud set automatically.',
+  // The keying choice on a radio Hamlib cannot key over CAT. The options are PTT Method's own
+  // (settings.rigControl.ptt.vox/rts/dtr) and so is the note under them (ptt.noCatPtt); each blurb
+  // says in one line what its option means. RTS, DTR, SignaLink and Digirig Mobile are tokens.
+  'setup.rig.keying.title': 'How does your interface key the radio?',
+  'setup.rig.keying.vox.blurb': 'It keys the radio when it hears audio, like a SignaLink.',
+  'setup.rig.keying.rts.blurb': "It keys the radio on the serial port's RTS line, like a Digirig Mobile.",
+  'setup.rig.keying.dtr.blurb': "It keys the radio on the serial port's DTR line.",
   'setup.rig.conn.serial.label': 'USB / Serial',
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
