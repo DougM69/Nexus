@@ -1683,7 +1683,7 @@ export const ES: PartialCatalog = {
   "contestLogger.size.smaller": "Texto más pequeño",
   "contestLogger.size.larger": "Texto más grande",
   "contestLogger.recent.title": "Last contacts",
-  "contestLogger.satellite.note": "{{bird}} is picked on the Satellites screen. Log its pass contacts there: this window logs them as ordinary contacts.",
+  "contestLogger.satellite.note": "{{bird}} está elegido en la pantalla Satélites. Anota allí los contactos de su pasada: esta ventana los anota como contactos normales.",
   "contestScreen.entry.title": "Anotar un contacto",
   "contestScreen.popOut.aria": "Pantalla de concurso en ventana aparte",
   "contestScreen.popOut.title": "Abrir la pantalla de concurso en su propia ventana, para otro monitor: el interruptor del concurso, los controles, el tablero del club, la puntuación, las secciones, las bonificaciones y el log. Mientras corre un concurso, su línea de log y tus últimos contactos se quedan aquí.",
