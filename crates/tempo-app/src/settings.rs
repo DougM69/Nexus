@@ -2822,17 +2822,17 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
-    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
-    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
-    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
-    /// confirmation source — an upload here never earns DXCC/WAS credit.
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
     /// it (field report, 2026-09-01). Empty for the single-profile majority, whose
-    /// requests are byte-identical to before.
+    /// requests carry no nickname at all.
     #[serde(default)]
     pub eqsl_qth_nickname: String,
+    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
+    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
+    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
+    /// confirmation source — an upload here never earns DXCC/WAS credit.
     pub hrdlog_upload: bool,
     /// Auto-push each logged QSO to World Radio League (`POST /v1/contacts`).
     /// Flipped on by saving a WRL API key, off by clearing it — the credential IS

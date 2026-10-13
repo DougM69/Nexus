@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own letter beside L, C and E. The eQSL tooltips, in all five languages, no longer say WAZ turns
   eQSL away: ARRL awards do not accept it, CQ accepts it for WAZ and WPX from AG members, and Nexus
   does not count it toward WAZ yet. The FAQ says the same.
+- **The manual's eQSL pages match the program.** They said ClubLog and eQSL have no per-row push
+  and need a full sync to send a contact again (ClubLog has its CL button on each Logbook row, eQSL
+  has Push to eQSL in Awards ▸ Confirmations, and no whole-log eQSL upload exists), that an eQSL
+  download must start with "ADIF" (it no longer has to), and counted four automatic uploads as
+  three.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never

@@ -164,7 +164,7 @@ Every upload names Nexus in its ADIF header (`PROGRAMID` and `PROGRAMVERSION`), 
 
 **InBox import (inbound confirmation sync):** a two-step HTTP flow:
 1. Fetch the `DownloadInBox.cfm` HTML, confirm the "Your ADIF log file has been built" marker, and extract the `.adi` download link.
-2. Fetch the `.adi` file; validate it starts with `ADIF`, contains "eqsl.cc DownloadInBox", includes `<eoh>`, and ends with `<eor>` (truncation detection). All URLs are forced to HTTPS and pinned to `*.eqsl.cc` to prevent a compromised redirect from substituting a forged confirmation payload.
+2. Fetch the `.adi` file; validate that it does not start like an HTML page, that its header carries eQSL's `PROGRAMID` ("eQSL.cc DownloadInBox") and `<eoh>`, and that it ends with `<eor>` (truncation detection). All URLs are forced to HTTPS and pinned to `*.eqsl.cc` to prevent a compromised redirect from substituting a forged confirmation payload.
 
 The incremental cursor is a `YYYYMMDDHHMM` timestamp (RcvdSince), floored to the minute. A fresh install performs a full InBox pull on first sync. The cursor belongs to one eQSL account, its username and its QTH Nickname: changing either makes the next sync read that account's whole InBox.
 
@@ -230,7 +230,7 @@ Every QSO record carries a per-source `UploadOutcome` stamped at upload time and
 
 The connection event log (accessible from Settings → Logging & Connectors ▸ Connections) holds the last 200 events in a rolling buffer, covering every credential save, sync download, upload dispatch, and service rejection for all five connectors. Each event carries a timestamp, connector name, severity, and a sanitized message (absolute paths redacted to basenames, truncated to 200 characters).
 
-A per-row push button (↥) in the Logbook table lets you re-push any individual QSO to QRZ on demand without re-syncing the entire log. ClubLog and eQSL have no per-row push button; re-uploading to those services requires triggering a full sync.
+Per-row push buttons in the Logbook table re-push one QSO on demand without re-syncing the entire log: ↥ for QRZ, CL for ClubLog, HL for HRDLog.net and WRL for World Radio League. eQSL has none in the Logbook; Awards ▸ Confirmations offers **Push to eQSL** on a contact that was never uploaded to eQSL or whose upload bounced. There is no whole-log eQSL upload: saving the eQSL password queues the contacts not yet sent, as many as the upload queue has room for, one at a time.
 
 ---
 
