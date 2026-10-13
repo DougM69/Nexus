@@ -28,7 +28,7 @@ import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
-import { contestDomain, type DomainGroup } from '../features/contestDomains'
+import { contestDomain, multCode, multTotal, type DomainGroup } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
@@ -960,18 +960,22 @@ type CellWorked = 'own' | 'club' | 'none'
 
 function MultiplierBoard({ board }: { board: ContestBoard }) {
   const domain = contestDomain(board.domain)
+  // Each value as the multiplier it counts as: a place its list names under two spellings
+  // (`ContestDomain.same`, ILQP's PE and PEI) lights both cells and counts once.
   const workedSet = useMemo(
-    () => new Set(board.worked.map((v) => v.trim().toUpperCase())),
-    [board.worked],
+    () => new Set(board.worked.map((v) => multCode(domain, v))),
+    [board.worked, domain],
   )
   // The club's, this laptop's included — present only while club sync runs and the host sends it.
   const clubSet = useMemo(
-    () => new Set((board.club ?? []).map((v) => v.trim().toUpperCase())),
-    [board.club],
+    () => new Set((board.club ?? []).map((v) => multCode(domain, v))),
+    [board.club, domain],
   )
   const club = clubSet.size > 0
-  const cellWorked = (code: string): CellWorked =>
-    workedSet.has(code) ? 'own' : clubSet.has(code) ? 'club' : 'none'
+  const cellWorked = (code: string): CellWorked => {
+    const mult = multCode(domain, code)
+    return workedSet.has(mult) ? 'own' : clubSet.has(mult) ? 'club' : 'none'
+  }
   // Field Day's board IS the sections board, down to its strings — the block an
   // operator has been reading for releases. Nothing about it moves here.
   const isSections = board.domain === 'fd_sections' || board.domain === 'arrl_sections'
@@ -984,9 +988,11 @@ function MultiplierBoard({ board }: { board: ContestBoard }) {
           values: [...new Set([...workedSet, ...clubSet])].sort().map((c) => ({ code: c, name: c })),
         },
       ]
-  const total = domain ? domain.total : groups[0].values.length
+  const total = domain ? multTotal(domain) : groups[0].values.length
   const countOf = (pick: (w: CellWorked) => boolean) =>
-    groups.reduce((n, g) => n + g.values.filter((v) => pick(cellWorked(v.code))).length, 0)
+    new Set(
+      groups.flatMap((g) => g.values.filter((v) => pick(cellWorked(v.code))).map((v) => multCode(domain, v.code))),
+    ).size
   const workedCount = countOf((w) => w !== 'none')
   const ownCount = countOf((w) => w === 'own')
   const count = club

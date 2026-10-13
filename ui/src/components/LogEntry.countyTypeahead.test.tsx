@@ -156,6 +156,20 @@ describe('the exchange type-ahead', () => {
     ])
   })
 
+  it('LOGS Prince Edward Island, named in full, as the province: PEI', async () => {
+    // The list holds PE and PEI, both Prince Edward Island — one province, so the name is not
+    // ambiguous.
+    renderStrip()
+    fireEvent.change(callBox(), { target: { value: 'VY2AB' } })
+    fireEvent.change(qthBox(), { target: { value: 'Prince Edward Island' } })
+    fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    await vi.waitFor(() => expect(api.contestLogManual).toHaveBeenCalled())
+    expect(api.contestLogManual.mock.calls[0][1]).toEqual([
+      ['RST', '599'],
+      ['QTH', 'PEI'],
+    ])
+  })
+
   it('costs no IPC: the whole type-ahead is a lookup on data already in hand', () => {
     renderStrip()
     for (const v of ['C', 'CO', 'COO', 'Cook', 'st clair', 'Ma']) {

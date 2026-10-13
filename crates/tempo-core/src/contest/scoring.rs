@@ -210,16 +210,25 @@ impl PointsRule {
 /// ⭐ **for an all-digit value, read as its number**, so a CQ zone copied as `05` and one
 /// copied as `5` are one multiplier and not two.
 ///
-/// ⚠️ This is the one normalisation applied anywhere to a copied exchange value, and it
-/// is applied HERE rather than at copy time on purpose: `FieldSpec`'s own header forbids
-/// rewriting what a station actually sent, and `05` is what the operator logged and what
-/// the Cabrillo line must carry. What a bucket is keyed by is a different question from
-/// what was copied. It touches nothing but digits, so no county or section code
-/// (`SB`/`SBEN`, `BEE`, `4U`) is affected — the closest thing to a hazard would be a
-/// domain whose codes are numeric and leading-zero-significant, and no researched
-/// contest has one.
-fn canonical_mult_value(raw: &str) -> String {
+/// ⭐ **…and one province sent in either of its spellings is one bucket**: a value of a
+/// domain listing two spellings of one place counts as the spelling [`SAME_PROVINCE`] names.
+///
+/// ⚠️ These are the only normalisations applied anywhere to a copied exchange value, and
+/// they are applied HERE rather than at copy time on purpose: `FieldSpec`'s own header
+/// forbids rewriting what a station actually sent, and `05` (or `PE`) is what the operator
+/// logged and what the Cabrillo line must carry. What a bucket is keyed by is a different
+/// question from what was copied. The digit fold touches nothing but digits, so no county
+/// or section code (`SB`/`SBEN`, `BEE`, `4U`) is affected — the closest thing to a hazard
+/// would be a domain whose codes are numeric and leading-zero-significant, and no
+/// researched contest has one. The province fold touches only the domain it names.
+fn canonical_mult_value(raw: &str, domain: Option<&str>) -> String {
     let v = raw.trim().to_ascii_uppercase();
+    if let Some((_, _, sponsors)) = SAME_PROVINCE
+        .iter()
+        .find(|(d, spelling, _)| domain == Some(*d) && v == *spelling)
+    {
+        return sponsors.to_string();
+    }
     if v.len() > 1 && v.bytes().all(|b| b.is_ascii_digit()) {
         let stripped = v.trim_start_matches('0');
         return if stripped.is_empty() {
@@ -230,6 +239,21 @@ fn canonical_mult_value(raw: &str) -> String {
     }
     v
 }
+
+/// ⭐ **One province, two spellings, one multiplier** — `(domain, a spelling, the one it counts
+/// as)`.
+///
+/// The Illinois QSO Party publishes no exchange code list. The codes its own records table
+/// carries are the evidence, and they spell Newfoundland `NF` and Prince Edward Island `PEI`;
+/// `il_mults` lists Canada Post's `NL` and `PE` beside them because many loggers send those,
+/// so a VE station may send either. *"VE provinces"* count once each, so a multiplier bucket
+/// is keyed by the sponsor's spelling ([`canonical_mult_value`]); the rules data is left as it
+/// is. Keyed by DOMAIN: in CQ WW RTTY's list `NF` and `LB` are two multipliers, and every other
+/// list carries one spelling of each province.
+///
+/// The multiplier board folds its cells by the same table (`ui/src/features/contestDomains.ts`),
+/// held to this one by a test below.
+const SAME_PROVINCE: &[(&str, &str, &str)] = &[("il_mults", "NL", "NF"), ("il_mults", "PE", "PEI")];
 
 /// The points a table gives one relation on one band: a row naming the band wins over a
 /// row naming every band, so a `bands: []` arm can be a floor under band-specific ones.
@@ -415,7 +439,7 @@ impl Scoring {
                         .rx
                         .iter()
                         .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
-                        .map(|v| canonical_mult_value(&v.raw)),
+                        .map(|v| canonical_mult_value(&v.raw, v.domain)),
                     MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
                     MultSource::Prefix => row.prefix.map(|p| p.to_string()),
                 };
@@ -1218,6 +1242,46 @@ mod tests {
         ] {
             assert_eq!(FD_POINTS.for_mode(m), want, "mode {m:?}");
         }
+    }
+
+    /// ⭐ **The board folds the cells the scorer folds**: `ui/src/features/contestDomains.ts`
+    /// lights and counts one province under either spelling by its own table, which must be
+    /// this one ([`SAME_PROVINCE`]), or the board and the claimed score disagree.
+    #[test]
+    fn the_boards_province_spellings_are_the_scorers() {
+        let ts = include_str!("../../../../ui/src/features/contestDomains.ts");
+        let decl = "const IL_MULTS_SAME: Record<string, string> = {";
+        let start = ts
+            .find(decl)
+            .expect("contestDomains.ts declares IL_MULTS_SAME")
+            + decl.len();
+        let body = &ts[start..start + ts[start..].find('}').expect("the table closes")];
+        let mut board: Vec<(String, String)> = body
+            .split(',')
+            .filter(|kv| !kv.trim().is_empty())
+            .map(|kv| {
+                let (k, v) = kv.split_once(':').expect("code: 'code'");
+                (
+                    k.trim().to_string(),
+                    v.trim().trim_matches('\'').to_string(),
+                )
+            })
+            .collect();
+        board.sort();
+        assert_eq!(
+            board.len(),
+            2,
+            "parsed {board:?} — the parser is broken, not the mirror"
+        );
+        let mut scorer: Vec<(String, String)> = SAME_PROVINCE
+            .iter()
+            .filter(|(d, _, _)| *d == "il_mults")
+            .map(|(_, a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        scorer.sort();
+        assert_eq!(board, scorer);
+        // …and the board's ILQP list is the one that carries it.
+        assert_eq!(ts.matches("same: IL_MULTS_SAME").count(), 1);
     }
 
     /// An empty log scores zero rather than the power tier — `0 × 5` is still 0, but a

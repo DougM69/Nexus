@@ -99,6 +99,28 @@ describe('the club-wide multiplier board', () => {
     expect(board.querySelector('[data-board-legend]')).not.toBeNull()
   })
 
+  it('lights one province under either of its spellings, and counts it once', () => {
+    // The Illinois QSO Party's list carries Canada Post's PE and NL beside the sponsor's PEI and
+    // NF: this laptop worked a PE, another position an NF.
+    render(
+      <MultiplierBoards
+        boards={[
+          { id: 'mult', slot: 'QTH', domain: 'il_mults', scope: 'perLog', worked: ['PE'], club: ['PE', 'NF'] },
+        ]}
+      />,
+    )
+    const board = screen.getByLabelText('mult multiplier board')
+    expect(['PE', 'PEI', 'NL', 'NF'].map((c) => cell(board, c).dataset.worked)).toEqual([
+      'own',
+      'own',
+      'club',
+      'club',
+    ])
+    expect(board.textContent).toContain('2/64 worked · 1 on this laptop')
+    // CONTROL: another province is its own cell.
+    expect(cell(board, 'NS').dataset.worked).toBe('none')
+  })
+
   it('CONTROL: a board with no club list is this laptop’s own, exactly as before', () => {
     render(<MultiplierBoards boards={[COUNTY({ worked: ['COOK'] })]} />)
     const board = screen.getByLabelText('county multiplier board')
