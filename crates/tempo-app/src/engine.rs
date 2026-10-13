@@ -29616,6 +29616,8 @@ mod tests {
         killed(|e| e.set_tx_enabled(false));
         // 4. Leaving the section.
         killed(|e| e.set_operating_mode("phone", false));
+        // …or staying in it while JTTY becomes the modem: PSK must not key from the JTTY screen.
+        killed(|e| e.set_operating_mode("jtty", false));
         // 5. A tune carrier taking the transmitter — the PER-TICK predicate.
         killed(|e| {
             e.set_tune(true);
