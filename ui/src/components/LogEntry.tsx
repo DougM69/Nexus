@@ -671,6 +671,10 @@ export function LogEntry({
   // that sends one needed it retyped on every contact. Untouched, not WRITTEN: a report
   // written here is the mode this contact was logged in, and it stayed in the box after a
   // move to another one.
+  //
+  // ⭐ ONCE PER CONTACT. A contact this strip logged was cleared for as its log landed
+  // (`logIt` moves `fdSeenLen` on past its rows), so the snapshot that first shows it clears
+  // nothing more here. A strip that did not log it clears here, once.
   const fdLogLen = fieldDay?.log?.length ?? 0
   const fdSeenLen = useRef(fdLogLen)
   useEffect(() => {
@@ -1790,6 +1794,12 @@ export function LogEntry({
       // shows, so Enter pressed in both windows at once logs the contact once (the engine refuses
       // the second). With it closed nothing is named and the commands get what they always got.
       const entry = share.sharing ? await share.claim(shareContent) : undefined
+      // ⭐ THE STRIP THAT LOGS CLEARS ONCE, as its log lands (below), and the rows its log adds
+      // are cleared for then: `fdSeenLen` moves on past them. The snapshot that first showed them
+      // cleared again, emptying a county or report typed for the next contact in between (a fast
+      // typist, or call history filling it from the next call). Counted from what this strip had
+      // seen as it logged, so rows a snapshot showed before the log answered count once.
+      const seenAtLog = fdSeenLen.current
       if (lineSlot && lineRead?.ok) {
         const exchangeWith = (county: string) =>
           ex.map(([k, v]) => [k, k === lineSlot.key ? county : v] as [string, string])
@@ -1831,6 +1841,7 @@ export function LogEntry({
           if (logged.length > 0) {
             // Logged through the shared entry: this strip's changes from here are the next contact's.
             if (entry) share.logged()
+            fdSeenLen.current = Math.max(fdSeenLen.current, seenAtLog + logged.length)
             endFill(true)
             setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
             reset()
@@ -1866,6 +1877,7 @@ export function LogEntry({
           'success',
         )
         if (entry) share.logged()
+        fdSeenLen.current = Math.max(fdSeenLen.current, seenAtLog + 1)
         endFill(true)
         setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
         reset()

@@ -633,3 +633,207 @@ describe('a change made in one window before it shows the log never brings the l
     expect(callIn('logger').value, 'the next call, logger window').toBe('K9CCC')
   })
 })
+
+// THE WINDOW THAT LOGGED CLEARS ONCE. Its after-log clear runs as its log lands; the snapshot that
+// first shows the contact there clears nothing more, so the next contact typed (or filled from call
+// history) in between stays. A window that did not log clears when it first sees the contact, once.
+describe('the next contact typed in the window that logged, before its next snapshot, stays', () => {
+  /** What a window's strip shows: the call, the report and the county. */
+  const shown = (w: Win) => ({ call: callIn(w).value, rst: rstIn(w).value, qth: qthIn(w).value })
+  const theNext = { call: 'K9CCC', rst: '55', qth: 'COOK' }
+
+  it('logger window closed: the next call, report and county typed straight after Enter stay, and log', async () => {
+    engine.open = false
+    open(false)
+    await settle()
+    type(callIn('main'), 'K9BBB')
+    type(rstIn('main'), '57')
+    type(qthIn('main'), 'LAKE')
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9BBB'), 'CONTROL: logged as typed').toEqual([[['RST', '57'], ['QTH', 'LAKE']]])
+    // No snapshot has shown the contact yet: the operator types the next one.
+    type(callIn('main'), 'K9CCC')
+    type(rstIn('main'), '55')
+    type(qthIn('main'), 'COOK')
+    await settle()
+    poll('main')
+    await settle()
+    expect(shown('main'), 'the next contact, after the snapshot').toEqual({ call: 'K9CCC', rst: '55', qth: 'COOK' })
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9CCC'), 'the next contact, as typed for it').toEqual([[['RST', '55'], ['QTH', 'COOK']]])
+  })
+
+  /** K9BBB logged with Enter in `w`, then the next contact typed there before `w` polls. */
+  async function theNextContactTypedIn(w: Win) {
+    await aContactInProgress(w)
+    enter(w)
+    await settle()
+    await settle()
+    expect(loggedAs('K9BBB'), 'CONTROL: logged as typed').toEqual([[['RST', '57'], ['QTH', 'LAKE']]])
+    type(callIn(w), 'K9CCC')
+    type(rstIn(w), '55')
+    type(qthIn(w), 'COOK')
+    await settle()
+    poll(w)
+    await settle()
+    expect(shown(w), `${w}: the next contact, at its first snapshot after the contact`).toEqual(theNext)
+    await pollsSettle()
+    for (const v of ['main', 'logger'] as const) {
+      expect(shown(v), `${v}: the next contact, after the polls`).toEqual(theNext)
+    }
+    enter(w)
+    await settle()
+    await settle()
+    expect(loggedAs('K9CCC'), 'the next contact, as typed for it').toEqual([[['RST', '55'], ['QTH', 'COOK']]])
+  }
+
+  it('logger window open, Enter in the main window: the same, and the logger window shows them', async () => {
+    await theNextContactTypedIn('main')
+  })
+
+  it('logger window open, Enter in the logger window: the same, and the main window shows them', async () => {
+    await theNextContactTypedIn('logger')
+  })
+
+  it('logger window closed: the county call history fills for the next call stays, marked, and logs', async () => {
+    engine.session = (log) => ({ ...ilqp(log), assistanceOn: ['Call history'] }) as FieldDayStatus
+    api.getCallHistory.mockResolvedValueOnce({
+      contest: 'ilqp',
+      fileName: 'il-2026.txt',
+      entries: { K9CCC: { Loc1: 'COOK' } },
+    })
+    engine.open = false
+    open(false)
+    await settle()
+    // A filled box's label also says where it came from ("history").
+    const qth = () => inWindow('main').getByLabelText(/County \/ State/) as HTMLInputElement
+    const filled = () => ({ qth: qth().value, marked: qth().classList.contains('le-fd-input-history') })
+    type(callIn('main'), 'K9BBB')
+    type(qth(), 'LAKE')
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9BBB'), 'CONTROL: logged as typed').toEqual([[['RST', '59'], ['QTH', 'LAKE']]])
+    type(callIn('main'), 'K9CCC')
+    await settle()
+    expect(filled(), 'CONTROL: call history filled the next county').toEqual({ qth: 'COOK', marked: true })
+    poll('main')
+    await settle()
+    expect(filled(), 'the filled county, after the snapshot').toEqual({ qth: 'COOK', marked: true })
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9CCC'), 'the next contact, with the filled county').toEqual([[['RST', '59'], ['QTH', 'COOK']]])
+  })
+
+  it('logger window closed: after a county-line contact, the next call and county typed before the snapshot stay', async () => {
+    engine.open = false
+    open(false)
+    await settle()
+    type(callIn('main'), 'K9LLL')
+    type(qthIn('main'), 'COOK/DUPG')
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9LLL'), 'CONTROL: one row per county').toEqual([
+      [['RST', '59'], ['QTH', 'COOK']],
+      [['RST', '59'], ['QTH', 'DUPG']],
+    ])
+    type(callIn('main'), 'K9CCC')
+    type(qthIn('main'), 'LAKE')
+    await settle()
+    poll('main')
+    await settle()
+    expect(shown('main'), 'the next contact, after the snapshot').toEqual({ call: 'K9CCC', rst: '59', qth: 'LAKE' })
+  })
+
+  it('CONTROL: the logger window, which did not log, clears at its first snapshot showing the contact, and only then', async () => {
+    await aContactInProgress()
+    enter('main')
+    await settle()
+    await settle()
+    poll('logger')
+    await settle()
+    expect(shown('logger'), 'the logger window, at its first snapshot after the contact').toEqual({ call: '', rst: '59', qth: '' })
+    // Its operator types the next contact; its next snapshot shows the same log.
+    type(callIn('logger'), 'K9DDD')
+    type(rstIn('logger'), '55')
+    type(qthIn('logger'), 'DUPA')
+    await settle()
+    poll('logger')
+    await settle()
+    const typed = { call: 'K9DDD', rst: '55', qth: 'DUPA' }
+    expect(shown('logger'), 'the logger window, at its next snapshot').toEqual(typed)
+    await pollsSettle()
+    expect(shown('main'), 'the main window, after the polls').toEqual(typed)
+    enter('main')
+    await settle()
+    await settle()
+    expect(loggedAs('K9DDD'), 'the next contact, as typed for it').toEqual([[['RST', '55'], ['QTH', 'DUPA']]])
+  })
+
+  it('CONTROL: a snapshot shows the contact before its log answers; a contact logged elsewhere after it still starts the next one', async () => {
+    engine.session = fieldDay
+    engine.open = false
+    open(false)
+    await settle()
+    const box = (i: number) => inWindow('main').getAllByRole('textbox')[i] as HTMLInputElement
+    // The contact is in the log, and the answer waits on the journal: the snapshot shows it first.
+    let answer: (r: unknown) => void = () => {}
+    api.contestLogManual.mockImplementationOnce((call: string, ex: [string, string][], mode: string) => {
+      engine.write(call, ex, mode)
+      return new Promise((ok) => {
+        answer = ok
+      })
+    })
+    type(callIn('main'), 'K9FFF')
+    type(box(1), '3A')
+    type(box(2), 'WI')
+    enter('main')
+    await settle()
+    expect(loggedAs('K9FFF'), 'CONTROL: logged').toEqual([[['CLASS', '3A'], ['SECTION', 'WI']]])
+    poll('main')
+    await settle()
+    await act(async () => answer({}))
+    await settle()
+    expect(callIn('main').value, 'CONTROL: the call, once the log answers').toBe('')
+    // The FT sequencer logs a contact: class 2B from Connecticut.
+    engine.write('W1AW', [['CLASS', '2B'], ['SECTION', 'CT']], 'DIG')
+    poll('main')
+    await settle()
+    expect({ class: box(1).value, section: box(2).value }, 'what the next contact starts with').toEqual({
+      class: '2B',
+      section: 'CT',
+    })
+  })
+
+  it('CONTROL: an Enter the engine refuses (a dupe) clears for no contact: one logged elsewhere after it still starts the next one', async () => {
+    engine.session = fieldDay
+    engine.open = false
+    open(false)
+    await settle()
+    const box = (i: number) => inWindow('main').getAllByRole('textbox')[i] as HTMLInputElement
+    api.contestLogManual.mockImplementationOnce(() => Promise.reject('K9FFF is a dupe on this band/mode'))
+    type(callIn('main'), 'K9FFF')
+    type(box(1), '3A')
+    type(box(2), 'WI')
+    enter('main')
+    await settle()
+    await settle()
+    expect(callIn('main').value, 'CONTROL: the refused contact stays on screen').toBe('K9FFF')
+    expect(engine.rows, 'CONTROL: nothing logged').toEqual([])
+    // The operator abandons it, and the FT sequencer logs a contact: class 2B from Connecticut.
+    type(callIn('main'), '')
+    engine.write('W1AW', [['CLASS', '2B'], ['SECTION', 'CT']], 'DIG')
+    poll('main')
+    await settle()
+    expect({ class: box(1).value, section: box(2).value }, 'what the next contact starts with').toEqual({
+      class: '2B',
+      section: 'CT',
+    })
+  })
+})

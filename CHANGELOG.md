@@ -113,6 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logged call came back in both windows, and a county and Enter logged it again, as a dupe. A change
   typed in a window that has not yet shown the contact as logged is now dropped, and that window
   shows the next contact a moment later. Typing after the log, in either window, works as before.
+- **In a contest, what you type for the next station straight after Enter now stays.** A county or
+  report typed within about a third of a second of pressing Enter was emptied a moment later,
+  leaving only the call, and so was a county that call history filled from the next call in that
+  moment. It now stays, with the contest logger window open or closed, and logs with the next
+  contact.
 
 ## [1.18.0] — 2026-10-12
 
