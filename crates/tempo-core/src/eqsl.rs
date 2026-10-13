@@ -261,11 +261,17 @@ pub const EQSL_IMPORT_URL: &str = "https://www.eqsl.cc/qslcard/ImportADIF.cfm";
 /// into the `ADIFData` field. `record_adif` is a single `<…>…<eor>` record (e.g.
 /// from [`crate::logbook::adif_record`]). The body carries the password — never log
 /// it. ADIF length prefixes are BYTE lengths (ASCII calls/passwords).
+///
+/// The header also names the program, `PROGRAMID` Nexus at `program_version` (the build's own,
+/// passed in because this crate's version is not the app's): eQSL's developer page asks client
+/// programs for "LOG_PGM or PROGRAMID in the header", and ImportADIF answers an upload without one
+/// "Caution: ProgramID or Logger not found".
 pub fn build_upload_body(
     user: &str,
     pswd: &str,
     record_adif: &str,
     qth_nickname: Option<&str>,
+    program_version: &str,
 ) -> String {
     // The QTH Nickname goes IN THE RECORD — eQSL's ImportADIF spec places
     // `APP_EQSL_QTH_NICKNAME` "at the record level", not the header — inserted just
@@ -291,7 +297,10 @@ pub fn build_upload_body(
         None => record.to_string(),
     };
     let payload = format!(
-        "Nexus eQSL upload\n<EQSL_USER:{}>{}\n<EQSL_PSWD:{}>{}\n<EOH>\n{}\n",
+        "Nexus eQSL upload\n<PROGRAMID:5>Nexus\n<PROGRAMVERSION:{}>{}\n<EQSL_USER:{}>{}\n\
+         <EQSL_PSWD:{}>{}\n<EOH>\n{}\n",
+        program_version.len(),
+        program_version,
         user.len(),
         user,
         pswd.len(),
@@ -546,9 +555,61 @@ Generated on Tuesday, August 25, 2026 at 22:21:51 PM UTC\n\
         assert!(!is_complete_eqsl_body("<html>error</html>"));
     }
 
+    /// `ADIFData`'s payload, percent-decoded as eQSL reads it.
+    fn payload(body: &str) -> String {
+        let encoded = body.strip_prefix("ADIFData=").expect("one ADIFData field");
+        let bytes = encoded.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' {
+                out.push(u8::from_str_radix(&encoded[i + 1..i + 3], 16).expect("hex"));
+                i += 3;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).expect("UTF-8")
+    }
+
+    /// ★ Every upload names the program that sent it. eQSL's developer page asks client programs
+    /// for "LOG_PGM or PROGRAMID in the header", and ImportADIF answers an upload without one
+    /// "Caution: ProgramID or Logger not found". The version rides beside it, its length counted
+    /// in bytes like every ADIF field's, and neither reaches the record.
+    #[test]
+    fn an_upload_names_nexus_in_its_header() {
+        let body = build_upload_body(
+            "KD9TAW",
+            "pw",
+            "<CALL:4>W1AW <BAND:3>20m <eor>",
+            None,
+            "1.18.0-test1",
+        );
+        let sent = payload(&body);
+        let (header, record) = sent.split_once("<EOH>").expect("a header");
+        assert!(header.contains("<PROGRAMID:5>Nexus\n"), "{header}");
+        assert!(
+            header.contains("<PROGRAMVERSION:12>1.18.0-test1\n"),
+            "{header}"
+        );
+        assert!(!record.contains("PROGRAM"), "{record}");
+        // The credentials are where they were.
+        assert!(
+            header.contains("<EQSL_USER:6>KD9TAW\n<EQSL_PSWD:2>pw\n"),
+            "{header}"
+        );
+    }
+
     #[test]
     fn upload_body_carries_creds_in_header_and_encodes() {
-        let body = build_upload_body("KD9TAW", "p@ss&1", "<CALL:5>W1AW/4 <BAND:3>20m <EOR>", None);
+        let body = build_upload_body(
+            "KD9TAW",
+            "p@ss&1",
+            "<CALL:5>W1AW/4 <BAND:3>20m <EOR>",
+            None,
+            "1.18.0",
+        );
         assert!(body.starts_with("ADIFData="));
         // Credentials are inside the encoded ADIF header (length-prefixed), never raw.
         assert!(body.contains("EQSL_USER%3A6%3EKD9TAW"));
@@ -687,7 +748,13 @@ Generated on Tuesday, August 25, 2026 at 22:21:51 PM UTC\n\
         query.qth_nickname = Some("My QTH".into());
         assert!(build_inbox_url(&query).contains("&QTHNickname=My%20QTH"));
 
-        let body = build_upload_body("KD9TAW", "pw", "<CALL:4>W1AW <eor>", Some("HomeQTH"));
+        let body = build_upload_body(
+            "KD9TAW",
+            "pw",
+            "<CALL:4>W1AW <eor>",
+            Some("HomeQTH"),
+            "1.18.0",
+        );
         let decoded = body
             .replace("%3C", "<")
             .replace("%3E", ">")
@@ -697,9 +764,9 @@ Generated on Tuesday, August 25, 2026 at 22:21:51 PM UTC\n\
             "the nickname must sit at record level, before <eor>: {decoded}"
         );
 
-        // Unset: byte-identical to the pre-nickname builder — single-profile
-        // accounts must see no change at all.
-        let plain = build_upload_body("KD9TAW", "pw", "<CALL:4>W1AW <eor>", None);
+        // Unset: no nickname anywhere in the body — single-profile accounts must
+        // see no nickname at all.
+        let plain = build_upload_body("KD9TAW", "pw", "<CALL:4>W1AW <eor>", None, "1.18.0");
         assert!(!plain.to_ascii_lowercase().contains("nickname"));
     }
 }

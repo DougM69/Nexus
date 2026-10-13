@@ -11664,7 +11664,7 @@ mod private_note_tests {
 
         assert_withheld(
             "eQSL",
-            &crate::eqsl::build_upload_body("KD9TAW", "pw", &adif, Some("Home")),
+            &crate::eqsl::build_upload_body("KD9TAW", "pw", &adif, Some("Home"), "1.18.0"),
         );
 
         assert_withheld(

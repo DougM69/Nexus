@@ -27353,6 +27353,7 @@ fn eqsl_push_qso_impl(
             &password,
             &adif,
             (!qth_nickname.is_empty()).then_some(qth_nickname.as_str()),
+            env!("CARGO_PKG_VERSION"),
         );
         propagation::live::eqsl::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
     }; // `body` (holds the password) dropped here

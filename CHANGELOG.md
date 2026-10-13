@@ -87,6 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nickname must match eQSL's My Profile exactly, capitals included. Every eQSL refusal now keeps
   its reason on the contact, so the Connections row and Awards ▸ Confirmations still show it after
   the toast has gone.
+- **eQSL uploads name Nexus.** eQSL asks the programs that upload to it to name themselves, and
+  each Nexus upload reached it unnamed. Every upload now carries Nexus's name and version.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never
