@@ -21060,6 +21060,19 @@ button.cq-skiptx1.on {
   padding: 1px var(--space-2);
   white-space: nowrap;
 }
+/* The readout's NUMBER, in a field as wide as the widest it prints, so the chip and everything after
+   it hold still as its digit count changes (it shifted the whole row a digit sideways at a time, and
+   on a row just wide enough for a shorter reading a longer one wrapped it). The readout is
+   round((peak − floor) × dB per unit) with both 0..1, so at most 120 either way, and it goes
+   NEGATIVE while keyed, when the floor is frozen and the row is not: "-120" is four characters, in
+   the chip's tabular figures. Right-aligned, so the ones digit keeps its place too. A min-width, not
+   a width: figures wider than the font's "0" would push the row, never overprint the unit.
+   PhoneScope.readout.test.tsx. */
+.ph-scope-dyn-val {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
+}
 .ph-scope-gz {
   flex: 0 0 auto;
   display: inline-flex;

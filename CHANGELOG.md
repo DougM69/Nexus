@@ -168,6 +168,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line and in the Cabrillo CLAIMED-SCORE. They now count once there and on the multiplier board,
   where both spellings' cells light together. Each contact is still logged and exported as its
   station sent it, and Prince Edward Island typed by name in the county box is logged as PEI.
+- **The scope's ▲ dB reading no longer shoves G, Z and the buttons beside it.** On the Phone and
+  CW scopes and the RF scope pane, the reading of how far the strongest signal stands above the
+  noise moved everything after it sideways each time it gained or lost a digit, from 8 dB to 10 dB
+  and back. It now has a field as wide as the widest reading it can show (-120, while you
+  transmit), so nothing in the row moves. On CW at 1024×768 with UI scale at 175 %, the row now
+  stays on two lines, where it jumped to two only for the widest readings.
 
 ## [1.18.0] — 2026-10-12
 
