@@ -230,6 +230,10 @@ done that you have not ticked:
   name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
   shown as it is now and as it was before. Tick the ones you want back.
 
+At a club it also says how many of this laptop's contacts the club's log does not have yet. They
+still go to the host once this laptop is back with it, with the mode on or off, as long as Nexus
+stays open with club sync on.
+
 **Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
 mode stays on. The merge and the export are done before the mode goes off, because they need the
 contest's session; if one of them fails, nothing after it is done, the reason is shown, and the mode
@@ -318,8 +322,8 @@ a club sync worked.*
   answers "who's on 20?" too.
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
-  reconnect. If the host PC dies, enable hosting on any other position;
-  everyone re-joins and nothing is lost.
+  reconnect, Contest mode on or off. If the host PC dies, enable hosting on
+  any other position; everyone re-joins and nothing is lost.
 - The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
   the rules score it (earliest contact wins). A contest that wants repeats
   reported, such as the New York QSO Party, keeps them in the file, scoring

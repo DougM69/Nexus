@@ -3520,13 +3520,15 @@ export function SettingsPanel({
     // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
     // offers it FIRST and saves nothing until it is answered — the merge and the export need the
     // session the mode holds. "Now" is what this Save would leave: the live settings, with this
-    // form's own changes. With nothing to offer, the Save goes ahead as it always did.
+    // form's own changes. It says the club chip's count of contacts the host does not have yet.
+    // With nothing to offer or say, the Save goes ahead as it always did.
     if (savedRef.current?.fdActive === true && !form.fdActive) {
       const live = await getSettings()
       const offer = contestOverOffer(
         { ...live, ...changedSince(savedRef.current, form) },
         fieldDay?.log?.length ?? 0,
         fieldDay?.event,
+        fieldDay?.club?.queued ?? 0,
       )
       if (hasOffer(offer)) {
         setOverOffer(offer)

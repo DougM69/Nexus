@@ -3269,9 +3269,10 @@ export function ContestView({
         }
       } else {
         // OFF: offer the checklist BEFORE the mode goes, because the merge and the export need the
-        // session it holds. Read against what is saved NOW, the engine's note of "before" included.
-        // With nothing to offer, the switch goes off as it always did.
-        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event)
+        // session it holds. Read against what is saved NOW, the engine's note of "before" included,
+        // with the club chip's count of contacts the host does not have yet. With nothing to offer
+        // or say, the switch goes off as it always did.
+        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event, fieldDay?.club?.queued ?? 0)
         if (hasOffer(offer)) {
           setOverOffer(offer)
           return

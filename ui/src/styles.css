@@ -30093,6 +30093,13 @@ tr.sel .aprs-sym {
   font-size: var(--fs-label);
   color: var(--text-faint);
 }
+/* At a club: how many of this laptop's contacts the club's log does not have yet. Body text, not a
+   faint note: it is what the operator waits on before packing up. */
+.contest-over-club {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
 .contest-over-head,
 .contest-over-row {
   display: grid;

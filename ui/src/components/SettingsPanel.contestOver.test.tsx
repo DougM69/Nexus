@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
-import type { Settings } from '../types'
+import type { FieldDayStatus, Settings } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
 // The house budget for a Settings render under a loaded full suite (SettingsPanel.stalecopy.test.tsx).
@@ -41,8 +41,9 @@ vi.mock('../toast', () => ({
 let station: Record<string, unknown> = {}
 
 /** The end of a club weekend at the Illinois QSO Party: the club's call on the air, the mode on, and
- *  the engine's note of the station's own call. */
-function openOn(held: Partial<Settings> = {}) {
+ *  the engine's note of the station's own call. `fieldDay` is the snapshot's contest block, as App
+ *  passes it. */
+function openOn(held: Partial<Settings> = {}, fieldDay: FieldDayStatus | null = null) {
   station = structuredClone({
     ...defaultSettings,
     mycall: 'W9CLB',
@@ -81,6 +82,7 @@ function openOn(held: Partial<Settings> = {}) {
       onDensityChange={() => {}}
       onResetLayout={() => {}}
       features={features}
+      fieldDay={fieldDay}
     />,
   )
 }
@@ -156,6 +158,41 @@ describe('a Save that turns Contest mode off', () => {
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]).toMatchObject({ fdActive: false, mycall: 'K9ABC' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('at a club, says how many of this laptop\'s contacts the club\'s log does not have yet', async () => {
+    // The snapshot's club chip: the link down, three contacts the host never had.
+    const fieldDay = {
+      running: false,
+      state: 'Idle',
+      qsoCount: 3,
+      sections: 0,
+      points: 6,
+      event: 'ilqp',
+      log: [],
+      club: {
+        syncState: 'offline',
+        queued: 3,
+        offlineSinceUnix: 1,
+        hosting: false,
+        event: 'ILQP 2026',
+        hostCall: 'W9CLB',
+        score: 0,
+        qsos: 0,
+        sections: 0,
+        skewSecs: 0,
+        dupes: [],
+        board: [],
+      },
+    } as FieldDayStatus
+    openOn({ fdJoinAddr: '192.168.1.20:42073' }, fieldDay)
+    await switchOffInTheForm()
+    pressSave()
+    await screen.findByRole('dialog', { name: 'Contest over?' })
+    expect(document.querySelector('.contest-over-club')?.textContent).toBe(
+      "3 contacts from this laptop are not in the club's log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.",
+    )
+    expect(writes()).toEqual([])
   })
 
   it('puts back a setting the form never changed, over a value that changed since it loaded', async () => {
