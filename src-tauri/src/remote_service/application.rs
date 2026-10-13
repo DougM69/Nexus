@@ -743,7 +743,7 @@ mod tests {
         let mut engine = tempo_app::engine::Engine::with_settings(Default::default());
         engine.contest_entry_share(true);
         engine
-            .contest_entry_put("K1ABC", Default::default(), serde_json::Value::Null)
+            .contest_entry_put("K1ABC", Default::default(), serde_json::Value::Null, 0)
             .unwrap();
         assert!(
             engine.snapshot().contest_entry.is_some(),

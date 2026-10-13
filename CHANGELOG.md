@@ -120,6 +120,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent report. Each contact now carries its own, the one its Cabrillo line and the Logbook show: 59
   on phone, 599 on CW and digital. In the Club ADIF that is the report sent by the laptop that
   logged the contact. A contest whose exchange has no report, such as Field Day, writes none.
+- **With the contest logger window open, a contact you just logged no longer comes back.** When one
+  person typed into the log line at the moment the other pressed Enter in the other window, the
+  logged call came back in both windows, and a county and Enter logged it again, as a dupe. A change
+  typed in a window that has not yet shown the contact as logged is now dropped, and that window
+  shows the next contact a moment later. Typing after the log, in either window, works as before.
+- **In a contest, what you type for the next station straight after Enter now stays.** A county or
+  report typed within about a third of a second of pressing Enter was emptied a moment later,
+  leaving only the call, and so was a county that call history filled from the next call in that
+  moment. It now stays, with the contest logger window open or closed, and logs with the next
+  contact.
 
 ## [1.18.0] — 2026-10-12
 

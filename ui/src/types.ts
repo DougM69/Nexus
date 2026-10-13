@@ -4959,6 +4959,9 @@ export interface AppSnapshot {
 export interface ContestEntryShared {
   /** Bumped by every change: a window shows the entry as of this rev. */
   rev: number
+  /** Which contact the entry holds: the number logged from it since the window opened. Every log
+   *  moves it on, and a put names the contact it was made on. */
+  contact: number
   /** The Call box, as typed. */
   call: string
   /** The received boxes by slot id, as typed. A box nobody has touched is absent. */
