@@ -203,6 +203,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its laptops on the club's call, names that call to each laptop that joins and in **Find club
   events**, and their waiting contacts reach the Club Cabrillo and Club ADIF. A laptop on any other
   call is still turned away, with the same words.
+- **At a club, the spectator scoreboard keeps the club's call after Contest over? on the host.**
+  The TV board read the host laptop's own call, so once **Contest over?** put the operator's own
+  call back, the board named the operator instead of the club. While the host holds the club's log,
+  the board names the call the club is on the air under.
 
 ## [1.18.0] — 2026-10-12
 

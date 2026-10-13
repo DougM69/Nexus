@@ -12791,8 +12791,8 @@ impl Engine {
         self.fd_club.as_ref().map(|c| c.event_name.clone())
     }
 
-    /// ⭐ **The call the club is on the air under** (beacon + welcome + the JOIN's call gate): the
-    /// one its files are written under, held from the save that turned this host's Contest mode
+    /// ⭐ **The call the club is on the air under** (beacon + welcome + the JOIN's call gate + the
+    /// spectator board): the one its files are written under, held from the save that turned this host's Contest mode
     /// off ([`crate::fdevent::ClubLog::hosted_call`]), else this station's own. So "Contest over?"
     /// here, which puts the operator's own call back, does not turn away a laptop of the club
     /// still on the club's call: it rejoins and sends what it still owes. While not hosting, this
@@ -13185,6 +13185,10 @@ impl Engine {
     /// merged rows (`contest`), which the board scores by that contest's own ruleset off
     /// this lock. It used to hand a non-Field-Day club nothing, so hosting the Illinois QSO
     /// Party put "served from the host station" on the host's own TV.
+    ///
+    /// The board names the call the club is on the air under ([`Self::fd_club_call`]), so after
+    /// "Contest over?" on the host, which puts the operator's own call back, the TV still names
+    /// the club's.
     pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
         let club = self.fd_club.as_ref()?;
         let contest =
@@ -13214,7 +13218,7 @@ impl Engine {
         positions.sort_by(|a, b| a.id.cmp(&b.id));
         Some(crate::fd_scoreboard::FdBoardData {
             event: club.event,
-            call: self.settings.mycall.clone(),
+            call: self.fd_club_call(),
             class: self.settings.fd_class.clone(),
             section: self.settings.fd_section.clone(),
             power_mult: self.settings.fd_power_mult,
@@ -45436,6 +45440,53 @@ mod tests {
         e.fd_host_start(dir.join("ilqp.ndjson"))
             .expect("the Illinois QSO Party is hosted");
         e
+    }
+
+    /// ⭐ **The spectator board names the call the club is on the air under**: the host's
+    /// Settings call while nothing is held, and the club's after "Contest over?" on the host,
+    /// which puts the operator's own call back in the save that turns the mode off. The board
+    /// read Settings, so after the put-back the TV named the operator's own call.
+    #[test]
+    fn the_board_names_the_clubs_call_after_the_hosts_put_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-board-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_host(&dir);
+        let board_call = |e: &Engine| e.fd_board_snapshot().expect("hosting").call;
+        let save = |e: &mut Engine, active: bool, call: &str| {
+            let mut s = e.settings().clone();
+            s.fd_active = active;
+            s.mycall = call.into();
+            e.apply_settings(s);
+        };
+        assert_eq!(board_call(&e), "W9XYZ", "CONTROL: nothing held");
+
+        // "Contest over?": the mode off and the operator's own call back, in one save.
+        save(&mut e, false, "K9OWN");
+        assert_eq!(
+            (e.settings().mycall.as_str(), e.fd_hosting()),
+            ("K9OWN", true),
+            "CONTROL: the put-back landed and the laptop still hosts"
+        );
+        assert_eq!(
+            board_call(&e),
+            "W9XYZ",
+            "after the put-back the board names the club's call"
+        );
+
+        // The mode back on with the club's call lets the hold go; then another call with the
+        // mode on, which holds nothing: the board names the Settings call.
+        save(&mut e, true, "W9XYZ");
+        save(&mut e, true, "W9NEW");
+        assert_eq!(
+            (e.fd_club_call(), board_call(&e)),
+            ("W9NEW".to_string(), "W9NEW".to_string()),
+            "with nothing held, the board names the Settings call"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⭐ **A position set up in another exchange role than the club's is refused, by name,
