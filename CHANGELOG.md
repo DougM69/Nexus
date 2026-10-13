@@ -141,6 +141,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADIF export and the contacts merged into your logbook called it FT8. The Illinois and New York QSO
   parties and Winter Field Day give FT8 no credit. The log line now names the mode the station
   runs, as the JS8 screen's own log line does.
+- **"Contest over?" keeps your own settings through a rehearsal, and no longer notes everyday
+  changes made between contests.** Nexus notes your callsign, operator, position, categories and
+  Unassisted as they were before a contest changes them, so that "Contest over?" can offer them
+  back. A contest stayed picked after it ended, so a change made months later was still noted and
+  offered back at the next contest, and with nothing picked a club setting up for Field Day had
+  nothing noted until the mode went on. Turning Contest mode off also let the note go even when
+  you put nothing back, so a rehearsal that turned the mode off and on lost your own call before
+  the contest. Now a change is noted from a week before the contest you picked until it ends, or
+  while Contest mode is on, and with nothing picked that week is ARRL Field Day's. Turn the mode
+  off before the contest ends with a row left unticked and the note stays for the end; it goes once
+  you have put everything back, or once the contest is over.
 
 ## [1.18.0] — 2026-10-12
 
