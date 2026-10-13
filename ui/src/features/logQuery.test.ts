@@ -154,3 +154,22 @@ describe('logOrder is the Logbook’s own order, moved', () => {
     expect(at({ needsConfirmOnly: true })).toBe(false)
   })
 })
+
+describe('the search looks in the SUBMODE as well as the MODE', () => {
+  it('finds a phone contact held as SSB by its sideband, and ssb finds all phone', () => {
+    const row = (call: string, mode: string, submode?: string) =>
+      ({ ...FIXTURE[0], call, mode, extra: submode ? [['SUBMODE', submode]] : [] }) as LoggedQso
+    const log = [
+      row('K1AAA', 'SSB', 'USB'),
+      row('K2BBB', 'SSB', 'LSB'),
+      row('K3CCC', 'SSB'),
+      row('K4DDD', 'FT8'),
+      row('K5EEE', 'DYNAMIC', 'VARA HF'), // as VarAC writes it
+    ]
+    const found = (search: string) => logOrder(log, { sort: 'call', asc: true, search, needsConfirmOnly: false }).map((i) => log[i].call)
+    expect(found('usb')).toEqual(['K1AAA'])
+    expect(found('lsb')).toEqual(['K2BBB'])
+    expect(found('ssb')).toEqual(['K1AAA', 'K2BBB', 'K3CCC'])
+    expect(found('vara')).toEqual(['K5EEE'])
+  })
+})

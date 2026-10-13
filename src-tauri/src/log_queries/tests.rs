@@ -377,15 +377,15 @@ fn every_golden_answer_on_both_homes_of_the_log() {
         }
         expected.push((q, as_held));
     }
-    // Each for a reason a reader can check against the three rows: fx03 and fx04 sort, search
-    // and list as SSB, and K1ABC's history lists one mode; fx15's square is a 20 m square, its
-    // band is one of the log's bands, and the statistics count it under 20 m.
+    // Each for a reason a reader can check against the three rows: fx03 and fx04 sort and list
+    // as SSB, and K1ABC's history lists one mode; fx15's square is a 20 m square, its band is one
+    // of the log's bands, and the statistics count it under 20 m. The search for "usb" does not
+    // move: it finds fx03 by the sideband held as its SUBMODE.
     assert_eq!(
         moved,
         [
             r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":true,"needsConfirmOnly":false,"search":"","sort":"mode"}}"#,
             r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":false,"needsConfirmOnly":false,"search":"","sort":"mode"}}"#,
-            r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":false,"needsConfirmOnly":false,"search":"usb","sort":"time"}}"#,
             r#"{"kind":"page","limit":24,"offset":0,"query":{"asc":false,"needsConfirmOnly":false,"search":"ssb","sort":"mode"}}"#,
             r#"{"band":"40M","call":" k1abc ","kind":"callHistory","matchMode":true,"mode":"SSB"}"#,
             r#"{"band":"40m","call":"K1ABC","kind":"callHistory","matchMode":true,"mode":"CW"}"#,
@@ -425,6 +425,71 @@ fn every_golden_answer_on_both_homes_of_the_log() {
             answered += 1;
         }
         assert_eq!(answered, 78, "{home}: every question in the golden file");
+    }
+}
+
+/// ★ The Logbook's search finds a phone contact by its sideband. The log holds a phone contact as
+/// SSB with the sideband as its SUBMODE, so a search for `usb` finds the contact logged on USB
+/// (as Nexus's phone cockpit logs it) and the one another logger wrote as `MODE=SSB SUBMODE=USB`,
+/// `lsb` the LSB one, and `ssb` all three; on the store, where the sideband is a row of
+/// `qso_extra`, and on the 1.13 path.
+#[test]
+fn a_search_for_the_sideband_finds_the_phone_contacts_held_as_ssb() {
+    let (golden, _) = golden_log();
+    let log: Vec<QsoRecord> = [
+        ("K1AAA", "USB", None),
+        ("K2BBB", "SSB", Some("USB")),
+        ("K3CCC", "LSB", None),
+        ("K4DDD", "FT8", None),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, &(call, mode, submode))| {
+        let mut r = golden[0].clone();
+        r.id = Some(RecordId::Provisional {
+            hash: 950 + i as u64,
+            ordinal: 0,
+        });
+        r.call = call.to_string();
+        r.mode = mode.to_string();
+        r.extra = submode
+            .map(|s| vec![("SUBMODE".to_string(), s.to_string())])
+            .unwrap_or_default();
+        r.when_unix = 1_700_000_000 + i as u64 * 60;
+        r
+    })
+    .collect();
+    let resolve = |_: &str| None;
+    for (home, d) in [
+        ("store", Dir::new("sideband-store")),
+        ("1.13 path", Dir::new("sideband-mem")),
+    ] {
+        let engine = if home == "store" {
+            on_store(&d, &log)
+        } else {
+            on_log_file(&d, &log)
+        };
+        let queries = LogQueries::default();
+        for (search, want) in [
+            ("usb", vec!["K1AAA", "K2BBB"]),
+            ("lsb", vec!["K3CCC"]),
+            ("ssb", vec!["K1AAA", "K2BBB", "K3CCC"]),
+        ] {
+            let page = ask(
+                &queries,
+                &engine,
+                json!({"kind": "page", "query": {"sort": "call", "asc": true, "search": search,
+                    "needsConfirmOnly": false}, "offset": 0, "limit": 10}),
+                &resolve,
+            );
+            let calls: Vec<&str> = page["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .map(|r| r["call"].as_str().expect("a call"))
+                .collect();
+            assert_eq!(calls, want, "{home}: {search}");
+        }
     }
 }
 
@@ -1414,7 +1479,7 @@ fn assert_parity(seed: u64, step: &str, engine: &SharedEngine, queries: &LogQuer
     let sorts = [
         "call", "country", "band", "freq", "mode", "sent", "rcvd", "time", "park", "qsl",
     ];
-    let searches = ["", "w1", "ssb", "z", "ſ", "20m", "2023-11"];
+    let searches = ["", "w1", "ssb", "usb", "z", "ſ", "20m", "2023-11"];
     for _ in 0..3 {
         let query = json!({
             "sort": g.pick(&sorts), "asc": g.below(2) == 0,

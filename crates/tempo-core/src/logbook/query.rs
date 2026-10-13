@@ -336,7 +336,7 @@ fn sort_val_cmp(a: &SortVal, b: &SortVal) -> Ordering {
 }
 
 /// Whether the Logbook shows `r` under `query` (`matchesLogQuery`, verbatim): not an
-/// award-confirmed contact under the chip, and the search in any of seven fields — the formatted
+/// award-confirmed contact under the chip, and the search in any of eight fields — the formatted
 /// time among them, whose trailing `Z` is why a search for "z" finds every row.
 pub fn matches(r: &QsoRecord, query: &LogQuery) -> bool {
     shown(
@@ -361,7 +361,19 @@ fn shown(r: &QsoRecord, needs_confirm_only: bool, t: &str) -> bool {
         || has(&r.band)
         || has(&r.mode)
         || has(&mode_key(&r.mode))
+        || submode(r).is_some_and(has)
         || has(&fmt_utc(r.when_unix))
+}
+
+/// A contact's SUBMODE, from its passthrough: among them the sideband of a phone contact, which
+/// the log holds as `SSB` with the sideband there ([`super::canonical`]), so "usb" and "lsb" find
+/// those contacts by it. A narrow read of the store carries it only for a search
+/// ([`super::sqlite::LogDb::each_narrow_after_with_submode`]).
+fn submode(r: &QsoRecord) -> Option<&str> {
+    r.extra
+        .iter()
+        .find(|(k, _)| k == "SUBMODE")
+        .map(|(_, v)| v.as_str())
 }
 
 /// The rows `query` shows, as their handles in display order — the order vector (`logOrder`,
@@ -401,6 +413,13 @@ impl<H> OrderBuilder<H> {
             t: js_lower(js_trim(&query.search)),
             kept: Vec::new(),
         }
+    }
+
+    /// Whether the query searches, and so reads each row's SUBMODE as well as its columns: a
+    /// narrow read of the store carries it only when asked
+    /// ([`super::sqlite::LogDb::each_narrow_after_with_submode`]).
+    pub fn searches(&self) -> bool {
+        !self.t.is_empty()
     }
 
     /// The next row, in LOG ORDER after every row pushed before it.

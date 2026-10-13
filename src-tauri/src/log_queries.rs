@@ -508,7 +508,8 @@ impl LogQueries {
     }
 
     /// Build the order vector: off the index for the default order, else one narrow pass in log
-    /// order through the UI's filter and comparator.
+    /// order through the UI's filter and comparator — with each row's SUBMODE when the query
+    /// searches, since the search looks there too and nothing else reads it.
     fn build_order(&self, c: &Capture, query: &LogQuery) -> Result<Vec<u32>, String> {
         #[cfg(test)]
         self.0
@@ -520,7 +521,13 @@ impl LogQueries {
                     db.rowids_newest_first()
                 } else {
                     let mut b = OrderBuilder::new(query);
-                    db.each_narrow_after(ORDER_COLUMNS, 0, &mut |rowid, r| b.push(rowid, r))?;
+                    if b.searches() {
+                        db.each_narrow_after_with_submode(ORDER_COLUMNS, 0, &mut |rowid, r| {
+                            b.push(rowid, r)
+                        })?;
+                    } else {
+                        db.each_narrow_after(ORDER_COLUMNS, 0, &mut |rowid, r| b.push(rowid, r))?;
+                    }
                     Ok(b.finish())
                 }
             }),

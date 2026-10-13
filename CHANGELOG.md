@@ -118,6 +118,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station elsewhere whose record carries a US country no longer does. A contact whose call
   belongs to no entity still counts by the country it was logged with. The Remote page's
   statistics count the same way.
+- **Searching the Logbook for usb or lsb finds your phone contacts.** The Logbook search now looks
+  in a contact's submode as well as its mode, so usb and lsb find the contacts made on that
+  sideband, however they were logged or imported, and ssb finds all of them. A digital contact
+  whose mode is kept in its submode, such as VARA HF under DYNAMIC, is found by that name too.
+  The Remote page's log search does the same.
 - **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
   read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
   re-enter a password that was right. Nexus now says the contact is outside your eQSL account's
