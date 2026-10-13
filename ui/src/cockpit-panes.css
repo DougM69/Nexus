@@ -422,6 +422,16 @@
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
+/* …LIFTED WHILE A MACRO EDITOR STANDS ON IT. The keyboard docks' macro editor (`.rtty-macro-editor`,
+   styles.css) is out of flow on the dock's top edge, over the bottom of the pane region, so it
+   paints at the dock's level (2), under the region's column dividers (`.pane-splitter`, 3): where
+   a divider crossed it, a 12 px strip of the editor took no click (measured in Chrome, CW at
+   1366×768: Send once's centre hit the divider). While the editor is open the dock is lifted over
+   them. That covers no stop control: the TX strip, at the dock's own level, already paints under
+   the dock, which comes after it in the shell. */
+.cockpit-txdock-editing {
+  z-index: 4;
+}
 
 /* THE TX STRIP — the fifth shell child kind (2026-10-01: "FT's strip under the
    scope in every mode, FT's order, staying in view"). FT's transmit cluster — TX On/Off · Tune ·

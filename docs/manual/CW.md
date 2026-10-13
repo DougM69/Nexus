@@ -211,6 +211,15 @@ active profile takes precedence over every built-in set above, Field Day include
 keeps which of its keys [Enter Sends Message](Field-Day.md#enter-sends-message-esm) sends for each
 step, mapped in Settings → Contesting ▸ Enter Sends Message.
 
+A key can also be changed where it is, in the cockpit: its **✎**, a right-click on it, or
+`Ctrl+Shift` with its F-key opens the macro editor RTTY and PSK use, and none of them sends.
+**Save** writes that one key into the ACTIVE profile (`cwProfiles[activeCwProfile]`), the list
+Settings → CW → Macros edits. A profile with no keys of its own first takes the eight the dock showed
+(the running contest's or Field Day's set during one, else the casual set), with that set's Enter
+Sends Message steps when it is one of the contest layouts, so Enter keeps sending the same keys.
+**Send once** sends the edited text through the key's own send path (the His call commit, the
+licence check, `send_cw` and every engine gate behind it) and saves nothing.
+
 **RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
 
 ---

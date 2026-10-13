@@ -9,14 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Change what an RTTY or PSK macro key sends on the fly.** Right-click a key, or press Ctrl+Shift
-  with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in its message.
-  Neither sends anything, and the browser's menu no longer opens over a key. The editor has a new
-  **Send once** button: it sends the message as you changed it, one time, through the same path the
-  key itself uses, so everything that would stop the key stops it too (no call in the box, outside
-  your licence, TX off), and the key keeps its own message. **Save** keeps your change on the key,
-  as before. A plain click or F-key still sends the key, and Esc with the editor open still stops
-  an over on the air and only closes the editor when nothing is going out.
+- **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
+  Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
+  its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor
+  has a new **Send once** button: it sends the message as you changed it, one time, through the same
+  path the key itself uses, so everything that would stop the key stops it too (no call in the box,
+  outside your licence, TX off), and the key keeps its own message. **Save** keeps your change on the
+  key. A plain click or F-key still sends the key, and Esc with the editor open still stops an over
+  on the air and only closes the editor when nothing is going out.
+- **The CW macro keys get the same editor.** Hover a key and click ✎, right-click it, or press
+  Ctrl+Shift with its F-key. Save keeps the change in your active CW macro profile, the same keys
+  Settings ▸ CW ▸ Macros shows. A profile still on the built-in keys becomes your own set the first
+  time you save one: the eight keys the dock showed (the contest's set during a contest) with yours
+  changed, and Enter Sends Message keeps sending the same keys for the same steps. Send once sends
+  exactly as the key does, His call and all. With the editor open and nothing on the air, Esc closes
+  it and leaves TX on.
 - **FlexRadio: your paddle wins over Nexus's CW on the Flex native client (Beta), built and off
   until a tester has checked it on a radio.** Once a tester's bench has shown what the radio
   reports for a paddle or key in its key jack, touching it while Nexus sends CW clears the radio's

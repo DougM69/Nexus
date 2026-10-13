@@ -40,6 +40,10 @@ import {
 } from '../features/esmRoles'
 import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
 import { EsmPlate } from './EsmPlate'
+import { CwMacroButton, CwMacroEditor } from './CwMacroEditor'
+import type { MacroEditorFocus } from './MacroEditor'
+import { macroEditChordKey, type MacroKey, type MacroSlot } from '../features/macroSets'
+import { cwStoredBuiltIn, withCwEntry, type CwProfile } from '../features/cwMacros'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -832,6 +836,7 @@ export function CwCockpit({
   // to among them (and the radio loop then retuned the rig there).
   const switchProfile = (i: number) => {
     if (!control) return
+    setEditing(null)
     setActiveProfile(i)
     void patchSettings((s) => ({ macros: { ...s.macros, activeCwProfile: i } }))
       .then((s) => onSnap?.(s))
@@ -1088,13 +1093,16 @@ export function CwCockpit({
   const esmLit = esmLitKeys(esm.preview)
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else.
-  const send = (line: string) => {
-    if (!control) return
-    if (!line.trim()) return
+  //
+  // It answers whether the line went to `send_cw` (true) or was refused here (false), for the
+  // macro editor's Send once, which keeps the operator's draft open when the send was refused.
+  const send = (line: string): boolean => {
+    if (!control) return false
+    if (!line.trim()) return false
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (!snapRef.current.radio.txAllowed) {
       pushToast(snapRef.current.radio.txRefusal ?? t('cw.send.txLocked'), 'info', 3500)
-      return
+      return false
     }
     // #286: an edited His Call, or the decoder's guess in it, lands BEFORE the send that may
     // expand `!` to it.
@@ -1103,6 +1111,14 @@ export function CwCockpit({
       if (committing) await committing
       return sendCw(line)
     }, t('cw.send.failed'))
+    return true
+  }
+  /** One F-key macro, from its button or the editor's Send once: `send()` and Enter Sends
+   *  Message hearing the key, as the F-key itself does. */
+  const sendMacro = (m: { key: string; text: string }): boolean => {
+    const sent = send(m.text)
+    esm.noteKey(m.key)
+    return sent
   }
   const sendTyped = () => {
     if (!control) return
@@ -1117,6 +1133,118 @@ export function CwCockpit({
     // …and for Enter Sends Message, what went out to the call in the strip counts as not sent.
     esm.noteStop()
   }
+
+  // ── THE MACRO EDITOR (RTTY's and PSK's, `MacroEditor.tsx`, through `CwMacroEditor.tsx`) ──────
+  // Opened by a key's ✎, a right-click on the key, or Ctrl+Shift with its F-key; none of them
+  // sends. It edits the key AS THE DOCK SHOWS IT: the active profile's key, or, on a profile with
+  // no keys of its own, the built-in set the dock shows (the running contest's or Field Day's
+  // during one, the everyday set otherwise).
+  //
+  // SAVE writes THE STORE SETTINGS ▸ CW ▸ MACROS EDITS: the active profile's keys,
+  // `settings.macros.cwProfiles[activeCwProfile]`, through the settings patch seam the profile
+  // switch above uses, over the settings the backend holds at that moment. A profile on the
+  // built-ins becomes the operator's own set first, the keys the dock showed with this one changed
+  // (`withCwEntry`, which also keeps the Enter Sends Message steps it was sending). A settings save
+  // leaves the CW queue alone, so an over on the air keeps keying through it.
+  //
+  // SEND ONCE sends the editor's message through `sendMacro`, the key's own path: `send()`'s
+  // licence check, the His Call commit, `send_cw` and the engine's every gate behind it, and its
+  // tokens expanded there exactly as the key's are. The saved key is not touched.
+  const [editing, setEditing] = useState<string | null>(null)
+  const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
+  const [editorLeft, setEditorLeft] = useState(0)
+  const [savingMacros, setSavingMacros] = useState(false)
+  const dockRef = useRef<HTMLDivElement | null>(null)
+  const ownKeys = !!(profileMacros && profileMacros.length)
+  const builtInStored = builtIn.map(cwStoredBuiltIn)
+  /** A key as the shared surface reads it. Its caption is the one the dock has always shown (a
+   *  key of the operator's with no label shows its F-key name), and a key with neither label nor
+   *  message is empty, so a click opens its editor. `custom`: the key is not the built-in the dock
+   *  would show here without the profile's keys, so Reset this button has something to put back. */
+  const slotOf = (m: CwMacro): MacroSlot => {
+    const stock = builtInStored.find((b) => b.key === m.key)
+    return {
+      key: m.key as MacroKey,
+      label: m.labelKey ? t(m.labelKey) : m.label || (m.text.trim() ? m.key : ''),
+      text: m.text,
+      custom: ownKeys && (!stock || stock.label !== (m.label ?? '') || stock.text !== m.text),
+    }
+  }
+  /** The same key as its editor opens it: its own label, never the F-key name standing in for one. */
+  const editorSlotOf = (m: CwMacro): MacroSlot => ({ ...slotOf(m), label: m.labelKey ? t(m.labelKey) : (m.label ?? '') })
+  const openEditor = (key: string, focus: MacroEditorFocus = 'title') => {
+    if (!control) return
+    // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
+    // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
+    const el = dockRef.current?.querySelector<HTMLElement>(`[data-cw-macro="${key}"]`)
+    setEditorLeft(el?.offsetLeft ?? 0)
+    setEditorFocus(focus)
+    setEditing(key)
+  }
+  const closeEditor = () => {
+    const key = editing
+    setEditing(null)
+    // The caret goes back to the key the editor was opened from, not to the top of the page.
+    if (key) {
+      dockRef.current
+        ?.querySelector<HTMLElement>(`[data-cw-macro="${key}"] .cw-macro`)
+        ?.focus({ preventScroll: true })
+    }
+  }
+  const writeKey = async (key: string, entry: { label: string; text: string }) => {
+    if (!control) return
+    setSavingMacros(true)
+    const out: { saved: { profiles: CwProfile[]; active: number } | null } = { saved: null }
+    const after = await withErrorToast(
+      () =>
+        patchSettings((s) => {
+          const saved = withCwEntry(s.macros?.cwProfiles ?? [], s.macros?.activeCwProfile ?? 0, builtInStored, key, entry)
+          out.saved = saved
+          return { macros: { ...s.macros, cwProfiles: saved.profiles, activeCwProfile: saved.active } }
+        }),
+      t('cw.macros.saveFailed'),
+    )
+    setSavingMacros(false)
+    // A failed save keeps the editor open with the operator's draft.
+    if (!after || !out.saved) return
+    setProfiles(out.saved.profiles)
+    setActiveProfile(out.saved.active)
+    onSnap?.(after)
+    closeEditor()
+  }
+  const saveMacro = (key: string, label: string, text: string) => {
+    const m = macros.find((x) => x.key === key)
+    if (!m) return
+    const was = editorSlotOf(m)
+    if (label === was.label && text === was.text) {
+      closeEditor()
+      return
+    }
+    // A caption left as the editor showed it stays the key's own; on a built-in key that is the
+    // built-in's, stored as Settings stores it rather than in the language on screen.
+    const stock = builtInStored.find((b) => b.key === key)
+    void writeKey(key, { label: label === was.label && !ownKeys && stock ? stock.label : label, text })
+  }
+  const resetMacro = (key: string) => {
+    const stock = builtInStored.find((b) => b.key === key)
+    if (stock) void writeKey(key, { label: stock.label, text: stock.text })
+  }
+  // Sent, the editor closes; refused here, it stays open with the draft, as a failed Save does.
+  const sendOnce = (key: string, message: string) => {
+    if (macros.some((x) => x.key === key) && sendMacro({ key, text: message })) closeEditor()
+  }
+  // "Live" is anything the snapshot shows holding the transmitter (`txBusyReason`, the engine's
+  // arbiter: CW's queue, a tune, a PTT, any other mode's over) or keying a slot or a tune. It
+  // cannot show the LAST word of a CW over, which has left the queue while the keyer still sends
+  // it; that is why the idle Esc below still stops the CW keyer.
+  const live = !!snap.radio.txBusyReason || snap.radio.transmitting || snap.radio.tuning === true
+  const editRef = useRef({ editorOpen: false, live: false, openEditor, closeEditor })
+  editRef.current = { editorOpen: editing !== null, live, openEditor, closeEditor }
+  const editingMacro = editing ? macros.find((m) => m.key === editing) : undefined
+  // An editor is operator state for THIS station: a lost control hand closes it.
+  useEffect(() => {
+    if (!control) setEditing(null)
+  }, [control])
   // Commit a typed dial from the shared header readout — same CAT path as the
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
@@ -1174,7 +1302,19 @@ export function CwCockpit({
   // Esc's ABORT rides the shared capture listener (useEscStop, operator 2026-10-01), so no
   // control on the screen can swallow it; here its default is cancelled, as it always was, and it
   // is checked first so the stop key can never also fire a macro.
-  useEscStop(control, abort)
+  //
+  // With the macro editor open, Esc is decided as RTTY's and PSK's is: anything live, it is the
+  // abort, editor or no editor; nothing live, it closes the editor and turns nothing off (no
+  // `halt_tx`, so TX stays on and Enter Sends Message is not refused after a cancel). It still
+  // stops the CW keyer (`stop_cw`) there, because the last word of an over is on the air with
+  // nothing the snapshot shows; on an idle keyer that stop has nothing to cut.
+  useEscStop(control, () => {
+    const k = editRef.current
+    if (k.editorOpen && !k.live) {
+      void stopCw()
+      k.closeEditor()
+    } else abort()
+  })
   const stateRef = useRef({ wpm, text })
   stateRef.current = { wpm, text }
   useEffect(() => {
@@ -1183,10 +1323,16 @@ export function CwCockpit({
       const macro = macrosRef.current.find((m) => m.key === e.key)
       if (e.key === 'Escape') {
         e.preventDefault()
+      } else if (macro && macroEditChordKey(e)) {
+        // Ctrl+Shift with a key's F-key: that key's editor, with the caret in its message. It
+        // never sends (`macroEditChordKey` says why the chord is free).
+        e.preventDefault()
+        if (!e.repeat) editRef.current.openEditor(macro.key, 'message')
       } else if (macro) {
         if (e.altKey || e.ctrlKey || e.metaKey) return
         e.preventDefault()
-        if (!e.repeat) {
+        // Not while the editor is open: the caret is in it, as in RTTY and PSK.
+        if (!e.repeat && !editRef.current.editorOpen) {
           send(macro.text)
           esmRef.current.noteKey(macro.key)
         }
@@ -2368,7 +2514,10 @@ export function CwCockpit({
           keep their ⊞ id (`txmeters` in CW_PANEL_IDS — a readout, not a control) and render at
           the TOP of the dock: the panel changes height on key-down, and growing the dock
           downward would shift the Send button under the operator's pointer mid-QSO. */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
+      <div
+        className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}${control && editingMacro ? ' cockpit-txdock-editing' : ''}`}
+        ref={dockRef}
+      >
         {/* Transmit meters (SWR / ALC / Po / COMP) — only the meters the rig reports, and
             `pinned`, so the last send's readings stay on screen (dimmed) after the key is
             up. CW keys in short bursts: unpinned, the panel appeared and was gone before a
@@ -2378,26 +2527,39 @@ export function CwCockpit({
         <div className="cw-macros" role="group" aria-label={t('cw.macros.aria')}>
           {/* The buttons ADVERTISE their F-keys, and default Mac keyboards eat bare F-keys
               as media keys — the tooltip carries the cure there (mac QA audit). */}
+          {/* A built-in caption that is a WORD arrives as a key; one that is on-air shorthand
+              (CQ, 73, AGN, TU) and an operator's own profile label are both written as they
+              stand (`slotOf`). The key or keys the next Enter sends glow (Enter Sends Message). */}
           {macros.map((m) => (
-            <button disabled={!control}
+            <CwMacroButton
               key={m.key}
-              type="button"
-              // The key or keys the next Enter sends glow (Enter Sends Message).
-              className={`cw-macro${esmLit.includes(m.key) ? ' esm-lit' : ''}`}
-              onClick={() => {
-                send(m.text)
-                esm.noteKey(m.key)
-              }}
+              slot={slotOf(m)}
+              control={control}
+              editing={editing === m.key}
+              lit={esmLit.includes(m.key)}
               title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
-            >
-              <span className="cw-macro-key">{m.key}</span>
-              {/* A built-in caption that is a WORD arrives as a key; one that is on-air
-                  shorthand (CQ, 73, AGN, TU) and an operator's own profile label are both
-                  written as they stand. */}
-              <span className="cw-macro-label">{m.labelKey ? t(m.labelKey) : m.label || m.key}</span>
-            </button>
+              onSend={() => sendMacro(m)}
+              onEdit={(focus) => openEditor(m.key, focus)}
+            />
           ))}
         </div>
+
+        {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so
+            it moves and covers no control in the dock; non-modal, so Stop TX in the TX strip
+            stays one click away. Esc is decided by this cockpit's Esc above, never here. */}
+        {control && editingMacro && (
+          <CwMacroEditor
+            key={editingMacro.key}
+            slot={editorSlotOf(editingMacro)}
+            left={editorLeft}
+            saving={savingMacros}
+            focus={editorFocus}
+            onSave={(label, message) => saveMacro(editingMacro.key, label, message)}
+            onSendOnce={(message) => sendOnce(editingMacro.key, message)}
+            onCancel={closeEditor}
+            onReset={() => resetMacro(editingMacro.key)}
+          />
+        )}
 
         <div className="cw-send">
           {/* #286: His Call, on the send row so the dock does not grow a row. */}
