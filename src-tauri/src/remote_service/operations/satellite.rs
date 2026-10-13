@@ -130,7 +130,8 @@ fn run(
         Command::Transponder { name, index, auto } => {
             match crate::pick_sat_transponder(engine, name, index, auto) {
                 // A dead row, an index the bird does not have, a transponder with no downlink to
-                // tune, or an auto re-pick against the row a pass is being worked on.
+                // tune, an auto re-pick against the row a pass is being worked on, or a bird no
+                // radio at the station can receive.
                 Err(_) => Outcome::Rejected {
                     reason: Reason::InvalidAction,
                 },

@@ -345,6 +345,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contests read JAN VHF, JUN VHF and SEP VHF, which fit the rail. The scoreboard you tear off into
   its own window now says no contest is running, where it said Field Day was not active, and the
   Remote page's logging hint now says to log contest contacts at the shack.
+- **A satellite pass no longer retunes the radio you are using on another screen.** With ISS SSTV
+  auto-arm switched on, every ISS pass tuned the radio to 145.800 FM wherever you were. On a radio
+  that cannot reach 2 m, such as an FT-710 working FT8 on 20 m, transmit was turned off, the
+  decodes were cleared, and the band picker was left reading "20m (custom)". The auto-arm now tunes
+  only while the SSTV or Satellites screen is open. On any other screen it tells you the ISS is up
+  and leaves the radio alone, and opening SSTV during the pass arms it then. A satellite picked for
+  a radio that cannot receive it is no longer steered onto that radio by Doppler during the pass
+  either.
+- **Picking a satellite your only radio cannot receive no longer takes over the dial.** On a
+  station with one radio, such as an FT-710 and a 2 m satellite, the pick was held even though
+  the radio could not hear the bird. Opening FT8 then did not bring the dial back to the FT8
+  channel, switching FT8 to FT4 did not move to the FT4 channel, the transmit check went by the
+  satellite instead of your dial, and the contest logger window said the bird was picked. The pick
+  now says "This radio doesn't cover … nothing is held" and holds nothing, so all of these work as
+  if nothing had been picked. With a second radio enabled, or when Nexus cannot yet tell what the
+  radio covers, the satellite is held as before.
+- **ISS SSTV auto-arm on a radio that cannot receive 145.800 MHz now says so once.** Every ISS
+  pass used to bring the "ISS overhead" notice, and on the SSTV or Satellites screen the auto-arm
+  tuned a channel the radio refuses. When your only radio cannot receive 145.800 MHz, Nexus now
+  tells you once per session, with where to turn the auto-arm off (Settings ▸ Digital ▸ SSTV), and
+  then leaves the radio and the screen alone.
 
 ## [1.18.0] — 2026-10-12
 

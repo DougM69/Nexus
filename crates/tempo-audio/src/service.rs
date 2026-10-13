@@ -37089,6 +37089,113 @@ mod tests {
     }
 
     #[test]
+    fn a_held_bird_the_radio_cannot_hear_sends_it_nothing_at_aos() {
+        // THE REPORT'S STATION (2026-10-13), at the wire: one radio, an FT-710 (HF + 6 m),
+        // working FT8 on 20 m ("My 20m band changes from 20m to 20m custom"), here with SO-50
+        // held from earlier in the session. A pass then ran a Doppler correction per tick into a
+        // radio that cannot reach 70 cm: `F 436800828` three times, refused, read back, and the
+        // next correction again, the FT8 band picker reading "20m (custom)" each time the dial
+        // flicked. The same scene on a radio that DOES reach 70 cm is the control: Doppler still
+        // tunes it.
+        for (rig_hi, ranges, hears) in [
+            (
+                450_000_000u64,
+                vec![
+                    (30_000u64, 56_000_000u64),
+                    (144_000_000, 148_000_000),
+                    (430_000_000, 450_000_000),
+                ],
+                true,
+            ),
+            (56_000_000, vec![(30_000, 56_000_000)], false),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            let mut backend = MockBackend::new();
+            let (addr, log) = range_limited_rigctld(30_000, rig_hi, 14_074_000);
+            let mut rig = Rig::rigctld(&addr);
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut tick = 0.0f64;
+            let mut run = |state: &mut RadioLoop,
+                           rig: &mut Rig,
+                           backend: &mut MockBackend,
+                           n: usize,
+                           tick: &mut f64| {
+                for _ in 0..n {
+                    *tick += 400.0;
+                    state
+                        .step(
+                            &engine,
+                            backend,
+                            rig,
+                            &sinks,
+                            *tick,
+                            &mut ra,
+                            &mut rr,
+                            &mut station,
+                        )
+                        .unwrap();
+                }
+            };
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+            }
+            run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+            {
+                // The radio's coverage as its capability probe reports it (this stub answers no
+                // `\dump_state`), then the pick — through the real pick verbs.
+                let mut e = engine.lock().unwrap();
+                e.observe_rig_rx_ranges(Some(ranges));
+                e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, SO50)));
+                e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            }
+            run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+            let (freqs, modes) = (commanded_freqs(&log).len(), commanded_modes(&log).len());
+
+            // AOS: the armed track's per-tick calls (`run_sat_track`), on slot boundaries.
+            for n in 1..=4u64 {
+                {
+                    let mut e = engine.lock().unwrap();
+                    e.set_sat_pass_engaged(true);
+                    e.sat_doppler_tick(-5.0 + n as f64, 1_005_000 + n * 15_000, false);
+                }
+                run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+            }
+            let sent_f = commanded_freqs(&log)[freqs..].to_vec();
+            let sent_m = commanded_modes(&log)[modes..].to_vec();
+            let r = engine.lock().unwrap().snapshot().radio;
+            if hears {
+                assert!(
+                    sent_f.len() >= 4
+                        && sent_f
+                            .iter()
+                            .all(|hz| (436_780_000..436_810_000).contains(hz)),
+                    "control: every correction reached the radio that hears the bird: {sent_f:?}"
+                );
+                assert!(
+                    (r.dial_mhz - 436.795).abs() < 0.02,
+                    "control: the dial rides the downlink, got {}",
+                    r.dial_mhz
+                );
+            } else {
+                assert_eq!(
+                    (sent_f, sent_m),
+                    (vec![], vec![]),
+                    "no frequency or mode command may reach a radio that cannot hear the bird"
+                );
+                assert_eq!(
+                    (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+                    (14.074, "20m", "USB"),
+                    "the FT8 dial stays where the operator put it"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_tripped_cat_breaker_recovers_instead_of_latching_for_the_session() {
         // ⭐ THE WEDGE. `cat_ok = Some(false)` gates BOTH read-back paths, and the only thing that
         // used to clear it was a successful set_freq/set_mode from the retune block — which does

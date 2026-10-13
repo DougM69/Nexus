@@ -445,6 +445,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       features.landing,
     )
   })
+  // Live mirror of the screen in front of the operator, for the app-wide 30 s poll effect (empty
+  // deps): the ISS SSTV auto-arm may take the radio only while SSTV or Satellites is that screen.
+  const viewRef = useRef(view)
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
   // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
@@ -906,27 +912,59 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // flight unwinds — the disabled path ignores the pass.
           // `tuneChannel` for the 145.800 ARM (the app's own channel — never remembered as
           // the operator's 2 m dial); `setFrequency` for the LOS restore, which puts back a
-          // dial that really is theirs.
+          // dial that really is theirs. The screen goes with every tick, read when the tick
+          // runs: on any screen but SSTV or Satellites the radio is in use, and the pass is
+          // only announced (issAutoArm.ts).
           const issDeps = {
             tuneChannel: handleTuneChannel,
             setFrequency: handleSetFrequency,
             sstvArm,
             sstvAutoDisarm,
           }
+          // The radio in use is the station's only enabled radio: with its probed coverage,
+          // that is how the tick knows 145.800 cannot be received here at all. Read when the
+          // tick runs, as the screen is.
+          const soleRadio = () =>
+            !(settingsRef.current?.radios ?? []).some(
+              (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
+            )
           if (settingsRef.current?.issSstvAutoArm === true) {
             getIssPass()
               .then((issPass) =>
-                tickIssAutoArm(issPass, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+                tickIssAutoArm(
+                  issPass,
+                  snapRef.current?.radio,
+                  true,
+                  issDeps,
+                  Date.now() / 1000,
+                  viewRef.current,
+                  soleRadio(),
+                ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
               // get_iss_pass refuse) — it must still tick with no pass, or an
               // arm in flight when the refusal begins never unwinds and the
               // rig strands on 145.800 with SSTV armed (review catch).
               .catch(() =>
-                tickIssAutoArm(null, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+                tickIssAutoArm(
+                  null,
+                  snapRef.current?.radio,
+                  true,
+                  issDeps,
+                  Date.now() / 1000,
+                  viewRef.current,
+                  soleRadio(),
+                ),
               )
           } else {
-            tickIssAutoArm(null, snapRef.current?.radio, false, issDeps, Date.now() / 1000)
+            tickIssAutoArm(
+              null,
+              snapRef.current?.radio,
+              false,
+              issDeps,
+              Date.now() / 1000,
+              viewRef.current,
+            )
           }
           // One-shot alert when a band comes alive, TIERED by propagation mode:
           // Es/F2/aurora loud (rare + fleeting, aurora with operating guidance),
