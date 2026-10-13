@@ -200,8 +200,9 @@ describe("the spectrum's source badge reads in every light theme, in both its ho
   }, 60_000)
 
   it('FIRES: the badge as it shipped letters in the accent in the light theme, at the ratio Chrome measured on Connect', () => {
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
     const shipped = badges.map((b) => {
-      const { fg, bg, ratio } = wordOf(SHIPPED, 'light', b)
+      const { fg, bg, ratio } = wordOf(SHIPPED, 'light skin=bright', b)
       return `${b.host}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`
     })
     expect(shipped[0]).toBe('Connect scope pane: #0174ab on #e5eaf0 = 4.25:1')

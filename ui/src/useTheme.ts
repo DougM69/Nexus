@@ -10,8 +10,8 @@ export type ThemeChoice = Theme | 'system'
 const STORAGE_KEY = 'tempo-theme'
 const DARK_QUERY = '(prefers-color-scheme: dark)'
 
-/** The computer's light/dark setting as a theme; Dark when the platform cannot say, which is
- *  also the app's default. index.html's preseed carries the first-paint copy of this. */
+/** The computer's light/dark setting as a theme; Dark when the platform cannot say (the page's
+ *  own default). index.html's preseed carries the first-paint copy of this. */
 export function systemTheme(): Theme {
   if (typeof window.matchMedia !== 'function') return 'dark'
   return window.matchMedia(DARK_QUERY).matches ? 'dark' : 'light'
@@ -40,9 +40,10 @@ function readInitial(): ThemeChoice {
     localStorage.setItem(STORAGE_KEY, 'dark')
     return 'dark'
   }
-  // default to dark (shack), matching the index.html default — also when the computer prefers
-  // light: System is a choice, not the default (operator, 2026-09-26)
-  return 'dark'
+  // Nothing chosen follows the computer (operator, 2026-10-13, reversing 2026-09-26's "System is
+  // a choice, not the default"). A saved Dark stays Dark: this hook stored its old Dark default on
+  // every launch, so a saved one cannot be told from a pick, and only a pick writes one now.
+  return 'system'
 }
 
 /** [the painted theme, set the choice, the choice itself (for the Settings chips)]. */
@@ -54,12 +55,13 @@ export function useTheme(): [Theme, (t: ThemeChoice) => void, ThemeChoice] {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
-  // The CHOICE is stored, never the resolved theme — or System would become a fixed theme
-  // the next time the app starts.
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, choice)
-  }, [choice])
 
-  const setTheme = useCallback((t: ThemeChoice) => setChoice(t), [])
+  // The CHOICE is stored, never the resolved theme — or System would become a fixed theme the
+  // next time the app starts — and only by a pick, never by the mount, so "never chose" stays
+  // readable: no key.
+  const setTheme = useCallback((t: ThemeChoice) => {
+    localStorage.setItem(STORAGE_KEY, t)
+    setChoice(t)
+  }, [])
   return [theme, setTheme, choice]
 }

@@ -33,6 +33,7 @@ import { PhoneScope } from './components/PhoneScope'
 import { ZeroBeat } from './components/ZeroBeat'
 import {
   MODES,
+  baseTheme,
   chainOf,
   contrast,
   expandWith,
@@ -48,7 +49,7 @@ import {
   type Mode,
   type Rgb,
 } from './cssCascade'
-import { SKINS } from './features/skins'
+import { SKINS, STANDARD_LIGHT_WELL } from './features/skins'
 import { NEED_CHIP } from './features/needVisuals'
 import type { AppSnapshot, RadioStatus } from './types'
 
@@ -91,8 +92,11 @@ const darkTwin = (mode: Mode): Mode => {
   const dark = mode.replace(/^light/, 'dark')
   return (skinOf(mode)?.base === 'light' ? dark.replace(/ skin=[\w-]+/, '') : dark) as Mode
 }
-/** What a light theme paints in its wells itself, held to its table by styles-skins.test.ts. */
-const ownInWell = (mode: Mode): string[] => Object.keys(skinOf(mode)?.well ?? {})
+/** What a light theme paints in its wells itself: a light built-in theme's own, held to its table by
+ *  styles-skins.test.ts, and the standard Light's (STANDARD_LIGHT_WELL), held to Silver's values by
+ *  styles-light-is-silver.test.ts and, under every colour-role preset, by styles-palette-roles.test.ts. */
+const ownInWell = (mode: Mode): string[] =>
+  Object.keys(skinOf(mode)?.well ?? (baseTheme(mode) === 'light' ? STANDARD_LIGHT_WELL.day : {}))
 
 /** The status inks the scope must re-declare. `--state-*` are listed alongside `--snr-*`
  *  because the aliases are computed on <html>: a descendant that re-declares only the target

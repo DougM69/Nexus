@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { activeSkin, skinOf, type SkinId } from './features/skins'
+import { RETIRED_SKINS, activeSkin, skinOf, type SkinId } from './features/skins'
 import { PALETTE_EVENT } from './usePaletteRoles'
 import type { Theme } from './useTheme'
 
@@ -30,7 +30,11 @@ const SKIN_STORAGE_KEY = 'nexus-skin'
 
 function readStored(): SkinId | null {
   try {
-    return skinOf(localStorage.getItem(SKIN_STORAGE_KEY))?.id ?? null
+    const stored = localStorage.getItem(SKIN_STORAGE_KEY)
+    // A retired theme's look is its base's standard theme now (Silver is Light): the standard theme
+    // is no key, so the key goes, as useTheme migrates the removed Amber.
+    if (stored !== null && RETIRED_SKINS.includes(stored)) localStorage.removeItem(SKIN_STORAGE_KEY)
+    return skinOf(stored)?.id ?? null
   } catch {
     return null
   }

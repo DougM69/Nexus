@@ -2362,15 +2362,21 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 ### Theme
 
 - **Theme** — three cards, each with a line on its character: **Light**
-  (daylight panel, dark scopes and meters), **Dark** (dark panel, lit dials and
-  meters) and **System**. Light reads best outdoors in daylight.
+  (pale silver front, white panels, dark scopes and meters), **Dark** (dark panel, lit
+  dials and meters) and **System**. Light reads best outdoors in daylight.
   **System** follows your computer's own light or dark setting and changes when it
-  does; Dark is the default. Either way, the top bar's **Field** chip boosts
-  contrast and size on top of the theme you picked.
+  does, and it is the default: until you pick a theme, Nexus looks the way your
+  computer is set. A theme you picked stays picked. Earlier versions saved Dark for
+  everyone who never picked one, so a computer that ran one of them keeps Dark; pick
+  **System** there to follow your computer. Either way, the top bar's **Field**
+  chip boosts contrast and size on top of the theme you picked.
+  **Light** has the warmer, softer look that was the Silver chassis theme. If you had
+  Silver chassis picked, you now see Light, which looks the same. The brighter Light of
+  earlier versions is the **Bright** theme below.
   Below them are ten ready-made themes, each card with a swatch of its colours. **Rig
-  looks**: Amber LCD, Green LCD, Blue VFD and Silver chassis. **Modern**: Midnight
-  (true black), Slate, Lagoon, Ember, Nebula and Paper. Silver chassis and Paper are
-  light themes and the rest are dark. Picking **Light**, **Dark** or **System** again
+  looks**: Amber LCD, Green LCD and Blue VFD. **Modern**: Midnight (true black), Slate,
+  Lagoon, Ember, Nebula, Paper and Bright. Paper and Bright are light themes and the
+  rest are dark. Picking **Light**, **Dark** or **System** again
   goes back to a standard theme. Every theme is checked for contrast like the standard
   two: the scopes and meters stay dark, and the transmit red, the ON AIR sign, alerts,
   and the signal and Needed colours are the same in every theme. **High contrast** keeps
@@ -2441,8 +2447,8 @@ same thing.
 red-green colour-blind eyes as to everyone else. **Auto** follows the theme, and
 turns Amber CRT while Night is on. On one of the ready-made themes, Auto is that
 theme's own palette: Amber CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue
-VFD, Viridis on Silver chassis, Slate and Lagoon, Cividis on Paper and Inferno on
-the rest. A palette you picked by name never changes with the theme. Remembered per
+VFD, Viridis on Slate and Lagoon, Cividis on Paper and Bright, and Inferno on the
+rest. A palette you picked by name never changes with the theme. Remembered per
 computer.
 
 ### Map & globe

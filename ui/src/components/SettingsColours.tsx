@@ -13,20 +13,27 @@
 // ON A BUILT-IN THEME (features/skins.ts) the default of a role the theme retunes — the Accent and
 // the Readout — is the theme's own colour, not the standard one, so that chip says "Theme's own"
 // and shows the theme's colour. Otherwise the row would claim the standard cyan is what the
-// operator sees. A pick still wins over the theme, as it does over the standard colour.
+// operator sees. So does the standard LIGHT since it took Silver's look (2026-10-13): its accent and
+// digits are its own steel blue and navy, no cyan. A pick still wins over the theme, as it does over
+// the standard colour.
 import type { CSSProperties } from 'react'
 import { t } from '../i18n'
 import { PALETTE_ROLES, defaultPresetId, type PaletteRoleId, type PaletteSelection } from '../features/paletteRoles'
-import { skinOf, type SkinId } from '../features/skins'
+import { SKIN_TOKENS, skinOf, type SkinId } from '../features/skins'
+import type { Theme } from '../useTheme'
 
 interface Props {
   palette: PaletteSelection
   /** The built-in theme on screen, or null for a standard one. */
   skin?: SkinId | null
+  /** The theme the page paints (useTheme's first value): on the standard Light the default Accent
+   *  and Readout are Light's own colours. Optional, as hosts without theme wiring render the dark
+   *  names. */
+  paintedTheme?: Theme
   onChange: (role: PaletteRoleId, presetId: string) => void
 }
 
-export function SettingsColours({ palette, skin = null, onChange }: Props) {
+export function SettingsColours({ palette, skin = null, paintedTheme, onChange }: Props) {
   const theme = skinOf(skin)
   return (
     <div className="settings-grid">
@@ -53,8 +60,10 @@ export function SettingsColours({ palette, skin = null, onChange }: Props) {
             <span className="theme-switcher" role="group" aria-label={name}>
               {role.presets.map((p) => {
                 const on = p.id === current
-                // The theme's own colour, when this is the default of a role the theme retunes.
-                const own = p.id === standard ? theme?.day[role.swatch] : undefined
+                // The theme's own colour, when this is the default of a role the theme retunes: a
+                // built-in theme's, or the standard Light's (a theme token, at its light value).
+                const lightOwn = !theme && paintedTheme === 'light' && SKIN_TOKENS.includes(role.swatch) ? p.light[role.swatch] : undefined
+                const own = p.id === standard ? (theme?.day[role.swatch] ?? lightOwn) : undefined
                 // Both themes' colours ride on the swatch and the sheet shows the one for the
                 // theme in use, so the chip never needs to know which theme that is.
                 const swatch = (

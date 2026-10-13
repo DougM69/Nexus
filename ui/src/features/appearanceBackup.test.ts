@@ -121,6 +121,10 @@ describe('a restore reads it back', () => {
     }
   })
 
+  it('a backup that carries Silver comes back as the standard Light, which paints Silver\'s look now', () => {
+    expect(appearanceIn(withAppearance(STATION, { theme: 'light', skin: 'silver' as never }))).toEqual({ theme: 'light', skin: null })
+  })
+
   it('a palette the curated list no longer offers, but the app still paints, comes back', () => {
     // resolveColormap still accepts every WATERFALL_PALETTES value — a legacy pick is a real pick.
     const legacy = withAppearance(STATION, { waterfallPalette: 'linrad' })

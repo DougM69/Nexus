@@ -426,17 +426,29 @@ describe('index.html preseed: the theme, System included', () => {
     expect(bad).toEqual([])
   })
 
-  it('System seeds the OS setting (the case parity could share a bug with), and unset stays Dark', () => {
-    os('light')
-    localStorage.setItem('tempo-theme', 'system')
-    root.removeAttribute('data-theme')
-    runPreseed()
-    expect(root.getAttribute('data-theme')).toBe('light')
-    // New installs start Dark (the operator's pick), even on a computer set to light.
-    localStorage.clear()
-    root.removeAttribute('data-theme')
-    runPreseed()
-    expect(painted()).toBe('dark')
+  it('System seeds the OS setting (the case parity could share a bug with), and so does nothing stored', () => {
+    // A computer that never chose follows the computer from the FIRST frame (operator, 2026-10-13):
+    // no dark flash on a light computer, no light flash on a dark one. A platform that cannot say
+    // keeps the page's own dark.
+    for (const stored of ['system', null]) {
+      for (const [setting, want] of [['light', 'light'], ['dark', 'dark'], ['none', 'dark']] as const) {
+        os(setting)
+        localStorage.clear()
+        if (stored) localStorage.setItem('tempo-theme', stored)
+        root.removeAttribute('data-theme')
+        runPreseed()
+        expect(painted(), `stored ${stored}, OS ${setting}`).toBe(want)
+      }
+    }
+    // A pick is a pick: Dark stays dark on a light computer, Light stays light on a dark one.
+    for (const [stored, setting] of [['dark', 'light'], ['light', 'dark']] as const) {
+      os(setting)
+      localStorage.clear()
+      localStorage.setItem('tempo-theme', stored)
+      root.removeAttribute('data-theme')
+      runPreseed()
+      expect(painted(), `stored ${stored}, OS ${setting}`).toBe(stored)
+    }
     delete (window as { matchMedia?: unknown }).matchMedia
     root.removeAttribute('data-theme')
   })
@@ -555,7 +567,7 @@ describe('index.html preseed: the built-in themes', () => {
 
   it('seeds exactly the attribute useSkin writes, theme by theme, for every stored theme and OS setting', () => {
     const bad: string[] = []
-    for (const stored of [...SKINS.map((x) => x.id), 'no-such-theme', null]) {
+    for (const stored of [...SKINS.map((x) => x.id), 'silver', 'no-such-theme', null]) {
       for (const theme of [null, 'dark', 'light', 'system']) {
         for (const setting of ['dark', 'light'] as const) {
           const seed = () => {
@@ -583,6 +595,22 @@ describe('index.html preseed: the built-in themes', () => {
     delete (window as { matchMedia?: unknown }).matchMedia
     reset()
     expect(bad).toEqual([])
+  })
+
+  it('a stored Silver seeds no theme: its look is the standard Light now, so the page is plain Light', () => {
+    for (const theme of ['light', 'system'] as const) {
+      os('light')
+      localStorage.clear()
+      localStorage.setItem('nexus-skin', 'silver')
+      localStorage.setItem('tempo-theme', theme)
+      reset()
+      setWin(1366, 768)
+      runPreseed()
+      expect(root.getAttribute('data-theme'), theme).toBe('light')
+      expect(root.getAttribute('data-skin'), theme).toBeNull()
+    }
+    delete (window as { matchMedia?: unknown }).matchMedia
+    reset()
   })
 
   it('seeds a theme on its own base and never on the other (the case parity could share a bug with), and the zoom stays put', () => {

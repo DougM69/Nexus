@@ -66,9 +66,10 @@ type Props = { source: MonitorSource; previewTools?: ReactNode; navigation?: Rea
 
 function MonitorSession({ source, previewTools, navigation, scale }: Props) {
   const [state, setState] = useState<MonitorState>(initialState)
-  // Dark → Light → System → Dark: the one button names the NEXT theme, as the Sun/Moon did.
-  // System follows the computer's light/dark setting (useTheme.ts) and paints light or dark.
-  const [choice, setChoice] = useState<ThemeChoice>(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
+  // System → Dark → Light → System: the one button names the NEXT theme, as the Sun/Moon did.
+  // System follows the computer's light/dark setting (useTheme.ts) and paints light or dark. The
+  // monitor keeps no choice, so every visit starts as a computer that never chose: on System.
+  const [choice, setChoice] = useState<ThemeChoice>('system')
   const os = useSystemTheme(choice === 'system')
   const theme = choice === 'system' ? os : choice
   const next: ThemeChoice = choice === 'dark' ? 'light' : choice === 'light' ? 'system' : 'dark'

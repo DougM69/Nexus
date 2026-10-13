@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
 //
-// SYSTEM THEME — Light / Dark / System, with Dark staying the default for a machine that never
-// chose (the operator's pick, 2026-09-26: "Dark, as today"; System is an option, and existing
-// saved themes are untouched).
+// THE THEME — Light / Dark / System. A machine that never chose FOLLOWS THE COMPUTER (the operator's
+// pick of 2026-10-13, reversing 2026-09-26's "System is a choice, not the default"): the default is
+// System for a new install and for any webview that has no stored choice. A stored choice is kept
+// exactly — Dark and Light alike — and only a PICK writes one: Nexus saved its old Dark default on
+// every launch since the first release, which is why a saved Dark cannot be told from a picked one,
+// and storing nothing until the operator picks is what keeps "never chose" readable from now on.
 //
 // The shape that keeps every [data-theme] selector and every theme-keyed canvas cache as it is:
 // the operator's CHOICE ('system' included) is what is stored in `tempo-theme`, and the theme
 // the page PAINTS — what `data-theme` carries and what the hook returns — is always the resolved
 // 'light' or 'dark'. index-preseed.test.ts holds the first-paint copy of the resolution.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useTheme } from './useTheme'
 
@@ -46,15 +49,47 @@ afterEach(() => {
   delete (window as { matchMedia?: unknown }).matchMedia
 })
 
-describe('useTheme: the default stays Dark', () => {
-  it('a machine that never chose is Dark — even when the computer prefers light', () => {
-    // The disconfirming case for "System became the default": the OS says light and the screen
-    // still paints dark, because nothing was chosen and Dark is the default.
+describe('useTheme: a machine that never chose follows the computer', () => {
+  it('nothing stored paints what the computer prefers, light or dark, and the choice is System', () => {
+    for (const os of ['light', 'dark'] as const) {
+      osPrefers(os)
+      const { result, unmount } = renderHook(() => useTheme())
+      expect(result.current[0], `OS ${os}`).toBe(os)
+      expect(result.current[2], `OS ${os}`).toBe('system')
+      expect(attr(), `OS ${os}`).toBe(os)
+      unmount()
+    }
+  })
+
+  it('opening the app stores nothing: only a pick writes the choice', () => {
+    // The old hook stored its default on mount, so every install that ever ran holds a Dark it may
+    // never have picked. Nothing stored is the only mark of "never chose" there is.
     osPrefers('light')
+    const set = vi.spyOn(Storage.prototype, 'setItem')
     const { result } = renderHook(() => useTheme())
+    expect(set).not.toHaveBeenCalled()
+    expect(localStorage.getItem('tempo-theme')).toBeNull()
+    act(() => result.current[1]('light'))
+    expect(localStorage.getItem('tempo-theme')).toBe('light')
+    set.mockRestore()
+  })
+
+  it('follows a change of the computer\'s setting from the default, as a picked System does', () => {
+    const os = osPrefers('light')
+    const { result } = renderHook(() => useTheme())
+    expect(attr()).toBe('light')
+    os.flip('dark')
+    expect(attr(), 'the OS went dark and the page did not follow').toBe('dark')
     expect(result.current[0]).toBe('dark')
-    expect(result.current[2]).toBe('dark')
-    expect(attr()).toBe('dark')
+    expect(localStorage.getItem('tempo-theme')).toBeNull()
+  })
+
+  it('a stored value this build does not know follows the computer too', () => {
+    osPrefers('light')
+    localStorage.setItem('tempo-theme', 'sepia')
+    const { result } = renderHook(() => useTheme())
+    expect(result.current[0]).toBe('light')
+    expect(result.current[2]).toBe('system')
   })
 
   it('a saved Light or Dark is kept exactly, whatever the computer prefers', () => {
@@ -63,7 +98,9 @@ describe('useTheme: the default stays Dark', () => {
       localStorage.setItem('tempo-theme', saved)
       const { result, unmount } = renderHook(() => useTheme())
       expect(result.current[0], `saved ${saved}`).toBe(saved)
+      expect(result.current[2], `saved ${saved}`).toBe(saved)
       expect(attr()).toBe(saved)
+      expect(localStorage.getItem('tempo-theme')).toBe(saved)
       unmount()
     }
   })
@@ -106,7 +143,9 @@ describe('useTheme: System follows the computer', () => {
 
   it('picking System from Dark applies the OS setting at once', () => {
     osPrefers('light')
+    localStorage.setItem('tempo-theme', 'dark')
     const { result } = renderHook(() => useTheme())
+    expect(attr()).toBe('dark')
     act(() => result.current[1]('system'))
     expect(attr()).toBe('light')
     expect(localStorage.getItem('tempo-theme')).toBe('system')
@@ -126,10 +165,14 @@ describe('useTheme: System follows the computer', () => {
     expect(localStorage.getItem('tempo-theme')).toBe('dark')
   })
 
-  it('a platform that cannot say resolves System to Dark', () => {
-    localStorage.setItem('tempo-theme', 'system')
-    const { result } = renderHook(() => useTheme())
-    expect(result.current[0]).toBe('dark')
-    expect(attr()).toBe('dark')
+  it('a platform that cannot say resolves System to Dark, picked or by default', () => {
+    for (const stored of ['system', null]) {
+      if (stored) localStorage.setItem('tempo-theme', stored)
+      const { result, unmount } = renderHook(() => useTheme())
+      expect(result.current[0], `stored ${stored}`).toBe('dark')
+      expect(attr(), `stored ${stored}`).toBe('dark')
+      unmount()
+      localStorage.clear()
+    }
   })
 })
