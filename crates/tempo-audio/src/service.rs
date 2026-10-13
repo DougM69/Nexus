@@ -11772,21 +11772,10 @@ impl RadioLoop {
         // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
         // they cost nothing here, and moving them would risk dropping audio under contention.
         eng.feed_rx_audio(&captured);
-        // JTTY's PSK Reporter spots (`tempo_app::engine::jtty_rx`): only calls its receive side has
-        // decoded in two separate messages are ever queued. Taken every tick, so the queue cannot
-        // grow while uploading is off; sent with the rest by the PSK Reporter flush below.
-        let jtty_spots = eng.take_jtty_spots();
-        if sinks.psk.is_some() {
-            station
-                .psk_spots
-                .extend(jtty_spots.into_iter().map(|s| Spot {
-                    call: s.call,
-                    freq_hz: s.freq_hz,
-                    snr: s.snr,
-                    mode: "JTTY".to_string(),
-                    time_secs: s.time_secs,
-                }));
-        }
+        // JTTY's PSK Reporter spots join the batch the flush below sends ([`jtty_psk_reports`]).
+        station
+            .psk_spots
+            .extend(jtty_psk_reports(&mut eng, sinks.psk.is_some()));
 
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
@@ -13720,6 +13709,27 @@ fn build_spot(
         mode: mode.to_string(),
         time_secs: now_secs,
     })
+}
+
+/// JTTY's PSK Reporter spots, taken from the engine every tick (`tempo_app::engine::jtty_rx`
+/// queues only calls decoded in two separate messages), as the loop's batch entries in mode
+/// "JTTY", the mode string WSJT-X reports. With uploading off they are taken and dropped, so the
+/// queue cannot grow.
+fn jtty_psk_reports(eng: &mut Engine, uploading: bool) -> Vec<Spot> {
+    let spots = eng.take_jtty_spots();
+    if !uploading {
+        return Vec::new();
+    }
+    spots
+        .into_iter()
+        .map(|s| Spot {
+            call: s.call,
+            freq_hz: s.freq_hz,
+            snr: s.snr,
+            mode: "JTTY".to_string(),
+            time_secs: s.time_secs,
+        })
+        .collect()
 }
 
 /// Generate `n` samples of a unit-amplitude sine at `freq` Hz, continuing from
@@ -37506,6 +37516,56 @@ mod tests {
             "(reporter held, upload applied): inside Winter Field Day's window, an hour before \
              it, at its end, with the master switch off, inside ARRL Field Day's window; then \
              (held during the event, held after it, the switch)"
+        );
+    }
+
+    /// JTTY's spots reach PSK Reporter's batch from the engine's queue, in mode JTTY with the
+    /// sender, RF frequency, SNR and start the receive side gave them, and are taken once. While
+    /// uploading is off they are still taken, and dropped, so the queue cannot grow.
+    #[test]
+    fn jtty_spots_join_the_psk_reporter_batch_as_mode_jtty() {
+        use tempo_app::engine::jtty_rx::{JttyTerminal, JttyUpdate};
+        let queued = || {
+            let mut e = Engine::with_settings(tempo_app::settings::Settings {
+                mycall: "KD9TAW".into(),
+                dial_mhz: 14.090,
+                pskreporter: true,
+                ..tempo_app::settings::Settings::default()
+            });
+            e.set_jtty_armed(true);
+            e.feed_rx_audio(&[0.0; 1200]);
+            let session = e.take_jtty_audio()[0].session;
+            let cq = |id: i64, start_s: f64| JttyUpdate {
+                message_id: id,
+                text: "CQ W1AW CQ".into(),
+                freq_hz: 1500.0,
+                start_s,
+                latest_s: start_s,
+                terminal: JttyTerminal::Complete,
+                snr_db: -7,
+            };
+            e.apply_jtty_updates(session, &[cq(1, 2.0), cq(2, 12.0)]);
+            e
+        };
+        let mut e = queued();
+        let got = jtty_psk_reports(&mut e, true);
+        assert_eq!(
+            got.iter()
+                .map(|s| (s.call.as_str(), s.freq_hz, s.snr, s.mode.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("W1AW", 14_091_500, -7, "JTTY"); 2]
+        );
+        assert_eq!(
+            got[1].time_secs - got[0].time_secs,
+            10,
+            "each at its message's start"
+        );
+        assert!(jtty_psk_reports(&mut e, true).is_empty(), "taken once");
+        let mut off = queued();
+        assert!(jtty_psk_reports(&mut off, false).is_empty());
+        assert!(
+            off.take_jtty_spots().is_empty(),
+            "taken, and dropped, while uploading is off"
         );
     }
 

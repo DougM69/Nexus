@@ -40,6 +40,10 @@ use std::sync::Mutex;
 
 use jtty::{SearchBand, Terminal, Update};
 
+/// The modem's update record and its terminal states, as [`Engine::apply_jtty_updates`] takes
+/// them, so a caller outside this crate needs no `jtty` dependency of its own.
+pub use jtty::{Terminal as JttyTerminal, Update as JttyUpdate};
+
 use super::{engine_lock, now_unix_millis, Engine};
 use crate::dto::{JttyHeard, JttyLine, JttyState};
 
