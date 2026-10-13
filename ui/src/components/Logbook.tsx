@@ -2696,14 +2696,17 @@ export function Logbook({
                   {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
                 </span>
                 <span className="log-cell">
-                  {q.qslRcvd && (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl) ? (
-                    // Per-source detail: which channel(s) actually confirmed.
+                  {q.qslRcvd &&
+                  (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl || q.qslRcvd.qrz) ? (
+                    // Per-source detail: which channel(s) actually confirmed. QRZ has its own
+                    // letter: a QRZ-only confirmation fell through to the yellow eQSL word below.
                     <span
                       className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
                       title={[
                         q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
                         q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
                         q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
+                        q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
@@ -2712,6 +2715,7 @@ export function Logbook({
                         q.qslRcvd.lotw ? 'L' : null,
                         q.qslRcvd.card ? 'C' : null,
                         q.qslRcvd.eqsl ? 'E' : null,
+                        q.qslRcvd.qrz ? 'Q' : null,
                       ]
                         .filter(Boolean)
                         .join('·')}

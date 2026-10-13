@@ -104,6 +104,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mark keep it until you clear it from the row's QSL menu. A listener's (SWL) report in your InBox
   is no longer read as a card either: it neither confirms a contact nor shows as the confirmation
   of a QSO missing from your log.
+- **The Logbook's QSL column marks a QRZ confirmation Q.** A contact confirmed only in your QRZ
+  logbook showed the yellow word eQSL, so you could not tell an eQSL from a QRZ match. QRZ has its
+  own letter beside L, C and E. The eQSL tooltips, in all five languages, no longer say WAZ turns
+  eQSL away: ARRL awards do not accept it, CQ accepts it for WAZ and WPX from AG members, and Nexus
+  does not count it toward WAZ yet. The FAQ says the same.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never

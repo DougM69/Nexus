@@ -64,7 +64,7 @@ Nexus enforces this distinction at the record level:
 | Paper QSL (`QSL_RCVD=Y`) | true | **true** |
 | eQSL (`EQSL_QSL_RCVD=Y`) | true | false |
 
-Every award computation — DXCC, Challenge, Honor Roll, WAZ, WAS — uses `award_confirmed` exclusively. An eQSL-only contact counts as confirmed for your own records but never inflates an official award total. This distinction is maintained at every reconcile merge, ADIF import, and awards query; it cannot be overridden by re-importing.
+Every award computation — DXCC, Challenge, Honor Roll, WAZ, WAS — uses `award_confirmed` exclusively. An eQSL-only contact counts as confirmed for your own records but never inflates an official award total. This distinction is maintained at every reconcile merge, ADIF import, and awards query; it cannot be overridden by re-importing. For WAZ this is stricter than CQ, which accepts eQSLs from Authenticity Guaranteed (AG) members for WAZ and WPX: Nexus does not count those toward WAZ yet.
 
 ---
 
@@ -126,7 +126,7 @@ Up to 1.17.0, a downloaded confirmation went on the oldest contact with its stat
 
 To undo it, import that file with **Logbook ▸ Import ADIF**. The import matches each contact on its exact call, band, mode and time and puts back the confirmations, credit codes and upload marks the check took off. Nothing else moves.
 
-This check is the one way a confirmation comes off a contact, and only from the lines you tick. It uploads nothing, never touches a paper card or a contact's own fields (call, band, mode, time, state, grid, references, comment, notes), and moves no sync cursor. A contact that loses a false LoTW confirmation and was never uploaded becomes due for LoTW: **Upload to LoTW** sends it, and so does **Upload to LoTW automatically** if you turned that on. Award totals move only where the two contacts differ in what an award counts, such as WAS, VUCC, IOTA or satellite DXCC. DXCC and WAZ totals do not, because both contacts are the same station on the same band. eQSL and QRZ confirmations never count for awards, so their lines change only whether a contact shows as confirmed.
+This check is the one way a confirmation comes off a contact, and only from the lines you tick. It uploads nothing, never touches a paper card or a contact's own fields (call, band, mode, time, state, grid, references, comment, notes), and moves no sync cursor. A contact that loses a false LoTW confirmation and was never uploaded becomes due for LoTW: **Upload to LoTW** sends it, and so does **Upload to LoTW automatically** if you turned that on. Award totals move only where the two contacts differ in what an award counts, such as WAS, VUCC, IOTA or satellite DXCC. DXCC and WAZ totals do not, because both contacts are the same station on the same band. Nexus counts eQSL and QRZ confirmations toward no award, so their lines change only whether a contact shows as confirmed.
 
 ---
 
