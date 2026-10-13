@@ -99,6 +99,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **eQSL says why it refused a contact.** A contact dated outside the dates of your eQSL account
+  read as a bad login, in the upload toast and in Awards ▸ Confirmations, which sent you to
+  re-enter a password that was right. Nexus now says the contact is outside your eQSL account's
+  dates, which you check under My Profile at eqsl.cc, and offers to send it again once they are
+  right. When eQSL cannot tell which of your accounts a contact belongs to, because the QTH
+  Nickname is missing or misspelled, Nexus says that instead of a bare "rejected", and that the
+  nickname must match eQSL's My Profile exactly, capitals included. Every eQSL refusal now keeps
+  its reason on the contact, so the Connections row and Awards ▸ Confirmations still show it after
+  the toast has gone.
+- **eQSL uploads name Nexus.** eQSL asks the programs that upload to it to name themselves, and
+  each Nexus upload reached it unnamed. Every upload now carries Nexus's name and version.
+- **Changing your eQSL QTH Nickname no longer skips cards.** Each QTH Nickname is an eQSL account
+  of its own with its own InBox, but Nexus kept its place in the InBox across a nickname change,
+  so the next sync asked the new account only for cards since the old account's last sync, and its
+  earlier cards never arrived. Changing the nickname, in Settings or by loading a config profile,
+  now makes the next sync read that account's whole InBox, as changing the username already did,
+  and a sync that was running when you changed it no longer carries its place over to the other
+  account.
+- **A card from eQSL no longer marks your contact "QSL sent".** Every card in eQSL's InBox carries
+  the sender's own "QSL sent, electronic" mark, and a sync or Check confirmations copied it onto
+  your contact whether or not you had sent anything, so the Logbook showed the sent mark and an
+  ADIF export passed it on to other loggers. A card now brings its confirmation and nothing of the
+  sender's, and a sent mark you set yourself stays as it was. Contacts that already carry a copied
+  mark keep it until you clear it from the row's QSL menu. A listener's (SWL) report in your InBox
+  is no longer read as a card either: it neither confirms a contact nor shows as the confirmation
+  of a QSO missing from your log.
+- **The Logbook's QSL column marks a QRZ confirmation Q.** A contact confirmed only in your QRZ
+  logbook showed the yellow word eQSL, so you could not tell an eQSL from a QRZ match. QRZ has its
+  own letter beside L, C and E. The eQSL tooltips, in all five languages, no longer say WAZ turns
+  eQSL away: ARRL awards do not accept it, CQ accepts it for WAZ and WPX from AG members, and Nexus
+  does not count it toward WAZ yet. The FAQ says the same.
+- **The manual's eQSL pages match the program.** They said ClubLog and eQSL have no per-row push
+  and need a full sync to send a contact again (ClubLog has its CL button on each Logbook row, eQSL
+  has Push to eQSL in Awards ▸ Confirmations, and no whole-log eQSL upload exists), that an eQSL
+  download must start with "ADIF" (it no longer has to), and counted four automatic uploads as
+  three.
 - **LoTW confirmations come in for every call on your LoTW account, each on the contacts made under
   its own call.** Download confirmations and Check confirmations asked LoTW only for the call in
   Settings, so if you changed calls, the confirmations of QSOs made under your old call never

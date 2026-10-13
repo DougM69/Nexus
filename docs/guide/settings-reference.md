@@ -1804,6 +1804,10 @@ whether or not something is stored. **Set** saves one, **Forget** removes it.
 
 - **eQSL username** / **eQSL password** — your eQSL.cc login, often your
   callsign.
+- **QTH Nickname** — only for a callsign with more than one QTH profile at
+  eQSL. Enter it exactly as eQSL's My Profile page spells it, capitals
+  included. Each nickname is an eQSL account of its own, so changing it (or the
+  username) makes the next **Sync eQSL now** read that account's whole InBox.
 - **eQSL confirmations** — **Sync eQSL now** downloads confirmations into your
   log. "These count as confirmations but **not** for DXCC/WAS (ARRL doesn't
   accept eQSL) — a separate tier."

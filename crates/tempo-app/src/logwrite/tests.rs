@@ -2777,6 +2777,88 @@ fn checks_of(
     .collect()
 }
 
+/// One card of eQSL's InBox: `call` on 20 m FT8 at `hhmmss` UTC on 2026-10-01, with the fields
+/// eQSL's DownloadInBox spec puts on every row, its sender's `QSL_SENT` ("always Y") and
+/// `QSL_SENT_VIA` ("always E") among them.
+fn inbox_card(call: &str, hhmmss: &str) -> String {
+    adif_row(
+        call,
+        "20m",
+        "FT8",
+        hhmmss,
+        "<RST_SENT:3>-10<RST_RCVD:0><QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EQSL_QSL_RCVD:1>Y\
+         <EQSL_QSLRDATE:8>20261002",
+    )
+}
+
+/// ★ An eQSL sync brings the card and leaves the operator's own QSL mark alone. The card's
+/// `QSL_SENT`/`QSL_SENT_VIA` are its sender's, and the merge took them for the operator's: every
+/// contact a sync matched showed "QSL sent, electronic" whether the operator sent anything or not,
+/// and its export told every other logger so.
+#[test]
+fn an_eqsl_sync_brings_the_card_and_not_the_senders_sent_mark() {
+    let d = Dir::new("eqsl-sync-sent-mark");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row("W1AW", "20m", "FT8", "180000", "")]),
+    );
+    let inbox = eqsl_answer(&[inbox_card("W1AW", "180100")]);
+    let (summary, durability) = until_written(|| merge_eqsl_report(&engine, &inbox));
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(
+        summary.expect("merged").newly_confirmed_any,
+        1,
+        "premise: the card confirms the contact"
+    );
+    let held = engine.stored_records();
+    assert!(held[0].qsl_rcvd.eqsl, "{:?}", held[0]);
+    assert_eq!(
+        held[0].qsl_sent,
+        tempo_core::logbook::QslSent::default(),
+        "the operator sent nothing"
+    );
+    assert!(
+        !adif_record(&held[0]).contains("<QSL_SENT"),
+        "nor does the export say so"
+    );
+}
+
+/// ★ The same at Check confirmations' Apply, which merges eQSL's InBox as the sync does: the
+/// contact gains the card, and no QSL mark the operator never made.
+#[test]
+fn apply_brings_the_eqsl_card_and_not_the_senders_sent_mark() {
+    use tempo_core::reconcile::check::Channel;
+    let d = Dir::new("eqsl-apply-sent-mark");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row("W1AW", "20m", "FT8", "180000", "")]),
+    );
+    let inbox = eqsl_answer(&[inbox_card("W1AW", "180100")]);
+    let lines =
+        station::check_eqsl_confirmations(&crate::engine::log_plan(&engine), &inbox, Some("K2DEF"))
+            .expect("the check reads the log")
+            .check
+            .lines;
+    assert!(lines.is_empty(), "nothing to take off: {lines:#?}");
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &[(Channel::Eqsl, inbox)], &lines, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let made: Vec<(Channel, usize, usize)> = applied
+        .expect("applied")
+        .services
+        .iter()
+        .map(|s| (s.channel, s.confirmations, s.gained))
+        .collect();
+    assert_eq!(made, [(Channel::Eqsl, 0, 1)], "W1AW gains eQSL's card");
+    let held = engine.stored_records();
+    assert!(held[0].qsl_rcvd.eqsl, "{:?}", held[0]);
+    assert_eq!(
+        held[0].qsl_sent,
+        tempo_core::logbook::QslSent::default(),
+        "the operator sent nothing"
+    );
+}
+
 /// ★ Apply takes off only what the operator ticked, service by service. #400's pair on W1AW has
 /// every service's confirmation of 18:00 on 06:00, each put there by 1.17.0's matcher, and K1ABC
 /// holds eQSL's card of a 15:00 QSO this log lacks. Of the four lines only 06:00's eQSL line is

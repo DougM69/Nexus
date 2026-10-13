@@ -613,11 +613,19 @@ pub enum UploadDetail {
     Unclassified,
     /// Not a failure: the operator declared these already uploaded through another tool.
     OperatorDeclared,
+    /// eQSL holds no account under this login for the contact's date. Split from
+    /// [`Self::Credentials`] because the login matched: what does not cover the contact is the
+    /// date range of the operator's eQSL account, and that is fixed at eqsl.cc, not in Settings.
+    AccountDates,
+    /// eQSL could not tell which of the operator's accounts the contact belongs to: the QTH
+    /// Nickname is missing (two of the call's accounts cover the contact's date) or matches none
+    /// of them. The fix is the nickname in Settings, spelled as eQSL's My Profile page spells it.
+    QthNickname,
 }
 
 impl UploadDetail {
     /// Every class, for exhaustive walks (the round-trip and allow-list tests).
-    pub const ALL: [UploadDetail; 7] = [
+    pub const ALL: [UploadDetail; 9] = [
         UploadDetail::Credentials,
         UploadDetail::CallsignCertificate,
         UploadDetail::StationLocation,
@@ -625,6 +633,8 @@ impl UploadDetail {
         UploadDetail::BatchPartlySigned,
         UploadDetail::Unclassified,
         UploadDetail::OperatorDeclared,
+        UploadDetail::AccountDates,
+        UploadDetail::QthNickname,
     ];
 
     /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
@@ -638,6 +648,8 @@ impl UploadDetail {
             UploadDetail::BatchPartlySigned => "partial",
             UploadDetail::Unclassified => "unclassified",
             UploadDetail::OperatorDeclared => "declared",
+            UploadDetail::AccountDates => "account-dates",
+            UploadDetail::QthNickname => "qth-nickname",
         }
     }
 
@@ -677,6 +689,16 @@ impl UploadDetail {
             UploadDetail::OperatorDeclared => {
                 "Marked as already uploaded through another tool — by you, or by the log \
                  this record was imported from."
+            }
+            UploadDetail::AccountDates => {
+                "This contact's date is outside the dates of your eQSL account, so eQSL did \
+                 not take it. Your password is fine. Check the account's dates under My Profile \
+                 at eqsl.cc, then upload again."
+            }
+            UploadDetail::QthNickname => {
+                "The QTH Nickname is missing or matches none of your eQSL accounts, so eQSL \
+                 could not tell where this contact belongs. Enter it in Settings exactly as My \
+                 Profile at eqsl.cc spells it, capitals included, then upload again."
             }
         }
     }
@@ -3845,13 +3867,44 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
     }
 }
 
-/// A confirmation report's rows exactly as [`Logbook::merge_report`] reads them: the parse, and a
-/// LoTW report's bare `QSL_RCVD` on the LoTW channel ([`lotw_channel_fixup`]). For a reader that
-/// must never disagree with the merge about which channel a row confirms: a check of a download
-/// against the log ([`crate::reconcile::check`]).
+/// An eQSL InBox's rows as what they are: cards OTHER stations sent.
+///
+/// eQSL's DownloadInBox spec puts `QSL_SENT` ("always Y") and `QSL_SENT_VIA` ("always E") on
+/// every row, the SENDER's side of the card. Parsed by field name they became the operator's own
+/// outbound mark ([`QslSent`]), and the merge adopts a sent mark a contact lacks, so every contact
+/// a sync or Check confirmations matched showed "QSL sent, electronic" and exported it to every
+/// other logger. An InBox row brings no sent mark.
+///
+/// A row from a listener (`APP_EQSL_SWL`, "only present if sender is SWL and then always Y") is
+/// no QSO: it neither confirms a contact nor names one the log lacks, so it is dropped. Nexus's
+/// InBox request does not filter listeners out (eQSL's `HamOnly`).
+///
+/// Keyed on the FETCH SOURCE, as [`lotw_channel_fixup`] is, for the same reason: the same fields
+/// in another program's ADIF are that program's own, and [`crate::reconcile`]'s sent-mark merge is
+/// what a shared log's recovery from disk needs, so neither the parse nor the merge can do this.
+fn eqsl_inbox_fixup(text: &str, incoming: &mut Vec<QsoRecord>) {
+    if !crate::eqsl::is_eqsl_adif(text) {
+        return;
+    }
+    incoming.retain(|r| {
+        !r.extra
+            .iter()
+            .any(|(k, v)| k == "APP_EQSL_SWL" && v.trim().eq_ignore_ascii_case("Y"))
+    });
+    for r in incoming.iter_mut() {
+        r.qsl_sent = QslSent::default();
+    }
+}
+
+/// A confirmation report's rows exactly as [`Logbook::merge_report`] reads them: the parse, a
+/// LoTW report's bare `QSL_RCVD` on the LoTW channel ([`lotw_channel_fixup`]), and an eQSL
+/// InBox's cards without their senders' sent marks or its listeners' reports
+/// ([`eqsl_inbox_fixup`]). For a reader that must never disagree with the merge about which
+/// channel a row confirms: a check of a download against the log ([`crate::reconcile::check`]).
 pub fn report_rows(text: &str) -> Vec<QsoRecord> {
     let mut incoming = parse_adif(text);
     lotw_channel_fixup(text, &mut incoming);
+    eqsl_inbox_fixup(text, &mut incoming);
     incoming
 }
 
@@ -8476,6 +8529,22 @@ mod tests {
         for code in -1..=12 {
             details.push(crate::lotw_upload::tqsl_detail(code, &hostile));
         }
+        // eQSL: every answer its upload classifier reads, plus one it has never sent, each with
+        // the hostile text beside it on the page.
+        for marker in [
+            "Result: 1 out of 1 records added",
+            "Result: 0 out of 1 records added",
+            "Warning: Y=2026 M=06 D=07 Bad record: Duplicate",
+            "Error: No match on eQSL_User/eQSL_Pswd",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22",
+            "Error: Multiple accounts match eQSL_User/eQSL_Pswd for date 20190314 18:22",
+            "Error: something new",
+        ] {
+            details.push(
+                crate::eqsl::classify_upload(&format!("{marker}<BR>\n{hostile}"))
+                    .and_then(|(_, detail)| detail),
+            );
+        }
 
         // The positive control, and this test is worthless without it: the same predicate run
         // over the thing that WOULD leak has to trip.
@@ -8525,6 +8594,14 @@ mod tests {
             crate::lotw_upload::tqsl_detail(9, &hostile),
             Some(UploadDetail::BatchPartlySigned),
             "TQSL dropping part of a batch is the one thing the outcome alone cannot say"
+        );
+        assert_eq!(
+            crate::eqsl::classify_upload(&format!(
+                "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n{hostile}"
+            ))
+            .and_then(|(_, detail)| detail),
+            Some(UploadDetail::AccountDates),
+            "a contact outside the eQSL account's dates must still say so"
         );
         for d in UploadDetail::ALL {
             assert!(!d.sentence().trim().is_empty(), "{d:?} says nothing");
@@ -9753,6 +9830,110 @@ mod tests {
             crate::reconcile::reconcile(&mut by_rows, &report_rows(text));
             assert_eq!(*merged.records()[0], by_rows[0], "{text}");
         }
+    }
+
+    /// eQSL's InBox as its download reads: the banner, then `rows`.
+    fn eqsl_inbox(rows: &[String]) -> String {
+        format!(
+            "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<ADIF_Ver:5>3.1.6\n\
+             <EOH>\n{}",
+            rows.concat()
+        )
+    }
+
+    /// One card of eQSL's InBox from `call`, for the contact `rec(call, "20m", 1_700_000_000)`
+    /// makes, with `more`: the fields eQSL's DownloadInBox spec lists, in its order, the sender's
+    /// `QSL_SENT` ("always Y") and `QSL_SENT_VIA` ("always E") among them.
+    fn inbox_card(call: &str, more: &str) -> String {
+        let (y, mo, d, h, mi, _) = datetime_utc(1_700_000_000);
+        format!(
+            "<CALL:{}>{call}<QSO_DATE:8>{y:04}{mo:02}{d:02}<TIME_ON:4>{h:02}{mi:02}<BAND:3>20M\
+             <MODE:3>FT8<RST_SENT:3>-10<RST_RCVD:0><QSL_SENT:1>Y<QSL_SENT_VIA:1>E{more}\
+             <EQSL_QSL_RCVD:1>Y<EQSL_QSLRDATE:8>{y:04}{mo:02}{d:02}<EOR>\n",
+            call.len()
+        )
+    }
+
+    /// ★ A card from eQSL's InBox confirms the contact and leaves the operator's own QSL mark
+    /// alone. Its `QSL_SENT`/`QSL_SENT_VIA` describe the station that sent the card, and the merge
+    /// took them for the operator's: every contact a sync matched showed "QSL sent, electronic"
+    /// whether the operator sent anything or not, and its export told every other logger so.
+    #[test]
+    fn an_eqsl_card_brings_its_confirmation_and_not_the_senders_sent_mark() {
+        let inbox = eqsl_inbox(&[inbox_card("W1AW", "<APP_EQSL_AG:1>Y")]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&inbox);
+        assert_eq!(s.newly_confirmed_any, 1, "premise: the card confirms it");
+        let r = &lb.records()[0];
+        assert!(r.qsl_rcvd.eqsl && r.confirmed && !r.award_confirmed);
+        assert_eq!(
+            r.qsl_sent,
+            QslSent::default(),
+            "the operator sent nothing: {:?}",
+            r.qsl_sent
+        );
+        let out = lb.adif();
+        assert!(
+            !out.contains("<QSL_SENT"),
+            "nor does the export say so: {out}"
+        );
+        assert_eq!(
+            report_rows(&inbox)[0].qsl_sent,
+            QslSent::default(),
+            "Check confirmations reads the rows the merge reads"
+        );
+
+        // Controls. A mark the operator made stays as it was.
+        let mut marked = Logbook::new();
+        let mut card_sent = rec("W1AW", "20m", 1_700_000_000);
+        card_sent.qsl_sent = QslSent {
+            sent: true,
+            via: Some(QslVia::Bureau),
+            ..QslSent::default()
+        };
+        marked.add(card_sent.clone());
+        marked.merge_report(&inbox);
+        assert_eq!(marked.records()[0].qsl_sent, card_sent.qsl_sent);
+        // The same row in a file that is not eQSL's InBox is that file's own sent mark, as a
+        // third-party ADIF's QSL_RCVD stays a card.
+        let third_party = format!("<EOH>\n{}", inbox_card("W1AW", ""));
+        let mut other = Logbook::new();
+        other.add(rec("W1AW", "20m", 1_700_000_000));
+        other.merge_report(&third_party);
+        assert!(other.records()[0].qsl_sent.sent);
+    }
+
+    /// ★ A listener's report in eQSL's InBox (`APP_EQSL_SWL`) is no QSO: it neither confirms a
+    /// contact nor names one the log lacks. Nexus's InBox request does not filter them out, and
+    /// they read as cards: one confirmed a contact with the same call, and one from a listener's
+    /// call came back as a confirmation of a QSO missing from the log.
+    #[test]
+    fn an_eqsl_listener_report_is_no_qso() {
+        let listened = eqsl_inbox(&[
+            inbox_card("W1AW", "<APP_EQSL_SWL:1>Y"),
+            inbox_card("ONL4567", "<APP_EQSL_SWL:1>Y"),
+        ]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&listened);
+        assert_eq!(
+            (s.matched, s.newly_confirmed_any, s.orphans.len()),
+            (0, 0, 0),
+            "{s:?}"
+        );
+        assert!(!lb.records()[0].confirmed);
+        assert!(report_rows(&listened).is_empty(), "nor are they checked");
+
+        // Control: the same two rows from hams are a card and a QSO the log lacks.
+        let worked = eqsl_inbox(&[inbox_card("W1AW", ""), inbox_card("ONL4567", "")]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&worked);
+        assert_eq!(
+            (s.matched, s.newly_confirmed_any, s.orphans.len()),
+            (1, 1, 1)
+        );
     }
 
     #[test]
@@ -11618,7 +11799,7 @@ mod private_note_tests {
 
         assert_withheld(
             "eQSL",
-            &crate::eqsl::build_upload_body("KD9TAW", "pw", &adif, Some("Home")),
+            &crate::eqsl::build_upload_body("KD9TAW", "pw", &adif, Some("Home"), "1.18.0"),
         );
 
         assert_withheld(

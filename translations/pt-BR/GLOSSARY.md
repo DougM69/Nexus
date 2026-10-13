@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 7,055 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 7,056 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,20 +20,20 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 282 | The program's name. |
+| Nexus | 284 | The program's name. |
 | QSO / QSOs | 111 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 98 | ARRL's Logbook of The World — a service name. |
 | CAT | 95 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 126 / 72 | Transmit and receive. Printed on the radio itself. |
 | CW | 78 | The mode. Never "telegrafia" in a mode picker. |
-| QRZ | 74 | Both the Q-code and the callsign lookup site. |
-| CQ | 83 | The call. Translating it would be strange on the air and on screen. |
+| QRZ | 75 | Both the Q-code and the callsign lookup site. |
+| CQ | 85 | The call. Translating it would be strange on the air and on screen. |
 | MHz / kHz / Hz | 74 / 22 / 47 | SI units. Never translated, never re-punctuated. |
 | Doppler | 62 | The effect, in satellite work. Same word, proper name. |
 | DX | 69 | Distant station / distance working. |
 | ADIF | 54 | The log file format. |
 | WSJT-X | 52 | The program Nexus is compatible with. |
-| DXCC | 46 | The award programme and the entity list. |
+| DXCC | 44 | The award programme and the entity list. |
 | SSTV | 48 | The mode. |
 | APRS / APRS-IS | 43 / 12 | The protocol and its internet backbone. |
 | Field Day | 39 | The ARRL/RAC event's official name. |
@@ -54,7 +54,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | SmartSDR / FlexRadio | 23 / 10 | Product names. |
 | Hamlib / rigctld | 23 / 13 | The radio-control library and its daemon. |
 | DXpedition | 20 | The activity. Widely used unchanged. |
-| ARRL / RAC / IARU | 23 / 4 / 2 | Organisation names. |
+| ARRL / RAC / IARU | 26 / 4 / 2 | Organisation names. |
 | SatNOGS | 21 | The satellite database. |
 | AOS / LOS | 19 / 12 | Acquisition and loss of signal, on a satellite pass. |
 | PTT | 35 | Push to talk. Printed on the microphone. |
@@ -63,7 +63,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | QSL | 18 | The confirmation, the card and the act. |
 | HRDLog / HRD | 16 / 9 | Product names. |
 | DAX | 18 | FlexRadio's audio transport. |
-| VUCC / WAS / WAZ | 15 / 13 / 7 | Award programme names. |
+| VUCC / WAS / WAZ | 15 / 11 / 7 | Award programme names. |
 | ALC / AGC / SWR / ATU | 15 / 6 / 7 / 0 | Front-panel radio vocabulary. |
 | CI-V | 15 | Icom's CAT protocol. |
 | DSP | 8 | Digital signal processing. |
@@ -99,7 +99,7 @@ word in, and use only that word in the CSV.
 | radio | 311 | The rig itself, and the radio list in Settings. | |
 | mode | 251 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 172 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
-| log / logbook | 198 / 97 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
+| log / logbook | 198 / 98 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 170 | The Settings screen and every reference to it. | |
 | grid | 141 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 136 | Sound cards, levels, routing. | |
@@ -113,7 +113,7 @@ word in, and use only that word in the CSV.
 | frequency | 99 | | |
 | tune | 62 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 66 | RF power, in watts. | |
-| confirmed | 72 | A QSO confirmed by LoTW/eQSL/card. | |
+| confirmed | 73 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 65 | Both noun and verb. | |
 | spot / spots | 48 / 64 | A cluster or RBN spot. Both noun and verb. | |
 | needed | 57 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |

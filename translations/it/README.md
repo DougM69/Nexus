@@ -119,7 +119,7 @@ you like.
 |---:|---:|---|
 | **1** | **770** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 320 | First run: the setup wizard, the Getting Started guide and the splash page. The first thing a new operator meets. |
-| **3** | 1,118 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
+| **3** | 1,119 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
 | **4** | 479 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
 | **5** | 3,044 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
 | **6** | 1,512 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |

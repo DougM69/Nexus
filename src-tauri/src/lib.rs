@@ -13315,9 +13315,7 @@ fn save_and_publish(
                 settings.lotw_last_qsl.clear();
             }
             // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-                settings.eqsl_last_sync.clear();
-            }
+            keep_eqsl_cursor_for_its_account(eng.settings(), &mut settings);
             // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
             let cur = eng.settings();
             if cur.clublog_email != settings.clublog_email
@@ -24713,6 +24711,36 @@ fn clear_cloudlog_key() -> Result<(), String> {
 /// the resulting re-pull overlap.
 const EQSL_RCVD_MARGIN_SECS: i64 = 86_400;
 
+/// The eQSL account Settings name: its username and its QTH Nickname, as every request sends
+/// them (trimmed). Each nickname is an account of its own at eQSL, with its own InBox and its own
+/// dates, so the InBox cursor belongs to the pair, not to the username alone.
+fn eqsl_account(s: &Settings) -> (&str, &str) {
+    (s.eqsl_username.trim(), s.eqsl_qth_nickname.trim())
+}
+
+/// A save's eQSL InBox cursor ([`save_and_publish`]): kept while the save names the account the
+/// cursor was made for, and emptied when it names another, so the next sync reads that account's
+/// whole InBox. A config profile loads through the same save.
+fn keep_eqsl_cursor_for_its_account(held: &Settings, form: &mut Settings) {
+    if eqsl_account(held) != eqsl_account(form) {
+        form.eqsl_last_sync.clear();
+    }
+}
+
+/// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
+/// (a cut-off one must not skip the cards it never received), and only while Settings still name
+/// the account it read. The fetch runs without the engine lock, and a save meanwhile that names
+/// another account has emptied the cursor for it ([`keep_eqsl_cursor_for_its_account`]).
+fn eqsl_cursor_may_advance(
+    s: &Settings,
+    body: &str,
+    used_username: &str,
+    used_nickname: &str,
+) -> bool {
+    tempo_core::eqsl::is_complete_eqsl_body(body)
+        && eqsl_account(s) == (used_username.trim(), used_nickname.trim())
+}
+
 /// Download new LoTW confirmations and reconcile them into the log.
 ///
 /// Reads the LoTW username + incremental cursor from settings and the password
@@ -25335,6 +25363,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
     let used_username = username.clone();
+    let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
@@ -25375,8 +25404,8 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path (eQSL lands confirmed-not-award by
     // construction). Advance the cursor ONLY if (a) the body is structurally
     // complete — a truncated download must not skip unreceived records — AND (b) the
-    // username is unchanged since this sync started (an in-flight change already
-    // reset the cursor for the new account).
+    // account is unchanged since this sync started (an in-flight change already
+    // reset the cursor for the new account): `eqsl_cursor_may_advance`.
     //
     // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
     // cursor is advanced once it is made.
@@ -25385,9 +25414,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let summary: LotwSyncResult = summary?.into();
     {
         let mut eng = engine_lock(state);
-        if tempo_core::eqsl::is_complete_eqsl_body(&body)
-            && eng.settings().eqsl_username.trim() == used_username.trim()
-        {
+        if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
             let updated = eng.set_eqsl_cursor(next_cursor);
             persist_settings(updated, |e| {
                 eprintln!("tempo: failed to persist eQSL cursor: {e}")
@@ -27279,7 +27306,8 @@ async fn eqsl_push_qso(
     let res =
         tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
             .await
-            .map_err(|e| format!("upload task failed: {e}"))?;
+            .map_err(|e| format!("upload task failed: {e}"))?
+            .map(|(report, _)| report);
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -27291,7 +27319,7 @@ fn eqsl_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
     wait: bool,
-) -> Result<UploadReportDto, String> {
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -27352,26 +27380,45 @@ fn eqsl_push_qso_impl(
             &password,
             &adif,
             (!qth_nickname.is_empty()).then_some(qth_nickname.as_str()),
+            env!("CARGO_PKG_VERSION"),
         );
         propagation::live::eqsl::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
     }; // `body` (holds the password) dropped here
 
-    match tempo_core::eqsl::classify_upload(&resp) {
+    eqsl_answered(named.as_deref(), &rec, &resp, engine, wait)
+}
+
+/// What eQSL's answer to one upload does ([`tempo_core::eqsl::classify_upload`]): the outcome
+/// stamped on the contact, with the class of a refusal, and the report for the caller beside that
+/// class. It reads eQSL's answer alone; the request, and the password in it, are gone by then.
+fn eqsl_answered(
+    named: Option<&str>,
+    rec: &tempo_core::logbook::QsoRecord,
+    answer: &str,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
+    match tempo_core::eqsl::classify_upload(answer) {
         // Transient (system down) → leave unstamped for a clean retry.
-        None => Ok(UploadReportDto {
-            dispatched: 1,
-            outcome: "retry".into(),
-            detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-        }),
-        Some(outcome) => {
+        None => Ok((
+            UploadReportDto {
+                dispatched: 1,
+                outcome: "retry".into(),
+                detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+            },
+            None,
+        )),
+        Some((outcome, detail)) => {
             // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
-            let subject = stamp_subject(named.as_deref(), &rec);
+            let subject = stamp_subject(named, rec);
+            // ⛔ The CLASS of the refusal, off eQSL's markers — never eQSL's page, which is not
+            // kept anywhere. See `UploadDetail`: this field is exported in the signed LoTW batch.
             let status = tempo_core::logbook::UploadStatus {
                 outcome,
                 when_unix: now_unix(),
-                detail: None,
+                detail,
             };
             let stamp = || {
                 tempo_app::logwrite::stamp_push(
@@ -27392,14 +27439,46 @@ fn eqsl_push_qso_impl(
                     .wait(tempo_app::logstore::DURABLE_WAIT)
                     .map_err(durability_failed)?;
             }
-            Ok(UploadReportDto {
-                dispatched: 1,
-                outcome: outcome.code().to_string(),
-                detail: None,
-                skipped_edited: 0,
-                skipped_deleted: 0,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: 1,
+                    outcome: outcome.code().to_string(),
+                    detail: detail.map(|d| d.sentence().to_string()),
+                    skipped_edited: 0,
+                    skipped_deleted: 0,
+                },
+                detail,
+            ))
         }
+    }
+}
+
+/// The eQSL part of a contact's one upload toast ("W9XYZ → QRZ ✓ · eQSL ✗ …"), from the push's
+/// report and the class it stamped ([`eqsl_answered`]).
+fn eqsl_toast_part(
+    r: &UploadReportDto,
+    class: Option<tempo_core::logbook::UploadDetail>,
+) -> String {
+    use tempo_core::logbook::UploadDetail as D;
+    match (r.outcome.as_str(), class) {
+        ("accepted", _) => "eQSL ✓".to_string(),
+        ("duplicate", _) => "eQSL dup".to_string(),
+        ("authfail", _) => "eQSL ✗ login invalid — check Settings".to_string(),
+        ("retry", _) => "eQSL ✗ unavailable".to_string(),
+        // The two refusals of the account rather than the contact: each says where its fix is.
+        (_, Some(D::AccountDates)) => {
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)".to_string()
+        }
+        (_, Some(D::QthNickname)) => {
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)".to_string()
+        }
+        _ => format!(
+            "eQSL ✗ rejected{}",
+            r.detail
+                .as_deref()
+                .map(|d| format!(": {d}"))
+                .unwrap_or_default()
+        ),
     }
 }
 
@@ -28020,7 +28099,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     }
     if eqsl_on && owed & legs::EQSL != 0 {
         let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
-            Ok(r) => {
+            Ok((r, refusal)) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
                     "eQSL",
@@ -28028,26 +28107,17 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     format!("auto-push QSO with {call} — {}", r.outcome),
                 );
                 if !ok {
-                    let class = match r.outcome.as_str() {
-                        "authfail" => "Credentials",
-                        "retry" => "ServerError",
+                    use tempo_core::logbook::UploadDetail as D;
+                    let class = match (r.outcome.as_str(), refusal) {
+                        ("authfail", _) => "Credentials",
+                        ("retry", _) => "ServerError",
+                        (_, Some(D::AccountDates)) => "AccountDates",
+                        (_, Some(D::QthNickname)) => "QthNickname",
                         _ => "Refused",
                     };
                     diag_upload_failure("eQSL", class, None, &dto);
                 }
-                let part = match r.outcome.as_str() {
-                    "accepted" => "eQSL ✓".to_string(),
-                    "duplicate" => "eQSL dup".to_string(),
-                    "authfail" => "eQSL ✗ login invalid — check Settings".to_string(),
-                    "retry" => "eQSL ✗ unavailable".to_string(),
-                    _ => format!(
-                        "eQSL ✗ rejected{}",
-                        r.detail
-                            .as_deref()
-                            .map(|d| format!(": {d}"))
-                            .unwrap_or_default()
-                    ),
-                };
+                let part = eqsl_toast_part(&r, refusal);
                 // "retry" = eQSL temporarily unavailable → retry; authfail/reject = don't.
                 (part, ok, r.outcome.as_str() == "retry")
             }
@@ -44788,6 +44858,92 @@ mod tests {
         ));
     }
 
+    /// ★ A changed QTH Nickname makes the next eQSL sync read that account's whole InBox. Each
+    /// nickname is an account of its own at eQSL, with its own InBox, and the cursor was emptied
+    /// only when the username changed: after a switch the next sync asked the new account only
+    /// for cards since the old one's last sync, and its earlier cards never arrived. A config
+    /// profile carrying another nickname loads through this same save.
+    #[test]
+    fn a_changed_qth_nickname_makes_the_next_eqsl_sync_read_the_whole_inbox() {
+        let held = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            eqsl_last_sync: "202610010000".into(),
+            ..Default::default()
+        };
+        // What `download_eqsl_report_impl` asks eQSL for, from the settings a save leaves.
+        let next_sync = |s: &tempo_app::settings::Settings| {
+            tempo_core::eqsl::build_inbox_url(&tempo_core::eqsl::EqslQuery {
+                username: s.eqsl_username.trim().to_string(),
+                password: "not-a-password".into(),
+                rcvd_since: Some(s.eqsl_last_sync.trim().to_string()).filter(|c| !c.is_empty()),
+                qth_nickname: Some(s.eqsl_qth_nickname.trim().to_string())
+                    .filter(|n| !n.is_empty()),
+            })
+        };
+        let saved = |edit: &dyn Fn(&mut tempo_app::settings::Settings)| {
+            let mut form = held.clone();
+            edit(&mut form);
+            super::keep_eqsl_cursor_for_its_account(&held, &mut form);
+            next_sync(&form)
+        };
+        let portable = saved(&|f| f.eqsl_qth_nickname = "Portable".into());
+        assert!(
+            portable.ends_with("&QTHNickname=Portable&RcvdSince=190001010000"),
+            "{portable}"
+        );
+        // Controls: a changed username does the same, as it always has. A save that names the
+        // same account keeps the cursor, the nickname's surrounding spaces included, since no
+        // request ever sends them.
+        let other_login = saved(&|f| f.eqsl_username = "k2def-other".into());
+        assert!(
+            other_login.ends_with("&RcvdSince=190001010000"),
+            "{other_login}"
+        );
+        for kept in [
+            saved(&|f| f.eqsl_upload = !f.eqsl_upload),
+            saved(&|f| f.eqsl_qth_nickname = " Home ".into()),
+        ] {
+            assert!(
+                kept.ends_with("&QTHNickname=Home&RcvdSince=202610010000"),
+                "{kept}"
+            );
+        }
+    }
+
+    /// The nickname can change while an eQSL sync runs: the fetch holds no engine lock. The
+    /// sync's cursor belongs to the account it read, so it must not land on the account the save
+    /// switched to, or that account's first sync asks only for cards since the other's.
+    #[test]
+    fn an_eqsl_sync_already_running_keeps_its_cursor_off_another_account() {
+        let inbox = "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n\
+                     <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261001<TIME_ON:6>180000<EOR>\n";
+        let mut s = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            ..Default::default()
+        };
+        assert!(
+            super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "control: nothing moved during the fetch"
+        );
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, &inbox[..inbox.len() - 7], "k2def-test", "Home"),
+            "control: a cut-off download never moves it"
+        );
+        s.eqsl_qth_nickname = "Portable".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync of Home finishing after the switch to Portable"
+        );
+        s.eqsl_qth_nickname = "Home".into();
+        s.eqsl_username = "k2def-other".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync finishing after the username changed, as before"
+        );
+    }
+
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."
     /// QRZ's web page redirects a stroked call to its base; the XML API answers NOT_FOUND. So
     /// the lookup has to ask twice, and the ORDER is the whole design.
@@ -45536,6 +45692,87 @@ mod tests {
             tempo_core::reconcile::check::Channel::Eqsl,
             || crate::eqsl_check_on(engine, &test_eqsl(), &|url| eqsl.fetch(url)),
         )
+    }
+
+    /// ★ An eQSL refusal reaches the contact with its reason, and its toast names the fix. The
+    /// push classified eQSL's answer and stamped the outcome alone, so the Connections row and
+    /// Awards ▸ Confirmations had no reason to give for any eQSL bounce, and a contact outside the
+    /// dates of the operator's eQSL account read as a bad login. Only eQSL's answer is handed in
+    /// here: the request, and the password it carries, never reach this half of the push.
+    #[test]
+    fn an_eqsl_refusal_is_stamped_with_its_reason() {
+        use tempo_core::logbook::{UploadDetail as D, UploadOutcome as U};
+        let log = tempo_core::logbook::parse_adif(
+            &[
+                check_row("W1AW", "20m", "FT8", "180000", ""),
+                check_row("K1ABC", "20m", "FT8", "181500", ""),
+                check_row("N0SUP", "20m", "FT8", "183000", ""),
+            ]
+            .concat(),
+        );
+        let (dir, engine) = store_holding("eqsl-refusal-reason", &log);
+        let answered = |call: &str, answer: &str| {
+            let held = engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .expect("logged");
+            let named = held.id.map(|id| id.to_string());
+            crate::eqsl_answered(named.as_deref(), &held, answer, &engine, true).expect("answered")
+        };
+        let (dates, class) = answered(
+            "W1AW",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n\
+             Result: 0 out of 1 records added",
+        );
+        assert_eq!(
+            (dates.outcome.as_str(), dates.detail.as_deref(), class),
+            (
+                "rejected",
+                Some(D::AccountDates.sentence()),
+                Some(D::AccountDates)
+            ),
+            "what Awards ▸ Confirmations' Push to eQSL shows"
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&dates, class),
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)"
+        );
+        let (nickname, class) = answered(
+            "K1ABC",
+            "Error: NO MATCH ON APP_EQSL_QTH_NICKNAME<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&nickname, class),
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)"
+        );
+        // Control: a bad login is still the login.
+        let (login, class) = answered(
+            "N0SUP",
+            "Error: No match on eQSL_User/eQSL_Pswd<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&login, class),
+            "eQSL ✗ login invalid — check Settings"
+        );
+        let stamp = |call: &str| {
+            engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.upload.eqsl)
+                .map(|s| (s.outcome, s.detail))
+        };
+        assert_eq!(
+            [stamp("W1AW"), stamp("K1ABC"), stamp("N0SUP")],
+            [
+                Some((U::Rejected, Some(D::AccountDates))),
+                Some((U::Rejected, Some(D::QthNickname))),
+                Some((U::AuthFail, Some(D::Credentials))),
+            ],
+            "each contact carries its own reason, for the Connections row and Awards"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The QRZ Logbook key the tests check with. It is no one's: the fake below answers.

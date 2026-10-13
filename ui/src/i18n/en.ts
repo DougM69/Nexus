@@ -1630,9 +1630,12 @@ export const EN = {
   'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
-  'logbook.row.qsl.eqsl': 'eQSL received (NOT DXCC/WAZ/WAS-eligible)',
+  'logbook.row.qsl.eqsl':
+    'eQSL received (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
+  'logbook.row.qsl.qrz': 'QRZ logbook confirmed (ARRL awards do not accept it)',
   'logbook.row.qsl.confirmed': 'LoTW / paper — award-eligible',
-  'logbook.row.qsl.eqslOnly': 'eQSL only — not accepted for DXCC/WAZ/WAS',
+  'logbook.row.qsl.eqslOnly':
+    'eQSL only (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",

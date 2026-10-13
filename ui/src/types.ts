@@ -2361,9 +2361,10 @@ export interface UploadStatus {
   whenUnix: number
   /**
    * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
-   * "partial" | "unclassified" | "declared" — not prose. It rides `log.adi`, which is what
-   * TQSL signs and uploads to ARRL, so it is never the service's own words; anything else is
-   * dropped on the way back into Rust. Render it through a label of your own, not verbatim.
+   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" — not prose. It
+   * rides `log.adi`, which is what TQSL signs and uploads to ARRL, so it is never the service's
+   * own words; anything else is dropped on the way back into Rust. Render it through a label of
+   * your own, not verbatim.
    */
   detail?: string | null
 }
