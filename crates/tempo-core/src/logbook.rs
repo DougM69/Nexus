@@ -117,6 +117,8 @@ pub struct QsoRecord {
     /// US state (ADIF `STATE`, 2-letter postal code, uppercased) — drives WAS.
     /// `None` for non-US contacts or when the report didn't carry it.
     pub state: Option<String>,
+    /// ADIF `BAND`, in the Band enumeration's own spelling — lower case, `20m`, `70cm` — whatever
+    /// case its source wrote it in ([`canonical`]); `""` when the contact has none.
     pub band: String,
     /// ADIF `FREQ` — the frequency we TRANSMITTED on (MHz). Equal to the dial plus the TX
     /// audio offset on an ordinary simplex contact; the SPLIT TX dial plus that offset when
@@ -132,7 +134,9 @@ pub struct QsoRecord {
     /// ⚠️ Populated for TERRESTRIAL split only — see `Engine::log_frequencies`, which owns the
     /// rule and the reason satellites are excluded.
     pub freq_rx_mhz: Option<f64>,
-    /// Mode / tier label ("TempoFast" | "TempoDeep" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
+    /// Mode / tier label ("TempoFast" | "TempoDeep" | "FT8" | "CW" | "SSB" | "FM" …). A phone
+    /// contact's sideband is not a mode here: it is held as `SSB` with the sideband as its
+    /// `SUBMODE` in [`extra`](Self::extra) ([`canonical`]).
     pub mode: String,
     /// Signal report SENT / RECEIVED, as a string (ADIF `RST_SENT`/`RST_RCVD` are
     /// type String). Holds a CW RST ("599"), a phone RS ("59"), OR a digital dB SNR
@@ -871,6 +875,7 @@ pub struct Logbook {
     minter: Minter,
 }
 
+pub mod canonical;
 pub mod dedup;
 mod edit;
 pub mod hot;
@@ -2767,6 +2772,10 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if rec.when_unix % 86_400 == old.when_unix % 86_400 {
         rec.time_known = old.time_known;
     }
+    // An edit is held in the log's one form like every contact ([`canonical`]): a band typed in
+    // capitals, a sideband picked as the mode. Last, so the SUBMODE has already followed the mode
+    // the form gave.
+    canonical::contact(&mut rec);
     // The same row, corrected: it stays where it is, but its keys may have moved.
     rec
 }
@@ -3067,7 +3076,15 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
             out.push_str(&field("APP_TEMPO_MODE", &r.mode));
         }
         None if r.mode.trim().is_empty() => {}
-        None => out.push_str(&field("MODE", psk_parent(r).unwrap_or(&r.mode))),
+        None => {
+            out.push_str(&field("MODE", psk_parent(r).unwrap_or(&r.mode)));
+            // SSB's sideband, which the log holds as its SUBMODE ([`canonical`]), is written
+            // beside it — where the pair above writes every other submode — and not again among
+            // the passthrough fields at the end.
+            if let Some(side) = ssb_sideband(r) {
+                out.push_str(&field("SUBMODE", side));
+            }
+        }
     }
     out.push_str(&field("QSO_DATE", &format!("{y:04}{mo:02}{d:02}")));
     // NEVER assert a time nobody measured: an imported record with no time of
@@ -3241,8 +3258,13 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         out.push_str(&field("APP_NEXUS_ID", &id.to_string()));
     }
     // Fields this build does not model, preserved from import verbatim — see
-    // [`QsoRecord::extra`]. Emitted last so modelled fields always lead.
+    // [`QsoRecord::extra`]. Emitted last so modelled fields always lead; SSB's sideband was
+    // written beside its MODE.
+    let sideband_written = ssb_sideband(r).is_some();
     for (k, v) in &r.extra {
+        if sideband_written && k == "SUBMODE" {
+            continue;
+        }
         out.push_str(&field(k, v));
     }
     out.push_str("<EOR>\n");
@@ -3482,6 +3504,10 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
         // sideband back through our own file on import — `promoted_submode` deliberately
         // still does NOT promote a phone submode, so a FOREIGN logger's SSB+USB row keeps
         // MODE=SSB and round-trips its submode verbatim through `extra`, exactly as before.
+        //
+        // The log itself now holds every such contact in that foreign shape, SSB with the
+        // sideband in `extra` ([`canonical`]), so a contact in the log reaches these two only
+        // if something wrote it without going through the log.
         "USB" => Some(("SSB", "USB")),
         "LSB" => Some(("SSB", "LSB")),
         // -- #68 (rogerloxton): FreeDV and VarAC ------------------------------------
@@ -3630,6 +3656,17 @@ fn psk_parent(r: &QsoRecord) -> Option<&'static str> {
     let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
     (psk_submode(&r.mode).is_some() && sub.trim().eq_ignore_ascii_case(r.mode.trim()))
         .then_some("PSK")
+}
+
+/// The sideband of an SSB contact — the `USB` or `LSB` the log holds as its SUBMODE
+/// ([`canonical`]), as written — or `None` for any other row.
+fn ssb_sideband(r: &QsoRecord) -> Option<&str> {
+    if !r.mode.trim().eq_ignore_ascii_case("SSB") {
+        return None;
+    }
+    let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
+    let side = sub.trim();
+    (side.eq_ignore_ascii_case("USB") || side.eq_ignore_ascii_case("LSB")).then_some(sub.as_str())
 }
 
 /// The passthrough SUBMODE of a row an edit has just given a new mode ([`edited`]). A PSK submode
@@ -4558,7 +4595,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     }) {
         f.insert("SUBMODE".to_string(), sub);
     }
-    let rec = QsoRecord {
+    let mut rec = QsoRecord {
         // Consumed before the `extra` drain like every modelled field. Only the canonical
         // text parses; anything else is a row without an id, which the loader gives one.
         id: f.remove("APP_NEXUS_ID").and_then(|s| s.trim().parse().ok()),
@@ -4674,6 +4711,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             extra
         },
     };
+    // Every ADIF read hands back a contact in the log's one form: another logger's `20M` and a
+    // sideband in MODE included ([`canonical`]).
+    canonical::contact(&mut rec);
     Some(rec)
 }
 
@@ -6471,7 +6511,13 @@ mod tests {
             r.mode = typed.into();
             let adif = adif_header() + &adif_record(&r);
             let back = &parse_adif(&adif)[0];
-            assert_eq!(back.mode, typed, "the sideband must survive our own file");
+            // Read back in the log's one form ([`canonical`]): SSB, the sideband its SUBMODE.
+            let sub = back.extra.iter().find(|(k, _)| k == "SUBMODE");
+            assert_eq!(
+                (back.mode.as_str(), sub.map(|(_, v)| v.as_str())),
+                ("SSB", Some(typed)),
+                "the sideband must survive our own file"
+            );
             let again = adif_record(back);
             assert!(
                 again.contains(&field("MODE", "SSB")),

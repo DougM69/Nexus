@@ -2646,7 +2646,11 @@ export function Logbook({
                     {q.call}
                   </button>
                 </span>
-                <span className="log-cell log-country" title={q.country ?? ''}>{q.country ?? '—'}</span>
+                {/* The country is the DXCC entity the call resolves to, the one every award and the
+                    statistics already count: imported contacts carry their logger's own spelling
+                    of it ("UNITED STATES"), and they read as the same country as Nexus's own. The
+                    stored text stays on the tooltip, and shows where the call resolves to none. */}
+                <span className="log-cell log-country" title={q.country ?? ''}>{q.entity ?? q.country ?? '—'}</span>
                 <span className="log-cell">{q.band}</span>
                 <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
                 <span className="log-cell">{q.mode}</span>

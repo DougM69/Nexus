@@ -490,7 +490,7 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, id: &MergeIdentity) -> QsoRecord
             .collect(),
         qid: id.qid.clone(),
     };
-    QsoRecord {
+    let mut rec = QsoRecord {
         id: None,
         call: q.call.clone(),
         grid: None,
@@ -587,7 +587,11 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, id: &MergeIdentity) -> QsoRecord
         station_callsign: Some(log.mycall.clone()).filter(|c| !c.trim().is_empty()),
         extra: Vec::new(),
         contest: Some(Box::new(contest)),
-    }
+    };
+    // Into the lifetime log in its one form: a phone row worked on a sideband is SSB, with the
+    // sideband as its SUBMODE ([`crate::logbook::canonical`]).
+    crate::logbook::canonical::contact(&mut rec);
+    rec
 }
 
 /// The numeric serial in a field vector, when the exchange declares one — ADIF's `STX`
@@ -986,6 +990,30 @@ mod tests {
         assert!(
             !out.contains("<SUBMODE:"),
             "no sideband was ever observed: {out}"
+        );
+    }
+
+    /// A contest contact reaches the lifetime log in the form every contact there is held in: a
+    /// phone row worked on a sideband is SSB, with the sideband as its SUBMODE.
+    #[test]
+    fn a_merged_phone_row_is_held_as_ssb_with_its_sideband_as_the_submode() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "40m",
+        );
+        assert!(log.log_submode_at("K1ABC", "2A", "EMA", "PH", "LSB", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        let r = merge_into_general(&log, "pos", &mut lb);
+        let rec = &r.written[0];
+        let submode = rec.extra.iter().find(|(k, _)| k == "SUBMODE");
+        assert_eq!(
+            (rec.band.as_str(), rec.mode.as_str(), submode),
+            (
+                "40m",
+                "SSB",
+                Some(&("SUBMODE".to_string(), "LSB".to_string()))
+            )
         );
     }
 

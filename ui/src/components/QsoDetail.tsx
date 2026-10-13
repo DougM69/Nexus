@@ -73,7 +73,9 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
       f(t('qso.detail.theirGrid'), q.grid, true),
       f(t('logbook.column.qth'), q.qth),
       f(t('logbook.column.state'), q.state),
-      f(t('logbook.column.country'), q.country ?? q.entity),
+      // The DXCC entity first, as the Logbook's own column shows it; the stored text where the
+      // call resolves to none.
+      f(t('logbook.column.country'), q.entity ?? q.country),
       f('DXCC', q.dxcc, true),
     ]),
     section(t('qso.detail.section.contact.radio'), [

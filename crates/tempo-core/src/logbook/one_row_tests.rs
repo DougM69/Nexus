@@ -518,7 +518,15 @@ fn by_the_old_bodies(records: &mut Vec<Arc<QsoRecord>>, op: &LogOp) -> Effects {
         return none();
     };
     let done = match op.clone() {
-        LogOp::Edit { rec, .. } => vec_bodies::update_record(records, i, *rec),
+        // The body it replaced, verbatim — and then the log's one form, which an edit is held in
+        // now (`canonical`): a band typed in capitals, a sideband chosen as the mode.
+        LogOp::Edit { rec, .. } => {
+            let done = vec_bodies::update_record(records, i, *rec);
+            if done {
+                super::canonical::contact(Arc::make_mut(&mut records[i]));
+            }
+            done
+        }
         LogOp::MarkQslSent { via, date_unix, .. } => {
             vec_bodies::mark_qsl_sent(records, i, via, date_unix)
         }

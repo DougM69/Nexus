@@ -94,6 +94,7 @@ impl LogDb {
             if rec.contest.as_deref().is_some_and(contest_is_empty) {
                 rec.contest = None;
             }
+            crate::logbook::canonical::contact(&mut rec);
             each(rowid, &rec);
         }
         Ok(())
