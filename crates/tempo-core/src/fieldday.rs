@@ -1781,6 +1781,10 @@ impl FieldDayLog {
     /// export is built from, and the rows the journal writes
     /// ([`journal_adif`](Self::journal_adif)), which gives each one its sent exchange as well.
     ///
+    /// A row that sent a report writes it as `RST_SENT`, the tag another program reads, as the
+    /// submitted file's rows do ([`submission_adif`](Self::submission_adif)): for a club this is
+    /// the file its entry submits. The journal writes none.
+    ///
     /// ⚠️ **Live rows first, and that order is the downgrade's.** A build that predates the
     /// tag reads a removed row as an ordinary contact (the safe direction: nothing is lost),
     /// and admits rows in file order — so where a removed contact's station was worked again,
@@ -1802,13 +1806,13 @@ impl FieldDayLog {
             "",
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             sent_moved,
-            false,
+            true,
         )
     }
 
     /// ⭐ **The ADIF the entry submits**: the live rows (a removed contact is not submitted)
     /// without the satellite contacts a ruleset gives no credit (Winter Field Day: *"Do not
-    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif) is the journal and keeps
+    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif), the club's export, keeps
     /// every row.
     pub fn submission_adif(&self) -> String {
         let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
@@ -1824,7 +1828,8 @@ impl FieldDayLog {
     /// they hold.
     ///
     /// `rst_sent`: each row's own sent report under ADIF's `RST_SENT`, the tag another program
-    /// reads. The submitted file asks for it ([`submission_adif`](Self::submission_adif)). The
+    /// reads. Both exports ask for it, the submitted file
+    /// ([`submission_adif`](Self::submission_adif)) and the club's ([`adif`](Self::adif)). The
     /// journal does not: a restore reads the sent side from `APP_NEXUS_MYEX`, so the journal's
     /// bytes stay as they were.
     fn adif_of<'a>(
@@ -6601,6 +6606,30 @@ mod tests {
         assert!(!without.contains("<RST_SENT:"), "{without}");
         let field_day = moved_log().submission_adif();
         assert!(!field_day.contains("<RST_SENT:"), "{field_day}");
+    }
+
+    /// ⭐ **The journal keeps its bytes, and the club's export gains the sent report.** One log,
+    /// two whole files: `journal_adif` writes no `RST_SENT`, as before, because a restore reads a
+    /// row's sent side from `APP_NEXUS_MYEX`; `adif`, the export a club's file is written from,
+    /// is the same bytes with the one tag added. The phone row's `59` is neither the session's
+    /// `599` nor the `57` it received, so a journal that wrote the tag would show it here.
+    #[test]
+    fn the_journal_keeps_its_bytes_where_the_club_export_gains_the_sent_report() {
+        let mut log = ilqp_from_kane();
+        log.dial_khz = 14_250;
+        log.on_air_hz = 14_250_000;
+        ilqp_contact(&mut log, "K9AAA", "57", "COOK", "PH");
+        let journal = "ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n\
+             <CALL:5>K9AAA <MODE:3>SSB <BAND:3>20m <FREQ:9>14.250000 \
+             <APP_NEXUS_DIALKHZ:5>14250 <QSO_DATE:8>20261014 <TIME_ON:6>174640 \
+             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 \
+             <APP_NEXUS_EX:28>RST::57;QTH:il_counties:COOK \
+             <APP_NEXUS_MYEX:28>RST::59;QTH:il_counties:KANE <APP_NEXUS_QSEQ:1>1 <EOR>\n";
+        assert_eq!(log.journal_adif(), journal);
+        assert_eq!(
+            log.adif(),
+            journal.replace("<RST_RCVD:2>57 ", "<RST_RCVD:2>57 <RST_SENT:2>59 ")
+        );
     }
 }
 

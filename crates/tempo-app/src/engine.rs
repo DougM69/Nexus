@@ -47023,6 +47023,22 @@ mod tests {
         );
         let adif = e.fd_club_export(false).expect("the club ADIF");
         assert!(adif.contains("IL QSO Party"), "the ADIF contest id: {adif}");
+        // The report each row SENT under ADIF's own tag, once a record, as a position's own ADIF
+        // writes it: the SSB tent's 59 is not the club's 599.
+        let records: Vec<&str> = adif
+            .split("<EOR>")
+            .filter(|r| r.contains("<CALL:"))
+            .collect();
+        assert_eq!(records.len(), 5, "every contact, the dupes too: {adif}");
+        for r in records {
+            let rst_sent = if r.contains("<CALL:5>W9AWE ") {
+                "<RST_SENT:2>59 "
+            } else {
+                "<RST_SENT:3>599 "
+            };
+            assert!(r.contains(rst_sent), "{r}");
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{r}");
+        }
         // ⭐ …and the spectator board claims the SAME score, made of the same parts: the
         // club's own unique log under the party's rules, never a Field Day reading of it.
         let board: serde_json::Value =

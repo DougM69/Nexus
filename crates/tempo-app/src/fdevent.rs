@@ -4568,6 +4568,124 @@ mod tests {
         assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
     }
 
+    /// `call`'s record in an ADIF file.
+    fn record_of<'a>(adif: &'a str, call: &str) -> &'a str {
+        let tag = format!("<CALL:{}>{call} ", call.len());
+        adif.split("<EOR>")
+            .find(|r| r.contains(&tag))
+            .unwrap_or_else(|| panic!("no record for {call} in\n{adif}"))
+    }
+
+    /// ⭐ **The Club ADIF writes each row's OWN sent report as `RST_SENT`**, the tag another
+    /// program reads, as a position's own ADIF does: the report the position that logged the
+    /// contact sent, the one its line in the club's Cabrillo file carries.
+    ///
+    /// By value, on data that disagrees wherever a wrong source could pass: the two positions
+    /// sent different reports, neither is the host session's `599`, and each received another.
+    #[test]
+    fn the_club_adif_writes_each_rows_own_sent_report() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        for (pos, call, got, sent, at) in [
+            ("aaaa", "K9AAA", "559", "449", 60),
+            ("bbbb", "K9BBB", "579", "339", 120),
+        ] {
+            let mut q = ilqp_row(
+                pos,
+                1,
+                call,
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + at,
+            );
+            q.ex = party_fields("ilqp", &[("RST", got), ("QTH", "COOK")]);
+            q.mex = party_fields("ilqp", &[("RST", sent), ("QTH", "MCLN")]);
+            club.merge(&q, at);
+        }
+        let session = party_session("ilqp", "IL", "MCLN");
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session.clone(), &CabrilloEntrant::default())
+            .expect("one entry");
+        let adif = club.export_adif_with("W9XYZ", session);
+        for (call, line, rst_sent) in [
+            (
+                "K9AAA",
+                " W9XYZ 449 MCLN K9AAA 559 COOK\n",
+                "<RST_SENT:3>449 ",
+            ),
+            (
+                "K9BBB",
+                " W9XYZ 339 MCLN K9BBB 579 COOK\n",
+                "<RST_SENT:3>339 ",
+            ),
+        ] {
+            // The control first: the row carries its reports, as its Cabrillo line says.
+            assert!(cab.contains(line), "the control, {call}: {cab}");
+            let r = record_of(&adif, call);
+            assert!(
+                r.contains(rst_sent),
+                "{call} does not carry {rst_sent:?}: {r}"
+            );
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{call}: {r}");
+        }
+    }
+
+    /// A club row that sent no report writes no `RST_SENT`, never the host's `599` in its place,
+    /// and a Field Day club, whose exchange has no report, writes none. No position sends a
+    /// party row without a report, so this one is built by hand: the wire shape of a row whose
+    /// report was empty.
+    #[test]
+    fn a_club_row_without_a_sent_report_writes_no_rst_sent() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "K9AAA",
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + 60,
+            ),
+            1,
+        );
+        let mut q = ilqp_row(
+            "bbbb",
+            1,
+            "K9BBB",
+            "40m",
+            "CW",
+            "",
+            "WILL",
+            "MCLN",
+            ILQP_START + 120,
+        );
+        q.mex
+            .iter_mut()
+            .find(|f| f.k == "RST")
+            .expect("a party row sends a report")
+            .r
+            .clear();
+        club.merge(&q, 2);
+        let adif = club.export_adif_with("W9XYZ", party_session("ilqp", "IL", "MCLN"));
+        // The control first: the row beside it sent the club's report, and writes it.
+        let with = record_of(&adif, "K9AAA");
+        assert!(with.contains("<RST_SENT:3>599 "), "the control: {with}");
+        let without = record_of(&adif, "K9BBB");
+        assert!(!without.contains("<RST_SENT:"), "{without}");
+        let mut field_day = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        field_day.merge(
+            &with_sent(wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), ("3A", "WI")),
+            100,
+        );
+        let fd = field_day.export_adif("W9ABC", "3A", "WI");
+        assert!(!record_of(&fd, "W1AW").contains("<RST_SENT:"), "{fd}");
+    }
+
     /// ⭐ **The club log lists every multiplier value any position worked** — what every laptop's
     /// board lights (`ClubState::mults`): the county board's counties and the in-state board's
     /// states, both off the party's QTH slot, in the order they were first worked. A club dupe
