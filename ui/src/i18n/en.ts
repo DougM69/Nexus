@@ -4274,6 +4274,13 @@ export const EN = {
   'fieldDay.club.link.hosting': 'Hosting on port {{port}}. Positions join at:',
   'fieldDay.club.link.hostingNoAddress': 'Hosting on port {{port}}.',
   'fieldDay.club.link.connected': { one: '{{count}} other position connected.', other: '{{count}} other positions connected.' },
+  // Contacts this laptop logged on another call than the club's: the club's log takes a contact
+  // only on the call the club is on the air under, so these stay here, and the chip does not
+  // count them.
+  'fieldDay.club.link.otherCall': {
+    one: "{{count}} contact was logged on another call than the club's, so it stays in this laptop's own log and is not sent to the club.",
+    other: "{{count}} contacts were logged on another call than the club's, so they stay in this laptop's own log and are not sent to the club.",
+  },
   // A joined laptop's link in the host board's words, with when it last heard the host
   // (`fieldDay.club.heard.*`); Reconnecting and Lost name the address it is trying.
   'fieldDay.club.link.heard': 'Connected to the host, heard {{ago}}.',

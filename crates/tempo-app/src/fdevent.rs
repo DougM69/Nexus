@@ -1918,6 +1918,18 @@ impl ClubLog {
         self.positions.get(&q.pos).map(|p| p.acked).unwrap_or(0)
     }
 
+    /// ⭐ **A row taken off the wire and not added**: its position's ack moves past `seq`, so the
+    /// laptop that sent it is never asked for it again, and nothing else changes: not the log, its
+    /// journal, its counts, nor the kept-out list (the laptop that logged it says so on its own
+    /// screen). The engine's, for a contact its own position logged on another call than the
+    /// club's (`Engine::fd_club_merge`). Returns the position's ack, as [`merge`](Self::merge)
+    /// does.
+    pub fn take_off(&mut self, pos: &str, seq: u64) -> u64 {
+        let p = self.position(pos);
+        p.acked = p.acked.max(seq);
+        p.acked
+    }
+
     /// [`merge`](Self::merge) minus the wire type; `now == 0` = a journal
     /// replay (no arrival stamped, nothing re-journaled).
     fn merge_row(&mut self, mut row: MergedRow, now: u64) -> bool {
@@ -2775,6 +2787,10 @@ impl ClubLog {
 pub struct ClubMirror {
     pub event: String,
     pub host_call: String,
+    /// The call this laptop's link JOINED under, the one the welcome answered: what a contact
+    /// that carries no call of its own was logged on (`Engine::fd_on_another_call`). Set by the
+    /// pump's bridge from the JOIN it sent (`fdbridge::EnginePositionSync`).
+    pub link_call: String,
     /// LEGACY club dupe keys — the while-typing verdict unions these with own
     /// log. EMPTY when the host is running anything but Field Day: the triple is
     /// not that contest's dupe rule, and no club warning is honest where a wrong
@@ -2905,6 +2921,7 @@ impl ClubMirror {
     pub fn forget_host(&mut self) {
         self.event.clear();
         self.host_call.clear();
+        self.link_call.clear();
         self.last_error = None;
         self.unreachable = None;
         self.welcomed = false;

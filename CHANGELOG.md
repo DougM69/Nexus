@@ -269,6 +269,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its laptops on the club's call, names that call to each laptop that joins and in **Find club
   events**, and their waiting contacts reach the Club Cabrillo and Club ADIF. A laptop on any other
   call is still turned away, with the same words.
+- **At a club, the spectator scoreboard keeps the club's call after Contest over? on the host.**
+  The TV board read the host laptop's own call, so once **Contest over?** put the operator's own
+  call back, the board named the operator instead of the club. While the host holds the club's log,
+  the board names the call the club is on the air under.
+- **At a club, a contact logged on another call than the club's stays out of the club's log.**
+  After **Contest over?** on the host, which puts your own call back, a contact logged with Contest
+  mode turned back on to reach **Club Cabrillo** went into the club's log, and the Club Cabrillo and
+  Club ADIF wrote it under the club's call. The club's log now takes a contact only on the call the
+  club is on the air under. A contact logged on any other call, on the host or on a laptop whose
+  call was changed while it was joined, stays in that laptop's own log and is not sent; the club
+  block says how many, and the club chip still reaches Synced. Nothing already in the club's log
+  changes, and at ARRL Field Day the GOTA station still sends its contacts under its own call.
 
 ## [1.18.0] — 2026-10-12
 

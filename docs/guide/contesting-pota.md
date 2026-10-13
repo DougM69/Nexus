@@ -243,7 +243,8 @@ stays open with club sync on. So at the end of a club contest, wait until every 
 **Contest over?**: its button is on the Contest screen only while the mode is on. On the host,
 putting your own call and entry class back changes nothing in the club's files: Club Cabrillo and
 Club ADIF keep the call and class the club was hosted under, even with the mode turned back on to
-reach them.
+reach them. A contact you then log on your own call stays in that laptop's own log and is not sent:
+the club's log takes a contact only on the club's call, and the club block says how many it kept out.
 
 **Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
 mode stays on. The merge and the export are done before the mode goes off, because they need the

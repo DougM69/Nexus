@@ -2995,6 +2995,12 @@ pub struct ClubLinkDto {
     /// Seconds since this laptop last heard its host, beside [`status`](Self::status).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heard_secs: Option<u64>,
+    /// ⭐ **How many of this laptop's contacts the club's log does not take because they were
+    /// logged on another call than the club's** (`Engine::fd_on_another_call`): each stays in
+    /// this laptop's own log and is never sent, so the club chip does not count it as owed.
+    /// `None` when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_call: Option<u64>,
 }
 
 /// [`ClubLinkDto::hosting`]: whether the club is open, where a position joins it, and who is in.

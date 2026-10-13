@@ -3587,6 +3587,10 @@ export interface ClubLink {
   status?: 'connected' | 'reconnecting' | 'lost'
   /** Seconds since this laptop last heard its host, beside `status`. */
   heardSecs?: number
+  /** How many of this laptop's contacts the club's log does not take because they were logged on
+   *  another call than the club's: each stays in this laptop's own log, never sent, and the club
+   *  chip does not count it. Absent when there are none. */
+  otherCall?: number
 }
 
 /** The host's line: whether the club is open, where a position joins it, and who is in. */

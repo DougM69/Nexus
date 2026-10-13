@@ -1807,6 +1807,7 @@ export const ES: PartialCatalog = {
   "fieldDay.club.link.hosting": "Alojando en el puerto {{port}}. Las posiciones se unen en:",
   "fieldDay.club.link.hostingNoAddress": "Alojando en el puerto {{port}}.",
   "fieldDay.club.link.connected": { "one": "{{count}} posición más conectada.", "other": "{{count}} posiciones más conectadas." },
+  "fieldDay.club.link.otherCall": { "one": "{{count}} contacto se registró con otro indicativo que el del club, así que sigue en el log de este portátil y no se envía al club.", "other": "{{count}} contactos se registraron con otro indicativo que el del club, así que siguen en el log de este portátil y no se envían al club." },
   "fieldDay.club.link.heard": "Conectado al anfitrión, oído {{ago}}.",
   "fieldDay.club.link.reconnecting": "Reconectando con el anfitrión en {{addr}}: oído por última vez {{ago}}.",
   "fieldDay.club.link.lostHeard": "Se perdió el anfitrión en {{addr}}, oído por última vez {{ago}}. Reintentando.",

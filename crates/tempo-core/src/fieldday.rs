@@ -319,6 +319,19 @@ pub struct LoggedQso {
     /// ADIF writer names no station on any row, so it has nothing of this to carry, and no
     /// journal holds a row with one: a club's rebuilt log is never journaled.
     pub station_call: String,
+    /// ⭐ **The call this station was on the air under when the contact was logged** —
+    /// Settings' "Callsign on the air" at that moment, as [`FieldDayLog::on_air_call`] held it.
+    /// `""` on a row logged before it was recorded, and on every row of a log nothing stamps
+    /// (a club's rebuild).
+    ///
+    /// Club sync reads it: a club's log takes a contact only on the call the club is on the
+    /// air under, so one logged on another call stays in this log alone
+    /// (`Engine::fd_on_another_call` in tempo-app). It is journaled (`APP_NEXUS_ONAIR`), because a
+    /// restart re-reads every row into a session opened under whatever call Settings holds then,
+    /// and a contact must not change its call with it. Nothing else reads it: the Cabrillo QSO
+    /// line writes [`station_call`](Self::station_call), else [`FieldDayLog::mycall`], as it
+    /// always has.
+    pub on_air_call: String,
 }
 
 impl LoggedQso {
@@ -737,6 +750,11 @@ pub struct FieldDayLog {
     /// ([`LoggedQso::station_call`]). `""` on every log but a club's rebuild, which sets it
     /// for each row of a GOTA station's (`ClubLog::unique_log_with` in tempo-app).
     pub station_call: String,
+    /// The station's call on the air RIGHT NOW, Settings' "Callsign on the air", stamped by the
+    /// engine at contest entry and on every save, and copied onto each row as it is logged
+    /// exactly as [`operator`](Self::operator) is ([`LoggedQso::on_air_call`]). `""` in a log
+    /// nothing stamps.
+    pub on_air_call: String,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -826,6 +844,7 @@ impl FieldDayLog {
             current_submode: String::new(),
             operator: String::new(),
             station_call: String::new(),
+            on_air_call: String::new(),
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -1517,6 +1536,7 @@ impl FieldDayLog {
             sat: sat.cloned(),
             operator: self.operator.clone(),
             station_call: self.station_call.clone(),
+            on_air_call: self.on_air_call.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -1807,6 +1827,7 @@ impl FieldDayLog {
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             sent_moved,
             true,
+            false,
         )
     }
 
@@ -1816,7 +1837,13 @@ impl FieldDayLog {
     /// every row.
     pub fn submission_adif(&self) -> String {
         let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
-        self.adif_of("", self.submitted().map(|q| (q, None)), sent_moved, true)
+        self.adif_of(
+            "",
+            self.submitted().map(|q| (q, None)),
+            sent_moved,
+            true,
+            false,
+        )
     }
 
     /// `header`: the journal's own header fields, before `<EOH>` (an export has none).
@@ -1832,12 +1859,16 @@ impl FieldDayLog {
     /// ([`submission_adif`](Self::submission_adif)) and the club's ([`adif`](Self::adif)). The
     /// journal does not: a restore reads the sent side from `APP_NEXUS_MYEX`, so the journal's
     /// bytes stay as they were.
+    ///
+    /// `journal`: the journal's own rows, which also carry the call each was logged on
+    /// (`APP_NEXUS_ONAIR`, [`LoggedQso::on_air_call`]). No export writes it.
     fn adif_of<'a>(
         &'a self,
         header: &str,
         rows: impl Iterator<Item = (&'a LoggedQso, Option<u64>)>,
         sent_moved: bool,
         rst_sent: bool,
+        journal: bool,
     ) -> String {
         let mut s = format!("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n{header}<EOH>\n");
         for (q, removed_unix) in rows {
@@ -1999,6 +2030,11 @@ impl FieldDayLog {
             // log already writes for the same person. Only when somebody was named.
             if !q.operator.is_empty() {
                 s.push_str(&adif_field("OPERATOR", &q.operator));
+            }
+            // The call it was logged on, in the journal alone: a restart reads every row into a
+            // session opened under whatever call Settings holds then.
+            if journal && !q.on_air_call.is_empty() {
+                s.push_str(&adif_field("APP_NEXUS_ONAIR", &q.on_air_call));
             }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
@@ -2180,6 +2216,7 @@ impl FieldDayLog {
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             true,
             false,
+            true,
         );
         for h in &self.held {
             s.push_str(&h.adif);
@@ -2537,6 +2574,12 @@ impl FieldDayLog {
             // A journaled row went out under the log's own call: only a club's rebuild sets
             // another, and that log is never journaled.
             station_call: String::new(),
+            // The call it was logged on, from the journal's own `APP_NEXUS_ONAIR`: a row
+            // journaled before the tag existed carries none.
+            on_air_call: f
+                .get("APP_NEXUS_ONAIR")
+                .map(|c| c.trim().to_ascii_uppercase())
+                .unwrap_or_default(),
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -6630,6 +6673,56 @@ mod tests {
             log.adif(),
             journal.replace("<RST_RCVD:2>57 ", "<RST_RCVD:2>57 <RST_SENT:2>59 ")
         );
+    }
+
+    /// ⭐ **The journal keeps the call each contact was logged on, and no export carries it.** A
+    /// restart reads every row into a session opened under whatever call Settings holds then, so
+    /// a contact logged on the club's call and one logged on the operator's own after it must each
+    /// come back with its own ([`LoggedQso::on_air_call`]). The submitted file and the club's
+    /// export are as they were, and a row journaled before the tag existed carries none.
+    #[test]
+    fn the_journal_keeps_the_call_each_contact_was_logged_on() {
+        let mut log = ilqp_from_kane();
+        log.on_air_call = "W9XYZ".into();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.on_air_call = "K9OWN".into();
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains("<APP_NEXUS_ONAIR:5>W9XYZ "),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB").contains("<APP_NEXUS_ONAIR:5>K9OWN "),
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(!export.contains("APP_NEXUS_ONAIR"), "{export}");
+        }
+        let calls = |log: &FieldDayLog| -> Vec<(String, String)> {
+            log.qsos()
+                .iter()
+                .map(|q| (q.call.clone(), q.on_air_call.clone()))
+                .collect()
+        };
+        // Read back by a session opened under a third call: each row keeps its own.
+        let mut back = ilqp_from_kane();
+        back.mycall = "N9NEW".into();
+        back.on_air_call = "N9NEW".into();
+        back.merge_adif(&journal, 0);
+        let owned =
+            |pairs: [(&str, &str); 2]| pairs.map(|(a, b)| (a.to_string(), b.to_string())).to_vec();
+        assert_eq!(
+            calls(&back),
+            owned([("K9AAA", "W9XYZ"), ("K9BBB", "K9OWN")])
+        );
+        // A journal written before the tag: its rows carry none.
+        let older = journal
+            .replace("<APP_NEXUS_ONAIR:5>W9XYZ ", "")
+            .replace("<APP_NEXUS_ONAIR:5>K9OWN ", "");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(calls(&old), owned([("K9AAA", ""), ("K9BBB", "")]));
     }
 }
 

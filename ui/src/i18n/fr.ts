@@ -1807,6 +1807,7 @@ export const FR: PartialCatalog = {
   "fieldDay.club.link.hosting": "Héberge sur le port {{port}}. Les positions rejoignent à :",
   "fieldDay.club.link.hostingNoAddress": "Héberge sur le port {{port}}.",
   "fieldDay.club.link.connected": { "one": "{{count}} autre position connectée.", "other": "{{count}} autres positions connectées." },
+  "fieldDay.club.link.otherCall": { "one": "{{count}} contact a été enregistré sous un autre indicatif que celui du club : il reste dans le log de ce portable et n'est pas envoyé au club.", "other": "{{count}} contacts ont été enregistrés sous un autre indicatif que celui du club : ils restent dans le log de ce portable et ne sont pas envoyés au club." },
   "fieldDay.club.link.heard": "Connecté à l'hôte, entendu {{ago}}.",
   "fieldDay.club.link.reconnecting": "Reconnexion à l'hôte à {{addr}} : entendu pour la dernière fois {{ago}}.",
   "fieldDay.club.link.lostHeard": "Hôte à {{addr}} perdu, entendu pour la dernière fois {{ago}}. Nouvel essai en cours.",

@@ -6859,14 +6859,17 @@ impl Engine {
             }
         };
         let (on_air_mhz, on_air_rx_mhz) = self.log_frequencies();
-        // …and who is at the key, which a Save can change exactly as it changes the band.
+        // …and who is at the key, which a Save can change exactly as it changes the band, and
+        // the call on the air.
         let operator = self.fd_row_operator();
+        let on_air_call = self.fd_row_call();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
             station.log.on_air_hz = hz(on_air_mhz);
             station.log.on_air_rx_hz = on_air_rx_mhz.map(hz).filter(|v| *v > 0);
             station.log.operator = operator;
+            station.log.on_air_call = on_air_call;
         }
     }
 
@@ -6876,6 +6879,13 @@ impl Engine {
     /// chose would be indistinguishable from one somebody did.
     fn fd_row_operator(&self) -> String {
         self.settings.fd_operator.trim().to_ascii_uppercase()
+    }
+
+    /// The call a contest row is logged on (`LoggedQso::on_air_call`): Settings' "Callsign on the
+    /// air", uppercase, as the JOIN sends it to a club's host. Club sync keeps a contact logged on
+    /// another call than the club's out of the club's log ([`Self::fd_on_another_call`]).
+    fn fd_row_call(&self) -> String {
+        self.settings.mycall.trim().to_ascii_uppercase()
     }
 
     /// ⭐ **The contest whose rules forbid posting a spot over the internet RIGHT NOW**, by its
@@ -12742,6 +12752,7 @@ impl Engine {
             status: status.map(|s| s.code().to_string()),
             heard_secs: status.and(m.heard_secs(now)),
             hosting,
+            other_call: Some(self.fd_on_another_call_count()).filter(|n| *n > 0),
         })
     }
 
@@ -12791,8 +12802,8 @@ impl Engine {
         self.fd_club.as_ref().map(|c| c.event_name.clone())
     }
 
-    /// ⭐ **The call the club is on the air under** (beacon + welcome + the JOIN's call gate): the
-    /// one its files are written under, held from the save that turned this host's Contest mode
+    /// ⭐ **The call the club is on the air under** (beacon + welcome + the JOIN's call gate + the
+    /// spectator board): the one its files are written under, held from the save that turned this host's Contest mode
     /// off ([`crate::fdevent::ClubLog::hosted_call`]), else this station's own. So "Contest over?"
     /// here, which puts the operator's own call back, does not turn away a laptop of the club
     /// still on the club's call: it rejoins and sends what it still owes. While not hosting, this
@@ -12905,16 +12916,30 @@ impl Engine {
     /// the connection is sent when the JOIN it came in on (`hold`) no longer holds its position:
     /// the host gave it to another laptop ([`Self::fd_club_give_position`]), under this same
     /// lock, so the row is neither merged nor acked.
+    ///
+    /// ⭐ **A contact this laptop's own position logged on another call than the club's is taken
+    /// off the wire and not added**: acked, so it is never asked for again. Its queue never sends
+    /// one ([`Self::fd_on_another_call`]), and the intake agrees should one come anyway. The wire
+    /// names no call, so this laptop's own contacts are the only ones the host can read the call
+    /// of; every other laptop's link joined on the club's call (the JOIN gate).
     pub fn fd_club_merge(
         &mut self,
         hold: u64,
         row: &tempo_net::fdsync::WireQso,
     ) -> Result<u64, String> {
         let now = now_unix_secs();
+        let off = row.pos == self.settings.fd_position_id
+            && self.fd_sync_log().is_some_and(|log| {
+                let other = self.fd_on_another_call();
+                log.qsos().iter().any(|q| q.seq == row.seq && other(q))
+            });
         let Some(club) = self.fd_club.as_mut() else {
             return Ok(0);
         };
         club.held(&row.pos, hold)?;
+        if off {
+            return Ok(club.take_off(&row.pos, row.seq));
+        }
         Ok(club.merge(row, now))
     }
 
@@ -13185,6 +13210,10 @@ impl Engine {
     /// merged rows (`contest`), which the board scores by that contest's own ruleset off
     /// this lock. It used to hand a non-Field-Day club nothing, so hosting the Illinois QSO
     /// Party put "served from the host station" on the host's own TV.
+    ///
+    /// The board names the call the club is on the air under ([`Self::fd_club_call`]), so after
+    /// "Contest over?" on the host, which puts the operator's own call back, the TV still names
+    /// the club's.
     pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
         let club = self.fd_club.as_ref()?;
         let contest =
@@ -13214,7 +13243,7 @@ impl Engine {
         positions.sort_by(|a, b| a.id.cmp(&b.id));
         Some(crate::fd_scoreboard::FdBoardData {
             event: club.event,
-            call: self.settings.mycall.clone(),
+            call: self.fd_club_call(),
             class: self.settings.fd_class.clone(),
             section: self.settings.fd_section.clone(),
             power_mult: self.settings.fd_power_mult,
@@ -13335,21 +13364,64 @@ impl Engine {
         }
     }
 
+    /// ⭐ **Whether a contact of this laptop's was logged on another call than the club's** — the
+    /// one question the outbox, the club chip and the link line ask of each row past the host's
+    /// ack. A club entry is one station on the air under one call, and the club's files write
+    /// every contact under the club's, so the club's log takes a contact only on the call it is
+    /// on the air under. One logged on another (the host's own after its "Contest over?", Contest
+    /// mode back on under the operator's call to reach the Club Cabrillo button; a laptop whose
+    /// call was changed while it was joined) stays in this laptop's own log: it is never sent, it
+    /// is not owed, so the chip still reaches Synced, and the link line counts it
+    /// (`ClubLinkDto::other_call`). Decided here, where the contact is queued, because the wire
+    /// names no call; the host's intake agrees for its own laptop ([`Self::fd_club_merge`]).
+    ///
+    /// A contact's call is the one it was logged on (`LoggedQso::on_air_call`); one that carries
+    /// none (logged before the call was recorded) follows the call this laptop's link joined
+    /// under (`ClubMirror::link_call`). The club's call is the host's own on the host
+    /// ([`Self::fd_club_call`], held through "Contest over?") and the one the host's welcome
+    /// named on any other laptop. Both are read as club sync reads a call
+    /// ([`crate::fdevent::club_call`]), and a call either side cannot say keeps the contact
+    /// flowing, as the JOIN gate serves it. ARRL Field Day takes every call: its GOTA station is on
+    /// another call by rule, and the club's file writes its contacts under it.
+    fn fd_on_another_call(&self) -> impl Fn(&tempo_core::fieldday::LoggedQso) -> bool + '_ {
+        let gota = self.fd_club_contest() == tempo_core::fieldday::FdEvent::ArrlFd.code();
+        let club = crate::fdevent::club_call(&match &self.fd_club {
+            Some(_) => self.fd_club_call(),
+            None => self.fd_mirror.host_call.clone(),
+        });
+        let link = self.fd_mirror.link_call.as_str();
+        move |q| {
+            let call = match q.on_air_call.as_str() {
+                "" => link,
+                call => call,
+            };
+            !gota
+                && club.as_deref().is_some_and(|club| {
+                    crate::fdevent::club_call(call).is_some_and(|call| call != club)
+                })
+        }
+    }
+
     /// THE OUTBOX: own FD rows with `seq > after`, as wire rows — derived
     /// from the journal-backed log, so there is no separate queue file to
-    /// corrupt.
+    /// corrupt. Never a contact logged on another call than the club's
+    /// ([`Self::fd_on_another_call`]).
     ///
     /// The operator is the ROW's own — who was at the key when it was logged — so a
     /// seat change during an outage cannot re-attribute the contacts still queued. A row
     /// that names nobody falls back to what the wire has always carried: the
     /// `fd_operator` setting, else the station call.
     pub fn fd_sync_outbox(&self, after: u64) -> Vec<tempo_net::fdsync::WireQso> {
-        self.fd_sync_rows(|seq| seq > after)
+        let other = self.fd_on_another_call();
+        self.fd_sync_rows(|q| q.seq > after && !other(q))
     }
 
-    /// Own live FD rows whose seq `keep` takes, as wire rows, ascending — the outbox's rows and a
+    /// Own live FD rows `keep` takes, as wire rows, ascending — the outbox's rows and a
     /// restore's ([`Self::fd_sync_marks`]).
-    fn fd_sync_rows(&self, keep: impl Fn(u64) -> bool) -> Vec<tempo_net::fdsync::WireQso> {
+    fn fd_sync_rows(
+        &self,
+        keep: impl Fn(&tempo_core::fieldday::LoggedQso) -> bool,
+    ) -> Vec<tempo_net::fdsync::WireQso> {
         let Some(log) = self.fd_sync_log() else {
             return Vec::new();
         };
@@ -13365,7 +13437,7 @@ impl Engine {
         let mut rows: Vec<_> = log
             .qsos()
             .iter()
-            .filter(|q| keep(q.seq))
+            .filter(|q| keep(q))
             .map(|q| tempo_net::fdsync::WireQso {
                 pos: posid.clone(),
                 seq: q.seq,
@@ -13426,7 +13498,7 @@ impl Engine {
             .collect();
         if !host.is_empty() {
             marks.extend(
-                self.fd_sync_rows(|seq| host.contains(&seq))
+                self.fd_sync_rows(|q| host.contains(&q.seq))
                     .into_iter()
                     .map(|row| Mark::Restore(Box::new(row))),
             );
@@ -13548,11 +13620,13 @@ impl Engine {
     pub fn fd_sync_state(&self) -> crate::fdevent::SyncState {
         // What the host lacks: own live rows past its ack, and the take-backs it does not hold.
         // Never a seq past the ack that was taken back before it went up: the host is never
-        // sent that row, so counting it read "Behind 1" for good.
+        // sent that row, so counting it read "Behind 1" for good. Nor a contact logged on another
+        // call than the club's, which is never sent either ([`Self::fd_on_another_call`]).
+        let other = self.fd_on_another_call();
         let rows = self.fd_sync_log().map_or(0, |log| {
             log.qsos()
                 .iter()
-                .filter(|q| q.seq > self.fd_mirror.acked)
+                .filter(|q| q.seq > self.fd_mirror.acked && !other(q))
                 .count() as u64
         });
         crate::fdevent::SyncState::derive(
@@ -13561,6 +13635,19 @@ impl Engine {
             rows + self.fd_sync_marks().len() as u64,
             self.fd_mirror.down_since_unix,
         )
+    }
+
+    /// How many of this laptop's contacts past the host's ack the club's log does not take, as
+    /// logged on another call than the club's ([`Self::fd_on_another_call`]): what the link line
+    /// says beside the chip, which does not count them.
+    fn fd_on_another_call_count(&self) -> u64 {
+        let other = self.fd_on_another_call();
+        self.fd_sync_log().map_or(0, |log| {
+            log.qsos()
+                .iter()
+                .filter(|q| q.seq > self.fd_mirror.acked && other(q))
+                .count() as u64
+        })
     }
 
     /// ⭐ **The club board's rows as this laptop's own screens show them**: on the HOST, every
@@ -14704,8 +14791,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // The submode funnel: the sequencer's log() calls record
                     // the tier actually keyed (set_tier re-stamps on a change).
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
-                    // …and who is at the key, by the same funnel.
+                    // …and who is at the key, by the same funnel, and the call on the air.
                     st.log.operator = self.fd_row_operator();
+                    st.log.on_air_call = self.fd_row_call();
                     st
                 }),
                 running: true,
@@ -14716,6 +14804,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                         FieldDayStation::search_and_pounce(&mycall, &mygrid, session, &band);
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st.log.operator = self.fd_row_operator();
+                    st.log.on_air_call = self.fd_row_call();
                     st
                 }),
                 running: false,
@@ -45436,6 +45525,258 @@ mod tests {
         e.fd_host_start(dir.join("ilqp.ndjson"))
             .expect("the Illinois QSO Party is hosted");
         e
+    }
+
+    /// ⭐ **The spectator board names the call the club is on the air under**: the host's
+    /// Settings call while nothing is held, and the club's after "Contest over?" on the host,
+    /// which puts the operator's own call back in the save that turns the mode off. The board
+    /// read Settings, so after the put-back the TV named the operator's own call.
+    #[test]
+    fn the_board_names_the_clubs_call_after_the_hosts_put_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-board-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_host(&dir);
+        let board_call = |e: &Engine| e.fd_board_snapshot().expect("hosting").call;
+        let save = |e: &mut Engine, active: bool, call: &str| {
+            let mut s = e.settings().clone();
+            s.fd_active = active;
+            s.mycall = call.into();
+            e.apply_settings(s);
+        };
+        assert_eq!(board_call(&e), "W9XYZ", "CONTROL: nothing held");
+
+        // "Contest over?": the mode off and the operator's own call back, in one save.
+        save(&mut e, false, "K9OWN");
+        assert_eq!(
+            (e.settings().mycall.as_str(), e.fd_hosting()),
+            ("K9OWN", true),
+            "CONTROL: the put-back landed and the laptop still hosts"
+        );
+        assert_eq!(
+            board_call(&e),
+            "W9XYZ",
+            "after the put-back the board names the club's call"
+        );
+
+        // The mode back on with the club's call lets the hold go; then another call with the
+        // mode on, which holds nothing: the board names the Settings call.
+        save(&mut e, true, "W9XYZ");
+        save(&mut e, true, "W9NEW");
+        assert_eq!(
+            (e.fd_club_call(), board_call(&e)),
+            ("W9NEW".to_string(), "W9NEW".to_string()),
+            "with nothing held, the board names the Settings call"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An Illinois QSO Party position keeping its contest journal at `journal`, joined to a club
+    /// at a LAN address (nothing listens there: the tests below play the link's part).
+    fn party_position(journal: &std::path::Path) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_fd_log_path(journal.to_path_buf());
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        s.fd_position_id = "eeee0001".into();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        e.apply_settings(s);
+        assert!(matches!(e.mode, Mode::FieldDay { .. }), "the party is on");
+        e
+    }
+
+    /// One party contact from the log strip.
+    fn party_contact(e: &mut Engine, call: &str) {
+        let rx = [
+            ("RST".to_string(), "599".to_string()),
+            ("QTH".to_string(), "KANE".to_string()),
+        ];
+        assert!(
+            e.contest_log_manual(call, &rx, "CW", None).unwrap(),
+            "{call}"
+        );
+    }
+
+    /// ⭐ **Every contest row records the call it was logged on** (`LoggedQso::on_air_call`):
+    /// stamped as Contest mode starts, however it is started, and again on every save, so a row
+    /// the digital sequencer logs between saves carries it too. Club sync keeps a contact logged
+    /// on another call than the club's out of the club's log by it.
+    #[test]
+    fn every_contest_row_records_the_call_it_was_logged_on() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-row-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_position(&dir.join("own.adi"));
+        let stamped = |e: &Engine| match &e.mode {
+            Mode::FieldDay { station, .. } => station.log.on_air_call.clone(),
+            _ => panic!("the party is on"),
+        };
+        assert_eq!(stamped(&e), "W9XYZ", "the call on the air");
+        // The mode started again with no save in between, as its buttons start it, running or
+        // searching.
+        for (mode, call) in [("fieldday-run", "K9RUN"), ("fieldday-sp", "K9NEW")] {
+            e.settings.mycall = call.into();
+            e.set_mode(mode).unwrap();
+            assert_eq!(stamped(&e), call, "stamped as {mode} starts");
+        }
+        let mut s = e.settings().clone();
+        s.mycall = " k9abc".into();
+        e.apply_settings(s);
+        assert_eq!(stamped(&e), "K9ABC", "…and on a save that changes it");
+        party_contact(&mut e, "K9AAA");
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("the party is on");
+        };
+        assert_eq!(
+            station.log.qsos().last().map(|q| q.on_air_call.as_str()),
+            Some("K9ABC"),
+            "the row carries the call it was logged on"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A contact that carries no call follows the call this laptop's link joined under**: one
+    /// logged by a Nexus from before the call was recorded, read back from its journal. Taken
+    /// while the link joined on the club's call; kept out, never sent and never owed, while it
+    /// joined on another (the host's own laptop, its link made on the operator's own call after
+    /// "Contest over?" on it, while the host holds the club's).
+    #[test]
+    fn a_contact_that_carries_no_call_follows_the_call_its_link_joined_under() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-no-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("own.adi");
+        {
+            let mut e = party_position(&journal);
+            party_contact(&mut e, "K9AAA");
+            e.journal_mark().wait();
+        }
+        let written = std::fs::read_to_string(&journal).unwrap();
+        let older = written.replace("<APP_NEXUS_ONAIR:5>W9XYZ ", "");
+        assert!(
+            written != older && !older.contains("APP_NEXUS_ONAIR"),
+            "CONTROL: this build wrote the call, and the older journal has none: {written}"
+        );
+        std::fs::write(&journal, older).unwrap();
+        let mut e = party_position(&journal);
+        let link = |e: &mut Engine, joined: &str| {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, now_unix_secs());
+            m.on_welcome(0, "ILQP", "W9XYZ", 0);
+            m.link_call = joined.into();
+        };
+        let chip = |e: &Engine| {
+            let club = e.snapshot().field_day.unwrap().club.unwrap();
+            (club.sync_state, club.queued)
+        };
+        let other_call = |e: &Engine| e.fd_club_link().and_then(|l| l.other_call);
+
+        link(&mut e, "K9OWN");
+        assert_eq!(
+            (e.fd_sync_outbox(0).len(), chip(&e), other_call(&e)),
+            (0, ("synced".to_string(), 0), Some(1)),
+            "on a link joined on another call: kept out, not owed, and said"
+        );
+        link(&mut e, "W9XYZ");
+        let out = e.fd_sync_outbox(0);
+        assert_eq!(
+            (
+                out.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+                chip(&e),
+                other_call(&e)
+            ),
+            (vec!["K9AAA"], ("behind".to_string(), 1), None),
+            "on a link joined on the club's call: sent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host takes a contact its own laptop logged on another call off the wire**, should
+    /// one come anyway: acked, so it is never asked for again, and not added to the club's log or
+    /// its files. Its queue never sends one; the wire names no call, so the host can read the call
+    /// of its own laptop's contacts alone.
+    #[test]
+    fn the_host_takes_its_own_contact_on_another_call_off_the_wire() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-own-other-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_position(&dir.join("own.adi"));
+        let mut s = e.settings().clone();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        e.apply_settings(s);
+        e.fd_host_start(dir.join("ilqp.ndjson")).unwrap();
+        let role = e.fd_position_role();
+        let hold = e
+            .fd_club_join(
+                tempo_net::fdsync::PROTO_VERSION,
+                "eeee0001",
+                "HQ",
+                "W9XYZ",
+                "ilqp",
+                &role,
+                &club_key_hash("eeee0001"),
+            )
+            .expect("its own laptop joins")
+            .hold;
+        {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, now_unix_secs());
+            m.on_welcome(0, "ILQP", "W9XYZ", 0);
+            m.link_call = "W9XYZ".into();
+        }
+        party_contact(&mut e, "K9AAA");
+        let row = e
+            .fd_sync_outbox(0)
+            .pop()
+            .expect("the party contact is queued");
+        assert_eq!(e.fd_club_merge(hold, &row), Ok(1), "CONTROL: it is merged");
+
+        // "Contest over?", then the mode back on under the operator's own call.
+        for active in [false, true] {
+            let mut s = e.settings().clone();
+            s.fd_active = active;
+            s.mycall = "K9OWN".into();
+            e.apply_settings(s);
+        }
+        party_contact(&mut e, "K9BBB");
+        assert!(
+            e.fd_sync_outbox(1).is_empty(),
+            "CONTROL: its queue keeps it out"
+        );
+        let sent = tempo_net::fdsync::WireQso {
+            seq: 2,
+            call: "K9BBB".into(),
+            ..row
+        };
+        assert_eq!(
+            e.fd_club_merge(hold, &sent),
+            Ok(2),
+            "acked, so it is never asked for again"
+        );
+        assert_eq!(
+            e.fd_club_log().map(|c| c.qsos_raw()),
+            Some(1),
+            "and not added"
+        );
+        let cab = e.fd_club_export(true).unwrap();
+        assert!(!cab.contains("K9BBB"), "{cab}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⭐ **A position set up in another exchange role than the club's is refused, by name,
