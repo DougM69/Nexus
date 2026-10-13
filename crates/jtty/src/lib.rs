@@ -88,8 +88,18 @@ pub enum EncodeError {
 /// Encode message text into channel tones, normalising it the way WSJT-X does.
 ///
 /// The text goes to the modem as bytes; a byte outside the JTTY alphabet is
-/// sent as `#`.
+/// sent as `#`. The last frame carries end-of-message, as a whole message's
+/// does ([`encode_segment`] leaves that choice to the caller).
 pub fn encode(text: &str, profile: Profile) -> Result<Encoded, EncodeError> {
+    encode_segment(text, profile, true)
+}
+
+/// [`encode`] for one segment of a transmission: `last` sets end-of-message
+/// on the final frame. WSJT-X sends every segment but the last of a message,
+/// and everything its live entry sends while the operator is still typing,
+/// without it, so the receiver joins the segments into one growing message
+/// (`MainWindow::execute_jtty_tx`).
+pub fn encode_segment(text: &str, profile: Profile, last: bool) -> Result<Encoded, EncodeError> {
     let mut tones: Vec<c_int> = vec![0; MAX_TONES];
     let mut sent = [0u8; TEXT_LEN + 1];
     let len = c_int::try_from(text.len()).unwrap_or(c_int::MAX);
@@ -100,6 +110,7 @@ pub fn encode(text: &str, profile: Profile) -> Result<Encoded, EncodeError> {
                 text.as_ptr().cast::<c_char>(),
                 len,
                 profile as c_int,
+                c_int::from(last),
                 tones.as_mut_ptr(),
                 MAX_TONES as c_int,
                 sent.as_mut_ptr().cast::<c_char>(),
@@ -694,6 +705,72 @@ mod tests {
             (complete[0].start_s - 2.0).abs() < 0.1,
             "started at {} s",
             complete[0].start_s
+        );
+    }
+
+    /// Segments as a transmitter keys them, each its own waveform and the next
+    /// one following with no gap (WSJT-X chains them in its transmit buffer).
+    fn on_air_chained(segments: &[&[i32]], f0: f32) -> Vec<i16> {
+        let mut wave = Vec::new();
+        for tones in segments {
+            wave.extend(gen_wave(tones, f0).expect("the tones must make a waveform"));
+        }
+        let lead = 2 * SAMPLE_RATE as usize;
+        let mut pcm = vec![0i16; lead + wave.len() + 3 * SAMPLE_RATE as usize];
+        for (i, s) in wave.iter().enumerate() {
+            pcm[lead + i] = (s * 20_000.0) as i16;
+        }
+        pcm
+    }
+
+    /// A segment sent without end-of-message and the next one chained behind it
+    /// are ONE message at the receiver, which is what WSJT-X's live entry relies
+    /// on (`execute_jtty_tx`): it grows across the joint and completes only at
+    /// the end-of-message. Sent alone, the open segment never completes. The
+    /// control: the same two texts, each sent whole, are two messages.
+    #[test]
+    fn an_open_segment_and_the_next_are_one_message() {
+        let open = encode_segment("HELLO THERE", Profile::Unknown, false).unwrap();
+        let close = encode_segment("GOOD DAY", Profile::Unknown, true).unwrap();
+        // Spaces collapsed, as the receive window shows a message (WSJT-X's
+        // `stripJttyFillerText` simplifies it): the receiver joins the segments'
+        // texts as they were packed, the open segment's last five-character
+        // atom padded with spaces ("HELLO THERE    GOOD DAY", measured).
+        let done = |u: &[Update]| -> Vec<String> {
+            u.iter()
+                .filter(|u| u.terminal == Terminal::Complete)
+                .map(|u| u.text.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect()
+        };
+
+        let joined = receive(&on_air_chained(&[&open.tones, &close.tones], 1500.0));
+        assert_eq!(
+            done(&joined),
+            vec!["HELLO THERE GOOD DAY".to_string()],
+            "{joined:?}"
+        );
+
+        let alone = receive(&on_air(&open.tones, 1500.0));
+        assert!(
+            done(&alone).is_empty(),
+            "an open segment completed: {alone:?}"
+        );
+        assert!(
+            alone.iter().any(|u| u.text == "HELLO THERE"),
+            "control: the open segment itself decodes, {alone:?}"
+        );
+
+        let whole_a = encode("HELLO THERE", Profile::Unknown).unwrap();
+        let whole_b = encode("GOOD DAY", Profile::Unknown).unwrap();
+        let two = receive(&on_air_chained(&[&whole_a.tones, &whole_b.tones], 1500.0));
+        assert_eq!(
+            done(&two),
+            vec!["HELLO THERE".to_string(), "GOOD DAY".to_string()],
+            "{two:?}"
+        );
+        assert_ne!(
+            open.tones, whole_a.tones,
+            "the end-of-message choice must change what goes on the air"
         );
     }
 
@@ -1309,6 +1386,7 @@ mod tests {
                 msg.as_ptr().cast(),
                 len,
                 profile,
+                1,
                 tones.as_mut_ptr(),
                 tones.len() as c_int,
                 sent.as_mut_ptr(),
@@ -1333,6 +1411,20 @@ mod tests {
             ),
             JTTY_ERR_ARGS
         );
+        // An end-of-message flag that is neither 0 nor 1.
+        let flagged = unsafe {
+            tempo_fast_sys::jtty_encode_text(
+                msg.as_ptr().cast(),
+                msg.len() as c_int,
+                0,
+                2,
+                tones.as_mut_ptr(),
+                tones.len() as c_int,
+                sent.as_mut_ptr(),
+                sent.len() as c_int,
+            )
+        };
+        assert_eq!(flagged, JTTY_ERR_ARGS);
         assert!(tones.iter().all(|&t| t == -7), "a refused call wrote tones");
         assert!(
             sent.iter().all(|&c| c == b'?' as c_char),

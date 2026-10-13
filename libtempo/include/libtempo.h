@@ -736,11 +736,13 @@ typedef struct {
 
 /*
  * Text -> channel tones (0..3). profile: 0 unknown, 1 Field Day, 2 RTTY
- * Roundup. sent (capacity >= JTTY_TEXT_LEN+1) receives the normalised text.
- * Returns the tone count (whole frames), 0 for an empty message,
- * JTTY_ERR_ARGS (nothing written) or JTTY_ERR_ENCODE. NOT thread-safe.
+ * Roundup. is_final: 1 sets end-of-message on the last frame, 0 leaves it
+ * clear (a segment still being typed); anything else is refused. sent
+ * (capacity >= JTTY_TEXT_LEN+1) receives the normalised text. Returns the tone
+ * count (whole frames), 0 for an empty message, JTTY_ERR_ARGS (nothing
+ * written) or JTTY_ERR_ENCODE. NOT thread-safe.
  */
-int jtty_encode_text(const char *msg, int msg_len, int profile,
+int jtty_encode_text(const char *msg, int msg_len, int profile, int is_final,
                      int *itone_out, int max_tones, char *sent, int sent_cap);
 
 /*

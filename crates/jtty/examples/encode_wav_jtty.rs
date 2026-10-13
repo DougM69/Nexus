@@ -13,6 +13,9 @@
 //! `jtty::encode` under `--profile`, or, with a leading `@`, structured atoms
 //! through `jtty::encode_atoms` (WSJT-X's macro path), as
 //! `@kind,subtype,role,value,text;kind,...` with libtempo.h's descriptor fields.
+//! With a leading `+`, text is sent as an OPEN segment, without end-of-message
+//! (`jtty::encode_segment`): what WSJT-X sends for every segment of a message
+//! but its last, and for what its live entry sends while the typing goes on.
 //! Each message is rendered by `jtty::gen_wave` on its own, as WSJT-X renders
 //! each queued message (`MainWindow::execute_jtty_tones`), and the next one
 //! starts where it ends: queued messages carry no spacing frame. `--dt` seconds
@@ -33,7 +36,7 @@
 //! text) and `# wrote`; a message the modem refuses is an error, exit status 1.
 //!
 //! Usage:
-//!   cargo run -q -p jtty --example encode_wav_jtty -- OUT.wav "CQ KD9TAW EN52" ["NEXT" ...]
+//!   cargo run -q -p jtty --example encode_wav_jtty -- OUT.wav "CQ KD9TAW EN52" ["+OPEN " "NEXT" ...]
 //!       [--profile unknown|field-day|rtty-roundup] [--f0 1500] [--dt 1.0]
 //!       [--snr-db N] [--seed N] [--tones]
 
@@ -111,6 +114,14 @@ fn main() {
             };
             match jtty::encode_atoms(&atoms) {
                 Ok(t) => (t, format!("atoms {spec}")),
+                Err(e) => {
+                    eprintln!("encode failed: {message:?}: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+        } else if let Some(text) = message.strip_prefix('+') {
+            match jtty::encode_segment(text, profile, false) {
+                Ok(e) => (e.tones, format!("{:?} (open)", e.sent)),
                 Err(e) => {
                     eprintln!("encode failed: {message:?}: {e:?}");
                     std::process::exit(1);

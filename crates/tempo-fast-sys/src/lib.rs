@@ -959,8 +959,10 @@ extern "C" {
 
     /// Encode JTTY message text (at most [`JTTY_TEXT_LEN`] bytes) into channel
     /// tones, with exchange `profile` 0 unknown, 1 Field Day, 2 RTTY Roundup.
-    /// `sent` (capacity >= [`JTTY_TEXT_LEN`] + 1) receives the normalised text,
-    /// NUL-terminated.
+    /// `is_final` 1 sets end-of-message on the last frame, as a whole message
+    /// does; 0 leaves it clear, for a segment of text still being typed
+    /// (anything else is refused). `sent` (capacity >= [`JTTY_TEXT_LEN`] + 1)
+    /// receives the normalised text, NUL-terminated.
     ///
     /// Returns the tone count (whole frames of [`JTTY_FRAME_SYMBOLS`]), 0 for an
     /// empty message, [`JTTY_ERR_ARGS`] or [`JTTY_ERR_ENCODE`]. NOT thread-safe —
@@ -969,6 +971,7 @@ extern "C" {
         msg: *const c_char,
         msg_len: c_int,
         profile: c_int,
+        is_final: c_int,
         itone_out: *mut c_int, // [max_tones]
         max_tones: c_int,
         sent: *mut c_char, // [sent_cap]

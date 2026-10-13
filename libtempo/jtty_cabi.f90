@@ -21,11 +21,12 @@
 ! What it adds over upstream's own entries, and why:
 !
 !   jtty_encode_text  -> genjtty_profile, the entry WSJT-X's transmitter calls
-!                        (widgets/mainwindow_jtty.cpp). Adds a length limit,
-!                        a capacity check on the caller's tone buffer, the
-!                        normalised text back (what will actually be sent),
-!                        and tells an empty message from one that cannot be
-!                        encoded, which genjtty_profile reports alike (nsym=0).
+!                        (widgets/mainwindow_jtty.cpp), with its end-of-message
+!                        choice. Adds a length limit, a capacity check on the
+!                        caller's tone buffer, the normalised text back (what
+!                        will actually be sent), and tells an empty message
+!                        from one that cannot be encoded, which genjtty_profile
+!                        reports alike (nsym=0).
 !   jtty_encode_atoms -> genjtty_atoms_c, upstream's own C entry. Adds the
 !                        capacity check; upstream writes up to 59*16 tones
 !                        into an assumed-size buffer.
@@ -93,6 +94,9 @@ contains
   !
   !   msg, msg_len : the text, at most JTTY_TEXT_LEN bytes (a NUL ends it early)
   !   profile      : exchange profile, 0 unknown, 1 Field Day, 2 RTTY Roundup
+  !   is_final     : 1 sets end-of-message on the last frame, as a whole message
+  !                  does; 0 leaves it clear, for a segment of text still being
+  !                  typed (WSJT-X's live entry). Anything else is refused.
   !   itone_out    : caller buffer, capacity max_tones (JTTY_MAX_TONES always fits)
   !   sent         : caller buffer, capacity sent_cap >= JTTY_TEXT_LEN+1; gets the
   !                  normalised text (upper case, single spaces, unknown
@@ -104,10 +108,10 @@ contains
   !                  exchange whose serial will not parse). For an empty or
   !                  unencodable message, sent still holds the normalised text.
   !-------------------------------------------------------------------------
-  function jtty_encode_text(msg, msg_len, profile, itone_out, max_tones, sent, sent_cap) &
+  function jtty_encode_text(msg, msg_len, profile, is_final, itone_out, max_tones, sent, sent_cap) &
        result(nsym_out) bind(C, name="jtty_encode_text")
     character(kind=c_char), intent(in)  :: msg(*)
-    integer(c_int), value,  intent(in)  :: msg_len, profile, max_tones, sent_cap
+    integer(c_int), value,  intent(in)  :: msg_len, profile, is_final, max_tones, sent_cap
     integer(c_int),         intent(out) :: itone_out(*)
     character(kind=c_char), intent(out) :: sent(*)
     integer(c_int) :: nsym_out
@@ -124,11 +128,12 @@ contains
     end interface
 
     character(len=JTTY_TEXT_LEN) :: umsg
-    integer :: itone(JTTY_MAX_TONES), nsym, i, n
+    integer :: itone(JTTY_MAX_TONES), nsym, final, i, n
 
     nsym_out = JTTY_ERR_ARGS
     if (msg_len < 0 .or. msg_len > JTTY_TEXT_LEN) return
     if (sent_cap < JTTY_TEXT_LEN + 1) return
+    if (is_final /= 0 .and. is_final /= 1) return
 
     umsg = ' '
     do i = 1, msg_len
@@ -138,7 +143,8 @@ contains
 
     itone = 0
     nsym = 0
-    call genjtty_profile(umsg, int(profile), itone, nsym)
+    final = is_final
+    call genjtty_profile(umsg, int(profile), itone, nsym, is_final=final)
     if (nsym > 0 .and. max_tones < nsym) return
 
     n = len_trim(umsg)
