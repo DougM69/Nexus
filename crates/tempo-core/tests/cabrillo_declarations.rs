@@ -909,7 +909,8 @@ fn a_declared_band_is_written_only_where_the_sponsor_lists_it() {
 /// do not enter operator callsigns in this field, the robot will reject your log"*. So a scored
 /// CQ entry's file needs its assistance, band, mode and power, and a multi-operator one its
 /// class and operators. A checklog is not scored, and no other contest's sponsor is read as
-/// requiring any of them. Each name is a line the export leaves out, by value.
+/// requiring any of them; the Illinois QSO Party requires its own two, the entrant's ENTRY-CLASS and
+/// EMAIL. Each name is a line the export leaves out, by value.
 #[test]
 fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
     let ssb = cases()
@@ -993,7 +994,8 @@ fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
     );
     // Every other contest: nothing is named, whatever is blank. The CQ ones name what these
     // entries leave out (no band declared; a multi-operator entry with no class, whose OPERATORS
-    // line comes with the class), which is the control on this loop.
+    // line comes with the class), which is the control on this loop, and the Illinois QSO Party
+    // the entrant's class and email, left blank here.
     let mut named = Vec::new();
     for case in &cases() {
         for entry in [Entry::Defaults, Entry::Declared] {
@@ -1007,6 +1009,8 @@ fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
     assert_eq!(
         named,
         [
+            "ilqp Defaults: ENTRY-CLASS EMAIL",
+            "ilqp Declared: ENTRY-CLASS EMAIL",
             "cqww_cw Defaults: CATEGORY-BAND",
             "cqww_cw Declared: CATEGORY-BAND CATEGORY-TRANSMITTER OPERATORS",
             "cqww_ssb Defaults: CATEGORY-BAND",
