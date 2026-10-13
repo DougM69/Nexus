@@ -24,6 +24,9 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus } from '../types'
 
 vi.mock('../api', () => ({
+  // The contest screen's Removed list, read on mount: none removed.
+  contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
@@ -178,7 +181,7 @@ describe('⭐ the ClubLog sweep limitation renders beside the control', () => {
     expect(vi.mocked(fdSetUpload).mock.calls).toEqual([[true, []]])
     // A destination is the OTHER half — neither alone enqueues anything.
     vi.mocked(fdSetUpload).mockClear()
-    fireEvent.click(screen.getByRole('checkbox', { name: 'clublog' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Club Log' }))
     await settle()
     expect(vi.mocked(fdSetUpload).mock.calls).toEqual([[false, ['clublog']]])
   })

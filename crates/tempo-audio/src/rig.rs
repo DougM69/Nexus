@@ -285,6 +285,15 @@ fn rprt_error(what: &str, reply: &str) -> std::io::Error {
     }
 }
 
+/// A frequency line of a rigctld reply, in Hz. Hamlib's own rigctld prints a whole number
+/// (`14074000`); wfview's prints Hamlib's `%lf` form (`14074000.000000`), which Hamlib's NET
+/// client reads as a double, so it is read as one here too and rounded to the Hz. The bounds are
+/// the broker's for an `F` it is sent (finite, 0 to 1 THz).
+fn hz_in_line(line: &str) -> Option<u64> {
+    let hz = line.trim().parse::<f64>().ok()?;
+    (hz.is_finite() && (0.0..=1e12).contains(&hz)).then(|| hz.round() as u64)
+}
+
 /// Parse the RECEIVE frequency ranges (Hz, inclusive) out of a rigctld `\dump_state` reply.
 ///
 /// The format is Hamlib's own machine-readable capability dump — the one its NETRIGCTL backend
@@ -304,8 +313,9 @@ fn rprt_error(what: &str, reply: &str) -> std::io::Error {
 ///
 /// Deliberately strict: `None` unless the reply really looks like a dump_state (leading protocol
 /// version, then ≥1 well-formed 7-field range line, then the all-zero terminator). Everything
-/// else — an `RPRT` error, our own broker's shorter answer, a future format — reads as "unknown",
-/// and the caller must then fail OPEN rather than assume nothing is covered.
+/// else — an `RPRT` error, an empty list (Nexus's own CI-V daemon, which does not know its radio's
+/// range), a future format — reads as "unknown", and the caller must then fail OPEN rather than
+/// assume nothing is covered.
 pub fn parse_dump_state_rx_ranges(reply: &str) -> Option<Vec<(u64, u64)>> {
     let mut lines = reply.lines().map(str::trim).filter(|l| !l.is_empty());
     // Line 1 is the protocol version. Accept only versions whose range-list layout we know
@@ -1343,6 +1353,11 @@ impl Rig {
         self.control.is_some()
     }
 
+    /// The CAT control channel's `host:port`, `None` without one.
+    pub fn control_addr(&self) -> Option<&str> {
+        self.control.as_deref()
+    }
+
     /// Probe the rig by reading its current dial frequency (Hz) over CAT — the
     /// basis of a WSJT-X-style "Test CAT". Connects to rigctld and sends `f`,
     /// which replies with the frequency on its own line. Returns a descriptive
@@ -1477,7 +1492,7 @@ impl Rig {
         let reply = self.command("f\n")?;
         reply
             .lines()
-            .find_map(|l| l.trim().parse::<u64>().ok())
+            .find_map(hz_in_line)
             .filter(|hz| *hz > 0)
             .ok_or_else(|| match rprt_code(&reply) {
                 Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
@@ -1613,10 +1628,7 @@ impl Rig {
     pub fn read_split_freq(&mut self) -> Option<u64> {
         self.control.as_ref()?;
         let reply = self.command("i\n").ok()?;
-        reply
-            .lines()
-            .find_map(|l| l.trim().parse::<u64>().ok())
-            .filter(|hz| *hz > 0)
+        reply.lines().find_map(hz_in_line).filter(|hz| *hz > 0)
     }
     /// Set the split (TX) VFO's mode + passband — the transmit-side twin of
     /// [`Self::set_mode`], which only ever reaches the RX VFO. A BLANK mode is a
@@ -1833,6 +1845,9 @@ impl Rig {
         let reply = self.command(line)?;
         if reply_ok(&reply) || reply.is_empty() {
             Ok(())
+        } else if rprt_code(&reply).is_some_and(rprt_is_link_fault) {
+            // The rig did not answer: the link, as for a dial or a mode, never a refusal.
+            Err(rprt_error(line.trim(), &reply))
         } else {
             Err(std::io::Error::other(format!(
                 "rigctld error for {line:?}: {reply:?}"
@@ -1904,6 +1919,45 @@ mod tests {
             super::rprt_error("freq", "nonsense\n").kind(),
             std::io::ErrorKind::Other,
             "an unparseable reply is still a refusal-class error, never a silent success"
+        );
+    }
+
+    /// ⭐ AN EXTENDED WRITE THE RIG DID NOT ANSWER IS THE LINK, AS A DIAL IS. A level and a split
+    /// each answered `RPRT -5` read as no reply (`TimedOut`), which the radio loop words as the
+    /// link; `RPRT -1` stays a refusal (`Other`) in the words it always had, and `RPRT 0` is done.
+    /// The silence read as a refusal.
+    #[test]
+    fn an_extended_write_the_rig_did_not_answer_is_the_link_and_a_refusal_stays_a_refusal() {
+        let (addr, _log) = mock_rigctld(|line| {
+            match line {
+                "L RFPOWER 0.500" | "S 1 VFOB" => "RPRT -5\n",
+                "L RFPOWER 0.250" | "S 0 VFOA" => "RPRT -1\n",
+                _ => "RPRT 0\n",
+            }
+            .to_string()
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let kinds = [
+            rig.set_power(0.5),
+            rig.set_power(0.25),
+            rig.set_power(0.75),
+            rig.set_split(true, "VFOB"),
+            rig.set_split(false, "VFOA"),
+        ]
+        .map(|r| r.map_err(|e| e.kind()));
+        let refusal = rig.set_power(0.25).unwrap_err().to_string();
+        assert_eq!(
+            (kinds, refusal.as_str()),
+            (
+                [
+                    Err(std::io::ErrorKind::TimedOut),
+                    Err(std::io::ErrorKind::Other),
+                    Ok(()),
+                    Err(std::io::ErrorKind::TimedOut),
+                    Err(std::io::ErrorKind::Other),
+                ],
+                "rigctld error for \"L RFPOWER 0.250\\n\": \"RPRT -1\\n\""
+            )
         );
     }
 
@@ -2653,6 +2707,30 @@ mod tests {
         let mut rig = Rig::rigctld(&addr);
         assert_eq!(rig.read_freq().unwrap(), 14_074_000);
         assert_eq!(log.lock().unwrap().as_slice(), &["f".to_string()]);
+    }
+
+    /// ⭐ A FREQUENCY IN HAMLIB'S `%lf` FORM IS A FREQUENCY. wfview's rigctld answers `f` and `i`
+    /// with `14074000.000000` (its `src/rigctld.cpp`, 2.23; those are the bytes below), which
+    /// Hamlib's own NET client reads as a double. Nexus read it as no frequency at all, "rig did
+    /// not return a frequency", so the open's first read failed and sharing wfview's rigctld never
+    /// connected. The control: `0.000000`, like a whole `0`, is still no frequency.
+    #[test]
+    fn a_frequency_in_hamlibs_lf_form_is_read() {
+        let (addr, _) = mock_rigctld(|line| match line.trim() {
+            "f" => "14074000.000000\n".into(),
+            "i" => "14076000.000000\n".into(),
+            _ => "RPRT 0\n".into(),
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let (zero, _) = mock_rigctld(|_| "0.000000\n".into());
+        assert_eq!(
+            (
+                rig.read_freq().ok(),
+                rig.read_split_freq(),
+                Rig::rigctld(&zero).read_freq().is_err(),
+            ),
+            (Some(14_074_000), Some(14_076_000), true)
+        );
     }
 
     /// ⭐ THE READ THAT MAKES A/B SELECTION HONEST. `v` (get_vfo) is the one question Nexus

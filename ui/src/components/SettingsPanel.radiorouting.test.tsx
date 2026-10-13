@@ -12,6 +12,11 @@ import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Test CAT while editing a non-active radio patches THAT…", takes
+// 0.56 s and 0.55 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   // SettingsPanel pulls ~50 verbs from ../api. They all resolve null, which is enough for a
   // mount — the assertions here are about WHICH save verb gets called, not what it returns.
@@ -234,5 +239,35 @@ describe('rig form writes go to the radio they describe', () => {
       expect(saved.activeRadio).toBe(0)
       expect(saved.serialPort).toBe('COM3')
     }
+  })
+})
+
+// A save the backend refuses names why: here a port another radio's rigctld holds. Save has always
+// shown those words; Test CAT and Auto-test save first, and their refusal read only "Could not run
+// the CAT test." / "Could not run the port auto-test." Tauri rejects with the Err string, as these
+// mocks do.
+describe('a refused save says why, in Test CAT and Auto-test too', () => {
+  const refusal =
+    "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's rigctld TCP Port " +
+    "is 4533 too: IC-9700 and FTDX10 could each read and command the other's radio. Give FTDX10 " +
+    'a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced).'
+  const shown = () => document.querySelector('.settings-cat-test .cat-result')?.textContent
+
+  it('Test CAT shows the refusal of the radio it saved', async () => {
+    api.get('updateRadioProfile').mockImplementation(() => Promise.reject(refusal))
+    renderPanel()
+    await editTheNonActiveRadio()
+    fireEvent.click(await screen.findByRole('button', { name: /test cat/i }))
+    await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
+    await waitFor(() => expect(shown()).toBe(`✗ ${refusal}`))
+  })
+
+  it('Auto-test shows the refusal of the save it made', async () => {
+    api.get('setSettings').mockImplementation(() => Promise.reject(refusal))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    fireEvent.click(await screen.findByRole('button', { name: /auto-test/i }))
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalled())
+    await waitFor(() => expect(shown()).toBe(`✗ ${refusal}`))
   })
 })

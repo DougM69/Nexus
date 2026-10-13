@@ -207,14 +207,66 @@ pub fn mode_key(mode: &str) -> String {
     }
 }
 
+/// Whether `name`, trimmed and upper-cased, is one mode a contact is logged in: the modes a "new
+/// mode" need may judge as modes of their own ([`exact_mode`], [`feed_mode`]).
+///
+/// A list, not a rule: judged as a mode of its own, a name no contact is ever logged under can
+/// never be worked, and its need would never clear. Each spelling here is one a contact Nexus logs
+/// or imports carries for that mode. Not here, so judged by its class: a class (`PHONE`, `PH`,
+/// `DATA`, `DIGI`, a voice `DV`), a family (`PSK`, a bare `MFSK`), a retired name (`FT1`, `DX1`), a
+/// beacon nobody works (`WSPR`, `FST4W`), and another program's own name for something no contact
+/// here is logged as — PSK Reporter passes on whatever the reporting program calls its mode
+/// (`VARAC`, `JTTY`, `FREEDV`, `SAFECOM`). A mode the log can hold that is not named here (the
+/// rarer PSK submodes) is judged by its class as well.
+fn names_a_contact_mode(name: &str) -> bool {
+    matches!(
+        name,
+        "CW" | "SSB"
+            | "USB"
+            | "LSB"
+            | "AM"
+            | "FM"
+            | "FT8"
+            | "FT4"
+            | "FT2"
+            | "TEMPOFAST"
+            | "TEMPODEEP"
+            | "Q65"
+            | "FST4"
+            | "RTTY"
+            | "PSK31"
+            | "PSK63"
+            | "PSK125"
+            | "QPSK31"
+            | "JT65"
+            | "JT9"
+            | "JS8"
+            | "MSK144"
+            | "OLIVIA"
+            | "SSTV"
+    )
+}
+
 /// The mode a station heard in `mode` is in, by [`mode_key`] ("FT8", "CW", "SSB" for "USB"), or
-/// `None` when `mode` names only a CLASS. A cluster spot placed in the band plan by its frequency
-/// arrives as "Phone" or "Digital", and a source with no mode at all as "". The station's real
-/// mode is not known then, so the one mode need the log can back is "never worked this entity in
-/// any mode of the class" ([`ModeClass::from_adif`] of the same `mode`).
+/// `None` when `mode` names no one mode a contact is logged in ([`names_a_contact_mode`]). A
+/// cluster spot placed in the band plan by its frequency arrives as "Phone" or "Digital", a source
+/// with no mode at all as "", and a PSK Reporter report as whatever the reporting program calls
+/// it, "WSPR" for a beacon or "VARAC". The log cannot answer for such a mode, so the one mode need
+/// it can back is "never worked this entity in any mode of the class" ([`ModeClass::from_adif`] of
+/// the same `mode`).
 pub fn exact_mode(mode: &str) -> Option<String> {
     let key = mode_key(mode);
-    (!matches!(key.as_str(), "" | "PHONE" | "DIGITAL")).then_some(key)
+    names_a_contact_mode(&key).then_some(key)
+}
+
+/// The one mode a structured feed's mode token names, by [`mode_key`]: a POTA or SOTA activator
+/// spot's `mode`, or a mode a DXpedition announced. `None` for a token that names no one mode a
+/// contact is logged in ([`names_a_contact_mode`]); such a station is judged by class, as a
+/// cluster spot placed by its frequency is. Each name the list holds is one the activator feed's
+/// own classifier names explicitly rather than placing by frequency.
+pub(crate) fn feed_mode(token: &str) -> Option<String> {
+    let m = token.trim().to_ascii_uppercase();
+    names_a_contact_mode(&m).then(|| mode_key(&m))
 }
 
 /// Standard FT8 / FT4 / MSK144 DIGITAL "watering holes" (dial MHz). Checked FIRST because on

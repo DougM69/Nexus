@@ -14,7 +14,10 @@
 
 pub mod alltxt;
 pub mod bandplan;
+pub mod call_history;
 pub mod clocksync;
+pub mod club_firewall;
+pub mod clubclock;
 pub mod connect_web;
 pub mod dto;
 pub mod dualrx;
@@ -32,6 +35,7 @@ pub mod presence;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
+pub mod scp;
 #[cfg(test)]
 mod stage1_tests;
 pub mod station;
@@ -262,6 +266,10 @@ impl AppState {
                 rig_confirmed: false,
                 flex_dax_tx: false,
                 flex_radio_has_mic: false,
+                flex_tune: None,
+                flex_tune_refused: false,
+                flex_atu: None,
+                flex_atu_refused: false,
                 flex_meter_stream: false,
                 rated_watts: 100,
                 dial_mhz: 14.074, // FT8 20m (default mode)
@@ -326,6 +334,7 @@ impl AppState {
                 tx_level: 0.9,
                 tx_enabled: true,
                 tx_allowed: true,
+                tx_refusal: None,
                 tx_emission_mhz: None,
                 tuning: false,
                 tx_watchdog: false,
@@ -344,6 +353,7 @@ impl AppState {
                 cw_wpm: 25,
                 split_tx_mhz: None,
                 audio_error: None,
+                audio_error_kind: None,
                 cat_share_error: None,
                 scope_error: None,
                 scope_span_refused: None,
@@ -980,7 +990,10 @@ impl AppState {
             work_tick: 0,
             work_view: None,
             work_call: None,
+            work_park: None,
             field_day: None,
+            // The engine's club link (fills in snapshot()).
+            club_link: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
             late_decodes: None,
@@ -1012,6 +1025,11 @@ impl AppState {
             parsec_presence: None,
             // Filled by the engine while a transmitter alarm waits for the operator; none here.
             tx_alarms: Vec::new(),
+            // Filled by the engine while the contest logger window is open; none here.
+            contest_entry: None,
+            // Filled by the engine while a contest runs whose FT8/FT4 messages apply; none here.
+            contest_cq: None,
+            contest_cq_typed: false,
         }
     }
 

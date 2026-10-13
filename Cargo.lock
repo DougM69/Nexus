@@ -2748,6 +2748,7 @@ version = "0.2.0"
 dependencies = [
  "js8",
  "modes",
+ "ring",
  "serde",
  "serde_json",
  "socket2",
@@ -2823,10 +2824,12 @@ dependencies = [
 name = "tempo-net"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "socket2",
  "tempo-flexsim",
+ "windows 0.62.2",
 ]
 
 [[package]]

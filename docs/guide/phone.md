@@ -130,6 +130,16 @@ the dock below it never move, and **Tune** and **Stop TX** stay in the strip
 right under the scope, at the same height: with the left side showing, the scope
 gets narrower and keeps its height. **Reset layout** empties the left side.
 
+**Drag a pane.** A pane can also be picked up by its title bar and dropped onto a
+column, between two panes, or onto the left side when the window is wide enough for
+it; while you drag, a line shows where it will land, and an empty column or an empty
+left side shows a box where it would stand. The voice keyer moves only up and down in
+its column, as its arrows do. **Esc**, or letting go anywhere else, puts the pane
+back, and the same **Esc** stops transmit as always. A drop makes exactly the move the
+arrows in ⊞ Panels ▸ **Arrange** would (they stay, for the keyboard), and the rows
+there drag too. **PTT**, **Stop TX**, **Tune** and the dock cannot be dragged, and
+letting go over them drops nothing.
+
 **Boxes.** Any pane of [Conditions](connect.md) — the Clock, Space Wx, Getting Out, POTA / SOTA,
 the Spots and Needed boards and the rest — can also stand among this screen's panes, in up to six
 boxes. In ⊞ Panels ▸ **Arrange**, each column, and the left side while it can show, ends with
@@ -217,7 +227,9 @@ station.
 
 ### Use the voice keyer
 
-The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
+The voice keyer has seven slots, on F1–F6 and F8: **CQ, My Call, Report, QRZ?, 73, Again, AGN**.
+**AGN** on F8 is the slot [Enter Sends Message](../manual/Field-Day.md#enter-sends-message-esm)
+plays in a contest when you need a repeat, from the same key as AGN on CW and RTTY.
 
 ![The Voice Keyer pane. Under the line "click or press F1–F6 to send · Esc stops" and a ■ Stop button, six slot cards: F1 CQ, F2 My Call, F3 Report, F4 QRZ?, F5 73 and F6 Again. F2 is outlined and carries a ▶ play arrow; the other five read "record". Each card has a ● record button, an import arrow and a ✕.](../img/manual/phone-voice-keyer.webp)
 

@@ -31,6 +31,8 @@ import type {
   LogExport,
   DetectedRig,
   FdEventBeacon,
+  ClubFirewall,
+  ClubFirewallPress,
   FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
@@ -48,6 +50,7 @@ import type {
   NeedAlert,
   QrzLookup,
   PointedAt,
+  CallBearing,
   RotatorState,
   QrzPushResult,
   RouteMode,
@@ -66,6 +69,7 @@ import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } fro
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { SliceIntent } from './types'
+import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { StreetPack } from './features/streetPack'
 import type {
@@ -89,11 +93,13 @@ declare global {
       core?: { invoke?: InvokeFn; Channel?: new <T>() => { onmessage: (message: T) => void } }
       invoke?: InvokeFn
       /** Tauri's event bridge (exposed by `withGlobalTauri`). Used by usePounce for the app's
-       * one PUSH channel — everything else here polls. */
+       * one PUSH channel — everything else here polls — and by `useContestScreenWindow`, which
+       * hears one window's close (`target` names the window). */
       event?: {
         listen?: <T>(
           event: string,
           handler: (e: { payload: T }) => void,
+          options?: { target?: string | { kind: string; label?: string } },
         ) => Promise<() => void>
       }
     }
@@ -434,7 +440,7 @@ export async function fetchCty(): Promise<CtyStatus> {
 }
 
 /** Field Day rules-data currency — the "check for rules updates" row in
- * Settings ▸ Contesting ▸ Field Day Setup. Same set-once discipline as the
+ * Settings ▸ Contesting ▸ Contest. Same set-once discipline as the
  * country file: `activeGenerated` is the data scoring THIS session (the
  * bundled seed, or a previously downloaded file), `installedGenerated` what is
  * staged on disk (empty until a download happens; newer than active ⇒
@@ -463,6 +469,9 @@ export async function fetchFdRules(): Promise<FdRulesStatus> {
  * in the catalogs, computed UI-side. `enforcement` ships `'warn'`: nothing is
  * ever removed or disabled by rule (operator ruling). */
 export interface FdRulesetDto {
+  /** The contest allows spotting only over amateur RF while it runs (Winter Field Day 2027), so
+   *  Nexus posts no spot over the internet then. Absent when false. */
+  spotsRfOnly?: boolean
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
    * 'arrlss_cw' | 'arrlss_ssb' | 'arrlvhf_jan' | 'arrlvhf_jun' | 'arrlvhf_sep' |
@@ -491,6 +500,27 @@ export interface FdRulesetDto {
    *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
    *  tokens: the sponsor's names, never translated. */
   entryClasses?: string[]
+  /** ⭐ The entry declarations the picked contest's sponsor names, each absent when it names
+   *  none: its multi-operator classes (Cabrillo `CATEGORY-TRANSMITTER`), its overlays
+   *  (`CATEGORY-OVERLAY`), the `ADDRESS` headers its template carries, and whether it has a
+   *  `SOAPBOX`. Settings offers each only where it is written. Invariant tokens, never
+   *  translated. */
+  transmitterCategories?: string[]
+  overlayCategories?: string[]
+  addressHeaders?: string[]
+  soapbox?: boolean
+  /** ⭐ The bands an entry may declare (Cabrillo `CATEGORY-BAND`, CQ WW's `ALL 160M … 10M`), for
+   *  the Band category picker; absent for a contest that lists none. Invariant tokens. */
+  bandCategories?: string[]
+  /** ⭐ The Cabrillo lines the sponsor requires that a contest started from these settings would
+   *  leave out, for the Contest screen to name before Contest mode turns on. Filled by the
+   *  preview only. */
+  cabrilloMissing?: string[]
+  /** ⭐ When the picked contest runs: its running-or-next window (Unix UTC), from the same
+   *  rules data the session's banner reads, so the contest screen can show it before any
+   *  session exists. Filled by the preview only; absent from the Remote capture. */
+  eventStartUnix?: number
+  eventEndUnix?: number
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
@@ -700,13 +730,38 @@ export async function contestLogManual(
   fields: [string, string][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
+  entry?: EntryClaim,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_manual', {
     call,
     fields,
     mode,
     submode: submode ?? null,
+    ...(entry ? { entry } : {}),
   })
+}
+
+/** ⭐ **What a strip logging the shared contest entry saw** (`features/contestEntryShare.ts`):
+ *  the entry's rev when the strip last agreed with it, and the call and boxes it shows. Passed to
+ *  the three contest log commands while the contest logger window is open, so the engine logs
+ *  the contact once when Enter is pressed in both windows at the same moment — the second is
+ *  refused `contestEntryLogged` or `contestEntryChanged`, and logs nothing. Omitted otherwise, and
+ *  then the command's arguments are exactly what they always were. */
+export interface EntryClaim {
+  rev: number
+  call: string
+  fields: Record<string, string>
+}
+
+/** The contest strip changed in one window while the contest logger window is open: what it now
+ *  shows becomes the entry both windows show. Answers the entry's new rev. Rejects with the logger
+ *  window closed. Text in memory only — nothing is logged, written or sent. */
+export async function contestEntryPut(
+  call: string,
+  fields: Record<string, string>,
+  marks: unknown,
+): Promise<number> {
+  return invoke<number>('contest_entry_put', { call, fields, marks })
 }
 
 /** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
@@ -721,13 +776,130 @@ export async function contestLogManualRows(
   rows: [string, string][][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
+  entry?: EntryClaim,
 ): Promise<boolean[]> {
   return invoke<boolean[]>('contest_log_manual_rows', {
     call,
     rows,
     mode,
     submode: submode ?? null,
+    ...(entry ? { entry } : {}),
   })
+}
+
+/** A contest contact the operator removed — kept, never deleted, and restorable: the contest
+ *  screen's Removed list. `rows` are as the log table shows them (a county line has one per
+ *  county); `id` is what `contestRestore` takes. */
+export interface RemovedContest {
+  id: number
+  removedUnix: number
+  rows: FieldDayQso[]
+}
+
+/** Why a removal or a restore changed nothing. */
+export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain'
+
+/** At a club, where a removal or restore goes: `linked` — this laptop is with the host now, so
+ *  every laptop drops it (or gets it back) as soon as the host has it; `away` — when the link is
+ *  back. Absent without club sync. */
+export type ContestClubRoute = 'linked' | 'away'
+
+/** Where a removed contact had already gone — places Nexus cannot take it back from. */
+export interface ContestSentTo {
+  /** The N3FJP host it was pushed to. */
+  n3fjp?: string
+  /** The address of the N1MM broadcast it went out on. */
+  n1mm?: string
+  /** WSJT-X listeners had its "QSO Logged" datagram. */
+  wsjtx: boolean
+  /** The logbook holds a copy merged from the contest. */
+  logbook: boolean
+  /** The services holding that copy by its upload marks: 'lotw' | 'qrz' | 'clublog' | 'eqsl'. */
+  uploaded: string[]
+}
+
+export type ContestRemovalAnswer =
+  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo; club?: ContestClubRoute }
+  | { outcome: 'restored'; entry: RemovedContest; club?: ContestClubRoute }
+  | { outcome: 'refused'; refusal: ContestRemovalRefusal }
+
+/** ⭐ **Remove the newest contest contact** — when it is still the one named (`call` and
+ *  `whenUnix`, as the strip showed it), else `refused: changed`. It is kept, never deleted: its
+ *  serial and club seq stay spent, and `contestRestore` puts it back. At a club the club takes it
+ *  back too (`club`). Answers once the contest journal holds the change. Never keys or stops TX. */
+export async function contestRemoveLast(call: string, whenUnix: number): Promise<ContestRemovalAnswer> {
+  return invoke<ContestRemovalAnswer>('contest_remove_last', { call, whenUnix })
+}
+
+/** Put a removed contact back exactly as it was — refused when the station was worked again
+ *  since on that band and mode. At a club the club puts it back too (`club`). */
+export async function contestRestore(id: number): Promise<ContestRemovalAnswer> {
+  return invoke<ContestRemovalAnswer>('contest_restore', { id })
+}
+
+/** The removed contacts, oldest removal first. */
+export async function contestRemoved(): Promise<RemovedContest[]> {
+  return invoke<RemovedContest[]>('contest_removed')
+}
+
+/** Why an edit changed nothing: the contact is no longer as it was shown; no call or no band;
+ *  another number of counties than a county line has; a satellite contact's band; club sync,
+ *  which cannot carry an edit to the club. */
+export type ContestEditRefusal = 'changed' | 'incomplete' | 'rows' | 'satellite' | 'club'
+
+/** What an edit came to: the contact as it was and as it is now (one row, or one per county),
+ *  and where it had already gone, which keeps what it said — or why nothing changed. */
+export type ContestEditAnswer =
+  | { outcome: 'edited'; before: FieldDayQso[]; after: FieldDayQso[]; sentTo: ContestSentTo }
+  | { outcome: 'refused'; refusal: ContestEditRefusal }
+
+/** What an edit puts on a contact: its call, what they sent (one `[slot, value]` vector per row,
+ *  as `contestLogManualRows` takes them), its band, and its mode on the air (`''` keeps it). */
+export interface ContestContactEdit {
+  call: string
+  rows: [string, string][][]
+  band: string
+  mode: string
+}
+
+/** ⭐ **Edit a contest contact in place** — when it is still the one named (`call` and
+ *  `whenUnix`, as the screen showed it), else `refused: changed`. It keeps its time, serial and
+ *  number; refused at a club (`club`). Answers once the contest journal holds the edit. Never
+ *  keys or stops TX. */
+export async function contestEdit(call: string, whenUnix: number, edit: ContestContactEdit): Promise<ContestEditAnswer> {
+  return invoke<ContestEditAnswer>('contest_edit', {
+    call,
+    whenUnix,
+    newCall: edit.call,
+    rows: edit.rows,
+    band: edit.band,
+    mode: edit.mode,
+  })
+}
+
+/** One contest's contacts that the contest journal keeps past its four days and the logbook does
+ *  not hold: what the contest screen offers to merge. `event` is the contest's rules-file id;
+ *  the times are Unix seconds. */
+export interface ContestUnmerged {
+  event: string
+  count: number
+  firstUnix: number
+  lastUnix: number
+}
+
+/** ⭐ The contest contacts no session loads any more and the logbook does not hold, by contest.
+ *  Asking also lets go of every one whose copy the logbook holds on disk, as such a contact
+ *  always aged out of the journal. */
+export async function contestUnmerged(): Promise<ContestUnmerged[]> {
+  return invoke<ContestUnmerged[]>('contest_unmerged')
+}
+
+/** ⭐ Merge one contest's contacts that the contest journal keeps past its four days into the
+ *  general logbook: the offer above. The end-of-contest merge's own rule, so a contact already
+ *  there is skipped, never duplicated. Nothing is queued for upload. */
+export async function contestMergeUnmerged(event: string): Promise<FdMergeReport> {
+  const [report] = await invoke<[FdMergeReport, AppSnapshot]>('contest_merge_unmerged', { event })
+  return report
 }
 
 /** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
@@ -750,12 +922,14 @@ export async function contestLogSatellite(
   fields: [string, string][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
+  entry?: EntryClaim,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_satellite', {
     call,
     fields,
     mode,
     submode: submode ?? null,
+    ...(entry ? { entry } : {}),
   })
 }
 
@@ -865,10 +1039,59 @@ export async function fdDiscoverEvents(): Promise<FdEventBeacon[]> {
   return invoke<FdEventBeacon[]>('fd_discover_events', {})
 }
 
+/** Where Nexus's club sync rules stand in Windows Firewall on this laptop, read with no
+ *  administrator rights (`club_firewall_status`). `null` off Windows, and when the firewall
+ *  cannot be read. */
+export async function clubFirewallStatus(): Promise<ClubFirewall | null> {
+  return invoke<ClubFirewall | null>('club_firewall_status')
+}
+
+/** Allow Nexus through Windows Firewall (`'allow'`: Nexus's three club sync rules, on Private and
+ *  Public networks) or remove its rules (`'remove'`), through one Windows administrator prompt;
+ *  resolves with the firewall read back. Rejects with `onAir` while anything is transmitting,
+ *  `running` while a press is still waiting on Windows, `path` or `port` when the command cannot
+ *  be built, and `unsupported` off Windows. */
+export async function clubFirewallPress(action: 'allow' | 'remove'): Promise<ClubFirewallPress> {
+  return invoke<ClubFirewallPress>('club_firewall_press', { action })
+}
+
 /** Export the merged CLUB log from the host (deduped earliest-wins).
  * Rejects when this instance is not hosting. */
 export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string> {
   return invoke<string>('fd_club_export', { format })
+}
+
+/** What the host's Give button did: the position given, or why nothing changed. */
+export type FdGiveAnswer =
+  | { outcome: 'given' }
+  | { outcome: 'refused'; refusal: 'notHosting' | 'stale' }
+
+/** ⭐ **Give a club position to the laptop the host turned away for it** — the Give button on
+ *  the host's own turned-away list, by the `handle` that entry carries. The position is pinned
+ *  to that laptop, the laptop that held it is closed and turned away by name, and its own entry
+ *  can give the position back. Refused when this Nexus is not hosting, and for a handle no
+ *  entry on the list now can be given by. Never on Remote. */
+export async function fdClubGivePosition(handle: number): Promise<FdGiveAnswer> {
+  return invoke<FdGiveAnswer>('fd_club_give_position', { handle })
+}
+
+/** What the host's Remove or Allow back did: done, or why nothing changed (`own`: the host's own
+ *  position, which it cannot remove; `stale`: no such position on the board now, or, for Allow
+ *  back, not removed). */
+export type FdRemoveAnswer =
+  | { outcome: 'done' }
+  | { outcome: 'refused'; refusal: 'notHosting' | 'own' | 'stale' }
+
+/** ⭐ **Remove a position from the club event** — the host's own board, by the position's id. Its
+ *  link is closed and it is turned away at every JOIN until the host lets it back
+ *  (`fdClubAllowBack`); the contacts it already sent stay in the club's log. Never on Remote. */
+export async function fdClubRemovePosition(posid: string): Promise<FdRemoveAnswer> {
+  return invoke<FdRemoveAnswer>('fd_club_remove_position', { posid })
+}
+
+/** Let a removed position back in: its next try joins, and it sends what it logged meanwhile. */
+export async function fdClubAllowBack(posid: string): Promise<FdRemoveAnswer> {
+  return invoke<FdRemoveAnswer>('fd_club_allow_back', { posid })
 }
 
 /** The spectator scoreboard's bound state, for the Settings row: running?,
@@ -933,6 +1156,21 @@ export async function redecode(): Promise<AppSnapshot> {
  * plain CQ (clears a sticky directed token). */
 export async function startCq(dir: string | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_cq', { dir })
+}
+
+/** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's
+ * while a contest runs (`snap.contestCq`, `snap.contestCqTyped`). `dir` is the direction of the CQ
+ * typed in Tx6, which the contest's Running calls where WSJT-X has no activity for the contest
+ * (`snap.contestCqTyped`); null for a plain CQ. Outside a contest the row, and the Remote page
+ * always, call `startCq`, which sends the CQ they show. */
+export async function startRunning(dir: string | null = null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_running', { dir })
+}
+
+/** The Operate strip's S&P on this computer (`Engine::start_search_and_pounce`). The Remote page's
+ * S&P keeps its own path. */
+export async function startSearchAndPounce(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_search_and_pounce', {})
 }
 
 /** Call CQ from Tempo (chat-first): sends one structured `CQ <call> <grid>` frame and
@@ -1079,13 +1317,17 @@ export async function applyParkStates(
   return invoke<number>('apply_park_states', { changes })
 }
 
-/** One line of "Check confirmations": a contact holding LoTW's confirmation (`lotw`), or its LoTW
- *  upload mark (`lotwUpload`), that LoTW's own downloads give another contact, or none. */
+/** The services "Check confirmations" checks, in the order it lists them. */
+export type CheckedService = 'lotw' | 'eqsl' | 'qrz'
+
+/** One line of "Check confirmations": a contact holding a service's confirmation (`lotw`, `eqsl`,
+ *  `qrz`), or its LoTW upload mark (`lotwUpload`), that the service's own download gives another
+ *  contact, or none. */
 export interface ConfirmationLine {
   id: string
-  mark: 'lotw' | 'lotwUpload'
-  /** `moved`: the row it rests on pairs with another contact, the sibling; `contradicted`: LoTW
-   *  holds this contact itself, unconfirmed; `orphan`: the row pairs with no contact. */
+  mark: CheckedService | 'lotwUpload'
+  /** `moved`: the row it rests on pairs with another contact, the sibling; `contradicted`: the
+   *  service holds this contact itself, unconfirmed; `orphan`: the row pairs with no contact. */
   class: 'moved' | 'contradicted' | 'orphan'
   call: string
   whenUnix: number
@@ -1096,7 +1338,7 @@ export interface ConfirmationLine {
   rowUnix: number
   siblingId: string | null
   siblingUnix: number | null
-  /** LoTW's own unconfirmed record of this contact (`contradicted` only). */
+  /** The service's own unconfirmed record of this contact (`contradicted` only). */
   ownUnix: number | null
   /** The evidence decides it: the line starts ticked. */
   decisive: boolean
@@ -1107,50 +1349,72 @@ export interface ConfirmationLine {
   removeSubmitted: string[]
   /** A paper card it keeps, with its award credit. */
   cardHeld: boolean
-  /** Owed to LoTW once every line listed for this contact is applied. */
+  /** Owed to LoTW once every line listed for this contact is applied, and not before. */
   owedAfter: boolean
 }
 
-/** What "Check confirmations" found: its lines, newest first, and what it leaves alone. */
+/** What "Check confirmations" found for one service: its lines, newest first, and what it leaves
+ *  alone. */
 export interface ConfirmationCheck {
-  /** This check, which its Apply names. */
+  /** The check, which its Apply names. */
   session: number
+  service: CheckedService
+  /** How many records the service's download held (LoTW's confirmations, eQSL's cards, QRZ's
+   *  book), as the Connections log says them. */
+  records: number
   lines: ConfirmationLine[]
-  /** Contacts LoTW confirms that lack its confirmation: Apply adds it. */
-  gains: number
-  /** LoTW confirmations it leaves alone: no LoTW row within a day of them, or logged under
-   *  another call than the one LoTW was asked about. */
+  /** The contacts the service confirms that lack its confirmation: Apply adds it. */
+  gainIds: string[]
+  /** The service's confirmations it leaves alone: no row of it within a day of them, or logged
+   *  under another call than the one in Settings. */
   unreached: number
   outOfScope: number
-  /** LoTW upload marks it leaves alone, the same two ways. */
+  /** LoTW upload marks it leaves alone, the same two ways (LoTW only). */
   uploadsUnreached: number
   uploadsOutOfScope: number
+}
+
+/** What Apply in "Check confirmations" made of one service's check. */
+export interface ServiceApplied {
+  service: CheckedService
+  /** Contacts whose confirmation from this service was taken off. */
+  confirmations: number
+  /** Contacts that gained the service's confirmation from its download. */
+  gained: number
 }
 
 /** What Apply in "Check confirmations" made. */
 export interface ConfirmationApplied {
   /** The lines ticked. */
   ticked: number
-  /** Contacts whose LoTW confirmation was taken off, and whose upload mark was cleared: fewer than
-   *  ticked when a contact changed after the check. */
-  confirmations: number
+  /** Each service checked, LoTW, eQSL, QRZ: fewer confirmations taken off than ticked when a
+   *  contact changed after the check. */
+  services: ServiceApplied[]
+  /** Contacts whose LoTW upload mark was cleared. */
   uploads: number
-  /** What merging the download added. */
-  newlyConfirmed: number
-  newlyCredited: number
   /** The changed contacts as they were: Logbook ▸ Import ADIF puts them back. */
   beforeFile: string | null
 }
 
-/** The Logbook's "Check confirmations": LoTW's whole confirmation history and own-QSO list,
- *  downloaded once (minutes, on a long history) and checked against the log. It changes nothing:
- *  the download is held at the station for this check's Apply, or its Cancel. */
-export async function confirmationCheck(): Promise<ConfirmationCheck> {
-  return invoke<ConfirmationCheck>('confirmation_check')
+/** Start the Logbook's "Check confirmations": a new check at the station, which drops one it holds
+ *  and any still downloading. Each service is then checked in it. Its session. */
+export async function startConfirmationCheck(): Promise<number> {
+  return invoke<number>('start_confirmation_check')
+}
+
+/** One service's whole history in check `session` (LoTW's confirmations and own-QSO list, eQSL's
+ *  InBox, QRZ's book), downloaded once (minutes, for LoTW on a long history) and checked against
+ *  the log. It changes nothing: the download is held at the station for the check's Apply, or its
+ *  Cancel. */
+export async function confirmationCheck(
+  session: number,
+  service: CheckedService,
+): Promise<ConfirmationCheck> {
+  return invoke<ConfirmationCheck>('confirmation_check', { session, service })
 }
 
 /** Apply check `session`'s ticked lines, each only while its contact still holds what the check
- *  read, after merging the held download. Nothing is uploaded. */
+ *  read, after merging each service's held download. Nothing is uploaded. */
 export async function applyConfirmationCheck(
   session: number,
   ticked: { id: string; mark: ConfirmationLine['mark'] }[],
@@ -1350,6 +1614,22 @@ export async function setLotwPassword(password: string): Promise<void> {
 /** Remove the stored LoTW password from the OS keychain (idempotent). */
 export async function clearLotwPassword(): Promise<void> {
   await invoke<void>('clear_lotw_password')
+}
+
+/** Store a radio profile's Icom network password in the OS keychain (write-only; an empty string
+ *  clears it). The radio takes 16 printable characters at most. */
+export async function setIcomLanPassword(radioId: number, password: string): Promise<void> {
+  await invoke<void>('set_icom_lan_password', { radioId, password })
+}
+
+/** Remove a radio profile's Icom network password from the OS keychain (idempotent). */
+export async function clearIcomLanPassword(radioId: number): Promise<void> {
+  await invoke<void>('clear_icom_lan_password', { radioId })
+}
+
+/** Whether a radio profile has an Icom network password saved (never the password). */
+export async function icomLanPasswordSaved(radioId: number): Promise<boolean> {
+  return invoke<boolean>('icom_lan_password_saved', { radioId })
 }
 
 /** Sync your LoTW state into the log: pull new confirmations AND mark which of your
@@ -1935,26 +2215,33 @@ export async function setOperatingMode(
 
 /** Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
  * exact frequency atomically — one round-trip, so the rig can't end up in the new mode at the
- * old dial and the UI never sees a half-applied state. */
+ * old dial and the UI never sees a half-applied state. `mode` is the section, and comes back as
+ * the snapshot's `workView`: 'keyboard' is PSK's, and 'js8' is Digital named for the JS8 screen
+ * (`WORK_SECTION`, features/needs.ts). */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8',
   freqMhz: number,
   band: string,
   call?: string,
-  tier?: 'FT8' | 'FT4',
+  tier?: 'FT8' | 'FT4' | 'JS8',
+  park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
   // configure rig split automatically — the N1MM behavior. `tier` is the digital
   // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
   // backend call — as two calls, the radio loop could command the tier's default
   // dial to the rig in the gap before the spot's exact frequency ("hitting a
-  // default first, then switching" — operator report, 2026-08-09).
+  // default first, then switching" — operator report, 2026-08-09). `park` is a
+  // Needed row's park, which rides the work hint (`workPark`) to the log line.
   return invoke<AppSnapshot>('work_spot', {
     mode,
     freqMhz,
     band,
     call: call ?? null,
     tier: tier ?? null,
+    // Only when there is one: the hosted page's control transport refuses a work_spot carrying
+    // any other key, and a browser's Work never carries a park.
+    ...(park ? { park } : {}),
   })
 }
 
@@ -2038,6 +2325,17 @@ export async function setRigFunc(
  * type-ahead — the engine expands the tokens and the rig keys it. */
 export async function sendCw(text: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('send_cw', { text })
+}
+
+/** Queue CW for Enter Sends Message. Unlike `sendCw` it NEVER turns TX on: it rejects, with the
+ *  reason, while TX is off or any transmit gate refuses, and then nothing was taken. */
+export async function sendCwArmed(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw_armed', { text })
+}
+
+/** The ESM switch in a cockpit's TX dock, saved alone (never a settings-form save). */
+export async function setContestEsm(cockpit: 'cw' | 'rtty' | 'phone', on: boolean): Promise<void> {
+  await invoke('set_contest_esm', { cockpit, on })
 }
 
 /** Record the worked station's QRZ name + state for the {HISNAME}/{HISSTATE} CW-macro tokens,
@@ -2455,6 +2753,11 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's address, network user and control port for the Icom network connection (Beta;
+   *  per-radio, as above). Its password is never here: the OS keychain holds it. */
+  icomLanHost: string
+  icomLanUser: string
+  icomLanPort: number
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
@@ -2533,6 +2836,14 @@ export async function pointRotatorAtCall(call: string, longPath = false): Promis
   return invoke<PointedAt>('point_rotator_at_call', { call, longPath })
 }
 
+/** The bearing `pointRotatorAtCall(call)` turns the antenna to, and the distance to the same point,
+ *  without turning it: the station's own resolver, read only (the rotor box's line 2). Refuses with
+ *  `noGrid` or `unknownStation` when there is no bearing to give. The desktop's alone: a browser is
+ *  never offered it. */
+export async function rotatorBearingToCall(call: string): Promise<CallBearing> {
+  return invoke<CallBearing>('rotator_bearing_to_call', { call })
+}
+
 /** The grid the log form holds for the call it is logging — typed, or filled in from the
  *  callbook — so pointing the rotator at that call aims at the station. `''` forgets it for
  *  that call. Fire-and-forget, like `setCwPeerInfo`. */
@@ -2583,6 +2894,49 @@ export async function setUnassistedMode(on: boolean): Promise<AppSnapshot> {
 /** The assistance journal, newest first — what was running, and when. */
 export async function getAssistanceJournal(): Promise<import('./types').AssistanceEvent[]> {
   return invoke('get_assistance_journal')
+}
+
+/** Super Check Partial: download the list, or check for a newer one, when the site's rules for
+ *  logging software allow it now, and say what is held. The station decides: nothing is sent
+ *  while SCP is off or Unassisted mode is declared, and never more than once a day unless
+ *  `manual` (the operator's "Update now"). */
+export async function scpEnsure(manual: boolean): Promise<import('./types').ScpStatus> {
+  return invoke('scp_ensure', { manual })
+}
+
+/** What is held of the Super Check Partial list, without asking the site anything. */
+export async function getScpStatus(): Promise<import('./types').ScpStatus> {
+  return invoke('get_scp_status')
+}
+
+/** The Super Check Partial calls, once per strip mount; empty while SCP is effectively off. */
+export async function getScpCalls(): Promise<string[]> {
+  return invoke('get_scp_calls')
+}
+
+/** Import an N1MM-format call-history file for one contest (a `FieldDayStatus.event` id). A file
+ *  that does not read is refused and the one held is kept. */
+export async function importCallHistory(
+  text: string,
+  fileName: string,
+  contest: string,
+): Promise<import('./types').CallHistoryStatus> {
+  return invoke('import_call_history', { text, fileName, contest })
+}
+
+/** What call history is imported, if any. */
+export async function getCallHistoryStatus(): Promise<import('./types').CallHistoryStatus | null> {
+  return invoke('get_call_history_status')
+}
+
+/** The imported call history for the strip; null when none is imported or it is effectively off. */
+export async function getCallHistory(): Promise<import('./types').CallHistoryFile | null> {
+  return invoke('get_call_history')
+}
+
+/** Forget the imported call history. */
+export async function clearCallHistory(): Promise<void> {
+  return invoke('clear_call_history')
 }
 
 /** Clear the streaming CW decoder's accumulated transcript. */

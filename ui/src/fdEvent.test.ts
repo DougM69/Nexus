@@ -3,7 +3,7 @@
 // WFD's final six hours). What remains here is pure labeling over a window the
 // backend supplies, so these tests feed explicit windows.
 import { describe, it, expect } from 'vitest'
-import { clubSyncRefused, fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
+import { CONTESTS, clubSyncRefusal, clubSyncRefusalText, contestClubRefusal, contestFileStem, contestRoleWords, fdEventFromWindow, fdCountdownLabel, fdHeaderSubtitle } from './fdEvent'
 
 // The real 2026 windows, as the Rust side computes them (pinned there in
 // crates/tempo-core/src/fd_rules.rs::event_windows_are_algorithmic_and_dodge_the_feb_spill).
@@ -83,21 +83,91 @@ describe('fdHeaderSubtitle', () => {
   })
 })
 
-// The engine refuses club sync for anything but the two Field Days (`Engine::fd_sync_enabled`,
-// pinned in Rust by `club_sync_is_refused_for_a_contest_that_is_not_a_field_day`). The screen
-// says why from this, so it has to read the same three settings the same way, the trim included.
-describe('clubSyncRefused', () => {
-  it('is true for hosting or joining while a contest that is not a Field Day is picked', () => {
-    expect(clubSyncRefused({ fdEvent: 'ilqp', fdHostEnable: true })).toBe(true)
-    expect(clubSyncRefused({ fdEvent: 'cqww_cw', fdJoinAddr: '192.168.1.10:42073' })).toBe(true)
+// Club sync runs the picked contest's own rules and refuses only the contests whose merged log
+// would be wrong whoever built it (`Engine::club_sync_refusal`, pinned in Rust by
+// `club_sync_runs_the_pickers_contest_and_refuses_only_what_it_cannot_run`). The screen says why
+// from this, so it has to read the same settings the same way, the trim and the blank default
+// included.
+describe('clubSyncRefusal', () => {
+  it('names the reason for hosting or joining a serial-number or transmitter-column contest', () => {
+    expect(clubSyncRefusal({ fdEvent: 'arrlss_cw', fdHostEnable: true })).toBe('serial')
+    expect(clubSyncRefusal({ fdEvent: 'cqp', fdHostEnable: true })).toBe('serial')
+    expect(clubSyncRefusal({ fdEvent: 'cqww_cw', fdJoinAddr: '192.168.1.10:42073' })).toBe('transmitter')
+    expect(clubSyncRefusal({ fdEvent: ' cqww_rtty ', fdHostEnable: true })).toBe('transmitter')
   })
-  it('is false for both Field Days and the blank default, whitespace and all', () => {
-    for (const fdEvent of ['arrlfd', 'wfd', '', ' wfd ', undefined]) {
-      expect(clubSyncRefused({ fdEvent, fdHostEnable: true })).toBe(false)
+  it('is null for the Illinois QSO Party, both Field Days and the blank default — every contest the club runs', () => {
+    for (const fdEvent of ['ilqp', 'nyqp', 'tnqp', 'ohqp', 'txqp', 'arrlvhf_jun', 'arrlfd', 'wfd', '', ' wfd ', undefined]) {
+      expect(clubSyncRefusal({ fdEvent, fdHostEnable: true })).toBeNull()
     }
   })
-  it('is false when club sync is not switched on at all', () => {
-    expect(clubSyncRefused({ fdEvent: 'ilqp', fdHostEnable: false, fdJoinAddr: '   ' })).toBe(false)
-    expect(clubSyncRefused(null)).toBe(false)
+  it('is null when club sync is not switched on at all', () => {
+    expect(clubSyncRefusal({ fdEvent: 'cqww_cw', fdHostEnable: false, fdJoinAddr: '   ' })).toBeNull()
+    expect(clubSyncRefusal(null)).toBeNull()
+  })
+  it('answers for every contest on the picker, refused or not, and an inherited key is not a contest', () => {
+    const refused = CONTESTS.filter((c) => contestClubRefusal(c.id) !== null).map((c) => c.id)
+    expect(refused.sort()).toEqual(
+      ['arrlss_cw', 'arrlss_ssb', 'cqp', 'cqwpx_cw', 'cqwpx_ssb', 'cqww_cw', 'cqww_rtty', 'cqww_ssb'],
+    )
+    expect(contestClubRefusal('constructor')).toBeNull()
+  })
+  it('says the reason in the sentence it shows', () => {
+    expect(clubSyncRefusalText('serial', 'CQ WPX')).toMatch(/serial numbers must run in one sequence/)
+    expect(clubSyncRefusalText('transmitter', 'CQ WW')).toMatch(/which transmitter made each contact/)
+    expect(clubSyncRefusalText('serial', 'CQ WPX')).toContain('CQ WPX')
+  })
+  // A rules file the station downloaded can DROP a contest. The engine refuses club sync for
+  // it then (`ClubRefusal::NoRuleset`, code "unknown"), and the station's preview of the picked
+  // contest shows it by resolving the id to the ARRL Field Day that mode entry falls back to.
+  it('names a contest the loaded rules do not carry, read off the station preview', () => {
+    const fellBack = { event: 'arrlfd' }
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: true }, fellBack)).toBe('unknown')
+    expect(clubSyncRefusal({ fdEvent: ' ilqp ', fdJoinAddr: '10.0.0.2:42073' }, fellBack)).toBe('unknown')
+    expect(contestClubRefusal('ilqp', fellBack)).toBe('unknown')
+    // The engine asks for the rules first, so a dropped serial contest is refused for that.
+    expect(clubSyncRefusal({ fdEvent: 'arrlss_cw', fdHostEnable: true }, fellBack)).toBe('unknown')
+    // CONTROLS: carried, the blank default, no preview yet, and not switched on.
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: true }, { event: 'ilqp' })).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: '', fdHostEnable: true }, fellBack)).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: 'arrlfd', fdHostEnable: true }, fellBack)).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: true }, null)).toBeNull()
+    expect(clubSyncRefusal({ fdEvent: 'ilqp', fdHostEnable: false }, fellBack)).toBeNull()
+  })
+  it('says the missing-rules reason by the sponsor name, and where to fix it', () => {
+    const said = clubSyncRefusalText('unknown', 'Illinois QSO Party')
+    expect(said).toContain('Illinois QSO Party')
+    expect(said).toMatch(/rules this Nexus loaded do not include it/)
+    expect(said).toMatch(/Check for rules updates/)
+  })
+})
+
+describe('contestFileStem', () => {
+  it('is the rules-file id, unchanged, for every contest the picker offers', () => {
+    for (const c of CONTESTS) expect(contestFileStem(c.id)).toBe(c.id)
+  })
+
+  it('is ARRL Field Day for a blank id, as a blank pick is everywhere else', () => {
+    expect(contestFileStem('')).toBe('arrlfd')
+    expect(contestFileStem(undefined)).toBe('arrlfd')
+    expect(contestFileStem('  ')).toBe('arrlfd')
+  })
+
+  it('turns each run of characters a file name cannot carry into one dash', () => {
+    expect(contestFileStem('my contest/2027')).toBe('my-contest-2027')
+    expect(contestFileStem('a\\b:c*?d')).toBe('a-b-c-d')
+    expect(contestFileStem('../x')).toBe('-x')
+  })
+})
+
+describe('contestRoleWords', () => {
+  it('says each side of a contest in words, never the rules data\'s id', () => {
+    expect(contestRoleWords('in_state')).toBe('in-state')
+    expect(contestRoleWords('out_of_state')).toBe('out-of-state')
+    expect(contestRoleWords('w_ve')).toBe('W/VE')
+    expect(contestRoleWords('dx')).toBe('DX')
+  })
+
+  it('shows a role id it has no words for as itself, a token rather than a guess', () => {
+    expect(contestRoleWords('mobile_rover')).toBe('mobile_rover')
   })
 })

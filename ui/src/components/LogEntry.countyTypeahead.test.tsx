@@ -12,8 +12,9 @@
 // really produces, the shape `LogEntry.contestStrip.test.tsx` established. jsdom lays
 // nothing out; not one assertion here is about geometry.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
+import { subscribeToasts } from '../toast'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 vi.mock('../api', () => ({
@@ -91,7 +92,7 @@ const box = (caption: string): HTMLInputElement => {
   if (!cap) throw new Error(`no received box captioned ${caption}`)
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
-const qthBox = () => box('QTH')
+const qthBox = () => box('County / State')
 const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
 const hits = () => [...document.querySelectorAll('.le-fd-suggest .le-fd-hit-code')].map((n) => n.textContent)
 
@@ -261,5 +262,138 @@ describe('the while-typing DUPE badge', () => {
     } as unknown as FieldDayStatus)
     fireEvent.change(callBox(), { target: { value: 'K9NR' } })
     expect(dupeShown()).toBe(false)
+  })
+})
+
+// ⭐ "I MOVED" READS A COUNTY THE WAY THE QTH BOX DOES. A mobile knows the county it has just
+// driven into by its NAME; the box sent exactly what was typed, so `DuPage` was refused as "not
+// one of this contest's counties" while `DUPG` went through. Each box is now read by the QTH
+// box's own function, and the engine still decides what is a county.
+describe('"I moved" reads a county the way the QTH box does', () => {
+  /** Open "I moved", type into its QTH box and press Save. */
+  const moveTo = async (typed: string) => {
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const qth = [...document.querySelectorAll('.le-fd-sent input')].find(
+      (i) => i.getAttribute('aria-label') === 'QTH',
+    )!
+    fireEvent.change(qth, { target: { value: typed } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+  }
+
+  it.each([
+    ['a name', 'MONROE', 'MNRO'],
+    ['a code', 'DUPG', 'DUPG'],
+    ['a mixed-case name', 'DuPage', 'DUPG'],
+    ['a name with its punctuation and spacing', 'st. clair', 'SCLA'],
+  ])('%s: %s goes to the engine as %s', async (_what, typed, code) => {
+    renderStrip()
+    await moveTo(typed)
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', code]])
+  })
+
+  it("reads New York's own list in the New York QSO Party", async () => {
+    renderStrip({
+      ...ilqp(),
+      event: 'nyqp',
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'QTH', kind: 'oneOf', required: true, domains: ['ny_counties', 'ny_mults', 'dx_literal'] },
+      ],
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw: 'ALB', domain: 'ny_counties' },
+      ],
+    } as unknown as FieldDayStatus)
+    await moveTo('Monroe')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'MON']])
+  })
+
+  /** A QSO party as the engine serialises it for a `role` station sending `raw`, from the list
+   *  `domain` names (none for a value typed free, as a DX station's is). */
+  const party = (st: 'il' | 'ny', role: string, raw: string, domain?: string): FieldDayStatus =>
+    ({
+      ...ilqp(),
+      event: `${st}qp`,
+      role,
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        {
+          key: 'QTH',
+          kind: 'oneOf',
+          required: true,
+          domains: st === 'il' ? ['il_counties', 'il_mults'] : ['ny_counties', 'ny_mults', 'dx_literal'],
+        },
+      ],
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw, ...(domain ? { domain } : {}) },
+      ],
+    }) as unknown as FieldDayStatus
+
+  // Five counties share their name with a state or province on the same contest's list. The
+  // QTH box cannot tell which was meant; I moved can, from the list the station sends from.
+  it.each([
+    ['il', 'COOK', 'il_counties', 'Washington', 'WASH'],
+    ['ny', 'ALB', 'ny_counties', 'Delaware', 'DEL'],
+    ['ny', 'ALB', 'ny_counties', 'Ontario', 'ONT'],
+    ['ny', 'ALB', 'ny_counties', 'Washington', 'WAS'],
+    ['ny', 'ALB', 'ny_counties', 'Wyoming', 'WYO'],
+  ])('%sqp in-state, sending %s (%s): %s is the county %s', async (st, sent, list, typed, code) => {
+    renderStrip(party(st as 'il' | 'ny', 'in_state', sent, list))
+    await moveTo(typed)
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', code]])
+  })
+
+  it('outside the state, the same name is the state the station sends', async () => {
+    renderStrip(party('il', 'w_ve', 'IN', 'il_mults'))
+    await moveTo('Washington')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'WA']])
+  })
+
+  it('a value sent from no list (a DX station types its own) is read as the QTH box reads it', async () => {
+    renderStrip(party('il', 'dx', 'GERMANY'))
+    await moveTo('DuPage')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'DUPG']])
+  })
+
+  it("leaves the QTH box's own reading alone: a name two lists hold stays as typed there", () => {
+    renderStrip()
+    fireEvent.change(qthBox(), { target: { value: 'Washington' } })
+    fireEvent.keyDown(qthBox(), { key: ' ', code: 'Space' })
+    expect(qthBox().value.toUpperCase()).toBe('WASHINGTON')
+  })
+
+  it('a name that is no county goes as typed, and the engine refuses it in its own words', async () => {
+    const refusal = '"NARNIA" is not one of this contest\'s counties.'
+    api.contestIMoved.mockRejectedValueOnce(refusal)
+    let shown: string[] = []
+    const off = subscribeToasts((ts) => {
+      shown = ts.map((x) => x.message)
+    })
+    renderStrip()
+    await moveTo('Narnia')
+    off()
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'NARNIA']])
+    expect(shown).toContain(`Could not change what you send: ${refusal}`)
+  })
+
+  it('naming the county already being sent moves nothing', async () => {
+    renderStrip({
+      ...ilqp(),
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw: 'SCLA', domain: 'il_counties' },
+      ],
+    } as unknown as FieldDayStatus)
+    await moveTo('St. Clair')
+    expect(api.contestIMoved).not.toHaveBeenCalled()
+  })
+
+  it('a slot with no received box keeps what was typed, as before', async () => {
+    renderStrip({ ...ilqp(), receives: [{ key: 'RST', kind: 'rst', required: true }] } as unknown as FieldDayStatus)
+    await moveTo(' DuPage ')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'DUPAGE']])
   })
 })

@@ -75,10 +75,18 @@ pub struct DupeRule {
     /// languages build this key (this module's header), and a fold applied by one of
     /// them is exactly how they come to disagree.
     pub mode_class_groups: &'static [&'static [&'static str]],
-    /// ⭐ **What a duplicate IS to this sponsor: a row that scores zero, or a contact
-    /// that was never made.** `false` — the shipped behaviour, and still Field Day's —
-    /// REFUSES the contact and writes nothing. `true` LOGS it, marks it
+    /// ⭐ **What a duplicate IS: a row that scores zero, or a contact that was never
+    /// made.** `true` LOGS it, marks it
     /// ([`LoggedQso::dupe`](crate::fieldday::LoggedQso::dupe)) and scores it zero.
+    /// `false` REFUSES the contact and writes nothing.
+    ///
+    /// ⭐ **`true` for every contest since the operator's ruling of 2026-10-11** — a dupe
+    /// typed in, answered with a double-click or a logger's Reply, or calling the run is
+    /// "logged marked as a dupe for 0 points, as N1MM does". It is set where rulesets are
+    /// built (`fd_rules::build`), not read from the rules file, because a downloaded file
+    /// replaces the seed whole and older builds read the same file. No shipped sponsor's
+    /// rules say to remove dupes; the sentences below are why the cross-checked contests
+    /// had always logged them.
     ///
     /// **Both sponsors that cross-check say the same thing.** ARRL LGCK.1 and CQ
     /// XII.E.1: *"Duplicate contacts are removed with no additional penalty."* CQ
@@ -89,11 +97,12 @@ pub struct DupeRule {
     /// OTHER operator: their contact becomes Not-In-Log, 1× extra at ARRL, 2× extra at
     /// CQ. The checker is what zeroes a dupe; the entrant's job is to report it.
     ///
-    /// ⚠️ **It is `false` for ARRL and Winter Field Day, and that is not an oversight.**
-    /// Field Day has no log checking at all — no cross-check, no NIL, and *"Complete
-    /// station logs are NOT required for submission, and ARRL does not use the logs."*
-    /// The whole justification above is inapplicable there, and Field Day's deliverable
-    /// is a dupe sheet plus **raw non-dupe** QSO counts. So FD keeps refusing.
+    /// ⚠️ **Field Day logs them too, with nothing to gain from the checker.** It has no
+    /// log checking at all — no cross-check, no NIL, and *"Complete station logs are NOT
+    /// required for submission, and ARRL does not use the logs."* Its deliverable is a
+    /// dupe sheet plus **raw non-dupe** QSO counts, and those still leave a dupe out
+    /// (`FieldDayLog::qso_count`). The other station's log is the reason: it holds the
+    /// contact either way.
     ///
     /// ⚠️ **Not part of the key**, deliberately: it says what to DO with a duplicate,
     /// never what makes two contacts the same one. The four key-building sites in two

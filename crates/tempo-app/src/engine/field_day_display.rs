@@ -55,7 +55,12 @@ impl Engine {
             event: log.session.event_id.clone(),
             powered_points: scored,
             bonus_points: bonus,
-            total_score: scored + bonus,
+            // ⭐ The ONE formula: a contest that scores by objectives (Winter Field Day) claims
+            // QSO points × (OM + 1), every other contest what it always claimed.
+            total_score: rs.claimed_total(qso_pts, scored, bonus, &self.settings.fd_objectives),
+            objective_multiplier: (!rs.objective_menu.is_empty())
+                .then(|| rs.objective_multiplier(&self.settings.fd_objectives)),
+            satellite_credit: (!rs.satellite_credit).then_some(false),
             event_start_unix: event_window.start_unix,
             event_end_unix: event_window.end_unix,
             rules_year: rs.rules_year,
@@ -75,39 +80,7 @@ impl Engine {
             log: log
                 .qsos()
                 .iter()
-                .map(|q| FieldDayQso {
-                    call: q.call.clone(),
-                    class: q.class().to_string(),
-                    section: q.section().to_string(),
-                    band: q.band.clone(),
-                    mode: q.mode.clone(),
-                    submode: q.submode.clone(),
-                    when_unix: q.when_unix,
-                    // The bird, for the while-typing verdict — see `FieldDayQso::sat`.
-                    sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
-                    // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
-                    // row by the one function that renders one, so an emitter
-                    // looping over these rows has the right value in hand and
-                    // no reason to reach out to the session.
-                    mex: tempo_core::contest::sent_exchange_string(q, spec),
-                    // What this contact RECEIVED, aligned with `receives` below — the
-                    // contest log table's columns. Field Day's already ride class/section.
-                    rcvd: if spec.name == "fieldday" {
-                        Vec::new()
-                    } else {
-                        role.receives
-                            .iter()
-                            .map(|k| q.rcvd(k).to_string())
-                            .collect()
-                    },
-                    // ⭐ The row's key under THIS ruleset's rule, from the one builder.
-                    // The strip cannot build it: the rule names sent slots, and a row's
-                    // sent exchange reaches the UI only as the rendered `mex`.
-                    dkey: rs.dupe_rule.key(q),
-                    // ⭐ The engine's own answer about this row, so the log table marks a
-                    // zero-scoring dupe instead of guessing at one from a repeated callsign.
-                    dupe: q.dupe,
-                })
+                .map(|q| field_day_qso(q, rs, spec, role))
                 .collect(),
             // The club block, plus the generalised keys `fd_club_dto` does not carry —
             // it lives in `engine.rs` and projects the mirror to the legacy triple. The
@@ -168,6 +141,19 @@ impl Engine {
             // vector below because that one is also the "I moved" edit surface; see
             // `FieldDayStatus::composing_text`.
             composing_text: self.contest_composing_text().unwrap_or_default(),
+            // …and as a phone contact sends it, the report at two digits.
+            composing_text_phone: self.contest_composing_text_phone().unwrap_or_default(),
+            // What the sponsor requires and the file exported now would leave out, read off the
+            // header the export writes for the entrant's Settings; nothing is read for a contest
+            // whose requirements this build does not know.
+            cabrillo_missing: if rs.cabrillo_required.is_empty() {
+                Vec::new()
+            } else {
+                log.cabrillo_missing(&self.contest_entrant())
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            },
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             // The dupe rule's mode grouping, so the strip's badge and the engine's
             // refusal answer the same question.
@@ -220,6 +206,14 @@ impl Engine {
                     worked: log.worked_values(b.slot),
                 })
                 .collect(),
+            // What the journal restore kept out of this session, and why.
+            kept_out: match log.held() {
+                (0, 0) => None,
+                (contest, running) => Some(crate::dto::FdKeptOutDto {
+                    other_contest: contest as u32,
+                    other_running: running as u32,
+                }),
+            },
         })
     }
 
@@ -233,14 +227,22 @@ impl Engine {
             return Ok(None);
         };
         let log = &station.log;
-        if log.qso_count() > 2048
+        // ⭐ The club board's rows as the capture carries them, and the only ones it ships (cut to
+        // them below): on a host the board its club sends every position now, never its own list of
+        // every position, which can be longer than the hosted page takes; on a position the board
+        // the host sent it (`Engine::fd_club_board_sent`).
+        let board = self.fd_club_board_sent(crate::engine::now_unix_secs());
+        // ROWS, which is what the capture carries and the browser bounds: `qso_count` leaves out a
+        // logged dupe and a satellite contact the contest gives no credit, so it can sit under the
+        // bound while the log it ships is over it.
+        if log.qsos().len() > 2048
             || (self.fd_sync_enabled()
                 && (self.fd_mirror.dupes.len() > 4096
                     // The generalised keys now ship too, and they are the SAME contacts
                     // under a wider key — so they get the same count bound. Unbounded,
                     // a host could grow the capture past the limit the triple enforces.
                     || self.fd_mirror.dkeys.len() > 4096
-                    || self.fd_mirror.board.len() > 128
+                    || board.len() > 128
                     || self.fd_mirror.sections.len() > 256))
         {
             return Err("applicationTooLarge");
@@ -264,6 +266,7 @@ impl Engine {
         // per-string rule and must be refused here first rather than there.
         check(&self.contest_sent_exchange().unwrap_or_default())?;
         check(&self.contest_composing_text().unwrap_or_default())?;
+        check(&self.contest_composing_text_phone().unwrap_or_default())?;
         // The advisory band list comes out of a rules file, which bounds nothing about it.
         for b in log.ruleset().bands {
             check(b)?;
@@ -314,7 +317,7 @@ impl Engine {
                     check(s)?;
                 }
             }
-            for r in &self.fd_mirror.board {
+            for r in &board {
                 for s in [&r.pos, &r.name, &r.band, &r.mode, &r.op] {
                     check(s)?;
                 }
@@ -323,7 +326,85 @@ impl Engine {
                 check(s)?;
             }
         }
-        Ok(self.field_day_status())
+        let mut status = self.field_day_status();
+        keep_the_board_sent(&mut status, &board);
+        Ok(status)
+    }
+
+    /// ⭐ **What Remote's snapshot carries of this laptop's club board**: the board every position
+    /// is sent ([`Engine::fd_club_board_sent`]), as the Remote capture carries it, never the host's
+    /// own list of every position its club knows, which grows with each position that ever joined.
+    /// `field_day` is that snapshot's Field Day block.
+    pub fn fd_club_board_to_remote(&self, field_day: &mut Option<FieldDayStatus>) {
+        keep_the_board_sent(field_day, &self.fd_club_board_sent(now_unix_secs()));
+    }
+}
+
+/// Keep, of a Field Day block's club board, the lines of the positions in `sent` and no others:
+/// the host's own board lists every position its club knows, and what leaves the host carries the
+/// board every position is sent. A position's board is those rows already.
+fn keep_the_board_sent(
+    field_day: &mut Option<FieldDayStatus>,
+    sent: &[tempo_net::fdsync::WireBoardRow],
+) {
+    if let Some(club) = field_day.as_mut().and_then(|f| f.club.as_mut()) {
+        let sent: std::collections::HashSet<&str> = sent.iter().map(|r| r.pos.as_str()).collect();
+        club.board.retain(|r| sent.contains(r.posid.as_str()));
+    }
+}
+
+/// One contest row as the log table shows it — the snapshot's `log`, and the contest screen's
+/// Removed list, which must render a removed contact exactly as the row it was.
+pub(super) fn field_day_qso(
+    q: &tempo_core::fieldday::LoggedQso,
+    rs: &tempo_core::fd_rules::FdRuleset,
+    spec: &'static tempo_core::contest::ExchangeSpec,
+    role: &'static tempo_core::contest::RoleSpec,
+) -> FieldDayQso {
+    FieldDayQso {
+        call: q.call.clone(),
+        class: q.class().to_string(),
+        section: q.section().to_string(),
+        band: q.band.clone(),
+        mode: q.mode.clone(),
+        submode: q.submode.clone(),
+        when_unix: q.when_unix,
+        // The bird, for the while-typing verdict — see `FieldDayQso::sat`.
+        sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
+        // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
+        // row by the one function that renders one, so an emitter
+        // looping over these rows has the right value in hand and
+        // no reason to reach out to the session.
+        mex: tempo_core::contest::sent_exchange_string(q, spec),
+        // The same, slot by slot, for the one emitter that fills boxes rather than a line.
+        sent: tempo_core::contest::sent_exchange(q, spec)
+            .into_iter()
+            .map(|v| (v.key.to_string(), v.raw))
+            .collect(),
+        // What this contact RECEIVED, aligned with `receives` below — the
+        // contest log table's columns. Field Day's already ride class/section.
+        rcvd: if spec.name == "fieldday" {
+            Vec::new()
+        } else {
+            role.receives
+                .iter()
+                .map(|k| q.rcvd(k).to_string())
+                .collect()
+        },
+        // ⭐ The row's key under THIS ruleset's rule, from the one builder.
+        // The strip cannot build it: the rule names sent slots, and a row's
+        // sent exchange reaches the UI only as the rendered `mex`.
+        // A satellite contact the contest gives no credit is a dupe of
+        // nothing, so it carries no key the verdict could match.
+        dkey: if rs.satellite_credit || q.sat.is_none() {
+            rs.dupe_rule.key(q)
+        } else {
+            Vec::new()
+        },
+        // ⭐ The engine's own answer about this row, so the log table marks a
+        // zero-scoring dupe instead of guessing at one from a repeated callsign.
+        dupe: q.dupe,
+        seq: q.seq,
     }
 }
 
@@ -375,6 +456,326 @@ mod tests {
                 assert_eq!(e.field_day_log_adif(), before);
             }
         }
+    }
+
+    /// ⭐ **A host's capture carries the board its bound measured**: the board its club sends every
+    /// position now, cut to what one club line carries, so a host whose log has heard of more
+    /// positions than the hosted page takes (128) still ships a capture the page reads, while the
+    /// host's own board lists every one of them; its own loopback position need not be in for the
+    /// host to see who is. Each row says where its link stands, from the live club log. CONTROL:
+    /// the club log does know every one of them.
+    #[test]
+    fn a_hosts_capture_carries_the_board_its_bound_measured() {
+        let dir = std::env::temp_dir().join(format!("fdd-host-bound-{}", std::process::id()));
+        let mut e = engine("arrlfd", 0);
+        e.settings.fd_host_enable = true;
+        e.settings.fd_position_id = "aaaa0001".into();
+        e.fd_host_start(dir.join("fd_event_bound.jsonl")).unwrap();
+        let now = crate::engine::now_unix_secs();
+        let club = e.fd_club.as_mut().unwrap();
+        for i in 0..130u32 {
+            let id = format!("{:08x}", 0xb000_0000u32 + i);
+            club.join(&id, "", "W1AW", now);
+            club.open_link(&id);
+        }
+        // What the club sends each position: the positions heard from most recently, as many as
+        // one club line carries.
+        let sent: std::collections::BTreeSet<String> =
+            tempo_net::fdsync::board_fit(&club.board_rows(now))
+                .rows
+                .into_iter()
+                .map(|r| r.pos)
+                .collect();
+        assert_eq!(
+            e.fd_club.as_ref().unwrap().positions().len(),
+            130,
+            "CONTROL"
+        );
+        assert!(sent.len() < 130, "premise: one club line cannot carry 130");
+        assert!(
+            e.fd_mirror.board.is_empty(),
+            "premise: the host's own position is not in"
+        );
+        let value = e.bounded_field_day_status().unwrap().unwrap();
+        let board = value.club.unwrap().board;
+        assert!(
+            board.len() <= 128,
+            "the hosted page takes at most 128: {}",
+            board.len()
+        );
+        assert_eq!(
+            board
+                .iter()
+                .map(|r| r.posid.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            sent,
+            "the board the club sends"
+        );
+        assert!(
+            board.iter().all(|r| r.link.as_deref() == Some("connected")),
+            "each row's link, from the live club log: {board:?}"
+        );
+        assert_eq!(
+            e.snapshot()
+                .field_day
+                .unwrap()
+                .club
+                .unwrap()
+                .board
+                .into_iter()
+                .map(|r| r.posid)
+                .collect::<std::collections::BTreeSet<_>>(),
+            e.fd_club
+                .as_ref()
+                .unwrap()
+                .positions()
+                .keys()
+                .cloned()
+                .collect(),
+            "the host's own board lists every one of them"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The host's own position in [`a_full_club`], and the tent in it that went quiet.
+    const HQ: &str = "aaaa0001";
+    const QUIET: &str = "dddd0004";
+
+    /// ⭐ **A host whose club has more positions than one club line carries**: its own position,
+    /// 69 tents connected and heard from now, and the Digital tent, which joined and was last heard
+    /// ten minutes ago, so the board every position is sent leaves it out first. Every stamp is
+    /// `t0` or ten minutes before it, so the board the club sends at `t0` is the same bytes on
+    /// every run. The engine, `t0`, and every position id the club knows.
+    fn a_full_club(dir: &std::path::Path) -> (Engine, u64, std::collections::BTreeSet<String>) {
+        let mut e = engine("arrlfd", 0);
+        e.settings.fd_host_enable = true;
+        e.settings.fd_position_id = HQ.into();
+        e.fd_host_start(dir.join("fd_event_full.jsonl")).unwrap();
+        let t0 = crate::engine::now_unix_secs();
+        let club = e.fd_club.as_mut().unwrap();
+        let mut tent = |id: &str, name: &str, at: u64| {
+            club.join(id, name, "K1ABC", at);
+            club.position_status(
+                id,
+                &tempo_net::fdsync::PosReport {
+                    band: "20m".into(),
+                    mode: "CW".into(),
+                    op: "K1ABC".into(),
+                    freq: 14_025_000,
+                    name: name.into(),
+                    clock_ms: None,
+                },
+                at,
+            );
+            id.to_string()
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        ids.insert(tent(HQ, "HQ", t0));
+        for i in 1..=69u32 {
+            let id = format!("{:08x}", 0xc000_0000u32 + i);
+            ids.insert(tent(
+                &id,
+                &format!("Position {i:02} tent, the north field"),
+                t0,
+            ));
+        }
+        ids.insert(tent(QUIET, "Digital tent, by the tower", t0 - 600));
+        // A laptop is connected as each of them but the quiet one: the host's own over loopback.
+        for id in ids.iter().filter(|id| *id != QUIET) {
+            club.open_link(id);
+        }
+        (e, t0, ids)
+    }
+
+    /// The board every position is sent at host clock `now`: the rows the first club line carries,
+    /// cut from the club's board by `fdsync::board_fit` as the line writer cuts it.
+    fn wire_board(e: &Engine, now: u64) -> Vec<tempo_net::fdsync::WireBoardRow> {
+        let club = e.fd_club.as_ref().unwrap();
+        tempo_net::fdsync::board_fit(&club.club_state(0, 0, 0, now).board).rows
+    }
+
+    /// ⭐ **A host lists every joined position on its own board, however many, and removes one the
+    /// board every position is sent leaves out.** One club line carries about 59 positions, so the
+    /// board every position is sent is cut to the ones heard from most recently; the host's own
+    /// board, where each line has its Status and its Remove, is not, so no position can be kept off
+    /// the host's screen by filling the club with others or by going quiet. The host's count of
+    /// connected positions counts the Connected lines of that same board, beside it and on its own.
+    /// Read by value off the snapshot the host's screen reads; Remove is the one its button calls,
+    /// with the row's id, and the removed position's next JOIN is turned away.
+    #[test]
+    fn a_host_lists_every_joined_position_and_removes_one_the_board_it_sends_leaves_out() {
+        let dir = std::env::temp_dir().join(format!("fdd-host-every-{}", std::process::id()));
+        let (mut e, t0, ids) = a_full_club(&dir);
+        let sent: std::collections::BTreeSet<String> =
+            wire_board(&e, t0).into_iter().map(|r| r.pos).collect();
+        assert!(
+            sent.len() < 70 && !sent.contains(QUIET),
+            "premise: the board every position is sent leaves the quiet tent out: {} of {}",
+            sent.len(),
+            ids.len()
+        );
+        let connected = |board: &[crate::dto::FdClubBoardRow]| {
+            board
+                .iter()
+                .filter(|r| r.link.as_deref() == Some("connected"))
+                .count()
+        };
+        let s = e.snapshot();
+        let board = s.field_day.unwrap().club.unwrap().board;
+        assert_eq!(
+            board
+                .iter()
+                .map(|r| r.posid.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids,
+            "the host's own board lists every position its club knows"
+        );
+        let quiet = board.iter().find(|r| r.posid == QUIET).unwrap();
+        assert_eq!(quiet.pos_name, "Digital tent, by the tower");
+        assert_eq!(quiet.link.as_deref(), Some("lost"));
+        assert!(quiet.heard_secs.is_some_and(|h| h >= 600), "{quiet:?}");
+        assert_eq!(connected(&board), 69, "every tent but the quiet one");
+        assert_eq!(
+            s.club_link.unwrap().hosting.unwrap().connected,
+            69,
+            "the hosting line beside the board"
+        );
+        assert_eq!(
+            e.fd_club_link().unwrap().hosting.unwrap().connected,
+            69,
+            "the hosting line on its own, as Settings reads it with no board beside it"
+        );
+        // Remove, as the button on its line presses it.
+        assert_eq!(e.fd_club_remove_position(&quiet.posid), Ok(()));
+        let s = e.snapshot();
+        let board = s.field_day.unwrap().club.unwrap().board;
+        assert_eq!(board.len(), ids.len(), "a removed position keeps its line");
+        assert_eq!(
+            board
+                .iter()
+                .find(|r| r.posid == QUIET)
+                .and_then(|r| r.link.as_deref()),
+            Some("removed"),
+            "its line says so, beside Allow back"
+        );
+        assert_eq!(connected(&board), 69);
+        assert_eq!(s.club_link.unwrap().hosting.unwrap().connected, 69);
+        // Its next try is turned away, by the removal's own sentence.
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let hash = "c".repeat(64);
+        let join = |e: &mut Engine, id: &str, name: &str| {
+            e.fd_club_join(v, id, name, "K1ABC", "arrlfd", "", &hash)
+                .map(|_| ())
+        };
+        assert_eq!(
+            join(&mut e, QUIET, "Digital tent, by the tower"),
+            Err(crate::fdevent::POSITION_REMOVED.to_string())
+        );
+        assert_eq!(
+            join(&mut e, "eeee0005", "Satellite tent"),
+            Ok(()),
+            "CONTROL: a position the host did not remove is served"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ CONTROL: **the board every position is sent is the bytes it was** for the same club: cut
+    /// to what one club line carries, the quiet tent left out first, and within that line; byte for
+    /// byte the board this club sent before the host's own board listed every position (club sync
+    /// stays v4), pinned by its SHA-256 as the earlier build wrote it; and what the club's
+    /// connections are sent (`Engine::fd_club_state`, each heartbeat's) is that board.
+    #[test]
+    fn the_board_every_position_is_sent_stays_the_same_bytes() {
+        let dir = std::env::temp_dir().join(format!("fdd-host-wire-{}", std::process::id()));
+        let (mut e, t0, ids) = a_full_club(&dir);
+        let wire = wire_board(&e, t0);
+        assert!(
+            wire.len() < ids.len() && wire.iter().all(|r| r.pos != QUIET),
+            "cut: {} of {}",
+            wire.len(),
+            ids.len()
+        );
+        let line = tempo_net::fdsync::encode_line(&tempo_net::fdsync::Msg::Club(
+            tempo_net::fdsync::ClubState {
+                score: u32::MAX,
+                qsos: u64::MAX,
+                board: wire.clone(),
+                ..Default::default()
+            },
+        ));
+        assert!(
+            line.len() <= tempo_net::fdsync::MAX_LINE_BYTES,
+            "the longest club line it rides: {}",
+            line.len()
+        );
+        assert_eq!(
+            crate::fdevent::sha256_hex(&serde_json::to_string(&wire).unwrap()),
+            "bebc6aacc2a77986008802943dc5aee621e5121634ecbb829220bde0fd7d5270"
+        );
+        let now_sent: std::collections::BTreeSet<String> =
+            tempo_net::fdsync::board_fit(&e.fd_club_state(0, 0, "").board)
+                .rows
+                .into_iter()
+                .map(|r| r.pos)
+                .collect();
+        assert_eq!(
+            now_sent,
+            wire.into_iter().map(|r| r.pos).collect(),
+            "what each heartbeat sends"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The Remote capture carries the board every position is sent, never the host's own
+    /// list**: its rows are the cut every position gets, string for string the ones its bound
+    /// measures, within the 128 the hosted page takes, the quiet tent left out as each position's
+    /// board leaves it out. CONTROL: the host's own snapshot beside it lists every position.
+    #[test]
+    fn a_hosts_remote_capture_carries_the_board_every_position_is_sent() {
+        let dir = std::env::temp_dir().join(format!("fdd-host-remote-{}", std::process::id()));
+        let (e, _, ids) = a_full_club(&dir);
+        let strings = |rows: Vec<[String; 5]>| {
+            rows.into_iter()
+                .map(|r| (r[0].clone(), r))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let sent = strings(
+            tempo_net::fdsync::board_fit(
+                &e.fd_club
+                    .as_ref()
+                    .unwrap()
+                    .board_rows(crate::engine::now_unix_secs()),
+            )
+            .rows
+            .into_iter()
+            .map(|r| [r.pos, r.name, r.band, r.mode, r.op])
+            .collect(),
+        );
+        let shipped = e.bounded_field_day_status().unwrap().unwrap();
+        let shipped = shipped.club.unwrap().board;
+        assert!(shipped.len() <= 128, "{}", shipped.len());
+        let shipped = strings(
+            shipped
+                .into_iter()
+                .map(|r| [r.posid, r.pos_name, r.band, r.mode, r.operator])
+                .collect(),
+        );
+        assert!(!shipped.contains_key(QUIET));
+        assert_eq!(shipped, sent, "the board every position is sent");
+        assert_eq!(
+            e.snapshot()
+                .field_day
+                .unwrap()
+                .club
+                .unwrap()
+                .board
+                .into_iter()
+                .map(|r| r.posid)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids,
+            "CONTROL: the host's own board"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -526,9 +927,9 @@ mod tests {
         assert_eq!(wire["dupeRule"]["byFields"], serde_json::json!([]));
         assert_eq!(wire["dupeRule"]["bySentFields"], serde_json::json!([]));
         assert_eq!(wire["log"][0]["dkey"].as_array().unwrap().len(), 3);
-        // …and Field Day REFUSES a dupe rather than logging one, which is what the card's
-        // wording turns on: telling this operator the contact would be refused is true here.
-        assert_eq!(wire["dupeRule"]["logDupes"], false);
+        // …and Field Day LOGS a dupe, marked, as every contest does since the operator's ruling
+        // of 2026-10-11, which is what the card's wording turns on.
+        assert_eq!(wire["dupeRule"]["logDupes"], true);
 
         // CONTROL 2 — Sweepstakes, the other direction: the band and the mode class are
         // NOT in the key, so a station worked on 40m CW is a dupe on 20m SSB.
@@ -604,7 +1005,7 @@ mod tests {
     /// The UI must not re-derive this. It had been doing exactly that, over a fourth copy of
     /// the key, which is what the row flag replaces.
     #[test]
-    fn a_logged_dupe_says_so_on_the_row_and_field_day_still_has_none_to_say_it_about() {
+    fn a_logged_dupe_says_so_on_the_row_in_every_contest() {
         let mut e = Engine::with_settings(crate::settings::Settings {
             mycall: "W1ABC".into(),
             fd_active: true,
@@ -645,18 +1046,74 @@ mod tests {
             wire["log"][0]
         );
 
-        // CONTROL — Field Day REFUSES a dupe rather than logging one, so there is no marked
-        // row to find and the flag stays false. This is the half that must never move: if it
-        // ever reports a dupe row, Field Day has started logging them.
+        // …and Field Day, which logs its dupes too since the operator's ruling of 2026-10-11:
+        // the repeat is a row, and the row says so.
         let mut e = engine("arrlfd", 1);
         let Mode::FieldDay { station, .. } = &mut e.mode else {
             panic!("active")
         };
-        let before = station.log.qso_count();
-        assert!(!station.log.log_mode_at("K1T0", "2A", "WI", "PH", 99, 1000));
+        let before = station.log.qsos().len();
+        assert!(station.log.log_mode_at("K1T0", "2A", "WI", "PH", 99, 1000));
         let wire = serde_json::to_value(e.snapshot().field_day.unwrap()).unwrap();
-        assert_eq!(wire["log"].as_array().unwrap().len(), before);
+        assert_eq!(wire["log"].as_array().unwrap().len(), before + 1);
+        assert_eq!(wire["log"][before]["dupe"], true, "{}", wire["log"][before]);
         assert!(wire["log"][0].get("dupe").is_none(), "{}", wire["log"][0]);
+    }
+
+    /// ⭐ **THE SIZE BOUND COUNTS THE ROWS IT WOULD SEND.** The browser refuses a capture of more
+    /// than 2048 rows, and `qso_count` is not rows: it leaves out a logged dupe. Bounded on it, a
+    /// Sweepstakes log of 2048 stations and one logged repeat went out as 2049 rows the page then
+    /// refused, so the operator read "Station data unavailable" instead of "too large to show".
+    #[test]
+    fn the_size_bound_counts_the_rows_a_capture_carries() {
+        let ss = |stations: u64| {
+            let mut e = Engine::with_settings(crate::settings::Settings {
+                mycall: "W1ABC".into(),
+                fd_active: true,
+                fd_event: "arrlss_cw".into(),
+                contest_check: "68".into(),
+                fd_section: "EMA".into(),
+                contest_category_assisted: "NON-ASSISTED".into(),
+                contest_category_power: "LOW".into(),
+                ..Default::default()
+            });
+            e.restore_field_day_if_enabled();
+            let Mode::FieldDay { station, .. } = &mut e.mode else {
+                panic!("in SS")
+            };
+            // Every station once, then the first again: logged, marked, worth nothing.
+            for (nr, i) in (0..stations).chain([0]).enumerate() {
+                let call = format!("K1T{i}");
+                let fields = [
+                    ("NR", (nr + 1).to_string()),
+                    ("PREC", "A".into()),
+                    ("CALL", call.clone()),
+                    ("CK", "72".into()),
+                    ("SEC", "IL".into()),
+                ]
+                .map(|(k, v)| (k.to_string(), v));
+                assert!(station
+                    .log
+                    .log_fields_at(&call, &fields, "CW", "", 0, 1000 + nr as u64));
+            }
+            e
+        };
+        let e = ss(2048);
+        let native = e.snapshot().field_day.unwrap();
+        assert_eq!(
+            (native.qso_count, native.log.len(), native.log[2048].dupe),
+            (2048, 2049, true),
+            "PREMISE: the repeat is a row the count leaves out"
+        );
+        assert_eq!(
+            e.bounded_field_day_status().map(|s| s.map(|s| s.log.len())),
+            Err("applicationTooLarge"),
+            "the station refuses a capture of 2049 rows rather than sending it"
+        );
+        // CONTROL: one station fewer is 2048 rows with the repeat, and goes whole.
+        let e = ss(2047);
+        let captured = e.bounded_field_day_status().unwrap().unwrap();
+        assert_eq!((captured.qso_count, captured.log.len()), (2047, 2048));
     }
 
     #[test]

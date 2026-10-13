@@ -38,6 +38,15 @@ function dupeRule(v: unknown): boolean {
     return false
   }
 }
+// Two counts, both required: what the station's journal restore kept out of the session.
+function keptOut(v: unknown): boolean {
+  try {
+    const k = object(v, ['otherContest','otherRunning'])
+    return integer(k.otherContest) && integer(k.otherRunning)
+  } catch {
+    return false
+  }
+}
 function locationWarning(v: unknown): boolean {
   try {
     const w = object(v, ['typed','hints'])
@@ -58,7 +67,7 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','composingText','bands','locationWarning','dupeModeGroups','dupeRule','objectiveMultiplier','satelliteCredit','keptOut'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
@@ -73,6 +82,12 @@ function status(v: unknown): void {
     (f.locationWarning !== undefined && !locationWarning(f.locationWarning)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
     (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
+    // Winter Field Day's objective multiplier, beside the claimed total it multiplies.
+    (f.objectiveMultiplier !== undefined && !integer(f.objectiveMultiplier)) ||
+    // Whether a satellite contact counts, sent (as false) only by a contest where it does not.
+    (f.satelliteCredit !== undefined && typeof f.satelliteCredit !== 'boolean') ||
+    // What the journal restore kept out of this session, sent only when it kept something.
+    (f.keptOut !== undefined && !keptOut(f.keptOut)) ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
     // exchange is its `mex`. Bounded here rather than re-modelled: the real Nexus app is what
     // consumes these, and this gate exists to cap size and shape, not to duplicate the DTO.
@@ -81,7 +96,13 @@ function status(v: unknown): void {
     typeof f.running !== 'boolean' || !eventId(f.event) ||
     ![f.qsoCount,f.sections,f.points,f.poweredPoints,f.bonusPoints,f.totalScore,f.eventStartUnix,f.eventEndUnix,f.rulesYear].every(integer) ||
     Number(f.eventEndUnix) <= Number(f.eventStartUnix) || !texts(f.workedSections,2048) || !texts(f.assistanceOn,64) ||
-    !Array.isArray(f.log) || f.log.length > 2048 || f.qsoCount !== f.log.length || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
+    !Array.isArray(f.log) || f.log.length > 2048 || f.sections !== (f.workedSections as unknown[]).length) throw new Error('invalidFieldDay')
+  // `qsoCount` is the contacts that COUNT, the summary sheet's raw non-dupe number, and `log` is
+  // every row; requiring the two to be equal refused the whole capture for one logged dupe. Two
+  // marks take a row out of the station's count, and the rows carry both: `dupe`, a duplicate the
+  // sponsor asked to have logged and scored zero, and `sat`, a contact worked through a bird when
+  // the status says `satelliteCredit: false` (Winter Field Day). Counted over the rows checked below.
+  let counted = 0
   for (const raw of f.log) {
     // `mex` is the row's OWN sent exchange, which is where a per-QSO exchange belongs now that
     // the session-level class/section pair is gone from the status struct. Optional so a log
@@ -104,9 +125,11 @@ function status(v: unknown): void {
       (q.dupe !== undefined && typeof q.dupe !== 'boolean') ||
       (q.sat !== undefined && !text(q.sat)) ||
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
+    if (q.dupe !== true && (f.satelliteCredit !== false || !q.sat)) counted++
   }
+  if (f.qsoCount !== counted) throw new Error('invalidFieldDay')
   if (f.club !== undefined && f.club !== null) {
-    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys'])
+    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys','boardFull','refused','keptOut'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||
       ![c.queued,c.offlineSinceUnix,c.score,c.qsos,c.sections].every(integer) || !Number.isSafeInteger(c.skewSecs) ||
       (c.lastError !== undefined && c.lastError !== null && !text(c.lastError)) || !Array.isArray(c.dupes) || c.dupes.length > 4096 ||
@@ -116,9 +139,35 @@ function status(v: unknown): void {
       (c.dkeys !== undefined && (!Array.isArray(c.dkeys) || c.dkeys.length > 4096 ||
         !c.dkeys.every(k => texts(k,DUPE_KEY_MAX)))) ||
       !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
+    // A host's alone, each sent only when it applies: how full its board is, and the positions
+    // it turned away with the sentence each was sent (the host keeps at most 16).
+    if (c.boardFull !== undefined) {
+      const b = object(c.boardFull,['positions','shown'])
+      if (![b.positions,b.shown].every(integer)) throw new Error('invalidFieldDay')
+    }
+    if (c.refused !== undefined) {
+      if (!Array.isArray(c.refused) || c.refused.length > 16) throw new Error('invalidFieldDay')
+      for (const raw of c.refused) {
+        const r = object(raw,['posName','call','reason'])
+        if (![r.posName,r.call,r.reason].every(text)) throw new Error('invalidFieldDay')
+      }
+    }
+    // A host's alone, once it has kept a contact out of the club's log: how many, and the
+    // newest it names (at most 16, never more than it kept out), each like a refusal.
+    if (c.keptOut !== undefined) {
+      const k = object(c.keptOut,['total','latest'])
+      if (!integer(k.total) || !Array.isArray(k.latest) || k.latest.length > 16 || k.latest.length > Number(k.total)) throw new Error('invalidFieldDay')
+      for (const raw of k.latest) {
+        const r = object(raw,['posName','call','reason'])
+        if (![r.posName,r.call,r.reason].every(text)) throw new Error('invalidFieldDay')
+      }
+    }
     for (const raw of c.board) {
-      const r = object(raw,['posid','posName','band','mode','operator','qsos','rate','lastSeenSecs'])
-      if (![r.posid,r.posName,r.band,r.mode,r.operator].every(text) || ![r.qsos,r.rate,r.lastSeenSecs].every(integer)) throw new Error('invalidFieldDay')
+      // `clockMs`: that position's clock minus the host's, in whole ms, either sign; null when it
+      // has not measured one, and absent from a station older than the field.
+      const r = object(raw,['posid','posName','band','mode','operator','qsos','rate','lastSeenSecs'],['clockMs'])
+      if (![r.posid,r.posName,r.band,r.mode,r.operator].every(text) || ![r.qsos,r.rate,r.lastSeenSecs].every(integer) ||
+        (r.clockMs !== undefined && r.clockMs !== null && !Number.isSafeInteger(r.clockMs))) throw new Error('invalidFieldDay')
     }
   }
 }
@@ -128,18 +177,24 @@ export function parseFieldDay(page: QueryPage): FieldDayObservation & { captured
     !meta || !integer(meta.capturedAgeMs) || Number(meta.capturedAgeMs) >= FIELD_DAY_TTL_MS) throw new Error('invalidFieldDay')
   const value = object(meta.source,['active','fieldDay','settings','ruleset'])
   if (new TextEncoder().encode(JSON.stringify(value)).length > 224*1024 || typeof value.active !== 'boolean' || (!value.active && value.fieldDay !== null)) throw new Error('invalidFieldDay')
-  const s = object(value.settings,['fdOperator','fdPowerMult','fdBonuses','fdBonusesPlanned'])
-  if (!text(s.fdOperator) || ![1,2,5].includes(Number(s.fdPowerMult)) || typeof s.fdPowerMult !== 'number' || !texts(s.fdBonuses,64) || !texts(s.fdBonusesPlanned,64)) throw new Error('invalidFieldDay')
+  // The two objective lists ride a capture only for a contest that scores by objectives (Winter
+  // Field Day). OPTIONAL, so an older station without them still validates; and this page must be
+  // deployed before a station that sends them, which it would otherwise refuse whole.
+  const s = object(value.settings,['fdOperator','fdPowerMult','fdBonuses','fdBonusesPlanned'],['fdObjectives','fdObjectivesPlanned'])
+  if (!text(s.fdOperator) || ![1,2,5].includes(Number(s.fdPowerMult)) || typeof s.fdPowerMult !== 'number' || !texts(s.fdBonuses,64) || !texts(s.fdBonusesPlanned,64) ||
+    (s.fdObjectives !== undefined && !texts(s.fdObjectives,64)) || (s.fdObjectivesPlanned !== undefined && !texts(s.fdObjectivesPlanned,64))) throw new Error('invalidFieldDay')
   // Same drift as the status struct above, and this is the one that actually fired: the contest
   // programme gave the ruleset an `exchange` (the ExchangeSpec that replaced the hardcoded
   // class/section pair), a `problem` and a `role`. Optional for both-direction compatibility.
   const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'],
-    ['exchange','problem','role'])
+    ['exchange','problem','role','spotsRfOnly'])
   // The ruleset of whichever contest is running — the same id, so the same shape rule as the
   // status's `event` above (a hardcoded arrlfd/wfd pair here blanked every other contest).
   if (!eventId(r.event) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
     typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement) ||
     (r.role !== undefined && !text(r.role)) ||
+    // A contest that allows spotting only over amateur RF while it runs (Winter Field Day).
+    (r.spotsRfOnly !== undefined && typeof r.spotsRfOnly !== 'boolean') ||
     (r.problem !== undefined && r.problem !== null && !text(r.problem)) ||
     // The exchange is a spec object, bounded here rather than re-modelled - the real Nexus app
     // is what renders it, and this gate caps shape and size, it does not duplicate the DTO.

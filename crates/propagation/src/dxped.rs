@@ -11,7 +11,7 @@ use crate::advisor::PropAdvisory;
 use crate::dxcc;
 use crate::geo::{bearing_deg, compass_octant, haversine_km, maidenhead_to_latlon};
 use crate::likelihood::{BandOutlook, PathModel, Workability};
-use crate::model::{exact_mode, mode_key, Band, ModeClass, Region, SpaceWx};
+use crate::model::{exact_mode, feed_mode, mode_key, Band, ModeClass, Region, SpaceWx};
 
 /// How "needed" a DXpedition slot is for the operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -102,8 +102,9 @@ impl DxpeditionPlan {
 
 /// The operator's needs — implemented by [`LogNeeds`] (from the ADIF log) or by
 /// [`NeedsSet`] (manual/demo). `mode` is the mode the station is heard in, as its source names
-/// it: an exact mode ("FT8", "USB"), or a class label where that is all the source knows
-/// ("Digital", "Phone" — see [`exact_mode`]). Nexus work-now cards pass "Digital".
+/// it: an exact mode ("FT8", "USB"), a class label where that is all the source knows
+/// ("Digital", "Phone"), or a name no contact is logged in ("WSPR" — see [`exact_mode`]). A
+/// work-now card asks once per mode its operation announced ([`announced_need`]).
 pub trait OperatorNeeds {
     fn need(&self, entity: &str, band: Band, mode: &str) -> NeedKind;
 }
@@ -147,7 +148,8 @@ pub struct LogNeeds {
     /// modes with the same fold.
     worked_mode: HashSet<(String, String)>,
     /// `(entity, mode class)`, any band — what the "new mode" need falls back to for a station
-    /// heard in a class alone (a cluster spot placed by its frequency, see [`exact_mode`]).
+    /// heard in a class alone (a cluster spot placed by its frequency) or in a mode no contact is
+    /// logged in (a WSPR beacon), see [`exact_mode`].
     worked_class: HashSet<(String, ModeClass)>,
     confirmed_band: HashSet<(String, Band)>,
     /// CQ zones worked, PER BAND (for WAZ "new zone" need-aware spotting) —
@@ -367,7 +369,8 @@ impl OperatorNeeds for LogNeeds {
     fn need(&self, entity: &str, band: Band, mode: &str) -> NeedKind {
         // The heard mode goes through the SAME fold the log's modes did, so working the station
         // in the mode it is heard in is exactly what clears the need. A station heard in a
-        // class alone is new only when no mode of that class was ever worked.
+        // class alone, or in a mode no contact is logged in, is new only when no mode of that
+        // class was ever worked.
         let mode_worked = match exact_mode(mode) {
             Some(key) => self.worked_mode.contains(&(entity.to_string(), key)),
             None => self
@@ -386,6 +389,28 @@ impl OperatorNeeds for LogNeeds {
             NeedKind::Satisfied
         }
     }
+}
+
+/// The need a work-now card shows for `band`: the strongest of the needs of the modes its operation
+/// announced, each judged as the Needed board judges a station heard in it, so the card is a new
+/// mode while any announced mode has never been worked with the entity. A mode the announcement
+/// names only as a class or a family ("Digital", "PSK") is judged by that class, and an operation
+/// that announced none by the Digital class, as a cluster spot placed by its frequency is.
+fn announced_need(
+    needs: &dyn OperatorNeeds,
+    entity: &str,
+    band: Band,
+    modes: &[String],
+) -> NeedKind {
+    let judged = |m: &str| feed_mode(m).unwrap_or_else(|| ModeClass::from_adif(m).label().into());
+    if modes.is_empty() {
+        return needs.need(entity, band, ModeClass::Digital.label());
+    }
+    modes
+        .iter()
+        .map(|m| needs.need(entity, band, &judged(m)))
+        .max_by_key(|n| n.weight())
+        .unwrap_or(NeedKind::Satisfied)
 }
 
 /// One actionable card.
@@ -519,8 +544,8 @@ impl DxpeditionTracker {
 
             // Active now → workable cards per needed band. Match needs on the
             // *resolver* entity (cty.dat canonical) so it lines up with the
-            // log-derived needs, not NG3K's free-text name. Nexus operates
-            // digital, so evaluate the Digital mode-class.
+            // log-derived needs, not NG3K's free-text name, and judge the modes
+            // the operation announced.
             let resolved = dxcc::resolve(&p.call);
             // A call resolving to a WAE/CQ-only entity (e.g. an IG9/IT9 IOTA op)
             // is not a DXCC "new one", and `LogNeeds` never tracks such entities —
@@ -534,7 +559,7 @@ impl DxpeditionTracker {
                 .map(|i| i.entity.to_string())
                 .unwrap_or_else(|| p.entity.clone());
             for &band in &p.bands {
-                let need = needs.need(&match_entity, band, ModeClass::Digital.label());
+                let need = announced_need(needs, &match_entity, band, &p.modes);
                 if need == NeedKind::Satisfied {
                     continue;
                 }

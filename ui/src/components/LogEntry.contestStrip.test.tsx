@@ -132,14 +132,13 @@ describe('1 — the boxes are the session’s received slots, in receive order',
           { key: 'PREC', kind: 'pattern', required: true },
           { key: 'CALL', kind: 'call', required: true },
           { key: 'CK', kind: 'pattern', required: true },
-          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections' },
+          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections', domains: ['ss_sections'] },
         ],
       }),
     )
     const caps = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].map((n) => n.textContent)
-    // A slot with no catalog caption shows its SLOT ID — an invariant token, correctly
-    // untranslated, rather than an invented English word.
-    expect(caps).toEqual(['Call', 'NR', 'PREC', 'CALL', 'CK', 'SEC'])
+    // Each box says what it holds, in Sweepstakes' own words, rather than its slot id.
+    expect(caps).toEqual(['Call', 'Serial', 'Precedence', 'Call', 'Check', 'Section'])
   })
 })
 
@@ -166,11 +165,13 @@ describe('2 — space walks Call → field₁ → … → Call', () => {
           { key: 'PREC', kind: 'pattern', required: true },
           { key: 'CALL', kind: 'call', required: true },
           { key: 'CK', kind: 'pattern', required: true },
-          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections' },
+          { key: 'SEC', kind: 'enum', required: true, domain: 'ss_sections', domains: ['ss_sections'] },
         ],
       }),
     )
-    const order = [callBox(), box('NR'), box('PREC'), box('CALL'), box('CK'), box('SEC')]
+    // The exchange's CALL box is captioned Call as the strip's own is: the second one.
+    const exchangeCall = screen.getAllByText('Call')[1].closest('label')!.querySelector('input')!
+    const order = [callBox(), box('Serial'), box('Precedence'), exchangeCall, box('Check'), box('Section')]
     for (let i = 0; i < order.length; i++) {
       order[i].focus()
       fireEvent.keyDown(order[i], { key: ' ', code: 'Space' })
@@ -273,7 +274,19 @@ describe('the sent side, read-only, with its one action', () => {
     expect(document.querySelector('.le-fd-role')).toBeNull()
     cleanup()
     renderStrip(fdStatus({ role: 'in_state' }))
-    expect(document.querySelector('.le-fd-role')!.textContent).toBe(' in_state')
+    expect(document.querySelector('.le-fd-role')!.textContent).toBe(' in-state')
+  })
+
+  // The role in the contest's words, never the rules data's id: the strip read "Sending
+  // in_state 599 COOK" in an Illinois QSO Party. W/VE and DX are the sponsors' own words
+  // for those sides of a QSO party and of CQ WW RTTY.
+  it.each([
+    ['out_of_state', ' out-of-state'],
+    ['w_ve', ' W/VE'],
+    ['dx', ' DX'],
+  ])('shows the %s role as%s', (role, shown) => {
+    renderStrip(fdStatus({ role }))
+    expect(document.querySelector('.le-fd-role')!.textContent).toBe(shown)
   })
 
   it('"I moved" sends only the slots that changed, and takes effect on the next contact', async () => {
@@ -323,6 +336,27 @@ describe('the sent side, read-only, with its one action', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     })
     expect(api.contestIMoved).not.toHaveBeenCalled()
+  })
+
+  it('"I moved" takes a section by its full name, as the received Section box does', async () => {
+    // `domains` as the engine really sends it for an enum slot.
+    renderStrip(
+      fdStatus({
+        receives: [
+          { key: 'CLASS', kind: 'pattern', required: true },
+          { key: 'SECTION', kind: 'enum', required: true, domain: 'fd_sections', domains: ['fd_sections'] },
+        ],
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const sec = [...document.querySelectorAll('.le-fd-sent input')].find(
+      (i) => i.getAttribute('aria-label') === 'Section',
+    )!
+    fireEvent.change(sec, { target: { value: 'Illinois' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+    expect(api.contestIMoved).toHaveBeenCalledWith([['SECTION', 'IL']])
   })
 })
 

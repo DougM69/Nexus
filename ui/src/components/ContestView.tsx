@@ -1,7 +1,11 @@
 import type { FdDisplaySettings } from '../fieldDayObservation'
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type {
+  ClubLink,
   ContestBoard,
+  ContestFieldSpec,
+  DupeRule,
+  FdClubBoardRow,
   FdClubStatus,
   FdMergeReport,
   FieldDayQso,
@@ -9,18 +13,27 @@ import type {
   ModeRequest,
   Settings,
 } from '../types'
-import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
+import { isStreamInput } from '../remote-native/stream-input'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
+import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
+import { WfdObjectivesSection } from './WfdObjectivesSection'
+import { WFD_OBJECTIVES, wfdEarnedIds, type WfdObjective } from '../features/wfdObjectives'
 import { pushToast } from '../toast'
-import { clubSyncRefused, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
+import { ADDR_SEP, CLUB_DEAD_SECS, CLUB_PING_SECS, clubLinkLines, heardAgo, type ClubLinkLine } from '../features/clubLink'
+import { clubSyncRefusal, clubSyncRefusalText, contestFileStem, contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type ClubSyncRefusal, type FdKind } from '../fdEvent'
+import type { ContestSwitch } from '../contestSwitch'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { textPx } from '../useTextSize'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
-import { composingSlot, composingText } from '../features/contestExchange'
-import { slotCaption } from '../features/contestSlots'
+import { composingSlot } from '../features/contestExchange'
+import { receivedCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
+import { stationMode, usePskName } from '../features/contestMode'
+import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
+import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -137,7 +150,7 @@ export function fdBonusTally(earned: string[], planned: string[]) {
 }
 
 /**
- * The power tiers, one for one with Settings ▸ Contesting ▸ Field Day Setup. The SAME
+ * The power tiers, one for one with Settings ▸ Contesting ▸ Field Day. The SAME
  * `fdPowerMult` field and the SAME catalog keys deliberately: two surfaces that edit one
  * setting cannot drift, and they must not describe it in two different sets of words.
  */
@@ -153,10 +166,13 @@ const FD_POWER_TIERS = [
 
 interface Props {
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link (`AppSnapshot.clubLink`), said here whatever the Field Day mode
+   *  switch says. Not passed on Remote or in the logger window. */
+  clubLink?: ClubLink | null
   onSetMode?: (mode: ModeRequest) => void
   /** A complete ephemeral display capture; native loaders and writes stay disabled. */
   observation?: FdDisplaySettings
-  /** The Field Day master switch (settings.fdActive) — gates the advisories. */
+  /** The Contest mode switch (settings.fdActive) — gates the advisories. */
   fdActive?: boolean
   /** The active event's ruleset facts (App fetches get_fd_ruleset once per
    *  configured event) — the warn-only advisories read these. */
@@ -164,6 +180,104 @@ interface Props {
   /** The active digital tier (App's snap.link.tier) — the banned-mode chip
    *  checks it against the ruleset's bannedModes. */
   tier?: string
+  /** The station's operating section (`snap.radio.operatingMode`). Given, the banned-mode chip names
+   *  the mode the station is on — the tier on the digital section, the mode its contacts log under on
+   *  the others (`stationMode`) — so a station on phone at a contest that bans FT8 is not told FT8 is
+   *  not permitted. Absent (the Remote page, whose observation carries no section), it reads `tier`. */
+  section?: string
+  /** Open Settings at a section (App's `openSettingsAt`): where the mode switch sends an
+   *  operator whose contest cannot start yet. */
+  onOpenSettings?: (target: string) => void
+  /** App re-reads the settings and the snapshot after this screen saves the mode switch, so
+   *  the rail, Settings and every cockpit see the change at once. */
+  onSettingsSaved?: () => void
+  /** The contest logger window's copy of this screen (`ContestLogger`), where nothing may start,
+   *  stop or hold back the operator's transmission. So three things are read-only there and a
+   *  line says they are on the main screen: the contest switch and Running / S&P (Running calls
+   *  CQ in the digital cockpits), and the scoring panel, whose saves go through the whole-settings
+   *  path that keeps an over already planned from keying. Everything else works as it does here:
+   *  the operator box, the exports, the merge, the club, Remove and Restore. */
+  logger?: boolean
+  /** The switch a saved pick just made, for the session shown here (`useContestSwitch`, kept by
+   *  App and the logger window): the screen says the station switched, and from what. */
+  contestSwitch?: ContestSwitch | null
+  /** CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`), kept by App and the logger window:
+   *  the asks the operator box has not answered yet. At each new one the box takes the caret once
+   *  it can be typed in, and `onOperatorFocused` says it did. */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
+  /** The operator box is on the log line above this screen (`ContestLargeEntry`'s title line, while
+   *  a contest runs in the main window and the logger window): the scoreboard draws none of its own,
+   *  so the screen has one. Absent, the scoreboard keeps its box, as with no contest running, in the
+   *  torn-off scoreboard and on the Remote page. */
+  operatorBoxAbove?: boolean
+  /** Opens this screen in a window of its own (App's, in the main window only — never the logger
+   *  window's copy, the window itself or the Remote page): its Pop out, at the end of the banner. */
+  onPopOut?: () => void
+}
+
+/**
+ * ⭐ **What keeps the picked contest from starting, if anything.** The mode switch refuses to
+ * turn on while there is something, and says what it is.
+ *
+ * Field Day's own test first, because it is the engine's (`Engine::restore_opens_session`):
+ * both events need a class (WFD calls it a category) and a section before the station enters
+ * them, and naming both when both are blank says more than the session constructor, which
+ * stops at the first. Every other reason is that constructor's own sentence off the preview
+ * (`FdRulesetDto.problem`), which names the slot: "Your COUNTY is empty…".
+ */
+export type StartBlocker = { fields: ('class' | 'category' | 'section')[] } | { problem: string }
+
+export function startBlocker(
+  s: Pick<Settings, 'fdEvent' | 'fdClass' | 'fdSection'> | null,
+  preview: FdRulesetDto | null | undefined,
+): StartBlocker | null {
+  const event = s?.fdEvent?.trim()
+  if (s && isFieldDay(event)) {
+    const fields: ('class' | 'category' | 'section')[] = []
+    if (!(s.fdClass ?? '').trim()) fields.push(event === 'wfd' ? 'category' : 'class')
+    if (!(s.fdSection ?? '').trim()) fields.push('section')
+    if (fields.length > 0) return { fields }
+  }
+  return preview?.problem ? { problem: preview.problem } : null
+}
+
+/** The Settings section that fixes a blocker: Field Day for Field Day's class and section, the
+ *  station data for any other contest's slots. Section ids, never tab names. */
+function blockerTarget(b: StartBlocker): string {
+  return 'fields' in b ? 'field-day' : 'contest-station'
+}
+
+/** A Field Day exchange field by the name Settings gives it, so the sentence names the box. */
+function fieldLabel(f: 'class' | 'category' | 'section'): string {
+  if (f === 'class') return t('settings.fieldDay.class.label')
+  if (f === 'category') return t('settings.fieldDay.category.label')
+  return t('settings.fieldDay.section.label')
+}
+
+/** The Cabrillo lines a running session reads as it starts, so a declaration made while it runs
+ *  reaches the file only after Contest mode is turned off and on. */
+const READ_AS_THE_SESSION_STARTS = ['CATEGORY-ASSISTED', 'CATEGORY-POWER']
+
+/** One Cabrillo line the export would leave out, in words: the Settings control that fills it and
+ *  the line itself (an invariant token). A line no control fills is named by itself. */
+function cabrilloLineWords(line: string): string {
+  const control: Record<string, string> = {
+    'CATEGORY-ASSISTED': t('settings.contestPick.assisted.label'),
+    'CATEGORY-BAND': t('settings.contestPick.band.label'),
+    'CATEGORY-POWER': t('settings.contestPick.power.label'),
+    'CATEGORY-TRANSMITTER': t('settings.contestPick.transmitter.label'),
+    OPERATORS: t('settings.contestPick.operators.label'),
+  }
+  return control[line] ? `${control[line]} (${line})` : line
+}
+
+function blockerText(b: StartBlocker, contest: string): string {
+  if ('problem' in b) return b.problem
+  const [first, second] = b.fields
+  return second
+    ? t('fieldDay.mode.needs.two', { contest, first: fieldLabel(first), second: fieldLabel(second) })
+    : t('fieldDay.mode.needs.one', { contest, field: fieldLabel(first) })
 }
 
 interface LogRowMeta {
@@ -245,6 +359,101 @@ function qsoTimeUtc(q: FieldDayQso): string {
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
 }
 
+/** The log table's head row: Time · Call, then Field Day's Class (Category for Winter Field Day) and
+ *  Section or one column per received slot, then Band · Mode. Shared by this screen's table and the
+ *  contest logger window's last contacts (ContestLogger.tsx), so the two read alike. */
+export function ContestLogHead({
+  fieldDayColumns,
+  isWfd,
+  slotColumns,
+  role,
+}: {
+  fieldDayColumns: boolean
+  isWfd: boolean
+  slotColumns: readonly ContestFieldSpec[]
+  /** The session's role, which a column's caption depends on as its box's does. */
+  role?: string
+}) {
+  return (
+    <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
+      <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
+      <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
+      {fieldDayColumns ? (
+        <>
+          {/* Two words for two events, not one word with a variant: ARRL calls the exchange field
+              Class and WFD calls it Category. H/I/M/O are Winter Field Day's category letters,
+              which travel with the class number in this column (2O: two transmitters, outdoor) —
+              exchange codes, never translated. */}
+          <span className="fd-col cls">
+            {isWfd ? t('fieldDay.log.column.category') : t('fieldDay.log.column.class')}
+            {isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}
+          </span>
+          <span className="fd-col sec">{t('fieldDay.log.column.section')}</span>
+        </>
+      ) : (
+        slotColumns.map((f) => (
+          <span className="fd-col slot" key={f.key}>{receivedCaption(f, role)}</span>
+        ))
+      )}
+      <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
+      <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
+    </div>
+  )
+}
+
+/** One row of the log table, under `ContestLogHead`'s columns. `children` follow the mode chip in
+ *  its cell: the screen's Remove on its newest row. */
+export function ContestLogRow({
+  row,
+  fieldDayColumns,
+  slotColumns,
+  children,
+}: {
+  row: LogRowMeta
+  fieldDayColumns: boolean
+  slotColumns: readonly ContestFieldSpec[]
+  children?: ReactNode
+}) {
+  return (
+    <div
+      className={`fd-log-row${fieldDayColumns && row.isNewSection ? ' mult' : ''}${row.isDupe ? ' dupe' : ''}`}
+      {...slotGrid(slotColumns.length)}
+      title={
+        row.isDupe
+          ? t('fieldDay.log.dupe.title')
+          : fieldDayColumns && row.isNewSection
+            ? t('fieldDay.log.mult.title')
+            : undefined
+      }
+    >
+      <span className="fd-col time mono">{qsoTimeUtc(row.qso)}</span>
+      <span className="fd-col call mono">{row.qso.call}</span>
+      {fieldDayColumns ? (
+        <>
+          <span className="fd-col cls mono">{row.qso.class}</span>
+          <span className="fd-col sec mono">
+            {row.qso.section}
+            {row.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
+          </span>
+        </>
+      ) : (
+        slotColumns.map((f, j) => (
+          <span className="fd-col slot mono" key={f.key}>{row.qso.rcvd?.[j] ?? ''}</span>
+        ))
+      )}
+      <span className="fd-col band">{row.qso.band}</span>
+      <span className="fd-col mode">
+        {row.qso.mode && (
+          <span className={`fd-mode-chip sm ${(row.qso.mode ?? '').toLowerCase()}`}>
+            {row.qso.mode}
+          </span>
+        )}
+        {children}
+      </span>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Client-side summary + dupe-sheet exports (spec §6). Both derive from the same
 // log + annotate()/modeCounts() the board already uses — no backend command —
@@ -267,6 +476,92 @@ function bandCounts(log: FieldDayQso[]): { band: string; n: number }[] {
     .sort((a, b) => bandRank(a.band) - bandRank(b.band) || a.band.localeCompare(b.band))
 }
 
+/** One column of the band × mode grid: the scoring classes it counts, and its heading. */
+export interface ModeColumn {
+  classes: string[]
+  label: string
+}
+
+/** The scoring classes in the order ARRL's Field Day summary sheet lists them, and its names. */
+const SHEET_CLASSES = ['CW', 'DIG', 'PH'] as const
+const SHEET_CLASS_NAMES: Record<string, string> = { CW: 'CW', DIG: 'Digital', PH: 'Phone' }
+
+/**
+ * ⭐ **A contest's own mode classes, as the grid's columns**, in the summary sheet's order (CW,
+ * Digital, Phone): each class its own column where the contest counts it apart, the classes its
+ * dupe rule counts as one in one column (the Illinois QSO Party's "CW/Digital"), and for a contest
+ * that counts no mode class at all (CQ WW, Sweepstakes, the VHF contests) the classes its log
+ * holds. No rule (an older build) means the three, which is what such a build counted. The club
+ * board's grid passes its positions' classes as `log`, so its rows are these same classes.
+ */
+export function modeColumns(rule: DupeRule | undefined, log: readonly Pick<FieldDayQso, 'mode'>[]): ModeColumn[] {
+  const split = rule?.byModeClass ?? true
+  const held = SHEET_CLASSES.filter((c) => log.some((q) => q.mode === c))
+  const classes: string[] = split || held.length === 0 ? [...SHEET_CLASSES] : held
+  const groups = split ? (rule?.modeClassGroups ?? []) : []
+  const columns: ModeColumn[] = []
+  for (const c of classes) {
+    if (columns.some((col) => col.classes.includes(c))) continue
+    const group = groups.find((g) => g.includes(c))
+    const together = group ? classes.filter((x) => group.includes(x)) : [c]
+    columns.push({ classes: together, label: together.map((x) => SHEET_CLASS_NAMES[x]).join('/') })
+  }
+  return columns
+}
+
+/** ARRL Field Day's summary sheet, item 18: its band rows, in its order and spelling. */
+const SHEET_BANDS: [string, string][] = [
+  ['160m', '160 M'],
+  ['80m', '80 M'],
+  ['40m', '40 M'],
+  ['20m', '20 M'],
+  ['15m', '15 M'],
+  ['10m', '10 M'],
+  ['6m', '6 M'],
+  ['2m', '2 M'],
+  ['1.25m', '1.25 M'],
+  ['70cm', '70 CM'],
+]
+
+/**
+ * ⭐ **The Summary's band × mode grid** — contacts per band and mode, laid out as ARRL's Field
+ * Day summary sheet lays out its item 18 (2026 Summary Sheet, page 2): columns "CW Digital
+ * Phone", rows "160 M, 80 M, 40 M, 20 M, 15 M, 10 M, 6 M, 2 M, 1.25 M, 70 CM, Other, Satellite,
+ * GOTA" over "TOTALS", whose CW, Digital and Phone the sheet carries to its lines 8, 9 and 10.
+ *
+ * With `sheet` (ARRL Field Day) the rows are the sheet's own: a band it has no row for counts
+ * under Other, and a contact made through a satellite under Satellite, which the rules (7.3.7)
+ * list "separately on the summary sheet as a separate band". Its GOTA row is the GOTA station's,
+ * which this laptop's log does not tell apart from its own, so it reads "—": that station's own
+ * summary has its contacts. Every other contest gets the same grid in its own mode classes
+ * ([`modeColumns`]), one row per band its log holds. Every contact the log holds is counted,
+ * a duplicate logged at zero points included, as the QSO total above it counts it.
+ */
+export function bandModeGrid(log: FieldDayQso[], columns: ModeColumn[], sheet: boolean): string[] {
+  const NOT_TRACKED = '—'
+  const rowOf = (q: FieldDayQso): string => {
+    if (!sheet) return q.band
+    if (q.sat) return 'Satellite'
+    return SHEET_BANDS.find(([band]) => band === q.band)?.[1] ?? 'Other'
+  }
+  const rows: string[] = sheet
+    ? [...SHEET_BANDS.map(([, label]) => label), 'Other', 'Satellite', 'GOTA']
+    : bandCounts(log).map((b) => b.band)
+  const count = (row: string, col: ModeColumn) =>
+    log.filter((q) => rowOf(q) === row && col.classes.includes(q.mode ?? '')).length
+  const labelWidth = Math.max('TOTALS'.length, ...rows.map((r) => r.length)) + 2
+  const width = (col: ModeColumn) => Math.max(col.label.length, 5) + 2
+  const line = (label: string, cells: string[]) =>
+    '  ' + label.padEnd(labelWidth) + cells.map((c, i) => c.padStart(width(columns[i]))).join('')
+  const L: string[] = []
+  L.push(line('Band', columns.map((c) => c.label)))
+  for (const row of rows) {
+    L.push(line(row, columns.map((c) => (sheet && row === 'GOTA' ? NOT_TRACKED : String(count(row, c))))))
+  }
+  L.push(line('TOTALS', columns.map((c) => String(log.filter((q) => c.classes.includes(q.mode ?? '')).length))))
+  return L
+}
+
 interface SummaryArgs {
   eventName: string
   isWfd: boolean
@@ -285,10 +580,18 @@ interface SummaryArgs {
   bonusPoints: number
   totalScore: number
   claimedBonuses: FdBonus[]
+  /** Winter Field Day's completed objectives and the multiplier they earn, when the station
+   *  scores by them — `totalScore` is then QSO points × (om + 1). */
+  objectives?: { om: number; done: WfdObjective[] }
   /** A contest that is NOT Field Day: what the session sends and how many multipliers the
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
   contest?: { sending: string; multCount: number | null }
+  /** The running contest's dupe rule, whose mode classes are the grid's columns
+   *  ([`modeColumns`]); absent on an older build, which counted the three. */
+  dupeRule?: DupeRule
+  /** ARRL Field Day: lay the grid out as its summary sheet's item 18, rows and all. */
+  fieldDaySheet?: boolean
 }
 
 /**
@@ -318,6 +621,15 @@ export function buildSummaryText(a: SummaryArgs): string {
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
   L.push('')
+  // ⭐ The same contacts by band AND mode, as ARRL's Field Day summary sheet asks for them.
+  L.push(a.fieldDaySheet ? 'QSOs BY BAND AND MODE (ARRL summary sheet, item 18)' : 'QSOs BY BAND AND MODE')
+  L.push(...bandModeGrid(a.log, modeColumns(a.dupeRule, a.log), a.fieldDaySheet === true))
+  if (a.fieldDaySheet) L.push("  GOTA: on the GOTA station's own summary.")
+  const dupes = a.log.filter((q) => q.dupe === true).length
+  if (dupes > 0) {
+    L.push(`  Counted above: ${dupes} duplicate contact${dupes === 1 ? '' : 's'} logged at zero points.`)
+  }
+  L.push('')
   if (a.contest) {
     // The score the engine computed: QSO points × multipliers, with no power tier and no
     // claimed bonuses — neither exists outside Field Day.
@@ -337,6 +649,21 @@ export function buildSummaryText(a: SummaryArgs): string {
   const secs = [...a.workedSet].sort()
   L.push(`Sections worked (${secs.length}):  ${secs.length ? secs.join(' ') : '—'}`)
   L.push('')
+  if (a.objectives) {
+    // WINTER FIELD DAY scores by its objectives: no power multiplier and no bonus menu, and
+    // the total is the sponsor's QSO points × (OM + 1).
+    L.push(`Objectives completed (${a.objectives.done.length}, OM ${a.objectives.om}):`)
+    if (a.objectives.done.length === 0) L.push('  (none)')
+    else for (const o of a.objectives.done) L.push(`  ${o.label} — ×${o.multiplier}`)
+    L.push('')
+    L.push('SCORE')
+    L.push(`  QSO points                 ${a.qsoPts}`)
+    L.push(`  × (OM ${a.objectives.om} + 1)`.padEnd(29) + `= ${a.totalScore}`)
+    L.push('  --------------------------------')
+    L.push(`  TOTAL                      ${a.totalScore}`)
+    L.push('')
+    return L.join('\n')
+  }
   L.push(`Power multiplier: ×${a.powerMult}`)
   L.push(`Bonuses claimed (${a.claimedBonuses.length}, ${a.bonusPoints} pts):`)
   if (a.claimedBonuses.length === 0) L.push('  (none)')
@@ -767,6 +1094,34 @@ const CLUB_BOARD_GRID: CSSProperties = {
   fontSize: textPx(13),
   alignItems: 'baseline',
 }
+/** The host's board has one more column: each position's clock. */
+const CLUB_BOARD_COLUMNS_HOST = 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr minmax(0,0.9fr)'
+/** …and, while its rows carry the host's link words, the Status column after the position and,
+ *  on the host's own contest screen, one at the end for each row's Remove or Allow back. */
+function clubBoardColumns(link: boolean, manage: boolean): string {
+  const [position, ...rest] = CLUB_BOARD_COLUMNS_HOST.split(' ')
+  return [position, ...(link ? ['minmax(0,1.7fr)'] : []), ...rest, ...(manage ? ['auto'] : [])].join(' ')
+}
+/** Each link word's ink, the grid's own three (both themes carry them): green, the warning amber,
+ *  and Lost in the alert red, which the sync chip's orange is not in the dark theme. The host's own
+ *  row and a removed one read in the dim ink, as no alarm. */
+const CLUB_LINK_INK: Record<NonNullable<FdClubBoardRow['link']>, string> = {
+  host: 'var(--text-dim)',
+  connected: 'var(--status-confirmed)',
+  reconnecting: 'var(--alert-warning)',
+  lost: 'var(--alert-critical)',
+  removed: 'var(--text-dim)',
+}
+/** Each half of a link cell keeps to one line, and the cell wraps between them; a half wider than
+ *  the whole column still ends in an ellipsis rather than spill into the next. */
+const LINK_CHUNK: CSSProperties = {
+  display: 'inline-block',
+  maxWidth: '100%',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  verticalAlign: 'top',
+}
 const CLUB_COL_HEAD: CSSProperties = {
   fontSize: textPx(10),
   fontWeight: 700,
@@ -778,9 +1133,147 @@ const CLUB_COL_HEAD: CSSProperties = {
 function colHead(big: boolean): CSSProperties {
   return big ? { ...CLUB_COL_HEAD, fontSize: textPx(13) } : CLUB_COL_HEAD
 }
+/** A club sentence keeps a measure of its own where the screen is wider than its old 1600px cap:
+ *  the panel sets `--fd-prose-measure` on lg/xl (styles.css), and elsewhere it is unset. */
 const CLUB_WARN: CSSProperties = {
   fontSize: textPx(12),
   color: 'var(--status-new-entity)',
+  maxWidth: 'var(--fd-prose-measure, none)',
+}
+const CLUB_NOTE: CSSProperties = {
+  fontSize: textPx(12),
+  color: 'var(--text-dim)',
+  maxWidth: 'var(--fd-prose-measure, none)',
+}
+/** A club code, in a box of its own: set apart from the names and calls the laptops send, so no
+ *  name can pass for one. */
+const CLUB_CODE: CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 6px',
+  border: '1px solid var(--border-soft)',
+  borderRadius: 'var(--radius-sm)',
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  color: 'var(--text)',
+  whiteSpace: 'nowrap',
+}
+/** The host's check before it gives a laptop a position, under the entry it asks about. */
+const CLUB_CONFIRM: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: 6,
+  padding: '8px 10px',
+  border: '1px solid var(--status-new-entity)',
+  borderRadius: 'var(--radius-sm)',
+  fontSize: textPx(12),
+  color: 'var(--text)',
+}
+
+/** The club line says this PC's clock against the host's from here, in whole seconds… */
+const CLOCK_SHOW_SECS = 2
+/** …and past here says it as the warning it has always been. */
+const CLOCK_WARN_SECS = 30
+
+/** A board row's clock, in ms, as whole seconds rounded half away from zero (the
+ *  position's own line rounds the same way, so the two never say different numbers). */
+function clockSecs(ms: number): number {
+  return Math.sign(ms) * Math.round(Math.abs(ms) / 1000)
+}
+
+/** A board row's clock in the club line's own terms: in step under 2 s, ahead or behind
+ *  from there, a dash when the position has not measured one. */
+function clockCell(ms: number | null | undefined): string {
+  if (ms == null) return '—'
+  const secs = clockSecs(ms)
+  if (Math.abs(secs) < CLOCK_SHOW_SECS) return t('fieldDay.club.board.clock.ok')
+  return secs > 0
+    ? t('fieldDay.club.board.clock.ahead', { secs })
+    : t('fieldDay.club.board.clock.behind', { secs: -secs })
+}
+
+/** A board row's position as its line names it: an unnamed position falls back to who is sitting
+ *  at it, and only then to a translated placeholder — never to the position id, which is internal
+ *  plumbing an operator should never be shown. */
+function boardName(row: FdClubBoardRow): string {
+  return row.posName || row.operator || t('fieldDay.club.board.unnamed')
+}
+
+/** A host board row's link, in the Status column's word. */
+function linkWord(link: NonNullable<FdClubBoardRow['link']>): string {
+  return link === 'host'
+    ? t('fieldDay.club.board.link.host')
+    : link === 'connected'
+      ? t('fieldDay.club.board.link.connected')
+      : link === 'reconnecting'
+        ? t('fieldDay.club.board.link.reconnecting')
+        : link === 'lost'
+          ? t('fieldDay.club.board.link.lost')
+          : t('fieldDay.club.board.link.removed')
+}
+
+/** When the host last heard a position, as the Status column says it after the word. */
+function heardWords(row: FdClubBoardRow): string {
+  return row.heardSecs == null
+    ? t('fieldDay.club.board.heard.never')
+    : t('fieldDay.club.board.heard', { ago: heardAgo(row.heardSecs) })
+}
+
+/** A position the host has not heard lately, on a board with no link words to say so (a position's,
+ *  Remote's): last heard more than the club link's dead timeout ago (`fdsync::DEAD_SECS`). The table
+ *  dims its line and marks its name ⚠, and the grid greys its name and marks it ⚠, both by this. On
+ *  the host's own board every line carries its link word, which says it instead (Lost). */
+function notHeard(row: FdClubBoardRow): boolean {
+  return !row.link && row.lastSeenSecs > CLUB_DEAD_SECS
+}
+
+/** A host board row's link word and when the host last heard the position, as one cell: on one
+ *  line where the column has room, and the heard part on a line of its own where it has not (a
+ *  1024-wide window), never cut. */
+function LinkCell({ row }: { row: FdClubBoardRow }) {
+  const link = row.link
+  if (!link) return <span />
+  const word = linkWord(link)
+  const heard = link === 'host' ? '' : heardWords(row)
+  return (
+    <span data-club-row={row.posid} style={{ minWidth: 0 }} title={heard ? `${word} ${heard}` : word}>
+      <span style={{ ...LINK_CHUNK, color: CLUB_LINK_INK[link], fontWeight: 600 }}>{word}</span>
+      {heard && (
+        <>
+          {' '}
+          <span style={{ ...LINK_CHUNK, color: 'var(--text-dim)' }}>{heard}</span>
+        </>
+      )}
+    </span>
+  )
+}
+
+/** The club link's lines (`features/clubLink.ts`) in the club block's two styles: the addresses
+ *  and the club code each in a box a reader can copy from. */
+function ClubLinkRows({ lines }: { lines: ClubLinkLine[] }) {
+  return (
+    <>
+      {lines.map((l) => (
+        <div key={l.key} style={l.alert ? CLUB_WARN : CLUB_NOTE} role={l.alert ? 'alert' : 'status'} data-club-link={l.key}>
+          {l.text}
+          {l.addrs?.map((a, i) => (
+            <Fragment key={a}>
+              {i > 0 ? ADDR_SEP : ' '}
+              <span className="mono">{a}</span>
+            </Fragment>
+          ))}
+          {l.code && (
+            <>
+              {' '}
+              <span className="mono" style={{ ...CLUB_CODE, fontSize: textPx(12) }}>
+                {t('fieldDay.club.code', { code: l.code })}
+              </span>
+            </>
+          )}
+        </div>
+      ))}
+    </>
+  )
 }
 
 /** The chip's text for each derived state (honesty rule: the queue is IN the
@@ -994,22 +1487,353 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
   )
 }
 
+/** Each link's mark beside its colour in the grid, so no state is told by colour alone, and the ⚠
+ *  after a name the host has not heard lately ([`notHeard`]), as the table marks its line; the legend
+ *  says what each is. A mark rather than the word: the word in every name would double each name's
+ *  width in a grid that has a column for every band. */
+const GRID_MARK = { connected: '✓', reconnecting: '↻', lost: '✕', stale: '⚠', self: '⌂' } as const
+type GridLook = keyof typeof GRID_MARK
+
+/** The grid's columns: the bands the contest runs on, from its rules data, or Field Day's own for
+ *  the two Field Days (their rules name none), then any band a position is on that the list leaves
+ *  out, in a column of its own, as the band occupancy board does: a station on the air never hides. */
+function gridBands(named: string[] | undefined, fieldDay: boolean, rows: FdClubBoardRow[]): string[] {
+  const listed = named?.length ? named : fieldDay ? FD_BOARD_BANDS : []
+  const extra = [...new Set(rows.map((r) => r.band.trim()))]
+    .filter((b) => b !== '' && !listed.includes(b))
+    .sort((a, b) => bandRank(a) - bandRank(b) || a.localeCompare(b))
+  return [...listed, ...extra]
+}
+
+/** One position in the grid: its name, coloured by its link where the board says one (the host's
+ *  own screen), with the link's mark and, for a screen reader, its word; this laptop's own marked as
+ *  this laptop. A board without the host's link words (a position's, Remote's) colours nothing, and
+ *  there a position the host has not heard lately is greyed with ⚠ after its name and its word, as
+ *  its line in the table is ([`notHeard`]); this laptop's own keeps its mark and edge as well. */
+function GridPos({ row, self }: { row: FdClubBoardRow; self: boolean }) {
+  const link = row.link === 'connected' || row.link === 'reconnecting' || row.link === 'lost' ? row.link : undefined
+  const look: GridLook | undefined = self ? 'self' : link
+  const word = look === 'self' ? linkWord('host') : link ? linkWord(link) : ''
+  const stale = notHeard(row)
+  return (
+    <span
+      className={`club-grid-pos${look ? ` link-${look}` : ''}${stale ? ' stale' : ''}`}
+      title={
+        stale
+          ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
+          : look === 'self'
+            ? word
+            : link
+              ? `${word} ${heardWords(row)}`
+              : undefined
+      }
+    >
+      {/* The space is the line's break point: the name drops under its mark whole, where a mark
+          joined to it made one word the line could only cut in two. */}
+      {look && (
+        <span className="club-grid-mark" aria-hidden="true">
+          {`${GRID_MARK[look]} `}
+        </span>
+      )}
+      <span className="club-grid-name">{boardName(row)}</span>
+      {/* After the name, as the table puts it; the space lets it drop to a line of its own. */}
+      {stale && (
+        <span className="club-grid-mark" aria-hidden="true">
+          {` ${GRID_MARK.stale}`}
+        </span>
+      )}
+      {word && <span className="sr-only">{word}</span>}
+      {stale && <span className="sr-only">{t('fieldDay.club.grid.notHeard', { secs: CLUB_DEAD_SECS })}</span>}
+    </span>
+  )
+}
+
+/**
+ * ⭐ **WHERE EVERY POSITION IS, AT A GLANCE** — the club board as a band × mode grid, above its table:
+ * the contest's bands across, its own mode classes down, each position's name in the cell of its
+ * band and class. Two on one band and class are both in that cell, which at a club is a split pool
+ * of contacts or a deliberate pair, and the operator is the one who can tell which.
+ *
+ * The rows are the Summary's idea of the contest's classes ([`modeColumns`]), not a second one: the
+ * Illinois QSO Party's CW/DIG and PH, Field Day's CW, DIG and PH, and for a contest that counts no
+ * class the ones its positions are on. Each name sits in the class its mode scores in
+ * ([`fdModeClass`]), the only mode a position's report carries.
+ *
+ * On the host's own screen, where the board carries its link words, each name is coloured by its
+ * link — green Connected, amber Reconnecting, red Lost — with a mark beside the colour and the word
+ * for a reader, never the colour alone, and the legend under the grid says what each is. A position
+ * the host removed is not in the grid (its line in the table keeps Allow back); one with no band yet
+ * is named on a line under it. A position's board and Remote's carry no link words (Remote's capture
+ * leaves them out), so there the grid places every name and colours none, and a position the host
+ * has not heard lately is greyed and marked ⚠, exactly when its line in the table is ([`notHeard`]),
+ * with a key in the legend. The two never meet on one name: on the host's own screen the link word
+ * says it (Lost), and the table marks no line ⚠ there either.
+ */
+function ClubBandModeGrid({
+  board,
+  bands: named,
+  dupeRule,
+  fieldDay,
+  linked,
+  ownPosid,
+  big,
+}: {
+  board: FdClubBoardRow[]
+  bands?: string[]
+  dupeRule?: DupeRule
+  fieldDay: boolean
+  /** The board carries the host's link words, so the legend says what their colours are; without
+   *  them, what the ⚠ of a position not heard lately is, which only such a board shows. */
+  linked: boolean
+  ownPosid?: string
+  big: boolean
+}) {
+  const shown = board.filter((r) => r.link !== 'removed')
+  const placed = shown.filter((r) => r.band.trim() !== '')
+  const waiting = shown.filter((r) => r.band.trim() === '')
+  const bands = gridBands(named, fieldDay, placed)
+  const modes = modeColumns(dupeRule, placed.map((r) => ({ mode: fdModeClass(r.mode) })))
+  const isSelf = (r: FdClubBoardRow) => r.link === 'host' || (!!ownPosid && r.posid === ownPosid)
+  const legend: GridLook[] = [
+    ...(linked ? (['connected', 'reconnecting', 'lost'] as const) : (['stale'] as const)),
+    ...(shown.some(isSelf) ? (['self'] as const) : []),
+  ]
+  if (shown.length === 0) return null
+  return (
+    <div className="club-grid-block" data-glance={big ? '' : undefined}>
+      {bands.length > 0 && (
+        <div className="club-grid">
+          <table className="club-grid-table">
+            <caption className="sr-only">{t('fieldDay.club.grid.caption')}</caption>
+            <thead>
+              <tr>
+                <th scope="col" className="club-grid-mode">
+                  {t('fieldDay.club.board.column.mode')}
+                </th>
+                {bands.map((b) => (
+                  <th scope="col" key={b} className="club-grid-band">
+                    {b}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {modes.map((m) => {
+                const label = m.classes.join('/')
+                return (
+                  <tr key={label}>
+                    <th scope="row" className="club-grid-mode">
+                      {label}
+                    </th>
+                    {bands.map((b) => (
+                      <td key={b} className="club-grid-cell">
+                        {placed
+                          .filter((r) => r.band.trim() === b && m.classes.includes(fdModeClass(r.mode)))
+                          .map((r) => (
+                            <GridPos key={r.posid} row={r} self={isSelf(r)} />
+                          ))}
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {waiting.length > 0 && (
+        <div className="club-grid-waiting">
+          <span className="club-grid-waiting-label">{t('fieldDay.club.grid.noBand')}</span>
+          {waiting.map((r) => (
+            <GridPos key={r.posid} row={r} self={isSelf(r)} />
+          ))}
+        </div>
+      )}
+      {legend.length > 0 && (
+        // For the eye: every name already says its word to a screen reader.
+        <div className="club-grid-legend" aria-hidden="true">
+          {legend.map((look) => (
+            <span key={look} className={look === 'stale' ? 'club-grid-pos stale' : `club-grid-pos link-${look}`}>
+              <span className="club-grid-mark">{`${GRID_MARK[look]} `}</span>
+              {look === 'stale'
+                ? t('fieldDay.club.grid.notHeard', { secs: CLUB_DEAD_SECS })
+                : look === 'self'
+                  ? linkWord('host')
+                  : linkWord(look)}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function FdClubSection({
   club,
   onExport,
+  onGivePosition,
+  onRemovePosition,
+  onAllowBack,
   busy = false,
   detached = false,
   readOnly = false,
+  fieldDay = true,
+  keepsDupes = false,
+  link = null,
+  bands,
+  dupeRule,
+  ownPosid,
 }: {
   club: FdClubStatus
   onExport?: (format: 'club-cabrillo' | 'club-adif') => void
+  /** The host's own contest screen only: give a club position to the laptop a turned-away
+   *  entry names, by the entry's `handle`. Not passed on Remote, in the pop-out or on a
+   *  position, so no Give button shows there. */
+  onGivePosition?: (handle: number) => Promise<FdGiveAnswer>
+  /** The host's own contest screen only, as `onGivePosition` is: remove a position from the club
+   *  event by its id, and let a removed one back. Each row of the host's board gets the button
+   *  that applies, but the host's own. */
+  onRemovePosition?: (posid: string) => Promise<FdRemoveAnswer>
+  onAllowBack?: (posid: string) => Promise<FdRemoveAnswer>
   busy?: boolean
   detached?: boolean
   readOnly?: boolean
+  /** The club runs one of the two Field Days. Any other contest has no sections, so its
+   *  counters leave them out rather than show a zero that means nothing. */
+  fieldDay?: boolean
+  /** The contest logs its duplicates (`DupeRule::log_dupes`), so the club file keeps a
+   *  repeat as a zero-point line instead of keeping only the earliest — except a Field Day
+   *  club's, which keeps only the earliest whatever the contest logs (`export_indices`). */
+  keepsDupes?: boolean
+  /** This laptop's club link: the lines the block does not already say. The contest screen's
+   *  own block only, never the pop-out or Remote. */
+  link?: ClubLink | null
+  /** The running contest's bands and dupe rule (`FieldDayStatus.bands`, `.dupeRule`): the grid's
+   *  columns and its mode classes. */
+  bands?: string[]
+  dupeRule?: DupeRule
+  /** This laptop's own position id (`Settings.fdPositionId`), whose name the grid marks as this
+   *  laptop on a position's board. Not on Remote, which is no laptop of the club's. */
+  ownPosid?: string
 }) {
   // The glance scale. One flag, applied at the handful of places that carry a
   // px size, so the docked board is byte-for-byte what it was.
   const big = detached
+  // What the club FILE keeps, which is what its export buttons say: every contest logs its
+  // dupes, but a Field Day club writes its earliest-wins unique rows, as 1.x wrote them.
+  const fileKeepsDupes = keepsDupes && !fieldDay
+  // What the last Give press did, until the next one.
+  const [giveNote, setGiveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The entry a Give press asks about, until the host answers: the position goes only to the
+  // laptop whose own screen shows this code. Pinned to the entry's handle, so the list moving
+  // under the pointer cannot change which laptop is asked about, and asked only while that entry
+  // is on the list.
+  const [asking, setAsking] = useState<{ handle: number; name: string; call: string; code: string } | null>(null)
+  const askingListed = asking != null && (club.refused ?? []).some((r) => r.handle === asking.handle)
+  // The codes are this laptop's screen's and the host's, never the pop-out's or Remote's.
+  const showCodes = !detached && !readOnly
+  function ask(handle: number, r: { posName: string; call: string; clubCode?: string }) {
+    // Only at the host: a press that comes through a stream gives no position. Read before
+    // anything awaits, while the stream's dispatch is still the one running.
+    if (isStreamInput()) {
+      setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
+      return
+    }
+    setGiveNote(null)
+    setAsking({ handle, name: r.posName, call: r.call, code: r.clubCode ?? '' })
+  }
+  function give() {
+    if (isStreamInput()) {
+      setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
+      return
+    }
+    if (!asking) return
+    const { handle, name: posName, call } = asking
+    const name = posName || call
+    setAsking(null)
+    onGivePosition?.(handle).then(
+      (answer) =>
+        setGiveNote(
+          answer.outcome === 'given'
+            ? { text: t('fieldDay.club.give.given', { name }), alert: false }
+            : {
+                text:
+                  answer.refusal === 'notHosting'
+                    ? t('fieldDay.club.give.refused.notHosting')
+                    : t('fieldDay.club.give.refused.stale'),
+                alert: true,
+              },
+        ),
+      () => setGiveNote({ text: t('fieldDay.club.give.failed'), alert: true }),
+    )
+  }
+  // The host's link words ride its own board alone (a position's board and Remote's copy have
+  // none), and its Remove and Allow back are on its own contest screen alone.
+  const showLink = club.hosting && club.board.some((r) => r.link != null)
+  const manage = showLink && !detached && !readOnly && onRemovePosition != null && onAllowBack != null
+  // What the last Remove or Allow back did, until the next press.
+  const [removeNote, setRemoveNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The position a Remove press asks about, by id, until it is answered: asked only while that
+  // position is on the board and not removed already.
+  const [removing, setRemoving] = useState<{ posid: string; name: string } | null>(null)
+  const removingListed =
+    removing != null && club.board.some((r) => r.posid === removing.posid && r.link !== 'removed' && r.link !== 'host')
+  const remoteNote = { text: t('fieldDay.club.remove.refused.remote'), alert: true }
+  function refusedNote(refusal: 'notHosting' | 'own' | 'stale') {
+    return {
+      text:
+        refusal === 'notHosting'
+          ? t('fieldDay.club.remove.refused.notHosting')
+          : refusal === 'own'
+            ? t('fieldDay.club.remove.refused.own')
+            : t('fieldDay.club.remove.refused.stale'),
+      alert: true,
+    }
+  }
+  function askRemove(row: FdClubBoardRow) {
+    // Only at the host, as Give is: read before anything awaits.
+    if (isStreamInput()) {
+      setRemoveNote(remoteNote)
+      return
+    }
+    setRemoveNote(null)
+    setRemoving({ posid: row.posid, name: boardName(row) })
+  }
+  function remove() {
+    if (isStreamInput()) {
+      setRemoveNote(remoteNote)
+      return
+    }
+    if (!removing) return
+    const { posid, name } = removing
+    setRemoving(null)
+    onRemovePosition?.(posid).then(
+      (answer) =>
+        setRemoveNote(
+          answer.outcome === 'done'
+            ? { text: t('fieldDay.club.remove.done', { name }), alert: false }
+            : refusedNote(answer.refusal),
+        ),
+      () => setRemoveNote({ text: t('fieldDay.club.remove.failed'), alert: true }),
+    )
+  }
+  function allowBack(row: FdClubBoardRow) {
+    if (isStreamInput()) {
+      setRemoveNote(remoteNote)
+      return
+    }
+    const name = boardName(row)
+    setRemoveNote(null)
+    onAllowBack?.(row.posid).then(
+      (answer) =>
+        setRemoveNote(
+          answer.outcome === 'done'
+            ? { text: t('fieldDay.club.allowBack.done', { name }), alert: false }
+            : refusedNote(answer.refusal),
+        ),
+      () => setRemoveNote({ text: t('fieldDay.club.remove.failed'), alert: true }),
+    )
+  }
   return (
     <div
       style={
@@ -1036,13 +1860,21 @@ export function FdClubSection({
             {t('fieldDay.club.hostLine', { event: club.event || '—', call: club.hostCall || '—' })}
           </span>
         )}
+        {/* This laptop's own club code: what the host checks before it gives it a position. */}
+        {showCodes && club.clubCode && (
+          <span className="mono" data-club-code="" style={{ ...CLUB_CODE, fontSize: textPx(12) }} title={t('fieldDay.club.code.title')}>
+            {t('fieldDay.club.code', { code: club.clubCode })}
+          </span>
+        )}
         <span style={{ flex: '1 1 auto' }} />
         <span style={{ fontSize: textPx(big ? 16 : 13), color: 'var(--text-dim)' }}>
-          {t('fieldDay.club.counters', {
-            score: club.score,
-            qsos: club.qsos,
-            sections: club.sections,
-          })}
+          {fieldDay
+            ? t('fieldDay.club.counters', {
+                score: club.score,
+                qsos: club.qsos,
+                sections: club.sections,
+              })
+            : t('fieldDay.club.countersContest', { score: club.score, qsos: club.qsos })}
         </span>
         {club.hosting && onExport && (
           <>
@@ -1051,7 +1883,11 @@ export function FdClubSection({
               className="export-btn"
               disabled={busy}
               onClick={() => onExport('club-cabrillo')}
-              title={t('fieldDay.club.export.cabrillo.title')}
+              title={
+                fileKeepsDupes
+                  ? t('fieldDay.club.export.cabrillo.titleKept')
+                  : t('fieldDay.club.export.cabrillo.title')
+              }
             >
               {t('fieldDay.club.export.cabrillo.label')}
             </button>
@@ -1060,7 +1896,11 @@ export function FdClubSection({
               className="export-btn"
               disabled={busy}
               onClick={() => onExport('club-adif')}
-              title={t('fieldDay.club.export.adif.title')}
+              title={
+                fileKeepsDupes
+                  ? t('fieldDay.club.export.adif.titleKept')
+                  : t('fieldDay.club.export.adif.title')
+              }
             >
               {t('fieldDay.club.export.adif.label')}
             </button>
@@ -1077,16 +1917,128 @@ export function FdClubSection({
           </button>
         )}
       </div>
-      {Math.abs(club.skewSecs) > 30 && (
+      {link && <ClubLinkRows lines={clubLinkLines(link, true)} />}
+      {/* This PC's clock against the host's: said from 2 s, a warning past 30 s. Shown
+          only — Nexus never changes a clock. */}
+      {Math.abs(club.skewSecs) > CLOCK_WARN_SECS ? (
         <div style={CLUB_WARN} role="alert">
           {t('fieldDay.club.skew', { secs: Math.abs(club.skewSecs) })}
         </div>
-      )}
+      ) : Math.abs(club.skewSecs) >= CLOCK_SHOW_SECS ? (
+        <div style={CLUB_NOTE}>
+          {club.skewSecs > 0
+            ? t('fieldDay.club.clock.ahead', { secs: club.skewSecs })
+            : t('fieldDay.club.clock.behind', { secs: -club.skewSecs })}
+        </div>
+      ) : null}
       {club.lastError && (
         <div style={CLUB_WARN} role="alert">
           {t('fieldDay.club.error', { msg: club.lastError })}
         </div>
       )}
+      {/* The host's alone: the laptops it turned away, each with the sentence it was sent,
+          which that laptop's own screen shows as its host error. One turned away because another
+          laptop holds its position has a Give button, on the host's own contest screen alone. */}
+      {club.refused?.map(({ handle, ...r }, i) => (
+        <div key={handle !== undefined ? `h${handle}` : `i${i}`} style={CLUB_WARN} role="alert">
+          {r.posName
+            ? t('fieldDay.club.refusedPosition', { name: r.posName, call: r.call, reason: r.reason })
+            : t('fieldDay.club.refusedCall', { call: r.call, reason: r.reason })}
+          {/* The laptop's club code, the one thing on the line it cannot choose: the same code
+              that laptop's own screen shows. */}
+          {showCodes && r.clubCode && (
+            <>
+              {' '}
+              <span className="mono" data-club-code="" style={CLUB_CODE}>
+                {t('fieldDay.club.code', { code: r.clubCode })}
+              </span>
+            </>
+          )}
+          {club.hosting && onGivePosition && handle !== undefined && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="export-btn"
+                onClick={() => ask(handle, r)}
+                title={t('fieldDay.club.give.title')}
+              >
+                {t('fieldDay.club.give.label')}
+              </button>
+            </>
+          )}
+        </div>
+      ))}
+      {/* Before the host gives a position: the code of the laptop it would go to, to check
+          against the code on that laptop's own screen. */}
+      {asking && askingListed && (
+        <div role="group" aria-label={t('fieldDay.club.give.confirm.aria')} style={CLUB_CONFIRM}>
+          <div>{t('fieldDay.club.give.confirm.head')}</div>
+          <span className="mono" data-club-code="" style={{ ...CLUB_CODE, fontSize: textPx(22), padding: '2px 10px' }}>
+            {asking.code}
+          </span>
+          <div>
+            {t('fieldDay.club.give.confirm.check')}{' '}
+            {asking.name
+              ? t('fieldDay.club.give.confirm.says', { name: asking.name, call: asking.call })
+              : t('fieldDay.club.give.confirm.saysCall', { call: asking.call })}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button type="button" className="export-btn" onClick={give}>
+              {t('fieldDay.club.give.confirm.yes')}
+            </button>
+            <button type="button" className="export-btn" onClick={() => setAsking(null)}>
+              {t('fieldDay.club.give.confirm.no')}
+            </button>
+          </div>
+        </div>
+      )}
+      {giveNote && (
+        <div style={giveNote.alert ? CLUB_WARN : CLUB_NOTE} role={giveNote.alert ? 'alert' : 'status'}>
+          {giveNote.text}
+        </div>
+      )}
+      {removeNote && (
+        <div style={removeNote.alert ? CLUB_WARN : CLUB_NOTE} role={removeNote.alert ? 'alert' : 'status'}>
+          {removeNote.text}
+        </div>
+      )}
+      {/* The host's alone, for the rest of the event: every contact it kept out of the club's
+          log, how many and the newest of them, each with the position that sent it and why. */}
+      {club.keptOut && (
+        <div style={CLUB_WARN} role="status">
+          <div>{t('fieldDay.club.keptOut.total', { count: club.keptOut.total })}</div>
+          {club.keptOut.latest.map((k, i) => (
+            <div key={i}>
+              {k.posName
+                ? t('fieldDay.club.keptOut.position', { name: k.posName, call: k.call, reason: k.reason })
+                : t('fieldDay.club.keptOut.call', { call: k.call, reason: k.reason })}
+            </div>
+          ))}
+          {club.keptOut.total > club.keptOut.latest.length && (
+            <div>{t('fieldDay.club.keptOut.more', { count: club.keptOut.total - club.keptOut.latest.length })}</div>
+          )}
+        </div>
+      )}
+      {/* The host's alone: its board is as big as the club line every position is sent can
+          carry — said before one more position might not fit, and once it is cut. */}
+      {club.boardFull && (
+        <div style={CLUB_WARN} role="status">
+          {club.boardFull.shown < club.boardFull.positions
+            ? t('fieldDay.club.boardCut', { shown: club.boardFull.shown, positions: club.boardFull.positions })
+            : t('fieldDay.club.boardFull', { positions: club.boardFull.positions })}
+        </div>
+      )}
+      {/* Who is on which band and mode, at a glance, above the table that details each position. */}
+      <ClubBandModeGrid
+        board={club.board}
+        bands={bands}
+        dupeRule={dupeRule}
+        fieldDay={fieldDay}
+        linked={showLink}
+        ownPosid={ownPosid}
+        big={big}
+      />
       {club.board.length === 0 ? (
         // Sync IS on here (the block only rides the snapshot when it is), so this
         // says what it is waiting for and never sends anyone to Settings — the
@@ -1097,43 +2049,131 @@ export function FdClubSection({
       ) : (
         <div
           data-club-board=""
-          style={big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
+          style={{
+            ...(big ? { ...CLUB_BOARD_GRID, fontSize: textPx(20), columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID),
+            ...(club.hosting ? { gridTemplateColumns: clubBoardColumns(showLink, manage) } : {}),
+          }}
         >
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.mode')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
-          <span style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
+          {/* The host's: where each position's link stands, and when the host last heard it. */}
+          {showLink && (
+            <span
+              data-head=""
+              style={colHead(big)}
+              title={t('fieldDay.club.board.link.title', {
+                beat: CLUB_PING_SECS,
+                window: 2 * CLUB_PING_SECS,
+                dead: CLUB_DEAD_SECS,
+              })}
+            >
+              {t('fieldDay.club.board.column.link')}
+            </span>
+          )}
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.mode')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
+          <span data-head="" style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
+          {/* The host's column: each position's clock, as it reported it to the host. */}
+          {club.hosting && (
+            <span data-head="" style={colHead(big)} title={t('fieldDay.club.board.clock.title')}>
+              {t('fieldDay.club.board.column.clock')}
+            </span>
+          )}
+          {/* The host's own contest screen: each row's Remove or Allow back. */}
+          {manage && <span data-head="" aria-hidden="true" />}
           {club.board.map((row) => {
-            // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
-            // screen but never silently stale.
-            const stale = row.lastSeenSecs > 15
+            // A host's row says where its link stands, so it is dimmed when that is lost or removed;
+            // a position's board stale-marks past 15 s (the DEAD_SECS threshold). Either way a
+            // reading stays on screen but is never silently stale.
+            const stale = row.link
+              ? row.link === 'lost' || row.link === 'removed'
+              : notHeard(row)
+            const marked = stale && !row.link
             const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
             return (
               <Fragment key={row.posid}>
                 <span
                   className="mono"
+                  data-club-row={row.posid}
                   style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                   title={
-                    stale
+                    marked
                       ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
                       : undefined
                   }
                 >
-                  {/* An unnamed position falls back to who is sitting at it, and only
-                      then to a translated placeholder — never to the position id, which is
-                      internal plumbing an operator should never be shown. */}
-                  {row.posName || row.operator || t('fieldDay.club.board.unnamed')}
-                  {stale && <span aria-hidden="true"> ⚠</span>}
+                  {boardName(row)}
+                  {marked && <span aria-hidden="true"> ⚠</span>}
                 </span>
-                <span className="mono" style={dim}>{row.band}</span>
-                <span className="mono" style={dim}>{row.mode}</span>
-                <span className="mono" style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.operator}</span>
-                <span className="mono" style={dim}>{row.qsos}</span>
-                <span className="mono" style={dim}>
+                {showLink && <LinkCell row={row} />}
+                <span className="mono" data-club-row={row.posid} style={dim}>{row.band}</span>
+                <span className="mono" data-club-row={row.posid} style={dim}>{row.mode}</span>
+                <span className="mono" data-club-row={row.posid} style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.operator}</span>
+                <span className="mono" data-club-row={row.posid} style={dim}>{row.qsos}</span>
+                <span className="mono" data-club-row={row.posid} style={dim}>
                   {t('fieldDay.club.board.rate', { rate: row.rate })}
                 </span>
+                {club.hosting && (
+                  <span
+                    className="mono"
+                    data-club-row={row.posid}
+                    style={{
+                      ...dim,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      ...(row.clockMs != null && Math.abs(clockSecs(row.clockMs)) > CLOCK_WARN_SECS
+                        ? { color: 'var(--status-new-entity)' }
+                        : {}),
+                    }}
+                    title={row.clockMs == null ? t('fieldDay.club.board.clock.unknown') : undefined}
+                  >
+                    {clockCell(row.clockMs)}
+                  </span>
+                )}
+                {manage && (
+                  <span data-club-row={row.posid}>
+                    {row.link === 'removed' ? (
+                      <button
+                        type="button"
+                        className="export-btn"
+                        onClick={() => allowBack(row)}
+                        title={t('fieldDay.club.allowBack.title')}
+                      >
+                        {t('fieldDay.club.allowBack.label')}
+                      </button>
+                    ) : row.link && row.link !== 'host' ? (
+                      <button
+                        type="button"
+                        className="export-btn"
+                        onClick={() => askRemove(row)}
+                        title={t('fieldDay.club.remove.title')}
+                      >
+                        {t('fieldDay.club.remove.label')}
+                      </button>
+                    ) : null}
+                  </span>
+                )}
+                {/* The question a Remove press asks, under the row it was pressed on. */}
+                {manage && removingListed && removing?.posid === row.posid && (
+                  <div
+                    role="group"
+                    aria-label={t('fieldDay.club.remove.confirm.aria')}
+                    style={{ ...CLUB_CONFIRM, gridColumn: '1 / -1', fontSize: textPx(big ? 16 : 12) }}
+                  >
+                    <div>{t('fieldDay.club.remove.confirm.head', { name: removing.name })}</div>
+                    <div>{t('fieldDay.club.remove.confirm.body')}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <button type="button" className="export-btn" onClick={remove}>
+                        {t('fieldDay.club.remove.confirm.yes')}
+                      </button>
+                      <button type="button" className="export-btn" onClick={() => setRemoving(null)}>
+                        {t('fieldDay.club.remove.confirm.no')}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </Fragment>
             )
           })}
@@ -1144,14 +2184,102 @@ export function FdClubSection({
 }
 
 /**
+ * The contacts in this computer's contest journal that entering the contest did not load,
+ * by reason, and that nothing was deleted — the journal is one file per position whatever
+ * contest it last ran, and the session loads only its own contest's rows from this running.
+ */
+function FdKeptOutNote({
+  keptOut,
+  contest,
+}: {
+  keptOut: { otherContest: number; otherRunning: number }
+  contest: string
+}) {
+  return (
+    <p className="fd-score-note" role="note">
+      {keptOut.otherRunning > 0 && <>{t('fieldDay.keptOut.running', { count: keptOut.otherRunning, contest })} </>}
+      {keptOut.otherContest > 0 && <>{t('fieldDay.keptOut.contest', { count: keptOut.otherContest })} </>}
+      {t('fieldDay.keptOut.kept')}
+    </p>
+  )
+}
+
+/**
+ * ⭐ The contacts in this computer's contest journal that no session loads any more (logged more
+ * than four days ago) and the logbook does not hold — how many, from which contest and when —
+ * with the merge for each contest. The journal keeps them until they are merged; the merge is the
+ * end-of-contest one's rule, so a press never writes a contact twice. The report stays when the
+ * offer it answered goes.
+ */
+function FdUnmergedNote({
+  unmerged,
+  busy,
+  report,
+  error,
+  onMerge,
+}: {
+  unmerged: ContestUnmerged[]
+  busy: string | null
+  report: FdMergeReport | null
+  error: string | null
+  onMerge: (event: string) => void
+}) {
+  return (
+    <>
+      {unmerged.map((u) => {
+        const contest = contestName(u.event)
+        const [first, last] = [utcDay(u.firstUnix), utcDay(u.lastUnix)]
+        return (
+          <div className="fd-merge" key={u.event}>
+            <p className="fd-score-note" role="note">
+              {first === last
+                ? t('fieldDay.unmerged.day', { count: u.count, contest, date: first })
+                : t('fieldDay.unmerged.days', { count: u.count, contest, first, last })}
+            </p>
+            <button
+              type="button"
+              className="export-btn fd-merge-btn"
+              disabled={busy !== null}
+              onClick={() => onMerge(u.event)}
+              title={t('fieldDay.unmerged.title')}
+            >
+              {busy === u.event ? t('fieldDay.merge.busy') : t('fieldDay.unmerged.merge', { count: u.count })}
+            </button>
+          </div>
+        )
+      })}
+      {(report || error) && (
+        <div className="fd-merge">
+          {report && (
+            <span className="fd-merge-report" role="status">
+              {t('fieldDay.merge.added', { count: report.added })}
+              {' · '}
+              {t('fieldDay.merge.already', { count: report.already })}
+              {report.refused > 0 && <> {' · '}{t('fieldDay.merge.refused', { count: report.refused })}</>}
+            </span>
+          )}
+          {error && <span className="log-export-error" role="alert">{error}</span>}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** A Unix time's UTC day, YYYY-MM-DD: the date a contest log gives a contact. */
+function utcDay(unix: number): string {
+  return new Date(unix * 1000).toISOString().slice(0, 10)
+}
+
+/**
  * Club sync switched on for a contest it cannot run, said where the club block would be.
  *
- * The engine refuses it (`clubSyncRefused`, `Engine::fd_sync_enabled`): the club log runs a
- * Field Day event's rules, and hosting any other contest used to build an ARRL Field Day club
- * log in silence. With nothing syncing there is no club block, so without this the screen
- * would simply go quiet about a switch the operator turned on.
+ * The engine refuses it (`clubSyncRefusal`, `Engine::club_sync_refusal`): the club log runs
+ * the picked contest's own rules, and refuses only a contest whose merged log would be wrong
+ * whoever built it — a serial-number exchange, or a sponsor template with a transmitter
+ * column. With nothing syncing there is no club block, so without this the screen would
+ * simply go quiet about a switch the operator turned on.
  */
-export function FdClubRefused({ contest }: { contest: string }) {
+export function FdClubRefused({ contest, why }: { contest: string; why: ClubSyncRefusal }) {
   return (
     <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
       <div style={CLUB_HEADER}>
@@ -1161,8 +2289,26 @@ export function FdClubRefused({ contest }: { contest: string }) {
         <span style={clubChipStyle('refused')}>{t('fieldDay.club.refused.chip')}</span>
       </div>
       <div style={CLUB_WARN} role="status">
-        {t('fieldDay.club.refused.body', { contest })}
+        {clubSyncRefusalText(why, contest)}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Where this laptop's club link stands, said where the club block would be while the Field Day
+ * mode is off: there is no club block then, and a laptop told to join a host said nothing at
+ * all about whether it had.
+ */
+export function FdClubLink({ link }: { link: ClubLink }) {
+  return (
+    <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
+      <div style={CLUB_HEADER}>
+        <span style={{ fontSize: textPx(13), fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.club.head')}
+        </span>
+      </div>
+      <ClubLinkRows lines={clubLinkLines(link)} />
     </div>
   )
 }
@@ -1182,6 +2328,9 @@ const OP_FIELD: CSSProperties = {
   gap: 8,
   flex: '1 1 auto',
   minWidth: 0,
+  // A lone control: on a screen wider than its old 1600px cap it stops at a field's width
+  // (`--fd-control-measure`, set by the panel on lg/xl) rather than crossing the window.
+  maxWidth: 'var(--fd-control-measure, none)',
 }
 const OP_LABEL: CSSProperties = {
   fontSize: textPx(10),
@@ -1303,10 +2452,95 @@ export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: numbe
 }
 
 /**
+ * ⭐ THE OPERATOR BOX — who is at the key. One component wherever it is drawn, so the places cannot
+ * drift: the scoreboard's row (`FieldDayScoreboard`: the torn-off scoreboard, the Remote page's
+ * read-only copy, and the Contest screen while no contest runs) and, while a contest runs, the large
+ * log line's title line beside Sending and I moved (`ContestLargeEntry`, in the main window and the
+ * logger window — the operator, 2026-10-12: "I want to move the field to change operators up near
+ * the top").
+ *
+ * A local draft so typing is smooth, uppercase as it is typed, committed on blur / Enter: a
+ * per-keystroke save would fire the heavyweight apply repeatedly. `onSave` is the host's NARROW write
+ * (`setFdOperator`), never the whole-settings save, which a seat swap must not run mid-contact (#54).
+ * Enter only blurs the box, so on a log line it never reaches the line's own Enter and logs nothing.
+ * A save that fails puts the stored operator back in the box.
+ */
+export function OperatorBox({
+  value,
+  onSave,
+  readOnly = false,
+  operatorAsk,
+  onOperatorFocused,
+  onLogLine = false,
+}: {
+  /** The operator as stored (`fdOperator`), or null until the host has read its settings: until
+   *  then the box waits, disabled. */
+  value: string | null
+  onSave: (call: string) => void | Promise<unknown>
+  readOnly?: boolean
+  /** Ctrl+O from a contest strip: the asks the box has not answered (its host's). */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
+  /** Drawn on the log line's title line (styles.css `.le-fd-operator`), not in the scoreboard's row. */
+  onLogLine?: boolean
+}) {
+  const [draft, setDraft] = useState(value ?? '')
+  useEffect(() => {
+    setDraft(value ?? '')
+  }, [value])
+  const commit = () => {
+    if (readOnly) return
+    const v = draft.trim()
+    if (v === (value ?? '')) return
+    void Promise.resolve(onSave(v)).catch(() => setDraft(value ?? ''))
+  }
+  // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): at each ask the box takes the caret
+  // as soon as it can be typed in — its settings read — and says so, so an ask is answered once.
+  // A read-only box never takes it.
+  const box = useRef<HTMLInputElement>(null)
+  const typable = value !== null && !readOnly
+  useEffect(() => {
+    const el = box.current
+    if (!operatorAsk || !typable || !el) return
+    el.focus({ preventScroll: true })
+    el.scrollIntoView?.({ block: 'nearest' })
+    el.select()
+    onOperatorFocused?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operatorAsk, typable])
+  return (
+    <label className={onLogLine ? 'le-fd-operator' : undefined} style={onLogLine ? undefined : OP_FIELD}>
+      <span className={onLogLine ? 'le-fd-operator-cap' : undefined} style={onLogLine ? undefined : OP_LABEL}>
+        {t('fieldDay.operator.label')}
+      </span>
+      <input
+        ref={box}
+        className={onLogLine ? 'settings-input mono le-fd-operator-input' : undefined}
+        style={onLogLine ? undefined : OP_INPUT}
+        value={draft}
+        disabled={value === null}
+        readOnly={readOnly}
+        onChange={(e) => { if (!readOnly) setDraft(e.target.value.toUpperCase()) }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+        }}
+        placeholder={t('fieldDay.operator.placeholder')}
+        aria-label={t('fieldDay.operator.aria')}
+        spellCheck={false}
+        autoCapitalize="characters"
+      />
+    </label>
+  )
+}
+
+/**
  * The reusable Field Day scoreboard: the settable operator, the score tiles, and the
  * worked-sections board. `onSaveOperator` persists the operator (optimistic, parent-
  * owned) so a torn-off window and the docked view can't clobber each other's writes.
- * `detached` hides the pop-out button in the already-torn-off window.
+ * `detached` hides the pop-out button in the already-torn-off window. `operatorBox` false: the
+ * box is on the log line above this scoreboard (ContestView's `operatorBoxAbove`), so its row
+ * holds the buttons alone and the screen has one box.
  */
 export function FieldDayScoreboard({
   fieldDay,
@@ -1314,12 +2548,19 @@ export function FieldDayScoreboard({
   onSaveOperator,
   detached = false,
   readOnly = false,
+  operatorBox = true,
+  operatorAsk,
+  onOperatorFocused,
 }: {
   fieldDay: FieldDayStatus | null
   settings: FdDisplaySettings | null
   onSaveOperator: (call: string) => void
   detached?: boolean
   readOnly?: boolean
+  operatorBox?: boolean
+  /** Ctrl+O from a contest strip: the asks the operator box has not answered (ContestView's). */
+  operatorAsk?: number
+  onOperatorFocused?: () => void
 }) {
   const log = fieldDay?.log ?? []
   const isWfd = (fieldDay?.event ?? '') === 'wfd'
@@ -1331,41 +2572,19 @@ export function FieldDayScoreboard({
     settings,
   )
 
-  // Local draft so typing is smooth; commit (persist) on blur / Enter — a per-keystroke
-  // setSettings would fire the heavyweight apply repeatedly.
-  const [opDraft, setOpDraft] = useState(settings?.fdOperator ?? '')
-  useEffect(() => {
-    setOpDraft(settings?.fdOperator ?? '')
-  }, [settings?.fdOperator])
-  const commitOp = () => {
-    if (readOnly) return
-    const v = opDraft.trim()
-    if (v === (settings?.fdOperator ?? '')) return
-    onSaveOperator(v)
-  }
-
   return (
     <>
-      {/* OPERATOR + POP-OUT */}
-      <div style={SCOREBOARD_HEADER}>
-        <label style={OP_FIELD}>
-          <span style={OP_LABEL}>{t('fieldDay.operator.label')}</span>
-          <input
-            style={OP_INPUT}
-            value={opDraft}
-            disabled={!settings}
+      {/* OPERATOR + POP-OUT — the buttons stay at the row's end when the box is on the log line. */}
+      <div style={operatorBox ? SCOREBOARD_HEADER : { ...SCOREBOARD_HEADER, justifyContent: 'flex-end' }}>
+        {operatorBox && (
+          <OperatorBox
+            value={settings ? (settings.fdOperator ?? '') : null}
+            onSave={onSaveOperator}
             readOnly={readOnly}
-            onChange={(e) => { if (!readOnly) setOpDraft(e.target.value.toUpperCase()) }}
-            onBlur={commitOp}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-            }}
-            placeholder={t('fieldDay.operator.placeholder')}
-            aria-label={t('fieldDay.operator.aria')}
-            spellCheck={false}
-            autoCapitalize="characters"
+            operatorAsk={operatorAsk}
+            onOperatorFocused={onOperatorFocused}
           />
-        </label>
+        )}
         {!detached && !readOnly && (
           <button
             type="button"
@@ -1374,6 +2593,19 @@ export function FieldDayScoreboard({
             title={t('fieldDay.popOut.title')}
           >
             {t('fieldDay.popOut.label')}
+          </button>
+        )}
+        {/* ⭐ THE CONTEST LOGGER WINDOW, from the torn-off scoreboard — the window with the
+            operator box, the sections and who is on what band, which is where a club opens it
+            from. The docked screen's header has its own. */}
+        {detached && !readOnly && (
+          <button
+            type="button"
+            style={POPOUT_BTN}
+            onClick={() => void openPanelWindow('contestlog')}
+            title={t('fieldDay.logger.title')}
+          >
+            {t('fieldDay.logger.label')}
           </button>
         )}
       </div>
@@ -1437,10 +2669,22 @@ export function FieldDayScoreboard({
               />
             </span>
           </div>
+        ) : isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? (
+          /* ⭐ WINTER FIELD DAY'S CLAIMED TOTAL — the sponsor's QSO points × (OM + 1), all
+             three numbers the engine's, so the line and the total cannot disagree. */
+          <div className="fd-score-math">
+            <span className="fd-score-math-line">
+              <T
+                k="fieldDay.score.wfdObjectives"
+                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+                vals={{ qsoPts, om: fieldDay.objectiveMultiplier, totalScore }}
+              />
+            </span>
+          </div>
         ) : isWfd ? (
-          /* WFD scores by OBJECTIVES (QSOs × (multipliers+1)) — we don't track
-             operator counts/objectives, so showing ARRL power×+bonus math would
-             claim a number WFD rules never produce. Show the honest raw counts. */
+          /* A station that does not score Winter Field Day's objectives (a Remote view of an
+             older one): its total is raw QSO points, so the honest line says so rather than
+             claiming ARRL power×+bonus arithmetic WFD never produces. */
           <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
         ) : (
           <div className="fd-score-math">
@@ -1479,8 +2723,30 @@ export function FieldDayScoreboard({
   )
 }
 
-export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier, observation }: Props) {
+export function ContestView({
+  fieldDay,
+  clubLink,
+  onSetMode,
+  fdActive = false,
+  fdRuleset = null,
+  tier,
+  section,
+  observation,
+  onOpenSettings,
+  onSettingsSaved,
+  logger = false,
+  contestSwitch = null,
+  operatorAsk,
+  onOperatorFocused,
+  operatorBoxAbove = false,
+  onPopOut,
+}: Props) {
   const observed = observation !== undefined
+  // The mode the banned-mode chip names: the station's own, given its section.
+  const pskName = usePskName(observed ? undefined : section)
+  const activeMode = section === undefined ? tier : stationMode(section, tier, pskName)
+  // The clock the spot advisory judges the event window by.
+  const nowUnix = useNowUnix()
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -1518,6 +2784,111 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   const rows = useMemo(() => annotate(log), [log])
   const modes = useMemo(() => modeCounts(log), [log])
 
+  // ⭐ REMOVE THE NEWEST CONTACT, AND THE REMOVED LIST WITH RESTORE — the screen's half of the
+  // strip's Ctrl+D. Remove sits on the newest row alone and asks before it acts (a second click
+  // within REMOVE_CONFIRM_MS), as the strip does. Nothing is deleted: a removed contact is kept,
+  // left out of the score, the dupe check and every export, and Restore puts it back exactly as
+  // it was. Never offered when observing (`observed`): removal is refused from afar.
+  const removable = !observed && fieldDay != null
+  const newest = newestContact(log)
+  const [removeAsk, setRemoveAsk] = useState<{ call: string; whenUnix: number; at: number } | null>(null)
+  const [removedList, setRemovedList] = useState<RemovedContest[]>([])
+  const [removedNote, setRemovedNote] = useState<{ text: string; alert: boolean } | null>(null)
+  // The list follows the log: a removal or a restore anywhere (the strip, another window)
+  // changes its length.
+  const logLen = log.length
+  useEffect(() => {
+    if (!removable) {
+      setRemovedList([])
+      return
+    }
+    let live = true
+    contestRemoved().then((list) => live && setRemovedList(list)).catch(() => {})
+    return () => { live = false }
+  }, [removable, logLen])
+  useEffect(() => {
+    if (!removeAsk) return
+    const id = window.setTimeout(() => setRemoveAsk(null), Math.max(0, removeAsk.at + REMOVE_CONFIRM_MS - Date.now()))
+    return () => window.clearTimeout(id)
+  }, [removeAsk])
+  const removeNewest = () => {
+    if (!newest) return
+    // Only at the station: a press that comes through the Remote stream removes nothing, as
+    // removal is refused from afar. Read before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setRemoveAsk(null)
+      setRemovedNote({ text: t('logEntry.remove.remote'), alert: true })
+      return
+    }
+    const now = Date.now()
+    const asked = removeAsk != null && removeAsk.call === newest.call && removeAsk.whenUnix === newest.whenUnix
+    if (!asked || now - removeAsk.at > REMOVE_CONFIRM_MS) {
+      setRemovedNote(null)
+      setRemoveAsk({ call: newest.call, whenUnix: newest.whenUnix, at: now })
+      return
+    }
+    setRemoveAsk(null)
+    const label = contactLabel(newest.rows)
+    contestRemoveLast(newest.call, newest.whenUnix)
+      .then(
+        (answer) => {
+          setRemovedNote({ text: removalText(answer, label), alert: answer.outcome === 'refused' })
+          return contestRemoved().then(setRemovedList)
+        },
+        () => setRemovedNote({ text: t('logEntry.remove.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+  const restore = (entry: RemovedContest) => {
+    // Only at the station, as removal is: a press that comes through the Remote stream restores
+    // nothing. Read before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setRemovedNote({ text: t('fieldDay.removed.restore.remote'), alert: true })
+      return
+    }
+    const call = entry.rows[0]?.call ?? ''
+    contestRestore(entry.id)
+      .then(
+        (answer) => {
+          setRemovedNote({ text: restoreText(answer, call), alert: answer.outcome === 'refused' })
+          return contestRemoved().then(setRemovedList)
+        },
+        () => setRemovedNote({ text: t('fieldDay.removed.failed'), alert: true }),
+      )
+      .catch(() => {})
+  }
+
+  // ⭐ EDIT A CONTACT IN PLACE — any row's Edit opens it where it stands (a county line as one
+  // contact), and the strip's Ctrl+Y opens the newest the same way. It keeps its time, serial and
+  // number. Never offered when observing, as removal is not; refused through the Remote stream;
+  // and at a club the screen says how a contact is fixed there today instead: club sync cannot
+  // carry an edit to the other laptops.
+  const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
+  const editRows = editing
+    ? log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
+    : []
+  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  useEffect(() => {
+    if (editing && editRows.length === 0) setEditing(null)
+  }, [editing, editRows.length])
+  const editRow = (q: FieldDayQso) => {
+    if (isStreamInput()) {
+      setRemovedNote({ text: t('contest.edit.remote'), alert: true })
+      return
+    }
+    setRemoveAsk(null)
+    if (fieldDay?.club) {
+      setRemovedNote({ text: t('contest.edit.club'), alert: true })
+      return
+    }
+    setRemovedNote(null)
+    setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
+  }
+  const editDone = (note: EditNote | null) => {
+    setEditing(null)
+    if (note) setRemovedNote(note)
+  }
+
   // Worked-section set for the summary/dupe exports (the board derives its own
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
@@ -1553,6 +2924,13 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   const [mergeError, setMergeError] = useState<string | null>(null)
   const mergeCount = log.length
   const runMerge = async () => {
+    // Only at the station: a press that comes through the Remote stream writes nothing into the
+    // logbook. Read before anything awaits, inside the stream's dispatch.
+    if (isStreamInput()) {
+      setMergeReport(null)
+      setMergeError(t('fieldDay.merge.remote'))
+      return
+    }
     setMerging(true)
     setMergeError(null)
     try {
@@ -1567,6 +2945,48 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }
 
+  // ⭐ The contest contacts no session loads any more that the logbook does not hold: the journal
+  // keeps each until it is merged. Asked of the station when the view opens and when the contest
+  // changes (asking also lets go of the ones already merged), never by a Remote observer, and
+  // merged only at the station, as the end-of-contest merge is.
+  const [unmerged, setUnmerged] = useState<ContestUnmerged[]>([])
+  const [unmergedBusy, setUnmergedBusy] = useState<string | null>(null)
+  const [unmergedReport, setUnmergedReport] = useState<FdMergeReport | null>(null)
+  const [unmergedError, setUnmergedError] = useState<string | null>(null)
+  const contestOn = fieldDay != null
+  const shownContest = fieldDay?.event
+  useEffect(() => {
+    if (observed || !contestOn) {
+      setUnmerged([])
+      return
+    }
+    let live = true
+    contestUnmerged().then((u) => live && setUnmerged(u)).catch(() => {})
+    return () => { live = false }
+  }, [observed, contestOn, shownContest])
+  const mergeUnmerged = async (event: string) => {
+    if (isStreamInput()) {
+      setUnmergedReport(null)
+      setUnmergedError(t('fieldDay.merge.remote'))
+      return
+    }
+    setUnmergedBusy(event)
+    setUnmergedError(null)
+    try {
+      setUnmergedReport(await contestMergeUnmerged(event))
+    } catch (e) {
+      // The engine's own sentence: outside the contest, or a contest whose session Settings
+      // cannot build, in the words entering that contest would use.
+      setUnmergedReport(null)
+      setUnmergedError(String(e))
+      return
+    } finally {
+      setUnmergedBusy(null)
+    }
+    // Asked again, so that what the merge wrote is no longer offered.
+    contestUnmerged().then(setUnmerged).catch(() => {})
+  }
+
   // One optimistic writer for every scoring field on this panel (earned list, plan list,
   // power multiplier). Each edit names ONE field, so the three controls cannot write over
   // each other's state, and the power chips edit the very same `fdPowerMult` the Settings
@@ -1578,7 +2998,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   // after a seat swap in the pop-out scoreboard, the old dial after the rig was retuned. The
   // copy only mirrors the edit, so the display does not wait on a round trip.
   const saveScoringPatch = async (edit: (s: Settings) => Partial<Settings>) => {
-    if (observed || !nativeSettings) return
+    if (observed || logger || !nativeSettings) return
     setSettingsState({ ...nativeSettings, ...edit(nativeSettings) })
     try {
       await patchSettings(edit)
@@ -1596,6 +3016,12 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   const togglePlanned = (id: string) =>
     saveScoringPatch((s) => ({ fdBonusesPlanned: toggle(s.fdBonusesPlanned ?? [], id) }))
   const setPowerMult = (mult: number) => saveScoringPatch(() => ({ fdPowerMult: mult }))
+  /** Tick / untick a Winter Field Day objective: the list the score multiplies by. */
+  const toggleObjective = (id: string) =>
+    saveScoringPatch((s) => ({ fdObjectives: toggle(s.fdObjectives ?? [], id) }))
+  /** Put an objective on the plan (or take it off). Never touches the score. */
+  const toggleObjectivePlanned = (id: string) =>
+    saveScoringPatch((s) => ({ fdObjectivesPlanned: toggle(s.fdObjectivesPlanned ?? [], id) }))
 
   // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
   // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path drops the TX
@@ -1613,21 +3039,99 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }
 
+  // ⭐ THE CONTEST MODE SWITCH. The same `fdActive` Settings writes, through the same patch
+  // seam as the scoring panel: the settings the backend holds at save time, this one field
+  // changed. What it shows is App's copy (`fdActive`), which App re-reads after the save; the
+  // value just written bridges the moment between the two, so the switch does not flick back.
+  const [modeWritten, setModeWritten] = useState<boolean | null>(null)
+  useEffect(() => setModeWritten(null), [fdActive])
+  const modeOn = modeWritten ?? fdActive
+  const [modeBusy, setModeBusy] = useState(false)
+  // A refused turn-on: what was missing at the moment the operator asked, read fresh then.
+  const [refusal, setRefusal] = useState<StartBlocker | null>(null)
+  // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning the mode off offers, while
+  // it is open. The save that turns the mode off waits for its answer.
+  const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
+  const toggleMode = async () => {
+    if (observed || logger || modeBusy) return
+    const next = !modeOn
+    setModeBusy(true)
+    try {
+      if (next) {
+        // Against what is saved NOW, not the copy this screen opened with: a class typed in
+        // Settings a minute ago counts, and so does a county.
+        const [s, preview] = await Promise.all([getSettings(), getFdRuleset().catch(() => null)])
+        const blocked = startBlocker(s, preview)
+        if (blocked) {
+          setRefusal(blocked)
+          return
+        }
+      } else {
+        // OFF: offer the checklist BEFORE the mode goes, because the merge and the export need the
+        // session it holds. Read against what is saved NOW, the engine's note of "before" included.
+        // With nothing to offer, the switch goes off as it always did.
+        const offer = contestOverOffer(await getSettings(), mergeCount, fieldDay?.event)
+        if (hasOffer(offer)) {
+          setOverOffer(offer)
+          return
+        }
+      }
+      await patchSettings(() => ({ fdActive: next }))
+      setRefusal(null)
+      setModeWritten(next)
+      onSettingsSaved?.()
+    } catch (e) {
+      pushToast(String(e), 'error')
+    } finally {
+      setModeBusy(false)
+    }
+  }
+
+  // The checklist's "Turn off": ONE save, the mode off with the ticked settings put back (the merge,
+  // the export and Unassisted are done by then). A refusal rejects back into the checklist, which
+  // shows it and stays open with the mode still on.
+  const turnOffWithChecklist = async (putBack: Partial<Settings>) => {
+    await patchSettings(() => ({ ...putBack, fdActive: false }))
+    setOverOffer(null)
+    setRefusal(null)
+    setModeWritten(false)
+    onSettingsSaved?.()
+  }
+
   // Event header: the window arrives Rust-computed on the DTO (fd_rules data —
   // real 27 h SFD / 30 h WFD durations; the old TS date math hardcoded 24 h and
   // called WFD over with six hours left). Snapshots refresh it, so the year
   // rollover and the active→next transition need no client-side clock walk.
-  const eventKind: FdKind = (fieldDay?.event === 'wfd' ? 'wfd' : 'arrlfd')
+  // The contest picked in Settings, as the preview resolved it (an id the rules data does not
+  // carry resolves to the ARRL Field Day mode entry would fall back to).
+  const pickedEvent = fdRuleset?.event ?? (nativeSettings?.fdEvent?.trim() || undefined)
+  // The running session's contest, and with no session (Contest mode off, or a station that
+  // cannot enter yet) the picked one: no session used to read as ARRL Field Day whatever the
+  // picker said.
+  const shownEvent = fieldDay ? fieldDay.event : pickedEvent
+  const eventKind: FdKind = (shownEvent === 'wfd' ? 'wfd' : 'arrlfd')
   const isWfd = eventKind === 'wfd'
+  // ⭐ The station scores Winter Field Day by its objectives: the engine says so by sending
+  // the multiplier. A Remote view of an older station has none, and keeps the bonus checklist
+  // that station still scores.
+  const wfdOm = isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? fieldDay.objectiveMultiplier : null
   // ⭐ WHICH CONTEST THIS IS. Every Field Day word on this screen — the banner, the header,
   // the class/section, the log table's columns, the summary — used to be printed whatever
   // the picker said, so a CQ WW log sat under an "ARRL Field Day" banner with Class and
   // Section columns empty on every row.
-  const fdEventIsFieldDay = isFieldDay(fieldDay?.event)
-  const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(fieldDay?.event)
+  const fdEventIsFieldDay = isFieldDay(shownEvent)
+  // Why club sync is not running, when it is switched on for a contest it cannot run — read
+  // from the station's own settings, which a Remote observation does not carry, and the
+  // station's preview of that pick (a contest the loaded rules dropped resolves elsewhere).
+  const clubRefusal = clubSyncRefusal(nativeSettings, fdRuleset)
+  const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(shownEvent)
+  // The window: the session's, else the preview's. Both are the rules data's running-or-next
+  // window, so the banner reads the same before the contest starts as during it.
+  const windowStart = fieldDay ? fieldDay.eventStartUnix : fdRuleset?.eventStartUnix
+  const windowEnd = fieldDay ? fieldDay.eventEndUnix : fdRuleset?.eventEndUnix
   const fdEvent = useMemo(
-    () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName),
-    [eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName],
+    () => fdEventFromWindow(eventKind, windowStart, windowEnd, eventName),
+    [eventKind, windowStart, windowEnd, eventName],
   )
   // The contest's received slots, one log-table column each (Field Day keeps its own two).
   const slotColumns = fdEventIsFieldDay ? [] : (fieldDay?.receives ?? [])
@@ -1646,15 +3150,18 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     [claimedBonuses, plannedBonuses],
   )
 
-  // Two words for two events, not one word with a variant: ARRL calls the exchange field
-  // Class and WFD calls it Category.
-  const classLabel = isWfd ? t('fieldDay.log.column.category') : t('fieldDay.log.column.class')
-
   // Cabrillo/ADIF come from the backend; Summary/Dupe sheet are derived client-side
   // from the same log the board renders (no backend command). Defined here so it can
   // read the score components computed just above.
   const handleExport = async (format: ExportFormat) => {
     if (observed) return
+    // Only at the station: a press that comes through the Remote stream writes no file to the
+    // station's disk, the station log's own or the club's. Read before anything awaits, inside
+    // the stream's dispatch.
+    if (isStreamInput()) {
+      setExportError(format.startsWith('club-') ? t('fieldDay.club.export.remote') : t('fieldDay.export.remote'))
+      return
+    }
     setExportError(null)
     setBusy(format)
     try {
@@ -1676,9 +3183,20 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           bonusPoints,
           totalScore,
           claimedBonuses: FD_BONUSES.filter((b) => claimedBonuses.includes(b.id)),
+          objectives:
+            wfdOm === null
+              ? undefined
+              : {
+                  om: wfdOm,
+                  done: WFD_OBJECTIVES.filter((o) => wfdEarnedIds(settings?.fdObjectives ?? []).has(o.id)),
+                },
+          // What the station sends, as it renders it: the issued serial, never the composing
+          // vector's "0" placeholder, which a serial contest's summary used to print.
           contest: fdEventIsFieldDay
             ? undefined
-            : { sending: composingText(fieldDay?.composing), multCount: fieldDay?.multCount ?? null },
+            : { sending: fieldDay?.composingText ?? '', multCount: fieldDay?.multCount ?? null },
+          dupeRule: fieldDay?.dupeRule,
+          fieldDaySheet: fdEventIsFieldDay && !isWfd,
         })
       } else if (format === 'dupesheet') {
         text = buildDupeSheetText(rows, fdEventIsFieldDay ? undefined : eventName)
@@ -1691,12 +3209,14 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
         text = await exportLog(format)
       }
       const stamp = new Date().toISOString().slice(0, 10)
+      // Named for the contest whose log it is, the one the banner and the tooltips name.
+      const stem = contestFileStem(shownEvent)
       const base =
         format === 'cabrillo' || format === 'adif'
-          ? 'fd-log'
+          ? `${stem}-log`
           : format.startsWith('club-')
-            ? 'fd-club-log'
-            : `fd-${format}`
+            ? `${stem}-club-log`
+            : `${stem}-${format}`
       // Real Rust write to Downloads, same as the Logbook exports — a `<a download>` blob is
       // silently CANCELLED by wry on macOS (no download handler is wired), so all four FD
       // export buttons produced no file there while looking successful. The toast fires only
@@ -1710,10 +3230,104 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     }
   }
 
+  // ⭐ THE LINES UNDER THE SWITCH. One reason the contest cannot start, when there is one: a
+  // refused turn-on shows the reason it read at that moment, otherwise App's preview (re-pulled
+  // after every save) and the settings this screen opened with. With a session running there
+  // is nothing to start.
+  const blocker = observed
+    ? null
+    : (refusal ?? (fieldDay ? null : startBlocker(nativeSettings, fdRuleset)))
+  const modeLines: { key: string; text: string }[] = []
+  if (fieldDay) {
+    // ⭐ A SAVED PICK SWITCHED THE CONTEST: said first, naming the one it ended. Its contacts
+    // are the journal's, kept out of this session (the kept-out note counts them).
+    if (contestSwitch) {
+      modeLines.push({
+        key: 'switched',
+        text: t('fieldDay.mode.switched', { contest: eventName, previous: contestName(contestSwitch.from) }),
+      })
+    }
+    // Which rules apply now, plainly. The ruleset facts are the PICKED contest's, so they are
+    // read only while that is the contest running; the line below says when it is not.
+    modeLines.push({ key: 'on', text: t('fieldDay.mode.on', { contest: eventName }) })
+    const running = fdRuleset && fdRuleset.event === (fieldDay.event || 'arrlfd') ? fdRuleset : null
+    if (running && running.bannedModes.length > 0) {
+      modeLines.push({
+        key: 'banned',
+        text: t('fieldDay.mode.rule.banned', { modes: running.bannedModes.join(', ') }),
+      })
+    }
+    if (running && !running.clusterAllowed) {
+      modeLines.push({ key: 'cluster', text: t('fieldDay.mode.rule.cluster') })
+    }
+    if (running && !running.spottingAllowed) {
+      modeLines.push({ key: 'spotting', text: t('fieldDay.mode.rule.spotting') })
+    }
+    // ⭐ A contest that allows spots only over amateur RF (Winter Field Day): inside its window
+    // the station posts none over the internet, judged by the same window the engine's spot
+    // block judges. Plainly, beside the switch; the banner's advisory names what is held back.
+    if (
+      running?.spotsRfOnly &&
+      fieldDay.eventStartUnix !== undefined &&
+      fieldDay.eventEndUnix !== undefined &&
+      fieldDay.eventStartUnix <= nowUnix &&
+      nowUnix < fieldDay.eventEndUnix
+    ) {
+      modeLines.push({ key: 'spotsRfOnly', text: t('fieldDay.mode.rule.spotsRfOnly') })
+    }
+  } else if (!observed && !blocker && !modeOn) {
+    modeLines.push({ key: 'off', text: t('fieldDay.mode.off', { contest: eventName }) })
+  }
+  // ⭐ WHAT THE SWITCH DOES TO A CLUB, said before it is pressed. Club sync follows its own
+  // settings, not this switch (`Engine::fd_sync_targets`): with the mode off the station stays
+  // in the club event, and its outbox is empty until a session is back, so the contacts it
+  // owes wait in the journal and go when the mode returns.
+  const clubOn =
+    !observed &&
+    !clubRefusal &&
+    !!nativeSettings &&
+    (nativeSettings.fdHostEnable === true || (nativeSettings.fdJoinAddr ?? '').trim() !== '')
+  if (clubOn) modeLines.push({ key: 'club', text: t('fieldDay.mode.club') })
+  // In the logger window: where the controls that are read-only here are.
+  if (logger) modeLines.push({ key: 'logger', text: t('fieldDay.logger.note') })
+  // ⭐ WHAT THE SPONSOR REQUIRES AND THE ENTRY HAS LEFT OUT, named before the export: the running
+  // session's list (the header its export writes now), else the preview's for a session started
+  // from the saved settings, so a declaration the session reads as it starts is made in time. Rust
+  // names the lines; each is worded here as the Settings control that fills it. Not on a Remote
+  // view, which exports nothing.
+  const cabrilloMissing = observed
+    ? []
+    : ((fieldDay ? fieldDay.cabrilloMissing : fdRuleset?.cabrilloMissing) ?? [])
+  // Running / S&P with nothing to switch between and the master off: see the buttons.
+  const roleLocked = !fieldDay && !modeOn
+
   return (
     <section className="conversation panel fieldday">
-      {/* EVENT BANNER */}
+      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
+      {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
+        {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
+            that offers it reads the same words. Not a transmit control: on enters the contest
+            passive (S&P), off leaves it, and either is the save Settings makes. Read-only for
+            a Remote observer, who is watching a station, not operating it. */}
+        <label className="fd-mode-switch">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={modeOn}
+            className={`toggle${modeOn ? ' on' : ''}`}
+            disabled={observed || logger || modeBusy}
+            onClick={() => void toggleMode()}
+            aria-label={
+              modeOn
+                ? t('settings.fieldDay.mode.aria.disable', { contest: eventName })
+                : t('settings.fieldDay.mode.aria.enable', { contest: eventName })
+            }
+          >
+            <span className="toggle-knob" />
+          </button>
+          <span className="fd-mode-label">{t('settings.fieldDay.mode.label')}</span>
+        </label>
         <span className="fd-event-name">{eventName}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
         {/* Warn-only rule advisories (banned mode + assistance) — passive status
@@ -1721,9 +3335,15 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
         <FdAdvisories
           fdActive={fdActive}
           ruleset={fdRuleset}
-          activeMode={tier}
+          activeMode={activeMode}
           assistanceOn={fieldDay?.assistanceOn ?? []}
           showAssistance
+          eventWindow={
+            fieldDay?.eventStartUnix !== undefined && fieldDay?.eventEndUnix !== undefined
+              ? { start: fieldDay.eventStartUnix, end: fieldDay.eventEndUnix }
+              : undefined
+          }
+          nowUnix={nowUnix}
         />
         {fieldDay?.rulesYear ? (
           <span className="fd-event-rules">
@@ -1733,7 +3353,70 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             })}
           </span>
         ) : null}
+        {/* ⭐ THIS SCREEN IN A WINDOW OF ITS OWN, for another monitor (App's, in the main window). The
+            scoreboard's own ⧉ Pop out, lower down, tears off the scoreboard alone, so this one is
+            named for the screen to a screen reader. */}
+        {onPopOut && (
+          <button
+            type="button"
+            className="fd-screen-popout"
+            onClick={onPopOut}
+            title={t('contestScreen.popOut.title')}
+            aria-label={t('contestScreen.popOut.aria')}
+          >
+            {t('fieldDay.popOut.label')}
+          </button>
+        )}
       </div>
+      {(blocker || modeLines.length > 0 || cabrilloMissing.length > 0) && (
+        <div className="fd-mode-status">
+          {blocker && (
+            <p className="fd-mode-line warn" role={refusal ? 'alert' : 'status'}>
+              {blockerText(blocker, eventName)}
+              {onOpenSettings && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => onOpenSettings(blockerTarget(blocker))}
+                  >
+                    {t('fieldDay.mode.needs.open')}
+                  </button>
+                </>
+              )}
+            </p>
+          )}
+          {cabrilloMissing.length > 0 && (
+            <p className="fd-mode-line warn" role="status">
+              {t('fieldDay.cabrillo.missing', {
+                contest: eventName,
+                lines: cabrilloMissing.map(cabrilloLineWords).join(', '),
+              })}
+              {fieldDay && cabrilloMissing.some((l) => READ_AS_THE_SESSION_STARTS.includes(l))
+                ? ` ${t('fieldDay.cabrillo.restart')}`
+                : ''}
+              {onOpenSettings && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => onOpenSettings('contest-category')}
+                  >
+                    {t('fieldDay.mode.needs.open')}
+                  </button>
+                </>
+              )}
+            </p>
+          )}
+          {modeLines.map((l) => (
+            <p key={l.key} className={`fd-mode-line ${l.key}`}>
+              {l.text}
+            </p>
+          ))}
+        </div>
+      )}
 
       <div className="panel-header fd-header">
         <div className="fd-ident">
@@ -1756,13 +3439,16 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             <span className="fd-class">{fieldDay?.sentExchange || '—'}</span>
           )}
         </div>
+        {/* ⚠️ Not with Contest mode off and no session: either button ENTERS the contest
+            (`set_mode`), and an entry the master switch does not know about is one the
+            snapshot hides, so a Running started from here would call CQ unseen. */}
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
           <button
             type="button"
             className={`fd-role-btn${running ? ' active' : ''}`}
             aria-pressed={running}
-            disabled={observed}
-            onClick={() => { if (!observed) onSetMode?.('fieldday-run') }}
+            disabled={observed || logger || roleLocked}
+            onClick={() => { if (!observed && !logger && !roleLocked) onSetMode?.('fieldday-run') }}
           >
             {t('fieldDay.role.running')}
           </button>
@@ -1770,8 +3456,8 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             type="button"
             className={`fd-role-btn${!running ? ' active' : ''}`}
             aria-pressed={!running}
-            disabled={observed}
-            onClick={() => { if (!observed) onSetMode?.('fieldday-sp') }}
+            disabled={observed || logger || roleLocked}
+            onClick={() => { if (!observed && !logger && !roleLocked) onSetMode?.('fieldday-sp') }}
           >
             {t('fieldDay.role.sp')}
           </button>
@@ -1781,12 +3467,25 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           {exportError && (
             <span className="log-export-error" role="alert">{exportError}</span>
           )}
+          {/* ⭐ THE CONTEST LOGGER WINDOW: this screen and the log line in a window of their own,
+              for a second person logging at a second monitor and keyboard. Not in that window
+              itself, which is already it. */}
+          {!logger && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => void openPanelWindow('contestlog')}
+              title={t('fieldDay.logger.title')}
+            >
+              {t('fieldDay.logger.label')}
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('cabrillo')}
-            title={t('fieldDay.export.cabrillo.title')}
+            title={t('fieldDay.export.cabrillo.title', { contest: eventName })}
           >
             {busy === 'cabrillo' ? t('fieldDay.export.busy') : t('fieldDay.export.cabrillo.label')}
           </button>
@@ -1795,7 +3494,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('adif')}
-            title={t('fieldDay.export.adif.title')}
+            title={t('fieldDay.export.adif.title', { contest: eventName })}
           >
             {busy === 'adif' ? t('fieldDay.export.busy') : t('fieldDay.export.adif.label')}
           </button>
@@ -1907,7 +3606,8 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
                       )
                     }
                   />
-                  <span className="mono">{id}</span>
+                  {/* The service's own name; the tick stores its id. */}
+                  <span>{SERVICE_NAMES[id] ?? id}</span>
                 </label>
               ))}
             </div>
@@ -1920,16 +3620,54 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
 
       {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
       {fieldDay?.club && (
-        <FdClubSection club={fieldDay.club} onExport={observed ? undefined : handleExport} busy={busy !== null} readOnly={observed} />
+        <FdClubSection
+          club={fieldDay.club}
+          onExport={observed ? undefined : handleExport}
+          onGivePosition={observed ? undefined : fdClubGivePosition}
+          onRemovePosition={observed ? undefined : fdClubRemovePosition}
+          onAllowBack={observed ? undefined : fdClubAllowBack}
+          busy={busy !== null}
+          readOnly={observed}
+          fieldDay={fdEventIsFieldDay}
+          keepsDupes={fieldDay.dupeRule?.logDupes === true}
+          link={observed ? null : clubLink}
+          bands={fieldDay.bands}
+          dupeRule={fieldDay.dupeRule}
+          ownPosid={observed ? undefined : nativeSettings?.fdPositionId}
+        />
       )}
+      {/* …or, with the Field Day mode off, where this laptop's club link stands: club sync
+          follows its own settings, not that switch. */}
+      {!fieldDay?.club && !clubRefusal && !observed && clubLink && <FdClubLink link={clubLink} />}
       {/* …or why it is not syncing: switched on for a contest club sync cannot run. The
           station's own settings, which a Remote observation does not carry. */}
-      {!fieldDay?.club && clubSyncRefused(nativeSettings) && (
-        <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} />
+      {!fieldDay?.club && clubRefusal && (
+        <FdClubRefused contest={contestName(nativeSettings?.fdEvent?.trim())} why={clubRefusal} />
+      )}
+      {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
+      {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
+      {/* …and the ones past its four days that the logbook does not hold, with their merge: never
+          asked for by a Remote observer, so never shown there, and never pressed from afar. */}
+      {(unmerged.length > 0 || unmergedReport || unmergedError) && (
+        <FdUnmergedNote
+          unmerged={unmerged}
+          busy={unmergedBusy}
+          report={unmergedReport}
+          error={unmergedError}
+          onMerge={(event) => void mergeUnmerged(event)}
+        />
       )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
-      <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} readOnly={observed} />
+      <FieldDayScoreboard
+        fieldDay={fieldDay}
+        settings={settings}
+        onSaveOperator={saveOperator}
+        readOnly={observed}
+        operatorBox={!operatorBoxAbove}
+        operatorAsk={operatorAsk}
+        onOperatorFocused={onOperatorFocused}
+      />
 
       {/* SCORING: the power multiplier and the bonus chase, in one place.
           Both halves of the score used to live on different screens — the multiplier in
@@ -1938,8 +3676,23 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           manual's, address for it) and is MIRRORED here on the same field: an operator
           meets scoring where the score is, and there is only ever one value. */}
       {/* Field Day's bonus menu and power tier. No other contest has either, so it is not
-          offered under a score it cannot change. */}
-      {fdEventIsFieldDay && (
+          offered under a score it cannot change — and Winter Field Day, which scores by its
+          objectives, has the objectives in their place. */}
+      {wfdOm !== null && (
+        <WfdObjectivesSection
+          earned={settings?.fdObjectives ?? []}
+          planned={settings?.fdObjectivesPlanned ?? []}
+          log={log}
+          om={wfdOm}
+          power={observed ? undefined : (nativeSettings?.contestCategoryPower ?? '')}
+          readOnly={observed || logger}
+          open={bonusOpen}
+          onToggleOpen={() => setBonusOpen((v) => !v)}
+          onToggleEarned={(id) => void toggleObjective(id)}
+          onTogglePlanned={(id) => void toggleObjectivePlanned(id)}
+        />
+      )}
+      {fdEventIsFieldDay && wfdOm === null && (
       <div className="fd-bonuses-section">
         <button
           type="button"
@@ -1987,7 +3740,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
                     className={`fd-power-chip${fdPowerMult === p.value ? ' active' : ''}`}
                     aria-pressed={fdPowerMult === p.value}
                     title={t(p.hintKey)}
-                    disabled={observed || !settings}
+                    disabled={observed || logger || !settings}
                     onClick={() => void setPowerMult(p.value)}
                   >
                     {t(p.labelKey)}
@@ -2035,7 +3788,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
                       id={`fd-bonus-${b.id}`}
                       type="checkbox"
                       checked={earned}
-                      disabled={observed}
+                      disabled={observed || logger}
                       onChange={() => void toggleEarned(b.id)}
                       aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
                     />
@@ -2044,7 +3797,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
                       type="button"
                       className={`fd-bonus-plan${onPlan ? ' on' : ''}`}
                       aria-pressed={onPlan}
-                      disabled={observed}
+                      disabled={observed || logger}
                       title={t('fieldDay.bonus.plan.title')}
                       aria-label={t('fieldDay.bonus.plan.aria', { label: b.label })}
                       onClick={() => void togglePlanned(b.id)}
@@ -2063,65 +3816,97 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
 
       {/* LOG TABLE */}
       <div className="fd-log">
-        <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
-          <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
-          <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
-          {fdEventIsFieldDay ? (
-            <>
-              <span className="fd-col cls">{classLabel}</span>
-              {/* H/I/M/O are the WFD location letters — exchange codes, never translated. */}
-              <span className="fd-col sec">{t('fieldDay.log.column.section')}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
-            </>
-          ) : (
-            slotColumns.map((f) => (
-              <span className="fd-col slot" key={f.key}>{slotCaption(f.key)}</span>
-            ))
-          )}
-          <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
-          <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
-        </div>
+        <ContestLogHead fieldDayColumns={fdEventIsFieldDay} isWfd={isWfd} slotColumns={slotColumns} role={fieldDay?.role} />
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
-          {rows.map((r, i) => (
-            <div
-              className={`fd-log-row${fdEventIsFieldDay && r.isNewSection ? ' mult' : ''}${r.isDupe ? ' dupe' : ''}`}
-              key={`${r.qso.call}-${i}`}
-              {...slotGrid(slotColumns.length)}
-              title={
-                r.isDupe
-                  ? t('fieldDay.log.dupe.title')
-                  : fdEventIsFieldDay && r.isNewSection
-                    ? t('fieldDay.log.mult.title')
-                    : undefined
-              }
-            >
-              <span className="fd-col time mono">{qsoTimeUtc(r.qso)}</span>
-              <span className="fd-col call mono">{r.qso.call}</span>
-              {fdEventIsFieldDay ? (
-                <>
-                  <span className="fd-col cls mono">{r.qso.class}</span>
-                  <span className="fd-col sec mono">
-                    {r.qso.section}
-                    {r.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
-                  </span>
-                </>
-              ) : (
-                slotColumns.map((f, j) => (
-                  <span className="fd-col slot mono" key={f.key}>{r.qso.rcvd?.[j] ?? ''}</span>
-                ))
-              )}
-              <span className="fd-col band">{r.qso.band}</span>
-              <span className="fd-col mode">
-                {r.qso.mode && (
-                  <span className={`fd-mode-chip sm ${(r.qso.mode ?? '').toLowerCase()}`}>
-                    {r.qso.mode}
-                  </span>
+          {rows.map((r, i) => {
+            // The contact being edited shows its edit in place of its rows: in its first row's
+            // place, and its other counties' rows not at all.
+            if (editRows.includes(r.qso)) {
+              return r.qso === editRows[0] ? (
+                <ContestContactEdit
+                  key={`edit-${r.qso.call}-${r.qso.whenUnix}`}
+                  rows={editRows}
+                  receives={fieldDay?.receives ?? []}
+                  role={fieldDay?.role}
+                  bands={fieldDay?.bands}
+                  onDone={editDone}
+                />
+              ) : null
+            }
+            return (
+              <ContestLogRow
+                key={`${r.qso.call}-${i}`}
+                row={r}
+                fieldDayColumns={fdEventIsFieldDay}
+                slotColumns={slotColumns}
+              >
+                {removable && r.qso.whenUnix ? (
+                  <button
+                    type="button"
+                    className="fd-edit"
+                    title={t('contest.edit.title')}
+                    aria-label={t('contest.edit.aria', { contact: contactLabel([r.qso]) })}
+                    onClick={() => editRow(r.qso)}
+                  >
+                    {t('contest.edit.label')}
+                  </button>
+                ) : null}
+                {removable && i === rows.length - 1 && (
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    aria-pressed={removeAsk != null}
+                    title={t('fieldDay.log.remove.title')}
+                    onClick={removeNewest}
+                  >
+                    {t('fieldDay.log.remove')}
+                  </button>
                 )}
-              </span>
-            </div>
-          ))}
+              </ContestLogRow>
+            )
+          })}
         </div>
       </div>
+
+      {/* THE REMOVED LIST — kept contacts, with Restore. Only while there is something to say,
+          so the log keeps every pixel otherwise. */}
+      {removable && (removedList.length > 0 || removeAsk != null || removedNote != null) && (
+        <div className="fd-removed" role="region" aria-label={t('fieldDay.removed.aria')}>
+          {removeAsk != null && newest && (
+            <p className="fd-removed-note" role="alert">
+              {t('fieldDay.log.remove.ask', { contact: contactLabel(newest.rows) })}
+            </p>
+          )}
+          {removeAsk == null && removedNote && (
+            <p className="fd-removed-note" role={removedNote.alert ? 'alert' : 'status'}>
+              {removedNote.text}
+            </p>
+          )}
+          {removedList.length > 0 && (
+            <details className="fd-removed-list">
+              <summary>{t('fieldDay.removed.title', { count: removedList.length })}</summary>
+              <p className="fd-removed-hint">{t('fieldDay.removed.note')}</p>
+              {removedList.map((entry) => (
+                <div className="fd-removed-row" key={entry.id}>
+                  <span className="mono">{contactLabel(entry.rows)}</span>
+                  <span className="fd-removed-at">
+                    {t('fieldDay.removed.at', { time: utcHhmm(entry.removedUnix) })}
+                  </span>
+                  <button
+                    type="button"
+                    className="fd-remove"
+                    title={t('fieldDay.removed.restore.title')}
+                    onClick={() => restore(entry)}
+                  >
+                    {t('fieldDay.removed.restore')}
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
+        </div>
+      )}
     </section>
   )
 }

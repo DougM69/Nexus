@@ -19,6 +19,11 @@ import * as api from '../api'
 import * as toast from '../toast'
 import type { AppSnapshot, PskState, Settings } from '../types'
 
+// THE BUDGET (2026-10-09). The slowest case here, "Esc closes an idle editor, and stops a live one instead…", takes
+// 0.52 s and 0.52 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const IDLE = {
   armed: true,
   afcHz: 0,
@@ -147,7 +152,7 @@ describe('the F1–F8 row', () => {
         pskProfiles: [{ name: 'contest', macros: [{ key: 'F2', label: 'Run exch', text: '{CALL} 599 05 05' }] }],
       }),
     })
-    expect(['F1', 'F2', 'F3', 'F7', 'F8'].map(labelOf)).toEqual(['CQ', 'Run exch', 'TU', 'AGN', 'B4'])
+    expect(['F1', 'F2', 'F3', 'F7', 'F8'].map(labelOf)).toEqual(['CQ', 'Run exch', 'TU', 'B4', 'AGN'])
     expect(screen.getByRole('button', { name: 'Contest' }).getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -489,5 +494,15 @@ describe('Everyday / Contest', () => {
   it('offers no reset for a set that is all built-ins', async () => {
     await renderCockpit()
     expect((screen.getByRole('button', { name: 'Reset set' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit({ snap: contest('IL') })
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('Field Day · 0 Q · 0 sections · —/hr')
   })
 })

@@ -24,12 +24,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, cleanup, fireEvent } from '@testing-library/react'
 import { ContestView } from './ContestView'
+import { fdSetUpload } from '../api'
+import { StreamInputDispatcher } from '../remote-native/stream-input'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FieldDayStatus, FdMergeReport } from '../types'
 
 const fdMergeToGeneral = vi.fn<() => Promise<FdMergeReport>>()
 
 vi.mock('../api', () => ({
+  // The contest screen's Removed list, read on mount: none removed.
+  contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: '' })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
@@ -147,11 +152,11 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
   })
 
   it("surfaces the engine's own refusal rather than a second copy of it", async () => {
-    fdMergeToGeneral.mockRejectedValueOnce('Field Day mode is not active')
+    fdMergeToGeneral.mockRejectedValueOnce('Contest mode is not active')
     await show()
     fireEvent.click(screen.getByRole('button', { name: /Merge 3 contacts/ }))
     await settle()
-    expect(screen.getByRole('alert').textContent).toContain('Field Day mode is not active')
+    expect(screen.getByRole('alert').textContent).toContain('Contest mode is not active')
     expect(screen.queryByRole('status')).toBeNull()
   })
 
@@ -161,7 +166,106 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
     // "upload: off" plus a ClubLog upload anyway is us misleading them, not ClubLog
     // surprising them.
     expect(screen.getByRole('button', { name: /Merge 3 contacts/ })).toBeTruthy()
-    expect(screen.getByRole('switch')).toBeTruthy()
+    // By name: the Contest mode switch shares the screen with it.
+    expect(screen.getByRole('switch', { name: "Upload this session's merged contacts" })).toBeTruthy()
+    // It uploads to the logbooks ticked beside it (`fd_set_upload`'s destinations); it never
+    // was the merge into my logbook, which is the button above. It read "Send merged contacts
+    // to my logbook".
+    expect(document.querySelector('.fd-upload-label')!.textContent).toBe('Upload merged contacts to:')
     expect(screen.getByRole('note').textContent).toContain('catch-up sweep')
+  })
+})
+
+// The upload ticks read `qrz`, `clublog`, `eqsl`…: the engine's ids, the last raw ids on the
+// screen. Each now shows the service's own name, the one the app uses elsewhere; what is
+// stored is still the id.
+describe('the upload ticks name the services', () => {
+  it('shows each service by its own name, and a tick still stores the id', async () => {
+    const available = ['qrz', 'clublog', 'eqsl', 'hrdlog', 'n3fjp', 'cloudlog', 'wrl']
+    await show(FD({ upload: { enabled: false, destinations: [], available, hint: HINT } }))
+    expect([...document.querySelectorAll('.fd-upload-dest')].map((n) => n.textContent)).toEqual([
+      'QRZ',
+      'Club Log',
+      'eQSL',
+      'HRDLog',
+      'N3FJP',
+      'Cloudlog',
+      'WRL',
+    ])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Club Log' }))
+    })
+    expect(fdSetUpload).toHaveBeenLastCalledWith(false, ['clublog'])
+  })
+
+  it('shows a service this build has no name for by its id', async () => {
+    await show(FD({ upload: { enabled: false, destinations: [], available: ['newlog'], hint: HINT } }))
+    expect(document.querySelector('.fd-upload-dest')!.textContent).toBe('newlog')
+  })
+})
+
+// jsdom never lays out: `elementFromPoint` does not exist, so each streamed press says what is
+// under it.
+describe('a press through the Remote stream merges nothing', () => {
+  let under: Element | null = null
+  let stream: StreamInputDispatcher | null = null
+  beforeEach(() => {
+    under = null
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => under })
+    stream = new StreamInputDispatcher(window)
+  })
+  afterEach(() => {
+    stream?.dispose()
+    stream = null
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  })
+  // Two ways through the stream: a click on the button, or Enter and then Space on it focused
+  // (each presses a button, as a browser does).
+  const through = {
+    pressed: async (el: HTMLElement) => {
+      under = el
+      for (const action of ['down', 'up']) {
+        await act(async () => {
+          stream!.handle({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
+            modifiers: 0, pointerType: 'mouse', clicks: 1 })
+        })
+      }
+      await settle()
+    },
+    keyed: async (el: HTMLElement) => {
+      el.focus()
+      for (const [key, code] of [['Enter', 'Enter'], [' ', 'Space']]) {
+        await act(async () => {
+          stream!.handle({ type: 'key', action: 'down', key, code, modifiers: 0, repeat: false })
+          stream!.handle({ type: 'key', action: 'up', key, code, modifiers: 0, repeat: false })
+        })
+      }
+      await settle()
+    },
+  }
+
+  it.each(['pressed', 'keyed'] as const)('refuses Merge %s through the stream, and says why; CONTROL: at the station it merges', async (way) => {
+    fdMergeToGeneral.mockResolvedValue({ added: 3, already: 0, refused: 0, queued: false })
+    await show()
+    const merge = () => screen.getByRole('button', { name: /Merge 3 contacts/ })
+    await through[way](merge())
+    expect(fdMergeToGeneral).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Only at the station: a press through Remote merges no contact into the logbook.',
+    )
+    expect(screen.queryByRole('status'), 'no report: nothing was merged').toBeNull()
+    fireEvent.click(merge())
+    await settle()
+    expect(fdMergeToGeneral).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status').textContent).toContain('Added 3')
+    expect(screen.queryByRole('alert'), 'the report replaces the refusal').toBeNull()
+  })
+
+  it('CONTROL: the upload switch beside it still answers a press through the stream', async () => {
+    vi.mocked(fdSetUpload).mockClear()
+    await show()
+    await through.pressed(screen.getByRole('switch', { name: "Upload this session's merged contacts" }))
+    expect(vi.mocked(fdSetUpload)).toHaveBeenCalledWith(true, [])
+    expect(fdMergeToGeneral).not.toHaveBeenCalled()
   })
 })

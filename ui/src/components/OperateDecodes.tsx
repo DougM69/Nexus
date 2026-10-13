@@ -137,6 +137,9 @@ interface Props {
   /** This pane's ⊞ label, for the ✕'s accessible name — the pane's title is a heading the
    *  operator reads, and "Hide Rx Frequency" is what a screen reader must say. */
   paneTitle?: string
+  /** The pane's id, where its cockpit arranges by drag: its head is then the grip it is dragged by
+   *  (panes/PaneDrag). Absent: nothing here can be dragged. */
+  grip?: string
   /**
    * The operator's own Maidenhead square — the origin every row's azimuth is
    * measured FROM. Optional and defaulting to empty: a host that doesn't pass it
@@ -184,6 +187,12 @@ interface Props {
    * decodes vanished ("no decodes" mid-session; operator report 2026-07-21). When
    * omitted (detached panels, other hosts) a private history is used as before. */
   history?: DecodeHistory
+  /** Externally-owned sort, for the same reason. The cockpit passes Band Activity's, so the order
+   * the operator picked survives the region remounting its panes (⊞ Arrange's first move, and the
+   * dashboard rail's boxes folding in below `lg` and out again) instead of going back to Time. When
+   * omitted, a private sort is used as before. */
+  sort?: DecodeSort
+  onSort?: (sort: DecodeSort) => void
   /**
    * Apply the operator's country exclusion to this pane (default on).
    *
@@ -248,12 +257,15 @@ export function OperateDecodes({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
   highlights = NO_HIGHLIGHTS,
   needAlertsByCall = NO_NEEDS,
   needScopes,
   onErase,
   clearTick = 0,
   history,
+  sort: keptSort,
+  onSort,
   hideExcludedCountries = true,
   myGrid = '',
 }: Props) {
@@ -289,7 +301,9 @@ export function OperateDecodes({
     saveDecodeFilter(f)
     setFilterState(f)
   }
-  const [sort, setSort] = useState<DecodeSort>('time')
+  const [ownSort, setOwnSort] = useState<DecodeSort>('time')
+  const sort = keptSort ?? ownSort
+  const setSort = onSort ?? setOwnSort
   // #276 "Newest on top" — an option, OFF by default so the pane keeps the WSJT-X order. It is
   // a TIME-order statement, so another sort ignores it (reversing an SNR ranking would read as a
   // broken sort), and like the chips it applies only on the pane that renders the chip bar:
@@ -570,7 +584,7 @@ export function OperateDecodes({
   return (
     <section className={`operate-decodes${compact ? ' compact' : ''}`}>
       {remoteCollections && <span className="dim" role="status">{!remoteHistory ? t('remote.historyUnavailable') : remoteHistory.dropped ? t('remote.historyGap', { count: remoteHistory.dropped }) : t('remote.historySession')}</span>}
-      <div className="od-head">
+      <div className="od-head" data-pane-grip={grip}>
         {/* Title + ✕ on one line, so the close button sits at the pane's top-right in BOTH
             head layouts — the full head is a flex COLUMN (title over the filter row) and a
             bare button appended to it would take a row of its own. */}

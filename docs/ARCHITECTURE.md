@@ -553,7 +553,7 @@ its co-located DLLs, so CAT works **offline** with no separate Hamlib install.
 
 The radio loop maps `Settings` → `RadioConfig`, resolves the PTT method, sets the
 dial/mode once, then keys/decodes per slot (§3.4). The default config is VOX
-(`rig_model = 0`, `rigctld_port = 4532`).
+(`rig_model = 0`, `rigctld_port = 4534`).
 
 ---
 
@@ -568,9 +568,13 @@ sender id `"Tempo"`. Tempo **emits** Heartbeat / Status / Decode / QSOLogged /
 Close to a target (WSJT-X default `127.0.0.1:2237`) and **parses inbound** Reply /
 HaltTx / FreeText control datagrams. The service loop wires these to the engine:
 `HaltTx` → `engine.halt_tx()` + drop PTT; `FreeText { send: true }` →
-`engine.broadcast(text)`. Each RX slot's decodes are sent as Decode datagrams; a
+`engine.broadcast(text)`; `Reply` → `engine.work_station(..)`, the double-click's
+own path (in a contest whose FT8/FT4 messages apply a CQ goes to the contest's
+S&P, made on a thread of its own when that opens the contest's session, whose rows
+are read off the lock), then TX armed. Each RX slot's decodes are sent as Decode datagrams; a
 Status datagram reflects dial/mode/TX state (with `tr_period` = 4 for TempoFast, 15 for
-the robust tiers, and `special_op = 3` in Field Day); newly-logged Field Day
+the robust tiers, and `special_op` the running contest's WSJT-X activity: 3 in ARRL
+Field Day, 1 in the ARRL VHF contests, 0 in the others); newly-logged Field Day
 contacts emit QSOLogged.
 
 **PSK Reporter** (`pskreporter.rs`): the IPFIX-like UDP spot upload to

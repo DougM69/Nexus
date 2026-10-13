@@ -94,25 +94,134 @@ export function contestShortName(id: string | undefined): string {
   return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
 }
 
-/** Is this one of the two events Field Day Setup (class + section) describes? */
+/** Is this one of the two Field Day events, whose class + section Settings ▸ Contesting ▸ Field Day
+ *  asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
 
 /**
- * ⭐ **Club sync is switched on for a contest it cannot run, so the engine refuses it.**
+ * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
+ * Settings ▸ Contesting ▸ Your station data shows **Power sent** for. None of the shipped ones does
+ * (the contests that send power, ARRL International DX among them, are not on the picker), so the
+ * box is shown for none of them; a value already stored is kept and is still saved.
  *
- * The club log runs a Field Day event's rules, so hosting or joining is refused for
- * anything but the two Field Days (`Engine::fd_sync_enabled`): hosting the Illinois QSO
- * Party used to build an ARRL Field Day club log in silence. This reads the same three
- * settings the engine does, so the screen saying why cannot disagree with what the
- * sockets do.
+ * ⚠️ A MIRROR, like `CLUB_SYNC_REFUSED` below: `fd_rules.rs` reads this list back and compares it
+ * with every seeded ruleset whose sent exchange reads `contest_power`, both ways, so a contest that
+ * starts sending power is a red test rather than a box nobody can find.
  */
-export function clubSyncRefused(
+export const CONTESTS_SENDING_POWER: readonly string[] = []
+
+/** The contest's part of an export's file name — `ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`:
+ *  its rules-file id, blank meaning ARRL Field Day as it does everywhere else. Every exported file
+ *  was named `fd-…` whatever the contest. An id a downloaded rules file added may carry characters
+ *  no file name can (a `/` turns the name into a path, and Downloads keeps only its last part), so
+ *  each run of them becomes one `-`; every shipped id passes through unchanged. */
+export function contestFileStem(id: string | undefined): string {
+  return (id?.trim() || 'arrlfd').replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
+/** ⭐ The side of a contest the operator's location puts them on, in words — never the rules
+ *  data's role id, which Settings and the log strip printed ("Running as in_state", "Sending
+ *  in_state 599 COOK"). In-state and out-of-state are words, and translated; `W/VE` and `DX` are
+ *  the sponsors' own names for those sides ("W/VE stations", "DX stations") and invariant tokens,
+ *  like the contest names above. A role id this build has no words for is shown as itself, a
+ *  token rather than a guess, as `contestName` does for a contest it does not list. */
+export function contestRoleWords(role: string): string {
+  if (role === 'in_state') return t('contest.role.inState')
+  if (role === 'out_of_state') return t('contest.role.outOfState')
+  if (role === 'w_ve') return 'W/VE'
+  if (role === 'dx') return 'DX'
+  return role
+}
+
+/** Why club sync cannot run a contest — the three reasons the engine refuses one for. */
+export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown'
+
+/**
+ * ⭐ **The contests club sync cannot run, and why**, by rules-file id.
+ *
+ * The club log runs every other contest under that contest's own rules — its exchange,
+ * dupe key, multipliers and Cabrillo. The two reasons it cannot are facts about a
+ * sponsor's rules, which the engine reads off each ruleset (`club_refusal` in
+ * `crates/tempo-app/src/fdevent.rs`): a serial-number exchange must run in ONE sequence
+ * for the whole entry while every position gives out its own, and a Cabrillo template
+ * with a transmitter column must say which transmitter made each contact, which club
+ * sync does not number.
+ *
+ * ⚠️ A MIRROR, held to the engine by a Rust test that reads this table back and compares
+ * it with every seeded ruleset (`the_screen_mirrors_the_contests_club_sync_refuses`), so a
+ * contest added to the rules seed without its answer here is a red test rather than a
+ * screen that disagrees with the sockets. One line per contest, `id: 'reason',`.
+ */
+export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
+  cqp: 'serial',
+  arrlss_cw: 'serial',
+  arrlss_ssb: 'serial',
+  cqwpx_cw: 'serial',
+  cqwpx_ssb: 'serial',
+  cqww_cw: 'transmitter',
+  cqww_ssb: 'transmitter',
+  cqww_rtty: 'transmitter',
+}
+
+/**
+ * ⭐ **Club sync is switched on for a contest it cannot run, so the engine refuses it** —
+ * and why, or `null` when it runs (or is not switched on at all).
+ *
+ * Hosting the Illinois QSO Party used to build an ARRL Field Day club log in silence; the
+ * club now runs whatever contest is picked, except the ones above
+ * (`Engine::club_sync_refusal`). This reads the same settings the engine does, the trim
+ * and the blank default (ARRL Field Day) included, so the screen saying why cannot
+ * disagree with what the sockets do.
+ */
+export function clubSyncRefusal(
   s: { fdHostEnable?: boolean; fdJoinAddr?: string; fdEvent?: string } | null | undefined,
-): boolean {
-  if (!s) return false
+  preview?: { event: string } | null,
+): ClubSyncRefusal | null {
+  if (!s) return null
   const configured = s.fdHostEnable === true || (s.fdJoinAddr ?? '').trim() !== ''
-  return configured && !isFieldDay(s.fdEvent?.trim())
+  return configured ? contestClubRefusal(s.fdEvent, preview) : null
+}
+
+/**
+ * Whether the contest rules the station LOADED carry `fdEvent` — `false` when a rules file
+ * it downloaded dropped the contest, which the engine refuses club sync for
+ * (`ClubRefusal::NoRuleset`, code `unknown`). Read off the station's preview of the picked
+ * contest (`get_fd_ruleset`), which resolves an id its rules do not carry to the ARRL Field
+ * Day that mode entry falls back to. `null` without a preview: nothing is known yet.
+ *
+ * ⚠️ The preview answers for the SAVED pick, so compare it with the saved pick: an unsaved
+ * choice held against a preview of the last one would name the wrong contest.
+ */
+export function rulesCarry(fdEvent: string | undefined, preview: { event: string } | null | undefined): boolean | null {
+  if (!preview) return null
+  return preview.event === (fdEvent?.trim() || 'arrlfd')
+}
+
+/**
+ * Why club sync cannot run this contest at all, switched on or not — `null` when it can.
+ * The rules first, as the engine asks: a contest the loaded rules do not carry is refused
+ * for that, whatever this table says of it.
+ */
+export function contestClubRefusal(
+  fdEvent: string | undefined,
+  preview?: { event: string } | null,
+): ClubSyncRefusal | null {
+  if (rulesCarry(fdEvent, preview) === false) return 'unknown'
+  const id = fdEvent?.trim() || 'arrlfd'
+  return Object.prototype.hasOwnProperty.call(CLUB_SYNC_REFUSED, id) ? CLUB_SYNC_REFUSED[id] : null
+}
+
+/** The sentence a refusal shows — one place, for the three surfaces that show it. */
+export function clubSyncRefusalText(why: ClubSyncRefusal, contest: string): string {
+  switch (why) {
+    case 'serial':
+      return t('fieldDay.club.refused.serial', { contest })
+    case 'transmitter':
+      return t('fieldDay.club.refused.transmitter', { contest })
+    case 'unknown':
+      return t('fieldDay.club.refused.unknown', { contest })
+  }
 }
 
 export interface FdEvent {

@@ -18,13 +18,24 @@
 //! ⭐ **Idempotence, and the mechanism rather than the promise.** Every row carries
 //! `APP_NEXUS_QID` = `"<session>:<posid>:<seq>"`. `(posid, seq)` is already the
 //! club-sync row identity — monotonic per position and restored across restart — so
-//! nothing new had to be invented to make re-running the merge safe. A row whose qid is
+//! nothing new had to be invented to make re-running the merge safe. A row whose copy is
 //! already in the general log is skipped. This holds **across a restart** only because
 //! the ADIF parser consumes the tag back into the record rather than leaving it in
 //! `extra`; a merge-twice test that never drops the `Logbook` would pass with no reader
 //! at all.
+//!
+//! ⭐ **The session part names the contest and the running a row was logged in — never where
+//! the operator was** ([`session_of`]). It was `"<contest id>:<county, state or section>"`,
+//! built from the location in Settings each time the contest was entered, so after "I moved"
+//! (or a County edited in Settings) and a restart the same contacts had new names and a second
+//! merge wrote every one of them again; and the same contest next year, from the same place,
+//! minted last year's names and the merge skipped every contact as already there. Both halves
+//! of the new name are facts of the ROW, on it in the journal and never changed: its contest,
+//! and the running its time falls in. The copies merged under the old names stay in the
+//! Logbook exactly as written, and are still recognised ([`MergeIdentity::names`]).
 use super::render::sent_exchange;
 use super::spec::FieldKind;
+use crate::fd_rules::FdRuleset;
 use crate::fieldday::{FieldDayLog, LoggedQso};
 use crate::logbook::{ContestFields, Logbook, QslRcvd, QslSent, QsoRecord, UploadState};
 
@@ -33,38 +44,176 @@ use crate::logbook::{ContestFields, Logbook, QslRcvd, QslSent, QsoRecord, Upload
 /// ⚠️ **There is no `qid` on a contest row.** [`LoggedQso`] does not carry one; the
 /// contest-side identity is [`LoggedQso::seq`](crate::fieldday::LoggedQso::seq) and the
 /// qid is MINTED here, from it. That direction is what makes a correction routable:
-/// the general log names a row by qid, and [`seq_from_qid`] turns that back into the
+/// the general log names a row by qid, and [`merged_row`] turns that back into the
 /// seq that [`FieldDayLog::correct_row`](crate::fieldday::FieldDayLog::correct_row)
 /// addresses.
 ///
 /// Minting and parsing are one pair of functions for the usual reason: two sites that
-/// each build this string by hand are two sites that come to disagree about it.
+/// each build this string by hand are two sites that come to disagree about it. The
+/// session is [`session_of`] the row ([`MergeIdentity::of`] mints with both).
 pub fn qid_for(session_id: &str, posid: &str, seq: u64) -> String {
     format!("{session_id}:{posid}:{seq}")
 }
 
-/// The `seq` a qid names, when that qid belongs to `session_id` — `None` otherwise, and
-/// for anything that is not one of these strings.
+/// ⭐ **The session a contest row belongs to, as its merge identity names it** —
+/// `"<contest id>:<running>"`: the contest the log runs, and the running of it the row's own
+/// time falls in ([`FdRuleset::running_of`]), the same answer the journal restore groups a
+/// session's rows by.
 ///
-/// ⚠️ **Parsed from the RIGHT, and that is not a style choice.** A session id contains a
-/// colon of its own — both constructors build it as `"<contest id>:<location>"`, so a
-/// real qid looks like `"CQ-WW-CW:IL:7:42"`. Splitting three ways from the left reads
-/// the posid as `"IL"` and the seq as `"7:42"`, which parses as nothing and silently
-/// makes every correction a no-op. The seq is the last field and the posid the one
-/// before it; everything to their left is the session, compared whole.
+/// ⚠️ **Nothing about where the operator is goes into it, and that is the fix.** This was the
+/// session's id, `"<contest id>:<county, state or section>"`, built from Settings whenever the
+/// contest was entered — so "I moved", or a County edited in Settings, renamed every contact at
+/// the next restart and the merge wrote them all again. The contest and the row's time are
+/// journaled with the row and never change; the running is what tells this year's contacts
+/// from last year's, whose numbers start at 1 too.
+pub fn session_of(log: &FieldDayLog, q: &LoggedQso) -> String {
+    running_session(
+        &log.session.contest_id,
+        log.ruleset().running_of(q.when_unix),
+    )
+}
+
+/// `"<contest id>:<running>"`: [`session_of`], from the two facts it is made of.
+fn running_session(contest_id: &str, running: u16) -> String {
+    format!("{contest_id}:{running}")
+}
+
+/// ⭐ **One contest row's merge identity** — the qid this build mints for it, and the test of
+/// whether a general-log copy is that row's, under that name or under the one an earlier build
+/// gave it.
 ///
-/// The session check is what stops a correction landing on the same seq in a DIFFERENT
-/// contest: seqs are per position and restart at 1, so `42` alone names a row in every
-/// log the operator has ever run.
-pub fn seq_from_qid(qid: &str, session_id: &str) -> Option<u64> {
-    let (head, seq) = qid.rsplit_once(':')?;
-    let (session, _posid) = head.rsplit_once(':')?;
-    if session != session_id {
-        return None;
+/// Owned, so a caller that reads the general log with the Engine lock released can carry it
+/// there. Two are equal when they mint the same qid.
+#[derive(Clone)]
+pub struct MergeIdentity {
+    /// [`session_of`] the row.
+    session: String,
+    /// `"<session>:<posid>:<seq>"`.
+    qid: String,
+    contest_id: String,
+    posid: String,
+    seq: u64,
+    /// The running the row was logged in, and the rules that say which running a time is in.
+    running: u16,
+    rules: &'static FdRuleset,
+}
+
+impl MergeIdentity {
+    /// Row `q` of `log`, merged at position `posid`.
+    pub fn of(log: &FieldDayLog, posid: &str, q: &LoggedQso) -> Self {
+        Self::of_contest(
+            &log.session.contest_id,
+            log.ruleset(),
+            posid,
+            q.seq,
+            q.when_unix,
+        )
     }
-    // A zero seq is UNSTAMPED, never a row: the merge refuses those rows, so no qid
-    // naming one was ever written. Refusing it here keeps that true on the way back.
-    seq.trim().parse::<u64>().ok().filter(|&n| n > 0)
+
+    /// Row `seq` of contest `contest_id`, logged at `when_unix` under `rules`, merged at position
+    /// `posid`: [`of`](Self::of) for a row no log holds, one the contest journal keeps past its
+    /// window ([`settle_aged`]). One minting for both, so the two cannot come to disagree.
+    pub(crate) fn of_contest(
+        contest_id: &str,
+        rules: &'static FdRuleset,
+        posid: &str,
+        seq: u64,
+        when_unix: u64,
+    ) -> Self {
+        let running = rules.running_of(when_unix);
+        let session = running_session(contest_id, running);
+        MergeIdentity {
+            qid: qid_for(&session, posid, seq),
+            session,
+            contest_id: contest_id.to_string(),
+            posid: posid.to_string(),
+            seq,
+            running,
+            rules,
+        }
+    }
+
+    /// The qid this build mints for the row.
+    pub fn qid(&self) -> &str {
+        &self.qid
+    }
+
+    /// ⭐ **Whether the general-log copy carrying `qid`, made at `when_unix`, is this row's** — the
+    /// one test every reader of a copy's name uses: the merge (already there?), a Logbook edit and
+    /// a Logbook delete (which contest row?), and a removal (which copy did the logbook upload?).
+    ///
+    /// Either the qid this build mints, or **a name an earlier build gave the same row**:
+    /// `"<contest id>:<where the operator was>:<posid>:<seq>"` — the same contest, position and
+    /// number, on a copy made in the running this row was logged in. Those copies are in the
+    /// operator's Logbook as they were written and are never renamed, so they are recognised
+    /// here instead, whatever the place they name: the one the contacts were sent from, or
+    /// one a restart read off Settings after a move.
+    ///
+    /// ⚠️ **The running is what makes the old names safe to read.** They carry no year, and the
+    /// numbers start at 1 at every contest, so `"<contest>:KANE:<posid>:1"` names last year's
+    /// first contact as well as this year's; the copy's own time says which.
+    pub fn names(&self, qid: &str, when_unix: u64) -> bool {
+        if qid == self.qid {
+            return true;
+        }
+        let Some((session, posid, seq)) = split_qid(qid) else {
+            return false;
+        };
+        seq == self.seq
+            && posid == self.posid
+            && session
+                .strip_prefix(self.contest_id.as_str())
+                .is_some_and(|rest| rest.starts_with(':'))
+            && self.rules.running_of(when_unix) == self.running
+    }
+}
+
+impl PartialEq for MergeIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.qid == other.qid
+    }
+}
+
+impl Eq for MergeIdentity {}
+
+impl std::fmt::Debug for MergeIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.qid)
+    }
+}
+
+/// The live row of `log` that the general-log copy carrying `qid`, made at `when_unix`, was
+/// merged from at position `posid` — its `seq`, for
+/// [`FieldDayLog::correct_row`](crate::fieldday::FieldDayLog::correct_row) and
+/// [`FieldDayLog::remove_row`](crate::fieldday::FieldDayLog::remove_row). `None` for a copy of
+/// another contest's, another running's or another position's row, for a row this log does
+/// not hold live, and for anything that is not a merge identity.
+///
+/// The seq alone names a row in every log the operator has ever run (seqs are per position and
+/// restart at 1), so the row it finds is held to the whole identity ([`MergeIdentity::names`]).
+pub fn merged_row(log: &FieldDayLog, posid: &str, qid: &str, when_unix: u64) -> Option<u64> {
+    let (_, _, seq) = split_qid(qid)?;
+    let q = log.qsos().iter().find(|q| q.seq == seq)?;
+    MergeIdentity::of(log, posid, q)
+        .names(qid, when_unix)
+        .then_some(seq)
+}
+
+/// A qid's `(session, posid, seq)`.
+///
+/// ⚠️ **Parsed from the RIGHT, and that is not a style choice.** A session contains a colon of
+/// its own (`"CQ-WW-CW:2026"`, and an earlier build's `"CQ-WW-CW:IL"`), so a real qid has four
+/// colon-separated parts, and splitting three ways from the left reads the posid as the running
+/// and the seq as `"7:42"`. The seq is the last field and the posid the one before it;
+/// everything to their left is the session.
+///
+/// A zero seq is UNSTAMPED, never a row: the merge refuses those rows, so no qid naming one was
+/// ever written. Refusing it here keeps that true on the way back.
+fn split_qid(qid: &str) -> Option<(&str, &str, u64)> {
+    let (head, seq) = qid.rsplit_once(':')?;
+    let (session, posid) = head.rsplit_once(':')?;
+    let seq = seq.trim().parse::<u64>().ok().filter(|&n| n > 0)?;
+    Some((session, posid, seq))
 }
 
 /// What one merge did (§3.2).
@@ -74,8 +223,8 @@ pub struct MergeReport {
     /// the caller can persist them and, if the session says so, queue them, without
     /// re-deriving which rows were new.
     pub written: Vec<QsoRecord>,
-    /// Rows whose qid was already in the general log. On a second run of the same
-    /// merge this is every row, and `written` is empty.
+    /// Rows whose copy was already in the general log ([`MergeIdentity::names`]). On a
+    /// second run of the same merge this is every row, and `written` is empty.
     pub already: usize,
     /// Rows with no stable identity — see [`merge_into_general`]. Reported, never
     /// silently dropped and never silently duplicated.
@@ -95,7 +244,7 @@ impl MergeReport {
 /// and the deviation from §3.2's sketch is mechanical.** The log already carries its own
 /// session (`FieldDayLog.session`), so a method taking both a `&self` session and a log
 /// would admit a caller that passes a session the log does not belong to — and the qid
-/// this whole function turns on is built from the session id. One argument, one session,
+/// this whole function turns on is built from the log's contest. One argument, one session,
 /// no way to disagree.
 ///
 /// `posid` is the local position's machine id (the club-sync half of a row identity). It
@@ -108,14 +257,17 @@ impl MergeReport {
 /// defensive path for a journal that has been hand-edited or truncated — which is a file
 /// on disk, and this build does not get to assume it is well formed.
 pub fn merge_into_general(log: &FieldDayLog, posid: &str, into: &mut Logbook) -> MergeReport {
-    let seen: std::collections::HashSet<String> = into
+    let copies: Vec<(String, u64)> = into
         .records()
         .iter()
-        .filter_map(|r| r.contest.as_deref())
-        .map(|c| c.qid.clone())
-        .filter(|q| !q.is_empty())
+        .filter_map(|r| {
+            r.contest
+                .as_deref()
+                .filter(|c| !c.qid.is_empty())
+                .map(|c| (c.qid.clone(), r.when_unix))
+        })
         .collect();
-    let mut report = plan_merge(log, posid, seen);
+    let mut report = plan_merge(log, posid, copies);
     for rec in &mut report.written {
         // The log mints the row's id; the copy reported as written carries it too.
         rec.id = Some(into.add(rec.clone()));
@@ -124,37 +276,175 @@ pub fn merge_into_general(log: &FieldDayLog, posid: &str, into: &mut Logbook) ->
 }
 
 /// [`merge_into_general`]'s decision with the general log's merge identities named rather than
-/// read: `seen` is every `APP_NEXUS_QID` the general log holds, and the report's `written` are
-/// the rows to append, in order, WITHOUT ids — for a caller whose general log is not a
-/// [`Logbook`] in hand. The station appends them itself and mints their ids (SPEC-2 v3 C19); the
-/// rule for what is merged, refused or already there is this one function either way.
+/// read: `copies` is every merged copy the general log holds, as its `APP_NEXUS_QID` and when it
+/// was made (`QsoRecord::when_unix`), and the report's `written` are the rows to append, in
+/// order, WITHOUT ids — for a caller whose general log is not a [`Logbook`] in hand. The station
+/// appends them itself and mints their ids (SPEC-2 v3 C19); the rule for what is merged, refused
+/// or already there is this one function either way.
 pub fn plan_merge(
     log: &FieldDayLog,
     posid: &str,
-    mut seen: std::collections::HashSet<String>,
+    copies: impl IntoIterator<Item = (String, u64)>,
 ) -> MergeReport {
+    // The copies by the number they name: a row is tested against its own number's copies (one,
+    // or the few an earlier build's renames wrote), never the whole log.
+    let mut by_seq: std::collections::HashMap<u64, Vec<(String, u64)>> =
+        std::collections::HashMap::new();
+    for (qid, when_unix) in copies {
+        if let Some((_, _, seq)) = split_qid(&qid) {
+            by_seq.entry(seq).or_default().push((qid, when_unix));
+        }
+    }
     let mut report = MergeReport::default();
     for q in log.qsos() {
         if q.seq == 0 {
             report.refused += 1;
             continue;
         }
-        let qid = qid_for(&log.session.id, posid, q.seq);
-        if seen.contains(&qid) {
+        let id = MergeIdentity::of(log, posid, q);
+        let there = by_seq.entry(q.seq).or_default();
+        if there
+            .iter()
+            .any(|(qid, when_unix)| id.names(qid, *when_unix))
+        {
             report.already += 1;
             continue;
         }
-        // A qid written by THIS run counts as seen too — the set is what the function
+        // A copy written by THIS run counts as there too — the set is what the function
         // means by "already there", and a set that only knew about the log it started
         // with would be true of the first duplicate and false of the second.
-        seen.insert(qid.clone());
-        report.written.push(record_for(log, q, qid));
+        there.push((id.qid.clone(), q.when_unix));
+        report.written.push(record_for(log, q, &id));
     }
     report
 }
 
+/// The contacts of one contest that a contest journal keeps past its window and the Logbook does
+/// not hold ([`settle_aged`]): how many, and when the first and the last of them were logged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unmerged {
+    /// The contest's rules-file event id.
+    pub event: &'static str,
+    pub count: usize,
+    pub first_unix: u64,
+    pub last_unix: u64,
+}
+
+/// ⭐ **The contacts a contest journal keeps past its window, asked of the Logbook** — the ones
+/// it no longer needs let go, the ones the Logbook does not hold answered.
+///
+/// `copies` is every merged copy the Logbook holds, as [`plan_merge`] takes them, and `on_disk`
+/// those of them already on disk. A contact whose copy is on disk, made at the contact's own
+/// time, is let go ([`FieldDayLog::let_go_aged`]) once its contest's running is over at
+/// `now_unix`: it ages out of the journal as a merged contact always did. ⭐ Until then it stays,
+/// copy or no copy: a session of its contest loads it whatever its age, and that contest's log
+/// and the files exported from it hold the whole running. A contact no copy names is answered,
+/// by contest, for the contest screen to offer
+/// its merge ([`plan_aged_merge`]). Any other is kept and not offered: its copy is still on its
+/// way to disk, or names it at another time — the copy's time was changed in the Logbook, or the
+/// copy is another contact's, whose number an earlier build gave this one again.
+///
+/// ⚠️ **A contact with no merge identity is kept and never offered**: one that carries no number
+/// (a journal no build since club sync has written), or names a contest the loaded rules do not
+/// hold. Nothing can merge it without giving it a name another contact may hold.
+pub fn settle_aged(
+    log: &mut FieldDayLog,
+    posid: &str,
+    copies: &[(String, u64)],
+    on_disk: &[(String, u64)],
+    now_unix: u64,
+) -> Vec<Unmerged> {
+    let (copies, on_disk) = (by_seq(copies), by_seq(on_disk));
+    let mut gone = Vec::new();
+    let mut unmerged: Vec<Unmerged> = Vec::new();
+    for (at, c) in log.aged_contacts(posid).into_iter().enumerate() {
+        let (Some(id), Some(rules)) = (c.identity, c.rules) else {
+            continue;
+        };
+        let event = rules.event;
+        if named(&on_disk, &id, Some(c.when_unix)) {
+            if rules.running_of(now_unix) != rules.running_of(c.when_unix) {
+                gone.push(at);
+            }
+        } else if !named(&copies, &id, None) {
+            match unmerged.iter_mut().find(|u| u.event == event) {
+                Some(u) => {
+                    u.count += 1;
+                    u.first_unix = u.first_unix.min(c.when_unix);
+                    u.last_unix = u.last_unix.max(c.when_unix);
+                }
+                None => unmerged.push(Unmerged {
+                    event,
+                    count: 1,
+                    first_unix: c.when_unix,
+                    last_unix: c.when_unix,
+                }),
+            }
+        }
+    }
+    log.let_go_aged(&gone);
+    unmerged
+}
+
+/// ⭐ **The merge the contest screen offers for the contacts of contest `event` that a contest
+/// journal keeps past its window and no copy in the Logbook names** ([`settle_aged`]) — through
+/// [`plan_merge`], the one merge there is, so a contact already there is never written again.
+///
+/// Each is read back alone into a log on `session`, a session of that contest
+/// ([`FieldDayLog::aged_log`]), so the identity it is merged under is the one [`settle_aged`]
+/// asked about. `copies` as [`plan_merge`] takes them. Nothing is let go here: a contact goes
+/// once its copy is on disk, the next time the Logbook is asked.
+pub fn plan_aged_merge(
+    log: &FieldDayLog,
+    event: &str,
+    session: &super::ContestSession,
+    posid: &str,
+    copies: Vec<(String, u64)>,
+) -> MergeReport {
+    let there = by_seq(&copies);
+    let at: Vec<usize> = log
+        .aged_contacts(posid)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            c.rules.is_some_and(|rs| rs.event == event)
+                && c.identity
+                    .as_ref()
+                    .is_some_and(|id| !named(&there, id, None))
+        })
+        .map(|(at, _)| at)
+        .collect();
+    plan_merge(&log.aged_log(&at, session.clone()), posid, copies)
+}
+
+/// `copies` by the number each names, so that a row is tested against its own number's copies
+/// alone, as [`plan_merge`] tests them.
+fn by_seq(copies: &[(String, u64)]) -> std::collections::HashMap<u64, Vec<(&str, u64)>> {
+    let mut by: std::collections::HashMap<u64, Vec<(&str, u64)>> = Default::default();
+    for (qid, when_unix) in copies {
+        if let Some((_, _, seq)) = split_qid(qid) {
+            by.entry(seq).or_default().push((qid, *when_unix));
+        }
+    }
+    by
+}
+
+/// Whether a copy in `by` is `id`'s ([`MergeIdentity::names`]) — one made at `at` only, when
+/// given.
+fn named(
+    by: &std::collections::HashMap<u64, Vec<(&str, u64)>>,
+    id: &MergeIdentity,
+    at: Option<u64>,
+) -> bool {
+    by.get(&id.seq).is_some_and(|there| {
+        there
+            .iter()
+            .any(|&(qid, when)| at.is_none_or(|t| t == when) && id.names(qid, when))
+    })
+}
+
 /// One contest row as a general-log record.
-fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
+fn record_for(log: &FieldDayLog, q: &LoggedQso, id: &MergeIdentity) -> QsoRecord {
     let spec = log.session.exchange;
     // The SENT side comes from the one renderer, which takes a ROW — never from the
     // session, which holds only what is being sent right now.
@@ -165,7 +455,7 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
     let (rst_sent, rst_rcvd) = (rst_of(&sent, spec), rst_of(&q.rx, spec));
     let (stx, srx) = (serial_of(&sent, spec), serial_of(&q.rx, spec));
     let contest = ContestFields {
-        session: log.session.id.clone(),
+        session: id.session.clone(),
         // A mode-split contest has a distinct id per mode, and a general-log record
         // is one row, so it resolves against ITS OWN class. `Err` is unreachable for
         // an unsplit contest and, for a split one, means the ruleset declares no id
@@ -198,7 +488,7 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
                 _ => true,
             })
             .collect(),
-        qid,
+        qid: id.qid.clone(),
     };
     QsoRecord {
         id: None,
@@ -394,7 +684,9 @@ mod tests {
         let rec = &lb.records()[0];
         let c = rec.contest.as_deref().expect("a merged row has provenance");
         assert_eq!(c.contest_id, "ARRL-FIELD-DAY");
-        assert_eq!(c.qid, "ARRL-FIELD-DAY:WI:a1b2c3d4:1");
+        // The contest and the running the contact was made in, never where it was made from.
+        assert_eq!(c.session, "ARRL-FIELD-DAY:2026");
+        assert_eq!(c.qid, "ARRL-FIELD-DAY:2026:a1b2c3d4:1");
         assert_eq!(c.stx_string.as_deref(), Some("3A WI"), "what I sent");
         assert_eq!(c.srx_string.as_deref(), Some("2A EMA"), "what they sent");
         assert_eq!(

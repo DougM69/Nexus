@@ -39,8 +39,8 @@ describe('the built-in sets', () => {
       ['F4', '«rtty.macro.myCall.label»', '{MYCALL} {MYCALL}'],
       ['F5', '«rtty.macro.hisCall.label»', '{CALL}'],
       ['F6', '«rtty.macro.spExch.label»', 'TU 599 {EXCH} {EXCH}'],
-      ['F7', 'AGN', 'AGN? AGN?'],
-      ['F8', 'B4', '{CALL} QSO B4 TU {MYCALL}'],
+      ['F7', 'B4', '{CALL} QSO B4 TU {MYCALL}'],
+      ['F8', 'AGN', 'AGN? AGN?'],
     ])
   })
 

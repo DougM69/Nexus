@@ -49,7 +49,7 @@ When Detect identifies a bridge chip that needs a driver, it shows the vendor UR
 
 On Windows, Nexus ships `rigctld.exe` plus the required DLLs (`libhamlib-4.dll`, `libusb-1.0.dll`, `libwinpthread-1.dll`, `libgcc_s_seh-1.dll`) inside the installer's `resources/hamlib/` directory. The app prefers this bundled binary over any `rigctld` on PATH, so CAT works immediately after install with no separate Hamlib download.
 
-Nexus launches rigctld internally, connects to it over a local TCP socket on the configured port (default **4532**), and uses 500 ms read/write timeouts. You do not run rigctld manually.
+Nexus launches rigctld internally, connects to it over a local TCP socket on the configured port (default **4534**), and uses 500 ms read/write timeouts. You do not run rigctld manually.
 
 The spawned rigctld process is placed in a Windows **Job Object** with the `KILL_ON_JOB_CLOSE` flag. When Nexus exits — including abnormal exits and crashes — the OS kills rigctld automatically and releases the COM port. A stuck port or lingering rigctld after a crash is not expected; if it occurs, file a bug.
 
@@ -125,7 +125,7 @@ To run WSJT-X alongside Nexus: enable the broker in Nexus, then point WSJT-X's H
 If you run more than one rig — an HF radio, a VHF/UHF weak-signal radio, an FM/APRS radio — Nexus keeps **all of them connected at once** and switches between them instantly.
 
 - **Add a radio:** Settings → Radio ▸ Radios, click **+ Add radio**. A new radio card appears. Give it a name (e.g. "IC-9700"), then click **Edit** on it to configure its model, port, baud, and audio without changing the radio you are operating on. "Make active" switches your operating radio. Single-radio operators never see any of this beyond the "+ Add radio" button.
-- **Distinct daemon ports:** each radio runs its own bundled `rigctld` at the same time, so every rig must use a **different rigctld TCP port**. New radios are assigned a free port automatically, and any accidental collision is repaired on load — you don't normally have to think about it.
+- **Distinct daemon ports:** each radio runs its own bundled `rigctld` at the same time, so every rig must use a **different rigctld TCP port**. New radios are assigned a free port automatically, and any accidental collision is repaired on load — you don't normally have to think about it. One port is never handed out: the one a radio on **NET rigctl** names on this computer (wfview's rigctld, for one), since whatever answers there is what that radio reads and commands. Save refuses a rigctld TCP Port typed onto it, naming the radio to change. One an earlier version left there is named in the status bar, and Nexus does not open that address (for the radio you operate, one in the radio switcher or one picked from the Remote) until you change the port.
 - **Switching:** with two or more radios configured, a **switcher appears in the top bar** (one pill per radio, showing each rig's live frequency). Click a pill to switch. Every rig stays connected the whole time — the non-active ones are monitored (frequency and S-meter stay live in the switcher), and switching is an instant handoff with no CAT reconnect, so the dial never bounces. When you switch to a radio, Nexus adopts the frequency it's *actually* on (you may have hand-tuned it).
 - **What's shared:** you operate (waterfall, decode, transmit, audio) the **active** radio; the others stay connected for monitoring. Watching two waterfalls at the same time is a planned later addition — run two windows (below) for that.
 - **Running two at the same time:** with two or more radios, Settings → Radio ▸ Radios offers **Run both radios at the same time**. Launching Nexus then asks which radio this window drives; open a second window for another. All windows share one logbook. Radios you add in one window are picked up by the others when they start.
@@ -241,7 +241,7 @@ Frequency is polled continuously — a manual VFO knob turn is reflected in the 
 | `pttMethod` | `vox` | Change to `cat`, `rts`, or `dtr` |
 | `rigModel` | `0` (none) | Select from the curated dropdown (unlisted rigs: NET rigctl, model 2) |
 | `baud` | `38400` | Match your rig's CAT baud setting |
-| `rigctldPort` | `4532` | Local TCP port; Hamlib NET rigctl default |
+| `rigctldPort` | `4534` | Local TCP port; not Hamlib's usual 4532, which the CAT broker uses |
 | `serialPort` | `''` (empty) | Fill via Detect or manually |
 | `audioIn` / `audioOut` | `''` (system default) | Fill via Detect or manually |
 | `txLevel` | `0.9` (90%) | Trim until ALC reads zero |

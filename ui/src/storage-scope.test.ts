@@ -71,6 +71,10 @@ export const PER_SURFACE = [
   // The two rail widths the operator dragged (2026-09-13). A width is a statement about one
   // window's shape: a pop-out inherits it on first open and clamps it against its own box.
   'nexus.connect.railWidths',
+  // The large log line's text size (its A− / A+), in the contest logger window and at the top of the
+  // main window's Contest screen: how large THIS window's entry and last contacts read, for the person
+  // at its monitor. Each window writes its own; a logger window never sized starts from the main's.
+  'nexus.contestLogger.textScale',
   // The dashboard rail beside the cockpits (features/dashRail): which box is in each slot, whether it
   // shows beside each section, and its width — statements about THIS window, like Connect's.
   'nexus.dashrail.config',
@@ -260,6 +264,10 @@ const SHARED = [
   // so clicking a second thumbnail re-points the window that is already open instead of
   // opening another. Per-surface, the two documents would never see each other's writes.
   'nexus.sstv.viewer.path',
+  // The contest screen window's "I saved the settings" (its contest switch). SHARED on purpose, and it
+  // is the whole mechanism, as the viewer's path above is: the window writes it and the main window's
+  // `storage` listener reads its settings again. Per-surface, the main window would never hear it.
+  'nexus.contestScreen.saved',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',

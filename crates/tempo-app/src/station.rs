@@ -171,7 +171,9 @@ impl DiagnosticsInputs {
                     std::ops::ControlFlow::Continue(())
                 },
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            // Never a diagnosis without a contact logged before it was asked (P4).
+            .or_refuse()?;
         let recents: Vec<&tempo_core::reconcile::ReconcileSummary> = self.recents.iter().collect();
         let report = tempo_core::diagnostics::diagnose_rows(
             &rows,
@@ -797,8 +799,9 @@ pub(crate) fn park_state_pairs(
         .collect()
 }
 
-/// What [`check_lotw_confirmations`] reads of a contact it only counts: its call, the call it was
-/// logged under (the station call, else the operator), its confirmations and its upload marks.
+/// What a check of one service ([`check_lotw_confirmations`] and the others) reads of a contact it
+/// only counts: its call, the call it was logged under (the station call, else the operator), its
+/// confirmations and its upload marks.
 const CHECK_COUNTED: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
     columns: &[
         "call",
@@ -824,7 +827,8 @@ const CHECK_COUNTED: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::
 /// and every one 1.17.0's matcher could have put a row on. After them come the other contacts
 /// holding LoTW's confirmation or its `Accepted` upload mark, read narrow ([`CHECK_COUNTED`]).
 /// No row names their call, so the check only counts them, and a count needs no more. Its lines
-/// carry their contacts; its gains are places in contacts the caller never sees, so a count.
+/// carry their contacts; its gains are places in contacts the caller never sees, so they come
+/// back by id ([`ServiceCheck`]).
 ///
 /// ⚠️ It reads the store: never under the Engine lock.
 pub fn check_lotw_confirmations(
@@ -832,26 +836,102 @@ pub fn check_lotw_confirmations(
     report: &str,
     own: &str,
     own_call: Option<&str>,
-) -> Result<tempo_core::reconcile::check::ConfirmationCheck, String> {
+) -> Result<ServiceCheck, String> {
+    check_downloaded(
+        plan,
+        tempo_core::reconcile::check::Channel::Lotw,
+        &tempo_core::logbook::report_rows(report),
+        &tempo_core::logbook::parse_adif(own),
+        own_call,
+    )
+}
+
+/// ★ Logbook ▸ Check confirmations, for eQSL: eQSL's whole InBox (`inbox`, the cards sent to the
+/// operator, read exactly as its merge reads them) checked against the log, read with the Engine
+/// lock released, as [`check_lotw_confirmations`] checks LoTW's. A card carries its sender's time,
+/// so eQSL holds no record of the operator's own to compare, and no upload mark is checked.
+/// `own_call` is the call the InBox is for. It writes nothing.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub fn check_eqsl_confirmations(
+    plan: &LogPlan,
+    inbox: &str,
+    own_call: Option<&str>,
+) -> Result<ServiceCheck, String> {
+    check_downloaded(
+        plan,
+        tempo_core::reconcile::check::Channel::Eqsl,
+        &tempo_core::logbook::report_rows(inbox),
+        &[],
+        own_call,
+    )
+}
+
+/// ★ Logbook ▸ Check confirmations, for QRZ: QRZ's whole book (`book`, a FETCH's ADIF, read
+/// exactly as its merge reads it) checked against the log, read with the Engine lock released, as
+/// [`check_lotw_confirmations`] checks LoTW's. The book is QRZ's record of each of the operator's
+/// contacts, confirmed or not, so it is also the service's own record a mark is compared with.
+/// Only QRZ's own confirmation in it is evidence: its copies of other services' confirmations are
+/// not (`tempo_core::reconcile::check`). `own_call` is the call the book is taken to be for. It
+/// writes nothing.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub fn check_qrz_confirmations(
+    plan: &LogPlan,
+    book: &str,
+    own_call: Option<&str>,
+) -> Result<ServiceCheck, String> {
+    let rows = tempo_core::logbook::report_rows(book);
+    check_downloaded(
+        plan,
+        tempo_core::reconcile::check::Channel::Qrz,
+        &rows,
+        &rows,
+        own_call,
+    )
+}
+
+/// What Logbook ▸ Check confirmations found for one service ([`check_lotw_confirmations`],
+/// [`check_eqsl_confirmations`], [`check_qrz_confirmations`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServiceCheck {
+    /// The check (`tempo_core::reconcile::check`). Its lines carry their contacts.
+    pub check: tempo_core::reconcile::check::ConfirmationCheck,
+    /// The contacts its gains are, by id, in log order: each lacks the confirmation a row of the
+    /// download pairs with it, which Apply's merge adds.
+    pub gains: Vec<RecordId>,
+}
+
+/// The check of one service's download (`rows`, its confirmations, and `own_rows`, its own record
+/// of the operator's contacts) against the contacts of every call the two name, and the other
+/// contacts holding the service's mark, which it only counts ([`check_lotw_confirmations`]).
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+fn check_downloaded(
+    plan: &LogPlan,
+    channel: tempo_core::reconcile::check::Channel,
+    rows: &[QsoRecord],
+    own_rows: &[QsoRecord],
+    own_call: Option<&str>,
+) -> Result<ServiceCheck, String> {
     use std::ops::ControlFlow;
     use tempo_core::logbook::sqlite::{call_norm_of, Order, Scope};
     use tempo_core::logbook::UploadOutcome;
     use tempo_core::reconcile::check::{check_report, Channel};
-    let rows = tempo_core::logbook::report_rows(report);
-    let own_rows = tempo_core::logbook::parse_adif(own);
     let calls: std::collections::BTreeSet<String> = rows
         .iter()
-        .chain(&own_rows)
+        .chain(own_rows)
         .map(|r| call_norm_of(&r.call))
         .collect();
     let mut local = plan.candidates(&calls)?;
     let counted = |r: &QsoRecord| {
         !calls.contains(&call_norm_of(&r.call))
-            && (r.qsl_rcvd.lotw
-                || r.upload
-                    .lotw
-                    .as_ref()
-                    .is_some_and(|s| s.outcome == UploadOutcome::Accepted))
+            && (channel.held(&r.qsl_rcvd)
+                || (channel == Channel::Lotw
+                    && r.upload
+                        .lotw
+                        .as_ref()
+                        .is_some_and(|s| s.outcome == UploadOutcome::Accepted)))
     };
     let mut others: Vec<Arc<QsoRecord>> = Vec::new();
     // The rows this process changed that the store holds: read below as they now stand.
@@ -881,13 +961,9 @@ pub fn check_lotw_confirmations(
             .filter(|r| r.id.is_some_and(|id| !changed_here.contains(&id))),
     );
     local.extend(others);
-    Ok(check_report(
-        &local,
-        &rows,
-        &own_rows,
-        Channel::Lotw,
-        own_call,
-    ))
+    let check = check_report(&local, rows, own_rows, channel, own_call);
+    let gains = check.gains.iter().filter_map(|&i| local[i].id).collect();
+    Ok(ServiceCheck { check, gains })
 }
 
 /// The rows the lines the operator ticked in Check confirmations make
@@ -1358,25 +1434,32 @@ impl LogPlan {
         }
     }
 
-    /// Every merge identity the log holds (`APP_NEXUS_QID`, a contest row's `qid`) as this process
-    /// knows the log ([`Self::rows`]): what the Field Day merge reads to skip a row already there
-    /// — one narrow pass over the store's `contest_qid`, whatever the log's size.
+    /// Every merge identity the log holds (`APP_NEXUS_QID`, a contest row's `qid`), with when its
+    /// contact was made, as this process knows the log ([`Self::rows`]): what the Field Day merge
+    /// reads to skip a row already there — one narrow pass over the store's `contest_qid` and
+    /// `when_unix`, whatever the log's size. The time is what tells a copy merged under an
+    /// earlier build's name for this running from one of last year's
+    /// ([`tempo_core::contest::MergeIdentity::names`]). Each copy once, as this process's
+    /// changes leave it — so a delete can count a contact's copies
+    /// ([`crate::engine::Engine::contest_row_deleted`]).
     ///
     /// ⚠️ It reads the store: never under the Engine lock.
-    pub(crate) fn merge_identities(&self) -> Result<HashSet<String>, String> {
+    pub(crate) fn merge_identities(&self) -> Result<Vec<(String, u64)>, String> {
         use std::ops::ControlFlow;
         use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
         const QIDS: Narrow = Narrow {
-            columns: &["contest_qid"],
+            columns: &["contest_qid", "when_unix"],
             uploads: false,
         };
         let qid = |r: &QsoRecord| {
             r.contest
                 .as_deref()
-                .map(|c| c.qid.clone())
-                .filter(|q| !q.is_empty())
+                .filter(|c| !c.qid.is_empty())
+                .map(|c| (c.qid.clone(), r.when_unix))
         };
-        let mut seen = HashSet::new();
+        let mut seen = Vec::new();
+        // The rows already answered for, so that none is answered twice.
+        let mut read = HashSet::new();
         let mut keep = |r: &QsoRecord| {
             // This process's own version of the row, where one is on its way: a row it deleted
             // is not there, and one it changed carries what the change left.
@@ -1384,6 +1467,53 @@ impl LogPlan {
                 Some(Some(mine)) => seen.extend(qid(&mine)),
                 Some(None) => {}
                 None => seen.extend(qid(r)),
+            }
+            read.extend(r.id);
+            ControlFlow::Continue(())
+        };
+        let crate::logstore::LogRows::Store(reads) = &self.rows;
+        reads
+            .read(std::time::Duration::ZERO, |db| {
+                db.each_narrow(QIDS, Scope::All, Order::Log, &mut keep)
+            })
+            .map_err(|e| e.to_string())?;
+        // Rows on their way the store has not taken at all — each once, as the newest of this
+        // process's changes leaves it.
+        for r in self.pending.rows_matching(|r| qid(r).is_some()) {
+            match r.id {
+                Some(id) if !read.insert(id) => {}
+                Some(id) => seen.extend(self.pending.row(id).flatten().and_then(|mine| qid(&mine))),
+                None => seen.extend(qid(&r)),
+            }
+        }
+        Ok(seen)
+    }
+
+    /// The merge identities [`Self::merge_identities`] reads that are on disk: the store's
+    /// copies that no change of this process's is held for ([`crate::logstore::Pending`]) — a
+    /// copy the store does not hold yet, one this process has changed or deleted since, and one
+    /// it wrote whose landing the station has not yet taken in (it does at its next change to the
+    /// log, and a launch starts with none) are not among them. What a contest contact the
+    /// journal keeps past its window is let go on ([`tempo_core::contest::settle_aged`]): its
+    /// copy must be sure to outlive a crash before the journal's own may not.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn durable_merge_identities(&self) -> Result<Vec<(String, u64)>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+        const QIDS: Narrow = Narrow {
+            columns: &["contest_qid", "when_unix"],
+            uploads: false,
+        };
+        let mut seen = Vec::new();
+        let mut keep = |r: &QsoRecord| {
+            let untouched = r.id.is_some_and(|id| self.pending.row(id).is_none());
+            if let Some(c) = r
+                .contest
+                .as_deref()
+                .filter(|c| untouched && !c.qid.is_empty())
+            {
+                seen.push((c.qid.clone(), r.when_unix));
             }
             ControlFlow::Continue(())
         };
@@ -1393,14 +1523,55 @@ impl LogPlan {
                 db.each_narrow(QIDS, Scope::All, Order::Log, &mut keep)
             })
             .map_err(|e| e.to_string())?;
-        // Rows on their way the store has not taken at all.
-        seen.extend(
-            self.pending
-                .rows_matching(|r| qid(r).is_some())
-                .iter()
-                .filter_map(|r| qid(r)),
-        );
         Ok(seen)
+    }
+
+    /// The upload marks on the log's copies of the contest rows `rows` names, under this build's
+    /// name or an earlier build's ([`tempo_core::contest::MergeIdentity::names`]), as this
+    /// process knows the log ([`Self::rows`]): what a removal from the contest log reports and
+    /// cannot take back. The same narrow pass as [`Self::merge_identities`], with the upload
+    /// stamps.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub(crate) fn merged_uploads(
+        &self,
+        rows: &[tempo_core::contest::MergeIdentity],
+    ) -> Result<Vec<tempo_core::logbook::UploadState>, String> {
+        use std::ops::ControlFlow;
+        use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+        const COPIES: Narrow = Narrow {
+            columns: &["contest_qid", "when_unix"],
+            uploads: true,
+        };
+        let named = |r: &QsoRecord| {
+            r.contest.as_deref().is_some_and(|c| {
+                !c.qid.is_empty() && rows.iter().any(|id| id.names(&c.qid, r.when_unix))
+            })
+        };
+        let mut found = Vec::new();
+        let mut keep = |r: &QsoRecord| {
+            // This process's own version of the row, where one is on its way, as above.
+            match r.id.and_then(|id| self.pending.row(id)) {
+                Some(Some(mine)) if named(&mine) => found.push(mine.upload.clone()),
+                Some(_) => {}
+                None if named(r) => found.push(r.upload.clone()),
+                None => {}
+            }
+            ControlFlow::Continue(())
+        };
+        let crate::logstore::LogRows::Store(reads) = &self.rows;
+        reads
+            .read(std::time::Duration::ZERO, |db| {
+                db.each_narrow(COPIES, Scope::All, Order::Log, &mut keep)
+            })
+            .map_err(|e| e.to_string())?;
+        found.extend(
+            self.pending
+                .rows_matching(|r| named(r))
+                .iter()
+                .map(|r| r.upload.clone()),
+        );
+        Ok(found)
     }
 
     /// The rows of the log whose call is one `calls` names — each a call as the store keys it,
@@ -1582,6 +1753,17 @@ impl Planned {
             .filter(|(before, _)| before.is_some())
             .count()
     }
+
+    /// How many held rows it gives `channel`'s confirmation that lacked it: a merge's gains.
+    pub(crate) fn gained(&self, channel: tempo_core::reconcile::check::Channel) -> usize {
+        self.pairs
+            .iter()
+            .filter(|(before, after)| {
+                before.as_ref().is_some_and(|b| !channel.held(&b.qsl_rcvd))
+                    && after.as_ref().is_some_and(|a| channel.held(&a.qsl_rcvd))
+            })
+            .count()
+    }
 }
 
 /// ★ Plan a bulk change — an import, a report merge, the POTA stamps — on the candidate sub-log:
@@ -1698,6 +1880,19 @@ pub(crate) fn plan_download(
     plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
         let (added, summary) = log.merge_downloaded(text);
         (added.len(), summary)
+    })
+}
+
+/// QRZ's book planned for Apply in Check confirmations: QRZ's own confirmation put on each contact
+/// a confirming row of the book pairs with — `Logbook::gain_qrz_confirmations`, on the rows of the
+/// book's calls. Unlike Sync from QRZ ([`plan_download`]), it adds no contact and takes nothing
+/// else a row carries. The plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_qrz_gains(plan: &LogPlan, text: &str) -> Result<((), Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.gain_qrz_confirmations(text);
     })
 }
 
@@ -3790,7 +3985,32 @@ impl StationCore {
     /// Another instance's commits are taken in BEFORE the delete is planned
     /// ([`Self::log_plan`]), so only THIS record goes and the other writer's QSOs stay.
     pub fn delete_qso(&mut self, id: RecordId) -> bool {
-        self.change_row(id, &[LogOp::Delete(id)], "delete_qso")
+        self.delete_row(id).is_some()
+    }
+
+    /// [`Self::delete_qso`], answering the contact as it was before it went — what the contest
+    /// log's own row is found by ([`crate::engine::Engine::delete_qso`]).
+    pub(crate) fn delete_row(&mut self, id: RecordId) -> Option<Arc<QsoRecord>> {
+        match self.change_by_id(id, "delete_qso", |_, row| {
+            Ok(ops_on(row, &[LogOp::Delete(id)]))
+        }) {
+            Ok(Ok(Some((before, None)))) => Some(before),
+            Ok(Err(RowRefusal::Busy)) => {
+                tempo_core::applog::warn(
+                    "logbook",
+                    "delete_qso: the contact kept changing under the change; not made",
+                );
+                None
+            }
+            Ok(_) => None,
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!("delete_qso: the logbook could not be read: {e}"),
+                );
+                None
+            }
+        }
     }
 
     /// Purge the ENTIRE logbook (operator-confirmed, destructive, irreversible).

@@ -60,6 +60,9 @@ enum CatDaemon {
     /// Nexus's own FlexRadio client (`crate::flex`, opt-in per radio, Beta): the same rigctld
     /// protocol on the same port, served from a SmartSDR session to the radio itself.
     Flex(crate::flex::FlexDaemon),
+    /// Nexus's own Icom network client (`crate::icomlan`, the "Icom network" Connection, Beta):
+    /// the native CI-V daemon, carried over a network session to the radio, keying refused.
+    IcomLan(crate::icomlan::IcomLanDaemon),
 }
 
 impl CatDaemon {
@@ -69,27 +72,44 @@ impl CatDaemon {
             CatDaemon::Native(d) => d.is_alive(),
             CatDaemon::Omni(d) => d.is_alive(),
             CatDaemon::Flex(d) => d.is_alive(),
+            CatDaemon::IcomLan(d) => d.is_alive(),
         }
     }
-    /// The native daemon, when that's what this is (scope drain / enable).
+    /// The native daemon, when that's what this is (scope drain / enable) — the one carried over
+    /// the Icom network session too, so the scope, the Sub levels and the receiver naming work
+    /// there unchanged.
     fn native(&self) -> Option<&crate::civ::broker::CivDaemon> {
         match self {
             CatDaemon::Native(d) => Some(d),
+            CatDaemon::IcomLan(d) => Some(d.native()),
             CatDaemon::Spawned(_) | CatDaemon::Omni(_) | CatDaemon::Flex(_) => None,
+        }
+    }
+    /// Nexus's own Icom network client, when that's what this is — for its status and findings.
+    fn icom_lan(&self) -> Option<&crate::icomlan::IcomLanDaemon> {
+        match self {
+            CatDaemon::IcomLan(d) => Some(d),
+            _ => None,
         }
     }
     /// The OmniRig shim, when that's what this is — for the status detail and TX intent.
     fn omni(&self) -> Option<&crate::omnirig::OmniDaemon> {
         match self {
             CatDaemon::Omni(d) => Some(d),
-            CatDaemon::Native(_) | CatDaemon::Spawned(_) | CatDaemon::Flex(_) => None,
+            CatDaemon::Native(_)
+            | CatDaemon::Spawned(_)
+            | CatDaemon::Flex(_)
+            | CatDaemon::IcomLan(_) => None,
         }
     }
     /// Nexus's own Flex client, when that's what this is — for the slices and the TX intent.
     fn flex(&self) -> Option<&crate::flex::FlexDaemon> {
         match self {
             CatDaemon::Flex(d) => Some(d),
-            CatDaemon::Native(_) | CatDaemon::Spawned(_) | CatDaemon::Omni(_) => None,
+            CatDaemon::Native(_)
+            | CatDaemon::Spawned(_)
+            | CatDaemon::Omni(_)
+            | CatDaemon::IcomLan(_) => None,
         }
     }
 }
@@ -115,7 +135,10 @@ fn native_civ_model(t: &Transport) -> Option<crate::civ::commands::IcomModel> {
     // OmniRig joins `is_network()` as a transport the CI-V daemon can never serve: OmniRig
     // holds the COM port, so Nexus cannot open it to speak CI-V. Mirrored in tempo-app's
     // `native_civ_reachable`, which is what tells the operator the cure does not exist here.
-    if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.rig_model == 0 {
+    // The Icom network connection carries the same daemon over its own session
+    // (`CatDaemon::IcomLan`); the serial one must never open a COM port for it.
+    if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.is_icom_lan() || t.rig_model == 0
+    {
         return None;
     }
     crate::rigmodels::icom_scope_model(t.rig_model)
@@ -164,6 +187,8 @@ fn keys_on_the_cat_port(t: &Transport) -> bool {
         // through a daemon that does not exist would be a rig that tunes and never keys.
         // `open_serial_ptt` has the matching branch; the two must stay in step (see the ⚠️).
         && !t.is_omnirig()
+        // Nor the Icom network connection: there is no CAT serial port, and it keys nothing.
+        && !t.is_icom_lan()
         && !t.serial_port.trim().is_empty()
         && t.ptt_port().eq_ignore_ascii_case(t.serial_port.trim())
 }
@@ -212,6 +237,20 @@ fn spawn_cat_daemon(
     if t.is_omnirig() {
         return crate::omnirig::OmniDaemon::start(t.omnirig_slot(), t.rigctld_port)
             .map(|d| (CatDaemon::Omni(d), None));
+    }
+    // Nexus's own Icom network client, when the operator chose that connection. Nothing falls
+    // back from it: rigctld has no network model for these radios, and the serial port the
+    // profile last had is not where the operator said the radio is.
+    if t.is_icom_lan() {
+        let Some(target) = t.icom_lan_target() else {
+            return Err(std::io::Error::other(
+                "The Icom network connection needs an IC-7610, IC-9700, IC-705, IC-905, IC-7760 \
+                 or IC-7300MK2 and the radio's IPv4 address (Settings ▸ Radio ▸ Rig & CAT)",
+            ));
+        };
+        return crate::icomlan::IcomLanDaemon::start(&target)
+            .map(|d| (CatDaemon::IcomLan(d), None))
+            .map_err(std::io::Error::other);
     }
     let mut native_fallback: Option<String> = None;
     // Nexus's own Flex client, when the operator opted this radio in (Beta). It talks to the radio
@@ -304,6 +343,17 @@ fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) 
         crate::rigctld_proc::LineState::from_keying_setting(&s.cat_ptt_line_state);
 }
 
+/// The transport the launch opens: the startup seed ([`Transport::from_cfg`]) with what the first
+/// open must already know from the settings. That is the #145 declarations
+/// ([`seed_line_declarations`]), and a NET rigctl address one of Nexus's own listeners holds
+/// ([`AddressRefusal`]): the launch is the open a clash an older build stored meets first.
+fn launch_transport(cfg: &RadioConfig, s: &Settings) -> Transport {
+    let mut t = Transport::from_cfg(cfg);
+    seed_line_declarations(&mut t, s);
+    t.address_refusal = AddressRefusal::of(&t, s);
+    t
+}
+
 /// Which CAT backend is actually serving, for probe/status attribution — the operator
 /// must never have to guess whether "isn't answering" came from the native CI-V daemon
 /// or from Hamlib. `native_wanted` = the transport opted into native CI-V (and keying
@@ -315,6 +365,27 @@ fn cat_backend_label(native_wanted: bool, daemon: Option<bool>) -> &'static str 
         Some(false) if native_wanted => "Hamlib rigctld — the native CI-V daemon didn't start",
         Some(false) => "Hamlib rigctld",
         None => "a shared external rigctld",
+    }
+}
+
+/// Can this link carry the radio's scope waveform at all? Over USB the radio refuses it below
+/// CI-V USB baud 115200 (the IC-9700 NAKs `27 11 01` at 57600); over the network "all data is
+/// sent together" and no baud applies.
+fn link_carries_the_scope(t: &Transport) -> bool {
+    t.is_icom_lan() || t.baud >= 115_200
+}
+
+/// When the radio loop next tries a radio on the Icom network connection whose open failed:
+/// when the retry ladder allows (`crate::icomlan::registry`), never while the radio waits for
+/// the operator, and on the ordinary reopen backoff (`default_at`) when the ladder has nothing to
+/// say (a failure before anything was sent, such as no saved password).
+fn icom_lan_reopen_at(key: std::net::SocketAddrV4, now: f64, default_at: f64) -> f64 {
+    if crate::icomlan::registry::held(key) {
+        return f64::INFINITY;
+    }
+    match crate::icomlan::registry::retry_in(key, crate::icomlan::now_ms()) {
+        Some(ms) => now + ms as f64,
+        None => default_at,
     }
 }
 
@@ -452,6 +523,12 @@ fn clip(line: &str) -> String {
 /// glance, and for an Icom adds the dual-USB-port gotcha (the IC-7610/9700 expose two serial ports,
 /// only one of which carries CI-V — picking the wrong one looks exactly like this).
 fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
+    if t.is_icom_lan() {
+        return format!(
+            "CAT can't reach the radio over the network ({err}). If the session was lost, Nexus \
+             reconnects by itself; the radio may hold the old session for up to 3 minutes."
+        );
+    }
     if t.is_network() {
         // A network CAT address is very often an SDR console on the same PC, not a radio with
         // a power switch — telling that operator to check the rig is powered on is advice for
@@ -480,22 +557,29 @@ fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
     )
 }
 
-/// The port a `host:port` rig address names, plus its host. `None` when the address names no
-/// port. The last colon wins, so the bracketed IPv6 form (`[::1]:5002`) splits correctly.
-fn split_host_port(addr: &str) -> Option<(&str, u16)> {
-    let (host, port) = addr.trim().rsplit_once(':')?;
-    Some((host.trim(), port.trim().parse().ok()?))
-}
-
-/// Is this rig address on THIS machine — i.e. does its port live in the same space rigctld
-/// binds into? A remote rig reusing our rigctld's port number is no clash at all.
-fn host_is_this_machine(host: &str) -> bool {
-    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
-    h.is_empty()
-        || h.eq_ignore_ascii_case("localhost")
-        || h == "::1"
-        || h == "0.0.0.0"
-        || h.starts_with("127.")
+/// The Network Address to share DIRECTLY: a NET rigctl radio's, when that address is on this
+/// machine (wfview's rigctld, or one the operator runs). `None` everywhere else.
+///
+/// NET rigctl means "the rigctld at this address", and one on this computer needs nothing in
+/// between: Nexus talks to it itself, as the coexist branch has always done when rigctld TCP Port
+/// happened to be the same number. With any other number Nexus started a second rigctld (`-m 2`)
+/// in front of it, and that one is not a neutral relay. Hamlib's rigctld (4.7.1, the one Nexus
+/// ships) asks the rigctld behind it for the power state as each client connects, and while that
+/// says off it refuses every command, PTT included. wfview says off until its radio has answered
+/// it, and again whenever it decides the radio is off.
+///
+/// Not for:
+/// * an address on another machine, which is still reached through Nexus's own rigctld;
+/// * rigctld TCP Port's own number, which the coexist probe asks already;
+/// * our own CAT broker's port, where Nexus would be talking to itself;
+/// * any other model, or any connection but Network (OmniRig and the Icom network client never
+///   are).
+///
+/// Pure config: the caller probes the address and shares only a rigctld's answer.
+fn net_rigctld_on_this_machine(t: &Transport) -> Option<&str> {
+    let (addr, port) =
+        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)?;
+    (port != t.rigctld_port && t.broker_self_port != Some(port)).then_some(addr)
 }
 
 /// **Case (c).** A rigctld **we are about to spawn** cannot both bind this local port and
@@ -700,8 +784,8 @@ fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
     )
 }
 
-use tempo_app::dto::{FieldDayQso, SourceKind, Tier};
-use tempo_app::settings::{RadioProfile, Settings};
+use tempo_app::dto::{AudioErrorKind, FieldDayQso, SourceKind, Tier};
+use tempo_app::settings::{host_is_this_machine, split_host_port, RadioProfile, Settings};
 use tempo_core::message::Msg;
 // Band label → club-log meter string. Lives in `tempo_net` beside the two
 // protocols that consume it (N1MM `<band>`, N3FJP `fldBand`), because the
@@ -1088,6 +1172,10 @@ const CAT_RETRY_MAX_MS: f64 = 30_000.0;
 /// whereas a rejected FREQUENCY is nearly always a hard fact about the radio's range — and each
 /// retry costs a full CAT round-trip on a link that is already unhappy.
 const DIAL_SET_MAX_TRIES: u32 = 3;
+/// How long after a Fake-It over ends its dial write-back goes out (ms): WSJT-X's wait after PTT
+/// off, because "some rigs cannot process CAT commands while switching from Tx to Rx"
+/// (`Transceiver/TransceiverBase.cpp:142`).
+const FAKE_IT_WRITE_BACK_MS: f64 = 100.0;
 
 /// Failed breaker re-probes before the DAEMON is suspected and rebuilt (the overnight-radio
 /// review, 2026-09-02): 2 s + 4 s + 8 s of a rigctld that answers its socket and never the
@@ -1357,6 +1445,14 @@ pub struct RadioConfig {
     /// CAT daemon a tick later.
     pub flex_native_cat: bool,
     pub flex_radio_ip: String,
+    /// The radio's address, network user and control port for Nexus's Icom network client (the
+    /// "Icom network" Connection; `RadioProfile::icom_lan_host`), and the radio profile whose
+    /// keychain entry holds the password, so the first launch connects rather than failing a
+    /// tick early.
+    pub icom_lan_host: String,
+    pub icom_lan_user: String,
+    pub icom_lan_port: u16,
+    pub radio_id: u32,
     /// The port our OWN CAT broker serves on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     pub broker_self_port: Option<u16>,
@@ -1409,6 +1505,10 @@ impl Default for RadioConfig {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            radio_id: 0,
             broker_self_port: Some(4532),
             dial_hz: 14_090_500,
             mode: "USB".to_string(),
@@ -1693,6 +1793,19 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
     }
 }
 
+/// ⭐ The PSK Reporter sink the radio loop holds, brought in line with the EFFECTIVE upload
+/// ([`Engine::pskreporter_uploading`]): the operator's switch, unless a contest that allows
+/// spotting only over RF is running (Winter Field Day), when no reporter exists — so nothing
+/// is collected for one and nothing is sent — until the event ends. Rebuilt only when that
+/// answer changes.
+fn hot_apply_psk(e: &Engine, psk: &mut Option<PskReporter>, applied: &mut bool) {
+    let uploading = e.pskreporter_uploading();
+    if uploading != *applied {
+        *psk = uploading.then(PskReporter::new);
+        *applied = uploading;
+    }
+}
+
 /// Run the radio slot loop until an unrecoverable error. Blocks — call on a
 /// dedicated thread. Opens the default sound devices, sets the rig, then each
 /// slot transmits the engine's `poll_tx` audio (holding PTT for the over) or
@@ -1720,7 +1833,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // see only a silent, blank waterfall).
             {
                 let mut eng = engine_lock(&engine);
-                eng.set_audio_error(Some(format!("Sound card failed to open: {e}")));
+                eng.set_audio_error(Some((
+                    AudioErrorKind::SoundCard,
+                    format!("Sound card failed to open: {e}"),
+                )));
             }
             // ⚠️ Do NOT die here when a device was NAMED. `CpalBackend::open` became strict
             // about a configured-but-unresolvable device (device.rs `resolve_configured`),
@@ -1751,10 +1867,13 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                         attempt += 1;
                         {
                             let mut eng = engine_lock(&engine);
-                            eng.set_audio_error(Some(format!(
-                                "Sound card failed to open: {e} The system default failed too \
-                                 ({fallback}). Retrying every {}s — attempt {attempt}.",
-                                (AUDIO_RETRY_MS / 1000.0) as u64
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::SoundCard,
+                                format!(
+                                    "Sound card failed to open: {e} The system default failed \
+                                     too ({fallback}). Retrying every {}s — attempt {attempt}.",
+                                    (AUDIO_RETRY_MS / 1000.0) as u64
+                                ),
                             )));
                         }
                         std::thread::sleep(Duration::from_millis(AUDIO_RETRY_MS as u64));
@@ -1800,13 +1919,14 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // connection status so the UI shows green/red right away. The transport is
     // rebuilt **live** below when the operator changes rig/PTT/audio settings, so
     // CAT connects on Save without an app restart.
-    let mut applied = Transport::from_cfg(&cfg);
-    // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, so they are overlaid onto
-    // the startup seed here — see [`seed_line_declarations`].
-    let remote_radio_id = {
+    // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, and so does a refused NET
+    // rigctl address, so both are overlaid onto the startup seed here — see [`launch_transport`].
+    let (applied, remote_radio_id) = {
         let eng = engine_lock(&engine);
-        seed_line_declarations(&mut applied, eng.settings());
-        eng.settings().active_radio
+        (
+            launch_transport(&cfg, eng.settings()),
+            eng.settings().active_radio,
+        )
     };
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
@@ -1828,6 +1948,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         ),
     }
     let init_freq = init_probe.freq_hz;
+    let init_ok = init_probe.ok;
     {
         let mut eng = engine_lock(&engine);
         eng.set_cat_status(init_probe.ok, init_probe.detail);
@@ -1871,6 +1992,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // and injects their re-open side-effects.
     let mut state = RadioLoop::new(applied, rigctld_proc, &cfg);
     state.remote_radio_id = Some(remote_radio_id);
+    state.after_the_launch_open(&rig, init_ok);
     // Station-wide sinks live OUTSIDE the per-radio loop (multi-radio Phase 1 boundary):
     // one PSK buffer and one Field Day / club-board cursor for the whole station.
     let mut station = StationSinks::new();
@@ -1993,10 +2115,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                 wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
                 wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
             }
-            if s.pskreporter != psk_applied {
-                psk = s.pskreporter.then(PskReporter::new);
-                psk_applied = s.pskreporter;
-            }
+            // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
+            // over RF is running (Winter Field Day), when no reporter exists and nothing is
+            // collected for one.
+            hot_apply_psk(&e, &mut psk, &mut psk_applied);
         }
         let sinks = Sinks {
             wsjtx: wsjtx.as_ref(),
@@ -2163,7 +2285,8 @@ fn drop_pooled(
 impl Transport {
     /// Build a transport from a SPECIFIC radio profile (not the flat active mirror) — to open a
     /// monitor connection to a non-active radio. Audio/monitor fields are zeroed (monitors are
-    /// CAT-only) and the broker port dropped (only the active radio talks to the broker).
+    /// CAT-only). The broker port is the station's, not the profile's: the caller sets it, as
+    /// [`monitor_want`] does.
     fn from_profile(p: &RadioProfile) -> Self {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
@@ -2193,7 +2316,12 @@ impl Transport {
             icom_native_cat: p.icom_native_cat,
             flex_native_cat: p.flex_native_cat,
             flex_radio_ip: p.flex_radio_ip.clone(),
+            icom_lan_host: p.icom_lan_host.clone(),
+            icom_lan_user: p.icom_lan_user.clone(),
+            icom_lan_port: p.icom_lan_port,
+            radio_id: p.id,
             broker_self_port: None,
+            address_refusal: AddressRefusal::default(),
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -2206,9 +2334,10 @@ impl Transport {
     }
 }
 
-/// Open a READ-ONLY CAT connection for a monitor radio: launch its rigctld (or share an EXTERNAL one
-/// already on the port) and probe by reading the dial — but NEVER set freq/mode/PTT (a monitor must
-/// not disturb the radio the operator isn't focused on). Returns the Rig + daemon handle + cat_ok.
+/// Open a READ-ONLY CAT connection for a monitor radio: launch its rigctld (or share the rigctld a
+/// NET rigctl radio names on this computer) and probe by reading the dial — but NEVER set
+/// freq/mode/PTT (a monitor must not disturb the radio the operator isn't focused on). Returns the
+/// Rig + daemon handle + cat_ok.
 fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
     // `None`: a monitor is READ-ONLY and must never be able to key. Even for a shared-port
     // keying transport, the background rig's daemon comes up WITHOUT --ptt-type, so a stray
@@ -2234,7 +2363,34 @@ fn open_read_only(
     if !t.cat_available() {
         return (Rig::vox(), None, None);
     }
-    // A monitor ALWAYS spawns its OWN rigctld — it must NEVER coexist onto a daemon already on the
+    // A NET rigctl address one of Nexus's own listeners holds is never opened (`AddressRefusal`):
+    // what answers there is another radio, or Nexus itself serving the active radio (the broker).
+    if t.address_refusal.0.is_some() {
+        return (Rig::vox(), None, Some(false));
+    }
+    // NET rigctl to a rigctld on THIS computer: the one the operator runs there (wfview's, or their
+    // own) is this radio, as Nexus's port bookkeeping keeps every daemon of its own off that address
+    // (`tempo_app::settings::net_rigctl_port_here`). So it is shared directly, as the active open
+    // shares it, whatever rigctld TCP Port says, and never fronted by a rigctld of ours: where
+    // nothing answers yet, nothing is started, and the pool asks again on its backoff. Something
+    // that answers, but not as a rigctld, takes the spawn below, as the active open's does.
+    if let Some((direct, _)) =
+        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)
+    {
+        // A network radio keys no line on a CAT port (`keys_on_the_cat_port`).
+        debug_assert!(ptt_line.is_none());
+        match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
+            crate::rigctld_server::PortReply::Rigctld => {
+                let mut rig = Rig::with_control(Some(direct.to_string()), PttMode::Vox);
+                rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                let ok = probe_cat(&mut rig, t).ok;
+                return (rig, None, ok);
+            }
+            crate::rigctld_server::PortReply::Silent => return (Rig::vox(), None, Some(false)),
+            crate::rigctld_server::PortReply::NotRigctld(_) => {}
+        }
+    }
+    // Every other monitor spawns its OWN rigctld — it must NEVER coexist onto a daemon already on the
     // port, because `probe_rigctld` can only tell that a RIGCTLD is listening (it reads the reply
     // now — see `classify_probe_reply`), never WHICH radio that daemon serves; coexisting onto
     // another radio's daemon is the dual-radio crossed-CAT bug (a monitor
@@ -2261,7 +2417,10 @@ fn open_read_only(
             // ~1.3 s (engine queue) — the client deadline must outlast it or every busy
             // moment reads as CAT-dead (the flapping pill).
             rig.set_slow_transport(
-                network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
+                network
+                    || native_civ_addr(t).is_some()
+                    || t.is_icom_lan()
+                    || t.is_slow_serial_link(),
             );
             let ok = probe_cat(&mut rig, t).ok;
             (rig, Some(proc), ok)
@@ -2283,39 +2442,7 @@ fn monitor_loop(
             return;
         }
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
-        let (active, want): (u32, Vec<(u32, Transport)>) = {
-            let e = engine_lock(&engine);
-            let s = e.settings();
-            let active = s.active_radio;
-            // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
-            // real port on a real radio — so it has to honour them too. Without this, an
-            // operator who set a line HIGH to power a line-fed CI-V converter would keep that
-            // converter alive on the active radio and kill it on every monitored one.
-            let lines = crate::rigctld_proc::ControlLines {
-                rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
-                dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
-                // The two #145 declarations. Both default to "auto"/"untouched", i.e. the
-                // inference and the silence every release up to now shipped.
-                handshake: crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake),
-                keying_line: crate::rigctld_proc::LineState::from_keying_setting(
-                    &s.cat_ptt_line_state,
-                ),
-                // Not an operator wish and never read from settings: `resolve_lines` sets it,
-                // and only where dropping the handshake is what makes `rts` above achievable.
-                handshake_none: false,
-            };
-            let want = s
-                .radios
-                .iter()
-                .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
-                .map(|p| {
-                    let mut t = Transport::from_profile(p);
-                    t.control_lines = lines;
-                    (p.id, t)
-                })
-                .collect();
-            (active, want)
-        };
+        let (active, want) = monitor_want(engine_lock(&engine).settings());
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
         if pending.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2326,6 +2453,43 @@ fn monitor_loop(
         poll_monitors(&pool, active, &engine, &pending);
         std::thread::sleep(Duration::from_millis(150));
     }
+}
+
+/// The monitor's desired set: the active radio, and `(id, transport)` for every enabled, non-active
+/// radio with a rig model.
+fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
+    let active = s.active_radio;
+    // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
+    // real port on a real radio — so it has to honour them too. Without this, an
+    // operator who set a line HIGH to power a line-fed CI-V converter would keep that
+    // converter alive on the active radio and kill it on every monitored one.
+    let lines = crate::rigctld_proc::ControlLines {
+        rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
+        dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+        // The two #145 declarations. Both default to "auto"/"untouched", i.e. the
+        // inference and the silence every release up to now shipped.
+        handshake: crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake),
+        keying_line: crate::rigctld_proc::LineState::from_keying_setting(&s.cat_ptt_line_state),
+        // Not an operator wish and never read from settings: `resolve_lines` sets it,
+        // and only where dropping the handshake is what makes `rts` above achievable.
+        handshake_none: false,
+    };
+    let want = s
+        .radios
+        .iter()
+        .filter(|p| p.enabled && p.id != active && p.rig_model != 0)
+        .map(|p| {
+            let mut t = Transport::from_profile(p);
+            t.control_lines = lines;
+            // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
+            // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
+            t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+            // And whether one of Nexus's own listeners holds this radio's NET rigctl address.
+            t.address_refusal = AddressRefusal::of(&t, s);
+            (p.id, t)
+        })
+        .collect();
+    (active, want)
 }
 
 /// Bring the monitor pool in line with the desired `(id, transport)` set: open newly-wanted radios,
@@ -2684,15 +2848,19 @@ fn handoff_if_switched(
         return;
     }
     state.handoff_deferred = false;
-    // The monitor's `from_profile` conn transport zeroes the broker port; compare CAT fields against a
-    // broker-stripped `want` so the broker being on doesn't spuriously fail the match (FIX #3: adopt
-    // ONLY a conn whose CAT config matches what we now want — a stale conn is dropped + reopened).
-    let mut want_cat = want_active.clone();
-    want_cat.broker_self_port = None;
-    // …and the keying port: a monitor's transport never carries one (`Transport::from_profile`)
-    // and its rig never opens one. The adopted rig keys from `want_active` (`ptt_mode_for`), and
-    // `install_handoff_connection` carries the port into `applied`.
-    want_cat.ptt_serial_port = String::new();
+    // FIX #3: adopt ONLY a conn whose CAT config matches what we now want — a stale conn is dropped
+    // + reopened. Compared without our own CAT broker's port, which is the station's and not the
+    // radio's (a monitor's transport carries it to judge its own open, `monitor_want`), and without
+    // the keying port: a monitor's transport never carries one (`Transport::from_profile`) and its
+    // rig never opens one. The adopted rig keys from `want_active` (`ptt_mode_for`), and
+    // `install_handoff_connection` carries both into `applied`.
+    let cat_of = |t: &Transport| {
+        let mut t = t.clone();
+        t.broker_self_port = None;
+        t.ptt_serial_port = String::new();
+        t
+    };
+    let want_cat = cat_of(&want_active);
     // Adopt ONLY a LIVE conn: a monitor whose rigctld failed to bind / whose CAT probe never connected
     // is parked in the pool as a `Rig::vox()` (no control channel — see `open_monitor`). Adopting that
     // dead conn would install a control-less rig as the active radio, and because `state.applied` is
@@ -2712,7 +2880,7 @@ fn handoff_if_switched(
             // adopting it installs dead CAT as the active radio with `applied` matching, so
             // rig_differs would never rebuild it. Refuse → the fallback drops it + reopens fresh.
             && c.rigctld_proc.as_mut().is_none_or(CatDaemon::is_alive)
-            && !c.transport.rig_differs(&want_cat)
+            && !cat_of(&c.transport).rig_differs(&want_cat)
     }) {
         let mut conn = p.remove(idx);
         // Preserve native unkey-on-adopt before installing the already-open
@@ -3128,9 +3296,11 @@ struct StationSinks {
     /// PSK Reporter spot buffer, flushed on `PSK_FLUSH_SECS`.
     psk_spots: Vec<Spot>,
     last_psk_flush: f64,
-    /// Field Day log cursor — how many FD QSOs have already been pushed to the club
-    /// network / WSJT-X sinks.
-    last_fd_qsos: usize,
+    /// Field Day log cursor — the highest contest seq already pushed to the club network /
+    /// WSJT-X sinks. A SEQ, not a count: rows are named by it, so a contact removed and the
+    /// next one logged inside one slot (the count back where it was) cannot hide the new one,
+    /// and a contact restored after it went out is never pushed twice.
+    last_fd_seq: u64,
     /// Last time (loop ms) we reported our band to the N3FJP club board, so the
     /// no-CAT band report fires on a coarse heartbeat, not every slot boundary.
     last_reported_band: f64,
@@ -3138,8 +3308,8 @@ struct StationSinks {
     /// immediately (between heartbeats). Empty until the first report.
     last_reported_bm: String,
     /// Whether the previous boundary saw a live FD session — the None→Some
-    /// edge seeds `last_fd_qsos` past the restored journal rows so they are
-    /// never re-pushed to the club network / WSJT-X sinks as newly logged.
+    /// edge seeds `last_fd_seq` past the restored journal rows (removed ones included) so
+    /// they are never re-pushed to the club network / WSJT-X sinks as newly logged.
     fd_was_active: bool,
 }
 
@@ -3148,7 +3318,7 @@ impl StationSinks {
         Self {
             psk_spots: Vec::new(),
             last_psk_flush: now_unix_ms(),
-            last_fd_qsos: 0,
+            last_fd_seq: 0,
             last_reported_band: now_unix_ms(),
             last_reported_bm: String::new(),
             fd_was_active: false,
@@ -3184,6 +3354,9 @@ struct RadioLoop {
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
     tuning_keyed: bool,
+    /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
+    /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
+    tune_native: bool,
     /// Was the operator in a DATA mode (FT8/PKTUSB → DATA-U) when this tune started? The Icom
     /// tune keys in DATA mode regardless; on release we restore THIS state, not a hardcoded OFF —
     /// else an FT8 operator gets dropped from DATA-U to plain USB.
@@ -3519,6 +3692,15 @@ struct RadioLoop {
     /// Whether the radio has the mic while native audio is on, as last pushed to the engine (the
     /// voice keyer's refusal).
     flex_radio_has_mic_pushed: Option<bool>,
+    /// What the Flex client's radio reports beside Tune while Tune is its own carrier, as last
+    /// pushed to the engine (`None` inside: Tune is Nexus's tone).
+    flex_tune_pushed: Option<Option<tempo_app::dto::FlexTune>>,
+    /// What is shown beside the ATU while the Flex client runs the radio's own ATU, as last
+    /// pushed to the engine (`None` inside: the client does not).
+    flex_atu_pushed: Option<Option<tempo_app::dto::FlexAtu>>,
+    /// The CW speed the Flex client's radio last reported, while its CW is switched on: a change
+    /// to a speed this loop did not set is followed (`last_cat_wpm`).
+    cw_radio_wpm: Option<u32>,
     /// When the current native audio source started, for the starvation check. `None` once
     /// starvation has been reported (the check is one-shot per source — it must not re-fire every
     /// tick).
@@ -3585,6 +3767,17 @@ struct RadioLoop {
     /// Fake-It split moved the VFO for the playing over — restore THIS dial
     /// (Hz) when the over ends (PTT drop / hard stop).
     fake_it_restore: Option<u64>,
+    /// …and the TX dial that over moved it to (Hz), held from the key until a dial read finds the
+    /// radio off it. A read of it until then is the shifted VFO, never the operator's QSY: WSJT-X
+    /// reports a read-back equal to the TX dial as the RX dial (`EmulateSplitTransceiver.cpp:56-64`,
+    /// "Keep that transient from being adopted as the RX dial"). It outlives the write-back, so a
+    /// radio that refused every try, or took one and then answered a read late, walks nowhere.
+    fake_it_tx_dial: Option<u64>,
+    /// When the write-back may go out (the loop's clock, ms): [`FAKE_IT_WRITE_BACK_MS`] after the
+    /// teardown first finds the over ended, then the next tick after a try the radio did not take.
+    fake_it_restore_at: Option<f64>,
+    /// Write-backs the radio has not taken, against [`DIAL_SET_MAX_TRIES`].
+    fake_it_restore_tries: u32,
     /// An audio Rig-mode split engaged VFO B for an over — tear the rig split
     /// down once no over is pending (unless the cluster split owns VFO B).
     audio_rig_split: bool,
@@ -3703,13 +3896,25 @@ struct RadioLoop {
     cat_port_identity: Option<(u16, u16, String)>,
     /// (configured port, port actually in use) when the rig came back under a new name.
     cat_port_alias: Option<(String, String)>,
-    /// A dial frequency the rig REFUSED (`RPRT <negative>`) — do not keep re-sending it. Mirrors
-    /// `mode_giveup`: the operator's HF-only radio cannot be talked into covering 2 m by asking
-    /// 8 times a second. Cleared by an explicit operator retune (the force branch) or any
-    /// successful dial set.
+    /// A dial frequency the rig REFUSED (`RPRT <negative>`), or did not answer
+    /// [`DIAL_SET_MAX_TRIES`] times — do not keep re-sending it. Mirrors `mode_giveup`: the
+    /// operator's HF-only radio cannot be talked into covering 2 m by asking 8 times a second.
+    /// Cleared by an explicit operator retune (the force branch), a successful set of that dial,
+    /// or the link coming back (`on_cat_link_back`).
     dial_giveup: Option<u64>,
-    /// Consecutive refusals of the currently-commanded dial, against [`DIAL_SET_MAX_TRIES`].
+    /// Consecutive failed sends of the currently-commanded dial, refused or unanswered, against
+    /// [`DIAL_SET_MAX_TRIES`].
     dial_fail_count: u32,
+    /// A filter width the radio has not answered, and how many times it has been sent: the dial's
+    /// rule, [`DIAL_SET_MAX_TRIES`] tries and then an honest give-up ([`width_try_spent`]). A width
+    /// that lands or is refused, a different width asked for, the link coming back, a handoff and a
+    /// rebuild all start the count again.
+    width_unanswered: Option<(u32, u32)>,
+    /// The engine's CAT-status publish count ([`Engine::cat_probe_gen`]) just after this loop put
+    /// a dial note up ("… not sent — no reply from the rig", "… refused by the rig (1/3)"). While
+    /// the count has not moved, the note is still what the operator reads, so a dial that then
+    /// lands takes it down. It used to stay up after the radio had taken the dial.
+    dial_note_gen: Option<u64>,
     /// RX frequency ranges (Hz) read from the rig's Hamlib capability table once per CAT
     /// confirmation. `None` = not probed yet or unknown (must fail OPEN — see
     /// [`crate::rig::Rig::read_rx_ranges`]).
@@ -3935,6 +4140,7 @@ impl RadioLoop {
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
             tuning_keyed: false,
+            tune_native: false,
             tune_was_data: false,
             tune_phase: 0.0,
             tune_started_ms: None,
@@ -4017,6 +4223,9 @@ impl RadioLoop {
             flex_client_audio_failed: false,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
+            flex_tune_pushed: None,
+            flex_atu_pushed: None,
+            cw_radio_wpm: None,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
             silent_capture_since: None,
@@ -4032,6 +4241,9 @@ impl RadioLoop {
             cur_md: String::new(),
             cur_section_cw: false,
             fake_it_restore: None,
+            fake_it_tx_dial: None,
+            fake_it_restore_at: None,
+            fake_it_restore_tries: 0,
             audio_rig_split: false,
             rig_split_restore: None,
             split_detect: None,
@@ -4062,6 +4274,8 @@ impl RadioLoop {
             cat_port_alias: None,
             dial_giveup: None,
             dial_fail_count: 0,
+            width_unanswered: None,
+            dial_note_gen: None,
             rx_ranges: None,
             rx_ranges_probed: false,
             handoff_deferred: false,
@@ -4157,6 +4371,7 @@ impl RadioLoop {
     fn on_cat_link_back(&mut self) {
         self.dial_giveup = None;
         self.dial_fail_count = 0;
+        self.width_unanswered = None;
         self.cat_dead_probes = 0;
         self.cat_port_present = None;
         self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
@@ -4167,7 +4382,10 @@ impl RadioLoop {
     /// Capture the USB identity of the configured serial port while it is present, so a rig
     /// that later comes back under a new port name can be recognised. Once per port.
     fn remember_port_identity(&mut self) {
-        if self.cat_port_identity.is_some() || self.applied.is_network() {
+        if self.cat_port_identity.is_some()
+            || self.applied.is_network()
+            || self.applied.is_icom_lan()
+        {
             return;
         }
         let name = self.effective_port_name();
@@ -4199,6 +4417,7 @@ impl RadioLoop {
             return false;
         }
         let port_returned = if !want.is_network()
+            && !want.is_icom_lan()
             && !want.serial_port.is_empty()
             && now >= self.cat_port_check_at
         {
@@ -4216,9 +4435,14 @@ impl RadioLoop {
         // No daemon AND no way to talk to a rig: the last open FAILED (or never happened) while
         // the port is present or unknowable. Retry it on the reopen backoff. A coexisting or
         // external rigctld has no handle here either but DOES give the rig control, so it
-        // takes the silence path below instead.
+        // takes the silence path below instead. Never during an over of Nexus's own: with no
+        // CAT channel the radio keys by the VOX fallback, so an over can be on the air, and the
+        // retry waits for its end.
         if !rig_has_control && self.rigctld_proc.is_none() {
-            return now >= self.cat_reopen_at;
+            return now >= self.cat_reopen_at
+                && self.tx_until_ms.is_none()
+                && !self.tuning_keyed
+                && !self.manual_ptt_applied;
         }
         self.silence_rebuild_due(now)
     }
@@ -4229,6 +4453,30 @@ impl RadioLoop {
     /// handle here either, and the tests' rigs run without one.)
     fn silence_rebuild_due(&self, now: f64) -> bool {
         self.cat_dead_probes >= CAT_DEAD_PROBES_BEFORE_REBUILD && now >= self.cat_rebuild_at
+    }
+
+    /// A NET rigctl radio WAITING for the rigctld at its Network Address on this computer: its
+    /// open found nothing there and started nothing in between (`open_cat`), so the loop holds no
+    /// daemon and no link. Asking that address again is all a reopen does for it.
+    fn waits_for_a_rigctld_here(&self, rig: &Rig) -> bool {
+        self.rigctld_proc.is_none()
+            && !rig.has_control()
+            && net_rigctld_on_this_machine(&self.applied).is_some()
+    }
+
+    /// What the launch open said, where the loop must act on it. Every reopen hands the loop its
+    /// verdict (`cat_ok`); the launch open, in `run_radio`, only publishes its own. That is enough
+    /// for a launch that opened a link, whose own reads trip the breaker while the radio stays
+    /// silent, but not for one that opened none: the reopen backoff runs only once CAT reads down,
+    /// and with no link nothing would ever read it down, so the radio waited for a Test CAT press
+    /// or a Save. So a failed launch that opened no link is asked again on the backoff, whatever
+    /// failed: nothing at a NET rigctl address ([`Self::waits_for_a_rigctld_here`]), the manual's
+    /// NET rigctl station before its rigctld is up, a port something else holds, a rigctld that
+    /// would not start, OmniRig not starting.
+    fn after_the_launch_open(&mut self, rig: &Rig, ok: Option<bool>) {
+        if ok == Some(false) && self.rigctld_proc.is_none() && !rig.has_control() {
+            self.cat_ok = Some(false);
+        }
     }
 
     /// One presence check of `port` against an enumeration. Returns true on the ABSENT →
@@ -4276,7 +4524,7 @@ impl RadioLoop {
     /// identity we remembered, follow the rig there. Anything ambiguous is left alone.
     fn resolve_port_alias(&mut self, want: &Transport) -> Transport {
         let mut want = want.clone();
-        if want.is_network() || want.serial_port.is_empty() {
+        if want.is_network() || want.is_icom_lan() || want.serial_port.is_empty() {
             return want;
         }
         let Some(identity) = self.cat_port_identity.clone() else {
@@ -4345,10 +4593,42 @@ impl RadioLoop {
         mode_is_data(&self.last_mode) && !self.cur_section_cw
     }
 
+    /// What carries this radio's CAT now ([`CatLink`]): the daemon serving it, and for a rigctld
+    /// the transport and the radio's model.
+    fn cat_link(&self) -> CatLink {
+        let t = &self.applied;
+        match self.rigctld_proc.as_ref() {
+            Some(CatDaemon::Native(_)) => CatLink::Civ,
+            Some(CatDaemon::IcomLan(_)) => CatLink::IcomLan,
+            Some(CatDaemon::Omni(_)) => CatLink::OmniRig,
+            Some(CatDaemon::Flex(_)) => CatLink::Flex,
+            Some(CatDaemon::Spawned(_)) | None if t.is_network() => {
+                CatLink::Network(t.rig_addr.clone())
+            }
+            Some(CatDaemon::Spawned(_)) | None => {
+                if crate::rigmodels::rig_model_name(t.rig_model)
+                    .is_some_and(|n| n.starts_with("Icom"))
+                {
+                    CatLink::Civ
+                } else {
+                    CatLink::HamlibSerial
+                }
+            }
+        }
+    }
+
     /// The backend attribution for the CURRENTLY-owned CAT channel, appended to probe and
     /// health messages (see [`cat_backend_label`]). `t` is the transport the channel was
     /// built for (`applied`, or `want` when they compare equal).
     fn live_backend_label(&self, t: &Transport) -> &'static str {
+        if self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::icom_lan)
+            .is_some()
+        {
+            return "Nexus's Icom network client (Beta)";
+        }
         let native_wanted = native_civ_addr(t).is_some() && !keys_on_the_cat_port(t);
         cat_backend_label(
             native_wanted,
@@ -4873,12 +5153,13 @@ impl RadioLoop {
         if flex_enabled && ip.is_empty() {
             {
                 let mut eng = engine_lock(engine);
-                eng.set_audio_error(Some(
+                eng.set_audio_error(Some((
+                    AudioErrorKind::FlexAddress,
                     "Flex native panadapter is switched on but no Flex radio IP is set — \
                      nothing will start. Put the radio's LAN address in Settings ▸ Radio ▸ \
                      \"Flex radio IP\" (Find Radios fills it in), then Save."
                         .to_string(),
-                ));
+                )));
             }
             self.err_owner = ErrOwner::Dax;
         }
@@ -5075,10 +5356,11 @@ impl RadioLoop {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(
+                    eng.set_audio_error(Some((
+                        AudioErrorKind::Ptt,
                         "The rig didn't accept PTT — check your PTT method and CAT/port."
                             .to_string(),
-                    ));
+                    )));
                 }
                 self.err_owner = ErrOwner::Ptt;
             }
@@ -5096,7 +5378,7 @@ impl RadioLoop {
     /// the rigctld answer, `RPRT -1`, which carries no reason. Anything else: nothing.
     fn explain_flex_refusal(&self, eng: &mut Engine, asked: Instant) {
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
-        if let Some((why, cause)) = flex.and_then(|d| d.key_refused_since(asked)) {
+        if let Some((why, Some(cause))) = flex.and_then(|d| d.key_refused_since(asked)) {
             eng.explain_refused_key(&why, cause);
         }
     }
@@ -5106,6 +5388,17 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// Whether Nexus's own Flex client believes a transmission of ours may be on the air
+    /// ([`crate::flex::FlexDaemon::keyed`]): part of this loop's true keyed set for the teardown
+    /// and the hard stop. The client sees what this loop cannot: a stop the radio has not yet
+    /// proven, a transmission the radio keys for Nexus by itself, an earlier session's carrier.
+    fn flex_keyed(&self) -> bool {
+        self.rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_some_and(crate::flex::FlexDaemon::keyed)
     }
 
     /// Whether this loop's PTT hold is a slot over's (FT8, FT4, JS8 and the other timed-slot
@@ -5144,6 +5437,32 @@ impl RadioLoop {
     /// this are unchanged. `Rig::ptt` leaves `keyed` set after a failed key (fail-safe), so with
     /// nothing held the idle self-heal unkeys the radio on this same tick, in case it keyed after
     /// all, and an over that goes out unkeys at its end as any over does.
+    /// Start the radio's own tune carrier through Nexus's Flex client, held at most `hold_ms`
+    /// ([`crate::flex::FlexDaemon::tune_on`]). A refusal goes on the PTT line in the operator's
+    /// words, as a refused key's does ([`Self::report_ptt`]), and comes back for the log; a start
+    /// clears that line.
+    fn key_radio_tune(&mut self, engine: &Arc<Mutex<Engine>>, hold_ms: u64) -> Option<String> {
+        let started = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .map(|d| d.tune_on(hold_ms));
+        let why = match started {
+            Some(Ok(())) => {
+                self.report_ptt(engine, false);
+                return None;
+            }
+            Some(Err(refusal)) => crate::flex::tune_refusal_words(refusal.as_ref()),
+            None => crate::flex::tune_refusal_words(None),
+        };
+        tempo_core::applog::info("tx", &format!("{why} (dropped)"));
+        if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
+            engine_lock(engine).set_audio_error(Some((AudioErrorKind::Ptt, why.clone())));
+            self.err_owner = ErrOwner::Ptt;
+        }
+        Some(why)
+    }
+
     fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
         let key = if plain {
@@ -5462,6 +5781,9 @@ impl RadioLoop {
     ///  3. HEAL the app's belief from the rig itself. `set_frequency` writes the dial optimistically
     ///     the moment the operator asks, so on a refusal the UI is showing a frequency that exists
     ///     nowhere but in our own state. Read the rig and adopt what it says.
+    ///
+    /// A dial the rig does not ANSWER (a link fault) takes the same budget and the same heal, in
+    /// its own words, and records no refusal: see the `Err` arm.
     fn push_dial(
         &mut self,
         rig: &mut Rig,
@@ -5504,35 +5826,46 @@ impl RadioLoop {
             }
             Err(e) => {
                 let mhz = dial as f64 / 1_000_000.0;
-                // A LINK fault — the rig did not answer — is not a refusal and must not count
-                // toward the band give-up: it feeds the circuit breaker instead (the next heavy
-                // poll trips it with a real read), and the give-up stays clear so the band is
-                // not blacklisted for the rest of the session over a radio that was off.
-                if is_link_fault(&e) {
-                    if rig.has_control() {
-                        self.freq_misses = self.freq_misses.saturating_add(1);
-                    }
-                    return Some(format!(
-                        "{mhz:.4} MHz not sent — {}",
-                        dial_failure_brief(&e)
-                    ));
+                // A LINK fault — the rig did not answer — is not a refusal, and is never called
+                // one: it is "not sent", records no refused dial, and feeds the circuit breaker
+                // (the next heavy poll trips it with a real read). It still spends the same
+                // budget. Each send to a silent radio holds the loop for the link's whole
+                // deadline, and one in flight at a slot boundary delays an FT key-on by that
+                // much, so a dial the radio never answers is sent DIAL_SET_MAX_TRIES times, as
+                // when the silence was counted as a refusal, not on every tick until the breaker
+                // trips (never, for a radio that answers reads). The give-up blacklists nothing
+                // for the session: every recovery site forgives it (`on_cat_link_back`), and so
+                // does the operator's next retune. The try that spends the budget picks the words.
+                let silent = is_link_fault(&e);
+                if silent && rig.has_control() {
+                    self.freq_misses = self.freq_misses.saturating_add(1);
                 }
+                let brief = dial_failure_brief(&e);
                 self.dial_fail_count += 1;
                 if self.dial_fail_count < DIAL_SET_MAX_TRIES {
-                    return Some(format!(
-                        "{mhz:.4} MHz {} ({}/{DIAL_SET_MAX_TRIES})",
-                        dial_failure_brief(&e),
-                        self.dial_fail_count
-                    ));
+                    let tries = format!("({}/{DIAL_SET_MAX_TRIES})", self.dial_fail_count);
+                    return Some(if silent {
+                        format!("{mhz:.4} MHz not sent — {brief} {tries}")
+                    } else {
+                        format!("{mhz:.4} MHz {brief} {tries}")
+                    });
                 }
-                // Budget spent: this radio will not go there. Stop asking, and stop showing a dial
-                // the radio refused — the rig's own frequency is the only true answer.
+                // Budget spent: stop asking, and stop showing a dial the radio is not on — the
+                // rig's own frequency is the only true answer. A refusal also says the radio does
+                // not go there; a silence says only that it did not answer.
                 self.dial_giveup = Some(dial);
                 self.dial_fail_count = 0;
-                eprintln!(
-                    "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving up \
-                     (the radio does not appear to cover {mhz:.4} MHz)."
-                );
+                if silent {
+                    eprintln!(
+                        "tempo-audio: set_freq({dial}) went unanswered {DIAL_SET_MAX_TRIES} times — \
+                         giving up until the link recovers or the dial is asked for again."
+                    );
+                } else {
+                    eprintln!(
+                        "tempo-audio: set_freq({dial}) refused {DIAL_SET_MAX_TRIES} times — giving \
+                         up (the radio does not appear to cover {mhz:.4} MHz)."
+                    );
+                }
                 let healed = rig.read_freq().ok();
                 {
                     let mut eng = engine_lock(engine);
@@ -5540,19 +5873,86 @@ impl RadioLoop {
                         self.last_dial = hz;
                         eng.observe_rig_freq(hz);
                     }
-                    eng.set_rig_refused_dial(Some(mhz));
-                }
-                Some(match healed {
-                    Some(hz) => format!(
-                        "the radio refused {mhz:.4} MHz — it does not cover that frequency; \
-                         still on {:.4} MHz",
-                        hz as f64 / 1_000_000.0
-                    ),
-                    None => {
-                        format!("the radio refused {mhz:.4} MHz — it does not cover that frequency")
+                    if !silent {
+                        eng.set_rig_refused_dial(Some(mhz));
                     }
+                }
+                let still_on = healed.map(|hz| format!("; still on {:.4} MHz", hz as f64 / 1e6));
+                Some(if silent {
+                    format!(
+                        "{mhz:.4} MHz not sent — {brief} after {DIAL_SET_MAX_TRIES} tries{}",
+                        still_on.unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "the radio refused {mhz:.4} MHz — it does not cover that frequency{}",
+                        still_on.unwrap_or_default()
+                    )
                 })
             }
+        }
+    }
+
+    /// A Fake-It over just moved the VFO: hold its write-back and its TX dial for the teardown.
+    fn hold_fake_it_restore(&mut self, restore: Option<u64>, tx_dial: Option<u64>) {
+        if restore.is_some() {
+            self.fake_it_restore = restore;
+            self.fake_it_tx_dial = tx_dial;
+            self.fake_it_restore_at = None;
+            self.fake_it_restore_tries = 0;
+        }
+    }
+
+    /// The Fake-It write-back is done with: taken, given up, or moot.
+    fn end_fake_it_restore(&mut self) {
+        self.fake_it_restore = None;
+        self.fake_it_restore_at = None;
+        self.fake_it_restore_tries = 0;
+    }
+
+    /// Is this dial read the Fake-It over's TX dial, before the radio has been read off it? Then
+    /// it is the shifted VFO, never an operator QSY ([`Self::fake_it_tx_dial`]). Any other read
+    /// ends the hold, and any write-back still to go with it: the radio is back on the RX dial, or
+    /// the operator has turned the knob, which a write-back would undo.
+    fn fake_it_transient(&mut self, hz: u64) -> bool {
+        match self.fake_it_tx_dial {
+            Some(tx) if hz == tx => true,
+            Some(_) => {
+                self.fake_it_tx_dial = None;
+                self.end_fake_it_restore();
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Something is about to key: a Fake-It write-back still waiting out its
+    /// [`FAKE_IT_WRITE_BACK_MS`] goes now, ahead of the key and of anything that moves the dial for
+    /// it. When the write-back went out on the unkey's own tick nothing could key ahead of it, and
+    /// WSJT-X runs its wait and its write-back before its next key; without this a tune, or an
+    /// over the engine did not shift, keyed inside the wait would go out on the last over's TX
+    /// dial. Only a write-back not yet tried, and only with no carrier up, on the teardown's own
+    /// test: a tune that supersedes an over in flight (`tx_until_ms` is still set when it keys)
+    /// keys over that over's TX dial as it always did, and the write-back waits for the tune to
+    /// end. A try the radio does not take is the teardown's to repeat.
+    fn fake_it_write_back_before_key(&mut self, rig: &mut Rig, now: f64) {
+        let Some(hz) = self.fake_it_restore else {
+            return;
+        };
+        let carrier =
+            self.tx_until_ms.is_some() || self.manual_ptt_applied || self.tuning_keyed || rig.keyed;
+        if carrier || self.fake_it_restore_tries > 0 {
+            return;
+        }
+        let sent = rig.set_freq(hz);
+        self.last_dial = hz;
+        self.last_rig_poll = now;
+        self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+        if sent.is_ok() {
+            self.end_fake_it_restore();
+        } else {
+            self.fake_it_restore_tries = 1;
+            self.fake_it_restore_at = Some(now);
         }
     }
 
@@ -5628,11 +6028,10 @@ impl RadioLoop {
             daemon.set_scope_enabled(false);
         }
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
-        // Monitor comparison strips the broker port. The active side retains
-        // it so ordinary reconciliation does not tear down either connection.
-        // The keying port likewise: a monitor never carries one, and the active
-        // side keys with the one the operator configured.
-        old_transport.broker_self_port = None;
+        // The demoted transport keeps the broker's port, which the monitor's own want carries
+        // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
+        // port: a monitor never carries one, and the active side keys with the one the operator
+        // configured.
         old_transport.ptt_serial_port = String::new();
         self.rigctld_proc = conn.rigctld_proc;
         self.applied.broker_self_port = want_active.broker_self_port;
@@ -5662,6 +6061,7 @@ impl RadioLoop {
         self.mode_giveup = None;
         self.mode_saw_reject = false;
         self.last_cat_wpm = 0;
+        self.cw_radio_wpm = None;
         // The WinKeyer is not the thing being handed off (it is its own box on its own
         // port), but the handoff resets every "already told it" cache and this one costs
         // two bytes to be wrong about, so it goes with the rest.
@@ -5706,7 +6106,8 @@ impl RadioLoop {
         self.af_gain_giveup = None;
         self.rf_gain_giveup = None;
         self.squelch_giveup = None;
-        self.fake_it_restore = None;
+        self.end_fake_it_restore();
+        self.fake_it_tx_dial = None;
         self.audio_rig_split = false;
         self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
@@ -5724,6 +6125,7 @@ impl RadioLoop {
         self.rx_ranges_probed = false;
         self.dial_giveup = None;
         self.dial_fail_count = 0;
+        self.width_unanswered = None;
         // The new radio is not in OUR satellite-mode session; if the old one
         // was, the operator gets it back as-is (hand back, never restore).
         self.split_on_sub = false;
@@ -5892,12 +6294,13 @@ impl RadioLoop {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Dax) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some(
+                    eng.set_audio_error(Some((
+                        AudioErrorKind::FlexAudio,
                         "Native Flex audio is selected but no audio is arriving — switched back \
                          to the sound card. Check the Flex API address, that DAX is enabled on \
                          the radio, and that a firewall isn't blocking its UDP audio."
                             .to_string(),
-                    ));
+                    )));
                 }
                 self.err_owner = ErrOwner::Dax;
             }
@@ -5964,6 +6367,27 @@ impl RadioLoop {
         if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
             self.flex_radio_has_mic_pushed = Some(radio_has_mic);
             engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
+        }
+        // …and, while Tune is the client's radio's own carrier (switched on only once a tester's
+        // bench has confirmed it), what that radio reports beside Tune: its tune power and its own
+        // transmit timeout. The engine then judges a tune as CW where the radio puts the carrier
+        // too. Pushed on the change, before the tune branch below reads `tuning`.
+        let flex_tune = flex
+            .filter(|d| d.tunes_natively())
+            .map(crate::flex::FlexDaemon::radio_tune);
+        if self.flex_tune_pushed != Some(flex_tune) {
+            self.flex_tune_pushed = Some(flex_tune);
+            engine_lock(engine).observe_flex_tune(flex_tune);
+        }
+        // …and, while the client runs the radio's own ATU (switched on only once a tester's bench
+        // has confirmed it) and the radio reports a tuner fitted, what is shown beside the ATU:
+        // the same readouts, and the ATU line (a cycle's result, or why a press started none). The
+        // engine then judges an ATU press as CW where the radio transmits too. Pushed on the
+        // change, before the ATU press below is taken.
+        let flex_atu = flex.and_then(crate::flex::FlexDaemon::radio_atu);
+        if self.flex_atu_pushed.as_ref() != Some(&flex_atu) {
+            self.flex_atu_pushed = Some(flex_atu.clone());
+            engine_lock(engine).observe_flex_atu(flex_atu);
         }
 
         self.apply_remote_radio(engine, rig, now);
@@ -6087,10 +6511,12 @@ impl RadioLoop {
             // storm the give-ups were invented to stop, and it fed a give-up that outlived the
             // outage. The breaker owns recovery — its re-probe reads the rig, and the loop then
             // follows the dial the radio woke up on. (2026-09-02 overnight-radio review.)
-            let can_push_dial = can_retune
-                && !self.operator_keyed()
-                && !self.manual_ptt_applied
-                && (self.cat_ok != Some(false) || !self.cat_down_link_fault);
+            // The MODE is withheld the same way, on both retune paths below: a radio that was off
+            // got a mode write on every step of the trip, each holding the loop for the link's
+            // whole deadline. It goes out again once the re-probe finds the radio.
+            let link_down = self.cat_ok == Some(false) && self.cat_down_link_fault;
+            let can_push_dial =
+                can_retune && !self.operator_keyed() && !self.manual_ptt_applied && !link_down;
             // Stash for the key-site latch (ensure_commanded) — the bindings above live in
             // this block's scope; the key-ups happen in narrower ones.
             self.cur_dial = dial;
@@ -6130,6 +6556,22 @@ impl RadioLoop {
             // a rig that is merely off, and the breaker's re-probe asks that same daemon forever.
             // Two independent triggers reopen the port: the configured port coming BACK, and
             // sustained silence past a few failed re-probes (with backoff between rebuilds).
+            // Test CAT on the Icom network connection is the operator acting: a radio waiting on
+            // the retry ladder, or for the operator after it ended the session or refused the
+            // login, is tried again now, through a fresh session rather than a probe of nothing.
+            // A radio waiting for the rigctld at its Network Address asks that address again now,
+            // for the same reason, and one whose address is refused says why again (its open reads
+            // nothing), rather than probe a link it never opened.
+            if reprobe_req && self.rigctld_proc.is_none() {
+                if let Some(t) = want.icom_lan_target() {
+                    crate::icomlan::registry::operator_acted(t.key());
+                    self.cat_reopen_at = 0.0;
+                } else if self.waits_for_a_rigctld_here(rig)
+                    || self.applied.address_refusal.0.is_some()
+                {
+                    self.cat_reopen_at = 0.0;
+                }
+            }
             let suspect_rebuild = self.cat_rebuild_due(&want, now, rig.has_control());
             // Nexus's Flex client says what the operator must know about the transmitter. Once its
             // session has ended, why, when the transmitter is the reason (the radio did not confirm
@@ -6238,21 +6680,43 @@ impl RadioLoop {
                 || suspect_rebuild
             {
                 self.cat_hold_active = false;
+                // An open that opened no link (no daemon, no CAT channel) left nothing to let go
+                // of and nothing keyed through it, so asking it again is no context change: no
+                // teardown below, and the retry reopens no port and says only what the open said.
+                // `cat_rebuild_due` has waited out any over of ours. A changed transport, a
+                // released Test-CAT hold and a dead daemon are rebuilt as always.
+                let linkless = self.rigctld_proc.is_none() && !rig.has_control();
+                let asking_again = linkless
+                    && suspect_rebuild
+                    && !daemon_died
+                    && !resume_after_hold
+                    && !want.rig_differs(&self.applied);
+                // A saved change to the Icom network connection is the operator acting too: the
+                // new configuration is tried at once, whatever the old one was waiting for.
+                if want.rig_differs(&self.applied) {
+                    if let Some(t) = want.icom_lan_target() {
+                        crate::icomlan::registry::operator_acted(t.key());
+                    }
+                }
                 // The keyed belief at teardown entry, carried onto the fresh rig below. A rebuild
                 // must NEVER make the loop forget a physically-keyed transmitter: the fresh rig
                 // starts keyed=false, which would disarm the idle self-heal that is the only thing
                 // that unkeys a wedged rig on the external-Hamlib path (it has no daemon fail-safe,
-                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX.
-                let was_keyed = rig.keyed;
+                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX. Nexus's
+                // own Flex client counts too: it knows what the radio keyed for Nexus that `rig`
+                // never did.
+                let was_keyed = rig.keyed || self.flex_keyed();
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down — flush, unkey, clear TX state, THEN drop the daemon.
-                self.unkey_before_letting_go(
-                    engine,
-                    backend,
-                    rig,
-                    "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
-                    "CAT daemon rebuild",
-                );
+                if !asking_again {
+                    self.unkey_before_letting_go(
+                        engine,
+                        backend,
+                        rig,
+                        "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
+                        "CAT daemon rebuild",
+                    );
+                }
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
                 // port (see `allow_coexist_on_swap`). We must NOT coexist onto our OWN daemon that
                 // we're about to kill — its corpse would keep commanding the OLD radio (the dual-radio
@@ -6266,6 +6730,12 @@ impl RadioLoop {
                 // it served, which `remote_radio_id` still names.
                 let served = self.remote_radio_id.unwrap_or(remote_want_radio);
                 raise_flex_alarm(self.rigctld_proc.as_ref(), served, engine);
+                // What the Icom network session said as it ended, before it goes.
+                let lan_loss = self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::icom_lan)
+                    .and_then(crate::icomlan::IcomLanDaemon::loss);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                                           // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
@@ -6274,7 +6744,7 @@ impl RadioLoop {
                 self.remote_radio_id = Some(remote_want_radio);
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
-                let detail = if suspect_rebuild && !daemon_died {
+                let detail = if suspect_rebuild && !daemon_died && !linkless {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")
                         .trim_end()
                         .to_string()
@@ -6284,12 +6754,14 @@ impl RadioLoop {
                 // A daemon death must SURVIVE in the message the rebuild publishes, not just
                 // flash before it: the probe detail lands on the same status line a moment
                 // later, so a pre-rebuild note alone would be gone before anyone read it.
-                let detail = if daemon_died {
-                    format!("the CAT helper (rigctld) stopped and was restarted. {detail}")
-                        .trim_end()
-                        .to_string()
-                } else {
-                    detail
+                let detail = match (daemon_died, lan_loss) {
+                    (true, Some(loss)) => format!("{loss}. {detail}").trim_end().to_string(),
+                    (true, None) => {
+                        format!("the CAT helper (rigctld) stopped and was restarted. {detail}")
+                            .trim_end()
+                            .to_string()
+                    }
+                    (false, _) => detail,
                 };
                 // …and so must the Flex client's alarm, ahead of it: the operator reads that the
                 // radio may still be transmitting before anything about the restart.
@@ -6329,6 +6801,7 @@ impl RadioLoop {
                 self.mode_saw_reject = false;
                 self.dial_giveup = None; // same for the dial: the refusal may have been the link
                 self.dial_fail_count = 0;
+                self.width_unanswered = None;
                 self.cat_dead_probes = 0;
                 self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
                 self.cat_port_present = None;
@@ -6336,6 +6809,14 @@ impl RadioLoop {
                 self.cat_reopen_at = now + self.cat_reopen_backoff_ms;
                 self.cat_reopen_backoff_ms =
                     (self.cat_reopen_backoff_ms * 2.0).min(CAT_REOPEN_MAX_MS);
+                // …except on the Icom network connection, whose next try is the radio's retry
+                // ladder, or the operator's own after the radio ended the session or refused
+                // the login.
+                if self.rigctld_proc.is_none() {
+                    if let Some(t) = want.icom_lan_target() {
+                        self.cat_reopen_at = icom_lan_reopen_at(t.key(), now, self.cat_reopen_at);
+                    }
+                }
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
@@ -6351,6 +6832,10 @@ impl RadioLoop {
                     || keys_on_the_cat_port(&want);
                 if ok.is_some() && probed_cat && rig.has_control() {
                     detail = with_backend(detail, self.live_backend_label(&want));
+                }
+                // The Icom network client's reading of the radio, as at connect.
+                if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::icom_lan) {
+                    detail = format!("{detail} {}", d.status());
                 }
                 // Test CAT is the button an operator presses precisely BECAUSE the rig isn't
                 // answering, so this is the most valuable place of all for Hamlib's own words
@@ -6389,8 +6874,9 @@ impl RadioLoop {
                     self.audio_suspect = None;
                     {
                         let mut eng = engine_lock(engine);
-                        eng.set_audio_error(Some(format!(
-                            "Sound card stopped — {err}. Reopening…"
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::SoundCard,
+                            format!("Sound card stopped — {err}. Reopening…"),
                         )));
                     }
                     // A REAL device error owns the line, same as the open-failure arm below.
@@ -6443,10 +6929,13 @@ impl RadioLoop {
                         };
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!(
-                                "Audio input is open but delivering pure silence — every \
-                                 sample is zero. Check the rig's USB audio cable and the \
-                                 input's level.{mac_hint}"
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::NoReceiveAudio,
+                                format!(
+                                    "Audio input is open but delivering pure silence — every \
+                                     sample is zero. Check the rig's USB audio cable and the \
+                                     input's level.{mac_hint}"
+                                ),
                             )));
                         }
                         // The receive side finally says something. This condition was detected
@@ -6617,9 +7106,10 @@ impl RadioLoop {
                         // erase the wait.
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::NoReceiveAudio,
                                 "Audio device reopened, waiting for samples…".to_string(),
-                            ));
+                            )));
                         }
                         self.err_owner = ErrOwner::Device;
                         self.audio_awaiting_samples = true;
@@ -6639,7 +7129,10 @@ impl RadioLoop {
                         );
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
+                            eng.set_audio_error(Some((
+                                AudioErrorKind::SoundCard,
+                                format!("Audio device failed to open: {e}"),
+                            )));
                         }
                         // A REAL device error owns the line — monitor/voice-mic
                         // notices may neither overwrite nor clear it.
@@ -6715,20 +7208,22 @@ impl RadioLoop {
                             // Device error outranks us; a VoiceMic notice is the
                             // operator's more recent concern.
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some(format!(
-                                    "Headphone monitor could not open: {e}"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Monitor,
+                                    format!("Headphone monitor could not open: {e}"),
                                 )));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
                         Ok(()) if want.monitor_enabled && guarded => {
                             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Monitor) {
-                                eng.set_audio_error(Some(
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Monitor,
                                     "Headphone monitor is off: the chosen output is the rig's TX \
                                      device — monitoring it would transmit the received band. Pick a \
                                      separate headphone or speaker device."
                                         .to_string(),
-                                ));
+                                )));
                                 self.err_owner = ErrOwner::Monitor;
                             }
                         }
@@ -6806,7 +7301,9 @@ impl RadioLoop {
                 // now a DATA submode too (see `RadioLoop::scope_yields_to_audio_waterfall`).
                 let stand_down =
                     self.scope_yields_to_audio_waterfall() && !self.spectrum_feed.rf_wanted();
-                d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !stand_down);
+                d.set_scope_enabled(
+                    link_carries_the_scope(&self.applied) && !keyed_now && !stand_down,
+                );
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
                 // steal the over (the native-CI-V PTT flicker). Cleared the moment TX ends.
@@ -6941,6 +7438,8 @@ impl RadioLoop {
             let mut retune_note: Option<String> = None;
             // A DIAL refusal, held separately so the mode note below cannot bury it.
             let mut dial_note: Option<String> = None;
+            // The rig took a dial this tick: a dial note still up is out of date.
+            let mut dial_landed = false;
             if force_retune {
                 // New native intent (including local TX arming's existing
                 // assert) owns this work; an observation never sets this flag.
@@ -6984,7 +7483,7 @@ impl RadioLoop {
                     // WSJT-X has no such window: `Configuration.cpp:947` and `:3552` both emit one
                     // `cached_rig_state_` carrying frequency AND mode together.
                     let mode_changed = !md.trim().is_empty() && md != self.last_mode;
-                    if !md.trim().is_empty() {
+                    if !md.trim().is_empty() && !link_down {
                         // A dial-only QSY (wheel/nudge) re-enters this force path with the SAME mode;
                         // skip the diagnostic mode read-back then, so continuous wheel-tuning doesn't
                         // fire an extra `w MD0;` round-trip per ~120 ms flush. The mode is still
@@ -7046,6 +7545,7 @@ impl RadioLoop {
                             Some(note) => dial_note = Some(note),
                             None => {
                                 retuned = true;
+                                dial_landed = true;
                                 // Band-crossing pick: the rig's band-stack may have just
                                 // overridden the mode commanded above — verify and win.
                                 self.reassert_mode_after_band_cross(
@@ -7080,7 +7580,7 @@ impl RadioLoop {
                         md != self.last_mode && self.mode_giveup.as_deref() != Some(md.as_str());
                     // Apply the section's mode. `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
-                    if mode_changed {
+                    if mode_changed && !link_down {
                         let sent_pb = retry_passband(&md, self.mode_fail_count);
                         match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
@@ -7139,7 +7639,12 @@ impl RadioLoop {
                                     if let Some(base) = fallback {
                                         self.last_mode = base.to_string();
                                     }
-                                    retune_note = Some(mode_giveup_note(&md, saw_reject, fallback));
+                                    retune_note = Some(mode_giveup_note(
+                                        &md,
+                                        saw_reject,
+                                        fallback,
+                                        &self.cat_link(),
+                                    ));
                                 }
                             }
                         }
@@ -7148,8 +7653,8 @@ impl RadioLoop {
                     // force path: `set_mode` alone shifts a pitch-offset rig, so a mode change
                     // whose dial is unchanged must still re-assert the dial in the DESTINATION
                     // mode's convention, or the shift stands and the read-back adopts it.
-                    // `dial_giveup` still stops a frequency the radio has REFUSED from being
-                    // re-sent every tick — the HF-only-rig-on-2 m storm.
+                    // `dial_giveup` still stops a frequency the radio has REFUSED (or never
+                    // answered) from being re-sent every tick — the HF-only-rig-on-2 m storm.
                     if (dial != self.last_dial || mode_changed)
                         && self.dial_giveup != Some(dial)
                         && can_push_dial
@@ -7160,6 +7665,7 @@ impl RadioLoop {
                             Some(note) => dial_note = Some(note),
                             None => {
                                 retuned = true;
+                                dial_landed = true;
                                 // Same band-stack window as the force path.
                                 self.reassert_mode_after_band_cross(
                                     rig, &md, prev_dial, dial, engine,
@@ -7449,7 +7955,7 @@ impl RadioLoop {
                                 );
                             }
                         }
-                        if hz != self.last_dial {
+                        if !self.fake_it_transient(hz) && hz != self.last_dial {
                             self.last_dial = hz;
                             {
                                 let mut eng = engine_lock(engine);
@@ -7500,14 +8006,26 @@ impl RadioLoop {
                         // Kenwood backends clamp `set_func TUNER 2` to "tuner in line" and
                         // still answer `RPRT 0` — see `rigmodels::hamlib_atu_start_tune_reaches`
                         // for the source lines — so the capability has to be read from the MODEL,
-                        // not from the rig's reply. Every path that answers `u TUNER` today is
-                        // Hamlib rigctld (the native CI-V gap above), so the model settles it.
+                        // not from the rig's reply. Every other path that answers `u TUNER` today
+                        // is Hamlib rigctld (the native CI-V gap above), so the model settles it;
+                        // Nexus's own Flex client answers it only behind its ATU switch, and says
+                        // itself whether it can start a tune.
                         if !self.tuner_probed {
                             self.tuner_probed = true;
                             let tuner = rig.read_func("TUNER");
-                            let start_tune = crate::rigmodels::hamlib_atu_start_tune_reaches(
-                                self.applied.rig_model,
-                            );
+                            // Nexus's own Flex client, once it runs the radio's ATU, says itself
+                            // whether it can start the radio's tuner (a tuner the radio reports
+                            // fitted): the profile's Hamlib model, 2036 for SmartSDR CAT,
+                            // describes a CAT path that is not in use, and says it cannot. Until
+                            // then the client answers no `u TUNER`, so no ATU button is offered,
+                            // and the model's answer stands, as before.
+                            let start_tune =
+                                match self.rigctld_proc.as_ref().and_then(CatDaemon::flex) {
+                                    Some(client) if client.runs_atu() => client.starts_atu(),
+                                    _ => crate::rigmodels::hamlib_atu_start_tune_reaches(
+                                        self.applied.rig_model,
+                                    ),
+                                };
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.observe_rig_tuner(tuner, start_tune);
@@ -7891,28 +8409,47 @@ impl RadioLoop {
                                         } else {
                                             d.set_filter_width(hz)
                                         };
+                                        // Nothing answered: a try, re-queued as on the Hamlib
+                                        // path, until the dial's DIAL_SET_MAX_TRIES are spent.
+                                        let spent = matches!(set, Err(Refusal::NoAnswer))
+                                            && width_try_spent(&mut self.width_unanswered, hz);
                                         match set {
                                             Ok(w) => {
+                                                self.width_unanswered = None;
                                                 engine_lock(engine).observe_rig_passband(Some(w))
                                             }
-                                            // Nothing answered: the same re-queue as the Hamlib path.
-                                            Err(Refusal::NoAnswer) => {
+                                            Err(Refusal::NoAnswer) if !spent => {
                                                 engine_lock(engine).request_filter_width(hz)
                                             }
-                                            // A REFUSAL IS FINAL — FM, DATA, an NG. Re-queued, it
-                                            // would be re-sent every cycle forever. Drop it, say why
-                                            // in the log, and put the radio's real width back where
-                                            // the optimistic one stands.
+                                            // A REFUSAL IS FINAL — FM, DATA, an NG — and so is a
+                                            // silence past its tries. Re-queued, it would be re-sent
+                                            // every cycle forever. Drop it, say why in the log (a
+                                            // silence on the CAT status too), and put the radio's
+                                            // real width back where the optimistic one stands.
                                             Err(why) => {
-                                                tempo_core::applog::info(
-                                                    "cat",
-                                                    &format!(
-                                                        "the radio kept its filter width: a {hz} Hz \
-                                                         width was not set ({why:?})"
-                                                    ),
-                                                );
+                                                self.width_unanswered = None;
                                                 // Read first: no CAT round trip under the engine lock.
                                                 let now = d.filter_width(mode);
+                                                let kept = match now {
+                                                    FilterWidthReading::Width(w) => Some(w),
+                                                    _ => None,
+                                                };
+                                                let note = spent.then(|| {
+                                                    width_giveup_note(
+                                                        hz,
+                                                        "no reply from the rig",
+                                                        kept,
+                                                    )
+                                                });
+                                                tempo_core::applog::info(
+                                                    "cat",
+                                                    &note.clone().unwrap_or_else(|| {
+                                                        format!(
+                                                            "the radio kept its filter width: a {hz} \
+                                                             Hz width was not set ({why:?})"
+                                                        )
+                                                    }),
+                                                );
                                                 let mut eng = engine_lock(engine);
                                                 match now {
                                                     FilterWidthReading::Width(w) => {
@@ -7923,11 +8460,15 @@ impl RadioLoop {
                                                     }
                                                     FilterWidthReading::Unread => {}
                                                 }
+                                                if let Some(note) = note {
+                                                    eng.set_cat_status(self.cat_ok, note);
+                                                }
                                             }
                                         }
                                     }
                                     (Some(hz), None) => match rig.set_passband(mode, hz) {
                                         Ok(()) => {
+                                            self.width_unanswered = None;
                                             let mut eng = engine_lock(engine);
                                             eng.observe_rig_passband(Some(hz)); // optimistic; next read confirms
                                         }
@@ -7938,6 +8479,7 @@ impl RadioLoop {
                                         // read. The `m` read just above already put the radio's
                                         // own width back on screen.
                                         Err(e) if e.kind() == std::io::ErrorKind::Other => {
+                                            self.width_unanswered = None;
                                             tempo_core::applog::info(
                                                 "cat",
                                                 &format!(
@@ -7946,9 +8488,27 @@ impl RadioLoop {
                                                 ),
                                             );
                                         }
-                                        Err(_) => {
-                                            let mut eng = engine_lock(engine);
-                                            eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                        // NOT ANSWERED: the dial's rule. A hiccup is re-queued for
+                                        // the next cycle; DIAL_SET_MAX_TRIES of them give it up and
+                                        // say so, and the `m` read above has put the radio's own
+                                        // width back on screen. It used to be re-queued for good: a
+                                        // radio that answers reads and never this write was sent
+                                        // it on every poll, each holding the loop for the link's
+                                        // deadline.
+                                        Err(e) => {
+                                            if width_try_spent(&mut self.width_unanswered, hz) {
+                                                let note = width_giveup_note(
+                                                    hz,
+                                                    dial_failure_brief(&e),
+                                                    pb.filter(|w| *w > 0),
+                                                );
+                                                tempo_core::applog::info("cat", &note);
+                                                engine_lock(engine)
+                                                    .set_cat_status(self.cat_ok, note);
+                                            } else {
+                                                let mut eng = engine_lock(engine);
+                                                eng.request_filter_width(hz); // a hiccup: re-queue for the next cycle
+                                            }
                                         }
                                     },
                                 }
@@ -8354,7 +8914,20 @@ impl RadioLoop {
                         }
                         if rig.has_control() && self.freq_misses >= FREQ_MISS_LIMIT {
                             self.cat_ok = Some(false);
-                            self.cat_down_link_fault = is_link_fault(&e);
+                            // DOWN ON THE LINK, which withholds the dial and the mode until the
+                            // re-probe finds the radio: Hamlib's own codes for a rig that did not
+                            // answer (`is_link_fault`), and any failed read through Nexus's CI-V
+                            // daemon, whose `f` answers 0 once the radio has stopped answering it
+                            // (`CivBackend::freq_hz`), where Hamlib's rigctld answers `RPRT -5`.
+                            // Read as a refusal, it left an Icom that was switched off getting a
+                            // mode write on every step of the trip, and a dial with nothing to
+                            // stop it but its three tries.
+                            self.cat_down_link_fault = is_link_fault(&e)
+                                || self
+                                    .rigctld_proc
+                                    .as_ref()
+                                    .and_then(CatDaemon::native)
+                                    .is_some();
                             // Arm the re-probe. Without this the breaker is a one-way door: it
                             // gates both read-back paths, and the only other clearer is a
                             // successful set_freq/set_mode, which the retune block does not send
@@ -8446,7 +9019,7 @@ impl RadioLoop {
                         eng.remote_observe_cat(remote_read.as_ref(), Some(true));
                         eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
                     }
-                    if hz != self.last_dial {
+                    if !self.fake_it_transient(hz) && hz != self.last_dial {
                         self.last_dial = hz;
                         {
                             let mut eng = engine_lock(engine);
@@ -8625,8 +9198,10 @@ impl RadioLoop {
                                 Ok(tx_vfo) => {
                                     // The operator-facing TX-VFO name for notes.
                                     let vfo_name = if tx_vfo == "Sub" { "Sub" } else { "VFO B" };
-                                    let ok = rig.set_split(true, tx_vfo).is_ok()
-                                        && rig.set_split_freq(tx_hz).is_ok();
+                                    let set = rig
+                                        .set_split(true, tx_vfo)
+                                        .and_then(|()| rig.set_split_freq(tx_hz));
+                                    let ok = set.is_ok();
                                     retune_note = Some(if ok {
                                         self.split_on_sub = tx_vfo == "Sub";
                                         // The rig ACKNOWLEDGED the split TX dial
@@ -8654,7 +9229,15 @@ impl RadioLoop {
                                             let mut eng = engine_lock(engine);
                                             eng.split_rejected(tx_mhz);
                                         }
-                                        "rig rejected split — work the pile-up manually".to_string()
+                                        // A silence is said as one, never as a refusal.
+                                        if set.as_ref().is_err_and(is_link_fault) {
+                                            "no reply from the rig — split not set; work the \
+                                             pile-up manually"
+                                                .to_string()
+                                        } else {
+                                            "rig rejected split — work the pile-up manually"
+                                                .to_string()
+                                        }
                                     });
                                     // The TX VFO's MODE, while a satellite pass holds it. On
                                     // a linear INVERTING transponder the sidebands swap —
@@ -8698,17 +9281,18 @@ impl RadioLoop {
                                                     // exactly like nobody answering, and the
                                                     // operator can fix it from the front panel in
                                                     // seconds once they know.
-                                                    let sent = rig
-                                                        .set_split_mode(md, passband_for(md))
-                                                        .is_ok();
-                                                    retune_note = Some(if sent {
-                                                        format!(
+                                                    let sent =
+                                                        rig.set_split_mode(md, passband_for(md));
+                                                    retune_note = Some(match &sent {
+                                                        Ok(()) => format!(
                                                             "split ON — TX {tx_mhz:.4} MHz {md} ({vfo_name})"
-                                                        )
-                                                    } else {
-                                                        format!(
+                                                        ),
+                                                        Err(e) if is_link_fault(e) => format!(
+                                                            "no reply from the rig — the TX mode was not set; put {vfo_name} in {md} by hand"
+                                                        ),
+                                                        Err(_) => format!(
                                                             "rig would not set the TX mode — put {vfo_name} in {md} by hand"
-                                                        )
+                                                        ),
                                                     });
                                                     self.last_split_mode = want_md.clone();
                                                 }
@@ -8757,6 +9341,7 @@ impl RadioLoop {
             // Surface the mode-set outcome to the CAT status so the operator can SEE the mode
             // the rig was commanded into (and any rejection) — emitted only on a real change
             // or failure, so it never spams. A success implies CAT is alive (Some(true)).
+            let showing_dial = dial_note.is_some();
             if let Some(note) = dial_note.or(retune_note) {
                 // The note rides along; the VERDICT is the breaker's. This used to promote any
                 // note starting "rig set to" to `Some(true)` — including "rig set to … (mode
@@ -8766,6 +9351,18 @@ impl RadioLoop {
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, note);
+                    self.dial_note_gen = showing_dial.then(|| eng.cat_probe_gen());
+                }
+            } else if dial_landed {
+                // The dial a note said was not sent, or was refused, has now landed. Take the note
+                // down, but only if it is still the line on screen: anything published since it
+                // (Test CAT, the breaker, another note) is newer than the dial and stays.
+                let mut eng = engine_lock(engine);
+                if self.dial_note_gen.take() == Some(eng.cat_probe_gen()) {
+                    eng.set_cat_status(
+                        self.cat_ok,
+                        "CAT confirmed — rig accepted a command".to_string(),
+                    );
                 }
             }
         }
@@ -8780,6 +9377,31 @@ impl RadioLoop {
             // not polling HOLDS the word in the engine's queue, so the macro resumes on the
             // radio it was typed for instead of keying the one being switched away from.
             let ready = now >= self.cw_busy_until && self.may_key();
+            // THE RADIO'S CW SPEED IS FOLLOWED, NEVER FOUGHT (Nexus's Flex client, once its CW is
+            // switched on). The radio's keyer sends each word at the speed it reports, and another
+            // program can change that speed (SmartSDR, a Maestro). A change the radio reports to a
+            // speed this loop did not set (`last_cat_wpm`) becomes the WPM control's: the CW screen
+            // shows what the radio keys at, the pacing below uses it, and nothing sets it back.
+            // Nexus's own speed still reaches the radio with the next word when the operator moves
+            // the control. Not persisted: the operator's saved speed is the operator's.
+            if let Some(d) = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .filter(|d| d.sends_cw())
+            {
+                let radio = d.cw_speed();
+                if radio != self.cw_radio_wpm {
+                    self.cw_radio_wpm = radio;
+                    if let Some(wpm) = radio.filter(|w| *w != self.last_cat_wpm) {
+                        let mut eng = engine_lock(engine);
+                        eng.set_cw_wpm(wpm);
+                        // The control's range is narrower than the radio's: what it holds is what
+                        // this loop would send, so the radio's speed is not sent back over it.
+                        self.last_cat_wpm = eng.cw_wpm();
+                    }
+                }
+            }
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
                 (
@@ -9060,16 +9682,35 @@ impl RadioLoop {
                                                     // that timed out — two different faults with two different answers.
                                                     // The serial keyline's sibling ten lines above has said the system's
                                                     // own error verbatim since the FTX-1 report, for exactly this reason.
+                        let asked = Instant::now();
                         let cw_err = rig.send_morse(&text).err();
+                        // Nexus's own Flex client says why it sent nothing (the slice not in CW,
+                        // break-in off, ...), in place of the Hamlib advice, which would be wrong
+                        // there. Its refusal drops the rest of the message, as a refused key does,
+                        // so the message cannot resume part way on a later word the radio takes.
+                        let flex_why = cw_err
+                            .as_ref()
+                            .and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                            .and_then(|d| d.key_refused_since(asked))
+                            .map(|(why, _)| why);
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_cw_keyer_error(cw_err.map(|e| {
-                                format!(
-                                    "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
-                                     — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
-                                     (which needs Nexus's audio routed to the rig)."
-                                )
-                            }));
+                            if let Some(why) = flex_why {
+                                tempo_core::applog::info(
+                                    "tx",
+                                    &format!("CW not keyed: {why} (dropped)"),
+                                );
+                                eng.cw_key_refused();
+                                eng.set_cw_keyer_error(Some(why));
+                            } else {
+                                eng.set_cw_keyer_error(cw_err.map(|e| {
+                                    format!(
+                                        "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
+                                         — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
+                                         (which needs Nexus's audio routed to the rig)."
+                                    )
+                                }));
+                            }
                         }
                     }
                 }
@@ -9927,9 +10568,12 @@ impl RadioLoop {
                         if matches!(self.err_owner, ErrOwner::None | ErrOwner::VoiceMic) {
                             {
                                 let mut eng = engine_lock(engine);
-                                eng.set_audio_error(Some(format!(
-                                    "Voice mic could not open: {e} — recording from the shared \
-                                     input instead"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::VoiceMic,
+                                    format!(
+                                        "Voice mic could not open: {e} — recording from the \
+                                         shared input instead"
+                                    ),
                                 )));
                             }
                             self.err_owner = ErrOwner::VoiceMic;
@@ -10030,8 +10674,9 @@ impl RadioLoop {
                             Err(e) => {
                                 let mut eng = engine_lock(engine);
                                 eng.stop_qso_recording();
-                                eng.set_audio_error(Some(format!(
-                                    "Could not start QSO recording: {e}"
+                                eng.set_audio_error(Some((
+                                    AudioErrorKind::Recording,
+                                    format!("Could not start QSO recording: {e}"),
                                 )));
                             }
                         }
@@ -10349,8 +10994,9 @@ impl RadioLoop {
                         .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
                         .flatten()
                         .and_then(|d| d.key_refused_since(asked))
-                        .filter(|(_, r)| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
-                        .map(|(_, r)| r.mode);
+                        .and_then(|(_, r)| r)
+                        .filter(|r| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
+                        .map(|r| r.mode);
                     engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
                     self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
                 } else {
@@ -10429,15 +11075,19 @@ impl RadioLoop {
                             self.last_rf_power = Some(p);
                             self.rf_power_giveup = None;
                         }
-                        Err(_) => {
+                        // Given up either way, the one try it always had; a silence is said as one.
+                        Err(e) => {
                             self.rf_power_giveup = Some(p);
+                            let why = if is_link_fault(&e) {
+                                "no reply from the rig"
+                            } else {
+                                "the rig didn't take it"
+                            };
                             let ok = self.cat_ok;
                             let mut eng = engine_lock(engine);
                             eng.set_cat_status(
                                 ok,
-                                "couldn't set RF power — the rig didn't take it; set power on \
-                                 the radio"
-                                    .to_string(),
+                                format!("couldn't set RF power — {why}; set power on the radio"),
                             );
                         }
                     }
@@ -10915,16 +11565,77 @@ impl RadioLoop {
         // `tuning_keyed` with `tx_until_ms` — this was the one that did not.
         //
         // Nothing is lost by waiting: `fake_it_restore` is HELD, not dropped, so the dial goes
-        // back on the first tick after the carrier stops.
+        // back once the carrier stops.
         if self.tx_until_ms.is_none() && !self.manual_ptt_applied && !self.tuning_keyed {
-            if let Some(hz) = self.fake_it_restore.take() {
-                let _ = rig.set_freq(hz);
-                // Settle the poll guards so the knob-QSY detector can't adopt
-                // a not-yet-restored read-back as an operator QSY (fast mirror deferred a full
-                // heavy interval, matching the retune path).
-                self.last_dial = hz;
-                self.last_rig_poll = now;
-                self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+            // ⭐ THE FAKE-IT WRITE-BACK, AS WSJT-X DOES IT. It went out on the unkey's own tick,
+            // once, its answer ignored, so a radio that missed it was left on the TX dial and the
+            // next dial read took that for the operator's QSY: the dial walked 500 Hz off the
+            // channel (at a 1441 Hz TX offset), and on a radio that missed every one, 500 Hz
+            // further every over. Now it waits FAKE_IT_WRITE_BACK_MS after the over ends, as
+            // WSJT-X waits after PTT off, and the dial reads wait with it; a try the radio does not
+            // take goes again on the next tick, DIAL_SET_MAX_TRIES in all, and then the CAT status
+            // says so; and the over's TX dial is never taken for a QSY ([`Self::fake_it_transient`]).
+            // A key that comes inside the wait sends it first
+            // ([`Self::fake_it_write_back_before_key`]). These receive-time writes are all that
+            // changed: the key, the TX dial and the over's timing are as they were.
+            if let Some(hz) = self.fake_it_restore {
+                if eng.settings().dial_hz() != hz {
+                    // The dial moved on during the over (an operator retune): the write-back
+                    // would undo that, and the over's TX dial is not the new dial's.
+                    self.end_fake_it_restore();
+                    self.fake_it_tx_dial = None;
+                } else if self.fake_it_restore_at.is_none() {
+                    self.fake_it_restore_at = Some(now + FAKE_IT_WRITE_BACK_MS);
+                    self.last_rig_poll = now;
+                    self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+                } else if self.fake_it_restore_at.is_some_and(|at| now >= at) {
+                    let sent = rig.set_freq(hz);
+                    // Settle the poll guards so the knob-QSY detector can't adopt
+                    // a not-yet-restored read-back as an operator QSY (fast mirror deferred a full
+                    // heavy interval, matching the retune path).
+                    self.last_dial = hz;
+                    self.last_rig_poll = now;
+                    self.last_freq_poll = now + (RIG_POLL_MS - FREQ_POLL_MS);
+                    match sent {
+                        Ok(()) => {
+                            self.end_fake_it_restore();
+                            // A note that said the radio did not go back is out of date now.
+                            if self.dial_note_gen.take() == Some(eng.cat_probe_gen()) {
+                                eng.set_cat_status(
+                                    self.cat_ok,
+                                    "CAT confirmed — rig accepted a command".to_string(),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            self.fake_it_restore_tries += 1;
+                            if self.fake_it_restore_tries < DIAL_SET_MAX_TRIES {
+                                self.fake_it_restore_at = Some(now); // again on the next tick
+                            } else {
+                                let tx = self
+                                    .fake_it_tx_dial
+                                    .map(|tx| {
+                                        format!(
+                                            "; it may still be on its TX frequency, {:.4} MHz",
+                                            tx as f64 / 1e6
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                                eng.set_cat_status(
+                                    self.cat_ok,
+                                    format!(
+                                        "Fake It split: the radio did not go back to {:.4} MHz \
+                                         after the over ({}, {DIAL_SET_MAX_TRIES} tries){tx}",
+                                        hz as f64 / 1e6,
+                                        dial_failure_brief(&e)
+                                    ),
+                                );
+                                self.dial_note_gen = Some(eng.cat_probe_gen());
+                                self.end_fake_it_restore();
+                            }
+                        }
+                    }
+                }
             }
             if self.audio_rig_split {
                 self.audio_rig_split = false;
@@ -10955,6 +11666,10 @@ impl RadioLoop {
                     }
                 }
             }
+        } else if self.fake_it_restore.is_some() {
+            // A carrier is up: a held write-back's wait starts again when it ends, so it always
+            // goes FAKE_IT_WRITE_BACK_MS after the last unkey.
+            self.fake_it_restore_at = None;
         }
 
         // Operator hit Erase → mirror it to cooperating apps (UDP Clear).
@@ -11061,12 +11776,11 @@ impl RadioLoop {
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
         let mut is_tuning = eng.tuning();
+        // Operator-configurable auto-release (WSJT-X "Tune after t s"), floored at 1 s and
+        // CLAMPED to the MAX_TUNE_MS hard ceiling.
+        let max_ms = ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
         if is_tuning {
             if let Some(start) = self.tune_started_ms {
-                // Operator-configurable auto-release (WSJT-X "Tune after t s"),
-                // floored at 1 s and CLAMPED to the MAX_TUNE_MS hard ceiling.
-                let max_ms =
-                    ((eng.settings().tune_timeout_secs.max(1) as f64) * 1000.0).min(MAX_TUNE_MS);
                 if now - start > max_ms {
                     eng.set_tune(false);
                     is_tuning = false;
@@ -11082,9 +11796,26 @@ impl RadioLoop {
         }
         if is_tuning {
             let keying = !self.tuning_keyed;
+            // THE RADIO'S OWN TUNE CARRIER (Nexus's Flex client, Beta, switched on only once a
+            // tester's bench has confirmed its readback). The radio makes the carrier itself at its
+            // own tune power (`transmit tune 1`), so this loop plays no tone, DAX carries nothing,
+            // and the client's typed calls start and end it: rigctld has no verb for it. The
+            // loop's timeout above and its release below stand; the client's session also ends the
+            // carrier by itself at the hold handed to it plus its margin, whether or not this loop
+            // runs. Decided at the key, kept to the release.
+            let native = if keying {
+                self.rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(crate::flex::FlexDaemon::tunes_natively)
+            } else {
+                self.tune_native
+            };
             // TUNE POWER (`Settings::tune_power_pct`) — the level a tune-up keys at, read while
             // the lock is still held. Applied in the LOOP and not in a cockpit, so every path
-            // that starts a tune gets it.
+            // that starts a tune gets it. Not to the radio's own carrier, which keys at the tune
+            // power set on the radio: Nexus shows that one and writes nothing (operator ruling,
+            // 2026-10-08, "Radio's, shown, nothing written").
             //
             // SAFE-DIRECTION ONLY: the lower of the operator's tune level and the level already
             // commanded, so a tune can turn the rig DOWN and never up — and it inherits the
@@ -11098,6 +11829,7 @@ impl RadioLoop {
             let tune_pct = eng
                 .settings()
                 .tune_power_pct
+                .filter(|_| !native)
                 .map(|pct| f32::from(pct.min(100)) / 100.0);
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
@@ -11148,6 +11880,7 @@ impl RadioLoop {
                 })
                 .flatten();
             if keying {
+                self.fake_it_write_back_before_key(rig, now);
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
                 // signal"). Flip DATA mode on for the tune (this exact sequence — set DATA,
@@ -11192,25 +11925,43 @@ impl RadioLoop {
                 }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
-                let key = self.key_over(rig, false);
-                // The tune's line, in the words the voice keyer gives a refused key.
-                self.report_ptt(engine, key.warns());
+                let refused = if native {
+                    // Held at most the auto-release's time: the client's session ends it at that
+                    // plus its margin even if this loop stalls.
+                    self.key_radio_tune(engine, max_ms as u64)
+                } else {
+                    let key = self.key_over(rig, false);
+                    // The tune's line, in the words the voice keyer gives a refused key.
+                    self.report_ptt(engine, key.warns());
+                    match key {
+                        KeyUp::Refused(why) => {
+                            note_refused_key("tune not keyed", &why);
+                            Some(why)
+                        }
+                        _ => None,
+                    }
+                };
                 self.tuning_keyed = true;
+                self.tune_native = native;
                 self.tune_started_ms = Some(now);
                 // A fresh hold starts with an empty ring and no elapsed baseline.
                 self.tune_last_chunk_ms = None;
                 self.tune_queued_ms = 0.0;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
-                if let KeyUp::Refused(why) = &key {
-                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`). The tune
-                    // ends here, through the same call its auto-release makes, and the next
-                    // tick's release below unkeys and puts the DATA mode and the power back, as
-                    // it does for every tune.
-                    note_refused_key("tune not keyed", why);
+                if refused.is_some() {
+                    // ⛔ The rig did not key, so no carrier goes into it (`key_over`; the client's
+                    // carrier was never started). The tune ends here, through the same call its
+                    // auto-release makes, and the next tick's release below unkeys and puts the
+                    // DATA mode and the power back, as it does for every tune.
                     engine_lock(engine).set_tune(false);
                     return Ok(());
                 }
+            }
+            if native {
+                // The radio makes the carrier: nothing to play.
+                self.rx.clear(); // don't decode our own carrier
+                return Ok(());
             }
             // TOP THE CARRIER'S LEAD UP TOWARD [`TUNE_LEAD_MS`] — never add to it.
             //
@@ -11254,7 +12005,21 @@ impl RadioLoop {
             // took to play out. Nothing but tune carrier can be queued here — the tune branch
             // supersedes any pending slot over and returns early on every tick it runs.
             backend.flush_output();
-            let _ = rig.ptt(false);
+            // The radio's own carrier ends with its own stop, the client's typed call; every other
+            // tune with the unkey, as does a native tune whose client has gone.
+            match self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .filter(|_| self.tune_native)
+            {
+                Some(d) => {
+                    d.tune_off();
+                }
+                None => {
+                    let _ = rig.ptt(false);
+                }
+            }
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
                 // Restore the PRE-TUNE data state — NOT a hardcoded OFF. An FT8/DATA-U operator
                 // (tune_was_data) stays in DATA-U; only a plain USB/LSB operator gets DATA off.
@@ -11323,9 +12088,11 @@ impl RadioLoop {
         // which `contended_switch_never_commands_the_old_rig_with_the_new_radios_settings`
         // pins at exactly one. `manual_ptt_applied` is excluded for the same reason the
         // self-heal excludes it: a physically held mic owns its own unkey path. A tune
-        // can never reach here — the tune branch above returns first.
-        let abort_has_something_to_cut =
-            self.tx_until_ms.is_some() || (rig.keyed && !self.manual_ptt_applied);
+        // can never reach here — the tune branch above returns first. Nexus's own Flex client's
+        // belief counts as `rig.keyed` does (`flex_keyed`): its `T 0` then ends everything of
+        // ours, whatever kind it is.
+        let abort_has_something_to_cut = self.tx_until_ms.is_some()
+            || ((rig.keyed || self.flex_keyed()) && !self.manual_ptt_applied);
         if (slot_tx_abort && abort_has_something_to_cut)
             || (self.tx_until_ms.is_some() && tx_off_cut)
         {
@@ -11429,19 +12196,52 @@ impl RadioLoop {
                         // onto the DX's frequency, not always from the grid at band-center.
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
+                            let dx_freq = Some(delta_freq as f32);
+                            // ⭐ It works the station as the operator's own double-click does
+                            // (`Engine::work_station`): a CQ, while a contest runs whose own
+                            // FT8/FT4 messages apply, goes to the contest's S&P. Entering that
+                            // from outside the contest opens its session, whose rows are read off
+                            // the Engine lock (SPEC-2 v3 C19) this tick holds: that answer is
+                            // made on a thread of its own, as the cockpit's command makes it.
+                            if eng.work_station_opens_session(sender, Some(&message)) {
+                                let engine = Arc::clone(engine);
+                                let (sender, message) = (sender.to_string(), message.clone());
+                                std::thread::spawn(move || {
+                                    let worked = tempo_app::engine::act_opening_session(
+                                        &engine,
+                                        |eng| {
+                                            eng.work_station_opens_session(&sender, Some(&message))
+                                        },
+                                        |eng| {
+                                            eng.work_station(
+                                                &sender,
+                                                None,
+                                                Some(&message),
+                                                Some(snr),
+                                                dx_freq,
+                                            )?;
+                                            eng.set_tx_enabled(true);
+                                            Ok(())
+                                        },
+                                        |_| (),
+                                    );
+                                    if let Err(reason) = worked {
+                                        crate::civ::diag::note(&format!(
+                                            "UDP Reply for {sender} refused: {reason}"
+                                        ));
+                                    }
+                                });
+                                continue;
+                            }
                             // A refusal (no derivable parity — the context was just flushed
                             // by a QSY/tier switch) must NOT fall through to the arm below:
                             // arming TX for a QSO that was never started is exactly the
                             // unattended-keying shape the refusal exists to prevent. The
                             // companion sent a message, so the reason goes to the diag log
                             // rather than vanishing.
-                            if let Err(reason) = eng.call_station_ctx(
-                                sender,
-                                None,
-                                Some(&message),
-                                Some(snr),
-                                Some(delta_freq as f32),
-                            ) {
+                            if let Err(reason) =
+                                eng.work_station(sender, None, Some(&message), Some(snr), dx_freq)
+                            {
                                 crate::civ::diag::note(&format!(
                                     "UDP Reply for {sender} refused: {reason}"
                                 ));
@@ -11524,13 +12324,12 @@ impl RadioLoop {
                         .map(|w| trim_samples < w.len())
                         .unwrap_or(false);
                     if trimmable {
+                        self.fake_it_write_back_before_key(rig, now);
                         // Split Operation: the engine reduced this over's audio —
                         // move the TX dial before the carrier keys (same as the
                         // boundary path).
                         let split = crate::slot::apply_tx_dial_shift(&mut eng, rig);
-                        if split.fake_it_restore.is_some() {
-                            self.fake_it_restore = split.fake_it_restore;
-                        }
+                        self.hold_fake_it_restore(split.fake_it_restore, split.fake_it_tx_dial);
                         if split.rig_split_engaged {
                             self.audio_rig_split = true;
                         }
@@ -12143,6 +12942,12 @@ impl RadioLoop {
         // A key the radio refuses plays nothing and halts TX, as WSJT-X halts on a rig failure;
         // a failed key while this loop already holds the transmitter is not one
         // (`slot::slot_key_failure`).
+        // Only a boundary in this station's TX period can key. Any other one keeps a write-back's
+        // wait: a snappy over started late is trimmed to end on the next boundary, which is the
+        // other station's.
+        if slot.is_multiple_of(2) == eng.tx_even() {
+            self.fake_it_write_back_before_key(rig, now);
+        }
         let held = self.holds_tx();
         let asked = Instant::now();
         let action = crate::slot::slot_tx_phase(
@@ -12167,9 +12972,7 @@ impl RadioLoop {
             // disconnect fail-safe can't race the fresh key-up.
             self.publish_tx_intent_now();
         }
-        if action.fake_it_restore.is_some() {
-            self.fake_it_restore = action.fake_it_restore;
-        }
+        self.hold_fake_it_restore(action.fake_it_restore, action.fake_it_tx_dial);
         if action.rig_split_engaged {
             self.audio_rig_split = true;
         }
@@ -12241,7 +13044,10 @@ impl RadioLoop {
                     let name = format!("{y:04}{mo:02}{d:02}_{h:02}{m:02}{sec:02}_{band}.wav");
                     let path = std::path::Path::new(&dir).join(name);
                     if let Err(e) = crate::voice::write_wav_12k(&path, frame) {
-                        eng.set_audio_error(Some(format!("period WAV save failed: {e}")));
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::Recording,
+                            format!("period WAV save failed: {e}"),
+                        )));
                     }
                 }
             }
@@ -12253,15 +13059,26 @@ impl RadioLoop {
         // that gate, silently starving N3FJP/N1MM whenever both sinks were their
         // default-off (the club master log simply never received the QSOs).
         let snap = eng.snapshot();
-        // An FD session just (re)started: the journal restore repopulates
-        // qso_count from 0 in one jump — seed the cursor so restored rows are
-        // never re-pushed to the club network / WSJT-X sinks as newly logged.
-        if !station.fd_was_active {
-            if let Some(fd) = snap.field_day.as_ref() {
-                station.last_fd_qsos = fd.qso_count;
-            }
+        // An FD session just (re)started: the journal restore repopulates the
+        // log in one jump — seed the cursor past every seq it holds, removed rows
+        // included, so restored rows are never re-pushed to the club network /
+        // WSJT-X sinks as newly logged.
+        if !station.fd_was_active && snap.field_day.is_some() {
+            station.last_fd_seq = eng.contest_seq_high_water();
         }
         station.fd_was_active = snap.field_day.is_some();
+        // The contacts logged since the last boundary, by seq.
+        let fd_new: Vec<tempo_app::dto::FieldDayQso> = snap
+            .field_day
+            .as_ref()
+            .map(|fd| {
+                fd.log
+                    .iter()
+                    .filter(|q| q.seq > station.last_fd_seq)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         // --- network emission (WSJT-X UDP API + PSK Reporter) ---
         if sinks.wsjtx.is_some() || sinks.psk.is_some() || snap.field_day.is_some() {
             let tier = tier_mode(snap.link.tier);
@@ -12298,13 +13115,16 @@ impl RadioLoop {
                     tx_watchdog: false,
                     sub_mode: "",
                     fast_mode: false,
-                    // The LIVE mode wins: field_day is Some only while the
-                    // Field Day mode is actually RUNNING, whereas special_op
+                    // The LIVE mode wins: field_day is Some only while a
+                    // contest is actually RUNNING, whereas special_op
                     // is a persistent setting an operator can forget to turn
                     // off — a stale Hound flag must not misadvertise an
-                    // active FD session (review catch). 6=FOX stays unbuilt.
-                    special_op: if snap.field_day.is_some() {
-                        3
+                    // active contest session (review catch). 6=FOX stays unbuilt.
+                    // A running contest reports the activity WSJT-X itself would
+                    // be set to for it: 3 (Field Day) in ARRL Field Day only,
+                    // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
+                    special_op: if let Some(fd) = &snap.field_day {
+                        tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
                     } else if matches!(
                         eng.settings().special_op,
                         tempo_app::settings::SpecialOp::Hound
@@ -12320,18 +13140,16 @@ impl RadioLoop {
                     config_name: "Default",
                     tx_message: "",
                 });
-                if let Some(fd) = snap.field_day.as_ref() {
-                    if fd.qso_count > station.last_fd_qsos {
-                        let ctx = FdWsjtxCtx {
-                            when_secs: now_secs,
-                            dial_hz: sinks.cfg_dial_hz,
-                            tier: tier.to_string(),
-                            mycall: snap.mycall.clone(),
-                            mygrid: snap.mygrid.clone(),
-                        };
-                        for q in &fd.log[station.last_fd_qsos.min(fd.log.len())..] {
-                            let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
-                        }
+                if !fd_new.is_empty() {
+                    let ctx = FdWsjtxCtx {
+                        when_secs: now_secs,
+                        dial_hz: sinks.cfg_dial_hz,
+                        tier: tier.to_string(),
+                        mycall: snap.mycall.clone(),
+                        mygrid: snap.mygrid.clone(),
+                    };
+                    for q in &fd_new {
+                        let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
                     }
                 }
             }
@@ -12340,7 +13158,7 @@ impl RadioLoop {
             // an N1MM-network dashboard (UDP <contactinfo>) when configured.
             // Spawned: a parked N3FJP box must never stall the slot loop.
             if let Some(fd) = snap.field_day.as_ref() {
-                if fd.qso_count > station.last_fd_qsos {
+                if !fd_new.is_empty() {
                     let st = eng.settings();
                     let n3_host = st.n3fjp_host.trim().to_string();
                     let n3_port = st.n3fjp_port;
@@ -12349,8 +13167,7 @@ impl RadioLoop {
                     let n3_use_enter = st.n3fjp_use_enter;
                     let n1_addr = st.n1mm_addr.trim().to_string();
                     if !n3_host.is_empty() || !n1_addr.is_empty() {
-                        let new_qsos: Vec<_> =
-                            fd.log[station.last_fd_qsos.min(fd.log.len())..].to_vec();
+                        let new_qsos = fd_new.clone();
                         let mycall = snap.mycall.clone();
                         // Which radio N1MM should attribute these to (#33) — the ACTIVE radio's
                         // 1-based position, derived by the one helper so this emitter and the
@@ -12370,6 +13187,12 @@ impl RadioLoop {
                         // match on the event id, whose `else` branch reported every
                         // contest that was not Winter Field Day as ARRL Field Day.
                         let contest = fd_contest_name(&fd.event, fd.rules_year);
+                        // What the N3FJP push needs to fill another contest's exchange: the
+                        // contest it names the program by, and the slot each of a row's
+                        // received values belongs to (`rcvd` is in this order).
+                        let n3_contest = contest.clone();
+                        let receives: Vec<String> =
+                            fd.receives.iter().map(|f| f.key.clone()).collect();
                         let dial_mhz = cur_dial as f64 / 1e6;
                         let fallback_unix = (now / 1000.0) as u64;
                         let n1_ctx = FdN1mmCtx {
@@ -12391,6 +13214,28 @@ impl RadioLoop {
                                     fallback_unix
                                 };
                                 if !n3_host.is_empty() {
+                                    // The rest of the exchange, in the boxes N3FJP documents
+                                    // for this contest's program; nothing for Field Day or
+                                    // for a program it does not document.
+                                    let (exchange, serial_sent) =
+                                        tempo_net::n3fjp::documented_exchange(
+                                            &n3_contest,
+                                            |side, slot| {
+                                                use tempo_net::n3fjp::Side;
+                                                match side {
+                                                    Side::Sent => q
+                                                        .sent
+                                                        .iter()
+                                                        .find(|(k, _)| k == slot)
+                                                        .map(|(_, v)| v.clone()),
+                                                    Side::Rcvd => receives
+                                                        .iter()
+                                                        .position(|k| k == slot)
+                                                        .and_then(|i| q.rcvd.get(i).cloned()),
+                                                }
+                                                .unwrap_or_default()
+                                            },
+                                        );
                                     let push = tempo_net::n3fjp::N3fjpQso {
                                         call: q.call.clone(),
                                         class: q.class.clone(),
@@ -12407,6 +13252,8 @@ impl RadioLoop {
                                         rst_rcvd: None,
                                         name: None,
                                         power: None,
+                                        exchange,
+                                        serial_sent,
                                     };
                                     let res = if n3_use_enter {
                                         tempo_net::n3fjp::push_qso_enter(&n3_host, n3_port, &push)
@@ -12432,8 +13279,19 @@ impl RadioLoop {
         }
         // Advance the FD cursor on EVERY boundary (independent of the sinks
         // above) — so it also RESETS to 0 when a session ends, and a stale
-        // count can never later flood the club log after FD is re-armed.
-        station.last_fd_qsos = snap.field_day.as_ref().map(|f| f.qso_count).unwrap_or(0);
+        // cursor can never later flood the club log after FD is re-armed. It
+        // never moves back while a session runs: a removed contact's seq stays
+        // passed, so restoring it can never push it twice.
+        station.last_fd_seq = match snap.field_day.as_ref() {
+            Some(fd) => fd
+                .log
+                .iter()
+                .map(|q| q.seq)
+                .fold(station.last_fd_seq, u64::max),
+            None => 0,
+        };
+        // Told to the engine, so a removal can say whether the contact already went.
+        eng.note_fd_forwarded(station.last_fd_seq);
 
         // Club band board (N3FJP Network Status Display): report THIS
         // position's band without CAT so the club sees where we are. Fires
@@ -13186,7 +14044,7 @@ fn repair_clock_with(
     // still asking about the first is refused, never queued as a second prompt.
     let _running = repair.claim().ok_or(ClockRepairRefusal::Running)?;
     // A real fault's repair, and nothing else, whatever is on offer: this is the
-    // one place Nexus asks Windows for administrator rights.
+    // one place the clock code asks Windows for administrator rights.
     let diag = repair
         .offered()
         .filter(|d| d.repair.fixes_a_fault())
@@ -13362,9 +14220,48 @@ impl Transport {
 /// next field anyone added would have been dropped the same way.
 ///
 /// This makes the mistake unrepresentable: `Transport` derives `PartialEq` again, so every
-/// field — present and future — is compared by default, and exactly one type opts out.
+/// field — present and future — is compared by default, and only display text opts out: this
+/// type, and the words of an [`AddressRefusal`].
 #[derive(Clone, Debug, Default)]
 struct LogLabel(String);
+
+/// Why a radio's NET rigctl Network Address may not be opened: `Some`, in the status lane's words,
+/// while one of Nexus's own listeners holds its port, another radio's CAT daemon on its rigctld TCP
+/// Port or the CAT broker ([`tempo_app::settings::net_rigctl_address_refusal`]). What answers there
+/// is that other radio, or Nexus itself. A save can no longer make such a clash, and nothing
+/// renumbers one an older build stored, so every opener refuses it first ([`open_cat`],
+/// [`open_read_only`]): nothing there is read, keyed or relayed to by a rigctld of ours until the
+/// operator changes the port.
+///
+/// A station fact, like `broker_self_port`: it is set wherever a transport is built from the
+/// settings ([`Transport::from_settings`], [`monitor_want`], [`launch_transport`]).
+///
+/// Compared by PRESENCE, for [`LogLabel`]'s reason: the words name radios, and renaming one must
+/// not tear down CAT. Being refused is identity, so changing the port reopens the radio at once,
+/// and a clash that arrives (another radio given a rig model) lets go of its link first.
+#[derive(Clone, Debug, Default)]
+struct AddressRefusal(Option<String>);
+
+impl PartialEq for AddressRefusal {
+    fn eq(&self, o: &Self) -> bool {
+        self.0.is_some() == o.0.is_some()
+    }
+}
+
+impl AddressRefusal {
+    /// `t`'s, under the station `s`: the address as `t` dials it, against `s`'s other radios and
+    /// its broker.
+    fn of(t: &Transport, s: &Settings) -> Self {
+        Self(tempo_app::settings::net_rigctl_address_refusal(
+            &s.radios,
+            s.cat_broker.then_some(s.cat_broker_port),
+            t.radio_id,
+            t.rig_model,
+            &t.rig_conn,
+            &t.rig_addr,
+        ))
+    }
+}
 
 impl PartialEq for LogLabel {
     fn eq(&self, _: &Self) -> bool {
@@ -13422,6 +14319,13 @@ struct Transport {
     /// radio's own address it connects to. Read through [`flex_client_ip`] only.
     flex_native_cat: bool,
     flex_radio_ip: String,
+    /// The Icom network connection's address, network user and control port, and the radio
+    /// profile whose keychain entry holds its password. Read through [`Transport::icom_lan_target`]
+    /// only.
+    icom_lan_host: String,
+    icom_lan_user: String,
+    icom_lan_port: u16,
+    radio_id: u32,
     /// The operator's D1/D2/D3 choice (`RadioProfile::icom_data_mode`), handed to the CI-V
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
@@ -13432,6 +14336,9 @@ struct Transport {
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
+    /// Why this radio's NET rigctl Network Address may not be opened, while one of Nexus's own
+    /// listeners holds its port ([`AddressRefusal`]).
+    address_refusal: AddressRefusal,
     audio_in: String,
     audio_out: String,
     /// Dedicated voice-mic device for recordings ("" = record from the shared input).
@@ -13482,7 +14389,12 @@ impl Transport {
             icom_native_cat: c.icom_native_cat,
             flex_native_cat: c.flex_native_cat,
             flex_radio_ip: c.flex_radio_ip.clone(),
+            icom_lan_host: c.icom_lan_host.clone(),
+            icom_lan_user: c.icom_lan_user.clone(),
+            icom_lan_port: c.icom_lan_port,
+            radio_id: c.radio_id,
             broker_self_port: c.broker_self_port,
+            address_refusal: AddressRefusal::default(),
             audio_in: c.audio_in.clone(),
             audio_out: c.audio_out.clone(),
             // The voice mic is not part of the startup seed — the initial applied state
@@ -13499,7 +14411,7 @@ impl Transport {
     }
 
     fn from_settings(s: &Settings) -> Self {
-        Self {
+        let mut t = Self {
             icom_data_mode: s.icom_data_mode,
             tx_audio_source: s.tx_audio_source.clone(),
             radio_label: LogLabel(
@@ -13534,6 +14446,10 @@ impl Transport {
             icom_native_cat: s.icom_native_cat,
             flex_native_cat: s.flex_native_cat,
             flex_radio_ip: s.flex_radio_ip.clone(),
+            icom_lan_host: s.icom_lan_host.clone(),
+            icom_lan_user: s.icom_lan_user.clone(),
+            icom_lan_port: s.icom_lan_port,
+            radio_id: s.active_radio,
             rig_conn: s.rig_conn.clone(),
             rig_addr: s.rig_addr.clone(),
             omnirig_slot: s.omnirig_slot,
@@ -13543,6 +14459,7 @@ impl Transport {
             } else {
                 None
             },
+            address_refusal: AddressRefusal::default(),
             audio_in: s.audio_in.clone(),
             audio_out: s.audio_out.clone(),
             voice_mic_device: s.voice_mic_device.clone(),
@@ -13551,7 +14468,9 @@ impl Transport {
             monitor_enabled: s.monitor_enabled,
             monitor_device: s.monitor_device.clone(),
             monitor_level: s.monitor_level,
-        }
+        };
+        t.address_refusal = AddressRefusal::of(&t, s);
+        t
     }
 
     /// The serial port the RTS/DTR keying line lives on: the dedicated `ptt_serial_port`
@@ -13587,7 +14506,44 @@ impl Transport {
             // the client is in play: an address edit on a radio NOT opted in restarts nothing, as
             // before the client existed.
             || flex_client_ip(self) != flex_client_ip(o)
+            // The Icom network client's radio, compared only where that connection is in play,
+            // like the Flex client's: an address edit on a serial radio restarts nothing.
+            || self.icom_lan_target() != o.icom_lan_target()
             || self.broker_self_port != o.broker_self_port
+            || self.address_refusal != o.address_refusal
+    }
+
+    /// Is CAT for this radio Nexus's own Icom network client? The rule lives in tempo-app
+    /// ([`tempo_app::settings::rig_conn_is_icom_lan`]), as [`Self::is_omnirig`]'s does, and
+    /// the engine's transmit refusal reads the same rule.
+    fn is_icom_lan(&self) -> bool {
+        tempo_app::settings::rig_conn_is_icom_lan(&self.rig_conn)
+    }
+
+    /// What the Icom network client connects to: `Some` only on that connection, for one of the
+    /// six network Icoms ([`tempo_app::settings::icom_lan_reachable`], the single source of
+    /// truth) with an IPv4 address.
+    fn icom_lan_target(&self) -> Option<crate::icomlan::Target> {
+        if !tempo_app::settings::icom_lan_reachable(
+            self.rig_model,
+            &self.rig_conn,
+            &self.icom_lan_host,
+        ) {
+            return None;
+        }
+        Some(crate::icomlan::Target {
+            host: self.icom_lan_host.trim().parse().ok()?,
+            control_port: if self.icom_lan_port == 0 {
+                tempo_app::settings::ICOM_LAN_DEFAULT_PORT
+            } else {
+                self.icom_lan_port
+            },
+            model: crate::rigmodels::icom_lan_model(self.rig_model)?,
+            user: self.icom_lan_user.trim().to_string(),
+            profile_id: self.radio_id,
+            rigctld_port: self.rigctld_port,
+            data_mode: self.icom_data_mode,
+        })
     }
 
     /// A networked rig (FlexRadio/SmartSDR or a remote rigctld): rigctld connects to
@@ -13943,17 +14899,71 @@ fn giveup_fallback(md: &str, saw_reject: bool) -> Option<&'static str> {
     }
 }
 
+/// What carries a radio's CAT, for advice that fits it when the radio does not answer
+/// ([`mode_giveup_note`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CatLink {
+    /// CI-V on the radio's USB or serial port: Nexus's own daemon, or Hamlib's rigctld driving an
+    /// Icom. Both open the port at the Baud setting.
+    Civ,
+    /// Hamlib's rigctld on a serial port to any other radio.
+    HamlibSerial,
+    /// A rigctld at this network address: the radio itself, or a program serving its CAT there.
+    Network(String),
+    /// OmniRig, which drives the radio from its own setup.
+    OmniRig,
+    /// Nexus's own Flex client.
+    Flex,
+    /// Nexus's own Icom network client.
+    IcomLan,
+}
+
+impl CatLink {
+    /// The causes that fit this link, for a radio that did not answer.
+    fn no_reply_advice(&self) -> String {
+        match self {
+            // The case the note was written for: a slow CI-V bus, crowded by the radio's own
+            // Transceive traffic. The port opens at the Baud setting, so a faster rate has to be
+            // set on both sides.
+            CatLink::Civ => "link too slow or rig mute; try raising the CI-V baud to 115200 on \
+                             the rig and in Settings ▸ Radio ▸ Rig & CAT, and turning CI-V \
+                             Transceive off"
+                .to_string(),
+            CatLink::HamlibSerial => "the rig did not answer Hamlib; check that the radio is on \
+                                      and that the port, baud and rig model in Settings ▸ Radio \
+                                      ▸ Rig & CAT match it"
+                .to_string(),
+            CatLink::Network(addr) => format!(
+                "the radio did not answer through {addr}; check that the radio, or the program \
+                 serving its CAT there, is running and connected to it"
+            ),
+            // OmniRig's own words for this status (`OmniStatus::describe`).
+            CatLink::OmniRig => "OmniRig says the rig is not responding; check the radio is on \
+                                 and its CAT settings match OmniRig"
+                .to_string(),
+            CatLink::Flex => "the radio did not answer Nexus's Flex client; check that it is on \
+                              and reachable on the network"
+                .to_string(),
+            CatLink::IcomLan => "the radio did not answer over the network; check its network \
+                                 connection (Nexus reconnects a lost session by itself)"
+                .to_string(),
+        }
+    }
+}
+
 /// The give-up note after [`MODE_SET_MAX_TRIES`] failures. The old note said
 /// "rig has no {md} mode" for EVERY exhausted budget — but a run of link faults
 /// (timeouts on a slow CI-V baud, a mute rig) proves nothing about the rig's modes,
 /// and that wording sent an IC-7610 operator chasing a missing PKTUSB the rig has
 /// always had (as USB-D). Only a run containing an active rejection (`RPRT -1`)
 /// may blame the rig, and even then the note says what to DO, not just what failed.
-fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>) -> String {
+/// A run of silence names the causes that fit the `link` it ran over: the CI-V baud and CI-V
+/// Transceive on CI-V alone. It gave that advice on every link, OmniRig's and the Flex's too.
+fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>, link: &CatLink) -> String {
     if !saw_reject {
         return format!(
-            "couldn't set {md}: no reply over CAT — link too slow or rig mute; try raising \
-             the rig's CI-V baud (115200) and turning CI-V Transceive off — gave up"
+            "couldn't set {md}: no reply over CAT — {} — gave up",
+            link.no_reply_advice()
         );
     }
     match fallback {
@@ -14029,6 +15039,26 @@ fn mode_command_failed(md: &str, e: &std::io::Error) -> String {
         }
         _ => format!("can't reach the radio's CAT link — couldn't set {md}: {e}"),
     }
+}
+
+/// Count one more try at a filter width the radio did not answer; `true` once the dial's
+/// [`DIAL_SET_MAX_TRIES`] are spent, which also forgets it. A different width starts again.
+fn width_try_spent(unanswered: &mut Option<(u32, u32)>, hz: u32) -> bool {
+    let tries = match *unanswered {
+        Some((asked, n)) if asked == hz => n + 1,
+        _ => 1,
+    };
+    *unanswered = (tries < DIAL_SET_MAX_TRIES).then_some((hz, tries));
+    tries >= DIAL_SET_MAX_TRIES
+}
+
+/// The give-up for a filter width the radio did not answer, in the dial's words: the width asked
+/// for, why, and the width the radio kept when it reported one.
+fn width_giveup_note(hz: u32, brief: &str, kept_hz: Option<u32>) -> String {
+    let still = kept_hz
+        .map(|w| format!("; still {w} Hz"))
+        .unwrap_or_default();
+    format!("{hz} Hz filter width not sent — {brief} after {DIAL_SET_MAX_TRIES} tries{still}")
 }
 
 /// One short clause naming WHY a dial set failed, for the retry notes. Distinguishes the rig
@@ -14149,6 +15179,7 @@ fn cat_ptt_mode(t: &Transport) -> PttMode {
     if tempo_app::settings::tx_audio_source_is_rear(&t.tx_audio_source)
         && crate::rigmodels::hamlib_ptt_mic_data(t.rig_model)
         && !t.is_omnirig()
+        && !t.is_icom_lan()
         && native_civ_addr(t).is_none()
     {
         PttMode::CatData
@@ -14303,6 +15334,16 @@ fn open_cat(
         ptt_line.is_none() || !allow_coexist,
         "shared-port keying must own its daemon — coexisting risks silent no-key"
     );
+    // A NET rigctl address one of Nexus's own listeners holds is never opened (`AddressRefusal`):
+    // no probe, no share, no rigctld of ours in front of it. The status says what holds the port
+    // and what to change.
+    if let Some(words) = &t.address_refusal.0 {
+        return (
+            Rig::vox(),
+            None,
+            CatProbe::status(Some(false), words.clone()),
+        );
+    }
     let addr = format!("127.0.0.1:{}", t.rigctld_port);
     if t.broker_self_port == Some(t.rigctld_port) {
         // Misconfig: our own CAT broker and the launched rigctld want the same port.
@@ -14329,7 +15370,44 @@ fn open_cat(
     // already on this port is not our shim, so attaching to it would drive whatever radio
     // THAT daemon serves while the operator believes they are on OmniRig. We must own the
     // listener. If the port is genuinely taken, the bind below fails and says so.
-    let allow_coexist = allow_coexist && !t.is_omnirig();
+    // The Icom network client never coexists either: whatever is on the port is not its daemon.
+    let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan();
+    // NET rigctl to a rigctld on this computer: share THAT one, whatever rigctld TCP Port says,
+    // rather than start a second rigctld in front of it (`net_rigctld_on_this_machine`). Only a
+    // rigctld's answer is taken. Where nothing answers, nothing is started either: the radio
+    // waits for that rigctld (wfview not started yet), the CAT status says so, and the loop asks
+    // the address again on the reopen backoff (`RadioLoop::waits_for_a_rigctld_here`), so the
+    // order the two programs start in does not matter. Something that answers, but not as a
+    // rigctld, goes on exactly as before: a server this probe does not recognise may still work
+    // through Hamlib's NET client, as wfview did before its `ChkVFO` answer was read. No
+    // `foreign_daemon_refusal`: NET rigctl is exempt from it, as whatever serves the address is
+    // what the operator chose.
+    if allow_coexist {
+        if let Some(direct) = net_rigctld_on_this_machine(t) {
+            match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
+                crate::rigctld_server::PortReply::Rigctld => {
+                    let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
+                    rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                    let mut probe = finish_cat_open(&mut rig, t);
+                    probe.detail = format!("Sharing the rigctld at {direct} — {}", probe.detail);
+                    return (rig, None, probe);
+                }
+                crate::rigctld_server::PortReply::Silent => {
+                    return (
+                        Rig::vox(),
+                        None,
+                        CatProbe::status(
+                            Some(false),
+                            format!(
+                                "Nothing is answering at {direct} — start wfview (or your rigctld)"
+                            ),
+                        ),
+                    );
+                }
+                crate::rigctld_server::PortReply::NotRigctld(_) => {}
+            }
+        }
+    }
     let listening = if allow_coexist {
         crate::rigctld_server::probe_cat_port(&addr, Duration::from_millis(400))
     } else {
@@ -14393,7 +15471,10 @@ fn open_cat(
             std::thread::sleep(Duration::from_millis(700));
             let mut rig = Rig::with_control(Some(addr), ptt_mode);
             rig.set_slow_transport(
-                network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
+                network
+                    || native_civ_addr(t).is_some()
+                    || t.is_icom_lan()
+                    || t.is_slow_serial_link(),
             ); // network chains + the native daemon + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
@@ -14404,6 +15485,7 @@ fn open_cat(
             probe.detail = with_backend(
                 probe.detail,
                 match (proc.omni(), proc.flex()) {
+                    _ if proc.icom_lan().is_some() => "Nexus's Icom network client (Beta)",
                     (Some(d), _) => omnirig_backend_label(d.slot()),
                     (None, Some(_)) => "Nexus's Flex client (Beta)",
                     (None, None) if flex_client_ip(t).is_some() => {
@@ -14437,8 +15519,12 @@ fn open_cat(
                             probe.detail = format!("{} {e}", probe.detail);
                         }
                     }
-                    CatDaemon::Native(_) | CatDaemon::Flex(_) => {}
+                    CatDaemon::Native(_) | CatDaemon::Flex(_) | CatDaemon::IcomLan(_) => {}
                 }
+            }
+            // What the Icom network client read from the radio, and what may need a look.
+            if let Some(d) = proc.icom_lan() {
+                probe.detail = format!("{} {}", probe.detail, d.status());
             }
             (rig, Some(proc), probe)
         }
@@ -14446,6 +15532,12 @@ fn open_cat(
             Rig::vox(),
             None,
             CatProbe::status(Some(false), omnirig_start_failed(t, &e)),
+        ),
+        // The Icom network client's own words: no answer, a refused login, busy, a wait.
+        Err(e) if t.is_icom_lan() => (
+            Rig::vox(),
+            None,
+            CatProbe::status(Some(false), e.to_string()),
         ),
         Err(e) => (
             Rig::vox(),
@@ -14511,7 +15603,7 @@ fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
 }
 
-/// The single shared tail of both `open_cat` branches (coexist + spawn): the open-time
+/// The single shared tail of every `open_cat` branch (direct share, coexist, spawn): the open-time
 /// dial/mode commands and the health probe. ONE copy on purpose — the read-only-launch
 /// flip deletes the two commands here, and a duplicated tail is how a future edit
 /// silently resurrects one of them (the tests exercise the coexist branch; this shared
@@ -14533,7 +15625,6 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
     // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
     // that is MOX and its tuner button that is a menu write (#385).
     rig.set_never_send(t.hamlib_never_send());
-    let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -14544,9 +15635,15 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
             // cached-mode caveat (rig.rs read_mode docs) is acceptable for display.
             mode: rig.read_mode(),
         },
+        // The address the rig dials: 127.0.0.1 at rigctld TCP Port, except for a rigctld shared
+        // at a NET rigctl Network Address, where naming rigctld TCP Port would send the operator
+        // to look for a daemon Nexus is not using.
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => CatProbe::status(
             Some(false),
-            format!("rigctld is not reachable on 127.0.0.1:{port}."),
+            format!(
+                "rigctld is not reachable on {}.",
+                rig.control_addr().unwrap_or_default()
+            ),
         ),
         // ⚠️ THE ADVICE MUST MATCH THE TRANSPORT (#144, vsboost, v1.7.5). `read_freq`'s
         // message ends "check the serial port, baud rate, and that CAT/CI-V is enabled on the
@@ -14664,15 +15761,23 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod civ_coverage;
     mod clock_repair_tests;
+    mod contest_reply;
+    mod contest_status;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ic905_ten_ghz;
+    mod icom_lan;
+    mod omnirig_coverage;
     mod receive_source;
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod split_overs;
+    mod wfview;
     use super::should_command_rf_power;
 
     #[test]
@@ -14904,6 +16009,7 @@ mod tests {
             submode: "FT8".into(),
             when_unix,
             mex: mex.into(),
+            sent: Vec::new(),
             rcvd: Vec::new(),
             // Terrestrial: 20m DIG, worked off the dial, not through a bird. Empty IS the
             // "no satellite" value -- `field_day_display` builds this field with
@@ -14917,6 +16023,8 @@ mod tests {
             // verdict it did not compute is asserting something it does not model.
             dkey: Vec::new(),
             dupe: false,
+            // The forwarder's cursor reads it; the emitter tests this helper feeds do not.
+            seq: 0,
         }
     }
 
@@ -16273,7 +17381,7 @@ mod tests {
         assert_eq!(giveup_fallback("RTTY", false), None);
         // And the note has to say something the operator can DO. "Press the rig's DATA key"
         // is nonsense here — the rig has no FSK mode to reach, and the fix is a Nexus setting.
-        let note = mode_giveup_note("RTTY", true, Some("PKTLSB"));
+        let note = mode_giveup_note("RTTY", true, Some("PKTLSB"), &CatLink::Civ);
         assert!(note.contains("AFSK"), "the note names the way out: {note}");
         assert!(
             !note.contains("DATA key"),
@@ -17386,25 +18494,207 @@ mod tests {
         // the rig's modes — the old "rig has no PKTUSB mode" wording sent the operator
         // chasing a mode the rig has always had (USB-D). The note must blame the LINK
         // and say what to do about it.
-        let n = mode_giveup_note("PKTUSB", false, None);
+        let n = mode_giveup_note("PKTUSB", false, None, &CatLink::Civ);
         assert!(!n.contains("has no"), "must not blame the mode: {n}");
         assert!(!n.contains("refused"), "must not blame the rig: {n}");
         assert!(n.contains("CI-V baud"), "must be actionable: {n}");
 
         // Active rejection + the plain-sideband fallback landed: one front-panel DATA
         // press from working — the note says exactly that.
-        let n = mode_giveup_note("PKTUSB", true, Some("USB"));
+        let n = mode_giveup_note("PKTUSB", true, Some("USB"), &CatLink::Civ);
         assert!(n.contains("refused PKTUSB"), "{n}");
         assert!(n.contains("USB-D"), "must name the rig-side mode: {n}");
 
         // Active rejection and even plain USB failed: still actionable for DATA modes.
-        let n = mode_giveup_note("PKTUSB", true, None);
+        let n = mode_giveup_note("PKTUSB", true, None, &CatLink::Civ);
         assert!(n.contains("USB-D/DATA"), "{n}");
 
         // A non-DATA rejection: honest, no bogus DATA advice.
-        let n = mode_giveup_note("CW", true, None);
+        let n = mode_giveup_note("CW", true, None, &CatLink::Civ);
         assert!(n.contains("refused CW"), "{n}");
         assert!(!n.contains("USB-D"), "{n}");
+    }
+
+    /// ⭐ THE CI-V ADVICE IS FOR CI-V. A run of silence gives up with the causes that fit the
+    /// link it ran over; the CI-V baud and CI-V Transceive appear on CI-V alone, Nexus's daemon or
+    /// Hamlib's. A refusal's note is the same on every link.
+    #[test]
+    fn a_silent_give_up_names_the_causes_that_fit_its_link() {
+        let links = [
+            CatLink::Civ,
+            CatLink::HamlibSerial,
+            CatLink::Network("192.168.1.20:4532".to_string()),
+            CatLink::OmniRig,
+            CatLink::Flex,
+            CatLink::IcomLan,
+        ];
+        let notes = links
+            .clone()
+            .map(|l| mode_giveup_note("PKTUSB", false, None, &l));
+        assert_eq!(
+            notes.clone(),
+            [
+                "couldn't set PKTUSB: no reply over CAT — link too slow or rig mute; try raising \
+                 the CI-V baud to 115200 on the rig and in Settings ▸ Radio ▸ Rig & CAT, and \
+                 turning CI-V Transceive off — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the rig did not answer Hamlib; check \
+                 that the radio is on and that the port, baud and rig model in Settings ▸ Radio \
+                 ▸ Rig & CAT match it — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the radio did not answer through \
+                 192.168.1.20:4532; check that the radio, or the program serving its CAT there, \
+                 is running and connected to it — gave up",
+                "couldn't set PKTUSB: no reply over CAT — OmniRig says the rig is not responding; \
+                 check the radio is on and its CAT settings match OmniRig — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the radio did not answer Nexus's Flex \
+                 client; check that it is on and reachable on the network — gave up",
+                "couldn't set PKTUSB: no reply over CAT — the radio did not answer over the \
+                 network; check its network connection (Nexus reconnects a lost session by \
+                 itself) — gave up",
+            ]
+            .map(String::from)
+        );
+        assert_eq!(
+            notes.map(|n| n.contains("CI-V")),
+            [true, false, false, false, false, false]
+        );
+        assert_eq!(
+            links.map(|l| mode_giveup_note("PKTUSB", true, None, &l)),
+            ["rig refused PKTUSB — couldn't set DATA mode; select USB-D/DATA on the rig by hand \
+              — gave up"; 6]
+                .map(String::from)
+        );
+    }
+
+    /// The width's tries are the dial's: two silences re-queue it, the third gives it up and
+    /// forgets it, and a different width starts its own count.
+    #[test]
+    fn a_silent_width_gets_the_dials_three_tries_and_a_new_width_its_own() {
+        let mut unanswered = None;
+        let mut spent = |hz| width_try_spent(&mut unanswered, hz);
+        assert_eq!(
+            [
+                spent(1800),
+                spent(1800),
+                spent(2400),
+                spent(2400),
+                spent(2400),
+                spent(2400)
+            ],
+            [false, false, false, false, true, false]
+        );
+        assert_eq!(
+            [
+                width_giveup_note(1800, "no reply from the rig", Some(2400)),
+                width_giveup_note(1800, "no reply from the rig", None),
+            ],
+            [
+                "1800 Hz filter width not sent — no reply from the rig after 3 tries; still 2400 Hz",
+                "1800 Hz filter width not sent — no reply from the rig after 3 tries",
+            ]
+            .map(String::from)
+        );
+    }
+
+    /// ⭐ THE GIVE-UP'S ADVICE FITS THE LINK, ON HAMLIB TOO. A switch to Digital the rig never
+    /// answers through Hamlib's rigctld (`RPRT -5`, Hamlib's own "the rig did not answer", to every
+    /// `M`), with the steady loop's budget started two short. On an FTDX10 the give-up points at
+    /// the port, baud and model Hamlib drives it with; on an IC-7300, whose CAT is CI-V, at the CI-V
+    /// baud on both sides and CI-V Transceive. Both were told to raise the rig's CI-V baud.
+    #[test]
+    fn a_mode_hamlib_never_answers_gives_up_in_words_that_fit_the_radios_link() {
+        /// Answers the dial and the mode reads, `RPRT -5` to every mode write, `RPRT 0` to the rest.
+        fn mode_unanswering_rigctld() -> String {
+            use std::io::{BufRead, BufReader, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { break };
+                    let Ok(r) = stream.try_clone() else { continue };
+                    let mut reader = BufReader::new(r);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let reply = match line.trim() {
+                            "f" => "14074000\n",
+                            "m" => "USB\n2400\n",
+                            l if l.starts_with("M ") => "RPRT -5\n",
+                            _ => "RPRT 0\n",
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+            addr
+        }
+        let gave_up = |model: u32| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                e.apply_settings(s);
+                e.set_operating_mode("phone", false);
+                e.set_frequency(14.074, "20m", "USB");
+            }
+            let mut rig = Rig::rigctld(&mode_unanswering_rigctld());
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let (mut backend, mut station) = (MockBackend::new(), StationSinks::new());
+            let mut t = 0.0;
+            let mut step = |state: &mut RadioLoop, rig: &mut Rig| {
+                t += 100.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            };
+            step(&mut state, &mut rig);
+            engine.lock().unwrap().set_operating_mode("digital", false);
+            step(&mut state, &mut rig);
+            state.mode_fail_count = MODE_SET_MAX_TRIES - 2;
+            for _ in 0..10 {
+                if state.mode_giveup.is_some() {
+                    break;
+                }
+                step(&mut state, &mut rig);
+            }
+            let line = engine.lock().unwrap().snapshot().radio.cat_detail;
+            (state.mode_giveup.clone(), line)
+        };
+        assert_eq!(
+            [gave_up(1042), gave_up(3073)],
+            [
+                (
+                    Some("PKTUSB".to_string()),
+                    "couldn't set PKTUSB: no reply over CAT — the rig did not answer Hamlib; check \
+                     that the radio is on and that the port, baud and rig model in Settings ▸ \
+                     Radio ▸ Rig & CAT match it — gave up"
+                        .to_string()
+                ),
+                (
+                    Some("PKTUSB".to_string()),
+                    "couldn't set PKTUSB: no reply over CAT — link too slow or rig mute; try \
+                     raising the CI-V baud to 115200 on the rig and in Settings ▸ Radio ▸ Rig & \
+                     CAT, and turning CI-V Transceive off — gave up"
+                        .to_string()
+                ),
+            ]
+        );
     }
 
     /// ⭐ THE SAFETY NET UNDER THE CLASS-WIDE `PKTFM` CHANGE (audit, 2026-08-12).
@@ -17451,7 +18741,7 @@ mod tests {
 
         // The note stays accurate for the new word: no bogus "select USB-D by hand" advice on
         // an FM channel — the fallback landed, so it says which mode the rig is now in.
-        let n = mode_giveup_note("PKTFM", true, Some("FM"));
+        let n = mode_giveup_note("PKTFM", true, Some("FM"), &CatLink::Civ);
         assert!(n.contains("refused PKTFM"), "{n}");
         assert!(n.contains("FM-D"), "must name the rig-side mode: {n}");
     }
@@ -19328,6 +20618,11 @@ mod tests {
             said.contains("Flex radio IP"),
             "the message names the field to fill in: {said}"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "flexAddress",
+            "named as the missing address, not as a stopped radio"
+        );
 
         // …then types the address. THIS is the transition the key must see.
         set_flex(&engine, "192.0.2.77", true);
@@ -19630,8 +20925,8 @@ mod tests {
         let mut want = cat_transport(4533, None);
         want.ptt_method = "cat".into();
         want.broker_self_port = Some(4534);
-        let mut monitored = want.clone();
-        monitored.broker_self_port = None;
+        // A monitor's transport carries the broker's port, as `monitor_want` builds it.
+        let monitored = want.clone();
         let connection = MonitorConn {
             id: 1,
             transport: monitored,
@@ -19650,7 +20945,11 @@ mod tests {
         assert!(matches!(rig.ptt_mode(), PttMode::Cat));
         assert!(matches!(demoted.rig.ptt_mode(), PttMode::Vox));
         assert_eq!(demoted.id, 0);
-        assert_eq!(demoted.transport.broker_self_port, None);
+        assert_eq!(
+            demoted.transport.broker_self_port,
+            Some(4534),
+            "the demoted transport keeps the broker's port, as the monitor's want has it"
+        );
         assert_eq!(state.applied.broker_self_port, Some(4534));
         assert_eq!(state.remote_radio_id, Some(1));
         assert_eq!(state.meter_feed.smeter_db(), None);
@@ -21671,7 +22970,8 @@ mod tests {
 
     /// Two radios, each configured through the flat settings form (which edits whatever is
     /// active), radio 0 active. Returns the engine, radio 1's id, both radios' MONITOR
-    /// transports (`Transport::from_profile`), and radio 0's transport as the loop applies it.
+    /// transports (`Transport::from_profile` and the broker's port, as `monitor_want` builds
+    /// them), and radio 0's transport as the loop applies it.
     fn two_radio_engine(
         radio0: impl FnOnce(&mut tempo_app::settings::Settings),
         radio1: impl FnOnce(&mut tempo_app::settings::Settings),
@@ -21690,7 +22990,11 @@ mod tests {
             e.apply_settings(s);
             e.set_active_radio(0);
             let monitor = |id: u32| {
-                Transport::from_profile(e.settings().radios.iter().find(|p| p.id == id).unwrap())
+                let s = e.settings();
+                let mut t = Transport::from_profile(s.radios.iter().find(|p| p.id == id).unwrap());
+                // As the monitor thread builds it, with the station's broker port (`monitor_want`).
+                t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+                t
             };
             (
                 r1,
@@ -29244,11 +30548,14 @@ mod tests {
                 .count()
         };
 
-        // ⚠️ POSITIVE CONTROL: with no carrier up, an outstanding restore DOES get written —
-        // otherwise the assertion below would pass against a scene where nothing was pending.
+        // ⚠️ POSITIVE CONTROL: with no carrier up, an outstanding restore DOES get written (100 ms
+        // after the teardown first finds no over up, as WSJT-X waits after PTT off) — otherwise
+        // the assertion below would pass against a scene where nothing was pending.
         state.fake_it_restore = Some(14_074_000);
         let mark = log.lock().unwrap().len();
-        run(&mut state, &mut rig, 0.0);
+        for i in 0..=5 {
+            run(&mut state, &mut rig, f64::from(i) * 20.0);
+        }
         assert!(
             freqs(&log, mark) > 0,
             "control: a pending restore is written when nothing is transmitting — {:?}",
@@ -29279,6 +30586,110 @@ mod tests {
         assert!(
             state.fake_it_restore.is_some(),
             "the restore must be HELD, not dropped — it still has to happen after the tune"
+        );
+    }
+
+    /// ⭐ A TUNE INSIDE THE FAKE-IT WRITE-BACK'S WAIT KEYS FROM THE RX DIAL. The write-back waits
+    /// 100 ms after an over, as WSJT-X waits after PTT off. A tune pressed inside that wait used to
+    /// find the dial already back, because the write-back went out on the unkey's own tick, and it
+    /// still must: the write-back goes before the tune keys. The other side: a tune that
+    /// supersedes an over still on the air writes nothing to the VFO while that carrier is up.
+    #[test]
+    fn a_tune_inside_the_fake_it_write_back_wait_keys_from_the_rx_dial() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let dial_writes = |log: &Arc<Mutex<Vec<String>>>, from: usize| -> Vec<String> {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| l.starts_with('F') || l.starts_with("T 1"))
+                .cloned()
+                .collect()
+        };
+
+        // A rig already commanded (no read-only-launch assert before a key), and the loop's own
+        // first dial push done, so the one dial write that can come before the tune's key is the
+        // write-back.
+        state.rig_asserted = true;
+        for i in 0..10 {
+            run(&mut state, &mut rig, f64::from(i) * 20.0);
+        }
+        // A Fake-It over on the air until t = 1000, its radio on the TX dial 14.0735; the loop
+        // unkeys it on that tick, as it ends every over.
+        assert!(rig.ptt(true).is_ok(), "premise: the over is keyed");
+        state.tx_until_ms = Some(1_000.0);
+        state.fake_it_restore = Some(14_074_000);
+        state.fake_it_tx_dial = Some(14_073_500);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 1_000.0);
+        assert_eq!(state.tx_until_ms, None, "premise: the over ended");
+        run(&mut state, &mut rig, 1_020.0);
+        assert_eq!(
+            dial_writes(&log, mark),
+            Vec::<String>::new(),
+            "premise: the write-back is waiting"
+        );
+        engine.lock().unwrap().set_tune(true);
+        run(&mut state, &mut rig, 1_040.0);
+        assert!(state.tuning_keyed, "premise: the tune keyed");
+        assert_eq!(
+            dial_writes(&log, mark),
+            ["F 14074000", "T 1"],
+            "the write-back, then the tune's key: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(state.fake_it_restore, None, "…and the write-back was taken");
+        engine.lock().unwrap().set_tune(false);
+        for i in 1..5 {
+            run(&mut state, &mut rig, 1_040.0 + f64::from(i) * 20.0);
+        }
+        assert!(!state.tuning_keyed, "premise: the tune ended");
+
+        // ⚠️ THE OTHER SIDE: a Fake-It over still on the air, and a tune that supersedes it. The
+        // teardown never saw that over end, so nothing writes the VFO under its carrier, and the
+        // write-back is held for after the tune.
+        assert!(rig.ptt(true).is_ok(), "premise: the over is keyed");
+        state.tx_until_ms = Some(60_000.0);
+        state.fake_it_restore = Some(14_074_000);
+        state.fake_it_tx_dial = Some(14_073_500);
+        let mark = log.lock().unwrap().len();
+        engine.lock().unwrap().set_tune(true);
+        for i in 0..5 {
+            run(&mut state, &mut rig, 2_000.0 + f64::from(i) * 20.0);
+        }
+        assert!(state.tuning_keyed, "premise: the tune keyed");
+        let wrote: Vec<String> = dial_writes(&log, mark)
+            .into_iter()
+            .filter(|l| l.starts_with('F'))
+            .collect();
+        assert_eq!(
+            wrote,
+            Vec::<String>::new(),
+            "the VFO was written under a live carrier: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            state.fake_it_restore,
+            Some(14_074_000),
+            "the write-back is held for after the tune"
         );
     }
 
@@ -29711,11 +31122,16 @@ mod tests {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            radio_id: 0,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,
             rigctld_port,
             broker_self_port,
+            address_refusal: AddressRefusal::default(),
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -30085,9 +31501,10 @@ mod tests {
 
         // The state the no-address warning leaves behind: a Dax-owned banner with the native
         // pan's key, which carries no address, still recorded.
-        engine.lock().unwrap().set_audio_error(Some(
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::FlexAddress,
             "Flex native panadapter is switched on but no Flex radio IP is set (…)".to_string(),
-        ));
+        )));
         state.err_owner = ErrOwner::Dax;
         state.spectrum_src_key = Some((2036, true, String::new()));
 
@@ -30102,10 +31519,10 @@ mod tests {
         assert_eq!(state.err_owner, ErrOwner::None, "the line is handed back");
 
         // …and the same transition must not clear a line another writer owns.
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Audio device failed to open".to_string()));
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::SoundCard,
+            "Audio device failed to open".to_string(),
+        )));
         state.err_owner = ErrOwner::Device;
         state.spectrum_src_key = Some((2036, true, String::new()));
         state.reconcile_spectrum_source(&engine, 0, false);
@@ -30127,32 +31544,40 @@ mod tests {
         state.report_ptt(&engine, true);
         assert!(banner(&engine).is_some(), "PTT NAK shows the banner");
         assert_eq!(state.err_owner, ErrOwner::Ptt);
+        assert_eq!(
+            line_kind(&engine),
+            "ptt",
+            "named as a PTT problem, so the lane does not say the radio stopped"
+        );
         state.report_ptt(&engine, false);
         assert!(
             banner(&engine).is_none(),
             "a good key clears the PTT status"
         );
         assert_eq!(state.err_owner, ErrOwner::None);
+        assert_eq!(line_kind(&engine), serde_json::Value::Null, "and its kind");
 
         // A PTT status must NOT clobber a higher-priority device error, and clearing PTT
         // must not wipe the device error either.
         state.err_owner = ErrOwner::Device;
-        engine
-            .lock()
-            .unwrap()
-            .set_audio_error(Some("Sound card failed".to_string()));
+        engine.lock().unwrap().set_audio_error(Some((
+            AudioErrorKind::SoundCard,
+            "Sound card failed".to_string(),
+        )));
         state.report_ptt(&engine, true);
         assert_eq!(
             banner(&engine).as_deref(),
             Some("Sound card failed"),
             "device error wins"
         );
+        assert_eq!(line_kind(&engine), "soundCard", "and so does its kind");
         state.report_ptt(&engine, false);
         assert_eq!(
             banner(&engine).as_deref(),
             Some("Sound card failed"),
             "clearing PTT leaves a device error intact"
         );
+        assert_eq!(line_kind(&engine), "soundCard", "kind and all");
     }
 
     #[test]
@@ -30524,6 +31949,104 @@ mod tests {
         // The serial branch is UNTOUCHED — a radio on a COM port really does have a switch.
         let serial = cat_transport(4532, None);
         assert!(cat_down_message(&serial, &e).contains("radio is on"));
+    }
+
+    /// Which NET rigctl stations are shared directly, by the address alone: a rigctld on this
+    /// computer, at any port but rigctld TCP Port's (the coexist probe's) and the CAT broker's.
+    #[test]
+    fn only_a_net_rigctl_address_on_this_computer_is_shared_directly() {
+        let net = |addr: &str| {
+            let mut t = cat_transport(4534, None);
+            t.rig_model = 2; // NET rigctl
+            t.rig_conn = "network".into();
+            t.rig_addr = addr.into();
+            t
+        };
+        let with = |addr: &str, change: &dyn Fn(&mut Transport)| {
+            let mut t = net(addr);
+            change(&mut t);
+            t
+        };
+        let rows = [
+            ("wfview here", net("127.0.0.1:4533"), Some("127.0.0.1:4533")),
+            ("localhost", net("localhost:4533"), Some("localhost:4533")),
+            ("IPv6 loopback", net("[::1]:4533"), Some("[::1]:4533")),
+            ("127.0.1.1", net("127.0.1.1:4533"), Some("127.0.1.1:4533")),
+            ("spaces", net(" 127.0.0.1:4533 "), Some("127.0.0.1:4533")),
+            ("another computer", net("192.168.1.50:4533"), None),
+            ("another computer by name", net("shack-pc:4533"), None),
+            ("rigctld TCP Port's number", net("127.0.0.1:4534"), None),
+            ("no port", net("127.0.0.1"), None),
+            (
+                "the CAT broker's port",
+                with("127.0.0.1:4532", &|t| t.broker_self_port = Some(4532)),
+                None,
+            ),
+            (
+                "the CAT broker elsewhere",
+                with("127.0.0.1:4533", &|t| t.broker_self_port = Some(4532)),
+                Some("127.0.0.1:4533"),
+            ),
+            (
+                "Thetis's profile",
+                with("127.0.0.1:4533", &|t| t.rig_model = 2054),
+                None,
+            ),
+            (
+                "Hamlib Dummy",
+                with("127.0.0.1:4533", &|t| t.rig_model = 1),
+                None,
+            ),
+            ("FLRig", with("127.0.0.1:4533", &|t| t.rig_model = 4), None),
+            (
+                "Connection Serial, an old address",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "serial".into()),
+                None,
+            ),
+            (
+                "OmniRig",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "omnirig".into()),
+                None,
+            ),
+            (
+                "the Icom network client",
+                with("127.0.0.1:4533", &|t| t.rig_conn = "icomlan".into()),
+                None,
+            ),
+        ];
+        assert_eq!(
+            rows.iter()
+                .map(|(what, t, _)| (*what, net_rigctld_on_this_machine(t)))
+                .collect::<Vec<_>>(),
+            rows.iter()
+                .map(|(what, _, want)| (*what, *want))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Test CAT names the address Nexus dials when nothing answers there. A rigctld shared at a NET
+    /// rigctl Network Address (wfview's, closed since) is not on rigctld TCP Port, and naming that
+    /// port sent the operator to look for a rigctld Nexus never used. Every other rig Nexus builds
+    /// dials 127.0.0.1 at rigctld TCP Port, and its sentence is unchanged. Port 1 is one nothing
+    /// listens on.
+    #[test]
+    fn test_cat_names_the_address_nexus_dials_when_nothing_answers_there() {
+        let mut shared = cat_transport(4534, None);
+        shared.rig_model = 2; // NET rigctl
+        shared.rig_conn = "network".into();
+        shared.rig_addr = "127.0.0.1:1".into();
+        let ours = cat_transport(1, None);
+        let sentence = |t: &Transport| {
+            let mut rig = Rig::with_control(Some("127.0.0.1:1".into()), PttMode::Cat);
+            probe_cat(&mut rig, t).detail
+        };
+        assert_eq!(
+            (sentence(&shared), sentence(&ours)),
+            (
+                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
+                "rigctld is not reachable on 127.0.0.1:1.".to_string(),
+            )
+        );
     }
 
     /// Shared recording backend for the read-only-launch tests: a stand-in rig that
@@ -30991,6 +32514,13 @@ mod tests {
             .unwrap();
     }
 
+    /// The kind the snapshot gives the audio-error line, as the UI reads it off the wire
+    /// (`Null` = no line).
+    fn line_kind(engine: &Arc<Mutex<Engine>>) -> serde_json::Value {
+        let snapshot = engine.lock().unwrap().snapshot();
+        serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"].clone()
+    }
+
     /// One `step` at `now`, with a rebuild closure that must never be called.
     fn quiet_step(
         engine: &Arc<Mutex<Engine>>,
@@ -31078,6 +32608,11 @@ mod tests {
                 .is_some_and(|m| m.contains("waiting for samples")),
             "control: the banner must be up before the card delivers"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "noReceiveAudio",
+            "an open card that has delivered nothing is named for what the operator lacks"
+        );
 
         // The rebuilt stream comes to life.
         backend.queue_capture(vec![0.01_f32; 512]);
@@ -31086,6 +32621,11 @@ mod tests {
             engine.lock().unwrap().snapshot().radio.audio_error,
             None,
             "the first delivered frame IS the recovery — the banner must come down on it"
+        );
+        assert_eq!(
+            line_kind(&engine),
+            serde_json::Value::Null,
+            "and its kind with it"
         );
         assert!(
             !state.audio_awaiting_samples,
@@ -31096,6 +32636,74 @@ mod tests {
             ErrOwner::None,
             "the audio-error line is released too, so a monitor/voice-mic notice can use it again"
         );
+    }
+
+    /// A card that dies, and then will not reopen, is named a SOUND CARD failure on the line at
+    /// both steps: while the confirmed death waits for its rebuild, and when the rebuild's open
+    /// fails. Not a stopped radio: CAT carries on throughout.
+    #[test]
+    fn a_card_that_dies_and_will_not_reopen_is_named_a_sound_card_failure() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        // Every reopen fails: the device is gone for good.
+        let mut ra =
+            |_t: &Transport| -> Result<MockBackend, String> { Err("no such device".to_string()) };
+        let mut step = |state: &mut RadioLoop, backend: &mut MockBackend, now: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let line = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.audio_error;
+
+        // Settle, so nothing but the death below can explain a rebuild.
+        step(&mut state, &mut backend, 0.0);
+        engine.lock().unwrap().set_audio_error(None);
+        backend.stream_error = Some("capture stream: device no longer available".to_string());
+        step(&mut state, &mut backend, 20.0);
+        // The death is confirmed, and its rebuild held back (as it is while keyed, or inside the
+        // debounce after a recent one).
+        state.audio_rebuild_floor = f64::MAX;
+        step(
+            &mut state,
+            &mut backend,
+            20.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+        );
+        let said = line(&engine);
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Sound card stopped")),
+            "premise: the death is on the line, its rebuild still to come: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "soundCard");
+
+        // The rebuild runs, and the card will not open.
+        state.audio_rebuild_floor = 0.0;
+        step(
+            &mut state,
+            &mut backend,
+            40.0 + AUDIO_DEATH_CONFIRM_MS + 1.0,
+        );
+        let said = line(&engine);
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Audio device failed to open")),
+            "premise: the reopen failed: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "soundCard");
     }
 
     #[test]
@@ -32361,6 +33969,65 @@ mod tests {
                 .contains("Voice mic could not open"),
             "the failure is surfaced on the audio-status line, got {err:?}"
         );
+        assert_eq!(
+            line_kind(&engine),
+            "voiceMic",
+            "named as the voice mic's notice: the radio works through it"
+        );
+    }
+
+    /// A headphone monitor held off because its output is the rig's TX device is named a MONITOR
+    /// notice on the line: the radio receives and transmits through it.
+    #[test]
+    fn a_monitor_held_off_by_the_tx_device_guard_is_named_a_monitor_notice() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.monitor_enabled = true;
+            s.monitor_device = "Rig USB CODEC".to_string();
+            s.audio_out = "Rig USB CODEC".to_string();
+            eng.apply_settings(s);
+        }
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        // The new output device rebuilds the card, which holds the line until it delivers.
+        quiet_step(&engine, &mut state, &mut backend, 0.0);
+        backend.queue_capture(vec![0.01_f32; 512]);
+        quiet_step(&engine, &mut state, &mut backend, 20.0);
+        // The monitor applies itself again (as after a voice-mic notice comes down).
+        state.monitor_reapply = true;
+        quiet_step(&engine, &mut state, &mut backend, 40.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Headphone monitor is off")),
+            "premise: the guard held the monitor off: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "monitor");
+    }
+
+    /// A QSO recording that cannot start is named a RECORDING notice on the line: the radio works
+    /// through it.
+    #[test]
+    fn a_qso_recording_that_cannot_start_is_named_a_recording_notice() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        // No file can be created at an empty path.
+        engine.lock().unwrap().start_qso_recording("");
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        quiet_step(&engine, &mut state, &mut backend, 0.0);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.starts_with("Could not start QSO recording")),
+            "premise: the recording could not start: {said:?}"
+        );
+        assert!(
+            !engine.lock().unwrap().is_qso_recording(),
+            "premise: the REC flag came down"
+        );
+        assert_eq!(line_kind(&engine), "recording");
     }
 
     #[test]
@@ -34524,6 +36191,117 @@ mod tests {
         (addr, seen)
     }
 
+    /// A rigctld whose rig answers every read and no frequency change: each `F` gets Hamlib's own
+    /// "the rig did not answer" (`RPRT -5`), and everything else is answered as
+    /// [`switchable_rigctld`] answers it with the rig on. The rig stays on `start`.
+    fn rigctld_deaf_to_dial_writes(start: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let Ok(mut out) = stream.try_clone() else {
+                    return;
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let reply = match line.trim() {
+                        l if l.starts_with("F ") => "RPRT -5\n".to_string(),
+                        "f" => format!("{start}\n"),
+                        "m" => "USB\n2400\n".to_string(),
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// ⭐ A FREQUENCY CHANGE HAMLIB SAYS THE RIG DID NOT ANSWER IS SENT THREE TIMES. The rig behind
+    /// rigctld answers every read, so the circuit breaker never trips, and gets `RPRT -5` for every
+    /// `F`. A QSY to 28.400 MHz goes out three times, is given up in "not sent — no reply from the
+    /// rig" words with the rig's own dial shown, and records no refusal. It went out on every pass
+    /// of the loop for as long as the rig stayed that way.
+    #[test]
+    fn a_dial_hamlib_says_the_rig_did_not_answer_is_sent_three_times() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, seen) = rigctld_deaf_to_dial_writes(14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        state.last_rig_poll = 0.0;
+        state.last_freq_poll = 0.0;
+        state.last_smeter_poll = 0.0;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut step = |state: &mut RadioLoop, rig: &mut Rig, n: usize| {
+            for _ in 0..n {
+                tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.074, "20m", "USB");
+        }
+        step(&mut state, &mut rig, 5);
+        let settled = seen.lock().unwrap().len();
+        engine.lock().unwrap().set_frequency(28.4, "10m", "USB");
+        step(&mut state, &mut rig, 40);
+        let dial_writes = seen.lock().unwrap()[settled..]
+            .iter()
+            .filter(|l| l.starts_with("F "))
+            .count();
+        let (said, refused, dial) = {
+            let e = engine.lock().unwrap();
+            let snap = e.snapshot();
+            (
+                snap.radio.cat_detail,
+                snap.radio.refused_dial_mhz,
+                e.settings().dial_mhz,
+            )
+        };
+        assert_eq!(
+            (
+                dial_writes,
+                said,
+                refused,
+                state.dial_giveup,
+                state.cat_ok,
+                dial
+            ),
+            (
+                3,
+                "28.4000 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+                None,
+                Some(28_400_000),
+                Some(true),
+                14.074,
+            )
+        );
+    }
+
     /// The overnight-radio review (2026-09-02), first half: a rig that is OFF answers every
     /// command with `RPRT -5`. That must trip the circuit breaker — the pill goes red — and
     /// must NOT be read as "the rig refused this band": the band give-up stays clear, so the
@@ -34749,6 +36527,192 @@ mod tests {
         state.cat_reopen_at = 0.0;
         run(&mut state, &mut rig, 4, &mut tick);
         assert_eq!(n(&reopens), 3, "nothing to open at while the port is gone");
+    }
+
+    /// ⭐ ASKING AGAIN AFTER AN OPEN THAT OPENED NO LINK NEVER CUTS AN OVER, OR TURNS TRANSMIT OFF.
+    /// With no CAT channel the radio keys by the VOX fallback, so an over can be on the air while
+    /// the loop asks the open again. The retry used to run a rebuild's teardown: it flushed the
+    /// over's audio, dropped its deadline, and halted TX for a context change, which in the digital
+    /// modes leaves transmit off, and it said "the port was reopened" when nothing had been open.
+    /// Nothing was there to let go of, and nothing changed: the retry now waits for the over to end,
+    /// leaves transmit as the operator set it, and says only what the open said. The control is the
+    /// same over with nothing to ask again: its one flush is the over's own end. Each value is
+    /// (opens, flushes, the over's deadline, transmit on), mid-over and after it, then the status.
+    #[test]
+    fn asking_again_after_an_open_that_opened_no_link_never_cuts_an_over_or_turns_tx_off() {
+        let over = |failed_open: bool| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            engine.lock().unwrap().set_tx_enabled(true);
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox(); // what a failed open hands back: no control at all
+            let mut state = loop_state();
+            if failed_open {
+                state.cat_ok = Some(false); // as a failed open leaves it
+            }
+            state.tx_until_ms = Some(5_000.0); // an over on the air until t = 5 s
+            let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = opens.clone();
+            let mut reopen = move |_t: &Transport, _c: bool| -> RigOpen {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                (
+                    Rig::vox(),
+                    None,
+                    CatProbe::status(Some(false), "driver not ready"),
+                )
+            };
+            let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+            let mut station = StationSinks::new();
+            let mut tick = 0.0f64;
+            let mut run =
+                |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, ticks| {
+                    for _ in 0..ticks {
+                        tick += 500.0;
+                        state
+                            .step(
+                                &engine,
+                                backend,
+                                rig,
+                                &sinks,
+                                tick,
+                                &mut ra,
+                                &mut reopen,
+                                &mut station,
+                            )
+                            .unwrap();
+                    }
+                };
+            let seen = |state: &RadioLoop, backend: &MockBackend| {
+                (
+                    opens.load(std::sync::atomic::Ordering::SeqCst),
+                    backend.flush_calls,
+                    state.tx_until_ms,
+                    engine.lock().unwrap().tx_enabled(),
+                )
+            };
+            run(&mut state, &mut rig, &mut backend, 4); // t = 2 s, mid-over
+            let mid = seen(&state, &backend);
+            run(&mut state, &mut rig, &mut backend, 12); // t = 8 s, the over ended at 5 s
+            let after = seen(&state, &backend);
+            let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+            (mid, after, said)
+        };
+        let (control, asked_again) = (over(false), over(true));
+        assert_eq!(control.0, (0, 0, Some(5_000.0), true), "premise: mid-over");
+        assert_eq!(control.1, (0, 1, None, true), "premise: the over's own end");
+        assert_eq!(
+            asked_again,
+            (
+                (0, 0, Some(5_000.0), true),
+                (1, 1, None, true),
+                "driver not ready".to_string()
+            )
+        );
+    }
+
+    /// The other side of asking again: a SAVED change of the CAT configuration is a context change,
+    /// with no link as with one, and its rebuild tears down first as it always did, which in the
+    /// digital modes halts transmit. The value is (transmit on after the save, opens, transmit on
+    /// after the loop's rebuild).
+    #[test]
+    fn a_saved_cat_change_with_no_link_still_tears_down_first() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_tx_enabled(true);
+        let mut state = loop_state();
+        state.cat_ok = Some(false); // as a failed open leaves it
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rigctld_port += 7;
+            e.apply_settings(s);
+        }
+        let saved = engine.lock().unwrap().tx_enabled();
+        let mut opens = 0;
+        let mut reopen = |_t: &Transport, _c: bool| -> RigOpen {
+            opens += 1;
+            (
+                Rig::vox(),
+                None,
+                CatProbe::status(Some(false), "driver not ready"),
+            )
+        };
+        state
+            .step(
+                &engine,
+                &mut MockBackend::new(),
+                &mut Rig::vox(),
+                &no_sinks(),
+                500.0,
+                &mut mock_reopen_audio(),
+                &mut reopen,
+                &mut StationSinks::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            (saved, opens, engine.lock().unwrap().tx_enabled()),
+            (true, 1, false)
+        );
+    }
+
+    /// Asking again waits for a tune carrier, and for the operator's mic PTT, as it does for an
+    /// over: the radio's VOX fallback keys on those too. Each value is (opens while held, the
+    /// loop keyed), then opens after the release.
+    #[test]
+    fn asking_again_waits_for_a_tune_or_a_mic_ptt_too() {
+        let held = |press: fn(&mut Engine), release: fn(&mut Engine)| {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let mut state = loop_state();
+            state.cat_ok = Some(false); // as a failed open leaves it
+                                        // Due from the second tick on, once the first tick has keyed.
+            state.cat_reopen_at = 1_000.0;
+            let mut rig = Rig::vox();
+            let mut backend = MockBackend::new();
+            let mut opens = 0;
+            let mut tick = 0.0f64;
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, opens: &mut usize, ticks| {
+                for _ in 0..ticks {
+                    tick += 500.0;
+                    let mut reopen = |_t: &Transport, _c: bool| -> RigOpen {
+                        *opens += 1;
+                        (
+                            Rig::vox(),
+                            None,
+                            CatProbe::status(Some(false), "driver not ready"),
+                        )
+                    };
+                    state
+                        .step(
+                            &engine,
+                            &mut backend,
+                            rig,
+                            &no_sinks(),
+                            tick,
+                            &mut mock_reopen_audio(),
+                            &mut reopen,
+                            &mut StationSinks::new(),
+                        )
+                        .unwrap();
+                }
+            };
+            press(&mut engine.lock().unwrap());
+            run(&mut state, &mut rig, &mut opens, 4);
+            let while_held = (opens, state.tuning_keyed || state.manual_ptt_applied);
+            release(&mut engine.lock().unwrap());
+            run(&mut state, &mut rig, &mut opens, 4);
+            (while_held, opens)
+        };
+        assert_eq!(
+            [
+                held(|e| e.set_tune(true), |e| e.set_tune(false)),
+                held(
+                    |e| {
+                        e.set_tx_enabled(true);
+                        e.set_ptt(true);
+                    },
+                    |e| e.set_ptt(false)
+                ),
+            ],
+            [((0, true), 1), ((0, true), 1)]
+        );
     }
 
     /// The serial-port watch, pure: an absent → present edge is the immediate rebuild trigger,
@@ -35465,6 +37429,71 @@ mod tests {
         assert!((snap.radio.rx_ranges_mhz[0].1 - 60.0).abs() < 1e-6);
     }
 
+    /// ⭐ **NO PSK REPORTER WHILE WINTER FIELD DAY RUNS** — the radio loop's half of the rule
+    /// that a spot goes out only over amateur RF while the event runs (2027 rules p.8): with the
+    /// operator's switch on throughout, the loop holds no reporter inside the event's window, so
+    /// nothing is collected for one or sent, and it holds one again once the event ends.
+    /// Controls: an hour before the event, at its end, with the master switch off, and ARRL
+    /// Field Day inside its own window all keep the reporter.
+    #[test]
+    fn the_radio_loop_holds_no_psk_reporter_while_winter_field_day_runs() {
+        let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+        let wfd = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::WinterFd, year)
+            .event_window(2027);
+        let arrl = tempo_core::fd_rules::ruleset(tempo_core::fieldday::FdEvent::ArrlFd, year)
+            .event_window(2026);
+        let station = |event: &str, class: &str, fd_active: bool, now: u64| {
+            let mut e = Engine::new("W9XYZ", "EN52", 0);
+            let mut s = e.settings().clone();
+            s.fd_active = fd_active;
+            s.fd_event = event.into();
+            s.fd_class = class.into();
+            s.fd_section = "WI".into();
+            s.pskreporter = true;
+            e.apply_settings(s);
+            e.set_spot_clock(Some(now));
+            e
+        };
+        // The loop starts from the switch, as `run` does, then applies the effective upload.
+        let held = |e: &Engine| {
+            let (mut psk, mut applied) = (Some(PskReporter::new()), true);
+            hot_apply_psk(e, &mut psk, &mut applied);
+            (psk.is_some(), applied)
+        };
+        // …and the event ending brings the reporter back, the switch never touched.
+        let mut e = station("wfd", "3O", true, wfd.start_unix + 7200);
+        let (mut psk, mut applied) = (Some(PskReporter::new()), true);
+        hot_apply_psk(&e, &mut psk, &mut applied);
+        let during = psk.is_some();
+        e.set_spot_clock(Some(wfd.end_unix));
+        hot_apply_psk(&e, &mut psk, &mut applied);
+        assert_eq!(
+            (
+                [
+                    held(&station("wfd", "3O", true, wfd.start_unix + 7200)),
+                    held(&station("wfd", "3O", true, wfd.start_unix - 3600)),
+                    held(&station("wfd", "3O", true, wfd.end_unix)),
+                    held(&station("wfd", "3O", false, wfd.start_unix + 7200)),
+                    held(&station("arrlfd", "3A", true, arrl.start_unix + 7200)),
+                ],
+                (during, psk.is_some(), e.settings().pskreporter),
+            ),
+            (
+                [
+                    (false, false),
+                    (true, true),
+                    (true, true),
+                    (true, true),
+                    (true, true)
+                ],
+                (false, true, true),
+            ),
+            "(reporter held, upload applied): inside Winter Field Day's window, an hour before \
+             it, at its end, with the master switch off, inside ARRL Field Day's window; then \
+             (held during the event, held after it, the switch)"
+        );
+    }
+
     #[test]
     fn field_day_club_push_fires_without_wsjtx_or_psk_sinks() {
         // Field Day club logging (N3FJP) with WSJT-X UDP and PSK Reporter both OFF
@@ -35551,8 +37580,8 @@ mod tests {
             "the N3FJP club push fired with WSJT-X and PSK sinks both off"
         );
         assert_eq!(
-            station.last_fd_qsos, 1,
-            "the FD cursor advanced past the pushed QSO"
+            station.last_fd_seq, 1,
+            "the FD cursor advanced past the pushed QSO's seq"
         );
     }
 
@@ -35680,10 +37709,653 @@ mod tests {
             "exactly one QSO push fired (the new QSO only); connections seen: {conns:?}"
         );
         assert_eq!(
-            station.last_fd_qsos, 2,
+            station.last_fd_seq, 2,
             "the FD cursor covers restored + new rows"
         );
     }
+
+    /// ⭐ **A contact logged after a removal, inside ONE slot, still reaches the club log** —
+    /// and the removed contact is never pushed again, not even once it is restored.
+    ///
+    /// The forwarder used to name rows by COUNTING them ("rows past the count seen at the last
+    /// boundary"). Remove the newest contact and log the next inside one slot — the rhythm of a
+    /// stopped TU taken back and the station worked again — and the count is back where it was:
+    /// the new contact never reached N3FJP, the N1MM broadcast or WSJT-X listeners.
+    #[test]
+    fn a_contact_logged_after_a_removal_in_the_same_slot_is_still_forwarded() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                fd_active: true,
+                fd_class: "1D".to_string(),
+                fd_section: "WI".to_string(),
+                n3fjp_host: "127.0.0.1".to_string(),
+                n3fjp_port: port,
+                ..Settings::default()
+            });
+            eng.set_mode("fieldday-run").unwrap();
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut boundary = |at: f64, station: &mut StationSinks| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    at,
+                    &mut ra,
+                    &mut rr,
+                    station,
+                )
+                .unwrap();
+        };
+        // Every QSO push that reached the club log port since the last call, as the calls they
+        // named (a connection that carried no QSO is not counted — see the test above).
+        let pushed = || {
+            use std::io::Read;
+            let mut calls = Vec::new();
+            let mut stop_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < stop_at {
+                match listener.accept() {
+                    Ok((mut s, _)) => {
+                        s.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                            .unwrap();
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf);
+                        for call in ["K1ABC", "W2NEW"] {
+                            if buf.contains(call) {
+                                calls.push(call);
+                            }
+                        }
+                        stop_at = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Err(_) => break,
+                }
+            }
+            calls
+        };
+        let newest = |engine: &Arc<Mutex<Engine>>| {
+            let snap = engine.lock().unwrap().snapshot();
+            let q = snap.field_day.unwrap().log.last().cloned().unwrap();
+            (q.call, q.when_unix)
+        };
+
+        boundary(0.0, &mut station); // the live session, seen
+        assert!(engine
+            .lock()
+            .unwrap()
+            .fd_log_manual("K1ABC", "2A", "EMA", "CW")
+            .unwrap());
+        boundary(16_000.0, &mut station);
+        assert_eq!(
+            pushed(),
+            ["K1ABC"],
+            "the first contact reached the club log"
+        );
+
+        // Inside ONE slot: take it back, and work the next station.
+        let (call, when) = newest(&engine);
+        let removed = engine
+            .lock()
+            .unwrap()
+            .contest_remove_last(&call, when)
+            .unwrap()
+            .unwrap();
+        assert!(engine
+            .lock()
+            .unwrap()
+            .fd_log_manual("W2NEW", "3A", "ENY", "CW")
+            .unwrap());
+        boundary(32_000.0, &mut station);
+        assert_eq!(
+            pushed(),
+            ["W2NEW"],
+            "the contact after the removal reached the club log, and the removed one did not again"
+        );
+
+        // Restored, it is not pushed a second time: it went before it was removed.
+        assert!(engine
+            .lock()
+            .unwrap()
+            .contest_restore(removed.entry.id())
+            .unwrap()
+            .is_ok());
+        boundary(48_000.0, &mut station);
+        assert!(pushed().is_empty(), "nothing is pushed twice");
+
+        // The newest removed, a boundary with nothing newer, then restored: the cursor never
+        // moved back to the shorter log, so this contact is not pushed twice either.
+        let (call, when) = newest(&engine);
+        let removed = engine
+            .lock()
+            .unwrap()
+            .contest_remove_last(&call, when)
+            .unwrap()
+            .unwrap();
+        boundary(64_000.0, &mut station);
+        assert!(engine
+            .lock()
+            .unwrap()
+            .contest_restore(removed.entry.id())
+            .unwrap()
+            .is_ok());
+        boundary(80_000.0, &mut station);
+        assert!(
+            pushed().is_empty(),
+            "a restored contact that went out is not pushed again"
+        );
+    }
+
+    // ── N3FJP: each contest's exchange through the ENTER sequence ─────────────────────────────
+
+    /// A fake N3FJP on loopback. It records every byte each connection carries and answers
+    /// the ENTER action the way N3FJP documents it (`<ENTERRESPONSE>`, the records added), so
+    /// a push runs to its end exactly as it does against the program. `added` is that number:
+    /// 1 for a contact N3FJP took, 0 for one it refused, `None` for a program that holds the
+    /// connection open and never answers.
+    fn fake_n3fjp(added: Option<u32>) -> (u16, Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { return };
+                // One entry per connection, kept up to date as its bytes arrive, so a program
+                // that never answers is still seen before the push gives up on it.
+                let at = {
+                    let mut seen = record.lock().unwrap();
+                    seen.push(String::new());
+                    seen.len() - 1
+                };
+                let record = Arc::clone(&record);
+                std::thread::spawn(move || {
+                    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(6)));
+                    let (mut got, mut buf, mut answered) = (Vec::new(), [0u8; 4096], false);
+                    loop {
+                        match s.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => got.extend_from_slice(&buf[..n]),
+                        }
+                        let text = String::from_utf8_lossy(&got).into_owned();
+                        let enter = text.contains("<CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n");
+                        record.lock().unwrap()[at] = text;
+                        if let (Some(added), true, false) = (added, enter, answered) {
+                            answered = true;
+                            let reply =
+                                format!("<CMD><ENTERRESPONSE><VALUE>{added}</VALUE></CMD>\r\n");
+                            let _ = s.write_all(reply.as_bytes());
+                        }
+                    }
+                });
+            }
+        });
+        (port, seen)
+    }
+
+    /// A country file that places ONE call, the station these tests run as (`W9ABC`), so
+    /// CQ WPX and CQ WW can open a session here: both are scored by where you are relative
+    /// to the station you work, and a session refuses to open without placing you.
+    ///
+    /// ⚠️ Process-wide and once-only. It places no call any other test in this binary uses,
+    /// so every other `resolve_call` answers exactly as with no resolver installed; the one
+    /// thing it changes is that those two contests can open, which nothing else here does.
+    fn n3fjp_country_file() {
+        fn places_this_station(call: &str) -> Option<tempo_core::contest::CallLocation> {
+            (call == "W9ABC").then_some(tempo_core::contest::CallLocation {
+                entity: "United States",
+                continent: "NA",
+                cq_zone: Some(4),
+            })
+        }
+        let _ = tempo_core::contest::install_call_resolver(places_this_station);
+    }
+
+    /// Every connection `seen` has recorded once bytes have arrived and a quiet half second
+    /// has passed with no more, so a second push would still be caught; bounded at 3 s.
+    fn n3fjp_seen(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let (mut last, mut quiet) = (0, std::time::Instant::now());
+        while std::time::Instant::now() < deadline {
+            let bytes: usize = seen.lock().unwrap().iter().map(String::len).sum();
+            if bytes != last {
+                (last, quiet) = (bytes, std::time::Instant::now());
+            }
+            if bytes > 0 && quiet.elapsed() > std::time::Duration::from_millis(500) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let pushes = seen.lock().unwrap().clone();
+        eprintln!("what the fake N3FJP received: {pushes:?}");
+        pushes
+    }
+
+    /// ONE contest contact through the loop's own forwarder, with the N3FJP push on (`on`:
+    /// the host set) or off (the host blank): what the fake N3FJP received, connection by
+    /// connection. `settings` names the contest; `log` logs the contact once the loop has
+    /// seen the live session (a row already there would read as a restored one).
+    fn n3fjp_pushes(settings: Settings, on: bool, log: impl FnOnce(&mut Engine)) -> Vec<String> {
+        n3fjp_country_file();
+        let (port, seen) = fake_n3fjp(Some(1));
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                fd_active: true,
+                n3fjp_host: if on {
+                    "127.0.0.1".into()
+                } else {
+                    String::new()
+                },
+                n3fjp_port: port,
+                ..settings
+            });
+            eng.set_mode("fieldday-run").unwrap();
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut boundary = |at: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    at,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        boundary(0.0);
+        log(&mut engine.lock().unwrap());
+        boundary(16_000.0);
+        n3fjp_seen(&seen)
+    }
+
+    /// The settings one contest runs from: the contest, and the station data it reads.
+    fn n3fjp_contest(event: &str) -> Settings {
+        Settings {
+            mycall: "W9ABC".into(),
+            mygrid: "EN37".into(),
+            fd_event: event.into(),
+            fd_class: if event == "wfd" { "1H" } else { "1D" }.into(),
+            fd_section: "WI".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "COOK".into(),
+            contest_cq_zone: 4,
+            ..Settings::default()
+        }
+    }
+
+    /// The strip's received slots for one contact.
+    fn rcvd(slots: &[(&str, &str)]) -> Vec<(String, String)> {
+        slots
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// One push's ENTER sequence, from the lines between the call and the operator, which
+    /// are all that differ from contest to contest here: the rest is Field Day's own,
+    /// unchanged, at the dial and band these loop tests run on.
+    fn enter_push(mode: &str, call: &str, exchange: &[&str], serial: Option<u32>) -> String {
+        let mut s = format!(
+            "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+             <CMD><CHANGEBM><BAND>20</BAND><MODE>{mode}</MODE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>{call}</VALUE></CMD>\r\n"
+        );
+        for line in exchange {
+            s.push_str(line);
+        }
+        s.push_str(
+            "<CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n",
+        );
+        if let Some(n) = serial {
+            s.push_str(&format!(
+                "<CMD><SETSERIALNUMBER><VALUE>{n}</VALUE></CMD>\r\n"
+            ));
+        }
+        s.push_str(
+            "<CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+             <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n",
+        );
+        s
+    }
+
+    /// `<CMD><UPDATE>` of one entry control, as the push sends it.
+    fn update(control: &str, value: &str) -> String {
+        format!("<CMD><UPDATE><CONTROL>{control}</CONTROL><VALUE>{value}</VALUE></CMD>\r\n")
+    }
+
+    /// ⭐ **Field Day's push is byte for byte what it was.** Captured off the loop's own
+    /// forwarder against a fake N3FJP that records every command: the ENTER sequence (the
+    /// default) and the `ADDDIRECT` insert an operator can fall back to, whose date and time
+    /// are the contact's own and are left out of the comparison. Winter Field Day's (the same
+    /// class and section, as N3FJP documents for its program) did not move either.
+    #[test]
+    fn the_field_day_n3fjp_push_is_byte_identical() {
+        let fd = |e: &mut Engine| assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("arrlfd"), true, fd),
+            [N3FJP_FD_ENTER],
+            "ARRL Field Day, ENTER"
+        );
+        let pushes = n3fjp_pushes(
+            Settings {
+                n3fjp_use_enter: false,
+                ..n3fjp_contest("arrlfd")
+            },
+            true,
+            fd,
+        );
+        let undated: Vec<String> = pushes
+            .iter()
+            .map(|p| {
+                let (head, rest) = p.split_once("<fldDateStr>").expect("a dated insert");
+                let (_, tail) = rest.split_once("</fldTimeOnStr>").expect("a timed insert");
+                format!("{head}<fldDateStr>…</fldTimeOnStr>{tail}")
+            })
+            .collect();
+        assert_eq!(undated, [N3FJP_FD_ADDDIRECT], "ARRL Field Day, ADDDIRECT");
+        let wfd = |e: &mut Engine| assert!(e.fd_log_manual("K1ABC", "2O", "EMA", "CW").unwrap());
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("wfd"), true, wfd),
+            [N3FJP_WFD_ENTER],
+            "Winter Field Day, ENTER"
+        );
+    }
+
+    /// ⭐ **A contest whose program's controls N3FJP does not publish is left as it was.**
+    /// N3FJP's API page lists the State QSO Parties as "Varies" and does not list its
+    /// Sweepstakes or CQ WW CW/SSB programs at all, so the Illinois QSO Party and CQ WW CW
+    /// still push the call alone, byte for byte as before.
+    #[test]
+    fn a_contest_n3fjp_does_not_document_pushes_as_it_did() {
+        let party = |e: &mut Engine| {
+            let qth = rcvd(&[("RST", "579"), ("QTH", "DUPG")]);
+            assert!(e.contest_log_manual("K9ABC", &qth, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("ilqp"), true, party),
+            [N3FJP_ILQP_ENTER],
+            "Illinois QSO Party"
+        );
+        let cqww = |e: &mut Engine| {
+            let zone = rcvd(&[("RST", "579"), ("ZN", "5")]);
+            assert!(e.contest_log_manual("K1ABC", &zone, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_cw"), true, cqww),
+            [N3FJP_CQWW_CW_ENTER],
+            "CQ WW CW"
+        );
+    }
+
+    /// ⭐ **CQ WPX carries its exchange into N3FJP's CQ WPX program**, in the controls N3FJP
+    /// lists for it ("CQ WPX: RST / Serial Received"): both reports (N3FJP fills them only
+    /// when its own report box takes the focus, so an application fills them), the serial
+    /// received, and SETSERIALNUMBER with the number THIS contact sent, so N3FJP's log holds
+    /// the number that went on the air rather than its own count. The sent and received
+    /// values differ on purpose, so a report filled from the wrong side cannot pass.
+    #[test]
+    fn a_cq_wpx_contact_reaches_n3fjp_with_its_exchange() {
+        let wpx = |e: &mut Engine| {
+            let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+            assert!(e.contest_log_manual("K1ABC", &nr, "CW", None).unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYSERIALNOR", "15"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), true, wpx),
+            [enter_push("CW", "K1ABC", &exchange, Some(1))]
+        );
+    }
+
+    /// ⭐ **CQ WW RTTY carries its exchange into N3FJP's CQ WW RTTY program** ("RST / CQ Zone
+    /// / State (or Province)"). The zone sent on the air goes in after the call, where it
+    /// replaces the one N3FJP fills in from the call; a DX station sends no state, and the
+    /// state box is then left alone rather than cleared.
+    #[test]
+    fn a_cq_ww_rtty_contact_reaches_n3fjp_with_its_exchange() {
+        let w_ve = |e: &mut Engine| {
+            let qth = rcvd(&[("RST", "579"), ("ZN", "5"), ("QTH", "MA")]);
+            assert!(e
+                .contest_log_manual("K1ABC", &qth, "DIG", Some("RTTY"))
+                .unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYCQZONE", "5"),
+            update("TXTENTRYSTATE", "MA"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_rtty"), true, w_ve),
+            [enter_push("RTTY", "K1ABC", &exchange, None)],
+            "a W/VE station"
+        );
+        let dx = |e: &mut Engine| {
+            let zone = rcvd(&[("RST", "579"), ("ZN", "14")]);
+            assert!(e
+                .contest_log_manual("DL1ABC", &zone, "DIG", Some("RTTY"))
+                .unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYCQZONE", "14"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_rtty"), true, dx),
+            [enter_push("RTTY", "DL1ABC", &exchange, None)],
+            "a DX station"
+        );
+    }
+
+    /// ⭐ **An ARRL VHF contact carries its grid into N3FJP's VHF Contest Log** ("VHF: Grid /
+    /// RST (optional)"; the ARRL contests send no report, so none is filled).
+    #[test]
+    fn an_arrl_vhf_contact_reaches_n3fjp_with_its_grid() {
+        let vhf = |e: &mut Engine| {
+            let grid = rcvd(&[("GRID", "FN42")]);
+            assert!(e.contest_log_manual("K1ABC", &grid, "CW", None).unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYGRID", "FN42"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("arrlvhf_jun"), true, vhf),
+            [enter_push("CW", "K1ABC", &exchange, None)]
+        );
+    }
+
+    /// ⭐ **Nothing reaches N3FJP while the push is off** (a blank host), for a contest whose
+    /// exchange now rides the push. CONTROL: the same contact with the host set is one push.
+    #[test]
+    fn nothing_reaches_n3fjp_while_the_push_is_off() {
+        let wpx = |e: &mut Engine| {
+            let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+            assert!(e.contest_log_manual("K1ABC", &nr, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), true, wpx).len(),
+            1,
+            "CONTROL: on, one push"
+        );
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), false, wpx),
+            Vec::<String>::new(),
+            "off, nothing"
+        );
+    }
+
+    /// ⭐ **An N3FJP that refuses, says nothing or is not there never holds up logging.** The
+    /// push runs on its own thread: the slot boundary that starts it returns at once, even
+    /// against a program that holds the connection for its whole 4 s timeout, and the next
+    /// contact logs and is forwarded as usual.
+    #[test]
+    fn a_refused_silent_or_absent_n3fjp_never_holds_up_logging() {
+        let absent = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        n3fjp_country_file();
+        for (what, added) in [("refused", Some(0)), ("silent", None), ("absent", Some(1))] {
+            let (mut port, seen) = fake_n3fjp(added);
+            if what == "absent" {
+                port = absent;
+            }
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut eng = engine.lock().unwrap();
+                eng.apply_settings(Settings {
+                    fd_active: true,
+                    n3fjp_host: "127.0.0.1".into(),
+                    n3fjp_port: port,
+                    ..n3fjp_contest("cqwpx_cw")
+                });
+                eng.set_mode("fieldday-run").unwrap();
+            }
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut boundary = |at: f64, station: &mut StationSinks| {
+                let started = std::time::Instant::now();
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        at,
+                        &mut ra,
+                        &mut rr,
+                        station,
+                    )
+                    .unwrap();
+                started.elapsed()
+            };
+            boundary(0.0, &mut station);
+            for (i, (call, at)) in [("K1ABC", 16_000.0), ("W2DEF", 32_000.0)]
+                .iter()
+                .enumerate()
+            {
+                let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+                assert!(
+                    engine
+                        .lock()
+                        .unwrap()
+                        .contest_log_manual(call, &nr, "CW", None)
+                        .unwrap(),
+                    "{what}: {call} logged"
+                );
+                let took = boundary(*at, &mut station);
+                assert!(
+                    took < std::time::Duration::from_millis(2_500),
+                    "{what}: the boundary that pushed {call} returned in {took:?}"
+                );
+                assert_eq!(
+                    station.last_fd_seq,
+                    i as u64 + 1,
+                    "{what}: {call} went past the forwarder"
+                );
+            }
+            let log = engine.lock().unwrap().snapshot().field_day.unwrap().log;
+            assert_eq!(log.len(), 2, "{what}: both contacts are in the log");
+            if what != "absent" {
+                assert!(
+                    n3fjp_seen(&seen).concat().contains("K1ABC"),
+                    "CONTROL, {what}: the push did reach the program"
+                );
+            }
+        }
+    }
+
+    /// ARRL Field Day's ENTER push, captured from the forwarder before the contest
+    /// exchange work: K1ABC 2A EMA on CW, 20 m, the dial 14.074 MHz, the operator W9ABC.
+    const N3FJP_FD_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2A</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>EMA</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// The same contact by the `ADDDIRECT` fallback, its date and time elided.
+    const N3FJP_FD_ADDDIRECT: &str = "<CMD><ADDDIRECT><EXCLUDEDUPES>TRUE</EXCLUDEDUPES>\
+        <fldCall>K1ABC</fldCall><fldDateStr>…</fldTimeOnStr><fldBand>20</fldBand>\
+        <fldMode>CW</fldMode><fldFrequency>14.0740</fldFrequency><fldClass>2A</fldClass>\
+        <fldSection>EMA</fldSection><fldOperator>W9ABC</fldOperator>\
+        <fldComments>via Nexus</fldComments></CMD>\r\n<CMD><CHECKLOG></CMD>\r\n";
+    /// Winter Field Day's push, captured the same way (K1ABC 2O EMA on CW).
+    const N3FJP_WFD_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2O</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>EMA</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// The Illinois QSO Party's push, captured the same way: the call alone, with Field
+    /// Day's class and section boxes cleared (K9ABC, who sent 579 DUPG).
+    const N3FJP_ILQP_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K9ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// CQ WW CW's push, captured the same way (K1ABC, who sent 579 5).
+    const N3FJP_CQWW_CW_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
 
     // ── The FT4222 open must be RETRIED ────────────────────────────────────────────────────────
     //

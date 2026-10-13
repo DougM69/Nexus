@@ -100,12 +100,10 @@ keying cable is involved.
 
 - **The keyer speed follows the WPM control** in the CW screen — Nexus sends it
   to the radio before each word.
-- **Below 10 MHz Nexus asks for CW-L**, which the SmartSDR CAT profile does not
-  offer under that name. Nexus notices the refusal and puts the radio in plain
-  **CW** instead. It is the same signal on the same frequency — CW-reverse only
-  changes which side of the carrier *you* listen on — so nothing about your
-  transmission changes. (Before this was fixed, the radio was left in whatever
-  mode it had been in while the keyer went on sending.)
+- **Nexus asks for plain CW on every band**, unless you turn on **Reverse CW
+  (CW-R)** in Nexus's CW settings. It is the same signal on the same frequency
+  either way — reverse only changes which side of the carrier *you* listen on —
+  so nothing about your transmission changes.
 - **Stop TX** clears everything Nexus has not sent yet. Words are handed over one
   at a time for exactly this reason, so the most that can still go out is the
   word already inside the radio.
@@ -122,6 +120,9 @@ The other keyer choices work on a Flex too, and are worth knowing about:
 **Not yet confirmed on real hardware** (please report): whether break-in/QSK
 mutes and unmutes the native DAX receive stream cleanly during a long macro, and
 whether Stop TX cuts the *one* word already inside the radio or lets it finish.
+
+**On the Flex native client (Beta)** Nexus does not send CW yet, and the CW screen says so. For CW,
+turn the client off (SmartSDR CAT sends it as above), or use the WinKeyer or Soundcard keyer.
 
 ---
 
@@ -191,6 +192,21 @@ Two limits worth knowing before you switch one on:
   slice or its mode changes (or native DAX audio, or a streamed operator's
   voice), and never while SmartSDR's own DAX is connected. It puts your setting
   back when it lets go, and at the next connect after a crash.
+
+**Tune on the Flex native client (Beta)** keys the radio and plays Nexus's tone, as on any CAT
+link. Tuning with the radio's own carrier, at the tune power you set in SmartSDR, is built and
+stays off until a tester has checked it on a radio. Once it is on, Nexus shows the radio's tune
+power and its transmit timeout beside Tune, and says so when the radio has no transmit timeout:
+then nothing would end the carrier if Nexus or the network failed during a tune, so set one in
+SmartSDR.
+
+**The Flex native client (Beta) offers no ATU button**: use the ATU in SmartSDR or on the radio.
+Running the radio's own tuner from Nexus is built and stays off until a tester has checked it on
+a radio. Once it is on, the ATU button shows when the radio reports a tuner fitted,
+and each press runs one cycle. Beside it Nexus shows the same tune power and transmit timeout as
+beside Tune, and the cycle's result in the radio's own word, or why a press started no cycle.
+FlexRadio documents no command that stops a cycle part way, so Stop TX during a cycle sends the
+radio both its unkey and its tune-off.
 
 ---
 

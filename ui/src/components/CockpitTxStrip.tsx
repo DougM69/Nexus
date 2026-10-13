@@ -5,6 +5,7 @@ import { useStationControl, useStationStopControl, useStationStopProgress } from
 import { t } from '../i18n'
 import type { AppSnapshot, RadioStatus } from '../types'
 import { isOnAir } from '../types'
+import { RadioTuneNote } from './RadioTuneNote'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), for the same
 // deferral `CockpitHeader` carried until these controls moved here: THE TX-ENABLE LATCH (and its
 // read-only rendering), TUNE, ATU AND STOP TX stay written here, labels and tooltips. One strip
@@ -113,7 +114,7 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
             aria-pressed={radio.tuning}
             onClick={() => onTune(!radio.tuning)}
             disabled={!control || !radio.txAllowed}
-            title="Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."
+            title={radio.txRefusal ?? "Key a steady carrier to tune an ATU/amp (auto-stops on the tune watchdog). Click again to stop."}
           >
             Tune
           </button>
@@ -181,13 +182,22 @@ export function CockpitTxStrip({ radio, onSnap, onSetTxEnabled, onTune, onAtuTun
       {/* The ON AIR sign reads the arbiter (`isOnAir`), never the FT slot flag alone, so a voice
           over, CW, RTTY, a tune or a key held at the radio all light it; an over armed through the
           stream lights it once the voice keys it (`lit`, above). Paint only. */}
-      <span className={`cq-statecap ${lit ? 'tx' : radio.txEnabled ? 'rx' : 'off'}`}>
+      {/* A connection that transmits nothing says so here, with its reason on hover, rather
+          than "receiving" over a TX that cannot key. A key the radio itself holds still lights
+          the sign: what is on the air is shown first. */}
+      <span className={`cq-statecap ${lit ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
+        title={!lit && radio.txRefusal ? radio.txRefusal : undefined}>
         {lit
           ? t('operate.strip.state.transmitting')
-          : radio.txEnabled
-            ? t('operate.strip.state.receiving')
-            : t('operate.strip.state.txOff')}
+          : radio.txRefusal
+            ? t('operate.strip.state.connectionNoTx')
+            : radio.txEnabled
+              ? t('operate.strip.state.receiving')
+              : t('operate.strip.state.txOff')}
       </span>
+      {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
+          child, on a line of its own, so it never moves the controls or the TX state. */}
+      {onTune && <RadioTuneNote radio={radio} />}
     </div>
   )
 }

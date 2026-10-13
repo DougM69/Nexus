@@ -13,6 +13,11 @@ import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "is not offered on an IC-9700, even with a D2 or D3…", takes 0.35 s
+// and 0.38 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
+// core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {
@@ -120,15 +125,17 @@ beforeEach(() => {
 afterEach(cleanup)
 
 /** Open Radio ▸ Rig & CAT ▸ Advanced, where the native CI-V controls live, and hand back the
- *  Data mode picker, or null when it is not offered. */
-async function pickerOnScreen(): Promise<HTMLSelectElement | null> {
+ *  Data mode picker, or null when it is not offered. `rendered` is a label that must be on screen
+ *  first, so an absent picker is an answer and not a missing render: the native CI-V switch, or for
+ *  a radio that has none (the IC-7760 and IC-7300MK2), the SSTV switch beside it. */
+async function pickerOnScreen(rendered: RegExp = /Native Icom CI-V/): Promise<HTMLSelectElement | null> {
   fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
   const grp = document.querySelector('#settings-rig-advanced .settings-group-toggle') as HTMLButtonElement | null
   expect(grp, 'the Advanced group exists in Rig & CAT').toBeTruthy()
   if (grp!.getAttribute('aria-expanded') === 'false') fireEvent.click(grp!)
   expect(
-    [...document.querySelectorAll('.settings-label')].some((e) => /Native Icom CI-V/.test(e.textContent ?? '')),
-    'the native CI-V controls are on screen, so an absent picker is an answer',
+    [...document.querySelectorAll('.settings-label')].some((e) => rendered.test(e.textContent ?? '')),
+    `${rendered} is on screen, so an absent picker is an answer`,
   ).toBe(true)
   const label = [...document.querySelectorAll('.settings-label')].find((e) => e.textContent?.trim() === 'Data mode')
   return (label?.parentElement?.querySelector('select') as HTMLSelectElement | null) ?? null
@@ -148,5 +155,81 @@ describe('the D1/D2/D3 picker', () => {
     const picker = await pickerOnScreen()
     expect(picker, 'IC-7610').not.toBeNull()
     expect(picker!.value).toBe('2')
+  })
+})
+
+// THE ICOM NETWORK CONNECTION DRIVES THE RADIO WITH NEXUS'S OWN CI-V, whatever the native switch says, and
+// it applies the saved D1/D2/D3 there too. So the picker follows each radio's own DATA count (the IC-7760
+// has three, A7788-8EX-2, PDF p. 23; the IC-7300MK2 one, rev 0, PDF p. 22) and can be changed on that
+// connection. Over USB, Hamlib drives an IC-7760 and always selects D1, and the radio has no native switch
+// to turn on, so there the picker says which connection makes it work.
+describe('the D1/D2/D3 picker on the Icom network connection', () => {
+  const SSTV = /Hold the data mode while SSTV/
+  const net = { rigConn: 'icomlan', icomNativeCat: false }
+
+  it('is offered on an IC-7760 and an IC-7610, showing the saved choice, and can be changed', async () => {
+    for (const [rigModel, rigModelName] of [[3092, 'Icom IC-7760'], [3078, 'Icom IC-7610']] as const) {
+      renderPanel(settingsFor({ ...net, rigModel, rigModelName, icomDataMode: 2 }))
+      const picker = await pickerOnScreen(SSTV)
+      expect(picker, rigModelName).not.toBeNull()
+      expect(picker!.value, rigModelName).toBe('2')
+      expect(picker!.disabled, `${rigModelName}: the network connection applies it`).toBe(false)
+      cleanup()
+    }
+  })
+
+  it('is not offered on an IC-7300MK2, even with a D2 or D3 saved there', async () => {
+    for (const d of [2, 3]) {
+      renderPanel(settingsFor({ ...net, rigModel: 3094, rigModelName: 'Icom IC-7300MK2', icomDataMode: d }))
+      expect(await pickerOnScreen(SSTV), `IC-7300MK2 holding D${d}`).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('is greyed on an IC-7760 over USB, naming the connection that applies it, even with a native switch left on', async () => {
+    renderPanel(settingsFor({ rigModel: 3092, rigModelName: 'Icom IC-7760', rigConn: 'serial', icomNativeCat: true, icomDataMode: 2 }))
+    const picker = await pickerOnScreen(SSTV)
+    expect(picker, 'IC-7760 over USB').not.toBeNull()
+    expect(picker!.disabled, 'Hamlib drives it over USB and always selects D1').toBe(true)
+    expect(picker!.parentElement?.querySelector('.settings-hint')?.textContent).toMatch(/Icom network connection/)
+  })
+})
+
+// OVER A CABLE THE PICKER ASKS THE NATIVE SWITCH'S OWN QUESTION (`nativeCivBlockedReason`, the engine's
+// `native_civ_model`), as the CI-V log does: the same radios and connections as SettingsPanel.civlog.test.tsx. The
+// saved D1/D2/D3 reaches the radio only through Nexus's own CI-V engine, and that engine never runs on Network or
+// through OmniRig, switch or no switch. There the picker was enabled, said the radio is put into that mode, and did
+// nothing. Each case is its own row, so each red names its own case.
+describe('the D1/D2/D3 picker follows the native CI-V switch', () => {
+  const SSTV = /Hold the data mode while SSTV/
+  const IC7610 = { rigModel: 3078, rigModelName: 'Icom IC-7610' }
+  const APPLIES = { enabled: true, hint: /^Which DATA mode this radio is put into/ }
+  const NEEDS_SWITCH = { enabled: false, hint: /^Needs the native CI-V connection above/ }
+
+  it.each([
+    // Nexus's own CI-V engine drives the radio, so the saved mode reaches it.
+    ['an IC-7610 over USB with the switch on', IC7610, APPLIES],
+    ['an IC-7610 stored under the name "Icom 7610"', { rigModel: 3078, rigModelName: 'Icom 7610' }, APPLIES],
+    ['an IC-7610 stored under the name "IC-7610M"', { rigModel: 3078, rigModelName: 'IC-7610M' }, APPLIES],
+    ['an IC-7610 stored with no name', { rigModel: 3078, rigModelName: '' }, APPLIES],
+    ['an IC-7610 on the Icom network connection', { ...IC7610, rigConn: 'icomlan', icomNativeCat: false }, APPLIES],
+    // OmniRig holds the COM port, and a Network radio has no port for Nexus to open.
+    ['an IC-7610 through OmniRig, with the switch left on', { ...IC7610, rigConn: 'omnirig' }, NEEDS_SWITCH],
+    ['an IC-7610 on Network, with the switch left on', { ...IC7610, rigConn: 'network', rigAddr: '192.168.1.50:4532' }, NEEDS_SWITCH],
+    ['an IC-7610 with the switch off', { ...IC7610, icomNativeCat: false }, NEEDS_SWITCH],
+    // One DATA mode, or no CI-V engine at all: nothing to pick.
+    ['an IC-7300', { rigModel: 3073, rigModelName: 'Icom IC-7300' }, null],
+    ['an IC-9700', { rigModel: 3081, rigModelName: 'Icom IC-9700' }, null],
+    ['an IC-705', { rigModel: 3085, rigModelName: 'Icom IC-705' }, null],
+    ['an IC-905', { rigModel: 3090, rigModelName: 'Icom IC-905' }, null],
+    ['an FTDX10 stored under the name IC-7300, with the switch left on', { rigModel: 1042, rigModelName: 'IC-7300' }, null],
+  ] as const)('on %s', async (_what, radio, expected) => {
+    renderPanel(settingsFor(radio))
+    const picker = await pickerOnScreen(SSTV)
+    const seen = picker && {
+      enabled: !picker.disabled,
+      hint: picker.parentElement?.querySelector('.settings-hint')?.textContent ?? '',
+    }
+    expect(seen).toEqual(expected && { enabled: expected.enabled, hint: expect.stringMatching(expected.hint) })
   })
 })

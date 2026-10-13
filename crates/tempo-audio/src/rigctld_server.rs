@@ -16,12 +16,25 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
+/// Why a write did not take, for a backend that can tell ([`RigBackend::try_set_freq`],
+/// [`RigBackend::try_set_mode`], and the extended verbs' `try_` forms).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetFault {
+    /// The radio, or the backend, said no: `RPRT -1`.
+    Refused,
+    /// The radio said nothing: `RPRT -5`, Hamlib's ETIMEOUT.
+    NoAnswer,
+}
+
 /// The rig state the broker serves + the setters it relays. Implemented by Nexus's
 /// live rig bridge (real radio), the native CI-V daemon, and by a mock in tests.
 ///
 /// The extended verbs below default to `None` = **not implemented** (`RPRT -11`), so an
 /// implementation that only fills in the core set behaves byte-identically to the
-/// pre-extension broker. `Some(true)` → `RPRT 0`, `Some(false)` → `RPRT -1`.
+/// pre-extension broker. `Some(true)` → `RPRT 0`, `Some(false)` → `RPRT -1`. A level, a
+/// function and the split verbs are relayed through their `try_` forms, which a backend that can
+/// tell a radio that did not answer from one that refused overrides, as for the dial: the
+/// silence is `RPRT -5`.
 pub trait RigBackend: Send + Sync {
     fn freq_hz(&self) -> u64;
     fn mode(&self) -> (String, u32); // (mode, passband Hz)
@@ -43,15 +56,55 @@ pub trait RigBackend: Send + Sync {
     }
     /// Setters return true on success (→ `RPRT 0`), false → `RPRT -1`.
     fn set_freq(&self, hz: u64) -> bool;
+    /// The dial write as `F` relays it: [`Self::set_freq`], for a backend that can tell a radio
+    /// that REFUSED the dial from one that did not ANSWER. Hamlib's own codes carry the
+    /// difference (`rig.h`): the refusal is `RPRT -1`, the silence `RPRT -5` (ETIMEOUT), and
+    /// Nexus's client reads `-5` as the link rather than the radio
+    /// ([`crate::rig::rprt_is_link_fault`]). So the radio loop says the radio did not answer and
+    /// counts it toward its circuit breaker; only a refusal counts toward giving the dial up.
+    ///
+    /// The default is [`Self::set_freq`], whose `false` is a refusal: a backend that cannot tell
+    /// sends exactly the bytes it always sent. The native CI-V daemon, the OmniRig shim and the
+    /// Flex client override it.
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        if self.set_freq(hz) {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        }
+    }
     fn set_mode(&self, mode: &str, passband_hz: u32) -> bool;
+    /// The mode write as `M` relays it: [`Self::set_mode`], told apart the way
+    /// [`Self::try_set_freq`] tells a dial apart. The radio loop reads `RPRT -5` on a mode as the
+    /// link, as it does Hamlib's: "no reply" in its words and a miss for its breaker, the same try
+    /// budget as a refusal, and no refusal on record.
+    ///
+    /// The default is [`Self::set_mode`], whose `false` is a refusal: a backend that cannot tell
+    /// sends exactly the bytes it always sent. The native CI-V daemon and the OmniRig shim
+    /// override it.
+    fn try_set_mode(&self, mode: &str, passband_hz: u32) -> Result<(), SetFault> {
+        if self.set_mode(mode, passband_hz) {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        }
+    }
     fn set_ptt(&self, on: bool) -> bool;
     fn set_vfo(&self, _vfo: &str) -> bool {
         true
     }
-    /// The radio's RECEIVE frequency ranges (Hz, inclusive) for `\dump_state`. `None` = don't
-    /// answer the verb (`RPRT -1`), which every client must read as "capabilities unknown" and
-    /// therefore fail OPEN. Implement it to let a client know what this radio can and cannot reach
-    /// without having to command it there and see what happens.
+    /// The radio's RECEIVE frequency ranges (Hz, inclusive) for `\dump_state`. Implement it to let
+    /// a client know what this radio can and cannot reach without having to command it there and
+    /// see what happens.
+    ///
+    /// - `Some(ranges)`: the radio's own list, sent as the RX rows.
+    /// - `Some(vec![])`: this backend does not know the radio's ranges, and says so with an empty
+    ///   RX list. Nexus's reader ([`crate::rig::parse_dump_state_rx_ranges`]) takes that as
+    ///   unknown, so every caller fails OPEN: the radio is commanded and answers for itself.
+    /// - `None` (the default): the dump carries [`DUMP_STATE`]'s wide row instead. That row is what
+    ///   the CAT broker tells a NET-rigctl client (WSJT-X), wide so it may set any frequency. It is
+    ///   not a radio's range, but a reader cannot tell it from one: Nexus's reader takes it as the
+    ///   radio's list.
     fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
         None
     }
@@ -78,6 +131,13 @@ pub trait RigBackend: Send + Sync {
     /// Set a level (`L NAME VALUE`, e.g. `RFPOWER 0.5`, `KEYSPD 25`).
     fn set_level(&self, _name: &str, _value: &str) -> Option<bool> {
         None
+    }
+    /// The level write as `L` relays it: [`Self::set_level`], told apart the way
+    /// [`Self::try_set_freq`] tells a dial apart. The default is [`Self::set_level`], whose
+    /// `Some(false)` is a refusal, so a backend that cannot tell sends exactly the bytes it always
+    /// sent. The Flex client overrides it.
+    fn try_set_level(&self, name: &str, value: &str) -> Option<Result<(), SetFault>> {
+        self.set_level(name, value).map(refused_unless)
     }
     /// Set a level on a NAMED receiver — `L Sub AF 0.50`, Hamlib's own VFO-mode spelling (the
     /// receiver's name ahead of the level's). On a radio with two receivers this is the one
@@ -106,6 +166,11 @@ pub trait RigBackend: Send + Sync {
     fn set_func(&self, _token: &str, _on: bool) -> Option<bool> {
         None
     }
+    /// The function write as `U` relays it, told apart as [`Self::try_set_level`] is. The default
+    /// is [`Self::set_func`]; the Flex client overrides it.
+    fn try_set_func(&self, token: &str, on: bool) -> Option<Result<(), SetFault>> {
+        self.set_func(token, on).map(refused_unless)
+    }
     /// Key CW from text (`b TEXT`).
     fn send_morse(&self, _text: &str) -> Option<bool> {
         None
@@ -133,15 +198,30 @@ pub trait RigBackend: Send + Sync {
     fn set_split(&self, _on: bool, _tx_vfo: &str) -> Option<bool> {
         None
     }
+    /// The split write as `S` relays it, told apart as [`Self::try_set_level`] is. The default is
+    /// [`Self::set_split`]; the native CI-V daemon and the OmniRig shim override it.
+    fn try_set_split(&self, on: bool, tx_vfo: &str) -> Option<Result<(), SetFault>> {
+        self.set_split(on, tx_vfo).map(refused_unless)
+    }
     /// Split TX frequency (`I <hz>`).
     fn set_split_freq(&self, _hz: u64) -> Option<bool> {
         None
+    }
+    /// The split dial as `I` relays it, told apart as [`Self::try_set_level`] is. The default is
+    /// [`Self::set_split_freq`]; the native CI-V daemon overrides it.
+    fn try_set_split_freq(&self, hz: u64) -> Option<Result<(), SetFault>> {
+        self.set_split_freq(hz).map(refused_unless)
     }
     /// Split TX VFO's mode + passband (`X <mode> <pb>`). The plain `M` verb only
     /// ever reaches the RX VFO, so this is the one way to command "transmit LSB
     /// while I listen USB" — the inverting-transponder uplink sideband.
     fn set_split_mode(&self, _mode: &str, _passband_hz: i32) -> Option<bool> {
         None
+    }
+    /// The split mode as `X` relays it, told apart as [`Self::try_set_level`] is. The default is
+    /// [`Self::set_split_mode`]; the native CI-V daemon overrides it.
+    fn try_set_split_mode(&self, mode: &str, passband_hz: i32) -> Option<Result<(), SetFault>> {
+        self.set_split_mode(mode, passband_hz).map(refused_unless)
     }
     /// RIT offset in Hz (`J <hz>`).
     fn set_rit(&self, _hz: i32) -> Option<bool> {
@@ -214,12 +294,13 @@ const DUMP_STATE: &str = concat!(
 
 /// The `\dump_state` reply for `backend`.
 ///
-/// Uses [`DUMP_STATE`] verbatim unless the backend declares real RX ranges, in which case its RX
-/// list is substituted. The wide default is deliberate for a broker fronting an arbitrary radio: a
-/// NET-rigctl client (WSJT-X) must be allowed to set any freq/mode, and a client reading these
-/// ranges as capability must therefore see "covers everything" rather than a guess.
+/// Uses [`DUMP_STATE`] verbatim unless the backend declares its RX ranges, in which case its RX
+/// list is substituted: an empty declaration is an empty list (see [`RigBackend::rx_ranges`]). The
+/// wide default is deliberate for a broker fronting an arbitrary radio: a NET-rigctl client
+/// (WSJT-X) must be allowed to set any freq/mode. It is not a range a capability reader can use:
+/// read as one, it says 135.7 kHz to 1.3 GHz.
 fn dump_state(backend: &dyn RigBackend) -> String {
-    let ranges = backend.rx_ranges().filter(|r| !r.is_empty());
+    let ranges = backend.rx_ranges();
     let preamp = backend.preamp_steps_db();
     let att = backend.attenuator_steps_db();
     if ranges.is_none() && preamp.is_empty() && att.is_empty() {
@@ -314,12 +395,41 @@ fn rprt(ok: bool) -> String {
     }
 }
 
+/// Map a write's outcome where the backend can tell a radio that did not answer from one that
+/// refused ([`RigBackend::try_set_freq`], [`RigBackend::try_set_mode`]): the silence is Hamlib's
+/// `RPRT -5` (ETIMEOUT).
+fn rprt_set(r: Result<(), SetFault>) -> String {
+    match r {
+        Ok(()) => rprt(true),
+        Err(SetFault::Refused) => rprt(false),
+        Err(SetFault::NoAnswer) => "RPRT -5\n".into(),
+    }
+}
+
 /// Map an extended-verb outcome: `None` = the backend doesn't implement it → Hamlib's
 /// `RPRT -11` (not implemented), otherwise RPRT 0/-1.
 fn rprt_ext(r: Option<bool>) -> String {
     match r {
         None => NOT_IMPLEMENTED.into(),
         Some(ok) => rprt(ok),
+    }
+}
+
+/// [`rprt_ext`] for an extended write whose backend can tell a silence from a refusal
+/// ([`rprt_set`]).
+fn rprt_ext_set(r: Option<Result<(), SetFault>>) -> String {
+    match r {
+        None => NOT_IMPLEMENTED.into(),
+        Some(r) => rprt_set(r),
+    }
+}
+
+/// A plain setter's answer as a write's outcome: `false` is a refusal.
+fn refused_unless(ok: bool) -> Result<(), SetFault> {
+    if ok {
+        Ok(())
+    } else {
+        Err(SetFault::Refused)
     }
 }
 
@@ -451,15 +561,15 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 ),
                 // Hamlib sends freq as printf %lf ("F 14074000.000000"), so parse
                 // as f64 and round to Hz — a u64 parse rejects every real client.
-                Some("F") => rprt(
+                Some("F") => rprt_set(
                     p.next()
                         .and_then(|s| s.parse::<f64>().ok())
                         // Reject NaN/±inf and absurd magnitudes: `f.round() as u64`
                         // saturates inf/huge to u64::MAX (a garbage dial with a
                         // false RPRT 0). Cap at 1 THz — far above any ham band.
                         .filter(|f| f.is_finite() && (0.0..=1e12).contains(f))
-                        .map(|f| backend.set_freq(f.round() as u64))
-                        .unwrap_or(false),
+                        .map(|f| backend.try_set_freq(f.round() as u64))
+                        .unwrap_or(Err(SetFault::Refused)),
                 ),
                 Some("m") => {
                     let (mode, pbw) = backend.mode();
@@ -468,7 +578,11 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 Some("M") => {
                     let mode = p.next().unwrap_or("");
                     let pbw = p.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-                    rprt(!mode.is_empty() && backend.set_mode(mode, pbw))
+                    rprt_set(if mode.is_empty() {
+                        Err(SetFault::Refused)
+                    } else {
+                        backend.try_set_mode(mode, pbw)
+                    })
                 }
                 Some("v") => format!("{}\n", backend.vfo()),
                 Some("V") => rprt(p.next().map(|v| backend.set_vfo(v)).unwrap_or(false)),
@@ -504,7 +618,7 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                     } else {
                         match rx {
                             Some(rx) => rprt_ext(backend.set_receiver_level(rx, name, value)),
-                            None => rprt_ext(backend.set_level(name, value)),
+                            None => rprt_ext_set(backend.try_set_level(name, value)),
                         }
                     }
                 }
@@ -515,7 +629,7 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 Some("U") => {
                     let token = p.next().unwrap_or("");
                     match (token.is_empty(), p.next()) {
-                        (false, Some(v)) => rprt_ext(backend.set_func(token, v != "0")),
+                        (false, Some(v)) => rprt_ext_set(backend.try_set_func(token, v != "0")),
                         _ => rprt(false),
                     }
                 }
@@ -523,15 +637,17 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                     let on = p.next().map(|s| s != "0");
                     let tx_vfo = p.next().unwrap_or("VFOB");
                     match on {
-                        Some(on) => rprt_ext(backend.set_split(on, tx_vfo)),
+                        Some(on) => rprt_ext_set(backend.try_set_split(on, tx_vfo)),
                         None => rprt(false),
                     }
                 }
-                Some("I") => rprt_ext(
+                Some("I") => rprt_ext_set(
                     p.next()
                         .and_then(|s| s.parse::<f64>().ok())
                         .filter(|f| f.is_finite() && (0.0..=1e12).contains(f))
-                        .map_or(Some(false), |f| backend.set_split_freq(f.round() as u64)),
+                        .map_or(Some(Err(SetFault::Refused)), |f| {
+                            backend.try_set_split_freq(f.round() as u64)
+                        }),
                 ),
                 Some("X") => {
                     let mode = p.next().unwrap_or("");
@@ -539,7 +655,7 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                     if mode.is_empty() {
                         rprt(false)
                     } else {
-                        rprt_ext(backend.set_split_mode(mode, pbw))
+                        rprt_ext_set(backend.try_set_split_mode(mode, pbw))
                     }
                 }
                 Some("J") => rprt_ext(
@@ -711,7 +827,8 @@ pub fn serve_until(
 pub enum PortReply {
     /// Nothing there, or nothing said: connect refused, or connected and the port stayed
     /// quiet for the whole budget. A rigctld that is merely slow lands here too — which is
-    /// the safe side, because it only costs a spawn attempt.
+    /// the safe side, because it only costs a spawn attempt (at a NET rigctl Network Address on
+    /// this computer, a wait for the next ask).
     Silent,
     /// A rigctld-protocol server (Hamlib's, or another Nexus's broker). Safe to share.
     Rigctld,
@@ -730,8 +847,10 @@ const REPLY_SNIPPET_MAX: usize = 200;
 /// **Accept only what a rigctld actually says.** Hamlib 4.7.1 answers `\chk_vfo` with the bare
 /// `vfo_opt` flag — `"0\n"` (or `"1\n"` under `-o`), printed by `rigctl_parse.c` with the
 /// `RPRT` trailer suppressed. Nexus's own broker (and older Hamlib, per its man page) answers
-/// `"CHKVFO 0\n"`. `RPRT <n>` is accepted as well: nothing but a rigctld-protocol server emits
-/// it, and it means the port understood the command even if it refused it.
+/// `"CHKVFO 0\n"`, and wfview's rigctld (its `src/rigctld.cpp`, 2.23) `"ChkVFO: 0\n"`, also
+/// with no `RPRT`: the labelled form is read in any case, with or without the colon. `RPRT <n>`
+/// is accepted as well: nothing but a rigctld-protocol server emits it, and it means the port
+/// understood the command even if it refused it.
 ///
 /// **The bias is deliberate.** A false negative costs one spawn attempt. A false positive is
 /// the bug this replaces: a silent connection to the wrong kind of server. So anything we do
@@ -749,7 +868,7 @@ pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
     if first.is_empty() {
         return PortReply::Silent;
     }
-    if matches!(first, "0" | "1" | "CHKVFO 0" | "CHKVFO 1") || first.starts_with("RPRT ") {
+    if matches!(first, "0" | "1") || is_chk_vfo_answer(first) || first.starts_with("RPRT ") {
         return PortReply::Rigctld;
     }
     let mut snippet: String = first.chars().take(REPLY_SNIPPET_MAX).collect();
@@ -757,6 +876,15 @@ pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
         snippet.push('…');
     }
     PortReply::NotRigctld(snippet)
+}
+
+/// `\chk_vfo`'s labelled answer: `CHKVFO`, then a colon or a space or both, then the flag, `0` or
+/// `1` — `CHKVFO 0` from Nexus's broker, `ChkVFO: 0` from wfview.
+fn is_chk_vfo_answer(line: &str) -> bool {
+    let Some((label, flag)) = line.split_once(|c: char| c == ':' || c.is_ascii_whitespace()) else {
+        return false;
+    };
+    label.eq_ignore_ascii_case("chkvfo") && matches!(flag.trim_start_matches(':').trim(), "0" | "1")
 }
 
 /// Ask `addr` whether it is a rigctld we can share, and REPORT WHAT ANSWERED.
@@ -968,6 +1096,158 @@ pub(crate) mod tests {
         assert_eq!(reply("\\get_level RFPOWER", &b), "RPRT -11\n");
         // An unknown long verb is still unknown.
         assert_eq!(reply("\\warble", &b), "RPRT -11\n");
+    }
+
+    /// `M` answers a backend that cannot tell a refusal from a silence exactly as it always has:
+    /// `set_mode`'s `true` is `RPRT 0` and its `false` `RPRT -1` (the CAT broker that WSJT-X talks
+    /// to is such a backend). A backend that can tell answers a silence `RPRT -5`, and a mode-less
+    /// `M` is refused without asking the backend at all.
+    #[test]
+    fn a_mode_write_is_rprt_minus_5_only_from_a_backend_that_heard_nothing() {
+        struct Plain(bool, Mutex<u32>);
+        impl RigBackend for Plain {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 0)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                *self.1.lock().unwrap() += 1;
+                self.0
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+        }
+        struct Telling(Result<(), SetFault>);
+        impl RigBackend for Telling {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 0)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                self.0.is_ok()
+            }
+            fn try_set_mode(&self, _: &str, _: u32) -> Result<(), SetFault> {
+                self.0
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+        }
+        let took = Plain(true, Mutex::new(0));
+        let refused = Plain(false, Mutex::new(0));
+        assert_eq!(
+            (
+                reply("M PKTUSB 3000", &took),
+                reply("M PKTUSB 3000", &refused),
+                reply("M", &took),
+                *took.1.lock().unwrap(),
+                [Ok(()), Err(SetFault::Refused), Err(SetFault::NoAnswer)]
+                    .map(|r| reply("M PKTUSB -1", &Telling(r))),
+            ),
+            (
+                "RPRT 0\n".to_string(),
+                "RPRT -1\n".to_string(),
+                "RPRT -1\n".to_string(),
+                1,
+                ["RPRT 0\n", "RPRT -1\n", "RPRT -5\n"].map(String::from),
+            )
+        );
+    }
+
+    /// The extended writes a radio can be silent to, a level (`L`), a function (`U`) and the split
+    /// verbs (`S`, `I`, `X`), answer as `M` does: `RPRT 0` for a write that took, `RPRT -1` for a
+    /// refusal, `RPRT -11` for a verb the backend lacks, and `RPRT -5` for a silence, which only a
+    /// backend that can tell reports. The silence was `RPRT -1`.
+    #[test]
+    fn an_extended_write_is_rprt_minus_5_only_from_a_backend_that_heard_nothing() {
+        struct Telling(Option<Result<(), SetFault>>);
+        impl RigBackend for Telling {
+            fn freq_hz(&self) -> u64 {
+                0
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 0)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _: &str, _: u32) -> bool {
+                true
+            }
+            fn set_ptt(&self, _: bool) -> bool {
+                true
+            }
+            fn set_level(&self, _: &str, _: &str) -> Option<bool> {
+                self.0.map(|r| r.is_ok())
+            }
+            fn try_set_level(&self, _: &str, _: &str) -> Option<Result<(), SetFault>> {
+                self.0
+            }
+            fn set_func(&self, _: &str, _: bool) -> Option<bool> {
+                self.0.map(|r| r.is_ok())
+            }
+            fn try_set_func(&self, _: &str, _: bool) -> Option<Result<(), SetFault>> {
+                self.0
+            }
+            fn set_split(&self, _: bool, _: &str) -> Option<bool> {
+                self.0.map(|r| r.is_ok())
+            }
+            fn try_set_split(&self, _: bool, _: &str) -> Option<Result<(), SetFault>> {
+                self.0
+            }
+            fn set_split_freq(&self, _: u64) -> Option<bool> {
+                self.0.map(|r| r.is_ok())
+            }
+            fn try_set_split_freq(&self, _: u64) -> Option<Result<(), SetFault>> {
+                self.0
+            }
+            fn set_split_mode(&self, _: &str, _: i32) -> Option<bool> {
+                self.0.map(|r| r.is_ok())
+            }
+            fn try_set_split_mode(&self, _: &str, _: i32) -> Option<Result<(), SetFault>> {
+                self.0
+            }
+        }
+        let answers = |r: Option<Result<(), SetFault>>| {
+            [
+                "L RFPOWER 0.5",
+                "U NB 1",
+                "S 1 VFOB",
+                "I 14076000",
+                "X USB 2400",
+            ]
+            .map(|line| reply(line, &Telling(r)))
+        };
+        assert_eq!(
+            [
+                Some(Ok(())),
+                Some(Err(SetFault::Refused)),
+                Some(Err(SetFault::NoAnswer)),
+                None
+            ]
+            .map(answers),
+            ["RPRT 0\n", "RPRT -1\n", "RPRT -5\n", "RPRT -11\n"].map(|a| [a; 5].map(String::from))
+        );
     }
 
     /// The morse long form takes the rest of the line as text, exactly like `b`.
@@ -1866,6 +2146,40 @@ pub(crate) mod tests {
             s.chars().count(),
             REPLY_SNIPPET_MAX + 1,
             "capped, with an ellipsis"
+        );
+    }
+
+    /// ⭐ WFVIEW'S RIGCTLD IS A RIGCTLD. It answers `\chk_vfo` with `ChkVFO: 0` and no `RPRT`
+    /// (wfview 2.23, `src/rigctld.cpp`; those are the bytes below). Sharing it, rigctld TCP Port
+    /// set to wfview's port, is the documented way to run Nexus beside wfview, and the probe took
+    /// it for some other program on the port (`NotRigctld("ChkVFO: 0")`), so CAT never opened. The
+    /// labelled answer is read in any case, with or without the colon; a flag other than 0 or 1,
+    /// another label, and raw rig CAT are still not a rigctld.
+    #[test]
+    fn wfviews_labelled_chk_vfo_answer_is_a_rigctld() {
+        let read = |replies: &[&[u8]]| -> Vec<PortReply> {
+            replies.iter().map(|r| classify_probe_reply(r)).collect()
+        };
+        assert_eq!(
+            (
+                classify_probe_reply(b"ChkVFO: 0\n"),
+                read(&[b"ChkVFO: 1\n", b"chkvfo:0\r\n", b"CHKVFO: 1\n"]),
+                read(&[b"ChkVFO: 2\n", b"ChkVFO:\n", b"ChkVFOs: 0\n"]),
+                read(&[THETIS_BANNER.as_bytes(), b"FA00014074000;"]),
+            ),
+            (
+                PortReply::Rigctld,
+                vec![PortReply::Rigctld; 3],
+                vec![
+                    PortReply::NotRigctld("ChkVFO: 2".into()),
+                    PortReply::NotRigctld("ChkVFO:".into()),
+                    PortReply::NotRigctld("ChkVFOs: 0".into()),
+                ],
+                vec![
+                    PortReply::NotRigctld(THETIS_BANNER.to_string()),
+                    PortReply::NotRigctld("FA00014074000;".into()),
+                ],
+            )
         );
     }
     /// `\dump_state`'s second line is the served rig's model — the fact that lets the coexist

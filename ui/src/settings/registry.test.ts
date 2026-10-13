@@ -316,6 +316,20 @@ describe('resolveTarget — a stale pointer must land, never dead-end', () => {
     expect(resolveTarget('Settings ▸ Rig Control')?.tab).toBe('radio')
   })
 
+  it('lands Field Day\'s section by the names it had, and "Contest mode" on the switch', () => {
+    // Field Day's section kept its id through two names. "Field Day Setup" still names what it
+    // holds, the class and section; "Contest mode" named the switch it held, which now sits
+    // under the picker, so a stale pointer by that name lands there. Both old labels' slugs are
+    // declared, so the docs guard and the manual's generator know the names are dead.
+    expect(resolveTarget('field-day-setup')).toEqual({ tab: 'contesting', section: 'field-day' })
+    expect(resolveTarget('Field Day')).toEqual({ tab: 'contesting', section: 'field-day' })
+    expect(resolveTarget('contest-mode')).toEqual({ tab: 'contesting', section: 'contest-pick' })
+    expect(resolveTarget('Settings ▸ Contesting ▸ Your entry')).toEqual({
+      tab: 'contesting',
+      section: 'contest-category',
+    })
+  })
+
   it('every alias resolves to a live tab', () => {
     const tabIds = new Set(SETTINGS_TABS.map((t) => t.id))
     const dead = Object.entries(TAB_ALIASES)
@@ -372,6 +386,8 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('wpm')).toContain('cw')
     expect(ids('keps')).toContain('orbital-elements')
     expect(ids('atno')).toContain('pounce')
+    expect(ids('esm')).toContain('contest-keys') // heading says "Enter Sends Message"
+    expect(ids('search and pounce')).toContain('contest-keys')
     expect(ids('text size')).toContain('workspace')
     // The Display sections (2026-09-26): Night moved to Theme with its row; the looks are in
     // Workspace; the palettes, the Logbook globe and Motion each have a section of their own.
@@ -430,6 +446,14 @@ describe('searchSettings — the operator types their own words', () => {
   it('ranks an exact label above a mere keyword mention', () => {
     // "CW" is the CW section's whole label and also a keyword elsewhere.
     expect(searchSettings('cw')[0].section.id).toBe('cw')
+  })
+
+  it('"contest mode" finds the switch under the picker on Contesting, and nothing in Features, where it no longer is', () => {
+    for (const q of ['contest mode', 'field day mode']) {
+      const found = searchSettings(q).map((h) => h.section.id)
+      expect(found[0], q).toBe('contest-pick')
+      expect(found, q).not.toContain('features')
+    }
   })
 
   it('says WHAT matched, so a result never looks arbitrary', () => {

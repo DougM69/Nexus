@@ -168,7 +168,7 @@ there is no driver to install; the port appears as `/dev/cu.*` (macOS) or
    previous session.
 3. **Wrong baud rate** — match the rig's CAT baud exactly (default 38400; common
    values 9600 / 19200 / 38400 / 57600).
-4. **Port conflict** — `rigctld` binds `4532` by default; change **rigctld Port**
+4. **Port conflict** — `rigctld` binds `4534` by default; change **rigctld Port**
    if something else is on it.
 5. **A slow rig or busy port** — the probe waits a fixed ~1.3 s. On a slow machine
    or a congested serial port that can be too short; just run **Test CAT** again,
@@ -379,7 +379,10 @@ Full setup guide: [Antenna rotator setup](rigs/rotators.md).
 
 - **The arm latch** — like WSJT-X, Nexus requires you to arm TX explicitly
   (Enable TX in the Operate cockpit) before any transmission. Digital does not
-  auto-arm on section entry; Phone and CW do.
+  auto-arm on section entry; Phone, CW, RTTY and PSK do, unless you stopped TX
+  (Stop TX, Esc, TX Off or the watchdog). Then TX stays off, whichever screens
+  you visit, until you turn it back on yourself: TX On, a CW F-key, or your
+  first PTT press in Phone.
 - **License-class lockout** — if the dial is outside your declared license
   segment, the TX button shows a lock and every TX path independently refuses to
   key. Check Settings ▸ Station (default **Open**, no lockout).

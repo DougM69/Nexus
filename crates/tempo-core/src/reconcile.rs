@@ -406,12 +406,43 @@ pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> Re
 /// mode spelling differs (local `SSB` vs a re-uploaded `USB`, `FT4` vs `MFSK`), which
 /// double-logs the contact. Returns the newly-added records (so the caller persists
 /// exactly those) plus the reconcile summary.
+///
+/// A row confirms with QRZ's own confirmation alone and brings no LoTW upload mark
+/// (`qrzs_own_word`), on a contact the log holds and on one the download adds.
 pub fn merge_and_add<R: StoredRecord>(
     local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
+    let incoming: Vec<QsoRecord> = incoming.into_iter().map(qrzs_own_word).collect();
     let pairs = pair_report(local, &incoming);
     merge_pass(local, incoming, pairs, |_, _| {})
+}
+
+/// What a row of QRZ's book is evidence of: QRZ's own confirmation (`APP_QRZLOG_STATUS`), and
+/// none of what the book repeats from other services, its copies of LoTW's, eQSL's and a paper
+/// card's confirmation and of LoTW's credit codes. They are not QRZ's word. Taken as evidence, a
+/// copy put back a confirmation Logbook ▸ Check confirmations had taken off, with the award credit
+/// only LoTW or a card can give. [`check`] judges the book by the same rule.
+///
+/// Nor is the book LoTW's word on an upload: its `LOTW_QSL_SENT`, or the `APP_TEMPO_UL_LOTW` stamp
+/// a Nexus push carried to QRZ, if QRZ hands one back. Either reads as a LoTW upload mark, and a
+/// contact holding one is not owed to LoTW, so a copy put back the mark Check confirmations' upload
+/// line had taken off and the contact was never uploaded again. The row brings no LoTW mark, and
+/// `LOTW_QSL_SENT` goes with it, or a contact the download adds would get the mark back whenever
+/// its ADIF is read again (an export or a backup imported). Only LoTW's mark goes: the stamps of
+/// QRZ's, Club Log's and eQSL's uploads a row may hand back still merge, as they decide what the
+/// catch-up sweep sends those services. The rest of the row is as QRZ sent it.
+fn qrzs_own_word(mut row: QsoRecord) -> QsoRecord {
+    let qrz = row.qsl_rcvd.qrz;
+    row.qsl_rcvd = Default::default();
+    row.qsl_rcvd.qrz = qrz;
+    row.confirmed = row.qsl_rcvd.any();
+    row.award_confirmed = row.qsl_rcvd.award();
+    row.credit_granted.clear();
+    row.credit_submitted.clear();
+    row.upload.lotw = None;
+    row.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+    row
 }
 
 /// Two-way merge of OUR OWN on-disk log back into memory — the two-instance recovery
@@ -1125,7 +1156,8 @@ mod tests {
         // pass matches it, upgrades the confirmation, and adds nothing.
         let mut log = vec![rec("W1AW", "20m", "SSB", 20_000)];
         let mut usb = rec("W1AW", "20m", "USB", 20_000);
-        usb.confirmed = true; // QRZ-native confirmation
+        usb.qsl_rcvd.qrz = true; // QRZ-native confirmation
+        usb.confirmed = true;
         let (added, sum) = merge_and_add(&mut log, vec![usb]);
         assert!(
             added.is_empty(),
@@ -1141,6 +1173,7 @@ mod tests {
     fn merge_add_appends_new_and_is_idempotent() {
         let mut log = vec![rec("W1AW", "20m", "FT8", 20_000)];
         let mut newq = rec("K5NEW", "40m", "CW", 20_000);
+        newq.qsl_rcvd.qrz = true;
         newq.confirmed = true;
         // First sync: K5NEW is new → added; W1AW row (unconfirmed) matches, no change.
         let (added, _) = merge_and_add(
@@ -1191,6 +1224,7 @@ mod tests {
 
         let mut same_day = rec("W1AW", "20m", "FT8", 20_000);
         same_day.when_unix = 20_000 * 86_400 + 6 * 3600 + 20 * 60; // they report 06:20
+        same_day.qsl_rcvd.qrz = true;
         same_day.confirmed = true;
         let (added, sum) = merge_and_add(&mut log, vec![same_day]);
         assert!(
@@ -1206,11 +1240,12 @@ mod tests {
         let mut log = vec![late];
         let mut next_day = rec("W1AW", "20m", "FT8", 20_001);
         next_day.when_unix = 20_001 * 86_400 + 60; // they report 00:01 the next day
-        next_day.award_confirmed = true;
+        next_day.qsl_rcvd.qrz = true;
+        next_day.confirmed = true;
         let (added2, sum2) = merge_and_add(&mut log, vec![next_day]);
         assert!(added2.is_empty(), "across midnight it still matches");
         assert_eq!((log.len(), sum2.matched), (1, 1));
-        assert!(log[0].award_confirmed);
+        assert!(log[0].qsl_rcvd.qrz);
     }
 
     #[test]
@@ -1219,6 +1254,7 @@ mod tests {
         // the later one confirmed.
         let mut log = vec![w1aw_at(20_000, 6, 0), w1aw_at(20_000, 18, 0)];
         let mut row = w1aw_at(20_000, 18, 2);
+        row.qsl_rcvd.qrz = true;
         row.confirmed = true; // QRZ's own confirmation: confirmed, never award-grade
         let (added, sum) = merge_and_add(&mut log, vec![row]);
         assert!(added.is_empty(), "it is the 18:00 contact, not a new one");
@@ -1233,6 +1269,7 @@ mod tests {
         // so beyond the window it is added as one, never folded onto the same-day QSO.
         let mut log = vec![w1aw_at(20_000, 12, 0)];
         let mut row = w1aw_at(20_000, 12, 31);
+        row.qsl_rcvd.qrz = true;
         row.confirmed = true;
         let (added, sum) = merge_and_add(&mut log, vec![row]);
         assert_eq!(sum.matched, 0);
@@ -1244,20 +1281,136 @@ mod tests {
 
     #[test]
     fn merge_add_settles_the_nearer_row_first() {
-        // The two-confirmation case through the QRZ fetch: the 10:24 row arrives first, and it
-        // is the contact the log lacks (added), not the 10:00 contact's confirmation.
+        // Through the QRZ fetch: the 10:24 row arrives first, and it is the contact the log lacks
+        // (added), not the 10:00 contact's; the 10:01 row, which QRZ confirms, is the 10:00 one's.
         let mut log = vec![w1aw_at(20_000, 10, 0)];
-        let elsewhere = confirms(w1aw_at(20_000, 10, 24), "DXCC");
-        let this_one = confirms(w1aw_at(20_000, 10, 1), "WAS");
+        let elsewhere = w1aw_at(20_000, 10, 24);
+        let mut this_one = w1aw_at(20_000, 10, 1);
+        this_one.qsl_rcvd.qrz = true;
+        this_one.confirmed = true;
         let (added, sum) = merge_and_add(&mut log, vec![elsewhere, this_one]);
         assert_eq!(sum.matched, 1);
         assert_eq!(added.len(), 1);
         assert_eq!(added[0].when_unix, 20_000 * 86_400 + 10 * 3600 + 24 * 60);
         assert_eq!(log.len(), 2);
+        assert!(log[0].qsl_rcvd.qrz, "the 10:00 contact took the 10:01 row");
+        assert!(!added[0].qsl_rcvd.qrz, "and the 10:24 row is the one added");
+    }
+
+    #[test]
+    fn merge_add_takes_qrzs_own_confirmation_and_none_of_its_copies() {
+        // QRZ's book repeats what LoTW, eQSL and a paper card hold, and LoTW's credit, beside
+        // QRZ's own confirmation. 06:00 holds nothing (Check confirmations took LoTW's off it),
+        // 18:00 holds LoTW's own confirmation and its DXCC, and K5NEW is not in the log. Only
+        // QRZ's own confirmation reaches a contact, held or added.
+        let copies = |mut r: QsoRecord, qrz: bool| {
+            r.qsl_rcvd = crate::logbook::QslRcvd {
+                card: true,
+                lotw: true,
+                eqsl: true,
+                qrz,
+            };
+            r.confirmed = true;
+            r.award_confirmed = true;
+            r.credit_granted = vec!["DXCC".into()];
+            r.credit_submitted = vec!["WAS".into()];
+            r
+        };
+        let early = w1aw_at(20_000, 6, 0);
+        let mut late = w1aw_at(20_000, 18, 0);
+        late.qsl_rcvd.lotw = true;
+        late.confirmed = true;
+        late.award_confirmed = true;
+        late.credit_granted = vec!["DXCC".into()];
+        let mut log = vec![early.clone(), late.clone()];
+        let book = vec![
+            copies(w1aw_at(20_000, 6, 0), false),
+            copies(w1aw_at(20_000, 18, 0), true),
+            copies(rec("K5NEW", "40m", "CW", 20_000), true),
+        ];
+        let (added, sum) = merge_and_add(&mut log, book);
+        // 18:00 gains QRZ's confirmation, though the same row says a card confirms it too.
+        late.qsl_rcvd.qrz = true;
+        let mut new = rec("K5NEW", "40m", "CW", 20_000);
+        new.qsl_rcvd.qrz = true;
+        new.confirmed = true;
+        assert_eq!(log, vec![early, late, new.clone()]);
+        assert_eq!(added, vec![new]);
         assert_eq!(
-            log[0].credit_granted,
-            vec!["WAS".to_string()],
-            "the 10:00 contact took the 10:01 row"
+            (sum.matched, sum.newly_confirmed, sum.newly_submitted),
+            (2, 0, 0)
+        );
+    }
+
+    #[test]
+    fn merge_add_takes_no_lotw_upload_mark_from_qrzs_book() {
+        use crate::logbook::{adif_record, parse_adif, UploadDetail};
+        // QRZ's book also says what LoTW holds of the upload: its `LOTW_QSL_SENT`, and the
+        // `APP_TEMPO_UL_LOTW` stamp a Nexus push carried to QRZ, if QRZ hands it back. 06:00 holds
+        // no LoTW mark (Check confirmations took it off), 18:00 holds an upload LoTW bounced, and
+        // K5NEW is not in the log. No row's mark reaches a contact, held or added, and QRZ's own
+        // confirmation on the same row still does.
+        let row = |call: &str, hhmmss: &str, more: &str| {
+            format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20241004\
+                 <TIME_ON:6>{hhmmss}{more}<EOR>\n",
+                call.len()
+            )
+        };
+        let book = parse_adif(
+            &[
+                row("W1AW", "060000", "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y"),
+                row(
+                    "W1AW",
+                    "180000",
+                    "<APP_TEMPO_UL_LOTW:20>accepted|1728100000|",
+                ),
+                row(
+                    "K5NEW",
+                    "090000",
+                    "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y",
+                ),
+            ]
+            .concat(),
+        );
+        let declared = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 0,
+            detail: Some(UploadDetail::OperatorDeclared),
+        });
+        let echoed = Some(UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_728_100_000,
+            detail: None,
+        });
+        assert_eq!(
+            book.iter()
+                .map(|r| r.upload.lotw.clone())
+                .collect::<Vec<_>>(),
+            [declared.clone(), echoed, declared],
+            "premise: each row reads as a LoTW upload mark"
+        );
+        let early = w1aw_at(20_000, 6, 0);
+        let mut late = w1aw_at(20_000, 18, 0);
+        late.upload.lotw = Some(UploadStatus {
+            outcome: UploadOutcome::Rejected,
+            when_unix: 1_728_050_000,
+            detail: Some(UploadDetail::RecordRefused),
+        });
+        let mut log = vec![early.clone(), late.clone()];
+        let (added, sum) = merge_and_add(&mut log, book);
+        let mut confirmed = early;
+        confirmed.qsl_rcvd.qrz = true;
+        confirmed.confirmed = true;
+        // K5NEW as QRZ's row would be without its word on LoTW.
+        let new = parse_adif(&row("K5NEW", "090000", "<APP_QRZLOG_STATUS:1>C")).remove(0);
+        assert_eq!(log, vec![confirmed, late, new.clone()]);
+        assert_eq!(added, vec![new]);
+        assert_eq!((sum.matched, sum.newly_confirmed_any), (2, 1));
+        assert_eq!(
+            parse_adif(&adif_record(&added[0]))[0].upload.lotw,
+            None,
+            "the added contact does not read a LoTW mark back from its own ADIF"
         );
     }
 

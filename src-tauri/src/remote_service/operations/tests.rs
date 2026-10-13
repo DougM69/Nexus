@@ -306,6 +306,8 @@ struct Fixture {
     engine: crate::SharedEngine,
     connection: u64,
     dir: std::path::PathBuf,
+    /// The test's clock ([`Fixture::now`]): an hour ahead of the box's, and still.
+    clock: Instant,
     /// Declared last, so dropped last: the folder goes once the engine has, and with it every
     /// thread of the engine's that writes the log there (the 1.13 path's `log.adi` lane, the
     /// store's mirror), each joined after its last try at what it still owed.
@@ -338,7 +340,17 @@ impl Fixture {
             connection,
             _folder: Folder(dir.clone()),
             dir,
+            clock: Instant::now() + Duration::from_secs(3600),
         }
+    }
+    /// The time to hand the authority, which takes `now` with every request: the test's own
+    /// clock, which moves only where a test asks at a later time (`f.now() + LEASE`). The box's
+    /// clock let a five-second lease lapse in a test that never heartbeats, whenever a loaded box
+    /// stopped the test's process for longer than that. Where the authority reads the box's clock
+    /// itself (a permit's reconcile, a command's check as it runs, a hardware permit's deadline),
+    /// that clock is an hour behind every deadline set on this one, so it ends nothing either.
+    fn now(&self) -> Instant {
+        self.clock
     }
     /// The same station with its log owned by the STORE — the ordinary launch since the
     /// logbook moved into its database — rather than by `contacts.adi` directly.
@@ -1636,4 +1648,75 @@ fn a_result_request_is_served_from_its_receipt_while_the_engine_is_busy() {
         "a genuinely new write still needs the Engine and must still be refused"
     );
     drop(held);
+}
+
+/// ⭐ **Giving a club position is refused from afar.** The host's Give button is on its own
+/// desktop and is none of Remote's operations: a request naming it, at the top or as a station
+/// control, is refused before anything reads it, whichever spelling it tries. CONTROL: a request
+/// and a station control the page does send are read.
+#[test]
+fn giving_a_club_position_is_refused_from_afar() {
+    for name in [
+        "fdClubGivePosition",
+        "fd_club_give_position",
+        "givePosition",
+        "club.givePosition",
+    ] {
+        assert!(
+            serde_json::from_value::<Request>(json!({"type": name, "requestId": "r", "handle": 1}))
+                .is_err(),
+            "a request named {name} was read"
+        );
+        assert!(
+            serde_json::from_value::<station::Action>(json!({"action": name, "handle": 1}))
+                .is_err(),
+            "a station control named {name} was read"
+        );
+    }
+    assert!(
+        serde_json::from_value::<Request>(json!({"type": "state", "requestId": "r"})).is_ok(),
+        "CONTROL: a request the page sends"
+    );
+    assert!(
+        serde_json::from_value::<station::Action>(json!({"action": "radio.disarm"})).is_ok(),
+        "CONTROL: a station control the page sends"
+    );
+}
+
+/// ⭐ **Removing a club position, or letting one back, is refused from afar**, as Give is: both
+/// buttons are on the host's own board and neither is one of Remote's operations, whichever
+/// spelling a request tries. CONTROL: a request and a station control the page does send are read.
+#[test]
+fn removing_a_club_position_or_letting_one_back_is_refused_from_afar() {
+    for name in [
+        "fdClubRemovePosition",
+        "fd_club_remove_position",
+        "removePosition",
+        "club.removePosition",
+        "fdClubAllowBack",
+        "fd_club_allow_back",
+        "allowBack",
+        "club.allowBack",
+    ] {
+        assert!(
+            serde_json::from_value::<Request>(
+                json!({"type": name, "requestId": "r", "posid": "bbbb0002"})
+            )
+            .is_err(),
+            "a request named {name} was read"
+        );
+        assert!(
+            serde_json::from_value::<station::Action>(json!({"action": name, "posid": "bbbb0002"}))
+                .is_err(),
+            "a station control named {name} was read"
+        );
+    }
+    assert!(
+        serde_json::from_value::<Request>(json!({"type": "state", "requestId": "r"})).is_ok(),
+        "CONTROL: a request the page sends"
+    );
+    assert!(
+        serde_json::from_value::<station::Action>(json!({"action": "radio.disarm"})).is_ok(),
+        "CONTROL: a station control the page sends"
+    );
 }

@@ -154,6 +154,17 @@ const MIGRATED = [
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
   'components/LogEntry.tsx',
+  // Removing the newest contest contact: the strip's and the contest screen's sentences.
+  'features/contestRemoval.ts',
+  // Editing a logged contest contact (2026-10-11): the edit's words and its in-place form, which
+  // the strip and the contest screen share — born migrated; mode and band names are tokens.
+  'features/contestEdit.ts',
+  'components/ContestContactEdit.tsx',
+  // The club link's words (2026-10-10), which Settings' club section and the Contest screen
+  // share — born migrated.
+  'features/clubLink.ts',
+  // Club sync's Windows Firewall lines (2026-10-10), Settings' club section — born migrated.
+  'features/clubFirewall.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
@@ -277,6 +288,17 @@ const MIGRATED = [
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',
   'components/ContestView.tsx',
+  // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
+  // modes it logs under are ADIF mode names, tokens.
+  'components/ContestLogger.tsx',
+  // The contest screen window and the line left in its place (2026-10-12): born migrated — every
+  // string is a catalog key; the screen it hosts is ContestView, above.
+  'components/ContestScreenWindow.tsx',
+  'components/ContestOverDialog.tsx',
+  'components/ContestScoreChip.tsx',
+  // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
+  // the objective names are the sponsor's own worksheet names, invariant like the bonus names.
+  'components/WfdObjectivesSection.tsx',
   // The contest slot captions (2026-09-17): born migrated — the entry strip and the contest
   // log table read one table of catalog keys; a slot id it has no caption for is a token.
   'features/contestSlots.ts',
@@ -445,6 +467,8 @@ const MIGRATED = [
   'components/panes/LeftSide.tsx',
   // A box in a cockpit (2026-10-07): born migrated; the entries' names are the Conditions boxes'.
   'components/panes/CockpitBox.tsx',
+  // A pane dragged by its title (2026-10-08): born migrated; the panes' and places' names are the cockpit's.
+  'components/panes/PaneDrag.tsx',
   'features/profiles.ts',
   'features/registry.ts',
   // Batch 18 (2026-08-19) — the Operate cockpit: its header, the waterfall strip, the two
@@ -491,7 +515,8 @@ const MIGRATED = [
   //
   // Two things this batch settles that the nineteen before it did not. A LABEL TABLE THAT
   // ANOTHER TEST PARSES OUT OF THE SOURCE moves its guard with it: `docs-match-code.test.ts`
-  // reads DEFAULT_MACROS/DEFAULT_FD_MACROS out of this file and compares the captions with
+  // reads DEFAULT_MACROS out of this file (and the contest and Field Day sets out of
+  // features/esmRoles.ts) and compares the captions with
   // the tables docs/manual/CW.md publishes, so the captions that are WORDS now carry a
   // `labelKey` and that guard resolves it through this catalog — asserting exactly what it
   // asserted before (proved by drifting one entry and watching both doc rows go red). And a
@@ -579,6 +604,26 @@ const MIGRATED = [
   'features/pttRefused.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // …and the headline for the station's audio-error line, by the kind the station names —
+  // migrated from birth. The sentence passes through as data.
+  'features/audioError.ts',
+  // Enter Sends Message's step table — migrated from birth. It holds no sentence: its reasons
+  // are typed, and the strip words them from the catalog.
+  'features/esm.ts',
+  // …and its role tables, the same way. A macro text is an on-air token, never prose.
+  'features/esmRoles.ts',
+  // …and its words: a step's name and one sentence per reason, all from the catalog — migrated
+  // from birth, with CQ, TU and AGN held as the on-air constants they are.
+  'features/esmWords.ts',
+  // …and Settings' role picker for one macro set — migrated from birth; a key name is a token.
+  'components/EsmRolePicker.tsx',
+  // …and what a cockpit hands its contest strip, which holds no sentence at all, and the TX
+  // dock's ESM plate — both migrated from birth; ESM, N1MM's name for it, is held as a token.
+  'features/esmHost.ts',
+  'components/EsmPlate.tsx',
+  // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
+  // birth.
+  'components/RadioTuneNote.tsx',
 ]
 
 /**

@@ -17,6 +17,7 @@ import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
@@ -67,6 +68,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the stream
    * pane renders without it, only the header needs it. */
   snap?: AppSnapshot | null
@@ -150,7 +153,7 @@ function fmtAfc(hz: number): string {
  * Mounted in a keep-alive host (like RTTY/SSTV) so the decoded stream keeps
  * accumulating while the operator is on another section.
  */
-export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
+export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
@@ -295,7 +298,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       return
     }
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast(t('psk.send.txLocked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('psk.send.txLocked'), 'info', 3500)
       return
     }
     const expanded = line
@@ -919,6 +922,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         <CockpitPaneFrame
           title={t('psk.pane.log.title')}
           paneId="log"
+          // The contest score chip rides in this head: the strip below has no room left for it.
+          actions={snap.fieldDay ? <ContestScoreChip place="head" fieldDay={snap.fieldDay} /> : undefined}
           weight={1.5}
           split={streamLogPair ? STREAM_LOG_SPLIT : undefined}
           share={streamShare != null ? (2 - streamShare) * STREAM_LOG_SPLIT : undefined}
@@ -927,6 +932,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           {!control ? psk && <RemoteRecallEntry snap={snap} mode={mode.name} onOpenLog={onOpenLogbook} /> : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
+            onEntryCall={onEntryCall}
             snap={snap}
             // The sub-mode table's names ARE the ADIF Mode tokens (PSK31 / QPSK31), so the
             // record says which waveform was actually on the air rather than folding QPSK
@@ -947,6 +953,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 ? { call: settledHisCall, rst: null, name: null, confirmed: true }
                 : null
             }
+            onSnap={onSnap}
             // FIELD DAY IS ALL-MODE, AND PSK IS ITS DIGITAL CLASS. Non-null `snap.fieldDay`
             // (the master switch, gated engine-side on `fd_active`) flips this strip to the
             // class/section exchange and routes the contact to the CONTEST log — the only
@@ -955,6 +962,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             // PSK Field Day contact was worked on the air and scored nothing. The prop rides
             // the snapshot this cockpit already has rather than a new App-level prop.
             fieldDay={snap.fieldDay ?? null}
+            scoreChip={false}
+            active={active}
             // The SCORING CLASS is DIG (2 points, dupes against the other digital modes);
             // the SUBMODE is the waveform that was actually keyed, so the export says PSK31
             // and not the FT tier the engine would otherwise fill in. Same table as `mode`

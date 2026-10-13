@@ -9,7 +9,7 @@ Shack-interop reference for every external protocol and online service Nexus spe
 | Service | Protocol | Default address |
 |---|---|---|
 | WSJT-X UDP (in + out) | UDP | `127.0.0.1:2237` |
-| Hamlib rigctld (CAT) | TCP | `127.0.0.1:4532` |
+| Hamlib rigctld (CAT) | TCP | `127.0.0.1:4534` |
 | CAT broker (share rig) | TCP listen | `4532` (off by default) |
 | N3FJP Field Day API | TCP | `<host>:1100` |
 | N1MM+ contactinfo | UDP broadcast | `<host>:12060` |
@@ -34,7 +34,7 @@ Nexus implements the full WSJT-X UDP datagram protocol on port `2237`. It is bot
 
 Type numbers are pinned to the canonical WSJT-X 0–15 range. A prior +1 offset in an earlier build was corrupting JTAlert FreeText as HaltTx; that bug is resolved.
 
-When Field Day mode is active, the Status datagram sets `special_op = 3` so JTAlert and GridTracker automatically activate their Field Day operating behavior without any extra configuration.
+When Contest mode is on, the Status datagram carries the special operation WSJT-X reports for it: `special_op = 3` (Field Day) in ARRL Field Day, 1 (NA VHF) in the ARRL VHF contests, and 0 in the others, Winter Field Day included. JTAlert and GridTracker see what they would see from WSJT-X and activate their Field Day operating behavior during ARRL Field Day without any extra configuration.
 
 ### Inbound datagrams (logger / overlay → Nexus)
 
@@ -48,7 +48,7 @@ Nexus accepts and acts on:
 | Location | Updates the operator grid |
 | HighlightCallsign | Applies bg/fg color to a row; shown inline as JTAlert highlight |
 | FreeText | When `send=true` and text is non-empty, immediately queues an open broadcast via the TempoFast engine. When `send=false` or text is empty, no action is taken. |
-| Reply | Double-click equivalent — arms the sequencer for the named decode |
+| Reply | Double-click equivalent — arms the sequencer for the named decode; in an FT8/FT4 contest, a reply to a CQ works the station in the contest's S&P, as a double-click does |
 
 ### JTAlert and GridTracker
 
@@ -83,7 +83,7 @@ Commands served: frequency read/set (`f`/`F`), mode read/set (`m`/`M`), PTT read
 
 ## N3FJP Field Day Push
 
-During a Field Day session, Nexus pushes each newly logged QSO to N3FJP over TCP using the documented N3FJP API (ADDDIRECT + CHECKLOG). The push is fire-and-forget from a spawned thread so a slow or parked N3FJP host never stalls the decode loop.
+During a contest session, Nexus pushes each newly logged QSO to N3FJP over TCP using the documented N3FJP API: the ENTER sequence, which scores the contact, or ADDDIRECT + CHECKLOG with **Use ENTER for contest scoring** off. The ENTER sequence carries the exchange in the boxes N3FJP documents for the contest's program: Field Day and Winter Field Day, CQ WPX, CQ WW RTTY and the ARRL VHF contests. A QSO party, Sweepstakes or CQ WW CW/SSB contact goes without its exchange, because N3FJP does not document those programs' boxes. The push is fire-and-forget from a spawned thread so a slow or parked N3FJP host never stalls the decode loop.
 
 **Default port: 1100** (N3FJP's documented API default). Configure host and port in **Settings › Logging & Connectors › N3FJP Integration**.
 

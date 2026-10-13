@@ -80,7 +80,12 @@ impl FlexScene {
         faults: Vec<tempo_flexsim::Fault>,
         config: tempo_net::flex::session::Config,
     ) -> FlexScene {
-        let sim = Simulator::start(
+        FlexScene::on(FlexScene::radio(session, faults), native, config)
+    }
+
+    /// The scene's simulated radio, before any client: a test can act on it first.
+    fn radio(session: SimSession, faults: Vec<tempo_flexsim::Fault>) -> Simulator {
+        Simulator::start(
             session,
             SimConfig {
                 streams: vec![Stream {
@@ -99,7 +104,11 @@ impl FlexScene {
                 faults,
             },
         )
-        .expect("the simulator starts");
+        .expect("the simulator starts")
+    }
+
+    /// The scene on `sim`, its client on `config`.
+    fn on(sim: Simulator, native: bool, config: tempo_net::flex::session::Config) -> FlexScene {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let settings = {
             let mut e = engine.lock().unwrap();
@@ -353,6 +362,239 @@ fn without_native_audio_the_client_leaves_audio_to_the_sound_card() {
         .log()
         .iter()
         .any(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("stream create") || text.starts_with("transmit set dax"))));
+}
+
+/// ⭐ THE FLEX'S RANGE IS UNKNOWN TO THE ENGINE, as a native CI-V radio's is. The client declares
+/// none, so its `\dump_state` carries an empty RX list, and the loop's probe hands the engine
+/// "unknown": every caller fails open and the radio answers for itself. It carried the CAT
+/// broker's wide row for WSJT-X, which the probe took as this FLEX-6400's range, 135.7 kHz to
+/// 1.3 GHz, 2 m included. The pads and preamps further down the same reply are the control.
+#[test]
+fn the_flex_clients_range_is_unknown_to_the_engine() {
+    let mut s = FlexScene::new(false);
+    run_until(&mut s, "the loop never probed the radio's range", |s| {
+        s.state.rx_ranges_probed
+    });
+    let e = s.engine.lock().unwrap();
+    let snap = e.snapshot();
+    assert_eq!(
+        (
+            s.state.rx_ranges.clone(),
+            e.rig_covers_mhz(145.0),
+            snap.radio.rx_ranges_mhz,
+            snap.radio.att_steps_db,
+            snap.radio.preamp_steps_db,
+        ),
+        (None, None, vec![], Some(vec![]), Some(vec![]))
+    );
+}
+
+/// A QSY to 7.074 MHz on the simulated FLEX-6400, which does not answer that tune; with
+/// `then_silent` it answers nothing at all from that tune on (switched off), otherwise it answers
+/// everything else. Stepped as `run_radio` steps until the loop gives the dial up, or 5 s. Returns
+/// what the operator was told about 7.074 MHz (each change of the CAT status line naming it, in
+/// order), whether any of them said "refused", the tunes to 7.074 MHz the radio was sent, the dial
+/// the radio refused and the dial given up on. How long each step that carried a tune held the loop
+/// goes to stderr (`--nocapture`): a tune the radio does not answer holds it for the client's
+/// request timeout.
+fn unanswered_tune(then_silent: bool) -> (Vec<String>, bool, usize, Option<f64>, Option<u64>) {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::Unanswered {
+            starting: "slice tune 0 7.074".into(),
+            then_silent,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    run_until(&mut s, "the loop never probed the radio's range", |s| {
+        s.state.rx_ranges_probed
+    });
+    let tunes = |s: &FlexScene| {
+        s.log()
+            .iter()
+            .filter(|(_, e)| matches!(e, SimEvent::Command { text, .. } if text.starts_with("slice tune 0 7.074")))
+            .count()
+    };
+    let told = |s: &FlexScene| {
+        let snap = s.engine.lock().unwrap().snapshot();
+        (snap.radio.cat_detail, snap.radio.refused_dial_mhz)
+    };
+    s.engine.lock().unwrap().set_frequency(7.074, "40m", "USB");
+    let (mut said, mut held_ms) = (Vec::new(), Vec::new());
+    let mut last = told(&s).0;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.state.dial_giveup.is_none() && Instant::now() < deadline {
+        let (sent, started) = (tunes(&s), Instant::now());
+        s.step(now_unix_ms());
+        if tunes(&s) > sent {
+            held_ms.push(started.elapsed().as_millis());
+        }
+        let line = told(&s).0;
+        if line != last {
+            said.push(line.clone());
+            last = line;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    eprintln!(
+        "a tune the FLEX does not answer{}: {} tunes; the steps that carried one held the loop \
+         {held_ms:?} ms",
+        if then_silent { ", then silent" } else { "" },
+        tunes(&s)
+    );
+    let said: Vec<String> = said.into_iter().filter(|l| l.contains("7.0740")).collect();
+    (
+        said.clone(),
+        said.iter().any(|l| l.contains("refused")),
+        tunes(&s),
+        told(&s).1,
+        s.state.dial_giveup,
+    )
+}
+
+/// ⭐ A DIAL THE FLEX DOES NOT ANSWER IS SENT THREE TIMES, AND IS NOT CALLED REFUSED. The radio
+/// answers everything but the tune. The loop sends it three times, as it did when the client
+/// answered the silence as a refusal, says each time that the rig did not reply, then gives the
+/// dial up without recording a refusal and shows the dial the radio is on. It was "the radio
+/// refused 7.0740 MHz — it does not cover that frequency".
+#[test]
+fn a_dial_the_flex_does_not_answer_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_tune(false),
+        (
+            vec![
+                "7.0740 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(7_074_000),
+        )
+    );
+}
+
+/// ⭐ …AND THE SAME FOR A FLEX SWITCHED OFF AT THE TUNE. From the tune on, nothing is answered, its
+/// pings included. The dial still goes out three times and is not called refused; the status the
+/// client last heard is the dial it shows.
+#[test]
+fn a_dial_sent_to_a_flex_that_went_silent_is_sent_three_times_and_not_called_refused() {
+    assert_eq!(
+        unanswered_tune(true),
+        (
+            vec![
+                "7.0740 MHz not sent — no reply from the rig (1/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig (2/3)".to_string(),
+                "7.0740 MHz not sent — no reply from the rig after 3 tries; still on 14.0740 MHz"
+                    .to_string(),
+            ],
+            false,
+            3,
+            None,
+            Some(7_074_000),
+        )
+    );
+}
+
+/// The simulated FLEX-6400 with nothing answered to the commands starting with `unanswered`, its
+/// range probed.
+fn flex_not_answering(unanswered: &str) -> FlexScene {
+    let mut s = FlexScene::with_faults(
+        false,
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::Unanswered {
+            starting: unanswered.into(),
+            then_silent: false,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    run_until(&mut s, "the loop never probed the radio's range", |s| {
+        s.state.rx_ranges_probed
+    });
+    s
+}
+
+/// How many commands the radio was sent with exactly `text`.
+fn times_sent(s: &FlexScene, text: &str) -> usize {
+    s.log().iter().filter(|(_, e)| command(e, text)).count()
+}
+
+/// ⭐ A WIDTH THE FLEX DOES NOT ANSWER IS SENT THREE TIMES, THEN GIVEN UP, AS A DIAL IS. The radio
+/// answers everything but the filter. The width goes out three times, the request is dropped, and
+/// the operator is told the radio did not answer and keeps its 3 kHz DATA filter. It went out once
+/// and was dropped without a word: the client answered the silence as a refusal.
+#[test]
+fn a_width_the_flex_does_not_answer_is_sent_three_times_then_given_up() {
+    let mut s = flex_not_answering("filt 0 0 2400");
+    s.engine.lock().unwrap().request_filter_width(2400);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.engine.lock().unwrap().passband_request_pending() && Instant::now() < deadline {
+        s.run(100);
+    }
+    s.run(1_500); // nothing more goes out after the give-up
+    let pending = s.engine.lock().unwrap().passband_request_pending();
+    assert_eq!(
+        (times_sent(&s, "filt 0 0 2400"), pending, cat_status(&s).1),
+        (
+            3,
+            false,
+            "2400 Hz filter width not sent — no reply from the rig after 3 tries; still 3000 Hz"
+                .to_string(),
+        )
+    );
+}
+
+/// ⭐ A MODE THE FLEX DOES NOT ANSWER IS NOT CALLED REFUSED, AND ITS GIVE-UP'S ADVICE FITS THE FLEX.
+/// Digital to Phone on the simulated FLEX-6400, which does not answer `mode=USB`; the steady loop's
+/// budget starts two short, so it gives up in two tries. The give-up says the radio did not answer
+/// the client and points at the radio and its network. It was "rig refused USB": the client
+/// answered the silence as a refusal.
+#[test]
+fn a_mode_the_flex_does_not_answer_is_not_called_refused_and_gives_up_in_words_that_fit_it() {
+    let mut s = flex_not_answering("slice set 0 mode=USB");
+    s.engine.lock().unwrap().set_operating_mode("phone", false);
+    s.step(now_unix_ms());
+    s.state.mode_fail_count = MODE_SET_MAX_TRIES - 2;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.state.mode_giveup.is_none() && Instant::now() < deadline {
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        (s.state.mode_giveup.clone(), cat_status(&s).1),
+        (
+            Some("USB".to_string()),
+            "couldn't set USB: no reply over CAT — the radio did not answer Nexus's Flex client; \
+             check that it is on and reachable on the network — gave up"
+                .to_string(),
+        )
+    );
+}
+
+/// ⭐ RF POWER THE FLEX DOES NOT ANSWER IS SENT ONCE, AS A REFUSED ONE IS, AND IS CALLED NO REPLY.
+/// The radio answers everything but `transmit set rfpower=40`. The level goes out once and that
+/// value is given up, the bound it always had; the operator is told the rig did not reply. It was
+/// "the rig didn't take it", the words for a refusal.
+#[test]
+fn rf_power_the_flex_does_not_answer_is_sent_once_and_called_no_reply() {
+    let mut s = flex_not_answering("transmit set rfpower=40");
+    s.engine.lock().unwrap().set_rf_power(0.4);
+    s.run(3_000);
+    assert_eq!(
+        (
+            times_sent(&s, "transmit set rfpower=40"),
+            s.state.rf_power_giveup,
+            cat_status(&s).1,
+        ),
+        (
+            1,
+            Some(0.4),
+            "couldn't set RF power — no reply from the rig; set power on the radio".to_string(),
+        )
+    );
 }
 
 /// The bundled session, except that the radio reports a slice it switched to one of `modes`, as a
@@ -1645,6 +1887,12 @@ fn a_receive_floor_fallback_inside_the_guard_refuses_the_over_too() {
              +900=Some(false)"
         )
     );
+    // The fallback's line is named as Flex audio, the radio carrying on through the sound card.
+    let snapshot = s.engine.lock().unwrap().snapshot();
+    assert_eq!(
+        serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"],
+        "flexAudio"
+    );
 }
 
 /// The Phone cockpit's "mic disconnected" (`flex_dax_tx`) follows the radio, not the toggle:
@@ -2393,4 +2641,1246 @@ fn flex_dax_tx_ft_timing_measurement() {
         std::fs::write(&path, csv).expect("write the samples");
         println!("samples: {path}");
     }
+}
+
+// ── The client's belief in the loop's keyed set ──────────────────────────────────────────────
+
+/// The bundled session with the radio reported idle when Nexus subscribes and no interlock on the
+/// new slice, so the transmitter's holder the simulator remembers (its answer to `sub tx all`) is
+/// the last word.
+fn holder_kept() -> SimSession {
+    let mut session = SimSession::v4_gui_client();
+    for (pattern, rules) in &mut session.rules {
+        match pattern {
+            Pattern::Prefix(p) if p == "slice create " => {
+                for r in rules.iter_mut() {
+                    r.items
+                        .retain(|i| !matches!(i, Item::Send(l) if l.contains("|interlock ")));
+                }
+            }
+            Pattern::Exact(p) if p == "sub tx all" => {
+                for r in rules.iter_mut() {
+                    for item in r.items.iter_mut() {
+                        if matches!(item, Item::Send(l) if l.contains("state=RECEIVE")) {
+                            *item = Item::Send(
+                                "S0|interlock tx_client_handle=0x00000000 state=READY reason= \
+                                 source= tx_allowed=1 amplifier="
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    session
+}
+
+/// An earlier session of ours that started the radio's tune carrier and was lost, played by a raw
+/// session: `transmit tune 1`, then gone. Under StuckTune the carrier stays up under its handle.
+fn tune_and_leave(sim: &Simulator) -> u32 {
+    use std::io::{BufRead, BufReader, Write};
+    let stream = std::net::TcpStream::connect(sim.tcp_addr()).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut line = String::new();
+    let handle = loop {
+        line.clear();
+        reader.read_line(&mut line).expect("the prologue");
+        if let Some(h) = line.trim().strip_prefix('H') {
+            break u32::from_str_radix(h, 16).expect("a handle");
+        }
+    };
+    (&stream).write_all(b"C1|transmit tune 1\n").unwrap();
+    loop {
+        line.clear();
+        reader.read_line(&mut line).expect("the reply");
+        if line.starts_with("R1|") {
+            assert_eq!(line.trim(), "R1|0|");
+            break handle;
+        }
+    }
+}
+
+/// The scene with an earlier session's tune carrier still up: the client knows that session's
+/// handle, as a client that replaces it does, and believes something of ours is on the air; the
+/// loop's own state does not.
+fn with_a_lost_tune() -> FlexScene {
+    let sim = FlexScene::radio(holder_kept(), vec![tempo_flexsim::Fault::StuckTune]);
+    let lost = tune_and_leave(&sim);
+    crate::flex::remember_handle(sim.tcp_addr(), lost);
+    let mut config = tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap());
+    config.previous_handles = vec![lost];
+    let s = FlexScene::on(sim, false, config);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.state.flex_keyed() {
+        assert!(
+            Instant::now() < deadline,
+            "the client never saw the lost tune"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!s.rig.keyed, "the loop never keyed it");
+    s
+}
+
+/// The commands one connection has sent so far, pings left out.
+fn sent(log: &[tempo_flexsim::Logged], conn: usize) -> Vec<String> {
+    log.iter()
+        .filter_map(|l| match &l.event {
+            SimEvent::Command { conn: c, text, .. } if *c == conn && text != "ping" => {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`sent`], once `want` is among them (or the wait ends).
+fn sent_on(s: &FlexScene, conn: usize, want: &str) -> Vec<String> {
+    s.sim.wait_for(Duration::from_secs(10), |log| {
+        sent(log, conn).iter().any(|c| c == want)
+    });
+    sent(&s.sim.log(), conn)
+}
+
+/// A saved CAT change: the transport differs, so the next tick rebuilds the link.
+fn save_a_cat_change(s: &FlexScene) {
+    let mut e = s.engine.lock().unwrap();
+    let mut settings = e.settings().clone();
+    settings.rig_addr = "127.0.0.1:5003".into();
+    e.apply_settings(settings);
+}
+
+/// ⭐ A REBUILD WHILE A NATIVE TUNE IS UP STOPS IT THROUGH THE NEW SESSION. The radio still holds
+/// an earlier session's tune carrier; the loop rebuilds the link and its unkey through the fresh
+/// client is `T 0`, which must end the tune with the tune's own stop: an `xmit 0` alone would leave
+/// the carrier up. The loop believes the radio keyed until that unkey has gone through.
+#[test]
+fn a_rebuild_while_a_native_tune_is_keyed_stops_it_through_the_new_session() {
+    let mut s = with_a_lost_tune();
+    s.replace_on_rebuild = true;
+    save_a_cat_change(&s);
+    s.step(now_unix_ms());
+    assert!(s.rebuilt.load(std::sync::atomic::Ordering::Relaxed));
+    // The connections: the lost session, the scene's client, the fresh client.
+    let fresh = sent_on(&s, 2, "xmit 0");
+    let at = |text: &str| {
+        fresh
+            .iter()
+            .position(|c| c == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {fresh:?}"))
+    };
+    assert!(at("transmit tune 0") < at("cwx clear"), "{fresh:?}");
+    assert!(at("cwx clear") < at("xmit 0"), "{fresh:?}");
+    assert!(!s.rig.keyed, "the unkey went through the fresh client");
+}
+
+/// ⭐ …and the belief is carried onto the fresh rig when its channel refuses that unkey, so the idle
+/// self-heal goes on sending it: the client's belief is part of the loop's keyed set, which a
+/// rebuild must never forget.
+#[test]
+fn a_rebuild_carries_the_flex_clients_belief_onto_the_fresh_rig() {
+    let mut s = with_a_lost_tune();
+    save_a_cat_change(&s);
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (addr, _, log) = mock_logging_rigctld_refusing_unkey(refuse);
+    let sinks = no_sinks();
+    let mut station = StationSinks::new();
+    let backend = s.backend.clone();
+    let mut reopen_audio = move |_t: &Transport| Ok::<_, String>(backend.clone());
+    let mut reopen_rig = move |_t: &Transport, _coexist: bool| {
+        (
+            Rig::rigctld(&addr),
+            None,
+            CatProbe::status(Some(true), "reopened"),
+        )
+    };
+    s.state
+        .step(
+            &s.engine,
+            &mut s.backend,
+            &mut s.rig,
+            &sinks,
+            now_unix_ms(),
+            &mut reopen_audio,
+            &mut reopen_rig,
+            &mut station,
+        )
+        .unwrap();
+    assert!(
+        log.lock().unwrap().iter().any(|l| l == "T 0"),
+        "the post-reopen unkey reached the fresh channel: {:?}",
+        log.lock().unwrap()
+    );
+    assert!(
+        s.rig.keyed,
+        "the fresh channel refused the unkey: the loop still believes the radio keyed"
+    );
+}
+
+/// ⭐ STOP TX REACHES A FLEX TRANSMISSION THE LOOP DID NOT KEY. The loop's own state is idle, but
+/// the client believes something of ours is on the air (here an earlier session's tune carrier):
+/// the hard stop sends `T 0`, and the client ends it with the tune's own stop. Stop TX's CW stop
+/// (`\stop_morse`) goes first, as it always has; it reaches the earlier session's CWX buffer.
+#[test]
+fn stop_tx_reaches_a_flex_transmission_the_loop_did_not_key() {
+    let mut s = with_a_lost_tune();
+    s.step(now_unix_ms());
+    let before = sent(&s.sim.log(), 1).len();
+    s.engine.lock().unwrap().halt_tx();
+    s.step(now_unix_ms());
+    let after: Vec<String> = sent_on(&s, 1, "xmit 0")[before..]
+        .iter()
+        .filter(|c| c.starts_with("xmit") || c.starts_with("transmit tune") || c.starts_with("cwx"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        after,
+        ["cwx clear", "transmit tune 0", "cwx clear", "xmit 0"],
+        "the CW stop, then the hard stop's T 0"
+    );
+}
+
+// ── CW through the radio's keyer: switched on in tests only ─────────────────────────────────
+//
+// Admission refuses every CWX word in production (`tempo_net::flex::admission::BENCHED`) until a
+// tester's bench confirms its readback. These tests open the door the way only tests can
+// (tempo-net's `flex-unbenched`), so the loop runs the path behind it on the checks it will run on
+// once switched on.
+
+/// The client's configuration with the door past the bench's list open.
+fn unbenched() -> tempo_net::flex::session::Config {
+    let mut c = tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap());
+    c.unbenched = true;
+    c
+}
+
+/// The served slice's mode, as the client reports it in rigctld words.
+fn slice_mode(s: &FlexScene) -> Option<String> {
+    let d = s.state.rigctld_proc.as_ref().and_then(CatDaemon::flex)?;
+    d.slices().into_iter().find(|r| r.index == 0)?.mode
+}
+
+/// The loop's CW section, the CAT keyer at 20 WPM, on a radio that reports its slice's mode
+/// changes, its client on `config`; the slice in CW.
+fn cw_scene(
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    cw_scene_on(reports(&["CW", "DIGU"]), faults, config)
+}
+
+/// [`cw_scene`] on a radio that follows `session`, which must report the slice's mode changes.
+fn cw_scene_on(
+    session: SimSession,
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    let mut s = FlexScene::with_faults(false, session, faults, config);
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_cw_keyer("cat", 600.0);
+        e.set_cw_wpm(20);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.03, "20m", "CW");
+    }
+    run_until(&mut s, "the slice in CW", |s| {
+        slice_mode(s).as_deref() == Some("CW")
+    });
+    s
+}
+
+/// The CW keyer's commands on the radio's wire, and the unkey, in order.
+fn cw_wire(s: &FlexScene) -> Vec<String> {
+    s.log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. } if text.starts_with("cwx ") || text == "xmit 0" => {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the CW screen's warning line says.
+fn cw_line(s: &FlexScene) -> Option<String> {
+    s.engine.lock().unwrap().cw_keyer_error()
+}
+
+/// Whether the client believes something of ours is on the air.
+fn flex_on_air(s: &FlexScene) -> bool {
+    s.state.flex_keyed()
+}
+
+/// ⭐ A message goes out one word per `cwx send`, at the classic pacing: each word is handed over
+/// once the one before has had its keying time plus a word space (7 dits), so at most one word sits
+/// in the radio's buffer and Stop TX can drop the rest. On the loop's own clock, 20 ms a step, each
+/// gap is that time to within one step. The radio's break-in ends the message: no stop, no alarm,
+/// nothing on the CW line.
+#[test]
+fn a_macro_goes_out_one_word_per_cwx_send_at_the_classic_pacing() {
+    let mut s = cw_scene(vec![], unbenched());
+    s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+    let words = ["CQ", "TEST", "DE", "W9XYZ"];
+    // The loop's clock steps 20 ms at the real clock's pace: the client and the radio keep real
+    // time. A word is handed over on the step whose clock it was paced to.
+    let (start, zero) = (Instant::now(), now_unix_ms());
+    let mut handed = Vec::new();
+    for i in 0..600u32 {
+        let now = zero + 20.0 * f64::from(i);
+        let busy = s.state.cw_busy_until;
+        s.step(now);
+        if s.state.cw_busy_until != busy {
+            handed.push(now - zero);
+        }
+        let next = start + Duration::from_millis(20 * u64::from(i + 1));
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
+        if handed.len() == words.len() && !flex_on_air(&s) {
+            break;
+        }
+    }
+    assert_eq!(handed.len(), words.len(), "{handed:?}");
+    let dit = 1200.0 / 20.0;
+    for (i, pair) in handed.windows(2).enumerate() {
+        let paced = tempo_core::cw::morse_duration_ms(words[i], 20) + 7.0 * dit;
+        let gap = pair[1] - pair[0];
+        assert!(
+            gap >= paced && gap < paced + 20.0,
+            "{}: {gap} ms after it, paced {paced}",
+            words[i + 1]
+        );
+    }
+    assert_eq!(
+        cw_wire(&s),
+        [
+            "cwx send \"CQ\" 1",
+            "cwx send \"TEST\" 2",
+            "cwx send \"DE\" 3",
+            "cwx send \"W9XYZ\" 4"
+        ]
+    );
+    assert!(!flex_on_air(&s), "the radio's break-in ended it");
+    assert_eq!(cw_line(&s), None);
+    assert_eq!(tx_alarms(&s), Vec::<(u64, String)>::new());
+}
+
+/// ⭐ Stop TX in the middle of a message (the CW screen's: the CW abort and Halt) clears the
+/// radio's CW buffer at once, `cwx clear` from `\stop_morse` and again from the hard stop's `T 0`,
+/// and nothing goes out after it. The radio's break-in ends the word that was going out: no unkey
+/// follows. On a radio that still shows our CWX transmitting after the clear, the unkey does, and
+/// its release ends it. No alarm either way.
+#[test]
+fn stop_tx_mid_macro_clears_and_sends_nothing_after() {
+    for held in [false, true] {
+        let faults = if held {
+            vec![tempo_flexsim::Fault::HoldsCwx]
+        } else {
+            Vec::new()
+        };
+        let mut s = cw_scene(faults, unbenched());
+        s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+        run_until(&mut s, "the first word", |s| !cw_wire(s).is_empty());
+        {
+            let mut e = s.engine.lock().unwrap();
+            e.stop_cw();
+            e.halt_tx();
+        }
+        run_until(&mut s, "the end proven", |s| !flex_on_air(s));
+        s.run(3_000);
+        let mut want = vec!["cwx send \"CQ\" 1", "cwx clear", "cwx clear"];
+        if held {
+            want.push("xmit 0");
+        }
+        assert_eq!(cw_wire(&s), want, "held: {held}");
+        assert_eq!(tx_alarms(&s), Vec::<(u64, String)>::new(), "held: {held}");
+    }
+}
+
+/// ⭐ The CW ID after an FT 73 stays unsent on a DIGU slice. It is queued from the FT section with
+/// the slice in DIGU (what the loop does once the 73 has left the air), the client refuses it
+/// there, nothing reaches the radio's keyer, and the CW line says why. That is today's outcome,
+/// kept: sending it would take a mode change inside FT's QSO handling. The control: the same send
+/// from the CW section goes out.
+#[test]
+fn the_cw_id_after_73_stays_refused_on_a_digu_slice() {
+    let mut s = FlexScene::with_faults(false, reports(&["CW", "DIGU"]), Vec::new(), unbenched());
+    run_until(&mut s, "the slice in DIGU", |s| {
+        slice_mode(s).as_deref() == Some("PKTUSB")
+    });
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mycall = e.settings().mycall.clone();
+        e.send_cw(&mycall);
+    }
+    s.run(1_500);
+    assert_eq!(cw_wire(&s), Vec::<String>::new());
+    assert_eq!(
+        cw_line(&s).as_deref(),
+        Some(
+            "CW not sent: the radio's transmit slice is in DIGU, not CW. Nexus sends CW to the \
+             radio's keyer only in CW."
+        )
+    );
+    let mut s = cw_scene(Vec::new(), unbenched());
+    s.engine.lock().unwrap().send_cw("W9XYZ");
+    run_until(&mut s, "the control's word", |s| !cw_wire(s).is_empty());
+    assert_eq!(cw_wire(&s), ["cwx send \"W9XYZ\" 1"]);
+}
+
+/// ⭐ A word the client refuses drops the rest of the message, as a refused key does, so the
+/// message cannot resume part way once the radio would take a word: here the first word is
+/// refused on a DIGU slice, the slice is in CW by the time the second word is due, and nothing goes
+/// out. As it ships, the CW line says the client does not send CW yet, in place of the Hamlib
+/// advice, which does not apply to it.
+#[test]
+fn a_refused_word_drops_the_rest_of_the_message_and_says_why() {
+    let mut s = FlexScene::with_faults(false, reports(&["CW", "DIGU"]), Vec::new(), unbenched());
+    run_until(&mut s, "the slice in DIGU", |s| {
+        slice_mode(s).as_deref() == Some("PKTUSB")
+    });
+    s.engine.lock().unwrap().send_cw("CQ TEST DE W9XYZ");
+    run_until(&mut s, "the first word refused", |s| cw_line(s).is_some());
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_cw_keyer("cat", 600.0);
+        e.set_operating_mode("cw", false);
+    }
+    run_until(&mut s, "the slice in CW", |s| {
+        slice_mode(s).as_deref() == Some("CW")
+    });
+    s.run(3_000);
+    assert_eq!(cw_wire(&s), Vec::<String>::new());
+
+    // As it ships.
+    let mut s = cw_scene(
+        Vec::new(),
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    s.engine.lock().unwrap().send_cw("CQ TEST");
+    run_until(&mut s, "the word refused", |s| cw_line(s).is_some());
+    assert_eq!(
+        cw_line(&s).as_deref(),
+        Some(
+            "CW not sent: the Flex native client does not send CW yet. For CW, turn the Flex \
+             native client off (SmartSDR CAT sends it), or use the WinKeyer or Soundcard keyer."
+        )
+    );
+    s.run(3_000);
+    assert_eq!(cw_wire(&s), Vec::<String>::new());
+}
+
+/// The client's configuration as it ships: the door past the bench's list shut.
+fn shipped() -> tempo_net::flex::session::Config {
+    tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap())
+}
+
+/// The scene's Flex client.
+fn client(s: &FlexScene) -> &FlexDaemon {
+    s.state
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::flex)
+        .expect("the scene's client")
+}
+
+/// The bundled session, its radio reporting `wpm` once it is told `cw wpm <wpm>`.
+fn speed_reported(mut session: SimSession, wpm: u32) -> SimSession {
+    let rule = (
+        Pattern::Exact(format!("cw wpm {wpm}")),
+        vec![Rule {
+            code: "0".to_string(),
+            message: String::new(),
+            items: vec![Item::Send(format!("S0|transmit speed={wpm}"))],
+        }],
+    );
+    session.rules.retain(|(p, _)| *p != rule.0);
+    session.rules.push(rule);
+    session
+}
+
+/// The CW keyer's speed commands on the radio's wire.
+fn speed_wire(s: &FlexScene) -> Vec<String> {
+    s.log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. } if text.starts_with("cw wpm") => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ⭐ A SPEED ANOTHER PROGRAM SETS ON THE RADIO IS FOLLOWED, NEVER FOUGHT. The radio's keyer sends
+/// each word at the speed it reports. With the CW screen at 20 WPM, another program sets the radio
+/// to 30 (here a command no part of the loop sent): the WPM control becomes 30, so the CW screen
+/// shows what the radio keys at; the next message is paced at 30, its second word handed over the
+/// first word's keying time at 30 plus a word space after it, to within one 20 ms step; and Nexus
+/// sends no speed back, so the only `cw wpm` on the wire is the other program's. Nexus's own speed
+/// is never taken back either: the operator sets 25, the next word carries it to the radio, the
+/// operator moves on to 28 before the radio's report of 25 is read, and the control stays at 28. As
+/// it ships, with the client's CW off, the radio's speed leaves the control alone.
+#[test]
+fn a_speed_another_program_sets_on_the_radio_is_followed_never_fought() {
+    let other_program_sets_30 = |s: &mut FlexScene| {
+        s.run(500);
+        let reply = client(s).session().request(
+            tempo_net::flex::encode::Command::CwSpeed { wpm: 30 },
+            Duration::from_secs(3),
+        );
+        assert!(matches!(reply, Ok(r) if r.code == 0), "the radio took 30");
+        s.run(500);
+        s.engine.lock().unwrap().cw_wpm()
+    };
+    let session = speed_reported(speed_reported(reports(&["CW", "DIGU"]), 30), 25);
+    let mut s = cw_scene_on(session.clone(), Vec::new(), unbenched());
+    let shown = other_program_sets_30(&mut s);
+    s.engine.lock().unwrap().send_cw("CQ TEST");
+    let (start, zero) = (Instant::now(), now_unix_ms());
+    let mut handed = Vec::new();
+    for i in 0..400u32 {
+        let now = zero + 20.0 * f64::from(i);
+        let busy = s.state.cw_busy_until;
+        s.step(now);
+        if s.state.cw_busy_until != busy {
+            handed.push(now - zero);
+        }
+        let next = start + Duration::from_millis(20 * u64::from(i + 1));
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
+        if handed.len() == 2 && !flex_on_air(&s) {
+            break;
+        }
+    }
+    let paced = tempo_core::cw::morse_duration_ms("CQ", 30) + 7.0 * 1200.0 / 30.0;
+    let gap = handed.get(1).zip(handed.first()).map(|(b, a)| b - a);
+    assert_eq!(
+        format!(
+            "shown={shown} paced_at_30={} speed_wire={:?} words={:?}",
+            gap.is_some_and(|g| g >= paced && g < paced + 20.0),
+            speed_wire(&s),
+            cw_wire(&s)
+        ),
+        "shown=30 paced_at_30=true speed_wire=[\"cw wpm 30\"] words=[\"cwx send \\\"CQ\\\" 1\", \
+         \"cwx send \\\"TEST\\\" 2\"]",
+        "the second word {gap:?} ms after the first, paced {paced}"
+    );
+    s.engine.lock().unwrap().set_cw_wpm(25);
+    s.engine.lock().unwrap().send_cw("K");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !cw_wire(&s).iter().any(|c| c.starts_with("cwx send \"K\"")) {
+        assert!(Instant::now() < deadline, "the word never went");
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    s.engine.lock().unwrap().set_cw_wpm(28);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while client(&s).cw_speed() != Some(25) {
+        assert!(Instant::now() < deadline, "the radio never reported 25");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    s.run(500);
+    let held = s.engine.lock().unwrap().cw_wpm();
+    assert_eq!(
+        (held, speed_wire(&s)),
+        (28, vec!["cw wpm 30".to_string(), "cw wpm 25".to_string()]),
+        "Nexus's own speed taken back"
+    );
+
+    // As it ships.
+    let mut s = cw_scene_on(session, Vec::new(), shipped());
+    assert_eq!(other_program_sets_30(&mut s), 20);
+}
+
+// ── Tune with the radio's own carrier: switched on in tests only ─────────────────────────────
+//
+// Admission refuses the radio's tune carrier in production (`tempo_net::flex::admission::BENCHED`)
+// until a tester's bench confirms its readback, and the loop then tunes as over every CAT link:
+// PTT and Nexus's tone, over the client's audio route. These tests open the door the way only tests
+// can ([`unbenched`]), so the loop runs the path behind it; each "as it ships" half is today's tune.
+
+/// A scene on the bundled radio, its client on `config`, settled: with `native` audio, the tee and
+/// the radio's DAX source in place, so a tone tune would go out over DAX; without, the readback
+/// idle.
+fn tuning_scene(
+    native: bool,
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    tuning_scene_on(SimSession::v4_gui_client(), native, faults, config)
+}
+
+/// [`tuning_scene`] on a radio that follows `session`.
+fn tuning_scene_on(
+    session: SimSession,
+    native: bool,
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    let mut s = FlexScene::with_faults(native, session, faults, config);
+    run_until(&mut s, "settle", |s| {
+        let ready = client(s).session().snapshot().transmit_ready;
+        ready
+            && (!native
+                || (s.backend.tee.lock().unwrap().is_some()
+                    && s.log()
+                        .iter()
+                        .any(|(_, e)| command(e, "transmit set dax=1"))))
+    });
+    s.run(300);
+    s
+}
+
+/// The keying commands on the radio's wire: the key, its unkey and the tune carrier's.
+fn tune_wire(s: &FlexScene) -> Vec<String> {
+    s.log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. }
+                if text.starts_with("xmit ") || text.starts_with("transmit tune") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the radio reports its tune carrier up (`transmit tune=1`).
+fn radio_tuned(s: &FlexScene) -> bool {
+    client(s).session().snapshot().model.transmit.tune == Some(true)
+}
+
+/// Whether DAX transmit audio reached the radio at or after `from`.
+fn dax_tx_audio_since(s: &FlexScene, from: Instant) -> bool {
+    s.log()
+        .iter()
+        .any(|(t, e)| *t >= from && matches!(e, SimEvent::UdpIn { bytes, .. } if bytes.len() > 1))
+}
+
+/// ⭐ A NATIVE TUNE KEYS THE RADIO'S OWN CARRIER AND PLAYS NO TONE. With native audio on, Tune is
+/// `transmit tune 1`: the radio makes the carrier at its own tune power, the loop plays nothing,
+/// DAX carries nothing, no power is written (the Tune power setting, here 10 %, is not for this
+/// carrier), and the screens are given the radio's tune power (the bundled radio's 10 %) and its
+/// transmit timeout (off: 0) to show beside Tune. As it ships, Tune is today's: PTT (`xmit 1`) and
+/// Nexus's tone, over DAX, at the Tune power setting, with nothing beside it.
+#[test]
+fn a_native_tune_keys_the_radios_carrier_and_plays_no_tone() {
+    let outcome = |config| {
+        let mut s = tuning_scene(true, Vec::new(), config);
+        {
+            let mut e = s.engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.tune_power_pct = Some(10);
+            e.apply_settings(settings);
+        }
+        let from = Instant::now();
+        s.engine.lock().unwrap().set_tune(true);
+        run_until(&mut s, "the tune keyed", |s| {
+            s.state.tuning_keyed && flex_on_air(s)
+        });
+        s.run(1_000);
+        let played = s.backend.played.lock().unwrap().iter().any(|t| *t >= from);
+        let power_written = s.log().iter().any(|(t, e)| {
+            *t >= from
+                && matches!(e, SimEvent::Command { text, .. } if text.starts_with("transmit set rfpower"))
+        });
+        let flex_tune = s.engine.lock().unwrap().snapshot().radio.flex_tune;
+        format!(
+            "wire={:?} radio_tuned={} played={played} dax_tx_audio={} power_written={power_written} \
+             beside_tune={flex_tune:?}",
+            tune_wire(&s),
+            radio_tuned(&s),
+            dax_tx_audio_since(&s, from)
+        )
+    };
+    assert_eq!(
+        outcome(unbenched()),
+        "wire=[\"transmit tune 1\"] radio_tuned=true played=false dax_tx_audio=false \
+         power_written=false beside_tune=Some(FlexTune { power_pct: Some(10), tx_timeout_ms: \
+         Some(0) })"
+    );
+    assert_eq!(
+        outcome(shipped()),
+        "wire=[\"xmit 1\"] radio_tuned=false played=true dax_tx_audio=true power_written=true \
+         beside_tune=None"
+    );
+}
+
+/// ⭐ THE TUNE TIMEOUT AND THE RELEASE EACH END THE RADIO'S CARRIER WITH ITS OWN STOP. On the loop's
+/// own clock, held: the carrier is still up 11,980 ms into the 12-second tune timeout, and
+/// `transmit tune 0` goes out on the first tick past 12,000 ms. Released by the operator: it goes
+/// out on the next tick. Each time the tune's own stop ends it (never `xmit 0`), the radio's end is
+/// proven, Tune is off and there is no alarm. In Phone the release's stop is the only one. In FT's
+/// section the end of a tune also stands the sequencer down, as WSJT-X's does (a halt), and the
+/// halt's hard stop asks the client again while the tune's end is not yet proven: the same stop
+/// twice, ms apart, the second one the hard stop's `T 0`.
+#[test]
+fn the_tune_timeout_and_the_release_each_send_transmit_tune_0() {
+    let ended = |s: &mut FlexScene, now: f64| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while flex_on_air(s) && Instant::now() < deadline {
+            s.step(now);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // One engine lock at a time: `tx_alarms` takes its own.
+        let tuning = s.engine.lock().unwrap().tuning();
+        format!(
+            "wire={:?} tuning={tuning} on_air={} alarms={:?}",
+            tune_wire(s),
+            flex_on_air(s),
+            tx_alarms(s)
+        )
+    };
+    let up = |s: &mut FlexScene, now: f64| {
+        s.engine.lock().unwrap().set_tune(true);
+        s.step(now);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !radio_tuned(s) {
+            assert!(Instant::now() < deadline, "the radio never tuned");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let scene = |phone: bool| {
+        let mut s = tuning_scene(false, Vec::new(), unbenched());
+        if phone {
+            s.engine.lock().unwrap().set_operating_mode("phone", false);
+            s.run(500);
+        }
+        s
+    };
+    for (phone, stops) in [
+        (true, "\"transmit tune 0\""),
+        (false, "\"transmit tune 0\", \"transmit tune 0\""),
+    ] {
+        let want =
+            format!("wire=[\"transmit tune 1\", {stops}] tuning=false on_air=false alarms=[]");
+        // The timeout.
+        let mut s = scene(phone);
+        assert_eq!(s.engine.lock().unwrap().settings().tune_timeout_secs, 12);
+        let t0 = now_unix_ms();
+        up(&mut s, t0);
+        s.step(t0 + 11_980.0);
+        assert_eq!(
+            tune_wire(&s),
+            ["transmit tune 1"],
+            "held at 11,980 ms, phone: {phone}"
+        );
+        s.step(t0 + 12_020.0);
+        assert_eq!(
+            ended(&mut s, t0 + 12_040.0),
+            want,
+            "the timeout, phone: {phone}"
+        );
+
+        // The release.
+        let mut s = scene(phone);
+        let t0 = now_unix_ms();
+        up(&mut s, t0);
+        s.engine.lock().unwrap().set_tune(false);
+        s.step(t0 + 500.0);
+        assert_eq!(
+            ended(&mut s, t0 + 520.0),
+            want,
+            "the release, phone: {phone}"
+        );
+    }
+}
+
+/// ⭐ STOP TX ENDS A NATIVE TUNE WITH THE TUNE'S OWN STOP. Halt drops Tune, the loop's release sends
+/// `transmit tune 0`, and the hard stop's `T 0` asks the client to end what is ours, which is that
+/// tune again: the same stop a second time, nothing else. The end is proven, Tune is off and the
+/// loop holds nothing, no alarm.
+#[test]
+fn stop_tx_ends_a_native_tune_with_its_own_stop() {
+    let mut s = tuning_scene(false, Vec::new(), unbenched());
+    s.engine.lock().unwrap().set_tune(true);
+    run_until(&mut s, "the radio tuned", radio_tuned);
+    s.engine.lock().unwrap().halt_tx();
+    run_until(&mut s, "the end proven", |s| !flex_on_air(s));
+    s.run(1_000);
+    let tuning = s.engine.lock().unwrap().tuning();
+    assert_eq!(
+        format!(
+            "wire={:?} tuning={tuning} tuning_keyed={} radio_tuned={} alarms={:?}",
+            tune_wire(&s),
+            s.state.tuning_keyed,
+            radio_tuned(&s),
+            tx_alarms(&s)
+        ),
+        "wire=[\"transmit tune 1\", \"transmit tune 0\", \"transmit tune 0\"] tuning=false \
+         tuning_keyed=false radio_tuned=false alarms=[]"
+    );
+}
+
+/// ⭐ A STALLED LOOP STILL ENDS THE RADIO'S CARRIER. The loop hands the client its tune timeout
+/// with the start, and the client's session ends the carrier by itself at that plus its 2-second
+/// margin: here a 1-second timeout and a loop that never steps again once the tune is up, and
+/// `transmit tune 0` goes out 3 s after `transmit tune 1` (from 10 ms before, as the session's
+/// clock counts whole milliseconds, to 250 ms after), with no stop from the loop.
+#[test]
+fn a_stalled_loop_still_ends_the_native_tune_at_its_timeout_and_margin() {
+    let mut s = tuning_scene(false, Vec::new(), unbenched());
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.tune_timeout_secs = 1;
+        e.apply_settings(settings);
+        e.set_tune(true);
+    }
+    s.step(now_unix_ms());
+    s.sim.wait_for(Duration::from_secs(8), |log| {
+        sent(log, 0).iter().any(|c| c == "transmit tune 0")
+    });
+    let at = |text: &str| {
+        s.sim.log().iter().find_map(|l| match &l.event {
+            SimEvent::Command { text: t, .. } if t == text => Some(l.at),
+            _ => None,
+        })
+    };
+    let gap = at("transmit tune 0")
+        .zip(at("transmit tune 1"))
+        .map(|(off, on)| off.saturating_sub(on).as_millis());
+    assert!(
+        gap.is_some_and(|g| (2_990..3_250).contains(&g)),
+        "transmit tune 0 {gap:?} ms after transmit tune 1: {:?}",
+        tune_wire(&s)
+    );
+}
+
+/// ⭐ NO TRANSMIT TIMEOUT ON THE RADIO: TUNE STILL STARTS, AND THE SCREENS ARE TOLD (operator ruling,
+/// 2026-10-08, "Warn only"). The bundled radio reports its transmit timeout off
+/// (`interlock timeout=0`): the native tune keys, and the radio's 0 reaches the snapshot for the
+/// screens to warn beside Tune. With a 30-second timeout reported, the same tune keys and the
+/// snapshot carries 30,000 ms.
+#[test]
+fn a_native_tune_without_the_radios_tx_timeout_starts_and_says_so() {
+    for (timeout, want) in [(0, "Some(0)"), (30_000, "Some(30000)")] {
+        let mut session = SimSession::v4_gui_client();
+        for item in session
+            .rules
+            .iter_mut()
+            .flat_map(|(_, rules)| rules.iter_mut())
+            .flat_map(|r| r.items.iter_mut())
+        {
+            if let Item::Send(line) = item {
+                *line = line.replace(
+                    "S0|interlock timeout=0 ",
+                    &format!("S0|interlock timeout={timeout} "),
+                );
+            }
+        }
+        let mut s = tuning_scene_on(session, false, Vec::new(), unbenched());
+        s.engine.lock().unwrap().set_tune(true);
+        run_until(&mut s, "the radio tuned", radio_tuned);
+        let beside = s.engine.lock().unwrap().snapshot().radio.flex_tune;
+        assert_eq!(
+            format!(
+                "wire={:?} timeout={:?}",
+                tune_wire(&s),
+                beside.map(|t| t.tx_timeout_ms)
+            ),
+            format!("wire=[\"transmit tune 1\"] timeout=Some({want})")
+        );
+    }
+}
+
+/// ⭐ NATIVE AUDIO OFF MID-TUNE CHANGES NOTHING. The radio makes the carrier, so native audio going
+/// off under a native tune takes nothing from it: the carrier stays up, Tune stays on, nothing that
+/// keys or routes the transmitter is written until the operator releases Tune, and the release ends
+/// it with the tune's own stop (twice in FT's section: see the timeout and release test). As it
+/// ships, the tune is PTT and Nexus's tone over DAX: native audio off takes the tone off DAX, and
+/// the radio is keyed with nothing to send.
+#[test]
+fn native_audio_off_mid_tune_changes_nothing() {
+    let outcome = |config| {
+        let mut s = tuning_scene(true, Vec::new(), config);
+        s.engine.lock().unwrap().set_tune(true);
+        run_until(&mut s, "the tune keyed", |s| {
+            s.state.tuning_keyed && flex_on_air(s)
+        });
+        s.run(500);
+        let transmit_side = |s: &FlexScene| -> Vec<String> {
+            s.log()
+                .into_iter()
+                .filter_map(|(_, e)| match e {
+                    SimEvent::Command { text, .. }
+                        if [
+                            "xmit",
+                            "transmit",
+                            "cwx",
+                            "atu",
+                            "stream create type=dax_tx",
+                        ]
+                        .iter()
+                        .any(|p| text.starts_with(p)) =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let before = transmit_side(&s).len();
+        let off = Instant::now();
+        s.set_native_audio(false);
+        s.run(1_500);
+        let written = transmit_side(&s)[before..].to_vec();
+        // Past what the DAX pacer may still hold when the route goes.
+        let dax_after = dax_tx_audio_since(&s, off + Duration::from_millis(700));
+        let held = format!(
+            "radio_tuned={} tuning={} tuning_keyed={}",
+            radio_tuned(&s),
+            s.engine.lock().unwrap().tuning(),
+            s.state.tuning_keyed
+        );
+        let keying = tune_wire(&s).len();
+        s.engine.lock().unwrap().set_tune(false);
+        run_until(&mut s, "the end proven", |s| !flex_on_air(s));
+        // The keying commands only: once the tune has ended, the next quiet point puts the
+        // operator's mic back (`transmit set dax=0`), as it does after any transmission.
+        let released = tune_wire(&s)[keying..].to_vec();
+        format!(
+            "written={written:?} {held} dax_after={dax_after} released={released:?} alarms={:?}",
+            tx_alarms(&s)
+        )
+    };
+    assert_eq!(
+        outcome(unbenched()),
+        "written=[] radio_tuned=true tuning=true tuning_keyed=true dax_after=false \
+         released=[\"transmit tune 0\", \"transmit tune 0\"] alarms=[]"
+    );
+    assert_eq!(
+        outcome(shipped()),
+        "written=[] radio_tuned=false tuning=true tuning_keyed=true dax_after=false \
+         released=[\"xmit 0\", \"xmit 0\"] alarms=[]"
+    );
+}
+
+/// ⭐ A CONNECTION LOST MID-TUNE. The session drops while the radio's carrier is up, and the radio
+/// keeps it up (the worse answer, which a tester's bench settles). The loop reads the client's alarm,
+/// that the radio may still be transmitting, ahead of its restart; Tune goes off; and the fresh
+/// client it starts ends the lost session's carrier with the tune's own stop, `transmit tune 0`,
+/// before the rest of `T 0` (the earlier session's `cwx clear` and `xmit 0`). Nothing keys again.
+#[test]
+fn a_connection_lost_mid_tune_alarms_and_the_fresh_client_ends_the_carrier() {
+    // The radio's answer to `sub tx all` is the last interlock word a fresh client hears
+    // ([`holder_kept`]): the lost session still tuning.
+    let sim = FlexScene::radio(
+        holder_kept(),
+        vec![tempo_flexsim::Fault::DisconnectMidOver {
+            after: Duration::from_millis(300),
+            radio_stays_keyed: true,
+        }],
+    );
+    let mut s = FlexScene::on(sim, false, unbenched());
+    run_until(&mut s, "settle", |s| {
+        client(s).session().snapshot().transmit_ready
+    });
+    s.replace_on_rebuild = true;
+    s.engine.lock().unwrap().set_tune(true);
+    let detail = status_after_the_rebuild(&mut s);
+    assert!(
+        detail.starts_with(
+            "the connection to the radio was lost during a transmission — it may still be \
+             transmitting. Check the radio now."
+        ),
+        "{detail}"
+    );
+    // The connections: the scene's client (lost), then the fresh client.
+    let fresh = sent_on(&s, 1, "xmit 0");
+    let at = |text: &str| {
+        fresh
+            .iter()
+            .position(|c| c == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {fresh:?}"))
+    };
+    assert!(at("transmit tune 0") < at("xmit 0"), "{fresh:?}");
+    s.run(1_000);
+    let keyed_again = sent(&s.sim.log(), 1)
+        .iter()
+        .any(|c| c == "xmit 1" || c == "transmit tune 1");
+    assert_eq!(
+        (
+            s.engine.lock().unwrap().tuning(),
+            s.state.tuning_keyed,
+            keyed_again
+        ),
+        (false, false, false)
+    );
+}
+
+// ── The radio's own ATU: switched on in tests only ──────────────────────────────────────────
+//
+// Admission refuses an ATU start in production (`tempo_net::flex::admission::BENCHED`) until a
+// tester's bench confirms its readback, and the client then answers no `u TUNER`, so no ATU button
+// is offered on it. These tests open the door the way only tests can ([`unbenched`]); each "as it
+// ships" half is today's. They run in the Phone section: in the Digital section the stand-down
+// that follows a tune-up the radio takes halts TX, which is its own matter.
+
+/// A scene on a radio that follows `session`, its client on `config`, in the Phone section,
+/// settled, the radio's tuner probed.
+fn atu_scene(
+    session: SimSession,
+    faults: Vec<tempo_flexsim::Fault>,
+    config: tempo_net::flex::session::Config,
+) -> FlexScene {
+    let mut s = FlexScene::with_faults(false, session, faults, config);
+    s.engine.lock().unwrap().set_operating_mode("phone", false);
+    run_until(&mut s, "settle", |s| {
+        client(s).session().snapshot().transmit_ready && s.state.tuner_probed
+    });
+    s.run(300);
+    s
+}
+
+/// The ATU's commands on the radio's wire, and both stops a cycle can take, in order.
+fn atu_wire(s: &FlexScene) -> Vec<String> {
+    s.log()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            SimEvent::Command { text, .. }
+                if text.starts_with("atu ")
+                    || text == "xmit 0"
+                    || text.starts_with("transmit tune") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the screens are given beside the ATU.
+fn beside_atu(s: &FlexScene) -> Option<tempo_app::dto::FlexAtu> {
+    s.engine.lock().unwrap().snapshot().radio.flex_atu
+}
+
+/// Whether the radio reports the client's ATU cycle keyed.
+fn cycle_keyed(s: &FlexScene) -> bool {
+    client(s)
+        .session()
+        .snapshot()
+        .model
+        .interlock
+        .sample
+        .is_some_and(|i| i.state == "TRANSMITTING" && i.source == "TUNE")
+}
+
+/// Whether the radio has reported the cycle's result and the client believes nothing of ours on the
+/// air.
+fn cycle_ended(s: &FlexScene) -> bool {
+    client(s).session().snapshot().model.atu.status.as_deref() == Some("TUNE_SUCCESSFUL")
+        && !flex_on_air(s)
+}
+
+/// The bundled radio with its `atu start` rules in place of its own.
+fn atu_rules(rules: Vec<Rule>) -> SimSession {
+    let mut session = SimSession::v4_gui_client();
+    let group = session.lookup("atu start").expect("a rule");
+    session.rules[group].1 = rules;
+    session
+}
+
+/// The bundled radio's own ATU cycle, taking `ms` from TRANSMITTING to its result (500 ms in the
+/// bundled session): room for Stop TX mid-cycle on the loop's real clock.
+fn cycle_of(ms: u64) -> Rule {
+    let mut cycle = SimSession::v4_gui_client().rules[SimSession::v4_gui_client()
+        .lookup("atu start")
+        .expect("a rule")]
+    .1[0]
+        .clone();
+    for item in &mut cycle.items {
+        if *item == Item::Wait(500) {
+            *item = Item::Wait(ms);
+        }
+    }
+    cycle
+}
+
+/// A radio with no tuner fitted: its answer to `sub atu all` carries no `atu` status.
+fn no_tuner() -> SimSession {
+    let mut session = SimSession::v4_gui_client();
+    let group = session.lookup("sub atu all").expect("a rule");
+    for rule in session.rules[group].1.iter_mut() {
+        rule.items.clear();
+    }
+    session
+}
+
+/// ⭐ ON A FLEX PROFILE THE ATU BUTTON IS THE CLIENT'S TO OFFER. The scene's profile is Hamlib model
+/// 2036, SmartSDR CAT's, whose CAT path cannot start a tune ("press TUNER on the radio itself").
+/// Behind the door, with a tuner the radio reports fitted, the screens get an ATU button that
+/// starts one, bypassed until a cycle matches: the client answers for its own path. With no tuner
+/// fitted, no button. As it ships, no button either, as before.
+#[test]
+fn the_atu_button_on_a_flex_profile_is_the_clients_to_offer() {
+    let probed = |session, config| {
+        let s = atu_scene(session, Vec::new(), config);
+        let radio = s.engine.lock().unwrap().snapshot().radio;
+        (radio.atu, radio.atu_start_tune_unsupported)
+    };
+    assert_eq!(
+        probed(SimSession::v4_gui_client(), unbenched()),
+        (Some(false), false)
+    );
+    assert_eq!(probed(no_tuner(), unbenched()), (None, true));
+    assert_eq!(probed(SimSession::v4_gui_client(), shipped()), (None, true));
+}
+
+/// ⭐ AN ATU PRESS RUNS ONE CYCLE OF THE RADIO'S OWN TUNER, AND ITS RESULT SHOWS BESIDE IT. Behind the
+/// door: one `atu start` and nothing else on the wire; the client believes nothing of ours on the
+/// air once the radio has reported the result and the idle interlock; beside the ATU the screens
+/// are given the radio's tune power and transmit timeout (the bundled radio's 10 % and off, so the
+/// warning shows) and the cycle's result in the radio's word; nothing alarms. As it ships there is
+/// no ATU button, a press is refused with its reason, and nothing reaches the radio.
+#[test]
+fn an_atu_press_runs_one_cycle_and_its_result_shows_beside_it() {
+    let mut s = atu_scene(SimSession::v4_gui_client(), Vec::new(), unbenched());
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle's result", cycle_ended);
+    s.run(500);
+    assert_eq!(
+        format!(
+            "wire={:?} on_air={} beside_atu={:?} alarms={:?}",
+            atu_wire(&s),
+            flex_on_air(&s),
+            beside_atu(&s),
+            tx_alarms(&s)
+        ),
+        "wire=[\"atu start\"] on_air=false beside_atu=Some(FlexAtu { tune: FlexTune { \
+         power_pct: Some(10), tx_timeout_ms: Some(0) }, status: Some(\"TUNE_SUCCESSFUL\"), \
+         refused: None }) alarms=[]"
+    );
+
+    let mut s = atu_scene(SimSession::v4_gui_client(), Vec::new(), shipped());
+    assert_eq!(
+        s.engine.lock().unwrap().atu_tune(),
+        Err("This radio doesn't report an antenna tuner over CAT — nothing to run".to_string())
+    );
+    s.run(500);
+    assert_eq!(
+        format!("wire={:?} beside_atu={:?}", atu_wire(&s), beside_atu(&s)),
+        "wire=[] beside_atu=None"
+    );
+}
+
+/// ⭐ STOP TX DURING AN ATU CYCLE SENDS BOTH STOPS. No command that ends a cycle part way is
+/// documented, so Stop TX (the hard stop's `T 0`) sends the radio's unkey and its tune-off, `xmit 0`
+/// and `transmit tune 0`, and nothing alarms once the radio reports the cycle's result and the idle
+/// interlock. A radio whose cycle goes on (the simulator's AtuNeverEnds) gets both again once the
+/// stop's deadline passes (shortened here to 1.5 s, as the client's own tests shorten it), and the
+/// operator reads that it may still be transmitting, ahead of the client's restart.
+#[test]
+fn stop_tx_mid_cycle_sends_both_stops_and_a_cycle_that_goes_on_alarms() {
+    let mut s = atu_scene(atu_rules(vec![cycle_of(3_000)]), Vec::new(), unbenched());
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle keyed", cycle_keyed);
+    s.engine.lock().unwrap().halt_tx();
+    run_until(&mut s, "the end proven", |s| !flex_on_air(s));
+    s.run(500);
+    assert_eq!(
+        format!("wire={:?} alarms={:?}", atu_wire(&s), tx_alarms(&s)),
+        "wire=[\"atu start\", \"xmit 0\", \"transmit tune 0\"] alarms=[]"
+    );
+
+    let mut config = unbenched();
+    config.unkey_deadline_ms = 1_500;
+    let mut s = atu_scene(
+        SimSession::v4_gui_client(),
+        vec![tempo_flexsim::Fault::AtuNeverEnds],
+        config,
+    );
+    s.replace_on_rebuild = true;
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle keyed", cycle_keyed);
+    s.engine.lock().unwrap().halt_tx();
+    let detail = status_after_the_rebuild(&mut s);
+    assert!(
+        detail.starts_with(
+            "the radio did not confirm the unkey — it may still be transmitting. Check the radio \
+             now."
+        ),
+        "{detail}"
+    );
+    let first: Vec<String> = sent(&s.sim.log(), 0)
+        .into_iter()
+        .filter(|c| c.starts_with("atu ") || c == "xmit 0" || c.starts_with("transmit tune"))
+        .collect();
+    assert_eq!(
+        first,
+        [
+            "atu start",
+            "xmit 0",
+            "transmit tune 0",
+            "xmit 0",
+            "transmit tune 0"
+        ]
+    );
+}
+
+/// ⭐ AN ATU START THE RADIO REFUSES ENDS QUIETLY, WITH ITS REASON BESIDE THE ATU. The radio answers
+/// the first `atu start` with an error and keys nothing: no stop, no alarm, the client kept (no
+/// restart), nothing of ours believed on the air, and the ATU line says why, with the radio's code.
+/// The next press clears it and runs a cycle. (Which code a radio refuses with is not established:
+/// the simulator's error code stands in.)
+#[test]
+fn a_refused_atu_start_ends_quietly_with_its_reason_beside_the_atu() {
+    let refused = Rule {
+        code: tempo_flexsim::fault::REFUSED.to_string(),
+        message: String::new(),
+        items: Vec::new(),
+    };
+    let mut s = atu_scene(
+        atu_rules(vec![refused, cycle_of(500)]),
+        Vec::new(),
+        unbenched(),
+    );
+    // So that a restart is a value here, not the scene's panic.
+    s.replace_on_rebuild = true;
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    s.run(2_000);
+    assert_eq!(
+        format!(
+            "wire={:?} on_air={} refused={:?} alarms={:?} restarted={}",
+            atu_wire(&s),
+            flex_on_air(&s),
+            beside_atu(&s).and_then(|a| a.refused),
+            tx_alarms(&s),
+            s.rebuilt.load(std::sync::atomic::Ordering::Relaxed)
+        ),
+        "wire=[\"atu start\"] on_air=false refused=Some(\"ATU not started: the radio refused it \
+         (0x5000002C).\") alarms=[] restarted=false"
+    );
+
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle's result", cycle_ended);
+    s.run(300);
+    assert_eq!(
+        beside_atu(&s).map(|a| (a.status, a.refused)),
+        Some((Some("TUNE_SUCCESSFUL".to_string()), None))
+    );
+    assert_eq!(atu_wire(&s), ["atu start", "atu start"]);
 }

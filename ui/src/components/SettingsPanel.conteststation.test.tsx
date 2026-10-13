@@ -18,6 +18,11 @@ import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
+// THE BUDGET (2026-10-09). The slowest case here, "⭐ carries every value into the save payload and back…", takes
+// 0.28 s and 0.28 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {
@@ -112,27 +117,30 @@ const lastSaved = () => {
   return calls.length ? (calls[calls.length - 1][0] as Record<string, unknown>) : null
 }
 
-/** Every field of §3.4's block, with a value and the label it is entered under. */
+/** Every field of §3.4's block the tab shows for every contest, with a value and the label it is
+ *  entered under. The sixth, Power sent, shows only for a contest whose exchange sends the
+ *  station's power — none of the shipped ones (`SettingsPanel.contestgroups.test.tsx`, per
+ *  contest), so it is not typed here; a stored value survives a Save (the same file's round trip). */
 const BLOCK = [
   { key: 'contestQthCounty', label: 'County', typed: 'FRAN', want: 'FRAN' },
   { key: 'contestQthState', label: 'State or province', typed: 'WI', want: 'WI' },
   { key: 'contestCheck', label: 'Check', typed: '74', want: '74' },
   { key: 'contestCqZone', label: 'CQ zone', typed: '4', want: 4 },
   { key: 'contestItuZone', label: 'ITU zone', typed: '8', want: 8 },
-  { key: 'contestPower', label: 'Power sent', typed: 'KW', want: 'KW' },
 ] as const
 
 describe('the station-data block', () => {
-  it('renders under the contest picker and above Field Day Setup', async () => {
+  it('renders under the contest picker and above Your entry', async () => {
     renderPanel()
     await openContesting()
+    await inputFor('County')
     const legends = [...document.querySelectorAll('fieldset.settings-section legend')].map(
       (n) => n.textContent,
     )
     expect(legends).toContain('Your station data')
     expect(legends.indexOf('Your station data')).toBeGreaterThan(legends.indexOf('Contest'))
     expect(legends.indexOf('Your station data')).toBeLessThan(
-      legends.indexOf('Field Day Setup'),
+      legends.indexOf('Your entry'),
     )
   })
 
@@ -199,11 +207,11 @@ describe('the station-data block', () => {
 // line), read by the engine at export, and a plain text setting like the rest of this tab — so
 // what this proves is the same round trip: typed, saved, and back after a reload.
 describe('the contest log email', () => {
-  it('is on the Contest section, empty by default, and survives a save and a reload', async () => {
+  it('is in Your entry, empty by default, and survives a save and a reload', async () => {
     const view = renderPanel()
     await openContesting()
     const email = await inputFor('Email for contest logs')
-    expect(email.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Contest')
+    expect(email.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Your entry')
     expect(email.value).toBe('')
     fireEvent.change(email, { target: { value: 'op@example.com' } })
     await save()
@@ -277,5 +285,146 @@ describe('the entry class, club and other operators', () => {
     await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.queryByText('Entry class', { selector: '.settings-label' })).toBeNull()
+  })
+})
+
+// ⭐ THE REST OF WHAT A SPONSOR'S TEMPLATE DECLARES: a multi-operator entry's class
+// (CATEGORY-TRANSMITTER), an overlay, the mailing address and the soapbox. Each comes from the
+// contest's rules data through the ruleset preview and is offered only where the sponsor writes
+// it; the class only for a MULTI-OP entry, the only one it is written for.
+describe('the multi-operator class, overlay, mailing address and soapbox', () => {
+  const WPX = {
+    event: 'cqwpx_cw',
+    transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
+    overlayCategories: ['CLASSIC', 'ROOKIE', 'TB-WIRES', 'YOUTH'],
+    addressHeaders: ['ADDRESS', 'ADDRESS-CITY', 'ADDRESS-STATE-PROVINCE', 'ADDRESS-POSTALCODE', 'ADDRESS-COUNTRY'],
+    soapbox: true,
+  }
+  const chips = async (group: string) =>
+    Array.from((await screen.findByRole('group', { name: group })).querySelectorAll('button'))
+  const textareaFor = async (label: string) =>
+    (await screen.findByText(label, { selector: '.settings-label' }))
+      .closest('.settings-field')!
+      .querySelector('textarea') as HTMLTextAreaElement
+  const CLASS = 'Which multi-operator class you are entering'
+  const OVERLAY = 'Which overlay category you are also entering'
+
+  it('offers the contest\'s own classes and overlays, and saves every declaration', async () => {
+    stored = { ...stored, fdEvent: 'cqwpx_cw', contestCategoryOperator: 'MULTI-OP' }
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(WPX as never))
+    renderPanel()
+    await openContesting()
+    const classes = await chips(CLASS)
+    expect(classes.map((b) => b.textContent)).toEqual(['Not set', 'ONE', 'TWO', 'UNLIMITED'])
+    expect(classes[0].getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(classes[2])
+    const overlays = await chips(OVERLAY)
+    expect(overlays.map((b) => b.textContent)).toEqual(['Not set', 'CLASSIC', 'ROOKIE', 'TB-WIRES', 'YOUTH'])
+    fireEvent.click(overlays[3])
+    fireEvent.change(await textareaFor('Mailing address'), { target: { value: '1 Example Rd\nApt 2' } })
+    fireEvent.change(await inputFor('Mailing city'), { target: { value: 'Springfield' } })
+    fireEvent.change(await inputFor('Mailing state or province'), { target: { value: 'IL' } })
+    fireEvent.change(await inputFor('Postal code'), { target: { value: '62701' } })
+    fireEvent.change(await inputFor('Mailing country'), { target: { value: 'USA' } })
+    fireEvent.change(await textareaFor('Soapbox'), { target: { value: 'A fine weekend.\nFirst licensed 2024.' } })
+    await save()
+    await waitFor(() => expect(lastSaved()?.contestCategoryTransmitter).toBe('TWO'))
+    const saved = lastSaved()!
+    expect([
+      saved.contestCategoryOverlay,
+      saved.contestAddress,
+      saved.contestAddressCity,
+      saved.contestAddressState,
+      saved.contestAddressPostalcode,
+      saved.contestAddressCountry,
+      saved.contestSoapbox,
+    ]).toEqual(['TB-WIRES', '1 Example Rd\nApt 2', 'Springfield', 'IL', '62701', 'USA', 'A fine weekend.\nFirst licensed 2024.'])
+  })
+
+  it('offers no class to a single operator, and shows a class this contest lacks as not set', async () => {
+    stored = { ...stored, fdEvent: 'cqwpx_cw', contestCategoryOperator: 'SINGLE-OP' }
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(WPX as never))
+    const view = renderPanel()
+    await openContesting()
+    expect(await chips(OVERLAY)).toHaveLength(5)
+    expect(screen.queryByRole('group', { name: CLASS })).toBeNull()
+    view.unmount()
+    // CONTROL: the same contest, a multi-operator entry holding a class it does not have
+    // (ARRL VHF's LIMITED): the picker is there, and that class reads as not set.
+    stored = { ...stored, contestCategoryOperator: 'MULTI-OP', contestCategoryTransmitter: 'LIMITED' }
+    renderPanel()
+    await openContesting()
+    const classes = await chips(CLASS)
+    expect(classes.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)).toEqual([
+      'Not set',
+    ])
+  })
+
+  it('POSITIVE CONTROL: a contest whose sponsor names none of them offers none of them', async () => {
+    stored = { ...stored, contestCategoryOperator: 'MULTI-OP' }
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd' } as never))
+    renderPanel()
+    await openContesting()
+    expect(await inputFor('Club')).toBeTruthy()
+    await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole('group', { name: CLASS })).toBeNull()
+    expect(screen.queryByRole('group', { name: OVERLAY })).toBeNull()
+    expect(screen.queryByText('Mailing address', { selector: '.settings-label' })).toBeNull()
+    expect(screen.queryByText('Soapbox', { selector: '.settings-label' })).toBeNull()
+  })
+})
+
+// ⭐ THE BAND CATEGORY (CATEGORY-BAND): ALL, or one band for a single-band entry, from the contest's
+// own list through the ruleset preview, offered only where the sponsor lists bands. A declaration:
+// nothing reads it off the log, and a band this contest does not list shows as not set.
+describe('the band category', () => {
+  const BAND = 'Which band category you are entering'
+  const CQWW = ['ALL', '160M', '80M', '40M', '20M', '15M', '10M']
+  const chips = async () =>
+    Array.from((await screen.findByRole('group', { name: BAND })).querySelectorAll('button'))
+  const pressed = (buttons: HTMLButtonElement[]) =>
+    buttons.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent)
+
+  it('offers the contest\'s own bands, not set by default, and saves the pick', async () => {
+    stored = { ...stored, fdEvent: 'cqww_ssb' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'cqww_ssb', bandCategories: CQWW } as never),
+    )
+    renderPanel()
+    await openContesting()
+    const bands = await chips()
+    expect(bands.map((b) => b.textContent)).toEqual(['Not set', ...CQWW])
+    expect(pressed(bands)).toEqual(['Not set'])
+    fireEvent.click(bands[5])
+    await save()
+    await waitFor(() => expect(lastSaved()?.contestCategoryBand).toBe('20M'))
+  })
+
+  it('shows a band this contest does not list as not set', async () => {
+    // CQ WW RTTY runs on five bands: a 160M picked for CQ WW SSB claims nothing here.
+    stored = { ...stored, fdEvent: 'cqww_rtty', contestCategoryBand: '160M' }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ event: 'cqww_rtty', bandCategories: ['ALL', '80M', '40M', '20M', '15M', '10M'] } as never),
+    )
+    const view = renderPanel()
+    await openContesting()
+    expect(pressed(await chips())).toEqual(['Not set'])
+    view.unmount()
+    // CONTROL: a band it lists reads as picked.
+    stored = { ...stored, contestCategoryBand: '40M' }
+    renderPanel()
+    await openContesting()
+    expect(pressed(await chips())).toEqual(['40M'])
+  })
+
+  it('POSITIVE CONTROL: a contest whose sponsor lists no bands offers no band category', async () => {
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd' } as never))
+    renderPanel()
+    await openContesting()
+    expect(await inputFor('Club')).toBeTruthy()
+    await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole('group', { name: BAND })).toBeNull()
   })
 })

@@ -17,7 +17,7 @@ import { PaneSeam } from './PaneSeam'
 import { LOG_GLOBE_SPLIT_MAX, LOG_GLOBE_SPLIT_MIN } from '../features/paneSeam'
 import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
 import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
-import { logSource, useLogAnswer, useLogAnswers, useLogPages } from '../features/logSource'
+import { failureToShow, logSource, useLogAnswer, useLogAnswers, useLogPages, useLogStatus } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
@@ -312,9 +312,16 @@ export function Logbook({
   // rows the station sent (`observedLog`, below).
   const [observedLog, setLog] = useState<LoggedQso[]>([])
   // The whole log's size, not the list's: the count badge, the purge warning, the exports and the
-  // globe key on it. A Remote browser counts the rows the station sent, as it always did.
-  const nativeLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick) ?? emptyAnswer(LOG_SIZE)
-  const logSize = control ? nativeLogSize : observedLog.length
+  // globe key on it. A Remote browser counts the rows the station sent, as it always did. The
+  // engine's answer is `undefined` until it lands, and for as long as the engine refuses the
+  // question while a change is being saved (features/notAnswered): the gates count that as 0, with
+  // nothing to export or purge yet, but only an ANSWERED 0 is an empty log.
+  const askedLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick)
+  const logSize = control ? (askedLogSize ?? emptyAnswer(LOG_SIZE)) : observedLog.length
+  // Where that count stands. One held from before the latest change is out of date until the fresh
+  // one lands, and is shown as such: a held 0 never as a count or an empty log.
+  const sizeStatus = useLogStatus(control ? LOG_SIZE : null)
+  const sizeCurrent = sizeStatus === undefined || sizeStatus.state === 'current'
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
     call: '',
@@ -986,7 +993,9 @@ export function Logbook({
     [sortKey, sortAsc, deferredSearch, needsConfirmOnly],
   )
   const queryKey = logQueryKey(query)
-  const latestFirst = useLogAnswer(control ? { kind: 'page', query, offset: 0, limit: LOG_PAGE } : null, logTick)
+  const firstPage = control ? ({ kind: 'page', query, offset: 0, limit: LOG_PAGE } as const) : null
+  const latestFirst = useLogAnswer(firstPage, logTick)
+  const firstPageStatus = useLogStatus(firstPage)
   // A Remote browser's rows are the page the station sent, searched and filtered there: they are
   // only put in this view's order (newest first — the headers are off there), exactly as before.
   const remoteOrder = useMemo(
@@ -1046,6 +1055,25 @@ export function Logbook({
   const showingRev = kept ? kept.orderRev : (onScreen ?? latestRev)
   const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
   const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)) : remoteOrder.length
+  // WHAT THE LIST SAYS WHEN IT HAS NO ROWS — and a log that exists is never reported empty. "No
+  // logged contacts yet." only on an answer that the LOG holds none: the engine's count of 0, or a
+  // page the station sent for no search and no filter. A list that matched nothing says so. Until
+  // the engine has counted the log, and sent the first page of a log it counted, the list is
+  // reading the logbook: at every open for a moment, and for as long as the engine refuses the
+  // questions while a change is being saved. So is a held 0 from before the latest change. A Remote
+  // page on its way says so in its status line.
+  //
+  // A READ THAT FAILED says so, in the engine's words, with Retry (`load`): the count's, or the first
+  // page's. Retry and reopening the view ask again. The rows the list had stay up under the line.
+  // A refusal while a change is being saved stays quiet, even once its asks run out
+  // (`failureToShow`): the list keeps saying it is reading the logbook.
+  const readFailed = failureToShow(sizeStatus) ?? failureToShow(firstPageStatus)
+  const listSays: 'failed' | 'reading' | 'empty' | 'noMatch' | null =
+    readFailed !== null ? 'failed'
+    : listTotal > 0 ? null
+    : control ? (askedLogSize === undefined || (askedLogSize === 0 && !sizeCurrent) || (askedLogSize > 0 && showingRev === null) ? 'reading' : askedLogSize === 0 ? 'empty' : 'noMatch')
+    : remoteLog?.phase !== 'ready' ? null
+    : deferredSearch.trim() || needsConfirmOnly ? 'noMatch' : 'empty'
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -1736,7 +1764,11 @@ export function Logbook({
       <div className="panel-header log-header">
         <div className="log-title">
           <h2>{t('logbook.title')}</h2>
-          <span className="count-badge">{remoteLog?.total ?? logSize}</span>
+          {(!control || (askedLogSize !== undefined && (sizeCurrent || askedLogSize > 0))) && (
+            <span className="count-badge" title={sizeCurrent ? undefined : t('logbook.count.stale')}>
+              {remoteLog?.total ?? logSize}
+            </span>
+          )}
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
         {!control && remoteLog && (canLog || showForm) && (
@@ -2511,8 +2543,17 @@ export function Logbook({
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
-          {logSize === 0 && (!remoteLog || remoteLog.phase === 'ready') && <p className="empty">{t('logbook.empty')}</p>}
-          {logSize > 0 && listTotal === 0 && (
+          {listSays === 'failed' && (
+            <p className="empty">
+              {t('logbook.readFailed', { reason: readFailed ?? '' })}{' '}
+              <button type="button" className="log-filter-chip" onClick={load}>
+                {t('logbook.readFailed.retry')}
+              </button>
+            </p>
+          )}
+          {listSays === 'reading' && <p className="empty">{t('logbook.reading')}</p>}
+          {listSays === 'empty' && <p className="empty">{t('logbook.empty')}</p>}
+          {listSays === 'noMatch' && (
             <p className="empty">{t('logbook.emptySearch', { query: deferredSearch.trim() })}</p>
           )}
           {listTotal > 0 && (

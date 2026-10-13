@@ -20,6 +20,11 @@ import type { AppSnapshot, QrzLookup } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
+// THE BUDGET (2026-10-09). The slowest case here, "is listed in ⊞ Panels in both layouts", takes 0.34 s and 0.74 s on
+// one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one core, past
+// vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const resolved: QrzLookup = {
   call: 'W1ABC',
   name: 'Alice Example',
@@ -34,7 +39,9 @@ const resolved: QrzLookup = {
   image: null,
 }
 
+const startSearchAndPounce = vi.fn(async () => null)
 vi.mock('../api', () => ({
+  startSearchAndPounce: () => startSearchAndPounce(),
   qrzLookup: vi.fn(async () => resolved),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),
@@ -236,7 +243,9 @@ describe('#204 — S&P clears the card', () => {
 
     await waitFor(() => expect(cardEl()).toBeNull())
     expect(onClearSelection).toHaveBeenCalledTimes(1)
-    expect(onSetMode).toHaveBeenCalledWith('qso-monitor')
+    // This computer's S&P goes by its own verb (the contest's S&P while a contest runs).
+    expect(startSearchAndPounce).toHaveBeenCalledTimes(1)
+    expect(onSetMode).not.toHaveBeenCalled()
   })
 })
 

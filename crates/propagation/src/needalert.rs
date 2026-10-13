@@ -9,7 +9,7 @@
 use crate::dxcc;
 use crate::dxped::{NeedKind, OperatorNeeds};
 use crate::geo::{haversine_km, km_token, maidenhead_to_latlon};
-use crate::model::{exact_mode, Band, ModeClass, PathSpot, Side};
+use crate::model::{exact_mode, feed_mode, Band, ModeClass, PathSpot, Side};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -161,10 +161,10 @@ pub enum StateSource {
     Grid,
 }
 
-/// The park or summit a need row is an ACTIVATION of. Carried so a Work from the board can set
-/// the hunt the way HUNT and a map double-click already do — the contact it leads to is then
-/// logged with the reference, which is the only contact POTA credits as a hunt (and the only one
-/// [`HuntedActivations`] can see).
+/// The park or summit a need row is an ACTIVATION of. Carried so the contact a Work from the board
+/// leads to is logged with the reference — the Phone or CW log line the Work opens fills it with
+/// the call, and a row that opens none sets the hunt the way HUNT and a map double-click do — which
+/// is the only contact POTA credits as a hunt (and the only one [`HuntedActivations`] can see).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParkRef {
@@ -466,7 +466,8 @@ pub fn score_slots(
         NeedTag::NewBand => format!("New band — {} {}", info.entity, band),
         // Name the mode: the need is "never worked this entity in THIS mode", so the row says
         // which ("New mode — FT8 The Gambia" with FT4 in the log), or names the class for a
-        // station heard in a class alone, when no mode of it was ever worked.
+        // station heard in a class alone or in a mode no contact is logged in, when no mode of
+        // that class was ever worked.
         //
         // The band is deliberately ABSENT (operator report 2026-07-29). `LogNeeds`
         // keys `worked_mode` as (entity, mode) with NO band — a mode need means
@@ -701,9 +702,9 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         // "TempoFast" arm never matched and dropped Nexus's own tiers through to the
         // frequency fallback, which can answer Cw/Phone from the band plan alone and
         // fabricate a NewMode. Spell the tiers in upper case with the rest.
-        "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "RTTY" | "PSK"
-        | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8" | "MFSK" | "MSK144" | "OLIVIA" | "DATA"
-        | "DIGI" | "SSTV" => ModeClass::Digital,
+        "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "Q65" | "FST4"
+        | "RTTY" | "PSK" | "PSK31" | "PSK63" | "PSK125" | "QPSK31" | "JT65" | "JT9" | "JS8"
+        | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
         _ => crate::model::classify_spot_mode(freq_mhz),
     }
 }
@@ -792,6 +793,11 @@ pub fn activation_alert(
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
     let mode = ota_mode_class(&spot.mode, freq_mhz);
+    // The need is judged on the one mode the feed names, as every other row's is, and on the class
+    // when the feed names only a class or nothing ([`feed_mode`]). The row keeps the class as its
+    // label (below): the board drops an activation row that repeats a cluster row by call, band
+    // and that label.
+    let heard = feed_mode(&spot.mode).unwrap_or_else(|| mode.label().to_string());
     let is_sota = spot.program.eq_ignore_ascii_case("SOTA");
     let program_tag = if is_sota {
         NeedTag::Sota
@@ -806,7 +812,7 @@ pub fn activation_alert(
     let mut award: Vec<NeedAlert> = score_slots(
         &spot.activator,
         band.label(),
-        mode.label(),
+        &heard,
         spot.grid.as_deref(),
         state,
         needs,
@@ -832,7 +838,7 @@ pub fn activation_alert(
         priority: 0,
         headline: String::new(),
         mode: mode.label().to_string(),
-        exact_mode: exact_mode(mode.label()),
+        exact_mode: exact_mode(&heard),
         freq_mhz: None,
         admitted_at: None,
         evidence: None,
@@ -844,6 +850,9 @@ pub fn activation_alert(
         park: None, // filled in below, on the merged row as well as this one
         state_from: None,
     });
+    // The award's row names the scored mode itself where it names FT8, FT4 or RTTY; this row is
+    // the class, as it always was.
+    alert.mode = mode.label().to_string();
     // The row's state, when it has one, is the park's or the summit's, on the merged row as well.
     alert.state_from = state.map(|_| StateSource::Park);
     // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
@@ -2985,6 +2994,69 @@ mod tests {
             true,
         )
         .is_none());
+    }
+
+    /// Every feed token judged as a mode of its own is one the activator classifier classes by its
+    /// spelling, in the class that mode is logged in. A token it placed by frequency instead would
+    /// give one station a row labelled Phone and a need for a digital mode.
+    #[test]
+    fn a_mode_the_feed_names_is_classed_by_its_spelling_not_its_frequency() {
+        let mut named = 0;
+        for token in [
+            "CW",
+            "SSB",
+            "USB",
+            "LSB",
+            "PHONE",
+            "PH",
+            "AM",
+            "FM",
+            "DV",
+            "FT8",
+            "FT4",
+            "FT2",
+            "TEMPOFAST",
+            "TEMPODEEP",
+            "FT1",
+            "DX1",
+            "RTTY",
+            "PSK",
+            "PSK31",
+            "PSK63",
+            "PSK125",
+            "QPSK31",
+            "BPSK31",
+            "JT65",
+            "JT9",
+            "JS8",
+            "MFSK",
+            "MSK144",
+            "OLIVIA",
+            "DATA",
+            "DIGI",
+            "SSTV",
+            "Q65",
+            "FST4",
+            "WSPR",
+            "OTHER",
+            "",
+            "tempofast",
+            " ft8 ",
+        ] {
+            let Some(key) = feed_mode(token) else {
+                continue;
+            };
+            named += 1;
+            let class = ModeClass::from_adif(&key);
+            // A CW, a phone and a data frequency: the class must not move with any of them.
+            for mhz in [14.025, 14.250, 14.074] {
+                assert_eq!(ota_mode_class(token, mhz), class, "{token:?} at {mhz}");
+            }
+        }
+        assert_eq!(
+            named, 26,
+            "control: the tokens the feed names were all reached"
+        );
     }
 
     // ── Park-level worked state: which activation is still worth working ────────────────

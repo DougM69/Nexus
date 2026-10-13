@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { DetachedPanel } from '../DetachedPanel'
 import { FdClubSection, FdBandOccupancy } from './ContestView'
-import { openPanelWindow, subscribeSnapshot, getSettings } from '../api'
+import { openPanelWindow, subscribeSnapshot, getSettings, getFdRuleset } from '../api'
 import type { AppSnapshot, FdClubStatus } from '../types'
 import { BAND_COLOR } from '../bandColors'
 
@@ -26,6 +26,7 @@ vi.mock('../api', () => ({
   getPropagation: vi.fn(() => Promise.resolve(null)),
   getNeedAlerts: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve(null)),
+  getFdRuleset: vi.fn(() => Promise.resolve(null)),
   selectPeer: vi.fn(() => Promise.resolve(null)),
 }))
 
@@ -229,10 +230,10 @@ describe('the club band board pops out', () => {
   })
 
   it('⭐ says why when sync is switched on for a contest club sync cannot run', async () => {
-    // The engine refuses club sync for anything but the two Field Days, so no club block
+    // The engine refuses club sync for a contest the club log cannot run, so no club block
     // ever arrives. Reading that as "the host stepped out" would tell the operator a club
     // is running when nothing is.
-    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'ilqp' } as never)
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'cqwpx_cw' } as never)
     mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
       cb({ ...snapWithClub(null), fieldDay: null })
       return () => {}
@@ -240,8 +241,49 @@ describe('the club band board pops out', () => {
     render(<DetachedPanel panel="fdclub" />)
     await settle()
     expect(screen.getByText(/Club sync is off/i)).toBeTruthy()
-    expect(screen.getByText(/With Illinois QSO Party selected/)).toBeTruthy()
+    expect(
+      screen.getByText(/Club sync does not run CQ World-Wide WPX Contest \(CW\): its serial numbers/),
+    ).toBeTruthy()
     expect(screen.queryByText(/nothing has stopped/i)).toBeNull()
+  })
+
+  it('⭐ says why when the rules this station loaded do not carry the picked contest', async () => {
+    // A downloaded rules file can drop a contest, and the engine then refuses club sync for
+    // it. The station's preview of the pick resolves it to the ARRL Field Day that mode entry
+    // falls back to, which is how this window can tell.
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'ilqp' } as never)
+    vi.mocked(getFdRuleset).mockResolvedValue({ event: 'arrlfd' } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    expect(
+      await screen.findByText(
+        /Club sync does not run Illinois QSO Party: the contest rules this Nexus loaded do not include it/,
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(/nothing has stopped/i)).toBeNull()
+  })
+
+  it('POSITIVE CONTROL: the same pick, carried by the loaded rules, is a club the host stepped away from', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true, fdEvent: 'ilqp' } as never)
+    vi.mocked(getFdRuleset).mockResolvedValue({ event: 'ilqp' } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    expect(await screen.findByText(/nothing has stopped/i)).toBeTruthy()
+    // In the contest's words: it said "while Field Day is the section you are working in" over
+    // an Illinois QSO Party club.
+    expect(screen.getByText(/nothing has stopped/i).textContent).toBe(
+      'The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.',
+    )
+    // The preview was asked for and has answered before the absence below is read.
+    await vi.waitFor(() => expect(vi.mocked(getFdRuleset)).toHaveBeenCalled())
+    await settle()
+    expect(screen.queryByText(/Club sync does not run/)).toBeNull()
   })
 
   it('POSITIVE CONTROL: a station that really has not configured sync is still told how', async () => {

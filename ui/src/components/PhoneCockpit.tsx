@@ -21,7 +21,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // and stay in the code.
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
 import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
-import { isStockPlacement, regionGroups } from '../features/panelPlace'
+import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
@@ -30,6 +30,7 @@ import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, gridTargets, usePaneDrag, type DropArea } from './panes/PaneDrag'
 import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
@@ -48,7 +49,12 @@ import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
-import { VoiceKeyer } from './VoiceKeyer'
+import { VoiceKeyer, type VoiceKeyerForEnter } from './VoiceKeyer'
+import { EsmPlate } from './EsmPlate'
+import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
+import { VOICE_SLOT_ROLES, esmRoles, esmVoiceSlots } from '../features/esmRoles'
+import { esmInertText } from '../features/esmWords'
+import { useEscStop } from '../useEscStop'
 import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
 import { formatDialMhz } from './FrequencyReadout'
 // ⊘ — the shared unavailable mark. Its own module so `CockpitHeader` can print the same
@@ -70,6 +76,7 @@ import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
   armStreamMic,
@@ -226,6 +233,8 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
    *  them — so working a row from the Spots pane is the view's own act. `spots` above is the
    *  feed. Absent ⇒ there is no Spots pane to show, ticked or not. */
@@ -236,6 +245,9 @@ interface Props {
    *  lends the dashboard rail. Absent ⇒ no box is drawn or offered, whatever the record says: the hosted
    *  Remote page keeps its own panes. */
   boxes?: BoxSource
+  /** Enter Sends Message's switch for this cockpit and the voice keyer's step mapping (App, from
+   *  Settings). Absent on the hosted page. */
+  esmSetting?: EsmSetting
 }
 
 /** The ⊞ menu's entries: the cockpit's own panes. A box comes and goes through ⊞ Arrange's "+ Add a
@@ -596,7 +608,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   const display = useRemotePresentation()
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
@@ -1084,7 +1096,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
     if (on && !snapRef.current.radio.txAllowed) {
-      pushToast(t('phone.tx.locked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('phone.tx.locked'), 'info', 3500)
       return
     }
     // …nor while a clock repair holds transmit (`Engine::hold_tx_for_clock_repair`): the engine
@@ -1108,10 +1120,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     // TX pill is display-only here (CockpitHeader arms only when it is passed onSetTxEnabled,
     // which Phone deliberately does not: doing so would replace the ▲ TX on-air pill with an
     // arm button mid-over, since `transmitting` is the FT slot flag alone) — so a message that
-    // named a switch would name one that is not there, and he would stay stuck until he
-    // navigated out of Phone and back. Arming keys NOTHING by itself, and it is no more than
-    // entering Phone already does (`set_operating_mode` arms TX for the manual modes); the
-    // rig keys on the NEXT press, through the ordinary path below.
+    // named a switch would name one that is not there, and the operator would stay stuck:
+    // after a stop, leaving Phone and coming back leaves TX off too (`set_operating_mode` arms
+    // the manual modes only where nothing stopped TX). Arming keys NOTHING by itself, and this
+    // press is the operator's own act that a stop waits for; the rig keys on the NEXT press,
+    // through the ordinary path below.
     //
     // ⚠️ THE ENGINE'S GATE IS UNTOUCHED. This is what the operator is TOLD, not what he is
     // allowed: set_ptt still refuses while tx_enabled is false, and TX is still only ever
@@ -1257,8 +1270,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
 
   // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
   // slot) — what the SESSION is composing, which is what the next contact will hear. Empty
-  // until FD setup fills it in.
-  const fdExchange = fieldDay?.composingText || composingText(fieldDay?.composing)
+  // until FD setup fills it in. As a PHONE contact sends it: the report at two digits (59), as
+  // the engine stamps a phone row, never the session's 599; a station that sends no phone form
+  // reads as it always did.
+  const fdExchange =
+    fieldDay?.composingTextPhone || fieldDay?.composingText || composingText(fieldDay?.composing)
 
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ─────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in
@@ -1418,6 +1434,32 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // omission: `shown(id)` is the operator's tick and nothing else may take a pane away.
   const hasBandPane = onWorkSpot != null && shown('bandActivity')
   const hasKeyerPane = shown('voiceKeyer')
+  // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`). The voice keyer
+  // is the only player of the recordings: it lends the strip its slots and a player that runs
+  // its own checks, and while it is hidden ESM steps aside (rule 4). When running, "his call and
+  // your exchange" plays nothing: the operator says them (decision 10).
+  const [keyerForEnter, setKeyerForEnter] = useState<VoiceKeyerForEnter | null>(null)
+  const esm = useEsmHost({
+    cockpit: 'phone',
+    on: !!esmSetting?.on && !!fieldDay && control,
+    callOnce: !!esmSetting?.callOnce,
+    roles: esmRoles(VOICE_SLOT_ROLES, esmSetting?.voiceRoles),
+    slots: esmVoiceSlots(keyerForEnter?.messages ?? []),
+    guards: () => ({
+      cockpit: 'phone',
+      txEnabled: snapRef.current.radio.txEnabled,
+      txAllowed: snapRef.current.radio.txAllowed,
+      clockRepair: snapRef.current.radio.clockRepairTxHeld === true,
+      keyerShown: hasKeyerPane && keyerForEnter !== null,
+      pttHeld: keyedRef.current,
+      recording: keyerForEnter?.recording ?? false,
+      radioHasMic: snapRef.current.radio.flexRadioHasMic === true,
+    }),
+    send: ({ keys }: EsmMessage) =>
+      keyerForEnter ? keyerForEnter.play(Number(keys[0].slice(1))) : Promise.resolve(esmInertText('noKeyer')),
+  })
+  // Phone's Esc is App's halt; it is a stop for ESM as well (decision 3).
+  useEscStop(esm.host.on && active, esm.noteStop)
   const hasRigScopePane = shown('rigscope') && (civScope || flexScope)
   const hasReceiverPane = shown('receiver')
   const hasTransmitterPane = shown('transmitter')
@@ -1509,6 +1551,43 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const mainColRef = useRef<HTMLDivElement>(null)
   const auxColRef = useRef<HTMLDivElement>(null)
   const logColRef = useRef<HTMLDivElement>(null)
+  // ⊞ ARRANGE BY DRAG (2026-10-08, the operator's "drag with the mouse"): a pane is picked up by its title and
+  // dropped onto a column, the left side or between two panes, here and in ⊞ Arrange's list; the drop is the
+  // arrows' moves with the arrows' own arguments, so it stores the record they would (panes/PaneDrag). The
+  // places are the columns as this tier draws them, the left side while the window has room for it. PTT, the
+  // dock and the TX strip hold no grip and are no place: a release over them cancels.
+  const sideColRef = useRef<HTMLDivElement>(null)
+  const cockpitRef = useRef<HTMLElement>(null)
+  const dropPane =
+    panels?.dropPane != null ? (id: PhonePanelId, drop: PaneDrop<PhonePanelId>) => panels.dropPane?.(id, drop, paneShown, sideRoom) : undefined
+  const holds = (area: DropArea) => (area === 'side' ? sideGroup.length > 0 : placed3.some((g) => g.col === area && g.ids.length > 0))
+  const paneDrag = usePaneDrag<PhonePanelId>({
+    root: cockpitRef,
+    region: panesRef,
+    enabled: dropPane != null,
+    spec: PHONE_PANELS.arrange!,
+    arrangement: { place, leftSide: panels?.layout.leftSide },
+    shown: paneShown,
+    sideShows: sideRoom,
+    stacked: flow === 'stack',
+    targets: () =>
+      gridTargets(
+        [
+          ...(sideRoom ? [{ el: sideShows ? sideColRef.current : null, areas: ['side'] as const }] : []),
+          ...(cols === 3
+            ? [
+                { el: mainColRef.current, areas: ['a'] as const },
+                { el: auxColRef.current, areas: ['b'] as const },
+              ]
+            : [{ el: mainColRef.current, areas: ['a', 'b'] as const }]),
+          { el: logColRef.current, areas: ['log'] as const },
+        ],
+        holds,
+      ),
+    labels,
+    names: { a: t('panels.arrange.column.a'), b: t('panels.arrange.column.b'), log: t('panels.arrange.column.log'), side: t('panels.arrange.side') },
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
 
   // ── WHAT THIS RIG DRIVES, one boolean per control ────────────────────────────────────
   // Read through `reports`, so each one is "reporting now, or reported at some point this
@@ -1795,6 +1874,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         transmitting={snap.radio.transmitting}
         fdExchange={fdExchange}
         radioHasMic={snap.radio.flexRadioHasMic === true}
+        esm={{
+          lit: esmLitKeys(esm.preview),
+          report: setKeyerForEnter,
+          onStop: esm.noteStop,
+          onPlay: (slot) => esm.noteKey(`F${slot}`),
+        }}
       /> : <p className="dim" role="status">{t('remote.voiceKeyerUnavailable')}</p>}
     </CockpitPaneFrame>
   ) : null
@@ -2373,7 +2458,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   ) : null
 
   const logPane = (
-    <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')} paneId="log">
+    <CockpitPaneFrame
+      title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')}
+      paneId="log"
+      // The contest score chip rides in this head: the strip below has no room left for it.
+      actions={fieldDay ? <ContestScoreChip place="head" fieldDay={fieldDay} /> : undefined}
+    >
       {/* compactRecall died here (2026-07-31). It existed because the pre-overhaul cockpit had
           no interposed scroller: the full recall card's height crushed the operating panes
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
@@ -2381,6 +2471,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           gets the QRZ photo / bearing / history back while operating. */}
       {control ? <LogEntry
         onOpenLogbook={onOpenLogbook}
+        onEntryCall={onEntryCall}
         snap={snap}
         mode={logMode}
         defaultRst="59"
@@ -2394,8 +2485,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         onCallChange={setWorkedCall}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
+        onSnap={onSnap}
         fieldDay={fieldDay}
+        scoreChip={false}
+        active={active}
         fdMode="PH"
+        esm={esm.host}
       /> : <RemoteRecallEntry snap={snap} mode={commandedMode === 'FM' ? 'FM' : 'SSB'} onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
@@ -2460,11 +2555,14 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           .then((s) => onSnap?.(s))
           .catch((e) => pushToast(String(e), 'error'))
       }
-      onStopTx={() => void haltTx()}
+      onStopTx={() => {
+        void haltTx()
+        esm.noteStop()
+      }}
     />
   )
   return (
-    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`}>
+    <main className={`layout single phone-cockpit${quick ? ' remote-quick-contact' : ''}`} ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -2532,6 +2630,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                     labels={labels}
                     sideRoom={sideRoom}
                     onMove={(id, move) => panels.movePane!(id, move, paneShown, sideRoom)}
+                    onDrop={dropPane}
                     // "+ Add a box" only where the window lends them (never the hosted Remote page).
                     onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                     boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -2689,8 +2788,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           setCols={panels.setCols}
           label={t('pane.left.label')}
           widthLabel={t('pane.seam.leftWidth.label')}
+          colRef={sideColRef}
         >
           {sideGroup.map(placedPane)}
+          <PaneDropLayer drag={paneDrag} host={sideColRef} />
         </LeftSide>
       )}
       <div className={sideShows ? 'cockpit-stage' : 'cockpit-flat'}>
@@ -2918,6 +3019,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             widthLabel={t('pane.seam.logWidth.label')}
           />
         )}
+        {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+        <PaneDropLayer drag={paneDrag} host={panesRef} />
       </div>
       {/* the stage */}</div>
       {/* the left side's row */}</div>
@@ -3118,7 +3221,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           // PhoneCockpit.structure.test.tsx.
           title={
             !snap.radio.txAllowed
-              ? 'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
+              ? snap.radio.txRefusal ??
+                'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
               : !snap.radio.txEnabled
                 ? "Transmit is switched OFF, so keying is discarded — Stop TX, the TX watchdog or a logger's Halt Tx turns it off. Click to enable transmit, then hold to talk. You talk on the rig's mic."
                 : "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys). You talk on the rig's mic."
@@ -3138,6 +3242,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           <input disabled={!control} type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
+        {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: AFTER PTT and Lock, and
+            taking only the room left, so nothing it says can move PTT under a held pointer. */}
+        {esmSetting && fieldDay && control && (
+          <EsmPlate
+            on={esmSetting.on}
+            onSwitch={esmSetting.onSwitch}
+            mode={esm.host.state.mode}
+            onToggle={esm.toggle}
+            preview={esm.preview}
+          />
+        )}
       </div>
       </div>
 

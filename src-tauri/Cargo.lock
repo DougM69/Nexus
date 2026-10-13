@@ -5490,7 +5490,7 @@ dependencies = [
 
 [[package]]
 name = "tempo"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "futures-util",
  "gdk",
@@ -5528,6 +5528,7 @@ version = "0.2.0"
 dependencies = [
  "js8",
  "modes",
+ "ring",
  "serde",
  "serde_json",
  "tempo-core",
@@ -5586,9 +5587,11 @@ version = "0.2.0"
 name = "tempo-net"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "socket2",
+ "windows 0.62.2",
 ]
 
 [[package]]

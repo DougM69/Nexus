@@ -2,6 +2,9 @@
 // These shapes MUST match the Rust app-logic layer exactly so the web UI
 // interoperates with the Tempo core over Tauri `invoke`.
 
+import type { EsmRoleMap } from './features/esmRoles'
+import type { MacroSetId } from './features/macroSets'
+
 export type Presence = 'active' | 'idle' | 'stale'
 
 export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR' | 'JS8'
@@ -1458,6 +1461,23 @@ export interface RadioStatus {
    * then ignores, so the voice keyer, APRS and SSTV refuse with a message and key nothing.
    * Absent when false. */
   flexRadioHasMic?: boolean
+  /** While Nexus's own Flex client tunes with the radio's own carrier (Beta, off until a
+   * tester's bench): the radio's tune power and its own transmit timeout, shown beside Tune
+   * (`RadioTuneNote`). Absent on every other station. */
+  flexTune?: FlexTune | null
+  /** Tune is the radio's own carrier here, and the licence refuses it where the radio transmits
+   * (judged as CW there too) though it allows the mode's own emission: Tune keys nothing, and the
+   * note beside it says why. Absent when false. */
+  flexTuneRefused?: boolean
+  /** While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
+   * and the radio reports a tuner fitted: the radio's tune power and transmit timeout, as beside
+   * Tune, and the ATU line (a cycle's result, or why a press started none), shown beside the ATU
+   * (`RadioTuneNote`). Absent on every other station. */
+  flexAtu?: FlexAtu | null
+  /** The ATU is the client's here, and the licence refuses its carrier where the radio transmits
+   * (judged as CW there too) though it allows the mode's own emission: ATU keys nothing, and the
+   * note beside it says why. Absent when false. */
+  flexAtuRefused?: boolean
   /** The Flex VITA **meter** worker is running — on a Flex the only producer of a
    * FlexLib-scaled SWR. Observed from the worker, never read from `flexNativePan` (the toggle
    * stands with no radio address, or with a start that failed). Read it WITH
@@ -1511,6 +1531,10 @@ export interface RadioStatus {
   /** Whether the operator's license class permits TX at the current dial+mode. False = TX
    * hard-blocked (outside privileges); the cockpit shows a lock indicator. */
   txAllowed: boolean
+  /** Why the radio's CAT connection refuses every transmission, when it does (the Icom network
+   *  connection is receive and control only in its Beta). `txAllowed` is false with it; name this
+   *  reason rather than the licence's. */
+  txRefusal?: string | null
   /** The dial the next over would be EMITTED on — the confirmed split TX frequency when the rig
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */
@@ -1582,8 +1606,13 @@ export interface RadioStatus {
   /** Rig split TX dial (MHz) when a pile-up spot configured split; null/absent =
    * simplex. Drives the SPLIT badge. */
   splitTxMhz?: number | null
-  /** Set when the sound card failed to open (explains a blank waterfall). */
+  /** The station's audio-error line: a sound card that failed, a PTT the rig did not accept, a
+   *  headphone monitor held off … The sentence is shown whole, as data. */
   audioError?: string | null
+  /** Which kind of problem `audioError` is (mirror of the Rust AudioErrorKind). Absent while there
+   *  is none, and from a station older than the field. The words are the UI's, in
+   *  features/audioError.ts. */
+  audioErrorKind?: AudioErrorKind | null
   /** Why this station is NOT sharing its radio: the CAT broker asked for its port and was
    *  refused (#165). Absent/null = it is serving, or sharing is switched off. The share block
    *  renders this INSTEAD of the address, because with the bind refused that address is one
@@ -2597,10 +2626,11 @@ export interface NeedAlert {
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */
   gridRarity?: GridRarity | null
-  /** The park or summit this row is an ACTIVATION of, when it is one. Working the row sets the
-   *  hunt target with it — the way HUNT and a map double-click do — so the contact it leads to is
-   *  logged with the reference. Absent/null on every other need: a row that names no activation
-   *  must never tag one. */
+  /** The park or summit this row is an ACTIVATION of, when it is one, so the contact working the
+   *  row leads to is logged with the reference: the Phone or CW log line the Work opens fills it
+   *  with the call, and a row that opens none sets the hunt target with it, the way HUNT and a map
+   *  double-click do. Absent/null on every other need: a row that names no activation must never
+   *  tag one. */
   park?: { program: string; reference: string } | null
   /** Where the US state this row was scored in came from, when it had one: the park or summit the
    *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
@@ -2724,6 +2754,15 @@ export interface PointedAt {
   country: string | null
 }
 
+/** What `rotator_bearing_to_call` answers for a call, without turning anything: what a short-path
+ *  point at it answers (`pointed`, the same resolver), and the great-circle distance to the same
+ *  point in km. When there is no bearing it refuses with a code instead: `noGrid` (the operator's
+ *  own grid is not set) or `unknownStation` (nothing places the station). */
+export interface CallBearing {
+  pointed: PointedAt
+  km: number
+}
+
 /** Result of a QRZ Logbook push (one-QSO upload). `result` is the outcome tag;
  *  `duplicate` is the benign "already in your QRZ logbook". */
 export interface QrzPushResult {
@@ -2785,6 +2824,40 @@ export interface AssistanceEvent {
   sources: AssistanceSourceState[]
   /** What happened ('UNASSISTED entry declared by the operator', 'Nexus started', …). */
   note: string
+}
+
+/** What Nexus holds of the Super Check Partial list (`tempo_app::scp::ScpMeta`). */
+export interface ScpStatus {
+  etag?: string | null
+  lastModified?: string | null
+  /** When the list in use was downloaded (Unix seconds; 0 = never). */
+  fetchedAt: number
+  /** When Nexus last asked the site, whatever the answer (0 = never). */
+  checkedAt: number
+  /** No automatic check before this. */
+  nextCheckAt: number
+  /** Calls in the list in use (0 = no list yet). */
+  count: number
+  /** Why the last check failed, until one succeeds. The list in use is kept. */
+  lastError?: string | null
+}
+
+/** What was imported as call history (`tempo_app::call_history::HistoryMeta`). */
+export interface CallHistoryStatus {
+  fileName: string
+  /** The contest it is for: a `FieldDayStatus.event` id. */
+  contest: string
+  importedAt: number
+  count: number
+  /** Its N1MM columns, in file order. */
+  fields: string[]
+}
+
+/** The imported call history as the strip reads it: call → N1MM column → value. */
+export interface CallHistoryFile {
+  contest: string
+  fileName: string
+  entries: Record<string, Record<string, string>>
 }
 
 /** Per-connector status: whether a credential is stored, and — the part the dot is painted
@@ -3250,8 +3323,15 @@ export interface FieldDayStatus {
   poweredPoints?: number
   /** Claimed bonus points. */
   bonusPoints?: number
-  /** poweredPoints + bonusPoints. */
+  /** The claimed total: poweredPoints + bonusPoints, or, for a contest that scores by
+   *  objectives (Winter Field Day), QSO points × (objectiveMultiplier + 1). */
   totalScore?: number
+  /** The objective multiplier (OM) the ticked objectives earn — present only for a contest
+   *  that scores by objectives (Winter Field Day). */
+  objectiveMultiplier?: number
+  /** `false` when this contest gives a satellite contact no credit (Winter Field Day 2027): a
+   *  row with a `sat` then counts for nothing and is no dupe of anything. Absent otherwise. */
+  satelliteCredit?: boolean
   /** The active-or-next occurrence of this event's window (Unix UTC), computed in Rust
    *  from the ruleset data — the single source the banner/countdown reads (the old TS
    *  date math hardcoded 24 h and dropped WFD's final six hours). */
@@ -3300,6 +3380,16 @@ export interface FieldDayStatus {
    *  it is also the "I moved" edit surface, and committing a live serial through `move_to`
    *  freezes the run at that number. */
   composingText?: string
+  /** The same exchange as a PHONE contact sends it: the report at two digits (`'59 MCHE'` where
+   *  `composingText` reads `'599 MCHE'`), as the engine stamps a phone row. What the phone
+   *  cockpit's Give line and a phone strip's Sending line read. Absent from an older station and
+   *  from the hosted page (which is not sent it yet): read `composingText` then. */
+  composingTextPhone?: string
+  /** ⭐ The Cabrillo header lines this contest's sponsor requires that the file exported now
+   *  would leave out (`'CATEGORY-POWER'`…), in the ruleset's order — read in Rust off the header
+   *  the export writes. Names, not prose: the Contest screen words each one. Absent when nothing
+   *  is missing, for a contest whose requirements this build does not read, and on Remote. */
+  cabrilloMissing?: string[]
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
@@ -3328,6 +3418,10 @@ export interface FieldDayStatus {
   role?: string
   /** One block per multiplier board — the generalised worked-sections display. */
   boards?: ContestBoard[]
+  /** The contacts in this computer's contest journal this session did not load: another
+   *  contest's, and another running of this one's (a rehearsal before it). They stay in the
+   *  journal, untouched. Absent when nothing was kept out, and from an older station. */
+  keptOut?: { otherContest: number; otherRunning: number }
 }
 
 /** One exchange slot, as the entry strip renders a box for it.
@@ -3358,6 +3452,10 @@ export interface ContestFieldSpec {
    *  it has one. It says what a slot MEANS without the UI guessing from a slot id — the
    *  zone hint is offered on the slot tagged `CQZ`. */
   adif?: string
+  /** The rules file's own word for this slot, the on-air label that introduces it (`NAME` in
+   *  "NAME ALEX"), when it declares one. A box shows it in place of the words the strip derives
+   *  (`receivedCaption`). Absent for a positional slot, which is every slot shipped today. */
+  label?: string
 }
 
 /** One copied exchange value. */
@@ -3435,6 +3533,89 @@ export interface FdClubBoardRow {
   /** Seconds since the host last heard from it — stale-mark past 15 s
    *  (readings are never silently stale). */
   lastSeenSecs: number
+  /** That position's clock minus the host's, in ms, as it measured it over the club link
+   *  and reported it to the host. Filled on the HOST's board only (the board's Clock column);
+   *  absent on a position's, for a position that has not measured one, and from a station
+   *  older than the field. Shown, never applied. */
+  clockMs?: number | null
+  /** Where this position's link stands, as the HOST's own screen says it
+   *  (`fdevent::PositionLink`): `host` is the host's own position. On the host's board only:
+   *  absent on a position's, and Remote's copy leaves it out. */
+  link?: 'host' | 'connected' | 'reconnecting' | 'lost' | 'removed'
+  /** Seconds since the host last heard this position on its own socket, beside `link`; absent
+   *  when this run of the host has not heard it (a position from before a restart). */
+  heardSecs?: number
+}
+
+/** This laptop's club link (`ClubLinkDto`): where its join stands and, on the host, its hosting
+ *  line. Shown in Settings' club section and on the Contest screen whatever the Field Day mode
+ *  switch says (the words are `features/clubLink.ts`). This laptop's screen only: Remote's
+ *  snapshot leaves it out. */
+export interface ClubLink {
+  role: 'host' | 'position'
+  /** The address this laptop's position joins, with the port it uses. */
+  addr: string
+  state: 'looking' | 'joined' | 'turnedAway' | 'unreachable' | 'lost'
+  /** Why the last attempt did not reach the host, in 'unreachable' and in 'lost' once one has. */
+  why?: 'badAddress' | 'refused' | 'noAnswer'
+  /** The host's own words, in 'turnedAway'. */
+  told?: string
+  /** When the link went down (unix seconds), in 'lost'; 0 otherwise. */
+  downSinceUnix: number
+  event: string
+  hostCall: string
+  /** This laptop's position, by the name the host's board shows it under. */
+  position: string
+  clubCode: string
+  hosting?: ClubHosting
+  /** A position's link to its host in the host board's words, once it has been in the event at
+   *  this address; absent before then and while turned away (the state and the host's words say
+   *  why), and on the host. */
+  status?: 'connected' | 'reconnecting' | 'lost'
+  /** Seconds since this laptop last heard its host, beside `status`. */
+  heardSecs?: number
+}
+
+/** The host's line: whether the club is open, where a position joins it, and who is in. */
+export interface ClubHosting {
+  up: boolean
+  port: number
+  /** Each of this laptop's network addresses with the port, and the adapter it is on. */
+  addrs: { addr: string; adapter: string }[]
+  /** Other positions connected now (this laptop's own is left out): the host board's rows that
+   *  read Connected. */
+  connected: number
+  failed?: 'start' | 'portInUse' | 'port'
+  detail?: string
+}
+
+/** Where Nexus's club sync rules stand in Windows Firewall on this laptop
+ *  (`tempo_net::fdfirewall::Status`, `club_firewall_status`); the words are
+ *  `features/clubFirewall.ts`. */
+export interface ClubFirewall {
+  /** `off`: the firewall is off for Private and Public networks, so there is nothing to allow.
+   *  `missing`: none of Nexus's rules is there. `stale`: some are, not as a press would make them
+   *  now (another port, another copy of Nexus). `inPlace`: all three are. */
+  state: 'off' | 'missing' | 'stale' | 'inPlace'
+  /** A rule of Nexus's is there, so there is something to remove. */
+  ours: boolean
+  /** Windows' own rule blocks Nexus on that kind of network, and a block wins over every allow. */
+  blockedPrivate: boolean
+  blockedPublic: boolean
+  /** The firewall blocks every incoming connection on that kind of network. */
+  blocksAllPrivate: boolean
+  blocksAllPublic: boolean
+  /** The ports Nexus's rules are for: the Host port, Find club events', the scoreboard's. */
+  hostPort: number
+  searchPort: number
+  boardPort: number
+}
+
+/** What a press of Allow Nexus through Windows Firewall, or of its Remove, did: whether the
+ *  command ran and exited 0, and the firewall read back afterwards (`null` when unreadable). */
+export interface ClubFirewallPress {
+  ran: boolean
+  status: ClubFirewall | null
 }
 
 /** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
@@ -3454,7 +3635,9 @@ export interface FdClubStatus {
   score: number
   qsos: number
   sections: number
-  /** Local minus host clock (secs) — warn past ±30 s, never adjusted. */
+  /** This PC's clock minus the host's, whole seconds — measured over the club link (the
+   *  welcome's coarse value until the first round trip, or from an older host). The club
+   *  line says it from 2 s and warns past 30 s; never adjusted. */
   skewSecs: number
   /** The last host error line, verbatim (version refusal etc.). */
   lastError?: string | null
@@ -3471,6 +3654,24 @@ export interface FdClubStatus {
    *  Absent on a build older than the field. */
   dkeys?: string[][]
   board: FdClubBoardRow[]
+  /** The HOST's alone, from the moment its board is as big as one club line carries: how
+   *  many positions it has, and how many of them each position's board shows (`shown`
+   *  below `positions` = already cut to the ones heard from most recently). */
+  boardFull?: { positions: number; shown: number }
+  /** The HOST's alone: laptops it turned away, and the sentence each was sent. `handle` only on
+   *  an entry for a laptop turned away because another laptop holds its position: the number
+   *  the host's Give button sends back (`fdClubGivePosition`), never a key. `clubCode` is the
+   *  code that laptop's own screen shows (absent for a JOIN with no key): the one thing on the
+   *  entry the laptop cannot choose. Neither reaches Remote. */
+  refused?: { posName: string; call: string; reason: string; handle?: number; clubCode?: string }[]
+  /** The HOST's alone, for the rest of the event: how many contacts it kept out of the club's
+   *  log, and the newest of them (at most 16), each with the position that sent it (its name
+   *  and call) and the sentence saying why. Each stays in that position's own log. */
+  keptOut?: { total: number; latest: { posName: string; call: string; reason: string }[] }
+  /** This laptop's own club code, for its club line: what the host compares with the code on
+   *  its turned-away list before it gives this laptop a position. Absent with no club key, and
+   *  never on Remote. */
+  clubCode?: string
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */
@@ -3509,6 +3710,18 @@ export interface KeyboardMacroProfile {
 }
 
 /** Persistent operator + radio settings. */
+/** The seven settings a contest weekend changes, as they were before it changed them (Rust
+ *  `ContestBefore`). Each field is the Settings field of the same name. */
+export interface ContestBefore {
+  mycall: string
+  fdOperator: string
+  fdPositionName: string
+  contestCategoryOperator: string
+  contestEntryClass: string
+  contestCategoryPower: string
+  unassistedMode: boolean
+}
+
 export interface Settings {
   mycall: string
   mygrid: string
@@ -3711,6 +3924,14 @@ export interface Settings {
    * keep the operator's own values, so ending it restores their station exactly. Default false;
    * only the operator's toggle sets it. */
   unassistedMode?: boolean
+  /** Super Check Partial in the contest strip. Default true: the list downloads the first time a
+   *  contest starts. Unassisted mode overrides it. */
+  scpEnabled?: boolean
+  /** The once-a-day check for a newer Super Check Partial list. Default true. */
+  scpAutoUpdate?: boolean
+  /** Fill the contest strip's exchange from the imported call history. Default true. Unassisted
+   *  mode overrides it. */
+  callHistoryEnabled?: boolean
   /** Amateur license class: 'technician' | 'general' | 'extra' | 'open' (no TX limits). */
   licenseClass: string
   /** Active operating mode ('digital' | 'phone' | 'cw') — set live via the section nav, but
@@ -3718,6 +3939,9 @@ export interface Settings {
   operatingMode?: string
   /** Phone voice-keyer slots — declared so a settings Save round-trips them (don't wipe). */
   voiceMessages?: VoiceMessage[]
+  /** ENTER SENDS MESSAGE on the voice keyer: the slots the operator mapped to ESM's steps, over
+   * the built-in slot convention. Absent = the convention as it is. */
+  voiceEsmRoles?: EsmRoleMap
   // --- rig control ---
   /** PTT keying method: CAT (rigctld) / serial RTS / serial DTR / VOX. */
   pttMethod: string
@@ -3874,6 +4098,12 @@ export interface Settings {
   /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
    *  stays the default and the fallback. */
   flexNativeCat?: boolean
+  /** The radio's own address for the Icom network connection (Beta): its "IP Address (LAN)". */
+  icomLanHost?: string
+  /** The network user the radio was set up with. Not secret; the password is in the OS keychain. */
+  icomLanUser?: string
+  /** The radio's control port (UDP), 50001 unless moved on the radio. */
+  icomLanPort?: number
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
@@ -4035,6 +4265,26 @@ export interface Settings {
   /** More Cabrillo `OPERATORS`, typed (calls separated by spaces or commas). The header lists
    *  the operators the contacts were stamped with (`fdOperator`), then these. */
   contestOperators?: string
+  /** Cabrillo `CATEGORY-TRANSMITTER`, a multi-operator entry's class: one of the selected
+   *  contest's own (`FdRulesetDto.transmitterCategories`), '' = undeclared. Written only for a
+   *  MULTI-OP entry, with the OPERATORS line. */
+  contestCategoryTransmitter?: string
+  /** Cabrillo `CATEGORY-OVERLAY`: one of the selected contest's own overlays
+   *  (`FdRulesetDto.overlayCategories`), '' = undeclared. */
+  contestCategoryOverlay?: string
+  /** The mailing address the Cabrillo ADDRESS lines carry, for a contest whose template names
+   *  them: the street lines, one per line, then its four parts. Withheld from Remote. */
+  contestAddress?: string
+  contestAddressCity?: string
+  contestAddressState?: string
+  contestAddressPostalcode?: string
+  contestAddressCountry?: string
+  /** Cabrillo `SOAPBOX`, as typed, for a contest whose template has one. */
+  contestSoapbox?: string
+  /** Cabrillo `CATEGORY-BAND`: `ALL`, or the one band a single-band entry is entered on, from the
+   *  selected contest's own list (`FdRulesetDto.bandCategories`), '' = undeclared. Written only
+   *  when it is one of them. A declaration, never read off the log. */
+  contestCategoryBand?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else
@@ -4057,6 +4307,16 @@ export interface Settings {
   /** The power I SEND as an exchange field (ARRL DX: `KW`, `500`, `5`) — free text, and
    *  ⚠️ not `fdPowerMult`, which is a scoring tier picked from a legal set. */
   contestPower?: string
+  /** ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
+   *  message. OFF by default, and only the operator's own switch turns it on. */
+  contestEsmCw?: boolean
+  /** The same for the RTTY cockpit's contest strip. OFF by default. */
+  contestEsmRtty?: boolean
+  /** The same for the Phone cockpit's contest strip, through the voice keyer. OFF by default. */
+  contestEsmPhone?: boolean
+  /** ESM's "call once" in Search and Pounce: my call goes once per station, and the next Enter
+   *  asks for a repeat. OFF by default. */
+  contestEsmCallOnce?: boolean
   /** FD power multiplier tier: 5 QRP-battery, 2 <=100W, 1 >100W. */
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */
@@ -4064,6 +4324,11 @@ export interface Settings {
   /** PLANNED FD bonus ids — the club's intent, never the score. `fdBonuses` above stays
    *  the EARNED set scoring reads; nothing on any scoring path reads this one. */
   fdBonusesPlanned?: string[]
+  /** Ticked OBJECTIVE ids — Winter Field Day's completed objectives, what its claimed score
+   *  multiplies by. Its own list: a bonus adds points, an objective multiplies them. */
+  fdObjectives?: string[]
+  /** PLANNED objective ids — the club's intent; nothing that scores reads this one. */
+  fdObjectivesPlanned?: string[]
   /** Host a Nexus↔Nexus club event: while on, the sync listener binds the LAN
    * (this toggle IS the opt-in — data-plane only) + a discovery beacon runs. */
   fdHostEnable?: boolean
@@ -4079,6 +4344,10 @@ export interface Settings {
   /** Persistent 8-hex club-sync position id (generated at startup; no UI edit —
    * QSO ids are (posid, seq), so a changed id re-pushes everything as new). */
   fdPositionId?: string
+  /** ⭐ The station as it was before the contest changed it, or null when no contest has changed it
+   *  since the last one ended — what the contest-over checklist offers back. The ENGINE's
+   *  (`engine/contest_before.rs`): a Settings save never writes or clears it. */
+  contestBefore?: ContestBefore | null
   /** Serve the read-only spectator scoreboard page on the LAN (this toggle IS
    * the opt-in; real data only in the host role). Default off. */
   fdScoreboard?: boolean
@@ -4191,7 +4460,8 @@ export interface Settings {
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */
   alertCq: boolean
-  /** Alert when a station not heard before this session appears. */
+  /** The decode alert for a new DXCC, a new grid or a rare grid 💎: its sound and its pop-up
+   *  (`processDecodes`, alerts.ts). Its own switch in Settings; the boards never read it. */
   alertNew: boolean
   /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
    *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
@@ -4206,7 +4476,8 @@ export interface Settings {
    *  confirmations and the alerts out of the corner (`popsUpWhenOff` in toast.ts says what stays).
    *  Optional: a station without the field, or the Remote page, which is never sent it, is ON. */
   popupNotifications?: boolean
-  /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
+  /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
+   *  follow it, and so does the alert while `alertNew` is on. */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */
   alertGridBands: string
@@ -4345,8 +4616,9 @@ export interface Settings {
      * (a "Default" profile) on load. New reads/writes go through the profiles. */
     cw?: { key: string; label: string; text: string }[]
     /** Named CW cockpit F-key macro sets (one per operator/purpose). Each profile's
-     * empty macro list = the cockpit's built-in defaults. */
-    cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[] }[]
+     * empty macro list = the cockpit's built-in defaults. `esmRoles` — which of the set's keys
+     * Enter Sends Message sends for each step, as the operator mapped them; absent = none. */
+    cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
     /** Index into `cwProfiles` of the active set. */
     activeCwProfile?: number
     /** The RTTY cockpit's F1–F8 sets by name (`everyday`, `contest`), each holding ONLY the keys
@@ -4355,6 +4627,10 @@ export interface Settings {
     rttyProfiles?: KeyboardMacroProfile[]
     /** The RTTY set the cockpit shows: `contest`, or Everyday for anything else. */
     activeRttyProfile?: string
+    /** ENTER SENDS MESSAGE on the RTTY sets, by set id: the steps the operator mapped to that
+     * set's keys, over the contest set's built-in layout. Written by the Settings form (the
+     * cockpit's `setRttyMacros` leaves it as it is); absent = nothing mapped. */
+    rttyEsmRoles?: Partial<Record<MacroSetId, EsmRoleMap>>
     /** The PSK cockpit's F1–F8 sets, exactly as `rttyProfiles` above — and SEPARATE STORAGE on
      * purpose: the two modes' built-in texts differ (PSK is mixed-case full ASCII), so one
      * shared field would make an edit in one cockpit rewrite the other's keys. Written only by
@@ -4480,6 +4756,10 @@ export interface RadioProfile {
   flexNativeAudio?: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
   flexNativeCat?: boolean
+  /** This radio's Icom network address, user and control port (Beta). */
+  icomLanHost?: string
+  icomLanUser?: string
+  icomLanPort?: number
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured
@@ -4524,6 +4804,9 @@ export interface AppSnapshot {
   activePeer: string | null
   qso: QsoStatus | null
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link, whatever the Field Day mode switch says; absent while club sync
+   *  does not run. */
+  clubLink?: ClubLink | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
@@ -4542,10 +4825,14 @@ export interface AppSnapshot {
   /** Bumped each time a spot is worked — App navigates to `workView`'s cockpit
    * on change (lets a pop-out window's click land the main window there). */
   workTick?: number
-  /** The last worked spot's mode: 'digital' | 'phone' | 'cw'. */
+  /** The section the last Work told `work_spot` ('digital', 'phone', 'cw', 'rtty', 'keyboard' for
+   *  PSK, 'js8'): App opens the screen it names (`workHintView`). */
   workView?: string | null
   /** The last worked spot's callsign — a pop-out window's click prefills the log Call from this. */
   workCall?: string | null
+  /** The park or summit of the last worked spot, when a Needed row named one: the log line fills it
+   *  with `workCall`. Never a hunt. Absent when there is none. */
+  workPark?: { program: string; reference: string } | null
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */
@@ -4603,6 +4890,72 @@ export interface AppSnapshot {
   /** The transmitter alarms the operator has not dismissed, oldest first (dismiss_tx_alarm).
    *  Absent while there are none, and from a station older than the alarm. */
   txAlarms?: TxAlarm[]
+  /** The contest strip's contact in progress, the same in the main window and the contest
+   *  logger window while that window is open. Absent while it is closed, from the Remote (which
+   *  never receives it), and from a station older than the logger window. */
+  contestEntry?: ContestEntryShared
+  /** The CQ the contest's Running calls, as it goes on the air ("CQ FD K1ABC FN42"), while a
+   *  contest runs whose own FT8/FT4 messages apply and that WSJT-X has an activity for, for a
+   *  standard call (`Engine::contest_running_cq`): the Tx6 row shows it then and calls it through
+   *  the contest's Running, as Call CQ does. Absent everywhere else, from the Remote (which never
+   *  receives it), and from an older station. */
+  contestCq?: string
+  /** A contest runs whose Running calls the CQ typed in the Tx6 row, where WSJT-X has no activity
+   *  for it (`Engine::contest_cq_typed`): the row stays the operator's, and Tx 6 and Call CQ hand
+   *  its direction to that Running. Absent everywhere else, from the Remote, and from an older
+   *  station. */
+  contestCqTyped?: boolean
+}
+
+/** The contest strip's contact in progress, shared by the main window and the contest logger
+ *  window (the engine's `contest_entry.rs`; the strip's half is `features/contestEntryShare.ts`). */
+export interface ContestEntryShared {
+  /** Bumped by every change: a window shows the entry as of this rev. */
+  rev: number
+  /** The Call box, as typed. */
+  call: string
+  /** The received boxes by slot id, as typed. A box nobody has touched is absent. */
+  fields: Record<string, string>
+  /** The strip's marks (the call-history fill, the take-back line): kept by the engine, read only
+   *  by `features/contestEntryShare.ts`. */
+  marks: unknown
+}
+
+/** What a FlexRadio reports about its own tune carrier (mirror of the Rust FlexTune,
+ *  `RadioStatus.flexTune`). Read and shown; Nexus writes neither. */
+export interface FlexTune {
+  /** The radio's tune power, 0–100 %, as SmartSDR sets it; null until the radio reports it. */
+  powerPct?: number | null
+  /** The radio's own transmit timeout in milliseconds, 0 when it is off; null until reported. */
+  txTimeoutMs?: number | null
+}
+
+/** Which kind of problem the station's audio-error line reports (mirror of the Rust
+ *  AudioErrorKind, by its wire names). The words and the tier are the UI's, in
+ *  features/audioError.ts. */
+export type AudioErrorKind =
+  | 'engineStopped'
+  | 'soundCard'
+  | 'noReceiveAudio'
+  | 'ptt'
+  | 'flexAudio'
+  | 'flexAddress'
+  | 'monitor'
+  | 'voiceMic'
+  | 'recording'
+  | 'decodeCrash'
+
+/** What is shown beside the ATU while Nexus's Flex client runs a FlexRadio's own tuner (mirror of
+ *  the Rust FlexAtu, `RadioStatus.flexAtu`). Read and shown; Nexus writes none of it. */
+export interface FlexAtu {
+  /** The radio's tune power and transmit timeout, as beside Tune. */
+  tune: FlexTune
+  /** The radio's ATU status in its own word (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …): data, never
+   *  translated. Null until the radio reports one. */
+  status?: string | null
+  /** Why the last ATU press started no cycle, in the station's words (the radio's refusal with its
+   *  code, or the client's): data, shown as it is. Null once a press goes out. */
+  refused?: string | null
 }
 
 /** A slot over's key the radio did not accept (mirror of the Rust SlotKeyRefused). The words are

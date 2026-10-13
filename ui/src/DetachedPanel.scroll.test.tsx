@@ -43,6 +43,12 @@ import { resolve } from 'node:path'
 import { DetachedPanel } from './DetachedPanel'
 import type { AppSnapshot } from './types'
 
+// THE BUDGET (2026-10-09). The slowest case without a budget of its own, "has exactly ONE scroll owner, and it is the
+// board itself", takes 0.79 s and 0.75 s on one core (two runs), nearly all of it CPU work (2.96 s at a third of a
+// CPU); a loaded full suite on this box has run cases up to 20 times slower than one core, 15.1 s for this one. 20 s
+// holds that; a test that hangs still fails, after 20 s.
+vi.setConfig({ testTimeout: 20_000 })
+
 // The snapshot every branch polls for. Read through a global rather than closed over,
 // because vi.mock factories are hoisted above this module's own initialisation.
 const SNAP = {
@@ -116,6 +122,10 @@ vi.mock('./api', async () => {
     return () => {}
   })
   out.getBandPlan = vi.fn().mockResolvedValue([])
+  // The contest logger window draws the whole contest screen, whose Removed list is a list, and
+  // so is its offer of the journal's contacts the logbook does not hold.
+  out.contestRemoved = vi.fn().mockResolvedValue([])
+  out.contestUnmerged = vi.fn().mockResolvedValue([])
   out.getNeedAlerts = vi.fn().mockResolvedValue([])
   out.getAllSpots = vi.fn().mockResolvedValue([])
   out.parksCount = vi.fn().mockResolvedValue(0)
@@ -375,11 +385,14 @@ describe('every pop-out the shell can host', () => {
   // has an arm for each. Kept whole rather than sampled: this bug reached a shipped beta
   // because one arm was reasoned about in isolation.
   const PANELS = [
-    'needed', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub',
-    'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
+    'needed', 'memories', 'connect', 'dxped', 'sats', 'pota', 'fieldday', 'fdclub', 'contestlog',
+    'contestscreen', 'operate', 'operatemap', 'bandmapPhone', 'bandmapCw', 'waterfall',
   ]
 
-  it('never clips its content with no scroller interposed', async () => {
+  // ONE TEST PER POP-OUT, each with its own time budget: one test that mounted all of them under a single 60 s budget
+  // grew past it under load as pop-outs were added. Every pop-out still runs and reports on its own, so a failure
+  // still names every offender, and the passes show everything that was already safe.
+  it.each(PANELS)('%s never clips its content with no scroller interposed', async (panel) => {
     // THE CONTRACT SENTENCE, applied to the detached host: an `overflow: hidden` ancestor may
     // never contain hard-floored descendants without an interposed scroller. A pop-out's
     // content root is the box that holds the whole surface, so if IT clips, whatever the
@@ -392,27 +405,79 @@ describe('every pop-out the shell can host', () => {
     // fixed frequency/canvas surfaces with nothing to scroll — and the check must not demand
     // one of them.
     //
-    // Collected, not asserted panel by panel, so a failure names EVERY offender and also
-    // everything that was already safe; a guard that stops at the first cannot show it is
-    // distinguishing anything.
     const trapped: string[] = []
-    for (const panel of PANELS) {
-      const { roots } = await mountPopout(panel)
-      for (const root of roots) {
-        if (escapes(overflowY(root))) continue
-        if (scrolls(overflowY(root))) continue
-        const inner = scrollOwners([root])
-        if (inner.length === 0) {
-          trapped.push(`${panel}: ${name(root)} {overflow-y:${overflowY(root)}} holds no scroller`)
-        }
+    const { roots } = await mountPopout(panel)
+    for (const root of roots) {
+      if (escapes(overflowY(root))) continue
+      if (scrolls(overflowY(root))) continue
+      const inner = scrollOwners([root])
+      if (inner.length === 0) {
+        trapped.push(`${panel}: ${name(root)} {overflow-y:${overflowY(root)}} holds no scroller`)
       }
-      cleanup()
     }
+    cleanup()
     expect(
       trapped,
       'These pop-outs clip their own content with nothing between the clip and the content. ' +
         'Whatever the surface cannot shrink is off the bottom of the window with no way to ' +
         `reach it:\n  ${trapped.join('\n  ')}\n`,
     ).toEqual([])
-  }, 60_000)
+  }, 30_000)
+})
+
+// ── 3. the contest logger window: the log line first and never scrolled, the rest giving way ──
+
+/** The value of `prop` that actually applies to `el`, by the same cascade as `overflowY` above,
+ *  over that one property: the rules sizing the logger window write `flex` as the shorthand and
+ *  `min-height` as itself. */
+function declOf(el: Element, prop: string): string {
+  let win: Cand | null = null
+  for (const { rule, order } of FLAT) {
+    let hit = false
+    try {
+      hit = el.matches(rule.selectorText)
+    } catch {
+      continue
+    }
+    const value = hit ? rule.style.getPropertyValue(prop).trim() : ''
+    if (!value) continue
+    const cand: Cand = {
+      prop,
+      value,
+      important: rule.style.getPropertyPriority(prop) === 'important',
+      spec: specificity(rule.selectorText),
+      order,
+    }
+    if (better(cand, win)) win = cand
+  }
+  return win ? (win as Cand).value : ''
+}
+
+describe('the contest logger window', () => {
+  it('puts the log line first and never scrolls it; the last contacts and the screen give way under it', async () => {
+    const { app, roots } = await mountPopout('contestlog')
+    const [line, recent, screenBox] = roots
+    expect(roots.map(name), 'the log line, the last contacts, then the contest screen').toEqual([
+      'section.contest-logger-entry',
+      'section.contest-logger-recent',
+      'main.layout.single',
+    ])
+    // The line is a control strip: content height, never grown, never shrunk away…
+    expect(declOf(line, 'flex')).toBe('0 0 auto')
+    // …and nothing between the Log button and the window clips it or scrolls it out of view.
+    const log = line.querySelector('.le-fd-log-btn')!
+    expect(deficitFate(log, app).fate).toBe('none')
+    // The last contacts give way before the line does, scrolling inside their own box, down to a
+    // floor that yields to a short window rather than leaving a sliver of a scroller.
+    expect(declOf(recent, 'flex')).toBe('0 1 auto')
+    expect(overflowY(recent)).toBe('auto')
+    expect(declOf(recent, 'min-height')).toBe('min(8em, 25%)')
+    // The screen gives way first, down to a floor of its own (over `.layout`'s 0), and its deficit
+    // has its valve: its panel scrolls, exactly as it does docked.
+    expect(declOf(screenBox, 'min-height')).toBe('min(9em, 30%)')
+    const panel = screenBox.querySelector(':scope > section.panel.fieldday')!
+    expect(overflowY(panel)).toBe('auto')
+    // Control: the same walk from a row of the screen's log meets the panel's scroller.
+    expect(deficitFate(panel.querySelector('.fd-log-head')!, app).fate).toBe('scroll')
+  })
 })

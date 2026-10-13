@@ -50,6 +50,14 @@
    `boxesOnOneLine: false`, `stripH 204` — so these are a measurement, not a page that
    stopped laying out.
 
+  REMOVE LAST (2026-10-09, the button beside Clear that removes the newest contact):
+   Its width comes out of the Call box, and nothing else moves. Header variant, with the
+   current styles.css, measured with and without the button:
+     • 1024, 2 fields   stripH 130 → 130   callW 506.7 → 385.3   overflow 0   one line
+     • 1024, 5 fields   stripH 200 → 200   callW 278 → 278       overflow 0   one line
+     • 1366 and 1920    stripH 130 → 130   at both field counts, overflow 0
+   The six-field control still reports `boxesOnOneLine: false`, `stripH 204`.
+
   THE EXCHANGE TYPE-AHEAD's DROPDOWN (2026-09-17, the county type-ahead):
    The list hangs off the last exchange box and this dock is BOTTOM-ANCHORED, so the
    only question is which way it may open. Measured with the strip pinned to the bottom
@@ -61,6 +69,16 @@
      • NEGATIVE CONTROL, the same list opening DOWNWARD (what the sheet would do without
        `bottom: calc(100% + 2px)`): top 756, bottom 894 in a 768 px window —
        `fullyInView: false`. The check can fail, so the trues above are evidence.
+
+  THE SCORE CHIP (2026-10-10, `.le-fd-score`, in the header between the hint and the sent block):
+   a ZERO-COST slot (basis 0, no shrink weight, its gap cancelled by a negative margin), so every
+   other item in the header lays out exactly as without it. Measured on a scratch copy of this
+   header at strip widths 420–1920 px, text scale 1 / 1.12 / 1.25 / 1.5, with the sent block shown
+   and with "I moved" open: stripH, headerH, overflow, the hint's lines and box and the sent block's
+   box were identical with and without it in all 120 cases. CONTROL: the same text as an ordinary
+   item (`.le-fd-mode`'s face, default flex) moved one of them in 85 of the 120. It shows only in
+   room the row has left (whole from about 1040 px of strip at Normal text), so the cockpits that
+   frame this strip in a Log pane carry the chip in that pane's head instead (`.contest-score-chip`).
 -->
 <body>
 <div class="app" style="display:block">
@@ -70,6 +88,7 @@
       <span class="le-fd-chip">FD LOG</span>
       <span class="le-fd-mode">PH</span>
       <span class="le-fd-hint">20m · contacts go to the Field Day log</span>
+      <span class="le-fd-score"><span class="le-fd-score-val">ILQP · 212 pts · 48 Q · 19 mults · 41/hr</span></span>
       <div class="le-fd-sent">
         <span class="le-fd-sent-cap">Sending<span class="le-fd-role"> in_state</span></span>
         <span class="mono le-fd-sent-val">3A WI</span>
@@ -84,6 +103,7 @@
       <div id="boxes"></div>
       <button class="le-log-btn le-fd-log-btn" type="button">Log FD</button>
       <button class="le-qrz" type="button">Clear</button>
+      <button class="le-qrz le-fd-remove" type="button">Remove last</button>
     </div>
     <div class="le-fd-verdicts"></div>
   </div>

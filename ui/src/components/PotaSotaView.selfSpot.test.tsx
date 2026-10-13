@@ -24,6 +24,11 @@ vi.mock('../toast', async (original) => ({ ...(await original<typeof import('../
 
 import { PotaSotaView } from './PotaSotaView'
 
+// THE BUDGET (2026-10-09). The slowest case here, "posts nothing until the operator presses Spot me and…", takes
+// 0.36 s and 0.39 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
+// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+vi.setConfig({ testTimeout: 15_000 })
+
 const snap = { hunt: null, radio: { dialMhz: 14.285 } } as unknown as AppSnapshot
 beforeEach(() => { api.selfSpot.mockReset(); toast.pushToast.mockReset() })
 afterEach(() => { cleanup(); localStorage.clear() })
@@ -65,6 +70,17 @@ it('says so when the park or dial moved after the press', async () => {
   fireEvent.click(await view())
   fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
   await waitFor(() => expect(toast.pushToast).toHaveBeenCalledWith(t('ota.selfSpot.moved'), 'error', 6000))
+})
+
+// While a contest that allows spotting only over amateur RF runs (Winter Field Day 2027: "You may
+// spot yourself and others only via amateur RF."), the station refuses the self-spot with a token,
+// and the toast says why in words rather than as a failure with no reason.
+it('says why when a contest that allows spotting only over RF is running', async () => {
+  api.selfSpot.mockRejectedValue('spotRfOnly')
+  fireEvent.click(await view())
+  fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
+  await waitFor(() => expect(toast.pushToast).toHaveBeenCalledWith(t('ota.selfSpot.rfOnly'), 'error', 6000))
+  expect(toast.pushToast).not.toHaveBeenCalledWith(t('ota.selfSpot.failed'), 'error', 6000)
 })
 
 it('gives the keyboard back to Spot me when the question closes, answered either way', async () => {

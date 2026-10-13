@@ -7,7 +7,8 @@
 // The station on the line sends its counties joined by `/` (`COOK/DUPG`), and that is how N1MM
 // Logger+ takes them in its exchange box, so the entry strip takes them the same way and logs
 // one row per county (`contestLogManualRows`): each an ordinary contact with its own county,
-// all at one time, band and mode.
+// all at one time, band and mode. N3FJP's loggers take the line joined by `+` (`COOK+DUPG`), so
+// an operator coming from one types that, and the strip reads it as the same line.
 //
 // ⚠️ EVERY PART IS JUDGED AS A SINGLE COUNTY BOX JUDGES ONE, and against the county list alone.
 // A part is a county code or a county's full name (`resolveDomainValue`), never a prefix of
@@ -19,6 +20,7 @@
 // `ilqpQth.ts`, read through `contestDomains.ts`.
 // ---------------------------------------------------------------------------
 
+import { getLocale } from '../i18n'
 import { resolveDomainValue } from './contestDomains'
 
 /** The county lists whose sponsor counts a county-line contact once per county, and the most
@@ -39,13 +41,16 @@ export function countyLineMax(domain: string): number {
   return COUNTY_LINE_MAX[domain] ?? 1
 }
 
-/** Does this box hold a county line rather than one value? The `/` is the whole test: no county
- *  code and no county name contains one. */
+/** What joins a line's counties: `/` or `+`, alike and in any mix. */
+const JOIN = /[/+]/
+
+/** Does this box hold a county line rather than one value? A `/` or a `+` is the whole test: no
+ *  county code and no county name contains either. */
 export function isCountyLine(raw: string): boolean {
-  return raw.includes('/')
+  return JOIN.test(raw)
 }
 
-const parts = (raw: string): string[] => raw.split('/').map((p) => p.trim().toUpperCase())
+const parts = (raw: string): string[] => raw.split(JOIN).map((p) => p.trim().toUpperCase())
 
 /** What a county line says, part by part — the counties to log, or the first reason it cannot
  *  be logged. The reasons come in the order an operator fixes them: an empty part, a part that
@@ -74,19 +79,33 @@ export function readCountyLine(domain: string, raw: string): CountyLine {
 }
 
 /** The box with every part that names a county written as its code — `Cook/DuPage` →
- *  `COOK/DUPG` — and every other part kept as typed, so the verdict can name it. */
+ *  `COOK/DUPG` — and every other part kept as typed, so the verdict can name it. The parts are
+ *  joined by `/` whichever mark joined them as typed: `Cook+DuPage` is `COOK/DUPG` too. */
 export function resolveCountyLine(domain: string, raw: string): string {
   return parts(raw)
     .map((p) => resolveDomainValue([domain], p) ?? p)
     .join('/')
 }
 
-/** The part the type-ahead completes: the text after the last `/`. */
+/** The part the type-ahead completes: the text after the last `/` or `+`. */
 export function lastCountyPart(raw: string): string {
-  return raw.slice(raw.lastIndexOf('/') + 1)
+  return raw.split(JOIN).pop() ?? ''
 }
 
 /** The box with its last part replaced by `code`, the county picked from the list. */
 export function withLastCountyPart(raw: string, code: string): string {
-  return raw.slice(0, raw.lastIndexOf('/') + 1) + code
+  return raw.slice(0, raw.length - lastCountyPart(raw).length) + code
+}
+
+/** `Intl.ListFormat`, where the runtime has it (every webview Nexus ships in does). */
+const ListFormat = (
+  Intl as unknown as {
+    ListFormat?: new (locale: string, o: { style: string; type: string }) => { format(items: string[]): string }
+  }
+).ListFormat
+
+/** Counties as a sentence names them, `COOK and WILL`, joined as the interface's language joins
+ *  a list. The codes are invariant tokens. */
+export function countyList(codes: string[]): string {
+  return ListFormat ? new ListFormat(getLocale(), { style: 'long', type: 'conjunction' }).format(codes) : codes.join(', ')
 }

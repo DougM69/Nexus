@@ -237,3 +237,97 @@ describe('contestDupe — the rule decides which components are the key', () => 
     expect(contestDupe(fd(), 'W1AW', '20m', 'CW')).toBe('none')
   })
 })
+
+// ---------------------------------------------------------------------------
+// ⭐ A CONTEST KEYED ON THE EXCHANGE, WITH THE EXCHANGE IN HAND.
+//
+// Every QSO party keys a station on its county as well (a mobile in a new county is a new
+// station), so the verdict above declines without the typed boxes. The log strip passes them,
+// and the answer is then the EXACT one: the key the engine is about to build
+// (`contestDupe.keys.shared.test.ts` holds that key to the engine's), compared with each own
+// row's key and the club's. For a club running the party this is the warning the second
+// position sees before it logs a station another position already has.
+// ---------------------------------------------------------------------------
+describe('contestDupe — a contest keyed on the exchange, with the exchange in hand', () => {
+  const ilqpRule = {
+    byCall: true,
+    byBand: true,
+    byModeClass: true,
+    byFields: ['QTH'],
+    bySentFields: ['QTH'],
+    modeClassGroups: [['CW', 'DIG']],
+    logDupes: false,
+  }
+  const party = fd({
+    dupeRule: ilqpRule,
+    // K9AAA worked HERE on 40 m CW from Cook; K9BBB by ANOTHER position on 20 m phone from Kane.
+    log: [
+      { call: 'K9AAA', band: '40m', mode: 'CW', dkey: ['K9AAA', '40M', 'CW', 'COOK', 'MCLN'] },
+    ],
+    club: { syncState: 'synced', dupes: [], dkeys: [['K9BBB', '20M', 'PH', 'KANE', 'MCLN']], board: [] },
+  } as unknown as Partial<FieldDayStatus>)
+  const typed = (qth: string, mine = 'MCLN') => ({
+    rx: (slot: string) => (slot === 'QTH' ? qth : slot === 'RST' ? '599' : ''),
+    tx: (slot: string) => (slot === 'QTH' ? mine : ''),
+  })
+
+  it('says own for the same station from the same county, CW and digital being one mode', () => {
+    expect(contestDupe(party, 'k9aaa', '40m', 'DIG', typed('cook'))).toBe('own')
+    expect(contestDupe(party, 'K9AAA', '40m', 'CW', typed('COOK'))).toBe('own')
+  })
+  it('does NOT fire for a mobile in a new county, nor on phone, nor once THIS station has moved', () => {
+    expect(contestDupe(party, 'K9AAA', '40m', 'CW', typed('WILL'))).toBe('none')
+    expect(contestDupe(party, 'K9AAA', '40m', 'PH', typed('COOK'))).toBe('none')
+    expect(contestDupe(party, 'K9AAA', '40m', 'CW', typed('COOK', 'DUPG'))).toBe('none')
+  })
+  it('says club for a station another position worked from that county', () => {
+    expect(contestDupe(party, 'K9BBB', '20m', 'PH', typed('KANE'))).toBe('club')
+  })
+  it('does NOT say club for that station from another county', () => {
+    expect(contestDupe(party, 'K9BBB', '20m', 'PH', typed('DUPG'))).toBe('none')
+  })
+  it('does not judge a contact whose county box is still empty', () => {
+    expect(contestDupe(party, 'K9AAA', '40m', 'CW', typed(''))).toBe('none')
+    expect(contestDupe(party, 'K9BBB', '20m', 'PH', typed('  '))).toBe('none')
+  })
+  it('CONTROL — without the exchange it still declines, as the FT cockpit card does', () => {
+    expect(contestDupe(party, 'K9AAA', '40m', 'CW')).toBe('none')
+  })
+})
+
+describe('contestDupe — a satellite contact the contest gives no credit (Winter Field Day 2027)', () => {
+  // The sponsor: "Cross-band, repeated, relayed, meshed, and/or internet-linked contacts do not
+  // count. Do not log any such contacts." (2027 rules p.5). WFD's dupe rule lists no bird as a
+  // band, so the pass row's key equals the terrestrial contact's — and the engine keeps the pass
+  // out of the dupe index, so the badge must not call the terrestrial contact a dupe of it.
+  const wfd = (over: Partial<FieldDayStatus> = {}) =>
+    fd({
+      log: [
+        { call: 'W5SAT', class: '1O', section: 'STX', band: '70cm', mode: 'PH', submode: 'FM', sat: 'SAUDISAT 1C (SO-50)' },
+      ],
+      dupeRule: {
+        byCall: true,
+        byBand: true,
+        byModeClass: true,
+        byFields: [],
+        bySentFields: [],
+        modeClassGroups: [],
+        logDupes: false,
+      },
+      satelliteCredit: false,
+      ...over,
+    } as unknown as Partial<FieldDayStatus>)
+
+  it('does NOT call a terrestrial contact a dupe of a pass that counts for nothing', () => {
+    expect(contestDupe(wfd(), 'W5SAT', '70cm', 'PH')).toBe('none')
+  })
+
+  it('CONTROL — the same pass under a contest that credits satellites still fires', () => {
+    expect(contestDupe(wfd({ satelliteCredit: undefined }), 'W5SAT', '70cm', 'PH')).toBe('own')
+  })
+
+  it('CONTROL — a terrestrial row in the same log still fires', () => {
+    const terrestrial = { call: 'W5SAT', class: '1O', section: 'STX', band: '70cm', mode: 'PH', submode: 'FM' }
+    expect(contestDupe(wfd({ log: [terrestrial] } as Partial<FieldDayStatus>), 'W5SAT', '70cm', 'PH')).toBe('own')
+  })
+})

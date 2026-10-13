@@ -396,6 +396,68 @@ fn dropped_pings_get_no_reply() {
     assert_eq!(dropped, [2, 3]);
 }
 
+/// A command the radio does not answer gets no reply, and the commands around it are answered as
+/// ever; with the radio gone silent on it, nothing after it is answered, pings included. The
+/// control is the same exchange without the fault.
+#[test]
+fn an_unanswered_command_gets_no_reply_and_a_radio_gone_silent_answers_nothing_after_it() {
+    let exchange = |then_silent: Option<bool>| {
+        let faults = then_silent.map_or_else(Vec::new, |then_silent| {
+            vec![Fault::Unanswered {
+                starting: "slice tune".into(),
+                then_silent,
+            }]
+        });
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        for command in ["ping", "slice tune 0 7.074000", "ping", "slice list"] {
+            c.send(command);
+        }
+        let lines = if then_silent == Some(true) {
+            // Every command reached the radio, then nothing arrives for half a second.
+            assert!(sim.wait_for(WAIT, |log| {
+                log.iter()
+                    .filter(|l| matches!(l.event, Event::Command { .. }))
+                    .count()
+                    == 4
+            }));
+            c.reader
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut got: Vec<String> = c.queue.drain(..).collect();
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = read_some(&mut c.reader, &mut buf) {
+                got.extend(c.lines.push(&buf[..n]).unwrap());
+            }
+            got
+        } else {
+            c.through_reply(4)
+        };
+        let answered: Vec<u32> = lines
+            .iter()
+            .filter_map(|l| parse_reply(l))
+            .map(|r| r.seq)
+            .collect();
+        let unanswered: Vec<u32> = sim
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Unanswered { seq, .. } => Some(*seq),
+                _ => None,
+            })
+            .collect();
+        (answered, unanswered)
+    };
+    assert_eq!(
+        [exchange(None), exchange(Some(false)), exchange(Some(true))],
+        [
+            (vec![1, 2, 3, 4], vec![]),
+            (vec![1, 3, 4], vec![2]),
+            (vec![1], vec![2, 3, 4]),
+        ]
+    );
+}
+
 #[test]
 fn the_radio_keepalive_closes_a_session_whose_pings_stop_arriving() {
     // A ping goes out every 40 ms or so, twenty times inside the timeout, so a stalled test
@@ -521,6 +583,145 @@ fn a_stuck_transmitter_acknowledges_xmit_0_and_stays_keyed_across_a_reconnect() 
     }
 }
 
+/// The tune carrier the same way: `transmit tune 0` acknowledged either way, its statuses (the
+/// transmit status's `tune=0` among them) withheld under the fault, and a later connection told
+/// the old handle still holds a tune.
+#[test]
+fn a_stuck_tune_acknowledges_tune_off_and_stays_up_across_a_reconnect() {
+    for stuck in [false, true] {
+        let faults = if stuck {
+            vec![Fault::StuckTune]
+        } else {
+            Vec::new()
+        };
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("transmit tune 1");
+        let up = c.until(|l| l.contains("state=TRANSMITTING"));
+        assert!(up.iter().any(|l| l == "S0|transmit tune=1"), "{up:?}");
+        assert!(
+            up.last().unwrap().contains("source=TUNE"),
+            "the tune profile's source: {up:?}"
+        );
+        let off = c.send("transmit tune 0");
+        let ping = c.send("ping");
+        let lines = c.through_reply(ping);
+        let reply = lines
+            .iter()
+            .position(|l| *l == format!("R{off}|0|"))
+            .expect("transmit tune 0 is acknowledged either way");
+        let after: Vec<&String> = lines[reply..].iter().collect();
+        if stuck {
+            assert!(
+                !after
+                    .iter()
+                    .any(|l| l.contains("tune=0") || l.contains("|interlock ")),
+                "{after:?}"
+            );
+            assert!(sim.events().contains(&Event::StatusWithheld {
+                conn: 0,
+                command: "transmit tune 0".into(),
+                lines: 4,
+            }));
+        } else {
+            let mut seen: Vec<String> = after.iter().map(|l| l.to_string()).collect();
+            seen.extend(c.until(|l| l.contains("tx_client_handle=0x00000000 state=READY")));
+            assert_eq!(
+                seen.iter().filter(|l| *l == "S0|transmit tune=0").count(),
+                1
+            );
+        }
+        drop(c);
+        assert!(closed(&sim, 0, Closer::Client));
+        let (mut d, handle) = Client::greeted(&sim);
+        assert_eq!(handle, "H2B6E1F41");
+        let tx = d.statuses("sub tx all");
+        assert_eq!(
+            tx.iter().any(|l| l == "S0|transmit tune=1"),
+            stuck,
+            "{tx:?}"
+        );
+        let last = tx
+            .iter()
+            .rev()
+            .find(|l| l.contains("|interlock tx_client_handle="))
+            .unwrap();
+        assert_eq!(
+            last.contains("tx_client_handle=0x2B6E1F40 state=TRANSMITTING")
+                && last.contains("source=TUNE"),
+            stuck,
+            "{last}"
+        );
+    }
+}
+
+/// The two faults that change a rule's statuses, each against its control: a reason on every
+/// keying report (the PGXL profile), and a radio that holds transmit after a CWX send until
+/// `xmit 0`.
+#[test]
+fn a_held_cwx_and_a_keying_reason_reach_the_wire_as_their_faults_say() {
+    // A reason on every keying report, and its control.
+    for reason in [None, Some(crate::fault::PGXL)] {
+        let faults = reason
+            .map(|r| Fault::KeyingReason { reason: r.into() })
+            .into_iter()
+            .collect();
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("xmit 1");
+        let keyed = c.until(|l| l.contains("state=TRANSMITTING"));
+        let requested = keyed
+            .iter()
+            .find(|l| l.contains("state=PTT_REQUESTED"))
+            .unwrap();
+        let want = format!(" reason={} source=SW ", reason.unwrap_or(""));
+        assert!(requested.contains(&want), "{requested}");
+        assert_eq!(
+            keyed
+                .last()
+                .unwrap()
+                .ends_with(" amplifier=0x5A0F0001,0x5A0F0002"),
+            reason.is_some(),
+            "{keyed:?}"
+        );
+    }
+    // A radio that holds transmit after a CWX send, and its control.
+    for held in [false, true] {
+        let faults = if held {
+            vec![Fault::HoldsCwx]
+        } else {
+            Vec::new()
+        };
+        let sim = start(Session::v4_gui_client(), faults);
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("cwx send \"CQ\" 1");
+        c.until(|l| l.contains("state=TRANSMITTING"));
+        c.ask("cwx clear");
+        // The free radio lets go 600 ms after it keys; this one keeps not doing so.
+        std::thread::sleep(Duration::from_millis(1_000));
+        let lines = c.ask("ping");
+        assert_eq!(
+            lines.iter().any(|l| l.contains("state=UNKEY_REQUESTED")),
+            !held,
+            "{lines:?}"
+        );
+        if held {
+            c.send("xmit 0");
+            let released = c.until(|l| l.contains("tx_client_handle=0x00000000 state=READY"));
+            assert!(
+                released.iter().any(|l| l.contains("state=UNKEY_REQUESTED")),
+                "{released:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_foreign_client_owns_a_slice_a_pan_and_the_transmitter() {
     let foreign = Foreign {
@@ -604,6 +805,48 @@ fn a_disconnect_mid_over_closes_the_session_while_transmitting() {
             })
             .count();
         assert_eq!(cut, 1);
+    }
+}
+
+/// The same disconnect under the radio's own tune carrier: the first `transmit tune 1` the radio
+/// takes is a key too, so the session closes while the tune is TRANSMITTING, and with
+/// `radio_stays_keyed` the next connection is told the dropped handle still holds the tune.
+#[test]
+fn a_disconnect_mid_tune_closes_the_session_and_can_leave_the_carrier_up() {
+    for stays in [false, true] {
+        let sim = start(
+            Session::v4_gui_client(),
+            vec![Fault::DisconnectMidOver {
+                after: Duration::from_millis(50),
+                radio_stays_keyed: stays,
+            }],
+        );
+        let (mut c, _) = Client::greeted(&sim);
+        c.ask("sub tx all");
+        c.ask("slice create pan=0x40000000 freq=14.074000 mode=DIGU");
+        c.send("transmit tune 1");
+        c.until(|l| l.contains("state=TRANSMITTING"));
+        assert!(c.closed_by_peer(), "the session outlived the tune");
+        assert!(closed(&sim, 0, Closer::Simulator));
+
+        let (mut d, _) = Client::greeted(&sim);
+        let tx = d.statuses("sub tx all");
+        assert_eq!(
+            tx.iter().any(|l| l == "S0|transmit tune=1"),
+            stays,
+            "{tx:?}"
+        );
+        let last = tx
+            .iter()
+            .rev()
+            .find(|l| l.contains("|interlock tx_client_handle="))
+            .unwrap();
+        assert_eq!(
+            last.contains("tx_client_handle=0x2B6E1F40 state=TRANSMITTING")
+                && last.contains("source=TUNE"),
+            stays,
+            "{last}"
+        );
     }
 }
 

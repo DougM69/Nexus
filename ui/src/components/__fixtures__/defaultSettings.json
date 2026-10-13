@@ -25,6 +25,10 @@
   "contestCqZone": 0,
   "contestItuZone": 0,
   "contestPower": "",
+  "contestEsmCw": false,
+  "contestEsmRtty": false,
+  "contestEsmPhone": false,
+  "contestEsmCallOnce": false,
   "fdPowerMult": 2,
   "fdBonuses": [],
   "n3fjpHost": "",
@@ -307,6 +311,11 @@
     {
       "slot": 6,
       "label": "Again",
+      "file": ""
+    },
+    {
+      "slot": 8,
+      "label": "AGN",
       "file": ""
     }
   ]

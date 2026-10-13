@@ -56,8 +56,9 @@ const EVERYDAY: BuiltinMacro[] = [
 ]
 
 /** CONTEST — the run/S&P set, RTTY's key ASSIGNMENTS (F1 CQ · F2 exchange · F3 TU · F4 my call ·
- *  F5 his call · F6 S&P exchange · F7 AGN · F8 B4) so an operator who works both modes does not
- *  relearn the keyboard, in PSK's own wording. The message shapes are the published digital
+ *  F5 his call · F6 S&P exchange · F7 B4 · F8 AGN, AGN on F8 as in N1MM's default message sets,
+ *  operator, 2026-10-10) so an operator who works both modes does not relearn the keyboard, in
+ *  PSK's own wording. The message shapes are the published digital
  *  contest conventions: a CQ starts AND ends with CQ, so a station tuning in mid-message still
  *  reads it as one; the exchange goes twice; the run station's TU asks for the next caller; the
  *  S&P exchange leaves out the runner's call. Kept SHORTER than RTTY's — PSK31 runs at about 31
@@ -69,8 +70,8 @@ const CONTEST: BuiltinMacro[] = [
   { key: 'F4', labelKey: 'psk.macro.myCall.label', text: '{MYCALL} {MYCALL}' },
   { key: 'F5', labelKey: 'psk.macro.hisCall.label', text: '{CALL}' },
   { key: 'F6', labelKey: 'psk.macro.spExch.label', text: 'tu 599 {EXCH} {EXCH}' },
-  { key: 'F7', label: 'AGN', text: 'agn? agn?' },
-  { key: 'F8', label: 'B4', text: '{CALL} qso b4 tu {MYCALL}' },
+  { key: 'F7', label: 'B4', text: '{CALL} qso b4 tu {MYCALL}' },
+  { key: 'F8', label: 'AGN', text: 'agn? agn?' },
 ]
 
 const PSK_BUILTINS: Record<PskSetId, BuiltinMacro[]> = { everyday: EVERYDAY, contest: CONTEST }

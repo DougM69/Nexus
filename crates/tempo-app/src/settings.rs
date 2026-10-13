@@ -487,6 +487,46 @@ pub fn flex_client_reachable(rig_model: u32, flex_radio_ip: &str) -> bool {
     FLEX_CLIENT_RIGS.contains(&rig_model) && !flex_radio_ip.trim().is_empty()
 }
 
+/// Is this rig driven over the radio's own network connection, by Nexus's Icom network client
+/// (the "Icom network (LAN / Wi-Fi)" Connection choice, Beta)?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for that question, like [`rig_conn_is_omnirig`]:
+/// `tempo_audio::service::Transport::is_icom_lan` calls this, and so does the engine's transmit
+/// refusal, so the daemon choice and the refusal cannot disagree. A build from before the choice
+/// existed reads this value as Serial (it is neither "network" nor "omnirig").
+pub fn rig_conn_is_icom_lan(rig_conn: &str) -> bool {
+    rig_conn.eq_ignore_ascii_case("icomlan")
+}
+
+/// Why every transmission is refused on the Icom network connection, as the operator reads it:
+/// the engine's refusal before PTT and the network daemon's own refusal of the keying verbs say
+/// the same thing.
+pub const ICOM_LAN_TX_REFUSED: &str =
+    "Transmit is off on the Icom network connection (Beta: receive and control only)";
+
+/// The Icoms with a network server built in, the only ones the Icom network connection is offered
+/// for: IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2. The UI mirrors this list
+/// (`ICOM_LAN_MODELS`), and a test holds the two together.
+pub const ICOM_LAN_RIGS: [u32; 6] = [3078, 3081, 3085, 3090, 3092, 3094];
+
+/// The control port a network Icom listens on unless its operator moved it.
+pub const ICOM_LAN_DEFAULT_PORT: u16 = 50001;
+
+fn default_icom_lan_port() -> u16 {
+    ICOM_LAN_DEFAULT_PORT
+}
+
+/// Could Nexus's Icom network client serve this radio: one of [`ICOM_LAN_RIGS`], on the Icom
+/// network connection, with an IPv4 address set?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for the daemon choice, as [`flex_client_reachable`] is for the
+/// Flex client. The connection choice is the opt-in: nothing selects it for the operator.
+pub fn icom_lan_reachable(rig_model: u32, rig_conn: &str, host: &str) -> bool {
+    ICOM_LAN_RIGS.contains(&rig_model)
+        && rig_conn_is_icom_lan(rig_conn)
+        && host.trim().parse::<std::net::Ipv4Addr>().is_ok()
+}
+
 impl Settings {
     /// Is the RECEIVE dial Doppler's to correct?
     ///
@@ -714,6 +754,38 @@ pub enum PounceThreshold {
 /// a blank key.
 fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
+}
+
+/// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
+/// the note the contest-over checklist offers back when Contest mode goes off: the station
+/// callsign a club set, the operator at the key, the position, the entry category (MULTI-OP),
+/// the entry class, the power category and Unassisted. Each field is the [`Settings`] field of
+/// the same name. Who takes the note, when, and when it is let go: `engine/contest_before.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ContestBefore {
+    pub mycall: String,
+    pub fd_operator: String,
+    pub fd_position_name: String,
+    pub contest_category_operator: String,
+    pub contest_entry_class: String,
+    pub contest_category_power: String,
+    pub unassisted_mode: bool,
+}
+
+impl ContestBefore {
+    /// The seven, as `s` holds them now.
+    pub fn of(s: &Settings) -> Self {
+        Self {
+            mycall: s.mycall.clone(),
+            fd_operator: s.fd_operator.clone(),
+            fd_position_name: s.fd_position_name.clone(),
+            contest_category_operator: s.contest_category_operator.clone(),
+            contest_entry_class: s.contest_entry_class.clone(),
+            contest_category_power: s.contest_category_power.clone(),
+            unassisted_mode: s.unassisted_mode,
+        }
+    }
 }
 
 /// Everything the operator configures: identity, band/frequency, Field Day
@@ -988,6 +1060,50 @@ pub struct Settings {
     /// stamped on each contact as it is logged), then these. Read at EXPORT.
     #[serde(default)]
     pub contest_operators: String,
+    /// Cabrillo `CATEGORY-TRANSMITTER` — a multi-operator entry's class, one of the values the
+    /// selected contest's rules declare (`ONE`, `TWO`, `UNLIMITED`…); empty is undeclared. Read
+    /// at EXPORT, and written only for a MULTI-OP entry and only when it is one of that contest's
+    /// own, with the OPERATORS line such an entry needs.
+    #[serde(default)]
+    pub contest_category_transmitter: String,
+    /// Cabrillo `CATEGORY-OVERLAY` — one of the selected contest's overlays (`ROOKIE`…); empty is
+    /// undeclared. Read at EXPORT, and written only when it is one of that contest's own.
+    #[serde(default)]
+    pub contest_category_overlay: String,
+    /// The mailing address a contest's Cabrillo `ADDRESS` lines carry, for a contest whose
+    /// template names them: the street lines, one per line. The city, state or province, postal
+    /// code and country are the four fields below it. Read at EXPORT, and never sent to Remote
+    /// (it is on no exposed list).
+    #[serde(default)]
+    pub contest_address: String,
+    /// The mailing address's city (`ADDRESS-CITY`).
+    #[serde(default)]
+    pub contest_address_city: String,
+    /// The mailing address's state or province (`ADDRESS-STATE-PROVINCE`) — where the mail goes,
+    /// which need not be [`Self::contest_qth_state`], where the station operates.
+    #[serde(default)]
+    pub contest_address_state: String,
+    /// The mailing address's postal code (`ADDRESS-POSTALCODE`).
+    #[serde(default)]
+    pub contest_address_postalcode: String,
+    /// The mailing address's country (`ADDRESS-COUNTRY`).
+    #[serde(default)]
+    pub contest_address_country: String,
+    /// Cabrillo `SOAPBOX` — the entrant's comments, as typed, for a contest whose template
+    /// carries them. Read at EXPORT.
+    #[serde(default)]
+    pub contest_soapbox: String,
+    /// Cabrillo `CATEGORY-BAND` — `ALL`, or the one band a single-band entry is entered on, one of
+    /// the selected contest's own bands (CQ WW's `ALL 160M 80M 40M 20M 15M 10M`); empty is
+    /// undeclared, which writes no line. Read at EXPORT, and written only when it is one of that
+    /// contest's bands, so a band picked for another contest claims nothing.
+    ///
+    /// ⚠️ A DECLARATION, never read off the log: a single-band entrant must log every contact,
+    /// other bands included (CQ: *"Single band entrants are required to include all contacts made
+    /// during the contest period, even if made on other bands"*), so the log cannot say which band
+    /// the entry is.
+    #[serde(default)]
+    pub contest_category_band: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -1040,6 +1156,24 @@ pub struct Settings {
     /// verbatim, because the sponsor's own examples are not a closed set.
     #[serde(default)]
     pub contest_power: String,
+    /// ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
+    /// message from the macro set's keys, step by step, as N1MM Logger+'s ESM does. OFF by
+    /// default, and nothing but the operator's own switch turns it on: it makes Enter a way to
+    /// start a transmission. One switch per cockpit, so an operator can run CW with it and
+    /// leave Phone without it.
+    #[serde(default)]
+    pub contest_esm_cw: bool,
+    /// [`Self::contest_esm_cw`] for the RTTY cockpit's contest strip. OFF by default.
+    #[serde(default)]
+    pub contest_esm_rtty: bool,
+    /// [`Self::contest_esm_cw`] for the Phone cockpit's contest strip, playing the voice keyer's
+    /// recordings. OFF by default.
+    #[serde(default)]
+    pub contest_esm_phone: bool,
+    /// ESM's "call once" in Search and Pounce: my call goes out once per station, and the next
+    /// Enter asks for a repeat instead of sending it again. OFF by default.
+    #[serde(default)]
+    pub contest_esm_call_once: bool,
     /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
@@ -1055,6 +1189,19 @@ pub struct Settings {
     /// same points it always did.
     #[serde(default)]
     pub fd_bonuses_planned: Vec<String>,
+    /// ⭐ Ticked OBJECTIVE ids — the objectives a contest that scores by them (Winter Field
+    /// Day) has completed, from its rules file's `objective_menu`. What the claimed score
+    /// MULTIPLIES by: QSO points × (the objectives' multipliers + 1).
+    ///
+    /// A setting of its own, not more ids in [`Self::fd_bonuses`]: a bonus adds points and an
+    /// objective multiplies them, and an id that means one in one contest must not be read as
+    /// the other in the next. `#[serde(default)]`, so an older settings file loads with none.
+    #[serde(default)]
+    pub fd_objectives: Vec<String>,
+    /// PLANNED objective ids — the same rule as [`Self::fd_bonuses_planned`]: what the club
+    /// means to complete, which no scoring path, export or club report reads.
+    #[serde(default)]
+    pub fd_objectives_planned: Vec<String>,
     /// N3FJP real-time push: each FD QSO lands in the club's N3FJP master log
     /// over its TCP API. Empty host = off.
     #[serde(default)]
@@ -1138,6 +1285,12 @@ pub struct Settings {
     /// instances sharing a settings dir from clobbering each other's backup.
     #[serde(default)]
     pub fd_position_id: String,
+    /// ⭐ The station as it was before the contest changed it ([`ContestBefore`]), or `None` when
+    /// no contest has changed it since the last one ended. **The engine's alone**: a Settings save
+    /// never writes or clears it (a payload's copy is a snapshot from whenever its surface
+    /// loaded); a restore takes the backup's. Persisted, so a restart mid-weekend keeps it.
+    #[serde(default)]
+    pub contest_before: Option<ContestBefore>,
     /// Serve the read-only spectator scoreboard — a self-contained web page of
     /// the club score for a TV/projector on the site LAN. **This toggle IS the
     /// LAN opt-in**: while on, `tempo_app::fd_scoreboard`'s GET/HEAD-only
@@ -1503,6 +1656,21 @@ pub struct Settings {
     /// operator hears would be worse than the exposure this closes.
     #[serde(default)]
     pub unassisted_mode: bool,
+    /// SUPER CHECK PARTIAL: the line of contest calls under the contest strip's Call box
+    /// (`crate::scp`). On by default (operator, 2026-10-08), so the list downloads the first time
+    /// a contest starts. Read it through [`Settings::scp_active`], which Unassisted mode overrides.
+    #[serde(default = "default_true")]
+    pub scp_enabled: bool,
+    /// The once-a-day check for a newer Super Check Partial list. Off keeps the list held; the
+    /// operator's "Update now" still asks.
+    #[serde(default = "default_true")]
+    pub scp_auto_update: bool,
+    /// CALL HISTORY: fill the contest strip's exchange boxes from the file the operator imported
+    /// (`crate::call_history`). Importing a file is the operator asking for it, so this is on;
+    /// it is the way to stop the fill without losing the file. Read it through
+    /// [`Settings::call_history_active`], which Unassisted mode overrides.
+    #[serde(default = "default_true")]
+    pub call_history_enabled: bool,
     /// Local TCP port Tempo uses for rigctld (it spawns rigctld on this port).
     pub rigctld_port: u16,
     /// Antenna rotator, the INTEGRATED way: a Hamlib rotator model number
@@ -1686,6 +1854,20 @@ pub struct Settings {
     /// per-radio truth is `RadioProfile::flex_native_cat` and this is the active radio's mirror.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// The radio's own address for Nexus's Icom network client (the "Icom network (LAN / Wi-Fi)"
+    /// Connection choice, Beta): the radio's "IP Address (LAN)". IPv4. The per-radio truth is
+    /// `RadioProfile::icom_lan_host` and this is the active radio's mirror. The network user's
+    /// password is never in settings: it lives in the OS keychain, one entry per radio profile.
+    #[serde(default)]
+    pub icom_lan_host: String,
+    /// The network user the radio was set up with, for the Icom network client. Not secret, but
+    /// never logged. Per-radio, as above.
+    #[serde(default)]
+    pub icom_lan_user: String,
+    /// The radio's control port (UDP) for the Icom network client: 50001 unless the operator moved
+    /// it on the radio. Per-radio, as above.
+    #[serde(default = "default_icom_lan_port")]
+    pub icom_lan_port: u16,
 
     // --- multi-radio (dual-radio) ---
     /// Configured radios. EMPTY in older settings files → migrated to a single profile 0 mirroring
@@ -2156,7 +2338,8 @@ pub struct Settings {
     pub band_edge_tones: bool,
     /// WSJT-X "CW ID after 73": key MYCALL in CW once the final 73/RR73 over
     /// has finished transmitting (stock default off). Keys through the normal
-    /// CW path (PTT + tone), not appended inside the FT8 waveform.
+    /// CW path (PTT + tone), not appended inside the over's waveform. Never in
+    /// FT8, FT4, FT2, FT1 or DX1: WSJT-X sends none in FT8/FT4.
     #[serde(default)]
     pub cw_id_after_73: bool,
     /// WSJT-X: "Clear DX call and grid after logging" (stock default off).
@@ -2700,6 +2883,15 @@ pub struct Settings {
     /// Defaulted to six labelled-but-empty casual slots.
     #[serde(default = "default_voice_messages")]
     pub voice_messages: Vec<VoiceMessage>,
+    /// ENTER SENDS MESSAGE on the voice keyer: the slots the operator mapped to ESM's steps
+    /// ([`EsmRoleMap`]), over the built-in slot convention. One map, as the keyer has one set of
+    /// slots. None = the convention as it is, and then it is not written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_esm_roles"
+    )]
+    pub voice_esm_roles: Option<EsmRoleMap>,
 
     /// ⛔ **THE FORWARD-COMPATIBILITY CATCH-ALL. Not a setting — do not read it.** Every
     /// key `settings.json` carries that this build has no field for, held verbatim so the
@@ -2764,8 +2956,6 @@ pub struct VoiceMessage {
     pub file: String,
 }
 
-/// The default six labelled (but empty) voice-keyer slots — a casual phone set (no
-/// contest exchange). The operator records or imports the audio per slot.
 /// WSJT-X "Special operating activity" (the DXpedition modes we support).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -3019,6 +3209,10 @@ fn default_announce_verbosity() -> String {
     "needed".to_string()
 }
 
+/// The default voice-keyer slots, labelled but empty: a casual phone set (no contest exchange)
+/// on F1–F6, and F8 AGN, the slot Enter Sends Message plays for AGN in a contest, from the key
+/// AGN is on in the CW and RTTY contest sets. There is no F7. The operator records or imports the
+/// audio per slot. A settings file from before F8 gains it at launch ([`Settings::move_agn_to_f8`]).
 pub fn default_voice_messages() -> Vec<VoiceMessage> {
     [
         (1, "CQ"),
@@ -3027,6 +3221,7 @@ pub fn default_voice_messages() -> Vec<VoiceMessage> {
         (4, "QRZ?"),
         (5, "73"),
         (6, "Again"),
+        (8, "AGN"),
     ]
     .iter()
     .map(|(slot, label)| VoiceMessage {
@@ -3071,6 +3266,18 @@ pub struct Macros {
     /// Same one writer as `rtty_profiles`.
     #[serde(default, deserialize_with = "lenient_string")]
     pub active_rtty_profile: String,
+    /// ENTER SENDS MESSAGE on the RTTY cockpit's sets: per set id (`everyday`, `contest`), the
+    /// steps the operator mapped to that set's keys ([`EsmRoleMap`]), over the contest set's
+    /// built-in layout. The SETTINGS FORM writes it, not `Engine::save_rtty_macros`, which
+    /// replaces only the two fields above and so leaves this one as it is. Kept beside the sets
+    /// rather than on their entries because the cockpit's editor rebuilds an entry from its name
+    /// and keys. None = nothing mapped, and then it is not written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_esm_role_sets"
+    )]
+    pub rtty_esm_roles: Option<std::collections::BTreeMap<String, EsmRoleMap>>,
     /// The PSK cockpit's F1–F8 sets — the same shape and the same contract as `rtty_profiles`,
     /// and SEPARATE STORAGE on purpose: the two modes' built-in texts differ (PSK is mixed-case
     /// full ASCII, RTTY is Baudot upper), so one shared field would make an edit in one cockpit
@@ -3098,6 +3305,58 @@ pub struct CwMacroDef {
 pub struct CwMacroProfile {
     pub name: String,
     pub macros: Vec<CwMacroDef>,
+    /// ENTER SENDS MESSAGE — which of this set's keys send ESM's steps, as the operator mapped
+    /// them ([`EsmRoleMap`]). It travels with the set it describes. None = nothing mapped, and
+    /// then the key is not written at all, so a profile saved before this field existed loads
+    /// and saves back byte for byte.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_esm_roles"
+    )]
+    pub esm_roles: Option<EsmRoleMap>,
+}
+
+/// ENTER SENDS MESSAGE — a macro set's own mapping of its keys to ESM's steps: the step's name
+/// (`cq`, `callExch`, `tu`, `myCall`, `exch`, `again`) → the F-keys that send it, in order (two
+/// keys go out as one message). The UI owns what the names mean (`ui/src/features/esmRoles.ts`);
+/// the backend only keeps the map, so a step or a key it does not know is kept as written.
+pub type EsmRoleMap = std::collections::BTreeMap<String, Vec<String>>;
+
+/// An [`EsmRoleMap`] read LENIENTLY, as [`lenient_list`] reads a list: a step whose keys are not
+/// a list of strings is dropped, and a value that is not a map at all reads as no map. A hand
+/// edit gone wrong costs that mapping, never the macro set it sits on or the file around it.
+fn esm_role_map(value: serde_json::Value) -> Option<EsmRoleMap> {
+    let serde_json::Value::Object(steps) = value else {
+        return None;
+    };
+    Some(
+        steps
+            .into_iter()
+            .filter_map(|(step, keys)| serde_json::from_value(keys).ok().map(|keys| (step, keys)))
+            .collect(),
+    )
+}
+
+/// The lenient loader of one [`EsmRoleMap`] field ([`esm_role_map`]).
+fn lenient_esm_roles<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<EsmRoleMap>, D::Error> {
+    Ok(esm_role_map(serde_json::Value::deserialize(de)?))
+}
+
+/// The lenient loader of [`EsmRoleMap`]s by macro-set id: a set whose map is not one is dropped.
+fn lenient_esm_role_sets<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<std::collections::BTreeMap<String, EsmRoleMap>>, D::Error> {
+    Ok(match serde_json::Value::deserialize(de)? {
+        serde_json::Value::Object(sets) => Some(
+            sets.into_iter()
+                .filter_map(|(set, roles)| esm_role_map(roles).map(|roles| (set, roles)))
+                .collect(),
+        ),
+        _ => None,
+    })
 }
 
 /// A list loaded ENTRY BY ENTRY: each entry that parses is kept, each one that does not is
@@ -3174,6 +3433,7 @@ impl Default for Macros {
             active_cw_profile: 0,
             rtty_profiles: Vec::new(),
             active_rtty_profile: String::new(),
+            rtty_esm_roles: None,
             psk_profiles: Vec::new(),
             active_psk_profile: String::new(),
         }
@@ -3201,6 +3461,7 @@ impl Macros {
             self.cw_profiles = vec![CwMacroProfile {
                 name: "Default".to_string(),
                 macros: std::mem::take(&mut self.cw),
+                esm_roles: None,
             }];
             self.active_cw_profile = 0;
         }
@@ -3554,6 +3815,14 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_cat`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// THIS radio's address, network user and control port for the Icom network client (see
+    /// [`Settings::icom_lan_host`]). Per-radio, as above. Its password is in the OS keychain.
+    #[serde(default)]
+    pub icom_lan_host: String,
+    #[serde(default)]
+    pub icom_lan_user: String,
+    #[serde(default = "default_icom_lan_port")]
+    pub icom_lan_port: u16,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -3650,6 +3919,11 @@ pub struct RadioProfilePatch {
     /// sends it, and a payload without it must fail loudly rather than quietly turn the opt-in
     /// off on every save.
     pub flex_native_cat: bool,
+    /// See `RadioProfile::icom_lan_host`. No serde default, for the reason above: a save that
+    /// lost the address would leave the radio unreachable with nothing to say why.
+    pub icom_lan_host: String,
+    pub icom_lan_user: String,
+    pub icom_lan_port: u16,
 }
 
 impl Settings {
@@ -3711,6 +3985,9 @@ impl RadioProfilePatch {
         }
         p.flex_native_audio = self.flex_native_audio;
         p.flex_native_cat = self.flex_native_cat;
+        p.icom_lan_host = self.icom_lan_host;
+        p.icom_lan_user = self.icom_lan_user;
+        p.icom_lan_port = self.icom_lan_port;
     }
 }
 
@@ -3769,6 +4046,12 @@ fn default_rated_watts() -> u32 {
     100
 }
 
+/// The assistance label Super Check Partial is journaled and reported under. The contest strip
+/// matches it on `FieldDayStatus::assistance_on` (see [`Settings::assistance_sources`]).
+pub const SCP_SOURCE: &str = "Super Check Partial";
+/// The assistance label call history is journaled and reported under, matched the same way.
+pub const CALL_HISTORY_SOURCE: &str = "Call history";
+
 fn default_true() -> bool {
     true
 }
@@ -3823,14 +4106,77 @@ impl Default for RadioProfile {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: ICOM_LAN_DEFAULT_PORT,
         }
     }
 }
 
-/// Validate that every enabled profile's rigctld port + rotctld port (and the CAT broker port, if
-/// on) are pairwise distinct — two daemons can't bind the same TCP port. Pure; used by the Settings
-/// save path + the UI. Rotctld ports only count for profiles that actually have a rotator.
+/// The port a `host:port` rig address names, plus its host. `None` when the address names no
+/// port. The last colon wins, so the bracketed IPv6 form (`[::1]:5002`) splits correctly.
+pub fn split_host_port(addr: &str) -> Option<(&str, u16)> {
+    let (host, port) = addr.trim().rsplit_once(':')?;
+    Some((host.trim(), port.trim().parse().ok()?))
+}
+
+/// Is this rig address on THIS machine — i.e. does its port live in the same space rigctld
+/// binds into? A remote rig reusing our rigctld's port number is no clash at all.
+pub fn host_is_this_machine(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    h.is_empty()
+        || h.eq_ignore_ascii_case("localhost")
+        || h == "::1"
+        || h == "0.0.0.0"
+        || h.starts_with("127.")
+}
+
+/// A NET rigctl radio's Network Address, trimmed, and its port, when the address is on this
+/// computer: the rigctld the operator runs here (wfview's, or their own), which Nexus shares rather
+/// than starts. `None` for any other radio. The one rule the port bookkeeping below and the openers
+/// that share the address (in `tempo-audio`'s service) both read.
+pub fn net_rigctl_addr_here<'a>(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &'a str,
+) -> Option<(&'a str, u16)> {
+    // 2 is Hamlib's NET rigctl.
+    if rig_model != 2 || !rig_conn_is_network(rig_conn, rig_addr) {
+        return None;
+    }
+    let (host, port) = split_host_port(rig_addr)?;
+    host_is_this_machine(host).then(|| (rig_addr.trim(), port))
+}
+
+/// The port of `p`'s Network Address on this computer, when `p` is NET rigctl
+/// ([`net_rigctl_addr_here`]). Whatever answers there is what `p` reads and commands, so no daemon
+/// of Nexus's, and not its CAT broker, may sit on it.
+pub fn net_rigctl_port_here(p: &RadioProfile) -> Option<u16> {
+    net_rigctl_addr_here(p.rig_model, &p.rig_conn, &p.rig_addr).map(|(_, port)| port)
+}
+
+/// Validate the TCP ports Nexus's own listeners take: every enabled profile's rigctld port and
+/// rotctld port, and the CAT broker's when it is on. They must be pairwise distinct — two daemons
+/// can't bind the same TCP port — and none may sit on a NET rigctl radio's Network Address on this
+/// computer ([`net_rigctl_address_clashes`]). Pure. Rotctld ports only count for profiles that
+/// actually have a rotator.
+///
+/// Two daemons on one port are repaired on load and on every save
+/// ([`Settings::ensure_distinct_radio_ports`]). A daemon on an address is not, since a rigctld TCP
+/// Port is the operator's to choose: a save that would make one is refused with these words
+/// ([`port_clash_introduced`]), and one already stored is said in the status lane
+/// ([`net_rigctl_address_conflicts`]).
 pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Result<(), String> {
+    if let Some(clash) = daemon_port_clash(radios, broker) {
+        return Err(clash);
+    }
+    net_rigctl_address_conflicts(radios, broker).map_or(Ok(()), Err)
+}
+
+/// Two of Nexus's daemons (or one and the broker) on one TCP port, the first such pair in words:
+/// [`validate_radio_ports`]'s first half, and what [`Settings::ensure_distinct_radio_ports`]
+/// repairs.
+fn daemon_port_clash(radios: &[RadioProfile], broker: Option<u16>) -> Option<String> {
     let mut used: Vec<(u16, String)> = Vec::new();
     for p in radios.iter().filter(|p| p.enabled) {
         used.push((p.rigctld_port, format!("{}'s CAT", p.name)));
@@ -3844,14 +4190,186 @@ pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Res
     for i in 0..used.len() {
         for j in (i + 1)..used.len() {
             if used[i].0 == used[j].0 {
-                return Err(format!(
+                return Some(format!(
                     "TCP port {} is claimed by both {} and {} — give them different ports",
                     used[i].0, used[i].1, used[j].1
                 ));
             }
         }
     }
-    Ok(())
+    None
+}
+
+/// What of Nexus's own sits on the port a NET rigctl radio's Network Address names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortHolder {
+    /// Radio `id`'s CAT daemon, on its rigctld TCP Port.
+    Cat(u32),
+    /// The CAT broker (Share this radio with other programs).
+    Broker,
+}
+
+/// One of Nexus's own listeners on the port radio `address_of`'s Network Address names on this
+/// computer. Whatever answers at that address is what that radio reads and commands: two radios'
+/// CAT crossed, or a radio talking to Nexus itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddressClash {
+    pub port: u16,
+    pub address_of: u32,
+    pub holder: PortHolder,
+}
+
+impl AddressClash {
+    /// In operator words, with the cure: what the status lane says about a stored one, and the
+    /// refusal of a save that would make one.
+    pub fn message(&self, radios: &[RadioProfile]) -> String {
+        let name = |id: u32| {
+            radios
+                .iter()
+                .find(|p| p.id == id && !p.name.trim().is_empty())
+                .map_or_else(
+                    || format!("Radio {}", id + 1),
+                    |p| p.name.trim().to_string(),
+                )
+        };
+        let q = name(self.address_of);
+        let addr = radios
+            .iter()
+            .find(|p| p.id == self.address_of)
+            .map_or("", |p| p.rig_addr.trim());
+        let port = self.port;
+        match self.holder {
+            PortHolder::Cat(id) => {
+                let a = name(id);
+                format!(
+                    "TCP port {port} is {q}'s Network Address ({addr}), and {a}'s rigctld TCP Port \
+                     is {port} too: {q} and {a} could each read and command the other's radio. \
+                     Give {a} a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+                )
+            }
+            PortHolder::Broker => format!(
+                "TCP port {port} is {q}'s Network Address ({addr}), and Share this radio with other \
+                 programs is on {port} too: {q} would read and command Nexus itself instead of its \
+                 own radio. Change the Share this radio port (Settings ▸ Radio ▸ Transmit limits & \
+                 sharing)."
+            ),
+        }
+    }
+}
+
+/// Every [`AddressClash`] among the enabled radios, with the broker on `broker` when it is on.
+///
+/// Not a clash:
+/// * a radio's own rigctld TCP Port on its own Network Address: the manual's NET rigctl station,
+///   whose rigctld is the operator's, shared and never started;
+/// * another radio doing the same at that address: two names for one rigctld, which
+///   [`network_cat_address_conflicts`] warns of;
+/// * a rotator: Settings has no control for its port, so the repair moves it
+///   ([`Settings::ensure_distinct_radio_ports`]).
+pub fn net_rigctl_address_clashes(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+) -> Vec<AddressClash> {
+    let enabled = || radios.iter().filter(|p| p.enabled);
+    let mut clashes = Vec::new();
+    for q in enabled() {
+        let Some(port) = net_rigctl_port_here(q) else {
+            continue;
+        };
+        let mut clash = |holder| {
+            clashes.push(AddressClash {
+                port,
+                address_of: q.id,
+                holder,
+            })
+        };
+        for p in enabled() {
+            let shares_it = net_rigctl_port_here(p) == Some(p.rigctld_port);
+            if p.rigctld_port == port && !shares_it {
+                clash(PortHolder::Cat(p.id));
+            }
+        }
+        if broker == Some(port) {
+            clash(PortHolder::Broker);
+        }
+    }
+    clashes
+}
+
+/// The first [`AddressClash`], in words: what the status lane says (`radio_config_warning`) while
+/// one is stored, as an older build's port repair could leave it. Nothing renumbers it: the
+/// rigctld TCP Port to change is the operator's to choose.
+pub fn net_rigctl_address_conflicts(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+) -> Option<String> {
+    net_rigctl_address_clashes(radios, broker)
+        .first()
+        .map(|c| c.message(radios))
+}
+
+/// The words that refuse radio `id`'s opener its NET rigctl Network Address on this computer, while
+/// one of Nexus's own listeners holds that port: another radio's CAT daemon, on its rigctld TCP
+/// Port, or the CAT broker (`broker`, while it is on). What answers there is that other radio, or
+/// Nexus itself, so a read would show the wrong dial and a key would key the wrong transmitter.
+/// `None` for every other address, and for every radio that is not NET rigctl on this computer.
+///
+/// [`port_clash_introduced`] keeps a save from making one. This is for a clash an older build
+/// stored, which nothing renumbers: the status lane says it ([`net_rigctl_address_conflicts`]),
+/// in these same words, and every opener refuses the address until the operator changes the port.
+///
+/// The radio is described as its opener dials it (`rig_model`, `rig_conn`, `rig_addr`): the
+/// operated radio's flat mirror, a monitored one's profile.
+///
+/// A holder is a radio Nexus runs a CAT daemon for: enabled, with a rig model or on OmniRig (which
+/// needs none). Not one: a radio with no CAT, whose rigctld TCP Port nothing binds, and a radio
+/// sharing its own rigctld at its own Network Address (the manual's NET rigctl station), for which
+/// Nexus starts nothing.
+pub fn net_rigctl_address_refusal(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+    id: u32,
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &str,
+) -> Option<String> {
+    let (_, port) = net_rigctl_addr_here(rig_model, rig_conn, rig_addr)?;
+    let holder = radios.iter().find(|p| {
+        p.enabled
+            && p.id != id
+            && (p.rig_model != 0 || rig_conn_is_omnirig(&p.rig_conn))
+            && p.rigctld_port == port
+            && net_rigctl_port_here(p) != Some(p.rigctld_port)
+    });
+    let holder = match holder {
+        Some(p) => PortHolder::Cat(p.id),
+        None if broker == Some(port) => PortHolder::Broker,
+        None => return None,
+    };
+    Some(
+        AddressClash {
+            port,
+            address_of: id,
+            holder,
+        }
+        .message(radios),
+    )
+}
+
+/// The first [`AddressClash`] a save makes, in words: one in `after` that `before` did not have.
+/// The save is refused with it. One already stored is not that save's to refuse: the operator may
+/// be saving something else entirely, and the status lane says it meanwhile.
+pub fn port_clash_introduced(
+    before: &[RadioProfile],
+    before_broker: Option<u16>,
+    after: &[RadioProfile],
+    after_broker: Option<u16>,
+) -> Option<String> {
+    let stored = net_rigctl_address_clashes(before, before_broker);
+    net_rigctl_address_clashes(after, after_broker)
+        .into_iter()
+        .find(|c| !stored.contains(c))
+        .map(|c| c.message(after))
 }
 
 /// Two enabled radios cannot share a serial CAT port: the OS opens a COM port
@@ -4217,6 +4735,15 @@ impl Default for Settings {
             contest_club: String::new(),
             contest_entry_class: String::new(),
             contest_operators: String::new(),
+            contest_category_transmitter: String::new(),
+            contest_category_overlay: String::new(),
+            contest_address: String::new(),
+            contest_address_city: String::new(),
+            contest_address_state: String::new(),
+            contest_address_postalcode: String::new(),
+            contest_address_country: String::new(),
+            contest_soapbox: String::new(),
+            contest_category_band: String::new(),
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.
@@ -4226,9 +4753,16 @@ impl Default for Settings {
             contest_cq_zone: 0,  // 0 = not set; CQ zones are 1..=40
             contest_itu_zone: 0, // 0 = not set; ITU zones are 1..=90
             contest_power: String::new(),
+            // Enter Sends Message: off in every cockpit until the operator turns it on.
+            contest_esm_cw: false,
+            contest_esm_rtty: false,
+            contest_esm_phone: false,
+            contest_esm_call_once: false,
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
+            fd_objectives: Vec::new(),
+            fd_objectives_planned: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
             n3fjp_use_enter: true,
@@ -4247,6 +4781,7 @@ impl Default for Settings {
             fd_join_addr: String::new(),
             fd_position_name: String::new(),
             fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
+            contest_before: None,          // no contest has changed anything yet
             fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
             fd_scoreboard_port: default_fd_scoreboard_port(),
             connect_web: false, // same rule: exposing the station on the LAN is opt-in
@@ -4308,6 +4843,9 @@ impl Default for Settings {
             // Assistance is a normal, legal way to operate; only the operator's explicit
             // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
             unassisted_mode: false,
+            scp_enabled: true,
+            scp_auto_update: true,
+            call_history_enabled: true,
             // Matches the profile default above: 4534 (broker owns 4532, rotctld 4533; #53).
             rigctld_port: 4534,
             rotator_model: 0,
@@ -4350,6 +4888,9 @@ impl Default for Settings {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: ICOM_LAN_DEFAULT_PORT,
             radios: Vec::new(), // migrated to a single profile on load()
             active_radio: 0,
             radio_pegged: false,
@@ -4533,6 +5074,7 @@ impl Default for Settings {
             opening_regional: true,
             macros: Macros::default(),
             voice_messages: default_voice_messages(),
+            voice_esm_roles: None,
             // A fresh install has no file, so nothing unknown to carry.
             unknown: serde_json::Map::new(),
         }
@@ -4592,15 +5134,35 @@ impl Settings {
         !self.unassisted_mode
     }
 
+    /// Is Super Check Partial EFFECTIVELY on? The operator's switch, minus Unassisted mode. A list
+    /// of the calls active in contests is help finding and copying stations, so an unassisted
+    /// entry gets none, and nothing is downloaded while one is declared.
+    pub fn scp_active(&self) -> bool {
+        self.scp_enabled && !self.unassisted_mode
+    }
+
+    /// Is call history EFFECTIVELY on? The operator's switch, minus Unassisted mode, for the same
+    /// reason as [`Settings::scp_active`]: last time's exchange is help copying this one.
+    pub fn call_history_active(&self) -> bool {
+        self.call_history_enabled && !self.unassisted_mode
+    }
+
     /// The assistance sources this build knows how to suppress, as
     /// `(label, effectively_on)` — the single list the journal records and the UI reads,
     /// so a new assistance source cannot be added to the app and forgotten by Unassisted
     /// mode. Order is stable: it is display order and journal order.
-    pub fn assistance_sources(&self) -> [(&'static str, bool); 3] {
+    ///
+    /// ⚠️ The contest strip reads the last two labels off `FieldDayStatus::assistance_on` to
+    /// decide whether it shows Super Check Partial and fills from call history
+    /// (`ui/src/features/contestLists.ts`), so a rename here is a rename there: guarded by
+    /// `the_strip_reads_the_scp_and_call_history_labels_the_engine_sends`.
+    pub fn assistance_sources(&self) -> [(&'static str, bool); 5] {
         [
             ("AI CW decoder", self.ai_cw_active()),
             ("DX cluster / RBN", self.cluster_active()),
             ("PSK Reporter needs", self.pskr_evidence_active()),
+            (SCP_SOURCE, self.scp_active()),
+            (CALL_HISTORY_SOURCE, self.call_history_active()),
         ]
     }
 
@@ -4663,6 +5225,9 @@ impl Settings {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
+            icom_lan_host: self.icom_lan_host.clone(),
+            icom_lan_user: self.icom_lan_user.clone(),
+            icom_lan_port: self.icom_lan_port,
         }
     }
 
@@ -4888,7 +5453,8 @@ impl Settings {
     }
 
     /// Append a new radio profile with a fresh (never-reused) id, a placeholder name, and CAT/rotator
-    /// TCP ports guaranteed distinct from every existing radio's (two daemons can't bind one port).
+    /// TCP ports guaranteed distinct from every existing radio's (two daemons can't bind one port),
+    /// and off every NET rigctl radio's Network Address on this computer.
     /// Returns the new profile's id. The operator then configures its CAT by switching to it (the
     /// flat rig form always edits the active radio). Does NOT change the active radio.
     pub fn add_radio_profile(&mut self) -> u32 {
@@ -4902,6 +5468,9 @@ impl Settings {
         if self.cat_broker {
             used.push(self.cat_broker_port);
         }
+        // …nor where a NET rigctl radio's Network Address points on this computer: the operator's
+        // rigctld is there (`net_rigctl_port_here`).
+        used.extend(self.radios.iter().filter_map(net_rigctl_port_here));
         let mut free_from = |start: u16| -> u16 {
             let mut port = start;
             while used.contains(&port) {
@@ -4938,24 +5507,43 @@ impl Settings {
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
-    /// (and any that clashes with the CAT broker) to the next free value, first-radio-wins. Idempotent;
-    /// called on load. `add_radio_profile` already assigns distinct ports, so this only fixes older
-    /// configs or hand-edited collisions.
+    /// (and any that clashes with the CAT broker) to the next free value, first-radio-wins, never
+    /// onto a NET rigctl radio's Network Address on this computer; and moves a rotator's port off
+    /// one. Idempotent; called on load. `add_radio_profile` already assigns distinct ports, so this
+    /// only fixes older configs or hand-edited collisions.
     pub fn ensure_distinct_radio_ports(&mut self) {
         let broker = self.cat_broker.then_some(self.cat_broker_port);
+        // Where NET rigctl radios' Network Addresses point on this computer. The operator's rigctld
+        // is there (wfview's, or their own), so no daemon is ever MOVED onto one. A CAT daemon
+        // already on one is not moved off it either: its rigctld TCP Port is the operator's to
+        // choose, and the status lane says which to change (`net_rigctl_address_conflicts`). A
+        // rotator's port is, as Settings has no control for it.
+        let addresses: Vec<u16> = self
+            .radios
+            .iter()
+            .filter_map(net_rigctl_port_here)
+            .collect();
+        let has_rotator = |p: &RadioProfile| p.rotator_model > 0 || !p.rotator_host.is_empty();
+        let rotator_on_an_address = self
+            .radios
+            .iter()
+            .any(|p| has_rotator(p) && addresses.contains(&p.rotctld_port));
         // Repair when ports COLLIDE, or when any profile has an INVALID (0) rigctld port. A lone 0
         // is technically "distinct" so `validate_radio_ports` alone wouldn't flag it, but connecting
         // to 127.0.0.1:0 fails on Windows with WSAEADDRNOTAVAIL ("the requested address is not valid
         // in its context", os error 10049) — so an older/imported config with a 0 port breaks CAT
         // for that one radio while its siblings work. Treat 0 like a collision and reassign it.
         let has_invalid_port = self.radios.iter().any(|p| p.rigctld_port == 0);
-        if !has_invalid_port && validate_radio_ports(&self.radios, broker).is_ok() {
+        if !has_invalid_port
+            && !rotator_on_an_address
+            && daemon_port_clash(&self.radios, broker).is_none()
+        {
             return;
         }
         let mut used: Vec<u16> = broker.into_iter().collect();
         let free_from = |start: u16, used: &mut Vec<u16>| -> u16 {
             let mut port = start.max(1024);
-            while used.contains(&port) {
+            while used.contains(&port) || addresses.contains(&port) {
                 port = port.saturating_add(1);
             }
             used.push(port);
@@ -4974,6 +5562,13 @@ impl Settings {
                 } else {
                     used.push(p.rotctld_port);
                 }
+            }
+        }
+        // A rotator on a NET rigctl address moves off it last, once every port above is known, so
+        // it lands on none of them.
+        for p in self.radios.iter_mut() {
+            if has_rotator(p) && addresses.contains(&p.rotctld_port) {
+                p.rotctld_port = free_from(4533, &mut used);
             }
         }
     }
@@ -5041,6 +5636,9 @@ impl Settings {
         self.flex_native_pan = p.flex_native_pan;
         self.flex_native_audio = p.flex_native_audio;
         self.flex_native_cat = p.flex_native_cat;
+        self.icom_lan_host = p.icom_lan_host;
+        self.icom_lan_user = p.icom_lan_user;
+        self.icom_lan_port = p.icom_lan_port;
     }
 
     /// Copy the flat mirror back INTO the active profile — so edits made through today's flat rig/
@@ -5083,6 +5681,9 @@ impl Settings {
             flex_native_pan,
             flex_native_audio,
             flex_native_cat,
+            icom_lan_host,
+            icom_lan_user,
+            icom_lan_port,
         ) = (
             self.ptt_method.clone(),
             self.rig_model,
@@ -5116,6 +5717,9 @@ impl Settings {
             self.flex_native_pan,
             self.flex_native_audio,
             self.flex_native_cat,
+            self.icom_lan_host.clone(),
+            self.icom_lan_user.clone(),
+            self.icom_lan_port,
         );
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == active) {
             p.ptt_method = ptt_method;
@@ -5150,6 +5754,9 @@ impl Settings {
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
             p.flex_native_cat = flex_native_cat;
+            p.icom_lan_host = icom_lan_host;
+            p.icom_lan_user = icom_lan_user;
+            p.icom_lan_port = icom_lan_port;
         }
     }
 
@@ -5202,6 +5809,147 @@ impl Settings {
             }
         }
         repaired
+    }
+
+    /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW, RTTY and PSK contest
+    /// keys, as in N1MM's default message sets. In the CW, RTTY and PSK contest sets it traded keys
+    /// with B4, now on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW
+    /// F5 sends his call, and a recording cannot say a callsign. The voice keyer gains an F8 slot
+    /// for it.
+    ///
+    /// A settings file from before has no F8 in the voice keyer, which is how this knows it has not
+    /// run: the keyer gains F8, empty and labelled AGN, and once the file has an F8 this does
+    /// nothing. What moves, moves with its message, so each key the operator set up sends what it
+    /// sent before:
+    ///
+    /// * RTTY's and PSK's contest sets: the keys the operator changed there trade F7 and F8 with
+    ///   the built-ins, and so does RTTY's step map for its set (PSK has no ESM). Everyday does not
+    ///   move, in either mode.
+    /// * CW: the step map of a profile on the built-in sets trades F7 and F8 with them (a Reset
+    ///   keeps the map a profile had, and the cockpit reads it over the built-in sets). A profile
+    ///   with macros of its own is its own layout, and does not move.
+    /// * Phone: F5 keeps whatever it holds, and F8 starts with a copy of it when Enter Sends
+    ///   Message played F5 for AGN: the operator used it in Phone (its switch is on, or they mapped
+    ///   its steps), AGN came from the built-in steps rather than a key they picked, and no step
+    ///   they mapped plays F5. Whether F5 holds that AGN or the casual set's 73, its label cannot
+    ///   say (no build ever let the operator rename a slot, so F5 reads "73" whatever it holds), so
+    ///   F5 is never cleared or rebound (operator, 2026-10-11): F5 plays what it played, ESM's AGN
+    ///   plays the same audio from F8, and the operator records a real AGN in F8 when they like.
+    ///
+    /// ⛔ NEVER LOSES OR OVERWRITES A RECORDING. The audio is COPIED to `slot8.wav` beside F5's
+    /// file, which stays bound to F5 as it was. The copy is a file of its own because the recorder
+    /// writes slot N to `slot<N>.wav`: F8 bound to `slot5.wav` would change with the next F5
+    /// recording, and a new F8 recording writes `slot8.wav`, never F5's file. A `slot8.wav`
+    /// already there is never written over; one holding the same bytes is this migration's own
+    /// copy from a launch whose save did not land, and F8 takes it. When no copy can be made, F8
+    /// starts empty.
+    ///
+    /// Returns whether the settings changed, so the caller saves them.
+    pub fn move_agn_to_f8(&mut self) -> bool {
+        if self.voice_messages.iter().any(|m| m.slot == 8) {
+            return false;
+        }
+        let f8 = self.agn_recording_copied_to_f8().unwrap_or_default();
+        self.voice_messages.push(VoiceMessage {
+            slot: 8,
+            label: "AGN".to_string(),
+            file: f8,
+        });
+        for profile in &mut self.macros.cw_profiles {
+            if profile.macros.is_empty() {
+                profile.esm_roles.iter_mut().for_each(Self::trade_f7_f8);
+            }
+        }
+        for set in self
+            .macros
+            .rtty_profiles
+            .iter_mut()
+            .chain(&mut self.macros.psk_profiles)
+        {
+            if set.name == "contest" {
+                Self::trade_f7_f8_entries(&mut set.macros);
+            }
+        }
+        if let Some(roles) = self
+            .macros
+            .rtty_esm_roles
+            .as_mut()
+            .and_then(|sets| sets.get_mut("contest"))
+        {
+            Self::trade_f7_f8(roles);
+        }
+        true
+    }
+
+    /// F5's recording copied to `slot8.wav` beside it when Enter Sends Message played F5 for AGN
+    /// ([`Self::move_agn_to_f8`]): the copy's path, or None and nothing written over.
+    fn agn_recording_copied_to_f8(&self) -> Option<String> {
+        let f5 = self.voice_messages.iter().find(|m| m.slot == 5)?;
+        let own = self.voice_esm_roles.clone();
+        if !(self.contest_esm_phone || own.is_some()) {
+            return None;
+        }
+        let own = own.unwrap_or_default();
+        // A key the operator picked for AGN, or a step of theirs on F5: the slot is theirs. An
+        // empty key list is no key, as Enter Sends Message reads it.
+        if own.get("again").is_some_and(|keys| !keys.is_empty())
+            || own.values().flatten().any(|key| key == "F5")
+        {
+            return None;
+        }
+        // An F5 with no recording binds no file, and an empty path does not read.
+        let from = Path::new(&f5.file);
+        let to = from.with_file_name("slot8.wav");
+        let audio = std::fs::read(from).ok()?;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&to)
+        {
+            Ok(mut file) => {
+                std::io::Write::write_all(&mut file, &audio).ok()?;
+                file.sync_all().ok()?;
+            }
+            // Never written over. The same bytes are this migration's own copy from a launch
+            // whose save did not land.
+            Err(_) => {
+                if std::fs::read(&to).ok()? != audio {
+                    return None;
+                }
+            }
+        }
+        Some(to.to_string_lossy().into_owned())
+    }
+
+    /// F7 for F8 and F8 for F7 in each step of a step map ([`Self::move_agn_to_f8`]).
+    fn trade_f7_f8(roles: &mut EsmRoleMap) {
+        for key in roles.values_mut().flatten() {
+            *key = Self::traded(key);
+        }
+    }
+
+    /// The same for a set's saved keys, which stay in F-key order.
+    fn trade_f7_f8_entries(entries: &mut [KeyboardMacro]) {
+        for entry in entries.iter_mut() {
+            entry.key = Self::traded(&entry.key);
+        }
+        let f7 = entries.iter().position(|e| e.key == "F7");
+        let f8 = entries.iter().position(|e| e.key == "F8");
+        if let (Some(f7), Some(f8)) = (f7, f8) {
+            if f7 > f8 {
+                entries.swap(f7, f8);
+            }
+        }
+    }
+
+    /// `key` with F7 and F8 traded; any other key as it is.
+    fn traded(key: &str) -> String {
+        match key {
+            "F7" => "F8",
+            "F8" => "F7",
+            other => other,
+        }
+        .to_string()
     }
 
     /// Load settings from `path`. A missing file (first run) returns defaults. A
@@ -6073,6 +6821,9 @@ mod tests {
             )])),
             flex_native_audio: true,
             flex_native_cat: true,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -6410,6 +7161,9 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
         })
         .expect("patch serializes");
         let patch_keys: Vec<&str> = patch
@@ -6451,7 +7205,7 @@ mod tests {
         // rename, not a parser hole.
         assert_eq!(
             labels.len(),
-            3,
+            5,
             "assistance_sources changed shape: {labels:?}"
         );
         for needed in ["DX cluster / RBN", "PSK Reporter needs"] {
@@ -6560,6 +7314,9 @@ mod tests {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            icom_lan_host: String::new(),
+            icom_lan_user: String::new(),
+            icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
             // Added by this branch. `yaesu_rf_scope` has a UI counterpart (`yaesuRfScope?`);
             // `yaesu_fix_starts` deliberately does NOT — its own doc says nothing writes it yet
             // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
@@ -6627,6 +7384,7 @@ mod tests {
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false, "flexNativeCat": false,
+            "icomLanHost": "", "icomLanUser": "", "icomLanPort": 50001,
             "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
         let patch: RadioProfilePatch =
@@ -6815,6 +7573,9 @@ mod tests {
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            icom_lan_host: p.icom_lan_host.clone(),
+            icom_lan_user: p.icom_lan_user.clone(),
+            icom_lan_port: p.icom_lan_port,
         }
     }
 
@@ -8259,6 +9020,83 @@ mod tests {
         assert!(
             json.contains("\"catRtsState\":\"low\""),
             "control: neighbouring keys serialise"
+        );
+    }
+
+    /// The contest entry's Cabrillo declarations, on the exact wire keys `ui/src/types.ts` writes
+    /// (`contestAddressPostalcode`, not `contestAddressPostalCode`, is the one the container's
+    /// `camelCase` rule makes), each empty by default: nothing is declared until the operator
+    /// declares it.
+    #[test]
+    fn the_cabrillo_declarations_use_the_exact_wire_keys_the_ui_writes() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "contestCategoryTransmitter",
+            "contestCategoryOverlay",
+            "contestAddress",
+            "contestAddressCity",
+            "contestAddressState",
+            "contestAddressPostalcode",
+            "contestAddressCountry",
+            "contestSoapbox",
+        ] {
+            assert!(json.contains(&format!("\"{key}\":\"\"")), "{key}");
+        }
+        // CONTROL: the camel-cased spelling a hand-written TS key would reach for is absent.
+        assert!(!json.contains("contestAddressPostalCode"));
+        // …and a stored file without them loads them empty, as every file before them is.
+        let old: Settings = serde_json::from_str("{\"mycall\":\"K1ABC\"}").unwrap();
+        assert_eq!(
+            (
+                old.contest_category_transmitter.as_str(),
+                old.contest_soapbox.as_str()
+            ),
+            ("", "")
+        );
+    }
+
+    /// ⭐ **The band category round-trips through a stored settings file**: its exact wire key,
+    /// empty by default and in a file written before it existed (nothing declared), and a stored
+    /// band that comes back from a load and a save as it went in, through the real file path. The
+    /// TS mirror is read out of `types.ts` itself.
+    #[test]
+    fn the_band_category_round_trips_through_a_stored_settings_file() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"contestCategoryBand\":\"\""), "{json}");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"K1ABC"}"#).unwrap();
+        assert_eq!(
+            (old.mycall.as_str(), old.contest_category_band.as_str()),
+            ("K1ABC", ""),
+            "a file from before the field declares nothing"
+        );
+        let dir = scratch_dir("contest_category_band");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            br#"{"mycall":"W9XYZ","fdEvent":"cqww_ssb","contestCategoryBand":"20M"}"#,
+        )
+        .unwrap();
+        let stored = Settings::load(&path);
+        assert_eq!(
+            (
+                stored.mycall.as_str(),
+                stored.contest_category_band.as_str()
+            ),
+            ("W9XYZ", "20M"),
+            "the stored band loads"
+        );
+        stored.save(&path).unwrap();
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back["contestCategoryBand"], "20M", "a save writes it back");
+        assert_eq!(Settings::load(&path).contest_category_band, "20M");
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("contestCategoryBand?: string"),
+            "ui/src/types.ts types the key"
         );
     }
 
@@ -10374,10 +11212,12 @@ mod tests {
                 CwMacroProfile {
                     name: "Alice".into(),
                     macros: vec![mac("F1"), mac("F2")],
+                    esm_roles: None,
                 },
                 CwMacroProfile {
                     name: "Bob".into(),
                     macros: vec![mac("F3")],
+                    esm_roles: None,
                 },
             ],
             active_cw_profile: 1,
@@ -10399,6 +11239,7 @@ mod tests {
                     label: "CQ".into(),
                     text: "CQ".into(),
                 }],
+                esm_roles: None,
             }],
             active_cw_profile: 9, // out of range
             ..Macros::default()
@@ -10446,6 +11287,7 @@ mod tests {
                     label: "CQ".into(),
                     text: "CQ DE {MYCALL}".into(),
                 }],
+                esm_roles: None,
             },
             CwMacroProfile {
                 name: "Bob".into(),
@@ -10454,6 +11296,7 @@ mod tests {
                     label: "73".into(),
                     text: "73".into(),
                 }],
+                esm_roles: None,
             },
         ];
         s.macros.active_cw_profile = 1;
@@ -10468,6 +11311,251 @@ mod tests {
         assert_eq!(back.macros.cw_profiles[1].name, "Bob");
         assert_eq!(back.macros.active_cw_profile, 1, "active index preserved");
         assert_eq!(back.macros.active_cw_macros()[0].key, "F2");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ENTER SENDS MESSAGE's four switches, in one array: CW, RTTY, Phone, call once.
+    fn esm_switches(s: &Settings) -> [bool; 4] {
+        [
+            s.contest_esm_cw,
+            s.contest_esm_rtty,
+            s.contest_esm_phone,
+            s.contest_esm_call_once,
+        ]
+    }
+
+    /// ENTER SENDS MESSAGE's four switches: OFF on a fresh install and in a file that predates
+    /// them, on their exact wire keys, and declared in `ui/src/types.ts`. Nothing but the
+    /// operator turns ESM on: it makes Enter a way to start a transmission.
+    #[test]
+    fn contest_esm_switches_ship_off_wire_keys_and_ts_mirror() {
+        let read = esm_switches;
+        assert_eq!(read(&Settings::default()), [false; 4], "ESM ships OFF");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"contestEsmCw\":false",
+            "\"contestEsmRtty\":false",
+            "\"contestEsmPhone\":false",
+            "\"contestEsmCallOnce\":false",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        // An upgrader's file predates the keys: off, never on by accident.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(read(&old), [false; 4]);
+
+        // The TS mirror, read from types.ts itself.
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        for key in [
+            "contestEsmCw",
+            "contestEsmRtty",
+            "contestEsmPhone",
+            "contestEsmCallOnce",
+            "voiceEsmRoles",
+            "rttyEsmRoles",
+        ] {
+            assert!(declares(key), "ui/src/types.ts Settings is missing `{key}`");
+        }
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start().starts_with("cwProfiles?:") && l.contains("esmRoles?:")),
+            "ui/src/types.ts declares no `esmRoles` on a CW profile"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("contestEsm") && !declares("contestEsmCW"));
+    }
+
+    /// Each ESM switch survives a restart: on by itself, it comes back from the real file as it
+    /// went in, the others with it; all four on come back on, and all four off come back off.
+    #[test]
+    fn contest_esm_switches_survive_a_save_and_a_load() {
+        let path = scratch_dir("esm_switches").join("settings.json");
+        for i in 0..4 {
+            let mut on = Settings::default();
+            match i {
+                0 => on.contest_esm_cw = true,
+                1 => on.contest_esm_rtty = true,
+                2 => on.contest_esm_phone = true,
+                _ => on.contest_esm_call_once = true,
+            }
+            on.save(&path).unwrap();
+            assert_eq!(
+                esm_switches(&Settings::load(&path)),
+                esm_switches(&on),
+                "switch {i} did not survive a save and a load"
+            );
+        }
+        for want in [true, false] {
+            let mut s = Settings::default();
+            s.contest_esm_cw = want;
+            s.contest_esm_rtty = want;
+            s.contest_esm_phone = want;
+            s.contest_esm_call_once = want;
+            s.save(&path).unwrap();
+            assert_eq!(esm_switches(&Settings::load(&path)), [want; 4]);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A CW profile, the RTTY sets and the voice keyer from before Enter Sends Message carry no
+    /// mapping, and an old profile comes back BYTE FOR BYTE: nothing is added to it, through
+    /// serde and through the real file path, so an operator's set reads back as it was written.
+    #[test]
+    fn a_macro_set_saved_before_esm_roles_round_trips_byte_for_byte() {
+        let old_profile = concat!(
+            r#"{"name":"Contest","macros":["#,
+            r#"{"key":"F1","label":"CQ TEST","text":"CQ TEST DE {MYCALL} {MYCALL} K"},"#,
+            r#"{"key":"F3","label":"Exch","text":"! DE {MYCALL} {RST} {EXCH} {EXCH} K"}]}"#
+        );
+        let p: CwMacroProfile = serde_json::from_str(old_profile).unwrap();
+        assert_eq!(p.esm_roles, None);
+        assert_eq!(
+            serde_json::to_string(&p).unwrap(),
+            old_profile,
+            "an old profile changed on its way back out"
+        );
+
+        let path = scratch_dir("esm_old_profile").join("settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let old_rtty = r#"[{"name":"contest","macros":[{"key":"F3","label":"TU","text":"TU {MYCALL} TEST"}]}]"#;
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"mycall":"W9XYZ","macros":{{"cwProfiles":[{old_profile}],"activeCwProfile":0,"rttyProfiles":{old_rtty},"activeRttyProfile":"contest"}}}}"#
+            ),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.mycall, "W9XYZ",
+            "control: the old file loaded, rather than falling back to defaults"
+        );
+        loaded.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for key in ["esmRoles", "rttyEsmRoles", "voiceEsmRoles"] {
+            assert!(
+                !saved.contains(&format!("\"{key}\"")),
+                "saving an old file wrote `{key}`"
+            );
+        }
+        let back = Settings::load(&path);
+        assert_eq!(
+            serde_json::to_string(&back.macros.cw_profiles[0]).unwrap(),
+            old_profile,
+            "the old profile changed through a save and a load"
+        );
+        assert_eq!(
+            serde_json::to_string(&back.macros.rtty_profiles).unwrap(),
+            old_rtty
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The mappings themselves come back by VALUE through a save and a load, on their wire keys:
+    /// a CW profile's, the RTTY sets' and the voice keyer's. And a hand edit gone wrong costs only
+    /// the step that is wrong — never the profile's keys, nor the file around them, which serde
+    /// would otherwise set aside for defaults, the licence lockout with it.
+    #[test]
+    fn esm_role_maps_round_trip_by_value_and_a_bad_one_costs_only_itself() {
+        let roles = |pairs: &[(&str, &[&str])]| -> EsmRoleMap {
+            pairs
+                .iter()
+                .map(|(step, keys)| {
+                    (
+                        step.to_string(),
+                        keys.iter().map(|k| k.to_string()).collect(),
+                    )
+                })
+                .collect()
+        };
+        let path = scratch_dir("esm_maps").join("settings.json");
+        let mut s = Settings::default();
+        s.macros.cw_profiles = vec![CwMacroProfile {
+            name: "Mine".into(),
+            macros: vec![CwMacroDef {
+                key: "F1".into(),
+                label: "CQ".into(),
+                text: "CQ TEST {MYCALL}".into(),
+            }],
+            esm_roles: Some(roles(&[("cq", &["F1"]), ("callExch", &["F5", "F2"])])),
+        }];
+        s.macros.rtty_esm_roles = Some(std::collections::BTreeMap::from([(
+            "everyday".to_string(),
+            roles(&[("tu", &["F3"])]),
+        )]));
+        s.voice_esm_roles = Some(roles(&[("again", &["F6"])]));
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.macros.cw_profiles[0].esm_roles,
+            s.macros.cw_profiles[0].esm_roles
+        );
+        assert_eq!(back.macros.rtty_esm_roles, s.macros.rtty_esm_roles);
+        assert_eq!(back.voice_esm_roles, s.voice_esm_roles);
+        let json = serde_json::to_value(&back).unwrap();
+        assert_eq!(
+            json["macros"]["cwProfiles"][0]["esmRoles"],
+            serde_json::json!({"cq": ["F1"], "callExch": ["F5", "F2"]})
+        );
+        assert_eq!(
+            json["macros"]["rttyEsmRoles"],
+            serde_json::json!({"everyday": {"tu": ["F3"]}})
+        );
+        assert_eq!(json["voiceEsmRoles"], serde_json::json!({"again": ["F6"]}));
+
+        // A bad hand edit: steps that are not lists of keys, a map that is not one.
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"mycall":"W9XYZ","macros":{"cwProfiles":["#,
+                r#"{"name":"Mine","macros":[{"key":"F1","label":"CQ","text":"CQ"}],"#,
+                r#""esmRoles":{"cq":["F1"],"tu":"F3","again":[3]}},"#,
+                r#"{"name":"Bad","macros":[],"esmRoles":5}],"#,
+                r#""rttyEsmRoles":{"everyday":{"tu":["F3"]},"contest":"x"}},"#,
+                r#""voiceEsmRoles":[1]}"#
+            ),
+        )
+        .unwrap();
+        let bad = Settings::load(&path);
+        assert_eq!(bad.mycall, "W9XYZ", "a bad mapping cost the whole file");
+        assert_eq!(
+            bad.macros
+                .cw_profiles
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Mine", "Bad"],
+            "a bad mapping cost its profile"
+        );
+        assert_eq!(
+            bad.macros.cw_profiles[0].macros.len(),
+            1,
+            "the profile's keys survived"
+        );
+        assert_eq!(
+            bad.macros.cw_profiles[0].esm_roles,
+            Some(roles(&[("cq", &["F1"])])),
+            "only the wrong steps were dropped"
+        );
+        assert_eq!(bad.macros.cw_profiles[1].esm_roles, None);
+        assert_eq!(
+            bad.macros.rtty_esm_roles,
+            Some(std::collections::BTreeMap::from([(
+                "everyday".to_string(),
+                roles(&[("tu", &["F3"])]),
+            )]))
+        );
+        assert_eq!(bad.voice_esm_roles, None);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -11248,6 +12336,505 @@ mod tests {
         );
     }
 
+    /// A NET rigctl radio: Connection Network, Rig Model NET rigctl, Network Address `addr`, Nexus's
+    /// own rigctld TCP Port `port`.
+    fn net_rigctl(id: u32, name: &str, addr: &str, port: u16) -> RadioProfile {
+        RadioProfile {
+            id,
+            name: name.into(),
+            rig_model: 2,
+            rig_conn: "network".into(),
+            rig_addr: addr.into(),
+            rigctld_port: port,
+            ..Default::default()
+        }
+    }
+
+    /// A radio on a serial port, its rigctld on TCP port `port`.
+    fn serial_rig(id: u32, name: &str, port: u16) -> RadioProfile {
+        RadioProfile {
+            id,
+            name: name.into(),
+            rig_model: 1036,
+            serial_port: format!("COM{}", id + 3),
+            rigctld_port: port,
+            ..Default::default()
+        }
+    }
+
+    /// (name, rigctld TCP Port, rotctld port) of every radio.
+    fn daemon_ports(s: &Settings) -> Vec<(String, u16, u16)> {
+        s.radios
+            .iter()
+            .map(|p| (p.name.clone(), p.rigctld_port, p.rotctld_port))
+            .collect()
+    }
+
+    /// ⭐ NO REPAIR MOVES A DAEMON ONTO A NET RIGCTL RADIO'S NETWORK ADDRESS. B is NET rigctl at
+    /// wfview's `127.0.0.1:4533`, its own rigctld TCP Port 4534; A, a serial radio, collides with B
+    /// on 4534; the broker is on 4532. The repair used to move A onto 4533, the port wfview answers
+    /// on, where A's CAT and B's reach each other's radio, and the validator passed it.
+    #[test]
+    fn a_port_repair_never_moves_a_daemon_onto_a_net_rigctl_address() {
+        let mut s = Settings {
+            cat_broker: true,
+            cat_broker_port: 4532,
+            ..Settings::default()
+        };
+        s.radios = vec![
+            net_rigctl(0, "B", "127.0.0.1:4533", 4534),
+            serial_rig(1, "A", 4534),
+        ];
+        s.ensure_distinct_radio_ports();
+        let rigctld: Vec<(String, u16)> = daemon_ports(&s)
+            .into_iter()
+            .map(|(n, p, _)| (n, p))
+            .collect();
+        assert_eq!(
+            (rigctld, validate_radio_ports(&s.radios, Some(4532))),
+            (vec![("B".into(), 4534), ("A".into(), 4535)], Ok(()))
+        );
+    }
+
+    /// ⭐ A NEW RADIO NEVER GETS A NET RIGCTL RADIO'S NETWORK ADDRESS AS ITS PORT. With the broker
+    /// off, the first free port used to be 4532: the manual's own external rigctld, at B's address.
+    #[test]
+    fn a_new_radio_never_gets_a_net_rigctl_address_as_its_port() {
+        let mut s = Settings {
+            cat_broker: false,
+            ..Settings::default()
+        };
+        s.radios = vec![net_rigctl(0, "B", "127.0.0.1:4532", 4534)];
+        s.active_radio = 0;
+        let id = s.add_radio_profile();
+        let added = s.radios.iter().find(|p| p.id == id).unwrap();
+        assert_eq!((added.rigctld_port, added.rotctld_port), (4535, 4536));
+    }
+
+    /// A rotator's daemon port is Nexus's own allocation (Settings has no control for it), so one on
+    /// a NET rigctl radio's Network Address is moved off it on load, as a clash between two daemons
+    /// is; and the move lands on no port another radio holds.
+    #[test]
+    fn a_rotator_on_a_net_rigctl_address_is_moved_off_it() {
+        let mut s = Settings {
+            cat_broker: false,
+            ..Settings::default()
+        };
+        let mut b = net_rigctl(0, "B", "127.0.0.1:4533", 4534);
+        b.rotator_model = 1;
+        b.rotctld_port = 4533;
+        let mut a = serial_rig(1, "A", 4535);
+        a.rotator_model = 1;
+        a.rotctld_port = 4536;
+        s.radios = vec![b, a];
+        s.ensure_distinct_radio_ports();
+        assert_eq!(
+            daemon_ports(&s),
+            vec![("B".into(), 4534, 4537), ("A".into(), 4535, 4536)]
+        );
+    }
+
+    /// Every station without a daemon on a NET rigctl address keeps its ports byte for byte: the
+    /// matching-port station (the manual's own NET rigctl setup), a NET rigctl radio on another
+    /// computer, a disabled radio, other models, an ordinary two-radio station, and a repair whose
+    /// first free port is not an address.
+    #[test]
+    fn stations_without_a_daemon_on_a_net_rigctl_address_keep_their_ports() {
+        let mut flex = net_rigctl(1, "Flex", "127.0.0.1:4533", 4535);
+        flex.rig_model = 2036;
+        let mut disabled = net_rigctl(1, "Off", "127.0.0.1:4533", 4535);
+        disabled.enabled = false;
+        let mut serial_with_an_old_address = net_rigctl(1, "Old", "127.0.0.1:4533", 4535);
+        serial_with_an_old_address.rig_conn = "serial".into();
+        let rosters: Vec<(&str, Option<u16>, Vec<RadioProfile>)> = vec![
+            (
+                "the manual's NET rigctl station",
+                None,
+                vec![net_rigctl(0, "B", "127.0.0.1:4532", 4532)],
+            ),
+            (
+                "NET rigctl on another computer, A on its port number",
+                Some(4532),
+                vec![
+                    net_rigctl(0, "B", "192.168.1.50:4533", 4534),
+                    serial_rig(1, "A", 4533),
+                ],
+            ),
+            (
+                "an ordinary two-radio station",
+                Some(4532),
+                vec![serial_rig(0, "A", 4533), serial_rig(1, "C", 4534)],
+            ),
+            (
+                "SmartSDR CAT, not NET rigctl, on this computer",
+                Some(4532),
+                vec![serial_rig(0, "A", 4534), flex],
+            ),
+            (
+                "Connection Serial, an old address left in the field",
+                Some(4532),
+                vec![serial_rig(0, "A", 4534), serial_with_an_old_address],
+            ),
+            (
+                "a disabled NET rigctl radio",
+                Some(4532),
+                vec![serial_rig(0, "A", 4534), disabled],
+            ),
+        ];
+        for (what, broker, radios) in rosters {
+            let mut s = Settings {
+                cat_broker: broker.is_some(),
+                cat_broker_port: broker.unwrap_or(4532),
+                ..Settings::default()
+            };
+            s.radios = radios.clone();
+            s.ensure_distinct_radio_ports();
+            assert_eq!(s.radios, radios, "{what}: byte for byte");
+        }
+        // A repair that has to move a daemon, where the first free port is no address: the same
+        // number it always got.
+        let mut s = Settings {
+            cat_broker: true,
+            cat_broker_port: 4532,
+            ..Settings::default()
+        };
+        s.radios = vec![
+            net_rigctl(0, "B", "127.0.0.1:4540", 4534),
+            serial_rig(1, "A", 4534),
+        ];
+        s.ensure_distinct_radio_ports();
+        assert_eq!(
+            daemon_ports(&s)
+                .into_iter()
+                .map(|(_, p, _)| p)
+                .collect::<Vec<_>>(),
+            vec![4534, 4533]
+        );
+    }
+
+    /// ⭐ A DAEMON OR THE BROKER ON A NET RIGCTL ADDRESS IS REFUSED, BY NAME. The rows are what
+    /// `validate_radio_ports` says; only the first three are clashes.
+    #[test]
+    fn validate_radio_ports_refuses_a_daemon_or_the_broker_on_a_net_rigctl_address() {
+        let b = net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4534);
+        let mut b_off = b.clone();
+        b_off.enabled = false;
+        let mut a_off = serial_rig(1, "FTDX10", 4533);
+        a_off.enabled = false;
+        let rows: Vec<(&str, Vec<RadioProfile>, Option<u16>)> = vec![
+            (
+                "another radio's CAT on the address",
+                vec![b.clone(), serial_rig(1, "FTDX10", 4533)],
+                None,
+            ),
+            (
+                "the broker on the address",
+                vec![net_rigctl(0, "IC-9700", "127.0.0.1:4532", 4534)],
+                Some(4532),
+            ),
+            (
+                "the address spelled localhost",
+                vec![
+                    net_rigctl(0, "IC-9700", "localhost:4533", 4534),
+                    serial_rig(1, "FTDX10", 4533),
+                ],
+                None,
+            ),
+            (
+                "the radio's own rigctld TCP Port on its own address",
+                vec![net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4533)],
+                Some(4532),
+            ),
+            (
+                "two radios naming one rigctld, each on its own address",
+                vec![
+                    net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4533),
+                    net_rigctl(1, "IC-705", "127.0.0.1:4533", 4535),
+                ],
+                None,
+            ),
+            (
+                "an address on another computer",
+                vec![
+                    net_rigctl(0, "IC-9700", "192.168.1.50:4533", 4534),
+                    serial_rig(1, "FTDX10", 4533),
+                ],
+                None,
+            ),
+            (
+                "the NET rigctl radio disabled",
+                vec![b_off, serial_rig(1, "FTDX10", 4533)],
+                None,
+            ),
+            ("the other radio disabled", vec![b.clone(), a_off], None),
+        ];
+        let said: Vec<(&str, Result<(), String>)> = rows
+            .iter()
+            .map(|(what, radios, broker)| (*what, validate_radio_ports(radios, *broker)))
+            .collect();
+        let cat = |addr: &str| {
+            format!(
+                "TCP port 4533 is IC-9700's Network Address ({addr}), and FTDX10's rigctld TCP \
+                 Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+                 radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+            )
+        };
+        assert_eq!(
+            said,
+            vec![
+                (
+                    "another radio's CAT on the address",
+                    Err(cat("127.0.0.1:4533"))
+                ),
+                (
+                    "the broker on the address",
+                    Err(
+                        "TCP port 4532 is IC-9700's Network Address (127.0.0.1:4532), and \
+                         Share this radio with other programs is on 4532 too: IC-9700 would \
+                         read and command Nexus itself instead of its own radio. Change the \
+                         Share this radio port (Settings ▸ Radio ▸ Transmit limits & sharing)."
+                            .into()
+                    )
+                ),
+                ("the address spelled localhost", Err(cat("localhost:4533"))),
+                (
+                    "the radio's own rigctld TCP Port on its own address",
+                    Ok(())
+                ),
+                (
+                    "two radios naming one rigctld, each on its own address",
+                    Ok(())
+                ),
+                ("an address on another computer", Ok(())),
+                ("the NET rigctl radio disabled", Ok(())),
+                ("the other radio disabled", Ok(())),
+            ]
+        );
+        // A clash between two daemons keeps the words it always had.
+        assert_eq!(
+            validate_radio_ports(&[serial_rig(0, "A", 4533), serial_rig(1, "C", 4533)], None),
+            Err(
+                "TCP port 4533 is claimed by both A's CAT and C's CAT — give them different ports"
+                    .into()
+            )
+        );
+    }
+
+    /// ⭐ AN OPENER IS REFUSED A NET RIGCTL ADDRESS ONE OF NEXUS'S OWN LISTENERS HOLDS, BY NAME. Each
+    /// row is a roster and the broker; the answer is what refuses the opener of the first radio, a
+    /// NET rigctl radio, its Network Address. Only the first four are refused: another radio's CAT
+    /// daemon on its port (in either spelling of this computer), one kept by OmniRig, which needs
+    /// no model, and the broker. A radio with no CAT or disabled starts no daemon there; the
+    /// manual's NET rigctl station shares its own; and an address on another computer, or with the
+    /// broker off, or on a port nothing of Nexus's takes, is the operator's.
+    #[test]
+    fn an_opener_is_refused_a_net_rigctl_address_nexus_holds_by_name() {
+        let b = |addr: &str, port: u16| net_rigctl(0, "IC-9700", addr, port);
+        let a = |port: u16| serial_rig(1, "FTDX10", port);
+        let mut a_off = a(4533);
+        a_off.enabled = false;
+        let mut a_vox = a(4533);
+        a_vox.rig_model = 0;
+        let a_omnirig = RadioProfile {
+            rig_model: 0,
+            rig_conn: "omnirig".into(),
+            serial_port: String::new(),
+            ..a(4533)
+        };
+        let mut dummy = b("127.0.0.1:4533", 4534);
+        dummy.rig_model = 1;
+        let rows: Vec<(&str, Vec<RadioProfile>, Option<u16>)> = vec![
+            (
+                "another radio's CAT on the address",
+                vec![b("127.0.0.1:4533", 4534), a(4533)],
+                Some(4532),
+            ),
+            (
+                "the address spelled localhost",
+                vec![b("localhost:4533", 4534), a(4533)],
+                None,
+            ),
+            (
+                "an OmniRig radio's port",
+                vec![b("127.0.0.1:4533", 4534), a_omnirig],
+                None,
+            ),
+            (
+                "the broker on the address",
+                vec![b("127.0.0.1:4532", 4534)],
+                Some(4532),
+            ),
+            (
+                "the broker off",
+                vec![b("127.0.0.1:4532", 4534), a(4535)],
+                None,
+            ),
+            (
+                "the other radio on another port",
+                vec![b("127.0.0.1:4533", 4534), a(4535)],
+                Some(4532),
+            ),
+            (
+                "an address on another computer",
+                vec![b("192.168.1.50:4533", 4534), a(4533)],
+                None,
+            ),
+            (
+                "the other radio disabled",
+                vec![b("127.0.0.1:4533", 4534), a_off],
+                None,
+            ),
+            (
+                "the other radio with no CAT",
+                vec![b("127.0.0.1:4533", 4534), a_vox],
+                None,
+            ),
+            (
+                "the radio's own rigctld TCP Port on its own address",
+                vec![b("127.0.0.1:4533", 4533)],
+                Some(4532),
+            ),
+            (
+                "another radio sharing its own rigctld there",
+                vec![
+                    b("127.0.0.1:4533", 4535),
+                    net_rigctl(1, "IC-705", "127.0.0.1:4533", 4533),
+                ],
+                None,
+            ),
+            ("not NET rigctl", vec![dummy, a(4533)], None),
+        ];
+        let said: Vec<(&str, Option<String>)> = rows
+            .iter()
+            .map(|(what, radios, broker)| {
+                let q = &radios[0];
+                (
+                    *what,
+                    net_rigctl_address_refusal(
+                        radios,
+                        *broker,
+                        q.id,
+                        q.rig_model,
+                        &q.rig_conn,
+                        &q.rig_addr,
+                    ),
+                )
+            })
+            .collect();
+        let cat = |addr: &str| {
+            format!(
+                "TCP port 4533 is IC-9700's Network Address ({addr}), and FTDX10's rigctld TCP \
+                 Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+                 radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+            )
+        };
+        let broker = "TCP port 4532 is IC-9700's Network Address (127.0.0.1:4532), and Share this \
+                      radio with other programs is on 4532 too: IC-9700 would read and command \
+                      Nexus itself instead of its own radio. Change the Share this radio port \
+                      (Settings ▸ Radio ▸ Transmit limits & sharing)."
+            .to_string();
+        assert_eq!(
+            said,
+            vec![
+                (
+                    "another radio's CAT on the address",
+                    Some(cat("127.0.0.1:4533"))
+                ),
+                ("the address spelled localhost", Some(cat("localhost:4533"))),
+                ("an OmniRig radio's port", Some(cat("127.0.0.1:4533"))),
+                ("the broker on the address", Some(broker)),
+                ("the broker off", None),
+                ("the other radio on another port", None),
+                ("an address on another computer", None),
+                ("the other radio disabled", None),
+                ("the other radio with no CAT", None),
+                ("the radio's own rigctld TCP Port on its own address", None),
+                ("another radio sharing its own rigctld there", None),
+                ("not NET rigctl", None),
+            ]
+        );
+        // The radio as its opener dials it: an operated radio whose flat form already names its
+        // own rigctld TCP Port as its address, before its profile does, is the manual's station on
+        // that port, never a radio holding its own address.
+        assert_eq!(
+            net_rigctl_address_refusal(
+                &[b("127.0.0.1:4540", 4533)],
+                None,
+                0,
+                2,
+                "network",
+                "127.0.0.1:4533"
+            ),
+            None
+        );
+    }
+
+    /// ⭐ A SAVE MAY NOT MAKE A CLASH; ONE ALREADY STORED IS NOT ITS TO REFUSE. Each row is the
+    /// roster (and broker) before and after a save; the answer is the refusal, if any.
+    #[test]
+    fn only_a_clash_the_save_makes_is_refused() {
+        let b = net_rigctl(0, "IC-9700", "127.0.0.1:4533", 4534);
+        let ok = vec![b.clone(), serial_rig(1, "FTDX10", 4535)];
+        let clash = vec![b.clone(), serial_rig(1, "FTDX10", 4533)];
+        let mut clash_new_baud = clash.clone();
+        clash_new_baud[1].baud = 4800;
+        /// The roster and the broker's port.
+        type Station = (Vec<RadioProfile>, Option<u16>);
+        let rows: Vec<(&str, Station, Station)> = vec![
+            (
+                "a save that makes one",
+                (ok.clone(), None),
+                (clash.clone(), None),
+            ),
+            (
+                "a save that turns the broker on at the address",
+                (ok.clone(), None),
+                (ok.clone(), Some(4533)),
+            ),
+            (
+                "an unrelated save with one already stored",
+                (clash.clone(), None),
+                (clash_new_baud, None),
+            ),
+            (
+                "a save that fixes it",
+                (clash.clone(), None),
+                (ok.clone(), None),
+            ),
+            (
+                "a stored one, and the save adds another",
+                (clash.clone(), None),
+                (clash.clone(), Some(4533)),
+            ),
+            ("no clash before or after", (ok.clone(), None), (ok, None)),
+        ];
+        let refused: Vec<(&str, bool)> = rows
+            .iter()
+            .map(|(what, (before, bb), (after, ab))| {
+                (
+                    *what,
+                    port_clash_introduced(before, *bb, after, *ab).is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            refused,
+            vec![
+                ("a save that makes one", true),
+                ("a save that turns the broker on at the address", true),
+                ("an unrelated save with one already stored", false),
+                ("a save that fixes it", false),
+                ("a stored one, and the save adds another", true),
+                ("no clash before or after", false),
+            ]
+        );
+        assert_eq!(
+            port_clash_introduced(&rows[0].1 .0, None, &rows[0].2 .0, None),
+            validate_radio_ports(&rows[0].2 .0, None).err(),
+            "the refusal is the validator's words"
+        );
+    }
+
     /// The track loop's honesty label: which steering surfaces the loop is
     /// actually allowed to drive. The Doppler half must be exactly what
     /// `sat_doppler_tick` will touch the radio for — EITHER leg driven, plus a
@@ -11742,6 +13329,97 @@ mod tests {
         );
     }
 
+    /// Super Check Partial and call history are on out of the box (the operator's ruling: the
+    /// list downloads the first time a contest starts), and Unassisted mode turns both off
+    /// without touching either switch, exactly as it does the cluster and the AI CW decoder.
+    #[test]
+    fn scp_and_call_history_are_on_by_default_and_unassisted_turns_both_off() {
+        let mut s = Settings::default();
+        assert_eq!(
+            (s.scp_enabled, s.scp_auto_update, s.call_history_enabled),
+            (true, true, true)
+        );
+        assert_eq!((s.scp_active(), s.call_history_active()), (true, true));
+        s.unassisted_mode = true;
+        assert_eq!((s.scp_active(), s.call_history_active()), (false, false));
+        assert_eq!(
+            (s.scp_enabled, s.call_history_enabled),
+            (true, true),
+            "it overrides, never overwrites"
+        );
+        let labels: Vec<_> = s
+            .assistance_sources()
+            .iter()
+            .filter(|&&(_, on)| !on)
+            .map(|&(label, _)| label)
+            .collect();
+        assert!(labels.contains(&SCP_SOURCE) && labels.contains(&CALL_HISTORY_SOURCE));
+        s.unassisted_mode = false;
+        s.scp_enabled = false;
+        assert_eq!((s.scp_active(), s.call_history_active()), (false, true));
+    }
+
+    /// The three switches on the exact wire keys the UI writes, and a settings file written
+    /// before they existed loads with all three ON: the ruling's default reaches upgrades too.
+    #[test]
+    fn scp_and_call_history_settings_use_the_exact_wire_keys_and_old_files_load_them_on() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "\"scpEnabled\":true",
+            "\"scpAutoUpdate\":true",
+            "\"callHistoryEnabled\":true",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW"}"#).unwrap();
+        assert_eq!(
+            (
+                old.scp_enabled,
+                old.scp_auto_update,
+                old.call_history_enabled
+            ),
+            (true, true, true)
+        );
+        let off: Settings = serde_json::from_str(
+            r#"{"scpEnabled":false,"scpAutoUpdate":false,"callHistoryEnabled":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                off.scp_enabled,
+                off.scp_auto_update,
+                off.call_history_enabled
+            ),
+            (false, false, false),
+            "the operator's own choice round-trips"
+        );
+    }
+
+    /// The contest strip decides whether it shows Super Check Partial and fills from call
+    /// history by these two labels on `FieldDayStatus::assistance_on`. A rename on either side
+    /// would leave the strip silently showing neither, so the UI's mirror is read here.
+    #[test]
+    fn the_strip_reads_the_scp_and_call_history_labels_the_engine_sends() {
+        let ts = include_str!("../../../ui/src/features/contestLists.ts");
+        let labels: Vec<&str> = Settings::default()
+            .assistance_sources()
+            .iter()
+            .map(|&(label, _)| label)
+            .collect();
+        for needed in [SCP_SOURCE, CALL_HISTORY_SOURCE] {
+            assert!(
+                labels.contains(&needed),
+                "{needed:?} left assistance_sources()"
+            );
+            assert!(
+                ts.contains(&format!("= '{needed}'")),
+                "contestLists.ts no longer mirrors {needed:?}: the strip would never see it on"
+            );
+        }
+        // Control: the reader is reading the real file, not an empty haystack.
+        assert!(ts.contains("export function useScpList"));
+    }
+
     /// Default false, and nothing but the operator's toggle may set it — same doctrine as
     /// `fd_active`. A default-on Unassisted mode would silently disable the decoder an
     /// operator paid attention to.
@@ -11827,6 +13505,499 @@ mod tests {
             serde_json::from_str(r#"{"id":0,"name":"FT-710","rigModel":1049}"#)
                 .expect("an older per-radio block still parses");
         assert!(profile.yaesu_fix_starts.is_empty());
+    }
+}
+
+/// AGN TO F8 ([`Settings::move_agn_to_f8`]), on real files and by value: the voice keyer's slots,
+/// the CW and RTTY steps and the RTTY keys the operator changed, as the settings file holds them
+/// after a save and a load, and the bytes on disk. The recordings and the operator's own texts are
+/// data, so each test says where each one ends up, and that none is lost or written over.
+#[cfg(test)]
+mod agn_f8_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// A station as a build before F8 left it, in a scratch folder of its own: six voice slots,
+    /// F1–F5 recorded in `voice/` (each file holding its own slot's bytes), F6 empty, and Phone's
+    /// Enter Sends Message as given. Saved and loaded back, so each test starts from the file.
+    fn old_station(label: &str, esm_phone: bool, own: Option<EsmRoleMap>) -> (PathBuf, Settings) {
+        let dir = std::env::temp_dir().join(format!("tempo_agn_f8_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("voice")).unwrap();
+        let voice_messages = [
+            (1, "CQ"),
+            (2, "My Call"),
+            (3, "Report"),
+            (4, "QRZ?"),
+            (5, "73"),
+            (6, "Again"),
+        ]
+        .into_iter()
+        .map(|(slot, label)| {
+            let mut file = String::new();
+            if slot <= 5 {
+                std::fs::write(wav(&dir, slot), audio(slot)).unwrap();
+                file = wav(&dir, slot);
+            }
+            VoiceMessage {
+                slot,
+                label: label.into(),
+                file,
+            }
+        })
+        .collect();
+        let s = Settings {
+            voice_messages,
+            contest_esm_phone: esm_phone,
+            voice_esm_roles: own,
+            ..Settings::default()
+        };
+        let path = dir.join("settings.json");
+        s.save(&path).unwrap();
+        (dir, Settings::load(&path))
+    }
+
+    /// `s` saved in `dir` and loaded back: what the next launch reads.
+    fn round_trip(dir: &Path, s: &Settings) -> Settings {
+        let path = dir.join("settings.json");
+        s.save(&path).unwrap();
+        Settings::load(&path)
+    }
+
+    /// What slot `n` holds on disk: a stand-in for its audio, different for every slot.
+    fn audio(n: u8) -> Vec<u8> {
+        format!("RIFF recording made for slot {n}").into_bytes()
+    }
+
+    /// The file the recorder writes for slot `n`.
+    fn wav(dir: &Path, n: u8) -> String {
+        dir.join("voice")
+            .join(format!("slot{n}.wav"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn read(file: &str) -> Vec<u8> {
+        std::fs::read(file).unwrap()
+    }
+
+    /// What slot `n` plays: the bytes of the file it is bound to, or None.
+    fn plays(s: &Settings, n: u8) -> Option<Vec<u8>> {
+        let m = s.voice_messages.iter().find(|m| m.slot == n)?;
+        std::fs::read(&m.file).ok()
+    }
+
+    /// What the recorder does for slot `n` (`stop_voice_recording` in src-tauri): the new take
+    /// written to `voice/slot<n>.wav` through a file renamed over it, and the slot bound to it.
+    fn record(dir: &Path, s: &mut Settings, n: u8, take: &[u8]) {
+        let file = wav(dir, n);
+        let partial = format!("{file}.partial");
+        std::fs::write(&partial, take).unwrap();
+        std::fs::rename(&partial, &file).unwrap();
+        s.voice_messages
+            .iter_mut()
+            .find(|m| m.slot == n)
+            .unwrap()
+            .file = file;
+    }
+
+    /// The slots as (slot, label, file), for a comparison by value.
+    fn slots(s: &Settings) -> Vec<(u8, String, String)> {
+        s.voice_messages
+            .iter()
+            .map(|m| (m.slot, m.label.clone(), m.file.clone()))
+            .collect()
+    }
+
+    /// The old station's slots with F8 added: F5's and F8's files are the two that can differ.
+    fn after(dir: &Path, f5: String, f8: String) -> Vec<(u8, String, String)> {
+        vec![
+            (1, "CQ".into(), wav(dir, 1)),
+            (2, "My Call".into(), wav(dir, 2)),
+            (3, "Report".into(), wav(dir, 3)),
+            (4, "QRZ?".into(), wav(dir, 4)),
+            (5, "73".into(), f5),
+            (6, "Again".into(), String::new()),
+            (8, "AGN".into(), f8),
+        ]
+    }
+
+    fn roles(pairs: &[(&str, &[&str])]) -> EsmRoleMap {
+        pairs
+            .iter()
+            .map(|(step, keys)| {
+                (
+                    step.to_string(),
+                    keys.iter().map(|k| k.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn key(key: &str, label: &str, text: &str) -> KeyboardMacro {
+        KeyboardMacro {
+            key: key.into(),
+            label: label.into(),
+            text: text.into(),
+        }
+    }
+
+    fn cw(key: &str, label: &str, text: &str) -> CwMacroDef {
+        CwMacroDef {
+            key: key.into(),
+            label: label.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn a_new_install_has_agn_on_f8_and_nothing_to_move() {
+        let want: Vec<(u8, String, String)> = [
+            (1, "CQ"),
+            (2, "My Call"),
+            (3, "Report"),
+            (4, "QRZ?"),
+            (5, "73"),
+            (6, "Again"),
+            (8, "AGN"),
+        ]
+        .into_iter()
+        .map(|(n, label)| (n, label.to_string(), String::new()))
+        .collect();
+        let mut s = Settings::default();
+        assert_eq!(slots(&s), want);
+        assert!(!s.move_agn_to_f8(), "a new install has F8: nothing to do");
+        assert_eq!(slots(&s), want);
+    }
+
+    /// The case the Phone copy exists for: Phone's ESM on, AGN on the built-in F5. F5's label
+    /// cannot say whether it holds that AGN or the casual set's 73, so F5 keeps it, and F8 starts
+    /// with a copy in a file of its own: F5 plays what it played, and so does ESM's AGN.
+    #[test]
+    fn with_phone_esm_on_f5_keeps_its_recording_and_f8_starts_with_a_copy() {
+        let (dir, mut s) = old_station("moves", true, None);
+        assert!(s.move_agn_to_f8());
+        let want = after(&dir, wav(&dir, 5), wav(&dir, 8));
+        assert_eq!(slots(&s), want);
+        assert_eq!(
+            read(&wav(&dir, 8)),
+            audio(5),
+            "F8 holds a copy of what F5 held"
+        );
+        assert_eq!(read(&wav(&dir, 5)), audio(5), "F5's file is left as it was");
+        for n in 1..=4 {
+            assert_eq!(read(&wav(&dir, n)), audio(n), "F{n} is untouched");
+        }
+        let mut back = round_trip(&dir, &s);
+        assert_eq!(slots(&back), want, "the file keeps the copy");
+        assert!(!back.move_agn_to_f8(), "once: the file has an F8 now");
+        assert_eq!(slots(&back), want);
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// F8's copy is a file of its own: recording a real AGN in F8 leaves F5 playing what it did.
+    #[test]
+    fn recording_f8_again_leaves_f5_as_it_was() {
+        let (dir, mut s) = old_station("record_f8", true, None);
+        assert!(s.move_agn_to_f8());
+        record(&dir, &mut s, 8, b"a real AGN, recorded in F8");
+        assert_eq!(plays(&s, 8), Some(b"a real AGN, recorded in F8".to_vec()));
+        assert_eq!(plays(&s, 5), Some(audio(5)), "F5 plays what it played");
+    }
+
+    /// And the other way: a new recording in F5 leaves F8's copy as it was.
+    #[test]
+    fn recording_f5_again_leaves_f8s_copy_as_it_was() {
+        let (dir, mut s) = old_station("record_f5", true, None);
+        assert!(s.move_agn_to_f8());
+        record(&dir, &mut s, 5, b"a new 73, recorded in F5");
+        assert_eq!(plays(&s, 5), Some(b"a new 73, recorded in F5".to_vec()));
+        assert_eq!(plays(&s, 8), Some(audio(5)), "F8 plays the copy");
+    }
+
+    /// Phone's ESM never used: F5 is the casual set's 73, and it stays the operator's.
+    #[test]
+    fn a_casual_f5_stays_in_f5() {
+        let (dir, mut s) = old_station("casual", false, None);
+        assert!(s.move_agn_to_f8(), "F8 is added all the same");
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists(), "no copy is made");
+    }
+
+    /// Steps the operator mapped show Phone's ESM was used, its switch off since.
+    #[test]
+    fn mapped_steps_show_phone_esm_was_used_with_its_switch_off() {
+        let (dir, mut s) = old_station("mapped", false, Some(roles(&[("exch", &["F6"])])));
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+        assert_eq!(s.voice_esm_roles, Some(roles(&[("exch", &["F6"])])));
+    }
+
+    /// AGN on a key the operator picked, F5 itself or another, is their choice: nothing moves,
+    /// their map is as they left it, and ESM's AGN plays what it played before.
+    #[test]
+    fn agn_on_a_key_the_operator_picked_stays_on_that_key() {
+        for (label, own) in [
+            ("picked_f5", roles(&[("again", &["F5"])])),
+            ("picked_f6", roles(&[("again", &["F6"])])),
+        ] {
+            let (dir, mut s) = old_station(label, true, Some(own.clone()));
+            assert!(s.move_agn_to_f8());
+            assert_eq!(
+                slots(&s),
+                after(&dir, wav(&dir, 5), String::new()),
+                "{label}"
+            );
+            assert_eq!(s.voice_esm_roles, Some(own), "{label}");
+            assert!(!Path::new(&wav(&dir, 8)).exists(), "{label}");
+        }
+    }
+
+    /// ESM reads a step with an empty key list as unmapped (`esmRoles` in the UI), so AGN was
+    /// the built-in F5.
+    #[test]
+    fn an_empty_key_list_for_agn_was_the_built_in_f5() {
+        let (dir, mut s) = old_station("again_empty", true, Some(roles(&[("again", &[])])));
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// A step the operator mapped to F5 plays its recording too: the slot is theirs.
+    #[test]
+    fn f5_that_another_mapped_step_plays_stays_theirs() {
+        let (dir, mut s) = old_station("f5_shared", true, Some(roles(&[("tu", &["F5"])])));
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists());
+    }
+
+    #[test]
+    fn a_slot8_file_already_there_is_never_written_over() {
+        let (dir, mut s) = old_station("slot8_other", true, None);
+        std::fs::write(wav(&dir, 8), b"a slot8.wav this did not write").unwrap();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), String::new()));
+        assert_eq!(read(&wav(&dir, 8)), b"a slot8.wav this did not write");
+        assert_eq!(read(&wav(&dir, 5)), audio(5));
+    }
+
+    /// The copy from a launch whose save did not land: same bytes, so F8 takes it.
+    #[test]
+    fn its_own_earlier_copy_is_taken() {
+        let (dir, mut s) = old_station("slot8_ours", true, None);
+        std::fs::write(wav(&dir, 8), audio(5)).unwrap();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// F5 not recorded: its old file on disk is bound to nothing, and is not copied.
+    #[test]
+    fn an_empty_f5_has_nothing_to_move() {
+        let (dir, mut s) = old_station("f5_empty", true, None);
+        s.voice_messages[4].file.clear();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, String::new(), String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists());
+    }
+
+    /// F5 bound to a file that is not on this disk: nothing to copy, and F5 keeps its binding.
+    #[test]
+    fn a_missing_f5_file_moves_nothing() {
+        let (dir, mut s) = old_station("f5_missing", true, None);
+        let gone = dir
+            .join("voice")
+            .join("not-here.wav")
+            .to_string_lossy()
+            .into_owned();
+        s.voice_messages[4].file = gone.clone();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, gone, String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists());
+    }
+
+    /// RTTY's and PSK's contest sets: the keys the operator changed there trade F7 and F8 with the
+    /// built-ins, in F-key order, and so does RTTY's step map (PSK has no ESM), so each text of
+    /// theirs stays on its message and Enter sends what it sent before. Everyday's keys and map do
+    /// not move, in either mode.
+    #[test]
+    fn rtty_and_psk_contest_keys_the_operator_changed_stay_on_their_messages() {
+        let (dir, mut s) = old_station("rtty", false, None);
+        s.macros.rtty_profiles = vec![
+            KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![
+                    key("F2", "Run exch", "{CALL} 599 05 05"),
+                    key("F7", "AGN", "AGN? AGN? K"),
+                    key("F8", "B4", "{CALL} B4 TU"),
+                ],
+            },
+            KeyboardMacroProfile {
+                name: "everyday".into(),
+                macros: vec![key("F7", "QRL", "QRL? DE {MYCALL}")],
+            },
+        ];
+        s.macros.rtty_esm_roles = Some(std::collections::BTreeMap::from([
+            (
+                "contest".to_string(),
+                roles(&[("again", &["F7"]), ("tu", &["F3"])]),
+            ),
+            ("everyday".to_string(), roles(&[("again", &["F7"])])),
+        ]));
+        s.macros.psk_profiles = vec![
+            KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![
+                    key("F7", "AGN", "agn? agn? k"),
+                    key("F8", "B4", "{CALL} b4"),
+                ],
+            },
+            KeyboardMacroProfile {
+                name: "everyday".into(),
+                macros: vec![key("F8", "QRZ", "qrz?")],
+            },
+        ];
+        let mut s = round_trip(&dir, &s);
+        assert!(s.move_agn_to_f8());
+        let s = round_trip(&dir, &s);
+        assert_eq!(
+            s.macros.rtty_profiles,
+            vec![
+                KeyboardMacroProfile {
+                    name: "contest".into(),
+                    macros: vec![
+                        key("F2", "Run exch", "{CALL} 599 05 05"),
+                        key("F7", "B4", "{CALL} B4 TU"),
+                        key("F8", "AGN", "AGN? AGN? K"),
+                    ],
+                },
+                KeyboardMacroProfile {
+                    name: "everyday".into(),
+                    macros: vec![key("F7", "QRL", "QRL? DE {MYCALL}")],
+                },
+            ]
+        );
+        assert_eq!(
+            s.macros.rtty_esm_roles,
+            Some(std::collections::BTreeMap::from([
+                (
+                    "contest".to_string(),
+                    roles(&[("again", &["F8"]), ("tu", &["F3"])])
+                ),
+                ("everyday".to_string(), roles(&[("again", &["F7"])])),
+            ]))
+        );
+        assert_eq!(
+            s.macros.psk_profiles,
+            vec![
+                KeyboardMacroProfile {
+                    name: "contest".into(),
+                    macros: vec![
+                        key("F7", "B4", "{CALL} b4"),
+                        key("F8", "AGN", "agn? agn? k")
+                    ],
+                },
+                KeyboardMacroProfile {
+                    name: "everyday".into(),
+                    macros: vec![key("F8", "QRZ", "qrz?")],
+                },
+            ]
+        );
+    }
+
+    /// One key changed on its own takes the other key, so it stays on its message.
+    #[test]
+    fn a_lone_rtty_contest_key_takes_the_other_key() {
+        for (label, from, to) in [("lone_f7", "F7", "F8"), ("lone_f8", "F8", "F7")] {
+            let (dir, mut s) = old_station(label, false, None);
+            s.macros.rtty_profiles = vec![KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![key("F3", "TU", "TU {MYCALL}"), key(from, "Mine", "MY TEXT")],
+            }];
+            let mut s = round_trip(&dir, &s);
+            assert!(s.move_agn_to_f8());
+            assert_eq!(
+                s.macros.rtty_profiles[0].macros,
+                vec![key("F3", "TU", "TU {MYCALL}"), key(to, "Mine", "MY TEXT")],
+                "{label}"
+            );
+        }
+    }
+
+    /// CW: a profile on the built-in sets reads their keys, and a Reset keeps the step map it had,
+    /// so its map trades F7 and F8 with the sets. A profile with macros of its own is its own
+    /// layout: its keys and its map stay exactly as they are.
+    #[test]
+    fn a_cw_step_map_over_the_built_in_sets_stays_on_its_messages() {
+        let (dir, mut s) = old_station("cw", false, None);
+        let mine = CwMacroProfile {
+            name: "Mine".into(),
+            macros: vec![cw("F7", "AGN", "AGN AGN"), cw("F8", "?", "? ")],
+            esm_roles: Some(roles(&[("again", &["F7"]), ("exch", &["F8"])])),
+        };
+        s.macros.cw_profiles = vec![
+            CwMacroProfile {
+                name: "Reset".into(),
+                macros: Vec::new(),
+                esm_roles: Some(roles(&[
+                    ("again", &["F7"]),
+                    ("callExch", &["F5", "F2"]),
+                    ("exch", &["F8"]),
+                ])),
+            },
+            mine.clone(),
+            CwMacroProfile {
+                name: "Built-in".into(),
+                macros: Vec::new(),
+                esm_roles: None,
+            },
+        ];
+        let mut s = round_trip(&dir, &s);
+        assert!(s.move_agn_to_f8());
+        let s = round_trip(&dir, &s);
+        assert_eq!(
+            s.macros.cw_profiles[0].esm_roles,
+            Some(roles(&[
+                ("again", &["F8"]),
+                ("callExch", &["F5", "F2"]),
+                ("exch", &["F7"]),
+            ]))
+        );
+        assert_eq!(
+            s.macros.cw_profiles[1], mine,
+            "a set of the operator's own does not move"
+        );
+        assert_eq!(s.macros.cw_profiles[2].esm_roles, None);
+    }
+
+    /// A file with an F8 has been moved already (or is new): nothing anywhere moves again.
+    #[test]
+    fn a_file_that_has_an_f8_is_left_alone() {
+        let (dir, mut s) = old_station("has_f8", true, None);
+        s.voice_messages.push(VoiceMessage {
+            slot: 8,
+            label: "Mine".into(),
+            file: String::new(),
+        });
+        s.macros.rtty_profiles = vec![KeyboardMacroProfile {
+            name: "contest".into(),
+            macros: vec![key("F7", "AGN", "AGN? AGN? K")],
+        }];
+        s.macros.rtty_esm_roles = Some(std::collections::BTreeMap::from([(
+            "contest".to_string(),
+            roles(&[("again", &["F8"])]),
+        )]));
+        s.macros.cw_profiles = vec![CwMacroProfile {
+            name: "Reset".into(),
+            macros: Vec::new(),
+            esm_roles: Some(roles(&[("again", &["F8"])])),
+        }];
+        let before = s.clone();
+        assert!(!s.move_agn_to_f8());
+        assert_eq!(s, before);
+        assert!(!Path::new(&wav(&dir, 8)).exists());
     }
 }
 

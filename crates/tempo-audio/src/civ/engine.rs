@@ -32,9 +32,11 @@ use super::state::CivState;
 pub trait CivIo: Read + Write + Send {}
 impl<T: Read + Write + Send> CivIo for T {}
 
-/// How long the engine waits on the wire for one request's reply before failing it.
-/// CI-V at 115200 answers in ~10–20 ms; even 19200 stays well under this.
-const REQUEST_DEADLINE: Duration = Duration::from_millis(300);
+/// How long the engine waits on a SERIAL bus for one request's reply before failing it.
+/// CI-V at 115200 answers in ~10–20 ms; even 19200 stays well under this. Another transport
+/// passes its own to [`CivEngine::start_with_deadline`]: a reply over the network rides two
+/// datagrams, maybe a retransmit, maybe Wi-Fi.
+pub const REQUEST_DEADLINE: Duration = Duration::from_millis(300);
 /// Read chunk timeout the loop expects `CivIo` reads to observe (the real port is opened
 /// with this; the loop just treats timeouts as "no data").
 pub const READ_TIMEOUT: Duration = Duration::from_millis(30);
@@ -92,6 +94,8 @@ pub struct CivHandle {
     tx: mpsc::Sender<CivRequest>,
     state: Arc<Mutex<CivState>>,
     alive: Arc<AtomicBool>,
+    /// The engine's per-request deadline ([`REQUEST_DEADLINE`] on a serial bus).
+    deadline: Duration,
 }
 
 impl CivHandle {
@@ -111,10 +115,15 @@ impl CivHandle {
                 reply_to: Some(rtx),
             })
             .map_err(|_| CivError::Gone)?;
-        // The engine enforces REQUEST_DEADLINE per request; the extra headroom here covers
+        // The engine enforces its deadline per request; the extra headroom here covers
         // requests queued behind others.
-        rrx.recv_timeout(REQUEST_DEADLINE * 4 + Duration::from_millis(100))
+        rrx.recv_timeout(self.deadline * 4 + Duration::from_millis(100))
             .map_err(|_| CivError::Timeout)?
+    }
+
+    /// How long the engine waits for one request's reply.
+    pub fn request_deadline(&self) -> Duration {
+        self.deadline
     }
 
     /// A snapshot of the live state (freq/mode/PTT/meters folded from replies + transceive).
@@ -136,9 +145,19 @@ pub struct CivEngine {
 impl CivEngine {
     /// Start the engine on `io`, talking to the radio at CI-V address `radio_addr`. `model` is
     /// which Icom that is, when known: its scope sweeps are scaled to that radio's own range
-    /// (0–200 on an IC-7610, 0–160 on the rest), which the address cannot tell, because the
-    /// operator can change it on the radio.
+    /// (0–200 on an IC-7610 or IC-7760, 0–160 on the rest), which the address cannot tell,
+    /// because the operator can change it on the radio. A serial bus: [`REQUEST_DEADLINE`].
     pub fn start(io: Box<dyn CivIo>, radio_addr: u8, model: Option<IcomModel>) -> CivEngine {
+        Self::start_with_deadline(io, radio_addr, model, REQUEST_DEADLINE)
+    }
+
+    /// [`Self::start`] with a transport's own per-request deadline.
+    pub fn start_with_deadline(
+        io: Box<dyn CivIo>,
+        radio_addr: u8,
+        model: Option<IcomModel>,
+        deadline: Duration,
+    ) -> CivEngine {
         let (tx, rx) = mpsc::channel::<CivRequest>();
         let state = Arc::new(Mutex::new(CivState::default()));
         let scope_row = Arc::new(Mutex::new(None));
@@ -158,6 +177,7 @@ impl CivEngine {
                         io,
                         radio_addr,
                         model,
+                        deadline,
                         rx,
                         state,
                         scope_row,
@@ -173,6 +193,7 @@ impl CivEngine {
                 tx,
                 state,
                 alive: alive.clone(),
+                deadline,
             },
             scope_row,
             scope_enabled,
@@ -266,6 +287,7 @@ fn engine_loop(
     mut io: Box<dyn CivIo>,
     radio_addr: u8,
     model: Option<IcomModel>,
+    deadline: Duration,
     rx: mpsc::Receiver<CivRequest>,
     state: Arc<Mutex<CivState>>,
     scope_row: Arc<Mutex<Option<ScopeSweep>>>,
@@ -313,7 +335,7 @@ fn engine_loop(
                     // native CAT including the ability to unkey a keyed radio.
                     match write_frame(&mut io, &req.frame) {
                         WriteOutcome::Ok => {
-                            pending = Some((req, Instant::now() + REQUEST_DEADLINE));
+                            pending = Some((req, Instant::now() + deadline));
                         }
                         WriteOutcome::Transient => {
                             req.resolve(Err(CivError::Timeout));
@@ -372,7 +394,7 @@ fn engine_loop(
             }
             // Everything else refreshes the live state (replies AND transceive pushes).
             if let Ok(mut s) = state.lock() {
-                s.apply(&f);
+                s.apply(&f, model);
             }
             // Resolve the in-flight request if this frame answers it.
             if let Some((req, _)) = &pending {
@@ -516,9 +538,48 @@ pub(crate) mod tests_support {
         /// p. 24): its reads are not modelled and are NAKed here, because nothing sends them to
         /// that radio, and its `25 01` / `26 01` writes land in the unselected-VFO registers.
         pub dial_by_band: bool,
+        /// Does this radio send its dial in 12 digits (6 bytes) on its 10 GHz band — "When the
+        /// 10 GHz band is selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz"
+        /// (IC-905 CI-V Reference Guide A7711-9EX-2, PDF p. 17)? True only at the IC-905's
+        /// address; see [`dial_field`].
+        pub ten_ghz_12_digits: bool,
         /// Fault injection — swallow the next N by-name dial/mode READ replies (`25`/`26`
         /// above): a lost CI-V reply, so the read times out while the rig's state stands.
         pub drop_dial_reads: u32,
+        /// The dials this radio TAKES on a `05` write, Hz inclusive. Empty (the default) takes
+        /// every dial, which is what every existing test expects. Otherwise a dial outside them
+        /// is answered NG (`FA`) and the radio stays where it was: this fixture's model of a
+        /// radio asked for a frequency it cannot tune, not a bench measurement.
+        pub covers_hz: Vec<(u64, u64)>,
+        /// Fault injection — the next N `05` dial WRITES get no answer at all, neither the ack
+        /// nor NG, and the radio stays where it was: a radio that went silent, or a frame lost
+        /// on the bus. The write times out, which is not a refusal.
+        pub drop_dial_writes: u32,
+        /// Fault injection — the next N mode WRITES get no answer at all, and the radio stays as
+        /// it was: `06`, a by-name `26` carrying a mode, and the DATA flag `1A 06` with a value,
+        /// each frame one write (`M PKTUSB` is two). A radio that went quiet, which is not a
+        /// refusal.
+        pub drop_mode_writes: u32,
+        /// Fault injection — the next N mode writes, the same frames, are answered NG (`FA`) and
+        /// the radio stays as it was: this fixture's model of a radio refusing a mode, not a bench
+        /// measurement.
+        pub nak_mode_writes: u32,
+        /// Fault injection — the next N DATA-flag writes (`1A 06` with a value) alone get no
+        /// answer, and the flag stays as it was; the mode frame before one is answered as ever.
+        pub drop_data_writes: u32,
+        /// Fault injection — the next N DATA-flag writes alone are answered NG (`FA`).
+        pub nak_data_writes: u32,
+        /// Fault injection — the next N split writes get no answer at all, and nothing changes:
+        /// `0F 00`/`0F 01`, and the unselected VFO's dial (`25 01`) and mode (`26 01`) with a value
+        /// on a radio that does not name its bands (`dial_by_band`). A radio that went quiet, which
+        /// is not a refusal.
+        pub drop_split_writes: u32,
+        /// Fault injection — the next N split writes, the same frames, are answered NG (`FA`).
+        pub nak_split_writes: u32,
+        /// Fault injection — the radio is SWITCHED OFF (or its CI-V lead is out): every frame
+        /// still goes out on the bus and is logged, and nothing answers any of them. Unlike
+        /// [`FakeRadio::mute`] it can be thrown after the radio is handed to a daemon.
+        pub off: bool,
         /// THE IF FILTER WIDTH (`1A 03`) per band — THE RAW WIRE BYTE, like [`Self::att_raw`], so
         /// a test reads the encoding itself: code 22 (1.8 kHz) is `0x22`, and a binary encoder's
         /// `0x16` would sit here as exactly that. Main defaults to `0x28` (code 28, 2.4 kHz SSB).
@@ -529,6 +590,15 @@ pub(crate) mod tests_support {
         pub sub_filter_raw: u8,
         /// Fault injection — NAK the next N `1A 03` commands, read or write.
         pub nak_filter_width: u32,
+        /// Fault injection — the next N `1A 03` WRITES (a width byte) get no answer at all, and the
+        /// width stays as it was; a read of it is answered as ever. A radio that answers reads but
+        /// not that write, which is not a refusal.
+        pub drop_filter_width_writes: u32,
+        /// THE `1A 05` MENU, item → its one data byte. A read of an item held here is answered
+        /// `1A 05 <item> <value>`; a read of any other item is refused (`FA`), the way a radio
+        /// answers an item its menu does not have. A write is stored, so a test that must see
+        /// none can look at [`Self::wire`].
+        pub menus: std::collections::BTreeMap<[u8; 2], u8>,
         /// Which band each command ACTED on, in arrival order: `(on_sub, cmd, data)`. A
         /// `29`-wrapped command is recorded UNWRAPPED, under the band it named; every other
         /// command under the selection at the moment it arrived. This is the witness for
@@ -598,13 +668,61 @@ pub(crate) mod tests_support {
     /// reply to send: `None` = ack, `Some((0xFA, _))` = NAK, [`SILENT`] = say nothing.
     fn act(r: &mut Regs, addr: u8, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
         r.acted.push((on_sub, cmd, data.to_vec()));
+        // See `Regs::drop_data_writes` and `Regs::nak_data_writes`.
+        let data_write = cmd == 0x1A && data.first() == Some(&0x06) && data.len() > 1;
+        if data_write && r.drop_data_writes > 0 {
+            r.drop_data_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if data_write && r.nak_data_writes > 0 {
+            r.nak_data_writes -= 1;
+            return Some((0xFA, Vec::new()));
+        }
+        // See `Regs::drop_split_writes` and `Regs::nak_split_writes`.
+        let split_write = match cmd {
+            0x0F => matches!(data, [0x00 | 0x01]),
+            0x25 | 0x26 => !r.dial_by_band && data.first() == Some(&0x01) && data.len() > 1,
+            _ => false,
+        };
+        if split_write && r.drop_split_writes > 0 {
+            r.drop_split_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if split_write && r.nak_split_writes > 0 {
+            r.nak_split_writes -= 1;
+            return Some((0xFA, Vec::new()));
+        }
+        // See `Regs::drop_mode_writes` and `Regs::nak_mode_writes`.
+        let mode_write = match cmd {
+            0x06 => true,
+            0x26 => data.len() > 1,
+            0x1A => data.first() == Some(&0x06) && data.len() > 1,
+            _ => false,
+        };
+        if mode_write && r.drop_mode_writes > 0 {
+            r.drop_mode_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if mode_write && r.nak_mode_writes > 0 {
+            r.nak_mode_writes -= 1;
+            return Some((0xFA, Vec::new()));
+        }
         match (cmd, data.first().copied()) {
             (0x03, _) => {
                 let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
-                Some((0x03, freq_to_bcd(hz).to_vec()))
+                Some((0x03, dial_field(r, hz)))
             }
             (0x05, _) => {
+                if r.drop_dial_writes > 0 {
+                    r.drop_dial_writes -= 1;
+                    return Some((SILENT, Vec::new()));
+                }
                 let hz = bcd_to_freq(data);
+                if !r.covers_hz.is_empty()
+                    && !r.covers_hz.iter().any(|(lo, hi)| (*lo..=*hi).contains(&hz))
+                {
+                    return Some((0xFA, Vec::new()));
+                }
                 if r.sel_sub {
                     r.sub_hz = hz;
                 } else {
@@ -739,9 +857,26 @@ pub(crate) mod tests_support {
                 }
                 None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
             },
+            // A MENU item (`1A 05 <item>` reads, `1A 05 <item> <value>` writes) — see
+            // [`Regs::menus`].
+            (0x1A, Some(0x05)) => match data {
+                [_, hi, lo] => match r.menus.get(&[*hi, *lo]) {
+                    Some(&v) => Some((0x1A, vec![0x05, *hi, *lo, v])),
+                    None => Some((0xFA, Vec::new())),
+                },
+                [_, hi, lo, v] => {
+                    r.menus.insert([*hi, *lo], *v);
+                    None // ack
+                }
+                _ => Some((0xFA, Vec::new())),
+            },
             // IF FILTER WIDTH (`1A 03`): a bare sub-command reads, one BCD byte writes — on the
             // band the command acts on, and never in FM (see [`Regs::filter_raw`]).
             (0x1A, Some(0x03)) => {
+                if data.len() > 1 && r.drop_filter_width_writes > 0 {
+                    r.drop_filter_width_writes -= 1;
+                    return Some((SILENT, Vec::new()));
+                }
                 let fm = (if on_sub { r.sub_mode } else { r.main_mode }) == 0x05;
                 if fm || r.nak_filter_width > 0 {
                     r.nak_filter_width = r.nak_filter_width.saturating_sub(1);
@@ -916,6 +1051,19 @@ pub(crate) mod tests_support {
         }
     }
 
+    /// The dial as this radio sends it in a `03` reply: 10 digits (5 bytes), and on the IC-905's
+    /// 10 GHz band ([`Regs::ten_ghz_12_digits`]) a sixth byte, its 100 GHz digit (always 0) over
+    /// its 10 GHz digit (A7711-9EX-2, PDF p. 17). The sixth byte is built here by hand from that
+    /// page, not by the encoder under test.
+    fn dial_field(r: &Regs, hz: u64) -> Vec<u8> {
+        let mut v = freq_to_bcd(hz).to_vec();
+        if r.ten_ghz_12_digits && hz >= 10_000_000_000 {
+            let (g100, g10) = ((hz / 100_000_000_000) % 10, (hz / 10_000_000_000) % 10);
+            v.push(((g100 << 4) | g10) as u8);
+        }
+        v
+    }
+
     /// Two decimal digits per byte, big-endian: `raw` 0..=9999 → the 2-byte BCD Icom's
     /// level and meter replies carry. By hand, like the decoder in the `0x14` arm.
     fn bcd2(raw: u16) -> [u8; 2] {
@@ -982,10 +1130,22 @@ pub(crate) mod tests_support {
                         sub_smeter_raw: 60,
                         cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
                         dial_by_band: addr == 0x98, // `25`/`26` name MAIN/SUB on the IC-7610 only
+                        ten_ghz_12_digits: addr == 0xAC, // the IC-905's 10 GHz band
                         drop_dial_reads: 0,
+                        covers_hz: Vec::new(),
+                        drop_dial_writes: 0,
+                        drop_mode_writes: 0,
+                        nak_mode_writes: 0,
+                        drop_data_writes: 0,
+                        nak_data_writes: 0,
+                        drop_split_writes: 0,
+                        nak_split_writes: 0,
+                        off: false,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose
                         nak_filter_width: 0,
+                        drop_filter_width_writes: 0,
+                        menus: std::collections::BTreeMap::new(),
                         acted: Vec::new(),
                         wire: Vec::new(),
                         log: Vec::new(),
@@ -1045,7 +1205,9 @@ pub(crate) mod tests_support {
                     r.log.push((f.cmd, f.data.clone()));
                     r.wire.push(bytes.clone());
                     // Decide the reply under the register lock, emit after.
-                    if f.cmd == 0x29 {
+                    if r.off {
+                        Some((SILENT, Vec::new()))
+                    } else if f.cmd == 0x29 {
                         band_directed(&mut r, addr, &f.data)
                     } else {
                         let on_sub = r.sel_sub;
@@ -1095,6 +1257,69 @@ mod tests {
     use super::tests_support::FakeRadio;
     use super::*;
 
+    /// A radio whose replies take `delay` to arrive after each command.
+    struct Late {
+        inner: FakeRadio,
+        delay: Duration,
+        wrote_at: Option<Instant>,
+    }
+    impl std::io::Write for Late {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.wrote_at = Some(Instant::now());
+            self.inner.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+    impl std::io::Read for Late {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.wrote_at.is_some_and(|t| t.elapsed() < self.delay) {
+                std::thread::sleep(Duration::from_millis(2));
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "no data"));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    /// ⭐ THE DEADLINE IS THE TRANSPORT'S. A serial bus keeps its 300 ms, exactly as before, and a
+    /// reply 500 ms late fails there; a transport that brings a longer one (the network's) still
+    /// takes that same late reply as the answer.
+    #[test]
+    fn the_serial_deadline_stays_300_ms_and_a_transport_can_bring_its_own() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let serial = CivEngine::start(Box::new(radio), 0xA2, None);
+        assert_eq!(
+            serial.handle().request_deadline(),
+            Duration::from_millis(300)
+        );
+        let late = |deadline: Option<Duration>| {
+            let (radio, _push) = FakeRadio::new(0xA2);
+            let io = Box::new(Late {
+                inner: radio,
+                delay: Duration::from_millis(500),
+                wrote_at: None,
+            });
+            let eng = match deadline {
+                None => CivEngine::start(io, 0xA2, None),
+                Some(d) => CivEngine::start_with_deadline(io, 0xA2, None, d),
+            };
+            eng.handle().transact(
+                read_freq(0xA2),
+                Expect::Reply {
+                    cmd: 0x03,
+                    sub: None,
+                },
+            )
+        };
+        assert_eq!(late(None), Err(CivError::Timeout), "serial: 300 ms");
+        let f = late(Some(Duration::from_millis(1_000))).expect("a 1 s deadline waits for it");
+        assert_eq!(
+            super::super::commands::parse_freq(&f, None),
+            Some(145_000_000)
+        );
+    }
+
     #[test]
     fn transact_read_and_set_against_a_fake_radio() {
         let (radio, _push) = FakeRadio::new(0xA2);
@@ -1110,9 +1335,12 @@ mod tests {
                 },
             )
             .expect("freq read");
-        assert_eq!(super::super::commands::parse_freq(&f), Some(145_000_000));
+        assert_eq!(
+            super::super::commands::parse_freq(&f, None),
+            Some(145_000_000)
+        );
         // Set a new one (ack), read it back.
-        h.transact(set_freq(0xA2, 144_200_000), Expect::Ack)
+        h.transact(set_freq(0xA2, 144_200_000, None), Expect::Ack)
             .expect("freq set acked");
         let f = h
             .transact(
@@ -1123,7 +1351,10 @@ mod tests {
                 },
             )
             .expect("freq re-read");
-        assert_eq!(super::super::commands::parse_freq(&f), Some(144_200_000));
+        assert_eq!(
+            super::super::commands::parse_freq(&f, None),
+            Some(144_200_000)
+        );
         // The engine folded replies into the shared state too.
         assert_eq!(h.state().freq_hz, Some(144_200_000));
     }
@@ -1192,6 +1423,54 @@ mod tests {
             }
             assert!(Instant::now() < deadline, "transceive folded into state");
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The dial `push` folds into the state of an engine started for `model` at `addr`, once
+    /// the engine has read it (`None` if it never folds one in 2 s).
+    fn folded(addr: u8, model: Option<IcomModel>, push: &[u8]) -> Option<u64> {
+        let (radio, pushed) = FakeRadio::new(addr);
+        let eng = CivEngine::start(Box::new(radio), addr, model);
+        pushed.lock().unwrap().extend_from_slice(push);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while eng.handle().state().freq_hz.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        eng.handle().state().freq_hz
+    }
+
+    /// ⭐ THE IC-905'S TRANSCEIVE REPORT ON ITS 10 GHz BAND IS 12 DIGITS, like its `03` reply:
+    /// one format for `00, 03, 05, 1C 03` (A7711-9EX-2, PDF p. 17). The frame is that page's
+    /// layout typed out at 10368.150 MHz: 1 Hz first, the 10 GHz digit in the sixth byte. Read
+    /// as 10 digits it folded 368.150 MHz into the dial a timed-out read serves.
+    #[test]
+    fn the_ic905s_10_ghz_transceive_report_folds_12_digits() {
+        let push = [
+            0xFE, 0xFE, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x15, 0x68, 0x03, 0x01, 0xFD,
+        ];
+        assert_eq!(
+            folded(0xAC, Some(IcomModel::Ic905), &push),
+            Some(10_368_150_000)
+        );
+    }
+
+    /// The controls: the IC-905's report from a band at or below 5600 MHz is 10 digits, folded
+    /// as before; and a six-byte report from any other radio, or one the caller did not name,
+    /// is read as before, its first five bytes. No other guide here has a 10 GHz digit.
+    #[test]
+    fn a_10_digit_report_and_another_radios_report_fold_as_before() {
+        let ic905_2m = [
+            0xFE, 0xFE, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x20, 0x44, 0x01, 0xFD,
+        ];
+        assert_eq!(
+            folded(0xAC, Some(IcomModel::Ic905), &ic905_2m),
+            Some(144_200_000)
+        );
+        let six = [
+            0xFE, 0xFE, 0x00, 0xA2, 0x00, 0x00, 0x00, 0x15, 0x68, 0x03, 0x01, 0xFD,
+        ];
+        for model in [Some(IcomModel::Ic9700), None] {
+            assert_eq!(folded(0xA2, model, &six), Some(368_150_000), "{model:?}");
         }
     }
 

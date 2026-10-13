@@ -665,13 +665,15 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 }
 
 /// The Field Day view (`field-day.ts`): the capture's four keys, the operator settings' four, the
-/// ruleset's six and three it may carry, and the running status: seventeen keys and sixteen it
-/// may carry, with its contacts, club board, dupe rule and location warning. The ruleset the
+/// ruleset's six and three it may carry, and the running status: seventeen keys and eighteen it
+/// may carry, with its contacts, club board (each row's measured clock one it may carry), dupe
+/// rule and location warning. The ruleset the
 /// desktop's Settings previews also carries a location warning; the station's never does.
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdClubBoardRow, FdClubDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto, FdClubRefusedDto,
+        FdKeptOutDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -713,8 +715,18 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 "locationWarning",
                 "dupeModeGroups",
                 "dupeRule",
+                "objectiveMultiplier",
+                "satelliteCredit",
+                "keptOut",
             ],
         );
+        if let Some(kept) = status.get("keptOut") {
+            takes(
+                &format!("{what}: what the journal restore kept out"),
+                kept,
+                &["otherContest", "otherRunning"],
+            );
+        }
         for contact in status["log"].as_array().unwrap() {
             takes_optional(
                 &format!("{what}: a contact"),
@@ -765,10 +777,43 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     "dupes",
                     "board",
                 ],
-                &["lastError", "dkeys"],
+                &["lastError", "dkeys", "boardFull", "refused", "keptOut"],
             );
-            for row in club["board"].as_array().unwrap() {
+            if let Some(kept) = club.get("keptOut") {
                 takes(
+                    &format!("{what}: the contacts the club kept out"),
+                    kept,
+                    &["total", "latest"],
+                );
+                for contact in kept["latest"].as_array().unwrap() {
+                    takes(
+                        &format!("{what}: a contact the club kept out"),
+                        contact,
+                        &["posName", "call", "reason"],
+                    );
+                }
+            }
+            if let Some(full) = club.get("boardFull") {
+                takes(
+                    &format!("{what}: the club's full board"),
+                    full,
+                    &["positions", "shown"],
+                );
+            }
+            for refused in club
+                .get("refused")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                takes(
+                    &format!("{what}: a position the club turned away"),
+                    refused,
+                    &["posName", "call", "reason"],
+                );
+            }
+            for row in club["board"].as_array().unwrap() {
+                takes_optional(
                     &format!("{what}: a club board row"),
                     row,
                     &[
@@ -781,6 +826,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                         "rate",
                         "lastSeenSecs",
                     ],
+                    &["clockMs"],
                 );
             }
         }
@@ -818,6 +864,51 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         &source["settings"],
         &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
     );
+    // Winter Field Day's capture adds the two objective lists, which the page takes as optional.
+    let wfd = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
+        tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "wfd".into(),
+            fd_class: "1O".into(),
+            fd_section: "EMA".into(),
+            fd_objectives: vec!["wfd-qrp".into()],
+            ..Default::default()
+        },
+    )));
+    wfd.lock().unwrap().restore_field_day_if_enabled();
+    // `self::` — the capture above is bound to a local named `page`.
+    let wfd_page = self::page(&wfd, &sources(), "fieldDay", "");
+    let wfd_settings = &wfd_page["meta"]["source"]["settings"];
+    assert_eq!(
+        wfd_settings["fdObjectives"],
+        serde_json::json!(["wfd-qrp"]),
+        "scene guard: Winter Field Day's capture carries its objectives"
+    );
+    takes_optional(
+        "fieldDay: Winter Field Day's settings",
+        wfd_settings,
+        &["fdOperator", "fdPowerMult", "fdBonuses", "fdBonusesPlanned"],
+        &["fdObjectives", "fdObjectivesPlanned"],
+    );
+    // …and its ruleset says it allows spotting only over amateur RF, a key the page takes too.
+    assert_eq!(
+        wfd_page["meta"]["source"]["ruleset"]["spotsRfOnly"],
+        serde_json::json!(true),
+        "scene guard: Winter Field Day's ruleset carries its spotting rule"
+    );
+    takes_optional(
+        "fieldDay: Winter Field Day's ruleset",
+        &wfd_page["meta"]["source"]["ruleset"],
+        &[
+            "event",
+            "rulesYear",
+            "bannedModes",
+            "spottingAllowed",
+            "clusterAllowed",
+            "enforcement",
+        ],
+        &["exchange", "problem", "role", "spotsRfOnly"],
+    );
     takes_optional(
         "fieldDay: the ruleset",
         &source["ruleset"],
@@ -829,7 +920,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             "clusterAllowed",
             "enforcement",
         ],
-        &["exchange", "problem", "role"],
+        &["exchange", "problem", "role", "spotsRfOnly"],
     );
     assert_eq!(
         source["fieldDay"]["log"].as_array().map(Vec::len),
@@ -852,6 +943,8 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         powered_points: 4,
         bonus_points: 100,
         total_score: 104,
+        objective_multiplier: Some(7),
+        satellite_credit: Some(false),
         event_start_unix: 1_782_500_400,
         event_end_unix: 1_782_597_600,
         mult_count: Some(1),
@@ -869,9 +962,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             when_unix: 1_782_510_000,
             sat: "AO-91".into(),
             mex: "1D EMA".into(),
+            sent: Vec::new(),
             rcvd: vec!["2A".into(), "WI".into()],
             dkey: vec!["K1ABC".into(), "20m".into(), "CW".into()],
             dupe: true,
+            seq: 1,
         }],
         club: Some(FdClubDto {
             sync_state: "synced".into(),
@@ -896,13 +991,44 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 qsos: 1,
                 rate: 30,
                 last_seen_secs: 5,
+                clock_ms: Some(-3_000),
+                // The host's link words and heard seconds: the capture leaves both out (below).
+                link: Some("reconnecting".into()),
+                heard_secs: Some(12),
             }],
+            board_full: Some(FdBoardFullDto {
+                positions: 70,
+                shown: 59,
+            }),
+            refused: vec![FdClubRefusedDto {
+                pos_name: "SSB tent".into(),
+                call: "W1AW".into(),
+                reason: "this club sends the in-state exchange".into(),
+                // The host's Give button's, and the laptop's club code: the capture leaves both
+                // out (below).
+                handle: Some(7),
+                club_code: Some("7KQ2-M9XD".into()),
+            }],
+            kept_out: Some(FdClubKeptOutDto {
+                total: 2,
+                latest: vec![FdClubRefusedDto {
+                    pos_name: "CW tent".into(),
+                    call: "W1AW".into(),
+                    reason: "its contact with K1ABC is not in the club's log".into(),
+                    handle: None,
+                    club_code: None,
+                }],
+            }),
+            // This laptop's own club code: left out too.
+            club_code: "3HV8-ZQ1P".into(),
         }),
         upload: Default::default(),
         receives: Vec::new(),
         composing: Vec::new(),
         sent_exchange: "1D EMA".into(),
         composing_text: "1D EMA".into(),
+        composing_text_phone: "1D EMA".into(),
+        cabrillo_missing: vec!["CATEGORY-POWER".into()],
         bands: vec!["20m".into()],
         dupe_mode_groups: vec![vec!["CW".into(), "DIG".into()]],
         dupe_rule: DupeRuleDto {
@@ -920,10 +1046,31 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         }),
         role: String::new(),
         boards: Vec::new(),
+        kept_out: Some(FdKeptOutDto {
+            other_contest: 1,
+            other_running: 3,
+        }),
     };
+    let native = serde_json::to_value(&written).unwrap();
+    assert!(
+        native["club"]["refused"][0]["handle"] == 7
+            && native["club"]["refused"][0]["clubCode"] == "7KQ2-M9XD"
+            && native["club"]["clubCode"] == "3HV8-ZQ1P"
+            && native["club"]["board"][0]["link"] == "reconnecting"
+            && native["club"]["board"][0]["heardSecs"] == 12
+            && native["composingTextPhone"] == "1D EMA"
+            && native["cabrilloMissing"][0] == "CATEGORY-POWER",
+        "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
+         the host board's link words, the phone form of the exchange and the Cabrillo lines the \
+         export would leave out"
+    );
+    // What the capture sends: the station's status with what only its own screen acts on left
+    // out, by the capture's own function.
+    let mut captured = Some(written);
+    super::field_day::leave_out_the_hosts_own(&mut captured);
     status(
         "fieldDay: every field",
-        &serde_json::to_value(written).unwrap(),
+        &serde_json::to_value(captured).unwrap(),
     );
 }
 

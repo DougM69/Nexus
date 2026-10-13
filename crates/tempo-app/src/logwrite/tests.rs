@@ -2395,6 +2395,7 @@ fn check_of(
 ) -> tempo_core::reconcile::check::ConfirmationCheck {
     station::check_lotw_confirmations(&crate::engine::log_plan(engine), report, own, Some("K2DEF"))
         .expect("the check reads the log")
+        .check
 }
 
 /// The contact `call` at `hhmmss`, as the store holds it.
@@ -2459,6 +2460,24 @@ fn misplaced_scene() -> (Vec<QsoRecord>, String, String) {
 /// When the tests' Apply happens: 2026-10-07 18:00:00 UTC.
 const APPLIED_AT: u64 = 1_791_396_000;
 
+/// LoTW's confirmation download, as Apply is handed it when LoTW is the one service checked.
+fn lotw_only(report: &str) -> Vec<(tempo_core::reconcile::check::Channel, String)> {
+    vec![(
+        tempo_core::reconcile::check::Channel::Lotw,
+        report.to_string(),
+    )]
+}
+
+/// The LoTW confirmations Apply took off.
+fn taken_off(applied: &ConfirmationsApplied) -> usize {
+    applied
+        .services
+        .iter()
+        .filter(|s| s.channel == tempo_core::reconcile::check::Channel::Lotw)
+        .map(|s| s.confirmations)
+        .sum()
+}
+
 /// The ticked contacts of `ticked` that are not, as the store holds them, exactly what `before`
 /// held of them: each named by its call and time.
 fn not_as_before(
@@ -2510,10 +2529,11 @@ fn the_before_file_imported_puts_every_change_back() {
     assert_eq!(ticked.len(), 3, "{:#?}", check.lines);
     let before = engine.stored_records();
 
-    let (applied, durability) = apply_confirmation_check(&engine, &report, &ticked, APPLIED_AT);
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &lotw_only(&report), &ticked, APPLIED_AT);
     durability.wait(DURABLE_WAIT).expect("on disk");
     let applied = applied.expect("applied");
-    assert_eq!((applied.confirmations, applied.uploads), (2, 1));
+    assert_eq!((taken_off(&applied), applied.uploads), (2, 1));
     let file = applied.before_file.expect("a before-file");
     assert_eq!(
         file,
@@ -2581,11 +2601,12 @@ fn a_contact_changed_after_the_check_is_left_alone() {
     written.wait(DURABLE_WAIT).expect("on disk");
     assert!(matches!(made, Ok(Ok(_))), "{made:?}");
 
-    let (applied, durability) = apply_confirmation_check(&engine, &report, &ticked, APPLIED_AT);
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &lotw_only(&report), &ticked, APPLIED_AT);
     durability.wait(DURABLE_WAIT).expect("on disk");
     let applied = applied.expect("applied");
     assert_eq!(
-        (applied.confirmations, applied.uploads),
+        (taken_off(&applied), applied.uploads),
         (1, 1),
         "W1AW's two lines are made; K1ABC's is not"
     );
@@ -2726,5 +2747,626 @@ fn the_check_counts_the_marks_no_download_names() {
         check.gains.len(),
         1,
         "W1AW at 18:00 gains LoTW's confirmation"
+    );
+}
+
+/// eQSL's InBox as its download reads: the banner, then `rows`, the cards sent to the operator.
+fn eqsl_answer(rows: &[String]) -> String {
+    format!(
+        "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<ADIF_Ver:5>3.1.6\n<EOH>\n{}",
+        rows.concat()
+    )
+}
+
+/// The three services' checks of the log `engine` holds, for K2DEF, as the commands read them.
+fn checks_of(
+    engine: &Mutex<Engine>,
+    lotw: &str,
+    inbox: &str,
+    book: &str,
+) -> Vec<tempo_core::reconcile::check::CheckLine> {
+    let plan = || crate::engine::log_plan(engine);
+    let own = Some("K2DEF");
+    [
+        station::check_lotw_confirmations(&plan(), lotw, &lotw_answer(&[]), own),
+        station::check_eqsl_confirmations(&plan(), inbox, own),
+        station::check_qrz_confirmations(&plan(), book, own),
+    ]
+    .into_iter()
+    .flat_map(|checked| checked.expect("the check reads the log").check.lines)
+    .collect()
+}
+
+/// ★ Apply takes off only what the operator ticked, service by service. #400's pair on W1AW has
+/// every service's confirmation of 18:00 on 06:00, each put there by 1.17.0's matcher, and K1ABC
+/// holds eQSL's card of a 15:00 QSO this log lacks. Of the four lines only 06:00's eQSL line is
+/// ticked: 06:00 loses eQSL's confirmation and keeps LoTW's, its DXCC and QRZ's; K1ABC keeps its
+/// card; and 18:00 gains each service's confirmation from the merges. N0SUP, which LoTW confirms,
+/// takes the DXCC its row brings since, and that is no gain. Nothing else moves.
+#[test]
+fn apply_takes_off_only_the_ticked_lines_of_each_service() {
+    use tempo_core::reconcile::check::{replay::left_by_1_17, Channel, Mark};
+    let d = Dir::new("check-each-service");
+    let w1aw = adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180200",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    );
+    // What LoTW sent the old sync, and what it holds now: N0SUP's DXCC was granted since.
+    let lotw_then = lotw_answer(std::slice::from_ref(&w1aw));
+    let lotw = lotw_answer(&[
+        w1aw,
+        adif_row(
+            "N0SUP",
+            "20m",
+            "FT8",
+            "120100",
+            "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        ),
+    ]);
+    let inbox = eqsl_answer(&[
+        adif_row("W1AW", "20m", "FT8", "180100", "<EQSL_QSL_RCVD:1>Y"),
+        adif_row("K1ABC", "20m", "FT8", "150000", "<EQSL_QSL_RCVD:1>Y"),
+    ]);
+    let book = [
+        adif_row("W1AW", "20m", "FT8", "180000", "<APP_QRZLOG_STATUS:1>C"),
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+    ]
+    .concat();
+    let mut log = contacts(&[
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+        adif_row("W1AW", "20m", "FT8", "180000", ""),
+        adif_row("K1ABC", "20m", "FT8", "100000", ""),
+        adif_row("N0SUP", "20m", "FT8", "120000", "<LOTW_QSL_RCVD:1>Y"),
+    ]);
+    for text in [&lotw_then, &inbox, &book] {
+        log = left_by_1_17(log, &tempo_core::logbook::report_rows(text));
+    }
+    let engine = holding(&d, &log);
+    let lines = checks_of(&engine, &lotw, &inbox, &book);
+    let listed: Vec<(&str, Mark, bool)> = lines
+        .iter()
+        .map(|l| (l.contact.call.as_str(), l.mark, l.decisive()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("W1AW", Mark::Confirmation(Channel::Lotw), true),
+            ("W1AW", Mark::Confirmation(Channel::Eqsl), true),
+            ("K1ABC", Mark::Confirmation(Channel::Eqsl), false),
+            ("W1AW", Mark::Confirmation(Channel::Qrz), true),
+        ]
+    );
+    let before = engine.stored_records();
+    let ticked = vec![lines[1].clone()];
+    let downloads = vec![
+        (Channel::Lotw, lotw),
+        (Channel::Eqsl, inbox),
+        (Channel::Qrz, book),
+    ];
+    let (applied, durability) = apply_confirmation_check(&engine, &downloads, &ticked, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let applied = applied.expect("applied");
+    let made: Vec<(Channel, usize, usize)> = applied
+        .services
+        .iter()
+        .map(|s| (s.channel, s.confirmations, s.gained))
+        .collect();
+    assert_eq!(
+        made,
+        [
+            (Channel::Lotw, 0, 1),
+            (Channel::Eqsl, 1, 1),
+            (Channel::Qrz, 0, 1)
+        ]
+    );
+    assert_eq!(applied.uploads, 0);
+
+    let at = |call: &str, hhmmss: &str| {
+        let when = contacts(&[adif_row(call, "20m", "FT8", hhmmss, "")])[0].when_unix;
+        before
+            .iter()
+            .find(|r| r.call == call && r.when_unix == when)
+            .cloned()
+            .expect("held before")
+    };
+    let mut expected = Vec::new();
+    let mut early = at("W1AW", "060000");
+    early.qsl_rcvd.eqsl = false;
+    expected.push(early.clone());
+    let mut late = at("W1AW", "180000");
+    late.qsl_rcvd.lotw = true;
+    late.qsl_rcvd.eqsl = true;
+    late.qsl_rcvd.qrz = true;
+    late.confirmed = true;
+    late.award_confirmed = true;
+    late.credit_granted = vec!["DXCC".into()];
+    expected.push(late);
+    expected.push(at("K1ABC", "100000"));
+    let mut credited = at("N0SUP", "120000");
+    credited.credit_granted = vec!["DXCC".into()];
+    expected.push(credited);
+    let mut now = engine.stored_records();
+    now.sort_by_key(|r| (r.call.clone(), r.when_unix));
+    expected.sort_by_key(|r| (r.call.clone(), r.when_unix));
+    assert_eq!(
+        now, expected,
+        "06:00 loses eQSL's alone; 18:00 gains each service's; K1ABC is untouched; N0SUP is credited"
+    );
+    assert!(
+        early.qsl_rcvd.lotw && early.qsl_rcvd.qrz && early.credit_granted == ["DXCC"],
+        "premise: the unticked lines' marks are there to keep: {early:?}"
+    );
+    let file = applied.before_file.expect("a before-file");
+    let kept = tempo_core::logbook::parse_adif(&std::fs::read_to_string(&file).unwrap());
+    let kept: Vec<(&str, u64)> = kept
+        .iter()
+        .map(|r| (r.call.as_str(), r.when_unix))
+        .collect();
+    assert_eq!(
+        kept,
+        [("W1AW", early.when_unix)],
+        "the one contact that changed"
+    );
+}
+
+/// ★ QRZ's copies of other services' confirmations never reach a contact at Apply. QRZ's book
+/// re-reports LoTW's, eQSL's and a card's confirmation, LoTW's credit, and a QSO this log lacks.
+/// Apply takes LoTW's misplaced confirmation off 06:00, as ticked, though QRZ's copy of 06:00
+/// says LoTW confirms it; 18:00 gains QRZ's own confirmation and LoTW's, and no card or eQSL
+/// from QRZ's copies; and no contact is added (Sync from QRZ adds those).
+#[test]
+fn qrz_s_copies_of_other_services_never_reach_a_contact_at_apply() {
+    use tempo_core::reconcile::check::{replay::left_by_1_17, Channel};
+    let d = Dir::new("check-qrz-copies");
+    let lotw = lotw_answer(&[adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180200",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let copies = "<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC";
+    let book = [
+        adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180000",
+            &format!("<APP_QRZLOG_STATUS:1>C{copies}"),
+        ),
+        adif_row("W1AW", "20m", "FT8", "060000", copies),
+        adif_row("K5NEW", "20m", "FT8", "090000", "<APP_QRZLOG_STATUS:1>C"),
+    ]
+    .concat();
+    let log = left_by_1_17(
+        contacts(&[
+            adif_row("W1AW", "20m", "FT8", "060000", ""),
+            adif_row("W1AW", "20m", "FT8", "180000", ""),
+        ]),
+        &tempo_core::logbook::report_rows(&lotw),
+    );
+    let engine = holding(&d, &log);
+    let lines = checks_of(&engine, &lotw, &eqsl_answer(&[]), &book);
+    assert_eq!(lines.len(), 1, "06:00's LoTW line alone: {lines:#?}");
+    let (applied, durability) = apply_confirmation_check(
+        &engine,
+        &[(Channel::Lotw, lotw), (Channel::Qrz, book)],
+        &lines,
+        APPLIED_AT,
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let applied = applied.expect("applied");
+    let made: Vec<(Channel, usize, usize)> = applied
+        .services
+        .iter()
+        .map(|s| (s.channel, s.confirmations, s.gained))
+        .collect();
+    assert_eq!(made, [(Channel::Lotw, 1, 1), (Channel::Qrz, 0, 1)]);
+    let now = engine.stored_records();
+    assert_eq!(now.len(), 2, "K5NEW is not added: {now:#?}");
+    let early = contact_at(&engine, "W1AW", "060000");
+    assert_eq!(
+        (early.qsl_rcvd, early.credit_granted.as_slice()),
+        (Default::default(), &[] as &[String]),
+        "06:00 is as it was before 1.17.0: {early:?}"
+    );
+    let late = contact_at(&engine, "W1AW", "180000");
+    assert_eq!(
+        late.qsl_rcvd,
+        tempo_core::logbook::QslRcvd {
+            lotw: true,
+            qrz: true,
+            ..Default::default()
+        },
+        "18:00 holds LoTW's word and QRZ's own, and no copy: {late:?}"
+    );
+    assert_eq!(late.credit_granted, ["DXCC"], "LoTW's row brought it");
+}
+
+/// ★ Sync from QRZ never puts back what Check confirmations took off. 1.17.0 put the 18:00
+/// contact's LoTW and eQSL confirmations, and LoTW's DXCC, on 06:00, and the check takes them off
+/// as ticked. QRZ's book then says LoTW, eQSL and a paper card confirm 06:00, with LoTW's credit:
+/// its copies, which are not QRZ's word, so 06:00 keeps none of them (a card would give back the
+/// award credit the check took off). QRZ's own confirmation still merges beside copies that do
+/// not: 18:00 gains QRZ's confirmation and not the card the same row says it has, and K5NEW,
+/// which the log lacks, is added with QRZ's confirmation alone.
+#[test]
+fn sync_from_qrz_never_puts_back_what_check_confirmations_took_off() {
+    use tempo_core::logbook::QslRcvd;
+    use tempo_core::reconcile::check::{replay::left_by_1_17, Channel};
+    let d = Dir::new("sync-qrz-copies");
+    let lotw = lotw_answer(&[adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180200",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let inbox = eqsl_answer(&[adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        "180100",
+        "<EQSL_QSL_RCVD:1>Y",
+    )]);
+    let mut log = contacts(&[
+        adif_row("W1AW", "20m", "FT8", "060000", ""),
+        adif_row("W1AW", "20m", "FT8", "180000", ""),
+    ]);
+    for text in [&lotw, &inbox] {
+        log = left_by_1_17(log, &tempo_core::logbook::report_rows(text));
+    }
+    let engine = holding(&d, &log);
+    let plan = || crate::engine::log_plan(&engine);
+    let lines: Vec<_> = [
+        station::check_lotw_confirmations(&plan(), &lotw, &lotw_answer(&[]), Some("K2DEF")),
+        station::check_eqsl_confirmations(&plan(), &inbox, Some("K2DEF")),
+    ]
+    .into_iter()
+    .flat_map(|checked| checked.expect("the check reads the log").check.lines)
+    .collect();
+    assert_eq!(lines.len(), 2, "06:00's LoTW and eQSL lines: {lines:#?}");
+    let (applied, durability) = apply_confirmation_check(
+        &engine,
+        &[(Channel::Lotw, lotw), (Channel::Eqsl, inbox)],
+        &lines,
+        APPLIED_AT,
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    applied.expect("applied");
+    let early = contact_at(&engine, "W1AW", "060000");
+    let late = contact_at(&engine, "W1AW", "180000");
+    assert_eq!(
+        (early.qsl_rcvd, early.credit_granted.as_slice()),
+        (QslRcvd::default(), &[] as &[String]),
+        "premise: the check took LoTW's and eQSL's confirmations and the DXCC off 06:00"
+    );
+
+    // Sync from QRZ: QRZ's FETCH answer, read as the sync reads it, then merged as it merges it.
+    let copies = "<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC";
+    let book = [
+        adif_row("W1AW", "20m", "FT8", "060000", copies),
+        adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "180000",
+            &format!("<APP_QRZLOG_STATUS:1>C{copies}"),
+        ),
+        adif_row(
+            "K5NEW",
+            "20m",
+            "FT8",
+            "090000",
+            &format!("<APP_QRZLOG_STATUS:1>C{copies}"),
+        ),
+    ]
+    .concat();
+    let answer = format!(
+        "RESULT=OK&COUNT=3&ADIF={}",
+        book.replace('<', "&lt;").replace('>', "&gt;")
+    );
+    let (merged, durability) =
+        merge_qrz_report(&engine, &tempo_core::qrz::parse_fetch(&answer).adif);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let (added, summary) = merged.expect("merged");
+    let now = |call: &str, hhmmss: &str| {
+        let r = contact_at(&engine, call, hhmmss);
+        (r.qsl_rcvd, r.award_confirmed, r.credit_granted)
+    };
+    assert_eq!(
+        [
+            now("W1AW", "060000"),
+            now("W1AW", "180000"),
+            now("K5NEW", "090000")
+        ],
+        [
+            (QslRcvd::default(), false, vec![]),
+            (
+                QslRcvd {
+                    card: false,
+                    lotw: true,
+                    eqsl: true,
+                    qrz: true
+                },
+                true,
+                vec!["DXCC".to_string()]
+            ),
+            (
+                QslRcvd {
+                    qrz: true,
+                    ..QslRcvd::default()
+                },
+                false,
+                vec![]
+            ),
+        ],
+        "06:00 keeps none of QRZ's copies; 18:00 gains QRZ's own confirmation and not its card; \
+         K5NEW is added with QRZ's alone"
+    );
+    assert_eq!((added, summary.matched), (1, 2));
+    // Nothing else about the two contacts moved.
+    assert_eq!(contact_at(&engine, "W1AW", "060000"), early);
+    let mut gained = late;
+    gained.qsl_rcvd.qrz = true;
+    assert_eq!(contact_at(&engine, "W1AW", "180000"), gained);
+}
+
+/// Sync from QRZ's merge of a FETCH answer holding `rows`, read as `sync_qrz_since` reads it: how
+/// many contacts it added, and its summary.
+fn qrz_synced(
+    engine: &Mutex<Engine>,
+    rows: &[String],
+) -> (usize, tempo_core::reconcile::ReconcileSummary) {
+    let answer = format!(
+        "RESULT=OK&COUNT={}&ADIF={}",
+        rows.len(),
+        rows.concat().replace('<', "&lt;").replace('>', "&gt;")
+    );
+    let (merged, durability) =
+        merge_qrz_report(engine, &tempo_core::qrz::parse_fetch(&answer).adif);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    merged.expect("merged")
+}
+
+/// The contacts the next LoTW upload sends ([`station::lotw_unsent`], read from the store as the
+/// upload reads it), as `CALL HH:MM`, in log order.
+fn lotw_owed(engine: &Mutex<Engine>) -> Vec<String> {
+    let rows = engine_lock(engine).log_rows();
+    station::lotw_unsent(&rows)
+        .expect("the store reads")
+        .iter()
+        .map(|r| {
+            let (h, m) = (r.when_unix % 86_400 / 3_600, r.when_unix % 3_600 / 60);
+            format!("{} {h:02}:{m:02}", r.call)
+        })
+        .collect()
+}
+
+/// [`misplaced_scene`] after Logbook ▸ Check confirmations: its decisive lines applied, among them
+/// the upload line that takes 1.17.0's LoTW mark off 06:00, so 06:00 is owed to LoTW again, the
+/// only contact that is. The engine, and the ADIF Nexus's QRZ push sent of 06:00 before the check
+/// (`adif_record`), the mark in its `APP_TEMPO_UL_LOTW`.
+fn lotw_mark_taken_off(d: &Dir) -> (Arc<Mutex<Engine>>, String) {
+    use tempo_core::reconcile::check::{CheckLine, Mark};
+    let (log, report, own) = misplaced_scene();
+    let engine = holding(d, &log);
+    let pushed = adif_record(&contact_at(&engine, "W1AW", "060000"));
+    assert!(
+        pushed.contains("<APP_TEMPO_UL_LOTW:11>accepted|7|"),
+        "premise: the push carried 1.17.0's mark: {pushed}"
+    );
+    let ticked: Vec<CheckLine> = check_of(&engine, &report, &own)
+        .lines
+        .into_iter()
+        .filter(|l| l.decisive())
+        .collect();
+    assert!(
+        ticked.iter().any(|l| l.mark == Mark::LotwUpload),
+        "06:00's upload line: {ticked:#?}"
+    );
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &lotw_only(&report), &ticked, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(applied.expect("applied").uploads, 1);
+    assert_eq!(
+        lotw_owed(&engine),
+        ["W1AW 06:00"],
+        "premise: the check left 06:00 owed to LoTW"
+    );
+    (engine, pushed)
+}
+
+/// ★ Sync from QRZ never puts back the LoTW upload mark Check confirmations took off. 1.17.0's
+/// own-QSO pull marked 06:00 as on file at LoTW from 18:00's upload, and the check's upload line
+/// takes the mark off, so 06:00 is owed to LoTW again. QRZ's book then says 06:00 was sent to LoTW
+/// (`LOTW_QSL_SENT`): its copy, not LoTW's word, so 06:00 stays owed and goes in the next upload.
+/// QRZ's own confirmation on the same row still lands.
+#[test]
+fn sync_from_qrz_never_puts_back_the_lotw_mark_check_confirmations_took_off() {
+    let d = Dir::new("sync-qrz-lotw-sent");
+    let (engine, _) = lotw_mark_taken_off(&d);
+    let synced = qrz_synced(
+        &engine,
+        &[adif_row(
+            "W1AW",
+            "20m",
+            "FT8",
+            "060000",
+            "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y",
+        )],
+    );
+    let early = contact_at(&engine, "W1AW", "060000");
+    assert_eq!(
+        (early.qsl_rcvd.qrz, early.upload.lotw, lotw_owed(&engine)),
+        (true, None, vec!["W1AW 06:00".to_string()]),
+        "QRZ's confirmation lands, its copy of LoTW's sent flag does not, and 06:00 is still owed"
+    );
+    assert_eq!((synced.0, synced.1.matched), (0, 1));
+}
+
+/// ★ Nor the stamp Nexus's own QRZ push carried there. Before the check, Nexus pushed 06:00 to QRZ
+/// with 1.17.0's mark in its `APP_TEMPO_UL_LOTW`. If QRZ's book keeps that field and hands it back
+/// (not measured), it is Nexus's old word passed back through QRZ, not LoTW's: 06:00 stays owed.
+/// LoTW's own-QSO list still marks it, once LoTW holds it.
+#[test]
+fn sync_from_qrz_never_puts_back_the_lotw_mark_its_push_carried() {
+    let d = Dir::new("sync-qrz-lotw-echo");
+    let (engine, pushed) = lotw_mark_taken_off(&d);
+    qrz_synced(&engine, &[pushed]);
+    let mark = |e: &Mutex<Engine>| contact_at(e, "W1AW", "060000").upload.lotw;
+    assert_eq!(
+        (mark(&engine), lotw_owed(&engine)),
+        (None, vec!["W1AW 06:00".to_string()]),
+        "the stamp QRZ handed back does not land, and 06:00 is still owed"
+    );
+
+    // The control: LoTW's own-QSO list, holding 06:00, marks it with LoTW's time.
+    const ECHOED_AT: i64 = APPLIED_AT as i64 + 3_600;
+    let (promoted, durability) = merge_lotw_own_echo(
+        &engine,
+        &lotw_answer(&[adif_row("W1AW", "20m", "FT8", "060000", "<QSL_RCVD:1>N")]),
+        ECHOED_AT,
+    );
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(promoted, Ok(1));
+    assert_eq!(
+        (mark(&engine), lotw_owed(&engine)),
+        (
+            Some(UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix: ECHOED_AT,
+                detail: None,
+            }),
+            vec![]
+        )
+    );
+}
+
+/// ★ Which contacts upload after Sync from QRZ: the LoTW marks QRZ's book no longer brings are the
+/// whole change. Owed to LoTW, and in the next upload: K1AAA, held with no LoTW mark, which the
+/// book says was sent; K1BBB, whose upload LoTW bounced, which the book hands a later "accepted"
+/// stamp; and K5NEW, which the sync adds, and which the book says was sent. Not owed, whatever the
+/// book says: K1CCC, uploaded and awaiting LoTW, and K1DDD, which LoTW confirms. What the catch-up
+/// sweep sends to QRZ, Club Log and eQSL is as it was: the stamps of those services the book hands
+/// back still land (K1EEE, and K5ADD, which the sync adds).
+#[test]
+fn sync_from_qrz_changes_only_which_contacts_go_to_lotw() {
+    use crate::engine::upload_legs::{CLUBLOG, EQSL, QRZ};
+    let d = Dir::new("sync-qrz-owed");
+    let stamp = |name: &str, value: &str| format!("<{name}:{}>{value}", value.len());
+    let row = |call: &str, hhmmss: &str, more: &str| adif_row(call, "20m", "FT8", hhmmss, more);
+    let bounced = "rejected|1791000000|record";
+    let log = contacts(&[
+        row("K1AAA", "010000", ""),
+        row("K1BBB", "020000", &stamp("APP_TEMPO_UL_LOTW", bounced)),
+        row(
+            "K1CCC",
+            "030000",
+            &stamp("APP_TEMPO_UL_LOTW", "pending|1791000000|"),
+        ),
+        row("K1DDD", "040000", "<LOTW_QSL_RCVD:1>Y"),
+        row(
+            "K1EEE",
+            "050000",
+            &(stamp("APP_TEMPO_UL_QRZ", "accepted|1791000000|")
+                + &stamp("APP_TEMPO_UL_EQSL", bounced)),
+        ),
+        row("K1FFF", "060000", ""),
+    ]);
+    let engine = holding(&d, &log);
+    let all = QRZ | CLUBLOG | EQSL;
+    let swept = |e: &Mutex<Engine>| -> Vec<(String, u8)> {
+        let rows = engine_lock(e).log_rows();
+        station::catch_up_records(&rows, all, 256)
+            .expect("the store reads")
+            .into_iter()
+            .map(|(r, legs)| (r.call, legs))
+            .collect()
+    };
+    let calls = |owed: &[(&str, u8)]| -> Vec<(String, u8)> {
+        owed.iter().map(|&(c, l)| (c.to_string(), l)).collect()
+    };
+    assert_eq!(
+        (lotw_owed(&engine), swept(&engine)),
+        (
+            vec![
+                "K1AAA 01:00".to_string(),
+                "K1BBB 02:00".into(),
+                "K1EEE 05:00".into(),
+                "K1FFF 06:00".into()
+            ],
+            calls(&[
+                ("K1AAA", all),
+                ("K1BBB", all),
+                ("K1CCC", all),
+                ("K1DDD", all),
+                ("K1EEE", CLUBLOG | EQSL),
+                ("K1FFF", all)
+            ])
+        ),
+        "premise"
+    );
+
+    let later = "accepted|1791100000|";
+    let (added, summary) = qrz_synced(
+        &engine,
+        &[
+            row("K1AAA", "010000", "<LOTW_QSL_SENT:1>Y"),
+            row("K1BBB", "020000", &stamp("APP_TEMPO_UL_LOTW", later)),
+            row(
+                "K1CCC",
+                "030000",
+                &("<LOTW_QSL_SENT:1>Y".to_string() + &stamp("APP_TEMPO_UL_LOTW", later)),
+            ),
+            row("K1DDD", "040000", "<LOTW_QSL_SENT:1>Y"),
+            row(
+                "K1EEE",
+                "050000",
+                &(stamp("APP_TEMPO_UL_CLUBLOG", later) + &stamp("APP_TEMPO_UL_EQSL", later)),
+            ),
+            row("K1FFF", "060000", "<APP_QRZLOG_STATUS:1>C"),
+            row(
+                "K5NEW",
+                "090000",
+                "<APP_QRZLOG_STATUS:1>C<LOTW_QSL_SENT:1>Y",
+            ),
+            row(
+                "K5ADD",
+                "100000",
+                &(stamp("APP_TEMPO_UL_QRZ", later)
+                    + &stamp("APP_TEMPO_UL_CLUBLOG", "duplicate|1791100000|")),
+            ),
+        ],
+    );
+    assert_eq!((added, summary.matched), (2, 6));
+    // QRZ, Club Log and eQSL first, so a LoTW red below is seen with these already as they were.
+    assert_eq!(
+        swept(&engine),
+        calls(&[
+            ("K1AAA", all),
+            ("K1BBB", all),
+            ("K1CCC", all),
+            ("K1DDD", all),
+            ("K1FFF", all),
+            ("K5NEW", all),
+            ("K5ADD", EQSL)
+        ]),
+        "QRZ, Club Log and eQSL: the sweep sends what it sent before"
+    );
+    assert_eq!(
+        lotw_owed(&engine),
+        [
+            "K1AAA 01:00",
+            "K1BBB 02:00",
+            "K1EEE 05:00",
+            "K1FFF 06:00",
+            "K5NEW 09:00",
+            "K5ADD 10:00"
+        ],
+        "LoTW: K1AAA, K1BBB and K5NEW are owed beside the rest"
     );
 }

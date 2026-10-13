@@ -16,6 +16,7 @@ import { t } from '../i18n'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { modeMismatch } from './TopBar'
+import { RadioTuneNote } from './RadioTuneNote'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
  *  words — `CQ` is a Q-code, and the word joiners keep the pill from breaking mid-token in a
@@ -32,6 +33,9 @@ const NARROW_FILTER_HZ = 1000
 
 interface Props {
   qso: QsoStatus | null
+  /** A contest's own run (`snap.fieldDay.running`): Call CQ starts it while a contest runs, and
+   * the snapshot carries it there, not in `qso`. */
+  contestRunning?: boolean
   /** Switch the sequencer role (Call CQ / Monitor S&P). */
   onSetMode: (mode: ModeRequest, expectedQso?: import('../types').QsoStatus | null) => void
   /** Start a PLAIN CQ run (clears any sticky directed token — the labelled
@@ -121,6 +125,7 @@ function reportLabel(rx: number | null | undefined): string | null {
  */
 export function OperateQsoStrip({
   qso,
+  contestRunning,
   onSetMode,
   onCallCq,
   onResend,
@@ -157,7 +162,8 @@ export function OperateQsoStrip({
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
   // AUTO-CQ pill claimed a CQ run that was not happening (operator-relayed report,
   // 2026-08-16). cqRunning is the flag resume_cq and the sequencer actually key off.
-  const running = qso?.cqRunning ?? false
+  // In a contest there is no `qso`: the contest's own run is the one Call CQ started.
+  const running = qso?.cqRunning ?? contestRunning ?? false
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
   const txNow = qso?.txNow ?? null
@@ -450,6 +456,9 @@ export function OperateQsoStrip({
         </span>
       )}
       {telemetry != null && <div className="cq-telemetry">{telemetry}</div>}
+      {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
+          child, on a line of its own, so it never moves the clusters or the readouts. */}
+      {radio && <RadioTuneNote radio={radio} />}
     </section>
   )
 }

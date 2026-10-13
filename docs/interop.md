@@ -124,9 +124,9 @@ solves the classic conflict: Nexus owns the rig, and other apps talk to the radi
   `\dump_state`, `\chk_vfo`, and `\get_powerstat`.
 
 > **Port note.** Nexus talks to the radio through its own internal `rigctld` on
-> `rigctld_port` (also default 4532). If you enable the broker, give the two distinct
-> ports so they don't collide — e.g. leave the broker on 4532 for your other apps and
-> keep Nexus's internal port separate.
+> `rigctld_port`, default 4534, so it never collides with the broker on 4532. If you
+> change either port, keep the two distinct: leave the broker on 4532 for your other
+> apps and Nexus's internal port on a number of its own.
 
 ### PTT arbitration — who gets to transmit
 
@@ -168,9 +168,15 @@ native equivalent of the classic WSJT-X → JTAlert → N3FJP bridge.
   (N3FJP is the TCP server).
 - **In Nexus:** set the N3FJP host (`n3fjp_host`; empty = off) and port
   (`n3fjp_port`, default **`1100`**).
-- Nexus uses the `ADDDIRECT` path (direct insert, server-side dupe exclusion) followed
-  by `CHECKLOG` to refresh the screen, connecting per push so it survives N3FJP
-  restarts mid-event. Band is in **meters**; mode is `FT8`/`FT4`/`CW`/`SSB`.
+- Nexus drives N3FJP's ENTER sequence, which scores the contact (`ADDDIRECT`, a direct
+  insert with server-side dupe exclusion, followed by `CHECKLOG`, when *Use ENTER for
+  contest scoring* is off), connecting per push so it survives N3FJP restarts
+  mid-event. Band is in **meters**; mode is `FT8`/`FT4`/`CW`/`SSB`.
+- The ENTER sequence fills the entry boxes N3FJP's API page documents for the
+  contest's program: class + section (Field Day, Winter Field Day), both reports + the
+  serial received + `SETSERIALNUMBER` with the serial sent (CQ WPX), both reports +
+  zone + state (CQ WW RTTY), grid (VHF Contest Log). The QSO parties, Sweepstakes and
+  CQ WW CW/SSB get the call alone: the page does not document those programs' boxes.
 - Use the connection test — it handshakes `<CMD><PROGRAM></CMD>` and reports the
   program and version on the other end, so you can confirm the API is enabled before
   the event.

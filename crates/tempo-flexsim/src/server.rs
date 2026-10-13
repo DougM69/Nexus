@@ -16,7 +16,8 @@
 //!
 //! **What the radio remembers.** Who holds the transmitter: a successful `xmit 1` keys it under
 //! the connection's handle and a successful `xmit 0` releases it, unless a fault says otherwise.
-//! That is what lets a reconnect see a transmitter still keyed by a dropped handle. And the
+//! The tune carrier the same way: `transmit tune 1` and `transmit tune 0`. That is what lets a
+//! reconnect see a transmitter still keyed, or still tuning, under a dropped handle. And the
 //! transmitter's DAX source, which is radio-wide: after a successful `transmit set dax=<0|1>`,
 //! every later `sub tx all` reports it, so a reconnect sees what an earlier session left.
 //! Everything else a client hears comes from the session's rules: the simulator models no slices
@@ -36,7 +37,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::fault::{interlock_line, Fault, REFUSED};
+use crate::fault::{interlock_line, statuses, unanswered, withholds, Fault, REFUSED};
 use crate::line::{self, LineBuf};
 use crate::session::{Item, Session};
 use crate::vita::{self, Start, Stream};
@@ -115,6 +116,11 @@ pub enum Event {
         conn: usize,
         seq: u32,
     },
+    /// [`Fault::Unanswered`] left this command unanswered: no reply, and nothing done.
+    Unanswered {
+        conn: usize,
+        seq: u32,
+    },
     /// [`Fault::StuckTransmit`] withheld this many status lines of the command's rule.
     StatusWithheld {
         conn: usize,
@@ -184,6 +190,8 @@ struct Radio {
     accepted: usize,
     /// The handle the transmitter is keyed under, if any.
     keyed_by: Option<u32>,
+    /// The handle the tune carrier is up under, if any.
+    tuned_by: Option<u32>,
     /// [`Fault::DisconnectMidOver`] fires once per simulator.
     disconnect_fired: bool,
     /// The transmitter's DAX source, once a client has set it.
@@ -376,6 +384,13 @@ impl Shared {
             .any(|f| matches!(f, Fault::StuckTransmit))
     }
 
+    fn stuck_tune(&self) -> bool {
+        self.config
+            .faults
+            .iter()
+            .any(|f| matches!(f, Fault::StuckTune))
+    }
+
     fn disconnect_mid_over(&self) -> Option<(Duration, bool)> {
         self.config.faults.iter().find_map(|f| match f {
             Fault::DisconnectMidOver {
@@ -436,12 +451,13 @@ fn close(shared: &Shared, conn: &Conn, by: Closer) {
     {
         let mut radio = lock(&shared.radio);
         radio.live.retain(|c| c.id != conn.id);
-        if radio.keyed_by == Some(conn.handle) {
-            let stays = by == Closer::Simulator
-                && shared.disconnect_mid_over().is_some_and(|(_, stays)| stays);
-            if !shared.stuck() && !stays {
-                radio.keyed_by = None;
-            }
+        let stays =
+            by == Closer::Simulator && shared.disconnect_mid_over().is_some_and(|(_, stays)| stays);
+        if radio.keyed_by == Some(conn.handle) && !shared.stuck() && !stays {
+            radio.keyed_by = None;
+        }
+        if radio.tuned_by == Some(conn.handle) && !shared.stuck_tune() && !stays {
+            radio.tuned_by = None;
         }
     }
     conn.out_cv.notify_all();
@@ -561,6 +577,7 @@ fn serve(shared: &Arc<Shared>, tcp: TcpStream, peer: SocketAddr) {
         last_ping: Instant::now(),
         held_reply: None,
         dax_rx_creates: 0,
+        silent: false,
     };
     let mut tcp = tcp;
     let mut lines = LineBuf::default();
@@ -607,6 +624,8 @@ struct Reader<'a> {
     held_reply: Option<String>,
     /// `stream create type=dax_rx` commands so far on this connection.
     dax_rx_creates: usize,
+    /// [`Fault::Unanswered`] switched the radio off on this connection: nothing is answered.
+    silent: bool,
 }
 
 impl Reader<'_> {
@@ -628,6 +647,22 @@ impl Reader<'_> {
         conn.out_cv.notify_all();
         let text = cmd.text.as_str();
         let now = Instant::now();
+
+        let no_reply = match unanswered(&shared.config.faults, text) {
+            _ if self.silent => true,
+            Some(then_silent) => {
+                self.silent = then_silent;
+                true
+            }
+            None => false,
+        };
+        if no_reply {
+            shared.record(Event::Unanswered {
+                conn: conn.id,
+                seq: cmd.seq,
+            });
+            return;
+        }
 
         if text == "ping" {
             self.pings += 1;
@@ -685,7 +720,7 @@ impl Reader<'_> {
         let reply = format!("R{}|{}|{}", cmd.seq, code, conn.expand(&message));
         self.reply(text, cmd.seq, reply, now);
 
-        let stuck = text == "xmit 0" && shared.stuck();
+        let stuck = withholds(&shared.config.faults, text);
         if stuck {
             let lines = items.iter().filter(|i| matches!(i, Item::Send(_))).count();
             shared.record(Event::StatusWithheld {
@@ -693,8 +728,8 @@ impl Reader<'_> {
                 command: text.to_string(),
                 lines,
             });
-            items.clear();
         }
+        let mut items = statuses(&shared.config.faults, text, items);
         self.augment(text, &mut items);
         let end = {
             let base = lock(&conn.out).last_status_due.max(now);
@@ -705,9 +740,13 @@ impl Reader<'_> {
         };
 
         if ok && text == "xmit 1" {
+            lock(&shared.radio).keyed_by = Some(conn.handle);
+        }
+        // The disconnect fires on the first key the radio takes: an over's, or its own tune
+        // carrier's.
+        if ok && matches!(text, "xmit 1" | "transmit tune 1") {
             let after = {
                 let mut radio = lock(&shared.radio);
-                radio.keyed_by = Some(conn.handle);
                 match shared.disconnect_mid_over() {
                     Some((after, _)) if !radio.disconnect_fired => {
                         radio.disconnect_fired = true;
@@ -731,6 +770,15 @@ impl Reader<'_> {
             let mut radio = lock(&shared.radio);
             if radio.keyed_by == Some(conn.handle) {
                 radio.keyed_by = None;
+            }
+        }
+        if ok && text == "transmit tune 1" {
+            lock(&shared.radio).tuned_by = Some(conn.handle);
+        }
+        if ok && text == "transmit tune 0" && !stuck {
+            let mut radio = lock(&shared.radio);
+            if radio.tuned_by == Some(conn.handle) {
+                radio.tuned_by = None;
             }
         }
 
@@ -808,12 +856,22 @@ impl Reader<'_> {
             }
         }
         if text == "sub tx all" {
-            let (other, dax) = {
+            let (other, tuning, dax) = {
                 let radio = lock(&self.shared.radio);
-                (radio.keyed_by.filter(|h| *h != self.conn.handle), radio.dax)
+                let other = |h: &u32| *h != self.conn.handle;
+                (
+                    radio.keyed_by.filter(other),
+                    radio.tuned_by.filter(other),
+                    radio.dax,
+                )
             };
             if let Some(owner) = other {
                 items.push(Item::Send(interlock_line(owner, "TRANSMITTING", "SW")));
+            }
+            if let Some(owner) = tuning {
+                // The tune profile's source (the bundled session, from AetherSDR's notes).
+                items.push(Item::Send("S0|transmit tune=1".to_string()));
+                items.push(Item::Send(interlock_line(owner, "TRANSMITTING", "TUNE")));
             }
             if let Some(dax) = dax {
                 items.push(Item::Send(format!("S0|transmit dax={}", u8::from(dax))));

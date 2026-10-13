@@ -135,7 +135,7 @@ both.
 **In a contest the same double-click fills the exchange.** With a contest running,
 the pane becomes that contest's entry strip — Call and one box per value it asks
 you to copy — and double-clicking a word in the transcript puts it in the box it
-belongs to: a zone in the zone box, a section or state in the QTH box. What fits
+belongs to: a zone in the Zone box, a section or a state in the Section or State box. What fits
 where is the contest's own rules, not a fixed list, so this works for the next
 contest without an update. Nexus only fills what it can recognise: a word that
 could be two things, or a value Nexus has no list for, is left for you to type, and
@@ -172,8 +172,8 @@ the next caller:
 | `F4` | My call | `{MYCALL} {MYCALL}` |
 | `F5` | His call | `{CALL}` |
 | `F6` | S&P exch | `TU 599 {EXCH} {EXCH}` |
-| `F7` | AGN | `AGN? AGN?` |
-| `F8` | B4 | `{CALL} QSO B4 TU {MYCALL}` |
+| `F7` | B4 | `{CALL} QSO B4 TU {MYCALL}` |
+| `F8` | AGN | `AGN? AGN?` |
 
 Click a macro, or press its F-key. The keys work whenever the RTTY cockpit is on
 screen, including while you are typing in Their call…, the compose bar or the

@@ -25,8 +25,9 @@
 //! ## Bring-up and teardown
 //! A first connect finds no slice of ours, so the daemon makes one the way GUI clients do: a
 //! panadapter, then a slice on it (the radio makes a new slice the transmit slice when it has
-//! none). At teardown it unkeys first, removes the slices and panadapters it owns, and closes the
-//! session, whose own teardown sends one more `xmit 0` if anything of ours may still be keyed.
+//! none). At teardown it first sends every stop of ours (what `T 0` sends), removes the slices and
+//! panadapters it owns, and closes the session, whose own teardown sends those stops once more if
+//! anything of ours may still be keyed and none has gone out.
 //!
 //! ## Audio (Beta, opt-in: `flex_native_audio` on a radio this client serves)
 //! The session registers a UDP port, so DAX rides the same session ([`audio`]): receive audio for
@@ -44,7 +45,21 @@
 //! ## Not yet
 //! No panadapter stream from this session (the older native pan still opens its own), no
 //! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
-//! CW keyer: the core's admission refuses those starts until its unkey readback covers them.
+//! CW keyer: the core has a readback profile for each, but its admission refuses those starts
+//! until a tester's bench confirms them. The stops for all of them are in place: `T 0`, teardown
+//! and the radio loop's belief ([`FlexDaemon::keyed`]) cover a transmission of any kind. The CW
+//! path is built up to that refusal: the WPM control sets the radio's keyer speed (`cw wpm`, which
+//! keys nothing), each word goes to the radio's keyer timed at its speed, and a word the client
+//! does not send, the refusal included, says why on the CW line. So is Tune: once its switch is on
+//! ([`FlexDaemon::tunes_natively`]), the radio loop starts and ends the radio's own carrier with
+//! typed calls ([`FlexDaemon::tune_on`], [`FlexDaemon::tune_off`]) and the screens show the radio's
+//! tune power and transmit timeout beside Tune ([`FlexDaemon::radio_tune`]); until then Tune is the
+//! loop's own tone over the client's audio route, as on every CAT link. So is the ATU: once its
+//! switch is on ([`FlexDaemon::runs_atu`]), the shim answers `u TUNER` from the radio's `atu`
+//! status, so the ATU button shows only for a radio that reports a tuner fitted, a press is
+//! `atu start`, and the screens show the same readouts beside the ATU with the cycle's result, or
+//! why a press started none ([`FlexDaemon::radio_atu`]); until then no ATU button is offered on
+//! this client.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
@@ -61,14 +76,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::dto::FlexAudioRefusal;
+use tempo_app::dto::{FlexAtu, FlexAudioRefusal, FlexTune};
 use tempo_app::engine::receivers::RxOwner;
 use tempo_app::engine::slices::{SliceIntent, SliceReport};
-use tempo_net::flex::admission::another_dax_feeder;
-use tempo_net::flex::encode::{AgcMode, Command, Mode, SliceFunction, Station, TxAudio, TxStop};
+use tempo_net::flex::admission::{another_dax_feeder, Refusal};
+use tempo_net::flex::encode::{
+    AgcMode, Command, Mode, SliceFunction, StartKind, Station, TxAudio, TxStart, TxStop,
+};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
 use tempo_net::flex::reconnect::End;
-use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot};
+use tempo_net::flex::session::{self, ConnError, Connection, Event, Phase, Snapshot, StopOutcome};
 use tempo_net::flex::streams::{UDP_REGISTRATION_PORT, VITA_PORT};
 
 use routing::{Memory, Restore, Routing, Step, View};
@@ -110,9 +127,17 @@ pub(crate) struct ClientState {
     pub(crate) native_audio: AtomicBool,
     /// The mode the shim last commanded for a slice, and when, until the radio reports it.
     pub(crate) commanded: Mutex<Option<(u8, String, Instant)>>,
-    /// The last key the shim kept off the air for the audio route: when, its words and its cause,
-    /// for the radio loop to put on screen ([`FlexDaemon::key_refused_since`]).
-    pub(crate) refused: Mutex<Option<(Instant, String, FlexAudioRefusal)>>,
+    /// The last key the shim kept off the air: when, its words, and for the audio route its cause,
+    /// for the radio loop to put on screen ([`FlexDaemon::key_refused_since`]). A CW word the
+    /// client did not send has words and no audio cause.
+    pub(crate) refused: Mutex<Option<(Instant, String, Option<FlexAudioRefusal>)>>,
+    /// The CW speed the shim last set (`cw wpm`), and when, until the radio reports it: a CW word
+    /// is timed at the slower of it and the radio's.
+    pub(crate) cw_wpm: Mutex<Option<(u32, Instant)>>,
+    /// Why the last ATU press started no cycle, for the ATU line ([`FlexDaemon::radio_atu`]): the
+    /// client's own refusal, kept by the shim, or the radio's in its reply, kept by the watcher.
+    /// The shim clears it as a start goes out.
+    pub(crate) atu_refused: Mutex<Option<String>>,
     /// The transmit audio routing ([`routing`]): carried out at the radio loop's quiet points
     /// ([`FlexDaemon::sync_tx_routing`]), and asked by the shim at `T 1` whether Nexus's own write
     /// leaves the radio on DAX ([`Routing::leaves_dax`]).
@@ -216,7 +241,9 @@ fn previous_handles(radio: SocketAddr) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-fn remember_handle(radio: SocketAddr, handle: u32) {
+/// Remember `handle` as a recent session of ours on `radio`. The radio loop's tests seed it as an
+/// earlier session would have.
+pub(crate) fn remember_handle(radio: SocketAddr, handle: u32) {
     let mut all = RECENT_HANDLES
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -394,9 +421,10 @@ impl FlexDaemon {
             let stop = stop.clone();
             let weak = Arc::downgrade(&conn);
             let alarm = alarm.clone();
+            let state = state.clone();
             std::thread::Builder::new()
                 .name("flex-watch".into())
-                .spawn(move || watch(weak, radio, &stop, &alarm))?
+                .spawn(move || watch(weak, radio, &stop, &alarm, &state))?
         };
         Ok(FlexDaemon {
             radio,
@@ -440,6 +468,100 @@ impl FlexDaemon {
     /// The address the rigctld listener is bound to.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// Whether a transmission of ours may be on the air through this client: a start of ours whose
+    /// end its readback has not proven (still so once the session has ended keyed), or the radio
+    /// naming this session or an earlier one of ours as the transmitter while it keys or tunes.
+    /// The radio loop counts it with its own keyed state, which cannot see a transmission the loop
+    /// did not key itself. Cheap: no copy of the session's state.
+    pub fn keyed(&self) -> bool {
+        self.conn().ours_on_air()
+    }
+
+    // ── The radio's own tune carrier (Beta, switched off until a tester's bench) ─────────────
+
+    /// Whether Tune is the radio's own carrier on this client (`transmit tune`): its readback is
+    /// switched on ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it,
+    /// it is not, and the radio loop tunes as it does over any CAT link: `T 1` and Nexus's tone.
+    pub fn tunes_natively(&self) -> bool {
+        self.conn().switched_on(StartKind::Tune)
+    }
+
+    /// Start the radio's own tune carrier, at the radio's tune power, held at most `hold_ms` (the
+    /// radio loop's tune timeout): the session ends it by itself at that plus its margin, whether
+    /// or not the loop runs. A typed call, as the loop reaches the native CI-V daemon: rigctld has
+    /// no verb for a radio's tune carrier. `Err(None)` when the session is gone.
+    pub fn tune_on(&self, hold_ms: u64) -> Result<(), Option<Refusal>> {
+        self.conn()
+            .start_lasting(TxStart::TuneOn, Some(hold_ms))
+            .map(|_| ())
+    }
+
+    /// End the radio's tune carrier (`transmit tune 0`). Never gated; another client's tune is
+    /// never ended from here.
+    pub fn tune_off(&self) -> StopOutcome {
+        self.conn().stop(TxStop::TuneOff)
+    }
+
+    /// What the radio reports beside Tune: its tune power and its own transmit timeout. Cheap: read
+    /// in place.
+    pub fn radio_tune(&self) -> FlexTune {
+        self.conn().read(readouts)
+    }
+
+    // ── The radio's own ATU (Beta, switched off until a tester's bench) ──────────────────────
+
+    /// Whether this client runs the radio's own ATU (`atu start`): its readback is switched on
+    /// ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it, it is not:
+    /// the shim does not answer `u TUNER`, so no ATU button is offered on this client, as before.
+    pub fn runs_atu(&self) -> bool {
+        self.conn().switched_on(StartKind::Atu)
+    }
+
+    /// Whether an ATU press can start the radio's tuner through this client: it runs the radio's
+    /// ATU and the radio reports a tuner fitted. The client's own answer, for the engine's
+    /// start-tune capability: the radio profile's Hamlib model (2036, SmartSDR CAT's) describes a
+    /// CAT path that is not in use. Cheap.
+    pub fn starts_atu(&self) -> bool {
+        self.runs_atu() && self.conn().read(|s| s.model.atu_fitted())
+    }
+
+    /// What is shown beside the ATU while this client runs the radio's ATU and the radio reports a
+    /// tuner fitted: the radio's tune power and transmit timeout, as beside Tune, its ATU status
+    /// (a cycle's result in its own word), and why the last press started no cycle. `None`
+    /// otherwise. Cheap: read in place.
+    pub fn radio_atu(&self) -> Option<FlexAtu> {
+        if !self.runs_atu() {
+            return None;
+        }
+        // Not under the session's state lock: the watcher takes this one alone.
+        let refused = lock(&self.state.atu_refused).clone();
+        self.conn().read(|s| {
+            s.model.atu_fitted().then(|| FlexAtu {
+                tune: readouts(s),
+                status: s.model.atu.status.clone(),
+                refused,
+            })
+        })
+    }
+
+    // ── CW through the radio's keyer (Beta, switched off until a tester's bench) ──────────────
+
+    /// Whether this client sends CW through the radio's keyer (`cwx send`): its readback is
+    /// switched on. Until then every word is refused, and says why.
+    pub fn sends_cw(&self) -> bool {
+        self.conn().switched_on(StartKind::Cwx)
+    }
+
+    /// The radio's CW speed as it reports it (`transmit speed`), whoever set it. Cheap.
+    pub fn cw_speed(&self) -> Option<u32> {
+        self.conn().read(|s| {
+            s.model
+                .transmit
+                .cw_speed
+                .and_then(|w| u32::try_from(w).ok())
+        })
     }
 
     /// Tell the shim whether Nexus itself is transmitting, so the broker's disconnect fail-safe
@@ -517,10 +639,11 @@ impl FlexDaemon {
         self.audio.as_ref().and_then(audio::Audio::radio_dax)
     }
 
-    /// Why the shim kept a key asked for at or after `asked` off the air for the audio route, if
-    /// it did: its words and its cause, once. The rigctld answer the radio loop reads for that key,
+    /// Why the shim kept a key asked for at or after `asked` off the air, if it did: its words,
+    /// once, and for the audio route its cause. A CW word the client did not send (`b`) carries
+    /// words only, for the CW line. The rigctld answer the radio loop reads for that key or word,
     /// `RPRT -1`, carries no reason.
-    pub fn key_refused_since(&self, asked: Instant) -> Option<(String, FlexAudioRefusal)> {
+    pub fn key_refused_since(&self, asked: Instant) -> Option<(String, Option<FlexAudioRefusal>)> {
         let refused = lock(&self.state.refused).take();
         match refused {
             Some((at, why, cause)) if at >= asked => Some((why, cause)),
@@ -738,11 +861,12 @@ impl FlexDaemon {
 
 impl Drop for FlexDaemon {
     fn drop(&mut self) {
-        // TX SAFETY: unkey FIRST, while the session is up. A stop asks only "are we keyed?", so
-        // this costs nothing when nothing of ours is on the air. The session's own teardown sends
-        // one more `xmit 0` if anything of ours may still be keyed.
+        // TX SAFETY: every stop of ours FIRST, while the session is up: the open operation's own,
+        // or what the radio shows an earlier session of ours may hold (a tune carrier, a CWX word,
+        // an over). A stop asks only "is it ours?", so this costs nothing when nothing of ours is
+        // on the air.
         if let Some(conn) = &self.conn {
-            let _ = conn.stop(TxStop::Unkey);
+            let _ = conn.end_ours();
             self.restore_routing(conn);
             remove_ours(conn);
         }
@@ -758,6 +882,60 @@ impl Drop for FlexDaemon {
         }
         // The last strong reference: the session's teardown runs here, before drop returns.
         self.conn.take();
+    }
+}
+
+/// The PTT line's words for a tune of the radio's own carrier the client did not start
+/// ([`FlexDaemon::tune_on`]): what kept it back, and what to do. `None`: the session has gone.
+pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
+    match refusal {
+        None => "Tune not keyed: the connection to the radio is closed.".to_string(),
+        Some(Refusal::XitOn) => "Tune not keyed: XIT is on for the radio's transmit slice, so the \
+                                 radio's carrier would sit off the frequency Nexus checked. Turn \
+                                 XIT off."
+            .to_string(),
+        Some(other) => format!("Tune not keyed: {other}."),
+    }
+}
+
+/// The ATU line's words for a press the client did not start ([`FlexDaemon::radio_atu`]): what
+/// kept it back, and what to do. `None`: the session has gone.
+pub(crate) fn atu_refusal_words(refusal: Option<&Refusal>) -> String {
+    match refusal {
+        None => "ATU not started: the connection to the radio is closed.".to_string(),
+        Some(Refusal::XitOn) => "ATU not started: XIT is on for the radio's transmit slice, so \
+                                 the radio's carrier would sit off the frequency Nexus checked. \
+                                 Turn XIT off."
+            .to_string(),
+        Some(other) => format!("ATU not started: {other}."),
+    }
+}
+
+/// The ATU line's words for a start the radio refused in its reply, with its code and any words
+/// of its own.
+fn atu_refused_by_radio(code: u32, message: &str) -> String {
+    let message = message.trim();
+    if message.is_empty() {
+        format!("ATU not started: the radio refused it (0x{code:08X}).")
+    } else {
+        format!("ATU not started: the radio refused it (0x{code:08X} {message}).")
+    }
+}
+
+/// What the radio reports beside Tune and the ATU: its tune power and its own transmit timeout.
+fn readouts(s: &Snapshot) -> FlexTune {
+    FlexTune {
+        power_pct: s
+            .model
+            .transmit
+            .tune_power
+            .and_then(|p| u8::try_from(p).ok()),
+        tx_timeout_ms: s
+            .model
+            .interlock
+            .config
+            .timeout
+            .and_then(|t| u64::try_from(t).ok()),
     }
 }
 
@@ -879,13 +1057,15 @@ struct Alarm {
     new: bool,
 }
 
-/// Drain the session's events, log the ones that matter, and keep what the operator must be told.
-/// Ends at the session's last event (`Closed`: nothing follows it), or when the daemon stops.
+/// Drain the session's events, log the ones that matter, and keep what the operator must be told:
+/// the alarms, and why the radio started no ATU cycle for a press. Ends at the session's last
+/// event (`Closed`: nothing follows it), or when the daemon stops.
 fn watch(
     conn: std::sync::Weak<Connection>,
     radio: SocketAddr,
     stop: &AtomicBool,
     alarm: &Mutex<Alarm>,
+    state: &ClientState,
 ) {
     let raise = |text: &str| {
         tempo_core::applog::warn("cat", &format!("Flex client ({radio}): {text}"));
@@ -925,6 +1105,17 @@ fn watch(
                 "an earlier Nexus session (0x{handle:08X}) still holds the transmitter; Nexus \
                  will not key until it is released"
             )),
+            // The radio did not start a cycle for an ATU press and keyed nothing for it: no
+            // alarm, the reason on the ATU line.
+            Event::StartRefused {
+                kind: StartKind::Atu,
+                code,
+                message,
+            } => {
+                let why = atu_refused_by_radio(code, &message);
+                tempo_core::applog::info("cat", &format!("Flex client ({radio}): {why}"));
+                *lock(&state.atu_refused) = Some(why);
+            }
             Event::ProtocolRejected => tempo_core::applog::warn(
                 "cat",
                 &format!(

@@ -42,6 +42,16 @@
 //! would move key-on timing, and an unkey must never wait behind a selection sequence. The
 //! transmit-side CONFIGURATION verbs (XIT, repeater shift and offset, CTCSS) do name the
 //! transmitting receiver, Main by default, and the radio loop withholds them from a keyed rig.
+//!
+//! ## Whether this daemon may key at all
+//!
+//! The daemon is told at its start ([`KeyingPolicy`]). Over a serial bus it keys exactly as it
+//! always has. Over the radio's network connection it refuses the three verbs that put the
+//! transmitter on the air, `T 1`, `b` (CAT CW) and `U VOX 1` (VOX keys on audio), sending
+//! nothing to the radio, so nothing reaches the transmitter through this port even from a
+//! program that never asked the engine. It refuses no unkey or stop: `T 0`, `\stop_morse`,
+//! `\stop_voice_mem`, `U VOX 0` and the key-up at teardown always go out. The engine refuses
+//! the same overs earlier, before PTT, with its own reason; this is the second layer.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,7 +64,7 @@ use super::engine::{CivEngine, CivError, CivHandle, Expect};
 use super::frame::Frame;
 use super::scope::ScopeSweep;
 use crate::dualrx::ReceiverId;
-use crate::rigctld_server::{serve_connection, RigBackend};
+use crate::rigctld_server::{serve_connection, RigBackend, SetFault};
 
 /// How THIS radio lets a command name the receiver it is for — decided once, from the model,
 /// never from the bus. See the module note.
@@ -147,6 +157,34 @@ struct SatSplit {
 }
 
 /// rigctld-protocol backend that translates every verb to CI-V through the engine.
+/// Whether a daemon may key the transmitter — see the module note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyingPolicy {
+    /// Every keying verb goes to the radio: the serial bus, as it always has.
+    Allowed,
+    /// `T 1`, `b` and `U VOX 1` are refused, sending nothing, for this reason. Unkeys and stops
+    /// are never refused.
+    Refused(&'static str),
+}
+
+/// What differs between the transports a [`CivDaemon`] can run over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    /// How long the engine waits for one request's reply.
+    pub deadline: Duration,
+    pub keying: KeyingPolicy,
+}
+
+impl Link {
+    /// A serial bus: the engine's own deadline, and keying as it always was.
+    pub fn serial() -> Link {
+        Link {
+            deadline: super::engine::REQUEST_DEADLINE,
+            keying: KeyingPolicy::Allowed,
+        }
+    }
+}
+
 pub struct CivBackend {
     h: CivHandle,
     addr: u8,
@@ -203,6 +241,8 @@ pub struct CivBackend {
     /// How a per-receiver command names its receiver on this radio — see [`RxAddressing`]
     /// and [`Self::on_receiver`].
     rx_addressing: RxAddressing,
+    /// Whether the keying verbs may reach the radio — see the module note.
+    keying: KeyingPolicy,
 }
 
 /// How long a timed-out dial read may still serve the last real reading.
@@ -238,6 +278,25 @@ impl CivBackend {
                 op_satmode_off: false,
             }),
             rx_addressing: RxAddressing::for_model(model),
+            keying: KeyingPolicy::Allowed,
+        }
+    }
+
+    /// The same backend under `keying`.
+    pub fn with_keying(mut self, keying: KeyingPolicy) -> Self {
+        self.keying = keying;
+        self
+    }
+
+    /// `Some(reason)` when this daemon must not key: the verb that asked is refused, sending
+    /// nothing, and the CI-V diagnostic log says so.
+    fn keying_refused(&self, verb: &str) -> Option<&'static str> {
+        match self.keying {
+            KeyingPolicy::Allowed => None,
+            KeyingPolicy::Refused(why) => {
+                super::diag::note(&format!("{verb} refused, nothing sent: {why}"));
+                Some(why)
+            }
         }
     }
 
@@ -492,7 +551,7 @@ impl CivBackend {
         let dial = self
             .read(commands::read_freq(self.addr), 0x03, None)
             .ok()
-            .and_then(|f| commands::parse_freq(&f));
+            .and_then(|f| commands::parse_freq(&f, self.model));
         let ok = self.ack(commands::set_dsp_func(
             self.addr,
             commands::FUNC_SATMODE,
@@ -512,7 +571,7 @@ impl CivBackend {
                 false,
             ));
             if let Some(hz) = dial {
-                let _ = self.ack(commands::set_freq(self.addr, hz));
+                let _ = self.ack(commands::set_freq(self.addr, hz, self.model));
             }
             return false;
         }
@@ -524,7 +583,7 @@ impl CivBackend {
             // next verb's `ensure_main` repairs it, and the next Doppler
             // correction rewrites the dial).
             if self.select("Main") {
-                let _ = self.ack(commands::set_freq(self.addr, hz));
+                let _ = self.ack(commands::set_freq(self.addr, hz, self.model));
             } else {
                 g.sel_stray = true;
             }
@@ -536,6 +595,15 @@ impl CivBackend {
 
     fn ack(&self, f: Frame) -> bool {
         self.h.transact(f, Expect::Ack).is_ok()
+    }
+    /// [`Self::ack`] for a write whose client must hear WHY it did not take: `FA` is the radio
+    /// refusing it; no reply, or no engine left to carry one, is the radio not answering.
+    fn answer(&self, f: Frame) -> Result<(), SetFault> {
+        match self.h.transact(f, Expect::Ack) {
+            Ok(_) => Ok(()),
+            Err(CivError::Nak) => Err(SetFault::Refused),
+            Err(CivError::Timeout | CivError::Gone) => Err(SetFault::NoAnswer),
+        }
     }
     fn read(&self, f: Frame, cmd: u8, sub: Option<u8>) -> Result<Frame, CivError> {
         self.h.transact(f, Expect::Reply { cmd, sub })
@@ -892,6 +960,10 @@ impl CivBackend {
         if token == "XIT" && !self.has_delta_tx() {
             return None;
         }
+        // VOX keys the transmitter on audio, so turning it ON is a key; turning it off never is.
+        if token == "VOX" && on && self.keying_refused("U VOX 1").is_some() {
+            return Some(false);
+        }
         let f = match token {
             "RIT" => commands::set_rit_on(self.addr, on),
             "XIT" => commands::set_dtx_on(self.addr, on),
@@ -1045,7 +1117,7 @@ impl RigBackend for CivBackend {
             Ok(f) => {
                 *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(std::time::Instant::now());
-                commands::parse_freq(&f)
+                commands::parse_freq(&f, self.model)
                     .or(self.h.state().freq_hz)
                     .unwrap_or(0)
             }
@@ -1144,22 +1216,40 @@ impl RigBackend for CivBackend {
     }
 
     fn set_freq(&self, hz: u64) -> bool {
+        self.try_set_freq(hz).is_ok()
+    }
+
+    /// The dial write, an `FA` told apart from a radio that did not answer. A selection stranded
+    /// on Sub stays a refusal: the daemon will not write blind.
+    fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
         let mut g = self.band(); // the `05` write hits the SELECTED band
                                  // A write with the selection stranded on Sub would land the downlink
                                  // in the uplink's band — re-assert Main first, refuse otherwise.
+        if !self.ensure_main(&mut g) {
+            return Err(SetFault::Refused);
+        }
         if self.main_dial_by_name() {
             // IC-7610: MAIN's dial by name (`25 00`), whichever band the operator has selected —
-            // the receiver `f` reads. Same refusal over a selection Nexus stranded.
-            return self.ensure_main(&mut g)
-                && self.ack(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
+            // the receiver `f` reads.
+            return self.answer(commands::set_band_freq(self.addr, commands::BAND_MAIN, hz));
         }
-        self.ensure_main(&mut g) && self.ack(commands::set_freq(self.addr, hz))
+        self.answer(commands::set_freq(self.addr, hz, self.model))
     }
 
-    fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
+    fn set_mode(&self, mode: &str, passband_hz: u32) -> bool {
+        self.try_set_mode(mode, passband_hz).is_ok()
+    }
+
+    /// The mode write, an `FA` told apart from a radio that did not answer. A mode is one frame
+    /// by name (the IC-7610) or the `06` and `1A 06` pair, each sent as before, byte for byte; an
+    /// `FA` on any frame that has to take makes the whole a refusal, as it always was, and only a
+    /// mode the radio said nothing to is silence. A selection stranded on Sub, and a mode word
+    /// with no CI-V form, stay refusals: the daemon will not write blind, and the radio was
+    /// never asked.
+    fn try_set_mode(&self, mode: &str, _passband_hz: u32) -> Result<(), SetFault> {
         let mut g = self.band(); // the `06` write hits the SELECTED band
         if !self.ensure_main(&mut g) {
-            return false; // same stray-selection refusal as `set_freq`
+            return Err(SetFault::Refused); // same stray-selection refusal as `set_freq`
         }
         // PKT*/DATA-* = base mode + DATA mode on; every plain mode turns DATA off.
         let up = mode.to_ascii_uppercase();
@@ -1179,7 +1269,7 @@ impl RigBackend for CivBackend {
             "PKTFM" | "FM-D" | "PKT-FM" => (Mode::Fm, true),
             _ => match Mode::from_name(&up) {
                 Some(m) => (m, false),
-                None => return false,
+                None => return Err(SetFault::Refused),
             },
         };
         if self.main_dial_by_name() {
@@ -1187,25 +1277,31 @@ impl RigBackend for CivBackend {
             // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
             // off and its default filter, a DATA mode with the operator's D1–D3 and FIL1.
             let n = data.then(|| self.data_mode_on_wire());
-            return self.ack(commands::set_band_mode(
+            return self.answer(commands::set_band_mode(
                 self.addr,
                 commands::BAND_MAIN,
                 base,
                 n,
             ));
         }
-        let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
+        let mode_set = self.answer(commands::set_mode(self.addr, base, None));
         // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
         // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
         // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n` — capped
-        // at what this radio has (`data_mode_on_wire`). Turning data OFF is still just off.
-        let data_ok = if data {
+        // at what this radio has (`data_mode_on_wire`). Turning data OFF is still just off, and
+        // whatever it answers, or does not, is tolerated the same way.
+        let data_set = if data {
             let n = self.data_mode_on_wire();
-            self.ack(commands::set_data_mode_n(self.addr, n, None))
+            self.answer(commands::set_data_mode_n(self.addr, n, None))
         } else {
-            self.ack(commands::set_data_mode(self.addr, false, None))
+            let _ = self.answer(commands::set_data_mode(self.addr, false, None));
+            Ok(())
         };
-        mode_ok && (data_ok || !data)
+        match (mode_set, data_set) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(SetFault::Refused), _) | (_, Err(SetFault::Refused)) => Err(SetFault::Refused),
+            _ => Err(SetFault::NoAnswer),
+        }
     }
 
     /// ⛔ KEY AND UNKEY — ONE FRAME, NO RECEIVER, NO LOCK, and that is deliberate on a
@@ -1216,11 +1312,26 @@ impl RigBackend for CivBackend {
     /// `nothing_new_rides_between_the_go_and_ptt_on` and
     /// `an_unkey_never_waits_on_the_band_lock`.
     fn set_ptt(&self, on: bool) -> bool {
+        // A key is refused where the link may not key; an unkey never is.
+        if on && self.keying_refused("T 1").is_some() {
+            return false;
+        }
         self.ack(commands::set_ptt(self.addr, on))
     }
 
     fn set_vfo(&self, vfo: &str) -> bool {
         self.set_vfo_on(ReceiverId::Main, vfo)
+    }
+
+    /// UNKNOWN: this daemon has no receive range for any model, so it declares none, and
+    /// `\dump_state` carries an empty RX list. Nexus's reader takes that as unknown and every
+    /// caller fails open, so the radio is commanded and answers for itself: a frequency it cannot
+    /// tune comes back NG, which the radio loop reports as the radio's refusal. Left at the trait's
+    /// `None`, the reply carried the CAT broker's wide row for WSJT-X, and the app took 135.7 kHz
+    /// to 1.3 GHz as this radio's range: an IC-905 was refused 2.4, 5.7 and 10 GHz before it was
+    /// asked, and an IC-7300 was believed to receive 2 m.
+    fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
+        Some(Vec::new())
     }
 
     /// The rig's own pads and preamps, so a client reading `\dump_state` learns which
@@ -1273,6 +1384,9 @@ impl RigBackend for CivBackend {
     /// transmits, and a selection round trip in front of the first chunk would delay key-on.
     /// Exactly the bytes it always sent — as is `stop_morse`, an unkey that must never wait.
     fn send_morse(&self, text: &str) -> Option<bool> {
+        if self.keying_refused("b").is_some() {
+            return Some(false);
+        }
         // Chunk to the rig's per-frame CW text limit; all chunks must ack.
         let bytes: Vec<u8> = text.bytes().filter(u8::is_ascii).collect();
         if bytes.is_empty() {
@@ -1301,12 +1415,23 @@ impl RigBackend for CivBackend {
     }
 
     fn set_split(&self, on: bool, tx_vfo: &str) -> Option<bool> {
+        self.try_set_split(on, tx_vfo).map(|r| r.is_ok())
+    }
+
+    /// The split write, an `FA` to the A/B split's `0F` told apart from a radio that did not
+    /// answer it. The satellite-mode legs answer a refusal for any failure, silence included: each
+    /// is several frames, backed out on a failure.
+    fn try_set_split(&self, on: bool, tx_vfo: &str) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
         // TX on the SUB BAND = the rig's satellite mode, not `0F` (same-band
         // A/B split, which cannot be cross-band on this family). Any other
         // TX-VFO token keeps the shipped `0F` path byte-identical.
         if on && tx_vfo.eq_ignore_ascii_case("sub") {
-            return Some(self.engage_sat_split(&mut g));
+            return Some(if self.engage_sat_split(&mut g) {
+                Ok(())
+            } else {
+                Err(SetFault::Refused)
+            });
         }
         if g.engaged {
             // Any other split request while the split rides satellite mode
@@ -1317,48 +1442,53 @@ impl RigBackend for CivBackend {
             // band and TX leaves on the downlink band. A refused release
             // refuses the whole request.
             if !self.release_sat_split(&mut g) {
-                return Some(false);
+                return Some(Err(SetFault::Refused));
             }
             if !on {
-                return Some(true); // released — never 0F 00 at this rig
+                return Some(Ok(())); // released — never 0F 00 at this rig
             }
         }
         // The A/B split is SAME-BAND by construction on this family, so a rig
         // the operator left in (cross-band) satellite mode has to come out of
         // it first — and go back in when we hand the split back.
         if on && !self.clear_operator_satmode(&mut g) {
-            return Some(false);
+            return Some(Err(SetFault::Refused));
         }
-        let ok = self.ack(commands::set_split(self.addr, on));
-        if ok {
+        let set = self.answer(commands::set_split(self.addr, on));
+        if set.is_ok() {
             self.split.store(on, Ordering::Relaxed);
             if !on {
                 self.restore_operator_satmode(&mut g);
             }
         }
-        Some(ok)
+        Some(set)
     }
 
     fn set_split_freq(&self, hz: u64) -> Option<bool> {
+        self.try_set_split_freq(hz).map(|r| r.is_ok())
+    }
+
+    /// The split dial, the A/B split's `25 01` told apart as `0F` is ([`Self::try_set_split`]).
+    fn try_set_split_freq(&self, hz: u64) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
         if !self.ensure_main(&mut g) {
             // `25 01` writes the unselected VFO of the CURRENT band — with a
             // stray selection either path would write the wrong register.
-            return Some(false);
+            return Some(Err(SetFault::Refused));
         }
         if !g.engaged {
-            return Some(self.ack(commands::set_unselected_freq(self.addr, hz)));
+            return Some(self.answer(commands::set_unselected_freq(self.addr, hz, self.model)));
         }
         // Satellite mode: the TX dial lives in the SUB band. Select-write-
         // verify-restore, atomic under the band lock. Success ONLY when the
         // rig's own read-back returns the frequency we sent — per LAW, what
         // was DONE, never what was computed.
         let ok = self.select("Sub")
-            && self.ack(commands::set_freq(self.addr, hz))
+            && self.ack(commands::set_freq(self.addr, hz, self.model))
             && self
                 .read(commands::read_freq(self.addr), 0x03, None)
                 .ok()
-                .and_then(|f| commands::parse_freq(&f))
+                .and_then(|f| commands::parse_freq(&f, self.model))
                 == Some(hz);
         // ALWAYS hand the selection back to Main — even mid-failure — and
         // re-read the dial so the engine's state cache holds MAIN's frequency
@@ -1372,13 +1502,37 @@ impl RigBackend for CivBackend {
         if restored {
             let _ = self.read(commands::read_freq(self.addr), 0x03, None);
         }
-        Some(ok && restored)
+        Some(if ok && restored {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        })
     }
 
-    fn set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<bool> {
+    fn set_split_mode(&self, mode: &str, passband_hz: i32) -> Option<bool> {
+        self.try_set_split_mode(mode, passband_hz)
+            .map(|r| r.is_ok())
+    }
+
+    /// The split VFO's mode, the A/B split's `26 01` told apart as `0F` is
+    /// ([`Self::try_set_split`]).
+    fn try_set_split_mode(&self, mode: &str, _passband_hz: i32) -> Option<Result<(), SetFault>> {
         let mut g = self.band();
-        let Some(m) = Mode::from_name(mode) else {
-            return Some(false);
+        // ⭐ FT8 IN AN A/B SPLIT: `PKTUSB` is USB with the radio's DATA mode, `26 01 01 <D>`, D
+        // capped as every DATA write is ([`Self::data_mode_on_wire`]): D1–D3 on the IC-7610 as
+        // its Data mode setting says, `01` on the one-DATA radios. It was refused here (no DATA
+        // submode among `Mode::from_name`'s names), so a Rig split on this daemon transmitted FT8
+        // from a TX VFO in whatever mode it was left in, where the same split through Hamlib set
+        // it, as WSJT-X does (`rig_set_split_mode`, PASSBAND_NOCHANGE). ⚠️ NEEDS-BENCH (IC-7610
+        // in Rig split). Satellite mode keeps its plain modes only.
+        let (m, data) = match mode.to_ascii_uppercase().as_str() {
+            "PKTUSB" | "DATA-U" | "PKT-U" if !g.engaged => {
+                (Mode::Usb, Some(self.data_mode_on_wire()))
+            }
+            up => match Mode::from_name(up) {
+                Some(m) => (m, None),
+                None => return Some(Err(SetFault::Refused)),
+            },
         };
         if !g.engaged {
             // ⚠️ NEEDS-BENCH (IC-9700 — field report 2026-08-16, V/U FM pass
@@ -1391,10 +1545,10 @@ impl RigBackend for CivBackend {
             // restore. Unacked ⇒ `Some(false)`, and the caller says so out loud
             // ("put VFO B in FM by hand") rather than leaving the operator to
             // discover it on the air.
-            return Some(self.ack(commands::set_unselected_mode(self.addr, m)));
+            return Some(self.answer(commands::set_unselected_mode(self.addr, m, data)));
         }
         if !self.ensure_main(&mut g) {
-            return Some(false); // same stray-selection refusal as the freq
+            return Some(Err(SetFault::Refused)); // same stray-selection refusal as the freq
         }
         // The uplink sideband (`X`, the inverting-bird LSB): command it on the
         // Sub band, selection restored, same discipline as the frequency —
@@ -1405,7 +1559,11 @@ impl RigBackend for CivBackend {
         if restored {
             let _ = self.read(commands::read_freq(self.addr), 0x03, None);
         }
-        Some(ok && restored)
+        Some(if ok && restored {
+            Ok(())
+        } else {
+            Err(SetFault::Refused)
+        })
     }
 
     /// RIT — a RECEIVE offset, so Main's. `21` has no band-directed mark on the IC-7610
@@ -1493,18 +1651,34 @@ impl CivDaemon {
         data_mode: u8,
         model: Option<IcomModel>,
     ) -> std::io::Result<CivDaemon> {
-        let engine = CivEngine::start(io, civ_addr, model);
+        Self::start_with_link(io, civ_addr, tcp_port, data_mode, model, Link::serial())
+    }
+
+    /// [`Self::start_with_io`] over a transport with its own [`Link`]: the radio's network
+    /// connection passes a longer deadline and refuses keying.
+    pub fn start_with_link(
+        io: Box<dyn super::engine::CivIo>,
+        civ_addr: u8,
+        tcp_port: u16,
+        data_mode: u8,
+        model: Option<IcomModel>,
+        link: Link,
+    ) -> std::io::Result<CivDaemon> {
+        let engine = CivEngine::start_with_deadline(io, civ_addr, model, link.deadline);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let tx_intent = Arc::new(AtomicBool::new(false));
-        let civ = Arc::new(CivBackend::new(
-            engine.handle(),
-            civ_addr,
-            tx_intent.clone(),
-            data_mode,
-            model,
-        ));
+        let civ = Arc::new(
+            CivBackend::new(
+                engine.handle(),
+                civ_addr,
+                tx_intent.clone(),
+                data_mode,
+                model,
+            )
+            .with_keying(link.keying),
+        );
         let backend: Arc<dyn RigBackend> = civ.clone();
         let tcp_stop = Arc::new(AtomicBool::new(false));
         let tcp_thread = {
@@ -1544,7 +1718,13 @@ impl CivDaemon {
                 })
                 .expect("spawn civ-daemon-tcp")
         };
-        super::diag::note("CivDaemon created (new serial engine + rigctld TCP)");
+        super::diag::note(match link.keying {
+            KeyingPolicy::Allowed => "CivDaemon created (new serial engine + rigctld TCP)",
+            KeyingPolicy::Refused(_) => {
+                "CivDaemon created (CI-V over the radio's network connection + rigctld TCP; \
+                 keying refused)"
+            }
+        });
         Ok(CivDaemon {
             engine,
             civ_addr,
@@ -1601,6 +1781,13 @@ impl CivDaemon {
     /// False once the serial engine died (port unplugged / denied).
     pub fn is_alive(&self) -> bool {
         self.engine.is_alive()
+    }
+
+    /// The engine's own handle, for reads the rigctld protocol does not carry (the radio's menu
+    /// items the network connection reads at connect).
+    #[cfg(feature = "device")]
+    pub(crate) fn engine_handle(&self) -> super::engine::CivHandle {
+        self.engine.handle()
     }
 
     /// Can a command sent through this daemon NAME THE SUB (`L Sub …`) — i.e. is this a radio
@@ -2710,6 +2897,203 @@ mod tests {
         );
     }
 
+    /// ⭐ THIS DAEMON DOES NOT KNOW WHAT ITS RADIO RECEIVES, AND ITS `\dump_state` SAYS SO: an empty
+    /// RX list, which Nexus's own reader takes as unknown, for every model and for an unnamed one.
+    /// It used to carry the CAT broker's wide row for WSJT-X, 135.7 kHz to 1.3 GHz, which the
+    /// reader took as the radio's range. The pads and preamps further down the same reply are
+    /// still each model's own, and the whole reply for a radio with none is pinned line by line:
+    /// every line but the RX row is the one it always was.
+    #[test]
+    fn the_dump_state_declares_no_receive_range_and_each_models_own_pads() {
+        use crate::rigctld_server::{handle_command, Handled};
+        use IcomModel::*;
+        let dump = |b: &CivBackend| match handle_command("\\dump_state", b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("\\dump_state closed the connection"),
+        };
+        let models = [
+            Some(Ic7300),
+            Some(Ic7610),
+            Some(Ic9700),
+            Some(Ic705),
+            Some(Ic905),
+            Some(Ic7760),
+            Some(Ic7300Mk2),
+            None,
+        ];
+        for model in models {
+            let (_e, b, _regs) = backend_on(model.map_or(0x94, IcomModel::default_civ_addr), model);
+            let ds = dump(&b);
+            assert_eq!(
+                (
+                    crate::rig::parse_dump_state_rx_ranges(&ds),
+                    crate::rig::parse_dump_state_db_lists(&ds)
+                        .map(|s| (s.preamp_db, s.attenuator_db)),
+                ),
+                (None, Some((b.preamp_steps_db(), b.attenuator_steps_db()))),
+                "{model:?}"
+            );
+        }
+        let (_e, b, _regs) = backend_on(0xAC, Some(Ic905));
+        assert_eq!(
+            dump(&b),
+            concat!(
+                "0\n",
+                "2\n",
+                "1\n",
+                "0 0 0 0 0 0 0\n",
+                "135700 1300000000 0xffffffff 5000 100000 0x3 0x0\n",
+                "0 0 0 0 0 0 0\n",
+                "0xffffffff 1\n",
+                "0 0\n",
+                "0xffffffff 2700\n",
+                "0xffffffff 500\n",
+                "0 0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+                "0x0\n",
+            )
+        );
+    }
+
+    /// ⭐ A DIAL THE RADIO DID NOT ANSWER IS NOT A DIAL IT REFUSED. Three dial writes to an IC-7300,
+    /// through the encoder the daemon serves: one it takes, one it answers NG (`FA`: 145 MHz, which
+    /// this fixture's IC-7300 does not tune) and one it says nothing to. The NG is `RPRT -1`, a
+    /// refusal, as it always was. The silence is Hamlib's `RPRT -5` (ETIMEOUT), which Nexus's own
+    /// client reads as the link, not the radio ([`crate::rig::rprt_is_link_fault`]); it was
+    /// `RPRT -1` as well, so a radio that went quiet mid-QSY was counted as refusing the dial.
+    #[test]
+    fn a_dial_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        regs.lock().unwrap().covers_hz = vec![(30_000, 74_800_000)];
+        let reply = |line: &str| match handle_command(line, &*b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("{line} closed the connection"),
+        };
+        let taken = reply("F 7074000.000000");
+        let refused = reply("F 145000000.000000");
+        regs.lock().unwrap().drop_dial_writes = 1;
+        let unanswered = reply("F 28400000.000000");
+        assert_eq!(
+            (
+                taken.as_str(),
+                refused.as_str(),
+                unanswered.as_str(),
+                regs.lock().unwrap().main_hz
+            ),
+            ("RPRT 0\n", "RPRT -1\n", "RPRT -5\n", 7_074_000)
+        );
+    }
+
+    /// ⭐ A MODE THE RADIO DID NOT ANSWER IS NOT A MODE IT REFUSED. Three mode writes through the
+    /// encoder the daemon serves, on an IC-7300 (the `06` and `1A 06` pair) and an IC-7610 (one
+    /// `26 00` frame by name): PKTUSB, which it takes; CW, answered NG (`FA`) on every frame; CW
+    /// again, met with silence on every frame. The NG is `RPRT -1`, a refusal, as it always was;
+    /// the silence is Hamlib's `RPRT -5`, as an unanswered dial is, and the radio stays in USB-D
+    /// both times. The silence was `RPRT -1` as well, so the radio loop told the operator the rig
+    /// rejected the mode, and at its give-up sent a fallback mode to a radio that was not answering.
+    #[test]
+    fn a_mode_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let answers = |addr: u8, model: IcomModel| {
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            let reply = |line: &str| match handle_command(line, &*b) {
+                Handled::Reply(r) => r,
+                Handled::Close => panic!("{line} closed the connection"),
+            };
+            let taken = reply("M PKTUSB 0");
+            regs.lock().unwrap().nak_mode_writes = u32::MAX;
+            let refused = reply("M CW 0");
+            regs.lock().unwrap().nak_mode_writes = 0;
+            regs.lock().unwrap().drop_mode_writes = u32::MAX;
+            let unanswered = reply("M CW 0");
+            let r = regs.lock().unwrap();
+            (taken, refused, unanswered, r.main_mode, r.data_mode)
+        };
+        let want = (
+            "RPRT 0\n".to_string(),
+            "RPRT -1\n".to_string(),
+            "RPRT -5\n".to_string(),
+            0x01,
+            true,
+        );
+        assert_eq!(
+            [
+                answers(0x94, IcomModel::Ic7300),
+                answers(0x98, IcomModel::Ic7610)
+            ],
+            [want.clone(), want]
+        );
+    }
+
+    /// The DATA flag's own answer, after the mode frame took (IC-7300, the `06` and `1A 06` pair).
+    /// Turning DATA off for a plain mode is tolerated whatever the radio says to it, NG or
+    /// nothing, as it always was: some radios NG a redundant off. Turning it on is required, so
+    /// for PKTUSB its NG is a refusal, as it always was, and its silence is silence.
+    #[test]
+    fn the_data_flags_answer_decides_a_data_mode_and_never_a_plain_one() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let answer = |line: &str, knob: fn(&mut Regs)| {
+            let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+            knob(&mut regs.lock().unwrap());
+            match handle_command(line, &*b) {
+                Handled::Reply(r) => r,
+                Handled::Close => panic!("{line} closed the connection"),
+            }
+        };
+        let ng: fn(&mut Regs) = |r| r.nak_data_writes = 1;
+        let quiet: fn(&mut Regs) = |r| r.drop_data_writes = 1;
+        assert_eq!(
+            [
+                answer("M USB 0", ng),
+                answer("M USB 0", quiet),
+                answer("M PKTUSB 0", ng),
+                answer("M PKTUSB 0", quiet),
+            ],
+            ["RPRT 0\n", "RPRT 0\n", "RPRT -1\n", "RPRT -5\n"]
+        );
+    }
+
+    /// ⭐ A SPLIT THE RADIO DID NOT ANSWER IS NOT A SPLIT IT REFUSED. The A/B split's three writes
+    /// through the encoder the daemon serves, on an IC-7300: split on (`0F 01`), its TX dial
+    /// (`25 01`) and its TX mode (`26 01`), each taken, then answered NG (`FA`), then met with
+    /// silence. The NG is `RPRT -1`, a refusal, as it always was; the silence is `RPRT -5`, as an
+    /// unanswered dial is. It was `RPRT -1`.
+    #[test]
+    fn a_split_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        let answers = || {
+            ["S 1 VFOB", "I 14076000", "X USB 0"].map(|line| match handle_command(line, &*b) {
+                Handled::Reply(r) => r,
+                Handled::Close => panic!("{line} closed the connection"),
+            })
+        };
+        let taken = answers();
+        regs.lock().unwrap().nak_split_writes = u32::MAX;
+        let refused = answers();
+        {
+            let mut r = regs.lock().unwrap();
+            r.nak_split_writes = 0;
+            r.drop_split_writes = u32::MAX;
+        }
+        let unanswered = answers();
+        assert_eq!(
+            [taken, refused, unanswered],
+            ["RPRT 0\n", "RPRT -1\n", "RPRT -5\n"].map(|a| [a; 3].map(String::from))
+        );
+    }
+
     /// A RIG WITH NO STEP LIST OFFERS NEITHER CONTROL, rather than a guessed one. The IC-905
     /// has no Hamlib backend to read pads off (NEEDS-BENCH), and `None` is what a build that
     /// does not know the model carries. Both must answer "unimplemented" — `None`, which the
@@ -3155,6 +3539,64 @@ mod tests {
         );
     }
 
+    /// ⭐ FT8 IN A SPLIT: `X PKTUSB` PUTS THE TX VFO IN USB WITH THE RADIO'S DATA MODE, as
+    /// `26 01 01 <D>`. Icom's `26` is the VFO (or on the IC-7610 the band), the mode (`01` USB),
+    /// the DATA mode and the filter: the DATA byte selects D1–D3 on the IC-7610 (A7380-7EX-4
+    /// p. 13) and is `01`, ON, on the one-DATA radios (IC-7300 Full Manual A7292-4EX-12, PDF
+    /// p. 171; IC-9700 A7508-3EX-4, PDF p. 25), capped as every DATA write is
+    /// (`data_mode_on_wire`). The filter byte is left off, as for every other mode this verb
+    /// sends. `PKTUSB` used to be refused here, so a Rig split on this daemon transmitted FT8 from
+    /// a TX VFO in whatever mode it was left in, where the same split through Hamlib set it.
+    /// NEEDS-BENCH: which filter a radio keeps when only the filter byte is skipped.
+    #[test]
+    fn a_split_puts_its_tx_vfo_in_usb_with_the_radios_data_mode() {
+        for (addr, model, choice, want) in [
+            (
+                0x98u8,
+                Some(IcomModel::Ic7610),
+                1u8,
+                "FE FE 98 E0 26 01 01 01 FD",
+            ),
+            (
+                0x98,
+                Some(IcomModel::Ic7610),
+                2,
+                "FE FE 98 E0 26 01 01 02 FD",
+            ),
+            (
+                0x98,
+                Some(IcomModel::Ic7610),
+                3,
+                "FE FE 98 E0 26 01 01 03 FD",
+            ),
+            (
+                0x94,
+                Some(IcomModel::Ic7300),
+                2,
+                "FE FE 94 E0 26 01 01 01 FD",
+            ),
+            (
+                0xA2,
+                Some(IcomModel::Ic9700),
+                3,
+                "FE FE A2 E0 26 01 01 01 FD",
+            ),
+        ] {
+            let (_e, b, regs) = backend_with_data_mode(addr, model, choice);
+            let n = regs.lock().unwrap().wire.len();
+            assert_eq!(
+                b.set_split_mode("PKTUSB", -1),
+                Some(true),
+                "{model:?}, Data mode D{choice}"
+            );
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [want],
+                "{model:?}, Data mode D{choice}: the TX VFO's mode on the wire"
+            );
+        }
+    }
+
     /// ⛔ EVERY OTHER RADIO WRITES ITS DIAL AND MODE WITH `05`, `06` AND `1A 06`, BYTE FOR BYTE —
     /// the one-receiver Icoms, a build that does not know its model, and the IC-9700, whose
     /// `25 00` would name its SELECTED VFO (A7508-3EX-4 p. 24). The frames are the ones the tree
@@ -3187,6 +3629,64 @@ mod tests {
                 ],
                 "{model:?}: the dial and mode writes moved"
             );
+        }
+    }
+
+    /// ⭐ ON ITS 10 GHz BAND THE IC-905 SENDS ITS DIAL IN 12 DIGITS. "When the 10 GHz band is
+    /// selected, the number of digits is 12 (1 ~ 6) from 100 GHz to 1 Hz" (A7711-9EX-2, PDF
+    /// p. 17). The fake radio adds that sixth byte by hand ([`Regs::ten_ghz_12_digits`]). Read as
+    /// 10 digits, 10368.150 MHz came back as 368.150 MHz: the 10 GHz digit was never read.
+    #[test]
+    fn the_ic905s_10_ghz_dial_is_read_in_12_digits() {
+        let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+        regs.lock().unwrap().main_hz = 10_368_150_000; // the radio on its 10 GHz band
+        assert_eq!(b.freq_hz(), 10_368_150_000);
+    }
+
+    /// ⭐ …AND IS SENT ITS DIAL IN 12 DIGITS: `05` and the split's `25 01` (whose frequency is the
+    /// same field, "See “Operating frequency.” (p. 16)", A7711-9EX-2 PDF p. 28). The bytes are
+    /// PDF p. 17's layout typed out: 1 Hz first, the 100 GHz digit (0) over the 10 GHz digit in
+    /// the sixth byte. In 10 digits a QSY to 10368.150 MHz sent the radio to 368.150 MHz.
+    #[test]
+    fn a_qsy_on_the_ic905s_10_ghz_band_is_sent_in_12_digits() {
+        let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+        let n = regs.lock().unwrap().wire.len();
+        let acked = (b.set_freq(10_368_150_000), b.set_split_freq(10_368_200_000));
+        let r = regs.lock().unwrap();
+        assert_eq!(
+            (acked, hex_frames(&r.wire[n..]), r.main_hz, r.unselected_hz),
+            (
+                (true, Some(true)),
+                vec![
+                    "FE FE AC E0 05 00 00 15 68 03 01 FD".to_string(),
+                    "FE FE AC E0 25 01 00 00 20 68 03 01 FD".to_string(),
+                ],
+                10_368_150_000,
+                10_368_200_000
+            )
+        );
+    }
+
+    /// The control: on every IC-905 band at or below 5600 MHz the dial stays 10 digits (5
+    /// bytes), read and written exactly as before (A7711-9EX-2 PDF p. 17).
+    #[test]
+    fn the_ic905s_bands_up_to_5600_mhz_keep_their_10_digit_dial() {
+        for (hz, bcd) in [
+            (144_200_000u64, "00 00 20 44 01"),
+            (432_100_000, "00 00 10 32 04"),
+            (1_296_100_000, "00 00 10 96 12"),
+            (2_304_100_000, "00 00 10 04 23"),
+            (5_760_100_000, "00 00 10 60 57"),
+        ] {
+            let (_e, b, regs) = backend_on(0xAC, Some(IcomModel::Ic905));
+            let n = regs.lock().unwrap().wire.len();
+            assert!(b.set_freq(hz), "{hz}");
+            assert_eq!(
+                hex_frames(&regs.lock().unwrap().wire[n..]),
+                [format!("FE FE AC E0 05 {bcd} FD")],
+                "{hz}"
+            );
+            assert_eq!(b.freq_hz(), hz, "{hz}: read back");
         }
     }
 
@@ -3243,6 +3743,38 @@ mod tests {
             want.push((None, d, usb_d(0x94, d)));
         }
         assert_eq!(sent, want, "the DATA mode each radio was sent");
+    }
+
+    /// The two radios driven only over the network, each against its own guide's `1A 06`. The
+    /// IC-7760 has DATA1, DATA2 and DATA3 (CI-V Reference Guide A7788-8EX-2, PDF p. 23), so D1, D2
+    /// and D3 each go out as chosen. The IC-7300MK2 has one DATA mode, `01` = ON (its CI-V
+    /// Reference Guide, rev 0, PDF p. 22), so it is sent `01` whatever is saved.
+    #[test]
+    fn the_network_icoms_are_sent_the_data_modes_their_own_guides_define() {
+        let mut sent = Vec::new();
+        for (addr, model) in [(0xB2u8, IcomModel::Ic7760), (0xB6, IcomModel::Ic7300Mk2)] {
+            for d in [1u8, 2, 3] {
+                let (_e, b, regs) = backend_with_data_mode(addr, Some(model), d);
+                let n = regs.lock().unwrap().wire.len();
+                assert!(b.set_mode("PKTUSB", 0), "{model:?}, D{d}: PKTUSB refused");
+                sent.push((model, d, hex_frames(&regs.lock().unwrap().wire[n..])));
+            }
+        }
+        let usb_d = |addr: u8, d: u8| {
+            vec![
+                format!("FE FE {addr:02X} E0 06 01 FD"),
+                format!("FE FE {addr:02X} E0 1A 06 {d:02X} 01 FD"),
+            ]
+        };
+        let want = vec![
+            (IcomModel::Ic7760, 1, usb_d(0xB2, 1)),
+            (IcomModel::Ic7760, 2, usb_d(0xB2, 2)),
+            (IcomModel::Ic7760, 3, usb_d(0xB2, 3)),
+            (IcomModel::Ic7300Mk2, 1, usb_d(0xB6, 1)),
+            (IcomModel::Ic7300Mk2, 2, usb_d(0xB6, 1)),
+            (IcomModel::Ic7300Mk2, 3, usb_d(0xB6, 1)),
+        ];
+        assert_eq!(sent, want, "the DATA mode each network Icom was sent");
     }
 
     /// ⭐ A DIAL READ THAT TIMES OUT SERVES MAIN'S LAST READING — never the engine's cache,
@@ -4523,6 +5055,132 @@ mod tests {
                 .iter()
                 .any(|f| f.windows(5).any(|w| w == [0x29, 0x00, 0x1A, 0x03, 0x22])),
             "the band-directed form went on the wire"
+        );
+    }
+
+    // ── THE KEYING POLICY: a link that may not key refuses the keys, never an unkey ──────────
+
+    /// The frames on the wire since `from`, as `(cmd, data)`.
+    fn wire_since(regs: &Arc<Mutex<Regs>>, from: usize) -> Vec<(u8, Vec<u8>)> {
+        regs.lock().unwrap().log[from..].to_vec()
+    }
+
+    fn keys(log: &[(u8, Vec<u8>)]) -> Vec<(u8, Vec<u8>)> {
+        log.iter()
+            .filter(|(cmd, data)| {
+                (*cmd == 0x1C && data.as_slice() == [0x00, 0x01])
+                    || (*cmd == 0x17 && data.as_slice() != [0xFF])
+                    || (*cmd == 0x16 && data.as_slice() == [0x46, 0x01])
+            })
+            .cloned()
+            .collect()
+    }
+
+    const REFUSED: Link = Link {
+        deadline: super::super::engine::REQUEST_DEADLINE,
+        keying: KeyingPolicy::Refused("transmit is off on this connection"),
+    };
+
+    /// ⭐ A LINK THAT MAY NOT KEY sends no key to the radio: `T 1`, `b` and `U VOX 1` are refused
+    /// with nothing on the wire, while `T 0`, `\stop_morse`, `\stop_voice_mem` and `U VOX 0` go
+    /// out as always. The control: the same verbs on a serial link reach the radio.
+    ///
+    /// Read off the WIRE, because the fake radio refuses PTT itself (`1C` is not scripted, so it
+    /// answers `FA`): `T 1` and `T 0` say `RPRT -1` on both links, and only the wire tells a key
+    /// the radio was sent and refused from one it was never sent.
+    #[test]
+    fn a_link_that_may_not_key_refuses_every_key_and_no_unkey() {
+        let model = IcomModel::Ic7760;
+        let addr = model.default_civ_addr();
+        for link in [Link::serial(), REFUSED] {
+            let refused = link.keying != KeyingPolicy::Allowed;
+            let (radio, _push) = FakeRadio::new(addr);
+            let regs = radio.regs();
+            let daemon =
+                CivDaemon::start_with_link(Box::new(radio), addr, 0, 1, Some(model), link).unwrap();
+            let (mut c, mut rd) = client(daemon.local_addr().port());
+            let before = regs.lock().unwrap().log.len();
+            for (line, serial_reply) in [
+                ("T 1\n", "RPRT -1\n"), // the fake's own refusal, after it was sent
+                ("b CQ\n", "RPRT 0\n"),
+                ("U VOX 1\n", "RPRT 0\n"),
+            ] {
+                let want = if refused { "RPRT -1\n" } else { serial_reply };
+                assert_eq!(
+                    roundtrip(&mut c, &mut rd, line),
+                    want,
+                    "{line:?} refused={refused}"
+                );
+            }
+            let sent = keys(&wire_since(&regs, before));
+            if refused {
+                assert_eq!(
+                    sent,
+                    Vec::<(u8, Vec<u8>)>::new(),
+                    "no key reached the radio"
+                );
+            } else {
+                assert_eq!(
+                    sent,
+                    vec![
+                        (0x1C, vec![0x00, 0x01]),
+                        (0x17, b"CQ".to_vec()),
+                        (0x16, vec![0x46, 0x01]),
+                    ],
+                    "the control: a serial link keys exactly as before"
+                );
+            }
+            // Every unkey and stop goes out on both.
+            let before = regs.lock().unwrap().log.len();
+            roundtrip(&mut c, &mut rd, "T 0\n"); // refused by the fake itself, as above
+            for line in ["\\stop_morse\n", "\\stop_voice_mem\n", "U VOX 0\n"] {
+                assert_eq!(roundtrip(&mut c, &mut rd, line), "RPRT 0\n", "{line:?}");
+            }
+            assert_eq!(
+                wire_since(&regs, before),
+                vec![
+                    (0x1C, vec![0x00, 0x00]),
+                    (0x17, vec![0xFF]),
+                    (0x28, vec![0x00, 0x00]),
+                    (0x16, vec![0x46, 0x00]),
+                ],
+                "refused={refused}"
+            );
+        }
+    }
+
+    /// The teardown's key-up is an unkey, so a link that may not key still sends it.
+    #[test]
+    fn a_link_that_may_not_key_still_unkeys_at_teardown() {
+        let addr = IcomModel::Ic7610.default_civ_addr();
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let daemon = CivDaemon::start_with_link(
+            Box::new(radio),
+            addr,
+            0,
+            1,
+            Some(IcomModel::Ic7610),
+            REFUSED,
+        )
+        .unwrap();
+        let before = regs.lock().unwrap().log.len();
+        drop(daemon);
+        assert!(
+            wire_since(&regs, before).contains(&(0x1C, vec![0x00, 0x00])),
+            "the safety key-up went out"
+        );
+    }
+
+    /// The serial link is the daemon as it always was: the engine's own 300 ms and keying.
+    #[test]
+    fn the_serial_link_is_the_daemon_as_it_always_was() {
+        assert_eq!(
+            Link::serial(),
+            Link {
+                deadline: std::time::Duration::from_millis(300),
+                keying: KeyingPolicy::Allowed,
+            }
         );
     }
 }

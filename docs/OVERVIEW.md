@@ -3,7 +3,7 @@
 **Nexus is a free, GPLv3, all-mode amateur radio operations center for the desktop**: FT8/FT4
 digital with WSJT-X operational parity, a CW keying station, an SSB phone cockpit, a live
 propagation map and opening detector, an evidence-backed needs board, a POTA/SOTA hunter, a
-club-ready Field Day mode, a DXCC-first logbook with online-service connectors, and the original
+club-ready Contest mode (Field Day, QSO parties, Sweepstakes, CQ WW and more), a DXCC-first logbook with online-service connectors, and the original
 Tempo TempoFast/TempoDeep weak-signal chat tiers — one window, one rig, one log.
 
 This document is the long-form tour. The short version is the [README](../README.md); the
@@ -323,7 +323,7 @@ load while this layer earns its stripes.
 ## Status and roadmap
 
 **Production-grade today:** FT8/FT4 operating, logbook/awards/connectors, Needed board,
-POTA/SOTA hunter, Field Day mode, Conditions map, setup/CAT.
+POTA/SOTA hunter, Field Day in Contest mode, Conditions map, setup/CAT.
 
 **Casual-grade by design:** CW and Phone cockpits (no contests).
 

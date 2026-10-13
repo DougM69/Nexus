@@ -5,7 +5,7 @@
 // Three things this owes an operator, and each has been wrong in a shipped build:
 //
 //  1. ONE contest picker, FIRST on the tab. The contest decides the exchange, the dupe
-//     rule, the multiplier universe and the Cabrillo headers, so Field Day Setup is the
+//     rule, the multiplier universe and the Cabrillo headers, so Contest mode is the
 //     setup for whichever contest is picked — not the place the contest is chosen.
 //  2. The ROLE is READ-ONLY. A role is derived from where the operator is; one that
 //     could be typed independently of the location would let the two disagree.
@@ -13,7 +13,7 @@
 //     literal `MULTI-OP`, so every solo Field Day entry Nexus exported claimed more
 //     than one operator was at the station.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -111,14 +111,16 @@ const chip = async (label: string, text: string) =>
 
 
 describe('the contest picker', () => {
-  it('is the first section on the tab, and Field Day Setup comes after it', async () => {
+  it('is the first section on the tab, and holds the Contest mode switch that starts the pick', async () => {
     renderPanel()
     await openContesting()
     const legends = [...document.querySelectorAll('fieldset.settings-section legend')].map(
       (n) => n.textContent,
     )
     expect(legends[0]).toBe('Contest')
-    expect(legends.indexOf('Field Day Setup')).toBeGreaterThan(0)
+    expect(sectionOf(await screen.findByRole('switch', { name: /^Enable Contest mode: / }))).toBe('Contest')
+    expect(legends).not.toContain('Field Day Setup')
+    expect(legends).not.toContain('Contest mode')
   })
 
   it('offers the shipped contests and picks the one the settings name', async () => {
@@ -160,7 +162,7 @@ describe('the contest picker', () => {
     expect((await chip('Contest', 'Winter Field Day')).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('picks a QSO party, and Field Day Setup drops the class and section it does not send', async () => {
+  it('picks a QSO party, and Field Day\'s class, section and power multiplier go, which it does not use', async () => {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({ ...defaultSettings, fdEvent: 'tnqp' } as never),
     )
@@ -177,6 +179,8 @@ describe('the contest picker', () => {
     // placeholder — Station data's state box carries the same placeholder and is
     // exactly the control a QSO party operator does fill in.
     expect(document.querySelector('#fd-section-list')).toBeNull()
+    // The power multiplier is ARRL Field Day's alone: no other contest's score reads it.
+    expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
     // POSITIVE CONTROL: the same panel on a Field Day event still shows both.
     cleanup()
     api.get('getSettings').mockImplementation(() =>
@@ -186,9 +190,20 @@ describe('the contest picker', () => {
     await openContesting()
     expect(await screen.findByPlaceholderText('1D')).not.toBeNull()
     expect(document.querySelector('#fd-section-list')).not.toBeNull()
+    expect(screen.getByRole('group', { name: 'Field Day power multiplier' })).not.toBeNull()
   })
 
-  it('lives in ONE place — the picker is not also inside Field Day Setup', async () => {
+  it('Winter Field Day scores by its objectives, so it has the class and section and no power multiplier', async () => {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, fdEvent: 'wfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(await screen.findByPlaceholderText('2O')).not.toBeNull()
+    expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
+  })
+
+  it('lives in ONE place — the picker is not also inside Field Day', async () => {
     renderPanel()
     await openContesting()
     // Two controls writing one setting is how they come to disagree. The contest chips
@@ -201,6 +216,34 @@ describe('the contest picker', () => {
   })
 })
 
+// A pick saved while a contest runs switches it at once, as turning Contest mode off and on
+// does: the running contest ends and the new one starts in S&P, each keeping its own contacts.
+// The place the pick is made says so, naming the contest running.
+describe('beside the picker while Contest mode is running a contest', () => {
+  const RUNNING = (contest: string) =>
+    `Contest mode is on for ${contest}. Saving a different pick ends it and starts the new one at once, without calling CQ. Each contest keeps its own contacts.`
+
+  it('says a saved pick switches at once, naming the contest running', async () => {
+    renderPanel({ event: 'ilqp', role: 'in_state' })
+    await openContesting()
+    const line = await screen.findByText(RUNNING('Illinois QSO Party'))
+    expect(line.closest('.settings-field')).toBe(await groupFor('Contest'))
+  })
+
+  it('a session with no contest id is ARRL Field Day', async () => {
+    renderPanel({ event: '', role: '' })
+    await openContesting()
+    expect(await screen.findByText(RUNNING('ARRL Field Day'))).not.toBeNull()
+  })
+
+  it('CONTROL: with no contest running, a pick starts with the next session, and it says nothing', async () => {
+    renderPanel()
+    await openContesting()
+    expect((await groupFor('Contest')).textContent).toContain('Which contest you are entering.')
+    expect(screen.queryByText(/Saving a different pick/)).toBeNull()
+  })
+})
+
 describe('the role / category block', () => {
   it('says there is no role to choose when the contest is symmetric', async () => {
     renderPanel({ role: '' })
@@ -210,12 +253,55 @@ describe('the role / category block', () => {
     ).not.toBeNull()
   })
 
-  it('names the live role, read-only, when the session has one', async () => {
+  it('names the live role in words, read-only, when the session has one', async () => {
     renderPanel({ role: 'in_state' })
     await openContesting()
-    expect(await screen.findByText(/Running as in_state/)).not.toBeNull()
+    expect(
+      await screen.findByText(
+        'Your station is in-state. Your location decides this, so moving across the line changes it.',
+      ),
+    ).not.toBeNull()
+    // Never the rules data's id: it read "Running as in_state".
+    expect((await groupFor('Your role')).textContent).not.toContain('in_state')
     // READ-ONLY: nothing in the role field is a control.
     expect((await groupFor('Your role')).querySelector('button, input, select')).toBeNull()
+  })
+
+  it.each([
+    ['out_of_state', 'out-of-state'],
+    ['w_ve', 'W/VE'],
+    ['dx', 'DX'],
+  ])('names the %s role as %s', async (role, words) => {
+    renderPanel({ role })
+    await openContesting()
+    expect(
+      await screen.findByText(
+        `Your station is ${words}. Your location decides this, so moving across the line changes it.`,
+      ),
+    ).not.toBeNull()
+  })
+
+  it('names the role the saved settings would start in, in words, before the contest runs', async () => {
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({
+        event: 'cqww_rtty',
+        rulesYear: 2026,
+        bannedModes: [],
+        spottingAllowed: true,
+        clusterAllowed: true,
+        enforcement: 'warn',
+        role: 'w_ve',
+        exchange: ['599', '4', 'IL'],
+        problem: '',
+      } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(
+      await screen.findByText(
+        'Your station is W/VE. Your location decides this, so moving across the line changes it.',
+      ),
+    ).not.toBeNull()
   })
 
   it('shows the W/VE warning the saved settings would start the contest with', async () => {
@@ -254,5 +340,67 @@ describe('the role / category block', () => {
     expect((await chip('Entry category', 'MULTI-OP')).getAttribute('aria-pressed')).toBe('true')
     // CHECKLOG is the third — a log sent to help the sponsor check others.
     expect(await chip('Entry category', 'CHECKLOG')).not.toBeUndefined()
+  })
+
+  // A club event needs ports through a firewall that is on, so the ports are named where the
+  // event is switched on, on every platform (Windows' button is SettingsPanel.clubfirewall).
+  it('names the club event\'s firewall ports beside Host a club event', async () => {
+    renderPanel()
+    await openContesting()
+    expect(
+      await screen.findByText(
+        'A club event uses TCP 42073 (the Host port), UDP 42074 (Find club events) and TCP 7373 (the club TV scoreboard). A firewall that is on must let Nexus in on them.',
+      ),
+    ).toBeTruthy()
+  })
+
+  // While a contest that allows spotting only over amateur RF runs (Winter Field Day 2027), no PSK
+  // Reporter report goes out whatever the switch says, so Settings says so beside the switch.
+  it('says beside PSK Reporter that a contest allowing spots only over RF pauses the reports', async () => {
+    const note = /While Winter Field Day runs, its rules allow spots only over amateur RF/
+    const wfd = { event: 'wfd', rulesYear: 2027, bannedModes: [], spottingAllowed: true, clusterAllowed: true, enforcement: 'warn', role: '', exchange: [], problem: '' }
+    const show = async (fdActive: boolean, spotsRfOnly: boolean) => {
+      api.get('getSettings').mockImplementation(() =>
+        Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', fdEvent: 'wfd', fdActive } as never),
+      )
+      api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ ...wfd, ...(spotsRfOnly ? { spotsRfOnly } : {}) } as never))
+      renderPanel()
+      fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+      await screen.findByText('PSK Reporter')
+      // The ruleset arrives on its own fetch; let it land before anything is read off the page.
+      await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())
+      await act(async () => {
+        for (let i = 0; i < 8; i++) await Promise.resolve()
+      })
+    }
+    await show(true, true)
+    expect(await screen.findByText(note)).toBeTruthy()
+    // CONTROLS: the contest switched off, and a ruleset without the rule, say nothing.
+    for (const [fdActive, spotsRfOnly] of [[false, true], [true, false]] as const) {
+      cleanup()
+      await show(fdActive, spotsRfOnly)
+      expect(screen.queryByText(note), `fdActive ${fdActive}, spotsRfOnly ${spotsRfOnly}`).toBeNull()
+    }
+  })
+
+  // Winter Field Day has no high-power entry (2027 rules: 100 W PEP, and the Cabrillo takes QRP
+  // or LOW), so beside the Power category picker Settings says what a HIGH pick writes there.
+  it('says beside the Power picker that Winter Field Day takes QRP or LOW, and only for it', async () => {
+    const note = /Winter Field Day takes QRP or LOW/
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', fdEvent: 'wfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    expect(await screen.findByText(note)).toBeTruthy()
+    cleanup()
+    // CONTROL: ARRL Field Day, whose power is a scoring tier, gets no such note.
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', fdEvent: 'arrlfd' } as never),
+    )
+    renderPanel()
+    await openContesting()
+    await groupFor('Power category')
+    expect(screen.queryByText(note)).toBeNull()
   })
 })

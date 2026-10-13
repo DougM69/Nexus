@@ -66,6 +66,10 @@ const SEED: &str = include_str!("fd_rules.seed.json");
 /// [`ruleset`] selects purely on the event; the year is carried for the
 /// forthcoming multi-year table and to stamp exports.
 pub const CURRENT_RULES_YEAR: u16 = 2026;
+/// How long before a contest starts its running's day begins ([`FdRuleset::running_of`]):
+/// a day. The morning a club sets up on is inside it, and a rehearsal on an earlier day is
+/// not.
+pub const RUNNING_DAY_LEAD_SECS: u64 = 24 * 3600;
 
 /// One Field Day bonus (replaces the old `tempo_app::FD_BONUSES` tuple table).
 /// `id` is the stable settings key; `points` is what a claimed bonus scores.
@@ -74,6 +78,22 @@ pub struct Bonus {
     pub id: &'static str,
     pub label: &'static str,
     pub points: u32,
+}
+
+/// ⭐ **One of a contest's OBJECTIVES** — Winter Field Day's thirteen (the sponsor's 2027
+/// rules, p.6-7 and the worksheet on p.11), each worth an objective multiplier (OM).
+///
+/// Not a [`Bonus`]: a bonus ADDS points and an objective MULTIPLIES them — *"Total score =
+/// (total QSO points) x (OM+1)"* (p.7). `implies` names the objectives that come with this
+/// one: *"Achieving this objective qualifies you for the 'Operate station equipment on
+/// alternative power' objective"* (p.6). `id` is the stable settings key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Objective {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub multiplier: u32,
+    /// The other objectives this one earns with it, each counted once.
+    pub implies: &'static [&'static str],
 }
 
 /// ⭐ **A bonus the LOG earns, not one the operator claims** — a station worth points
@@ -166,6 +186,16 @@ pub struct AssistancePolicy {
     pub cluster_allowed: bool,
     /// i18n catalog key for the advisory note (`""` = none).
     pub assistance_note_key: &'static str,
+    /// ⭐ **Spots may be POSTED only over amateur RF while the event runs** — Winter Field
+    /// Day's *"You may spot yourself and others only via amateur RF."* (2027 rules, p.8).
+    ///
+    /// Unlike the two flags above this one is ENFORCED, not advisory: while the event runs
+    /// for a station that has the contest switched on, Nexus posts no spot over the internet
+    /// — no PSK Reporter report, no DX cluster spot, no POTA self-spot — and says why. What
+    /// it RECEIVES is untouched, because the rule is about where a spot is posted. A rules
+    /// key rather than a Winter Field Day branch, so another contest with the same rule
+    /// takes it by one line of data.
+    pub spots_rf_only: bool,
 }
 
 /// Which Saturday of the month anchors the event weekend.
@@ -224,6 +254,16 @@ pub struct FdRuleset {
     /// two club calls. Empty for every contest that names none, which is every contest
     /// written before this key existed.
     pub bonus_stations: &'static [BonusStation],
+    /// ⭐ **Does a contact made through a satellite count?** `true` for every ruleset but
+    /// Winter Field Day's 2027 one, whose sponsor says *"Cross-band, repeated, relayed,
+    /// meshed, and/or internet-linked contacts do not count. Do not log any such contacts."*
+    /// (2027 rules, p.5) and *"Satellite objectives are gone"* (p.3).
+    ///
+    /// A contact this gives no credit is still LOGGED and kept — it reaches the general log
+    /// and LoTW like any satellite contact — but it scores nothing, enters no dupe index (so
+    /// it never refuses a later contact that does count), and is left out of the files the
+    /// entry submits.
+    pub satellite_credit: bool,
     pub dupe_rule: DupeRule,
     /// Tempo (FT1 keyboard chat) is a first-class FD contact surface for this
     /// event: WFD `true` (the digital-friendly event), SFD `false`.
@@ -233,9 +273,17 @@ pub struct FdRuleset {
     /// SSTV legal as Digital; ARRL FD bans none. Advisory data for a UI guard —
     /// scoring and dupes never consult it.
     pub banned_modes: &'static [&'static str],
-    /// Display-only objectives menu (WFD; empty today — WFD reuses the bonus
-    /// menu, and a real WFD objectives table flows through this field later).
+    /// The OLD display-only objectives list: still parsed, and never populated. A build
+    /// that predates [`objective_menu`](Self::objective_menu) counts each id in it as one
+    /// objective whatever it is worth, so the real menu rides a key of its own.
     pub objectives: &'static [Bonus],
+    /// ⭐ **The objectives this contest scores by** ([`Objective`]) — Winter Field Day's
+    /// thirteen since the sponsor's 2027 rules, and empty for every other ruleset.
+    ///
+    /// ⚠️ **A key of its own, not values in [`objectives`](Self::objectives) or
+    /// [`bonuses`](Self::bonuses), because the rules file reaches installed builds.** 1.14
+    /// to 1.17 ignore an unknown key, and score neither old list as the sponsor does.
+    pub objective_menu: &'static [Objective],
     /// Domains this ruleset DECLARES in the rules file. The reserved derived
     /// ids ([`arrl_sections_domain`], [`fd_sections_domain`]) are NOT in here —
     /// they are computed from the top-level section list, and a file that tries
@@ -306,6 +354,67 @@ pub struct FdRuleset {
     /// [`cabrillo_entry_headers`](Self::cabrillo_entry_headers) (the loader refuses either
     /// half alone).
     pub entry_classes: &'static [&'static str],
+    /// ⭐ **The sponsor's own `X-` headers, each filled from a SENT slot**: `(header, slot)`.
+    /// Winter Field Day's example log carries `X-EXCHANGE: 3O`, its class and category
+    /// (2027 rules, p.10). Empty for every contest that asks for none.
+    ///
+    /// ⚠️ A key of its own: an `X-` name in `cabrillo_headers` would make 1.17.0 refuse the
+    /// whole rules file, while it ignores an unknown key.
+    pub cabrillo_x_headers: &'static [(&'static str, &'static str)],
+    /// ⭐ **The only `CATEGORY-POWER` values the sponsor takes**, when it names some: Winter
+    /// Field Day's `QRP` or `LOW` (p.10; its limit is 100 W PEP, p.8). The declared power is
+    /// written only when it is one of them, so a station left at HIGH claims nothing. Empty
+    /// means whatever `cabrillo_headers` says about CATEGORY-POWER, as before.
+    ///
+    /// ⚠️ Never CATEGORY-POWER in `cabrillo_headers` for such a contest: 1.17.0 reads that
+    /// list and would write `HIGH` for a picker left at HIGH.
+    pub cabrillo_power_categories: &'static [&'static str],
+    /// ⭐ **The sponsor's multi-operator classes, as its `CATEGORY-TRANSMITTER` values**, in its
+    /// order — CQ WW's *"The category-transmitter is required for multi-operator entries and
+    /// must be one of the following. ONE TWO UNLIMITED"* (Multi-Single, Multi-Two, Multi-Multi).
+    /// Empty for every contest whose sponsor names none, which writes none. Written only for a
+    /// `MULTI-OP` entry that declared one of these, and with it the `OPERATORS` line every such
+    /// sponsor asks a multi-operator entry for (CQ WW: *"If you select a multi-operator category
+    /// and do not enter operator callsigns in this field, the robot will reject your log"*).
+    ///
+    /// ⚠️ **A key of its own, as are the three below.** The builds that read
+    /// [`cabrillo_entry_headers`](Self::cabrillo_entry_headers) refuse the whole rules file over
+    /// one name that list does not know, exactly as 1.17.0 does over
+    /// [`cabrillo_headers`](Self::cabrillo_headers); every build ignores a key it does not know.
+    pub cabrillo_transmitter_categories: &'static [&'static str],
+    /// ⭐ **The overlay categories the sponsor scores**, as its `CATEGORY-OVERLAY` values, in its
+    /// order (CQ WW's `CLASSIC`, `ROOKIE` and `YOUTH`). Empty writes none.
+    pub cabrillo_overlay_categories: &'static [&'static str],
+    /// ⭐ **The `ADDRESS` headers the sponsor's template names**, in Cabrillo 3.0's order: every
+    /// one of the five for CQ WW, `ADDRESS` alone for an ARRL template, whose city, state and
+    /// postal code ride a second `ADDRESS` line (*"ADDRESS: Newington, CT 06111"*). Empty writes
+    /// no address. See [`address_lines`](crate::contest::address_lines).
+    pub cabrillo_address_headers: &'static [&'static str],
+    /// ⭐ **The sponsor's template carries `SOAPBOX` lines** — the entrant's comments, and where
+    /// CQ WW asks a Rookie for the date first licensed.
+    pub cabrillo_soapbox: bool,
+    /// ⭐ **The `CATEGORY-BAND` values an entry may declare**, in the sponsor's order — CQ WW's
+    /// *"If you are entering an all band category, use ALL, otherwise select one of the individual
+    /// bands shown"*: `ALL 160M 80M 40M 20M 15M 10M`. The declared band is written only when it is
+    /// one of them. Empty for every contest whose sponsor names none, where `CATEGORY-BAND` in
+    /// [`cabrillo_headers`](Self::cabrillo_headers) still means the band read off the log — which
+    /// is also what a contest with both writes for an entry that declares none (CQ WW RTTY).
+    ///
+    /// ⚠️ A key of its own, as are the two below: every build ignores a key it does not know.
+    pub cabrillo_band_categories: &'static [&'static str],
+    /// ⭐ **The contest's own `CATEGORY-MODE`** (`CW` for CQ WW CW), written for every entry in it:
+    /// a single-mode contest's entries are all in its mode, so it is a fact about the contest the
+    /// entry picked and never a reading of its rows. `""` writes what `CATEGORY-MODE` in
+    /// [`cabrillo_headers`](Self::cabrillo_headers) says (the log's mode), or none.
+    pub cabrillo_mode_category: &'static str,
+    /// ⭐ **The header lines the sponsor requires**, from
+    /// [`CABRILLO_REQUIRABLE`]: what the Contest screen names when the entry has left one out,
+    /// before the export (CQ's rules: *"Failure to fill out the header correctly may result in the
+    /// entry being placed in the wrong category or reclassified as a Checklog"*). Never a refusal:
+    /// the file is the entrant's to send. `CATEGORY-TRANSMITTER` and `OPERATORS` are required of a
+    /// `MULTI-OP` entry only, and nothing of a `CHECKLOG`
+    /// ([`FieldDayLog::cabrillo_missing`](crate::fieldday::FieldDayLog::cabrillo_missing)).
+    pub cabrillo_required: &'static [&'static str],
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
     /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
     pub cabrillo_location: &'static [(&'static str, &'static str)],
@@ -342,6 +451,62 @@ impl FdRuleset {
     /// Total points for a set of claimed bonus ids (unknown ids score nothing).
     pub fn bonus_points(&self, claimed: &[String]) -> u32 {
         claimed.iter().filter_map(|id| self.bonus(id)).sum()
+    }
+
+    /// The objective this id names, when the menu has one.
+    pub fn objective(&self, id: &str) -> Option<&'static Objective> {
+        self.objective_menu.iter().find(|o| o.id == id)
+    }
+
+    /// ⭐ **The objectives a set of ticked ids EARNS**, in menu order: each ticked objective
+    /// and every objective it implies, each once however many ticks reach it — the walk over
+    /// the MENU is what counts each once. An id the menu does not name — an ARRL bonus, a
+    /// typo — earns nothing.
+    pub fn objectives_earned(&self, ticked: &[String]) -> Vec<&'static Objective> {
+        let reached: Vec<&str> = ticked
+            .iter()
+            .filter_map(|id| self.objective(id))
+            .flat_map(|o| std::iter::once(o.id).chain(o.implies.iter().copied()))
+            .collect();
+        self.objective_menu
+            .iter()
+            .filter(|o| reached.contains(&o.id))
+            .collect()
+    }
+
+    /// ⭐ **The objective multiplier (OM)** a set of ticked ids earns: the sum over
+    /// [`objectives_earned`](Self::objectives_earned).
+    pub fn objective_multiplier(&self, ticked: &[String]) -> u32 {
+        self.objectives_earned(ticked)
+            .iter()
+            .fold(0u32, |om, o| om.saturating_add(o.multiplier))
+    }
+
+    /// ⭐ **The sponsor's total for an objectives contest**: QSO points × (OM + 1), *"The +1
+    /// is for participating"* (Winter Field Day 2027 rules, p.7).
+    pub fn objective_total(&self, qso_points: u32, ticked: &[String]) -> u32 {
+        qso_points.saturating_mul(self.objective_multiplier(ticked).saturating_add(1))
+    }
+
+    /// ⭐ **The whole claimed total, the ONE formula every surface asks** — the snapshot, the
+    /// club line, the spectator board and the Cabrillo `CLAIMED-SCORE`.
+    ///
+    /// `scored` is [`Scoring::score`](crate::contest::Scoring::score)'s total (power tier and
+    /// multipliers applied) and `bonus` the claimed and earned bonus points. A ruleset with
+    /// an objective menu is the sponsor's objectives formula over the raw QSO points instead;
+    /// every other ruleset is `scored + bonus`, exactly as before the menu existed.
+    pub fn claimed_total(
+        &self,
+        qso_points: u32,
+        scored: u32,
+        bonus: u32,
+        objectives: &[String],
+    ) -> u32 {
+        if self.objective_menu.is_empty() {
+            scored + bonus
+        } else {
+            self.objective_total(qso_points, objectives) + bonus
+        }
     }
 
     /// ⭐ **Points this LOG earns from the contest's bonus stations** — once per
@@ -393,6 +558,29 @@ impl FdRuleset {
         )
     }
 
+    /// ⭐ **Which running of this contest a moment belongs to** — the year of the latest
+    /// running whose DAY has begun by `unix`. A running's day begins
+    /// [`RUNNING_DAY_LEAD_SECS`] before the contest starts, and lasts until the next
+    /// running's day begins: the setup before the contest, the contest itself, and the days
+    /// after it its logs are exported in.
+    ///
+    /// The Field Day journal restore reads it (`FieldDayLog::restore_journal`): a club's
+    /// rehearsal days before the contest belongs to the running before, so its contacts are
+    /// kept out of the contest's log.
+    pub fn running_of(&self, unix: u64) -> u16 {
+        let year = civil_year_of_unix(unix);
+        let day_begins = |y: u16| {
+            self.event_window(y)
+                .start_unix
+                .saturating_sub(RUNNING_DAY_LEAD_SECS)
+        };
+        if unix >= day_begins(year) {
+            year
+        } else {
+            year.saturating_sub(1)
+        }
+    }
+
     /// The currently-running occurrence if `now` is inside one, else the next
     /// one — what the banner/countdown DTO carries (the TS date math this
     /// replaces hardcoded a 24 h duration and dropped WFD's final six hours).
@@ -430,6 +618,24 @@ pub fn ruleset_by_id(event_id: &str, year: u16) -> Option<&'static FdRuleset> {
             .iter()
             .copied()
             .filter(|r| r.event == event_id)
+    };
+    mine()
+        .filter(|r| r.rules_year <= year)
+        .max_by_key(|r| r.rules_year)
+        .or_else(|| mine().max_by_key(|r| r.rules_year))
+}
+
+/// The active ruleset whose ADIF `CONTEST_ID` is `contest_id` (trimmed, in any case) — the one
+/// name a contest journal's record carries for its contest. Chosen by year as
+/// [`ruleset_by_id`] chooses; `None` for an id no ruleset in the loaded table declares.
+pub fn ruleset_by_contest_id(contest_id: &str, year: u16) -> Option<&'static FdRuleset> {
+    let id = contest_id.trim();
+    let mine = || {
+        table()
+            .rulesets
+            .iter()
+            .copied()
+            .filter(|r| r.contest_id.eq_ignore_ascii_case(id))
     };
     mine()
         .filter(|r| r.rules_year <= year)
@@ -878,6 +1084,13 @@ struct RulesetSpec {
     score_note_key: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+    /// The objectives this contest scores by — see [`FdRuleset::objective_menu`].
+    ///
+    /// ⚠️ `#[serde(default)]` for the `score_note_key` reason: absent is `[]`, "no objective
+    /// menu", which is what every ruleset written before this key means. A menu that IS
+    /// present is validated in full.
+    #[serde(default)]
+    objective_menu: Vec<ObjectiveSpec>,
     /// ⭐ **The sponsor's own Cabrillo template, where it asks for more than the
     /// structural one** — CQ WW RTTY's fixed exchange columns, its optional headers and
     /// its LOCATION spellings.
@@ -921,6 +1134,12 @@ struct CabrilloSpec {
     /// The sponsor's entry classes, the values `ENTRY-CLASS` may take, in its order.
     #[serde(default)]
     entry_classes: Vec<String>,
+    /// The sponsor's `X-` headers, header name → the SENT slot that fills it.
+    #[serde(default)]
+    x_headers: std::collections::BTreeMap<String, String>,
+    /// The `CATEGORY-POWER` values the sponsor takes, from HIGH, LOW and QRP.
+    #[serde(default)]
+    power_categories: Vec<String>,
     /// Sent QTH → `LOCATION` spelling, where the two lists differ.
     #[serde(default)]
     location: std::collections::BTreeMap<String, String>,
@@ -928,6 +1147,34 @@ struct CabrilloSpec {
     /// state, which is what every contest before this key writes.
     #[serde(default)]
     location_slot: String,
+    /// The `CATEGORY-TRANSMITTER` values the sponsor takes, in its order; `[]` = none is
+    /// written. This and the three keys under it are keys of their own, never names in
+    /// `headers` or `entry_headers`, so a build that predates them still loads this file (see
+    /// [`FdRuleset::cabrillo_transmitter_categories`]).
+    #[serde(default)]
+    transmitter_categories: Vec<String>,
+    /// The `CATEGORY-OVERLAY` values the sponsor scores, in its order; `[]` = none.
+    #[serde(default)]
+    overlay_categories: Vec<String>,
+    /// The `ADDRESS` headers the sponsor's template names, from
+    /// [`CABRILLO_ADDRESS_HEADERS`](crate::contest::CABRILLO_ADDRESS_HEADERS); `[]` = no address.
+    #[serde(default)]
+    address: Vec<String>,
+    /// The sponsor's template carries `SOAPBOX` lines.
+    #[serde(default)]
+    soapbox: bool,
+    /// The `CATEGORY-BAND` values an entry may declare, from [`CABRILLO_BAND_CATEGORIES`], in the
+    /// sponsor's order; `[]` = none is declared. This and the two keys under it are keys of their
+    /// own, so a build that predates them still loads this file.
+    #[serde(default)]
+    band_categories: Vec<String>,
+    /// The contest's own `CATEGORY-MODE`, from [`CABRILLO_MODE_CATEGORIES`]; `""` = none.
+    #[serde(default)]
+    mode_category: String,
+    /// The header lines the sponsor requires, from [`CABRILLO_REQUIRABLE`]; each one this ruleset
+    /// writes.
+    #[serde(default)]
+    required: Vec<String>,
 }
 
 /// One column of [`CabrilloSpec`].
@@ -967,6 +1214,62 @@ const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
 /// every installed Nexus would stop receiving rules updates. An unknown KEY is ignored (the
 /// additive rule in the module header), which is why these travel under one.
 const CABRILLO_ENTRY_HEADERS: &[&str] = &["CLUB", "ENTRY-CLASS", "OPERATORS", "QRP-COMPETITION"];
+
+/// Cabrillo 3.0's `CATEGORY-TRANSMITTER` values (WWROF, *"The category-transmitter is required
+/// for multi-operator entries and must be one of the following. ONE TWO LIMITED UNLIMITED
+/// SWL"*), the only ones `cabrillo.transmitter_categories` may name.
+const CABRILLO_TRANSMITTER_CATEGORIES: &[&str] = &["ONE", "TWO", "LIMITED", "UNLIMITED", "SWL"];
+
+/// Cabrillo 3.0's `CATEGORY-BAND` values (WWROF, *"The category-band must be one of the following.
+/// If you are entering an all band category, use ALL, otherwise select one of the individual bands
+/// shown"*, with `VHF-3-BAND` and `VHF-FM-ONLY` *"(ARRL VHF Contests only)"*), the only ones
+/// `cabrillo.band_categories` may name.
+const CABRILLO_BAND_CATEGORIES: &[&str] = &[
+    "ALL",
+    "160M",
+    "80M",
+    "40M",
+    "20M",
+    "15M",
+    "10M",
+    "6M",
+    "4M",
+    "2M",
+    "222",
+    "432",
+    "902",
+    "1.2G",
+    "2.3G",
+    "3.4G",
+    "5.7G",
+    "10G",
+    "24G",
+    "47G",
+    "75G",
+    "122G",
+    "134G",
+    "241G",
+    "Light",
+    "VHF-3-BAND",
+    "VHF-FM-ONLY",
+];
+
+/// Cabrillo 3.0's `CATEGORY-MODE` values (WWROF, *"The category-mode must be one of the following.
+/// CW DIGI FM RTTY SSB MIXED"*), the only ones `cabrillo.mode_category` may be.
+const CABRILLO_MODE_CATEGORIES: &[&str] = &["CW", "DIGI", "FM", "RTTY", "SSB", "MIXED"];
+
+/// ⭐ **The header lines a ruleset's `cabrillo.required` may name**: the CATEGORY lines a sponsor
+/// places an entry by, and the two a multi-operator entry adds. Each is one this build writes from
+/// the entry's own declarations, so the Contest screen can say which setting fills it; a line
+/// outside this list is refused rather than named in a sentence nothing could act on.
+pub const CABRILLO_REQUIRABLE: &[&str] = &[
+    "CATEGORY-ASSISTED",
+    "CATEGORY-BAND",
+    "CATEGORY-MODE",
+    "CATEGORY-POWER",
+    "CATEGORY-TRANSMITTER",
+    "OPERATORS",
+];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -1242,7 +1545,12 @@ struct DupeSpec {
     /// not make, which is what §8(c) is protecting against. The direction matters too:
     /// a rules file that omits the key can only ever REFUSE a dupe, never inflate a
     /// score by admitting one.
+    ///
+    /// ⚠️ **Read by builds before the operator's ruling of 2026-10-11 only.** This build
+    /// logs every contest's dupes whatever the file says (see `build`) and never reads it;
+    /// it stays declared here because the file still carries it for those builds.
     #[serde(default)]
+    #[allow(dead_code)]
     log_dupes: bool,
     /// ⭐ **A BIRD IS ITS OWN BAND** — ARRL Field Day 7.3.8: *"Satellite QSOs also count
     /// for regular QSO credit. Show them listed separately on the summary sheet as a
@@ -1347,6 +1655,21 @@ struct ScoringSpec {
     /// ⚠️ An ADDITION to schema 2 like `relation_points` before it, not a reshape: an
     /// already-shipped build ignores an unknown key and keeps receiving rules updates.
     band_points: Vec<BandPointsSpec>,
+    /// Whether a satellite contact counts — see [`FdRuleset::satellite_credit`].
+    ///
+    /// ⚠️ **The one defaulted key in this block, and the default is the rule every file
+    /// before it states.** This block refuses defaults so a file that forgot how an event
+    /// scores cannot load as though its author had decided something. Absent here is
+    /// `true`, credit, which is exactly what every ruleset written before the key scored
+    /// and what ARRL Field Day's rule 7.3.8 says; a file that forgot it scores as every
+    /// build before this one did. Only `false` changes anything, and only where it is
+    /// written.
+    #[serde(default = "satellite_credit_default")]
+    satellite_credit: bool,
+}
+
+fn satellite_credit_default() -> bool {
+    true
 }
 
 /// One row of [`ScoringSpec::band_points`].
@@ -1447,6 +1770,16 @@ struct BonusSpec {
     points: u32,
 }
 
+/// One [`Objective`] in the rules file. Every field is REQUIRED: a file that forgot
+/// `implies` must not load as though the sponsor had said the objective brings nothing.
+#[derive(Debug, serde::Deserialize)]
+struct ObjectiveSpec {
+    id: String,
+    label: String,
+    multiplier: u32,
+    implies: Vec<String>,
+}
+
 /// One [`BonusStation`] in the rules file.
 #[derive(Debug, serde::Deserialize)]
 struct BonusStationSpec {
@@ -1462,6 +1795,10 @@ struct AssistanceSpec {
     cluster_allowed: bool,
     #[serde(default)]
     assistance_note_key: String,
+    /// See [`AssistancePolicy::spots_rf_only`]. `#[serde(default)]`: absent is `false`, no
+    /// restriction, which is what every ruleset before the key means.
+    #[serde(default)]
+    spots_rf_only: bool,
 }
 
 fn stats_of(spec: &FileSpec) -> RulesStats {
@@ -2078,6 +2415,58 @@ mode class ({})",
                     ));
                 }
             }
+            // ⭐ The sponsor's X- headers. Each refusal is a line that would ship wrong: a
+            // name a Cabrillo robot does not read as an X- header, one that would pass for
+            // Nexus's own, or a slot some entrant does not send, which writes nothing.
+            for (name, slot) in &r.cabrillo.x_headers {
+                let shaped = name.len() > 2
+                    && name.starts_with("X-")
+                    && name[2..]
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
+                if !shaped {
+                    return Err(format!(
+                        "{tag}: cabrillo x-header {name:?} is not X- and uppercase letters, \
+                         digits or hyphens"
+                    ));
+                }
+                if name.starts_with("X-NEXUS-") {
+                    return Err(format!(
+                        "{tag}: cabrillo x-header {name:?} is one Nexus writes itself"
+                    ));
+                }
+                for role in &x.roles {
+                    if !role.sends.iter().any(|k| k == slot) {
+                        return Err(format!(
+                            "{tag}: cabrillo x-header {name:?} writes slot {slot:?}, which role \
+                             {:?} does not send",
+                            role.id
+                        ));
+                    }
+                }
+            }
+            // ⭐ The power categories a sponsor takes. CATEGORY-POWER in `headers` as well
+            // would let a build that reads only that list write any declared power.
+            let mut powers: Vec<&str> = Vec::new();
+            for p in &r.cabrillo.power_categories {
+                if !["HIGH", "LOW", "QRP"].contains(&p.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo power category {p:?} is not HIGH, LOW or QRP"
+                    ));
+                }
+                if powers.contains(&p.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo power category {p:?} is listed twice"
+                    ));
+                }
+                powers.push(p);
+            }
+            if !powers.is_empty() && r.cabrillo.headers.iter().any(|h| h == "CATEGORY-POWER") {
+                return Err(format!(
+                    "{tag}: cabrillo names power_categories and lists CATEGORY-POWER in headers \
+                     too (one says which powers are written)"
+                ));
+            }
             // ENTRY-CLASS and its classes come as a pair: a header with no class to write
             // ships blank, and classes nothing writes are a picker that changes nothing.
             let writes_class = r.cabrillo.entry_headers.iter().any(|h| h == "ENTRY-CLASS");
@@ -2137,6 +2526,114 @@ mode class ({})",
                         role.id
                     ));
                 }
+            }
+            // ⭐ The entry declarations a sponsor's template names. A value refused here is a
+            // line that would ship wrong: a transmitter class Cabrillo does not have, an overlay
+            // no robot could read as one word, an address part with no ADDRESS to belong to.
+            let mut transmitters: Vec<&str> = Vec::new();
+            for c in &r.cabrillo.transmitter_categories {
+                if !CABRILLO_TRANSMITTER_CATEGORIES.contains(&c.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo transmitter category {c:?} is not ONE, TWO, LIMITED, \
+                         UNLIMITED or SWL"
+                    ));
+                }
+                if transmitters.contains(&c.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo transmitter category {c:?} is listed twice"
+                    ));
+                }
+                transmitters.push(c);
+            }
+            let mut overlays: Vec<&str> = Vec::new();
+            for c in &r.cabrillo.overlay_categories {
+                let shaped = !c.is_empty()
+                    && c.len() <= 32
+                    && c.bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
+                if !shaped {
+                    return Err(format!(
+                        "{tag}: cabrillo overlay category {c:?} is not uppercase letters, \
+                         digits or hyphens"
+                    ));
+                }
+                if overlays.contains(&c.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo overlay category {c:?} is listed twice"
+                    ));
+                }
+                overlays.push(c);
+            }
+            let mut address: Vec<&str> = Vec::new();
+            for h in &r.cabrillo.address {
+                if !crate::contest::CABRILLO_ADDRESS_HEADERS.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo address header {h:?} is not one this build can write"
+                    ));
+                }
+                if address.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo address header {h:?} is listed twice"
+                    ));
+                }
+                address.push(h);
+            }
+            if !address.is_empty() && !address.contains(&"ADDRESS") {
+                return Err(format!(
+                    "{tag}: cabrillo names address parts but not ADDRESS, which they are \
+                     details of"
+                ));
+            }
+            // ⭐ The CATEGORY lines a sponsor places an entry by. Each refusal is a line that would
+            // ship wrong, or a Contest-screen sentence nothing could clear: a band or a mode no
+            // Cabrillo robot reads, a required line this build cannot name, or one this ruleset
+            // never writes.
+            let mut bands: Vec<&str> = Vec::new();
+            for b in &r.cabrillo.band_categories {
+                if !CABRILLO_BAND_CATEGORIES.contains(&b.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo band category {b:?} is not a Cabrillo CATEGORY-BAND value"
+                    ));
+                }
+                if bands.contains(&b.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo band category {b:?} is listed twice"
+                    ));
+                }
+                bands.push(b);
+            }
+            let mode = r.cabrillo.mode_category.as_str();
+            if !mode.is_empty() && !CABRILLO_MODE_CATEGORIES.contains(&mode) {
+                return Err(format!(
+                    "{tag}: cabrillo mode category {mode:?} is not CW, DIGI, FM, RTTY, SSB or MIXED"
+                ));
+            }
+            let listed = |list: &[String], h: &str| list.iter().any(|x| x == h);
+            let mut required: Vec<&str> = Vec::new();
+            for h in &r.cabrillo.required {
+                if !CABRILLO_REQUIRABLE.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo required line {h:?} is not one this build can name as \
+                         missing"
+                    ));
+                }
+                let written = match h.as_str() {
+                    "CATEGORY-BAND" => !bands.is_empty() || listed(&r.cabrillo.headers, h),
+                    "CATEGORY-MODE" => !mode.is_empty() || listed(&r.cabrillo.headers, h),
+                    "CATEGORY-POWER" => !powers.is_empty() || listed(&r.cabrillo.headers, h),
+                    "CATEGORY-TRANSMITTER" => !transmitters.is_empty(),
+                    "OPERATORS" => !transmitters.is_empty() || listed(&r.cabrillo.entry_headers, h),
+                    _ => listed(&r.cabrillo.headers, h),
+                };
+                if !written {
+                    return Err(format!(
+                        "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
+                    ));
+                }
+                if required.contains(&h.as_str()) {
+                    return Err(format!("{tag}: cabrillo requires {h:?} twice"));
+                }
+                required.push(h);
             }
         }
         // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
@@ -2221,6 +2718,52 @@ mode class ({})",
                 return Err(format!("{tag}: duplicate bonus id {:?}", b.id));
             }
             ids.push(&b.id);
+        }
+        // ⭐ THE OBJECTIVE MENU. Each refusal is an objective that would load and then score
+        // wrong: worth nothing, indistinguishable from another, bringing with it one that does
+        // not exist, or multiplying a score its contest does not multiply.
+        if !r.objective_menu.is_empty() {
+            if r.scoring.model != "objectives" {
+                return Err(format!(
+                    "{tag}: an objective menu needs scoring model \"objectives\", not {:?}",
+                    r.scoring.model
+                ));
+            }
+            if !r.bonuses.is_empty() {
+                return Err(format!(
+                    "{tag}: carries both a bonus menu and an objective menu (a contest scores \
+                     by one)"
+                ));
+            }
+        }
+        let mut objective_ids: Vec<&str> = Vec::new();
+        for o in &r.objective_menu {
+            if o.id.is_empty() {
+                return Err(format!("{tag}: empty objective id"));
+            }
+            if objective_ids.contains(&o.id.as_str()) {
+                return Err(format!("{tag}: duplicate objective id {:?}", o.id));
+            }
+            objective_ids.push(&o.id);
+            if o.label.trim().is_empty() {
+                return Err(format!("{tag}: objective {:?} has no label", o.id));
+            }
+            if o.multiplier == 0 {
+                return Err(format!("{tag}: objective {:?} has multiplier 0", o.id));
+            }
+        }
+        for o in &r.objective_menu {
+            for i in &o.implies {
+                if *i == o.id {
+                    return Err(format!("{tag}: objective {:?} implies itself", o.id));
+                }
+                if !objective_ids.contains(&i.as_str()) {
+                    return Err(format!(
+                        "{tag}: objective {:?} implies {i:?}, which is not on the menu",
+                        o.id
+                    ));
+                }
+            }
         }
         // ⭐ BONUS STATIONS. Each refusal is a bonus that would load and then never
         // fire — the silent 100 points an entrant's submitted score is short.
@@ -2335,6 +2878,20 @@ fn leak_opt_tag(t: String) -> Option<&'static str> {
     } else {
         Some(leak_str(t))
     }
+}
+
+fn leak_objectives(v: Vec<ObjectiveSpec>) -> &'static [Objective] {
+    Box::leak(
+        v.into_iter()
+            .map(|o| Objective {
+                id: leak_str(o.id),
+                label: leak_str(o.label),
+                multiplier: o.multiplier,
+                implies: leak_keys(o.implies),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
 }
 
 fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
@@ -2694,10 +3251,23 @@ fn build(spec: FileSpec) -> RulesTable {
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
                     ),
-                    log_dupes: r.dupe.log_dupes,
+                    // ⭐ EVERY CONTEST LOGS ITS DUPES, whatever the file says (the operator's
+                    // ruling, 2026-10-11: a dupe typed, answered or called is "logged marked as a
+                    // dupe for 0 points, as N1MM does"). No shipped sponsor's rules say to remove
+                    // dupes; one that did would be refused here, by its event id.
+                    //
+                    // ⚠️ Decided in code, not in the file, for two reasons. A downloaded file
+                    // replaces the seed whole, and one written before the ruling would turn
+                    // refusal back on. And builds before this one read the same published file
+                    // and refuse on its `false`: a `true` there would change their behaviour
+                    // with no code to go with it, starting with a Field Day club board that
+                    // counts every row it replays as unique. So the file keeps what older builds
+                    // need, and this build does not read it (`DupeSpec::log_dupes`).
+                    log_dupes: true,
                     satellite_is_a_band: r.dupe.satellite_is_a_band,
                     fm_satellite_once: r.dupe.fm_satellite_once,
                 },
+                satellite_credit: r.scoring.satellite_credit,
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
                     r.banned_modes
@@ -2707,10 +3277,12 @@ fn build(spec: FileSpec) -> RulesTable {
                         .into_boxed_slice(),
                 ),
                 objectives: leak_bonuses(r.objectives),
+                objective_menu: leak_objectives(r.objective_menu),
                 assistance: AssistancePolicy {
                     spotting_allowed: r.assistance.spotting_allowed,
                     cluster_allowed: r.assistance.cluster_allowed,
                     assistance_note_key: leak_str(r.assistance.assistance_note_key),
+                    spots_rf_only: r.assistance.spots_rf_only,
                 },
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),
@@ -2730,6 +3302,22 @@ fn build(spec: FileSpec) -> RulesTable {
                 cabrillo_headers: leak_keys(r.cabrillo.headers),
                 cabrillo_entry_headers: leak_keys(r.cabrillo.entry_headers),
                 entry_classes: leak_keys(r.cabrillo.entry_classes),
+                cabrillo_x_headers: Box::leak(
+                    r.cabrillo
+                        .x_headers
+                        .into_iter()
+                        .map(|(name, slot)| (leak_str(name), leak_str(slot)))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                cabrillo_power_categories: leak_keys(r.cabrillo.power_categories),
+                cabrillo_transmitter_categories: leak_keys(r.cabrillo.transmitter_categories),
+                cabrillo_overlay_categories: leak_keys(r.cabrillo.overlay_categories),
+                cabrillo_address_headers: leak_keys(r.cabrillo.address),
+                cabrillo_soapbox: r.cabrillo.soapbox,
+                cabrillo_band_categories: leak_keys(r.cabrillo.band_categories),
+                cabrillo_mode_category: leak_str(r.cabrillo.mode_category),
+                cabrillo_required: leak_keys(r.cabrillo.required),
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location
@@ -2827,6 +3415,40 @@ mod tests {
     use super::*;
     use crate::contest::ContestSession;
     use crate::fieldday::FieldDayLog;
+
+    /// ⭐ **A moment belongs to the running whose day has begun** — a day, to the second,
+    /// before the contest starts, and from then until the next running's day: the boundary
+    /// the contest journal restore keeps a rehearsal out by. A January contest's early
+    /// January belongs to the running of the year before.
+    #[test]
+    fn a_moment_belongs_to_the_running_whose_day_has_begun() {
+        let ilqp = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("shipped");
+        let start = ilqp.event_window(2026).start_unix;
+        assert_eq!(start, 1_792_342_800, "2026-10-18T17:00:00Z");
+        assert_eq!(
+            ilqp.running_of(start - 86_400),
+            2026,
+            "its day begins 24 h before"
+        );
+        assert_eq!(
+            ilqp.running_of(start - 86_400 - 1),
+            2025,
+            "a second before is the last running's"
+        );
+        assert_eq!(
+            ilqp.running_of(start + 30 * 86_400),
+            2026,
+            "and the weeks after are this one's"
+        );
+        let wfd = ruleset_by_id("wfd", CURRENT_RULES_YEAR).expect("shipped");
+        let start = wfd.event_window(2027).start_unix;
+        assert_eq!(
+            wfd.running_of(start - 86_400 - 3600),
+            2026,
+            "early January 2027 is 2026's"
+        );
+        assert_eq!(wfd.running_of(start), 2027);
+    }
 
     /// The RTTY parser accepted `valid_section(t) || t == "MX" || t == "DX"`
     /// (rtty/seq.rs at 82eb3112). Batch 0 replaces that inline test with a domain
@@ -3366,6 +3988,96 @@ mod tests {
         assert_eq!(unpicked(&short), vec!["ohqp"]);
     }
 
+    /// The settings a ruleset's SENT exchange reads, over every role: a `setting:` source by its
+    /// own name, a `derived:` one by the inputs [`SENT_SLOT_DERIVATIONS`] declares for it.
+    fn sent_settings(rs: &FdRuleset) -> std::collections::BTreeSet<&'static str> {
+        let mut out = std::collections::BTreeSet::new();
+        for role in rs.exchange.roles {
+            for key in role.sends {
+                let Some(field) = rs.exchange.fields.iter().find(|f| f.key == *key) else {
+                    continue;
+                };
+                match field.source.split_once(':') {
+                    Some(("setting", name)) => {
+                        out.insert(name);
+                    }
+                    Some(("derived", what)) => {
+                        if let Some((_, inputs)) =
+                            SENT_SLOT_DERIVATIONS.iter().find(|(id, _)| *id == what)
+                        {
+                            out.extend(inputs.iter().copied());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// The ids in `CONTESTS_SENDING_POWER`'s list, or `None` when fdEvent.ts does not declare it.
+    fn ts_contests_sending_power(ts: &str) -> Option<std::collections::BTreeSet<&str>> {
+        let declared = ts.split("export const CONTESTS_SENDING_POWER").nth(1)?;
+        let list = declared.split_once('=')?.1;
+        let body = list.split_once('[')?.1.split_once(']')?.0;
+        Some(
+            body.split(',')
+                .map(|id| id.trim().trim_matches('\''))
+                .filter(|id| !id.is_empty())
+                .collect(),
+        )
+    }
+
+    /// ⭐ **Settings shows Power sent for exactly the contests whose exchange sends it.**
+    ///
+    /// `CONTESTS_SENDING_POWER` in ui/src/fdEvent.ts is that list, written out, because the panel
+    /// needs the answer for a pick not yet saved and the rules data lives here. It is held to every
+    /// seeded ruleset both ways: a contest whose exchange starts sending `contest_power` without a
+    /// line there would ship a slot nobody can fill, and a line there for a contest that sends none
+    /// would show a box nothing reads. Empty today: no seeded contest sends the station's power.
+    #[test]
+    fn power_sent_is_offered_for_exactly_the_contests_whose_exchange_sends_it() {
+        let ts = include_str!("../../../ui/src/fdEvent.ts");
+        let mirrored = ts_contests_sending_power(ts)
+            .expect("CONTESTS_SENDING_POWER is declared in ui/src/fdEvent.ts");
+        let reading = |setting: &str| -> std::collections::BTreeSet<&'static str> {
+            table()
+                .rulesets
+                .iter()
+                .filter(|r| sent_settings(r).contains(setting))
+                .map(|r| r.event)
+                .collect()
+        };
+        assert_eq!(
+            mirrored,
+            reading("contest_power"),
+            "CONTESTS_SENDING_POWER in ui/src/fdEvent.ts"
+        );
+        // POSITIVE CONTROLS. The parser reads a list that names contests, and refuses a file
+        // without the declaration rather than reading it as an empty list…
+        assert_eq!(
+            ts_contests_sending_power(
+                "export const CONTESTS_SENDING_POWER: readonly string[] = ['arrldx', 'iaru']\n"
+            ),
+            Some(["arrldx", "iaru"].into_iter().collect())
+        );
+        assert_eq!(
+            ts_contests_sending_power("export const CONTESTS = []\n"),
+            None
+        );
+        // …and the reading of the seed finds the settings exchanges DO send, by value.
+        assert_eq!(
+            reading("contest_cq_zone"),
+            ["cqww_cw", "cqww_rtty", "cqww_ssb"].into_iter().collect()
+        );
+        assert_eq!(
+            reading("contest_check"),
+            ["arrlss_cw", "arrlss_ssb"].into_iter().collect()
+        );
+        assert!(reading("contest_qth_state").contains("ilqp"));
+        assert!(reading("contest_category_power").contains("arrlss_cw"));
+    }
+
     /// SAME GUARD for the RETIRED list: [`RETIRED_SECTIONS`] vs `RETIRED_SECTIONS`
     /// in ui/src/features/arrlSections.ts.
     ///
@@ -3450,6 +4162,81 @@ mod tests {
             ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).bonus("satellite"),
             None,
             "ARRL's satellite bonus leaked into Winter Field Day's menu"
+        );
+    }
+
+    /// `key: ['a', 'b']` from the same row shape — the quoted items of a one-line array.
+    fn ts_list_field<'a>(line: &'a str, key: &str) -> Option<Vec<&'a str>> {
+        let pat = format!("{key}: [");
+        let i = line.find(&pat)?;
+        let rest = &line[i + pat.len()..];
+        let body = &rest[..rest.find(']')?];
+        Some(
+            body.split(',')
+                .map(|item| item.trim().trim_matches('\''))
+                .filter(|item| !item.is_empty())
+                .collect(),
+        )
+    }
+
+    /// The first way the TS objectives table differs from `menu`, or `None` when it matches
+    /// row for row: id, label, multiplier and `implies`, in order.
+    fn objectives_mirror_drift(ts_src: &str, menu: &[Objective]) -> Option<String> {
+        let head = "export const WFD_OBJECTIVES";
+        let Some(start) = ts_src.find(head) else {
+            return Some(format!("no `{head}` in the TS file"));
+        };
+        let body = &ts_src[start..];
+        let Some(open) = body.find("= [") else {
+            return Some("the table has no initializer".into());
+        };
+        let body = &body[open + 3..];
+        let body = &body[..body.find("\n]").unwrap_or(body.len())];
+        let rows: Vec<(&str, &str, u32, Vec<&str>)> = body
+            .lines()
+            .filter_map(|l| {
+                Some((
+                    ts_str_field(l, "id")?,
+                    ts_str_field(l, "label")?,
+                    ts_num_field(l, "multiplier")?,
+                    ts_list_field(l, "implies")?,
+                ))
+            })
+            .collect();
+        if rows.len() != menu.len() {
+            return Some(format!(
+                "{} TS rows for {} objectives on the menu",
+                rows.len(),
+                menu.len()
+            ));
+        }
+        for (i, (row, o)) in rows.iter().zip(menu).enumerate() {
+            let want = (o.id, o.label, o.multiplier, o.implies.to_vec());
+            if *row != want {
+                return Some(format!("objective #{i}: TS {row:?}, seed {want:?}"));
+            }
+        }
+        None
+    }
+
+    /// ⭐ THE OBJECTIVES MIRROR: `ui/src/features/wfdObjectives.ts` against the seed's WFD
+    /// `objective_menu`. The checklist ticks ids from the TS table and the score multiplies
+    /// by the seed's, so an id, a multiplier or an `implies` that differs is a box that
+    /// scores something other than what it says. The labels are compared as well: both sides
+    /// carry the sponsor's worksheet names verbatim (2027 rules, p.11).
+    #[test]
+    fn the_typescript_objectives_mirror_matches_the_seed() {
+        let ts_src = include_str!("../../../ui/src/features/wfdObjectives.ts");
+        let menu = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).objective_menu;
+        assert_eq!(objectives_mirror_drift(ts_src, menu), None);
+        assert_eq!(menu.len(), 13, "the sponsor's thirteen, both sides");
+        // POSITIVE CONTROL: a copy with QRP's ×4 changed is drift, so the `None` above is the
+        // two tables agreeing and not a parser that read nothing.
+        let drifted = ts_src.replacen("multiplier: 4", "multiplier: 5", 1);
+        assert_ne!(drifted, ts_src, "the control changed nothing");
+        assert!(
+            objectives_mirror_drift(&drifted, menu).is_some(),
+            "a drifted multiplier went unnoticed"
         );
     }
 
@@ -3974,6 +4761,34 @@ mod tests {
             .contains("power_tiers"));
     }
 
+    /// ⭐ **Every contest logs its dupes, whatever the rules file says** (the operator's ruling,
+    /// 2026-10-11). A downloaded file replaces the seed whole, and a file written before the
+    /// ruling says `false`, or nothing, for the contests that used to refuse a dupe: neither may
+    /// turn refusal back on.
+    #[test]
+    fn a_rules_file_cannot_turn_dupe_refusal_back_on() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        for r in v["rulesets"].as_array_mut().unwrap() {
+            r["dupe"]["log_dupes"] = false.into();
+        }
+        v["rulesets"][0]["dupe"]
+            .as_object_mut()
+            .unwrap()
+            .remove("log_dupes");
+        let table = build(parse_spec(&v.to_string()).expect("the file loads"));
+        let refusing: Vec<&str> = table
+            .rulesets
+            .iter()
+            .filter(|r| !r.dupe_rule.log_dupes)
+            .map(|r| r.event)
+            .collect();
+        assert_eq!(refusing, Vec::<&str>::new(), "these refuse a dupe");
+        assert_eq!(
+            table.rulesets.len(),
+            parse_spec(SEED).unwrap().rulesets.len()
+        );
+    }
+
     /// The entry headers never share a name with the list an older build checks. A header
     /// in `cabrillo.headers` that a build cannot write makes that build refuse the whole
     /// rules file, so anything after 1.17.0 travels under `cabrillo.entry_headers`, a key the
@@ -3994,6 +4809,259 @@ mod tests {
             .cabrillo_headers
             .iter()
             .all(|h| !CABRILLO_ENTRY_HEADERS.contains(h)));
+    }
+
+    /// ⭐ The entry declarations ride keys of their own and never a name in either list an
+    /// installed build checks: 1.17.0 refuses the whole rules file over a `headers` name it
+    /// cannot write, every build since over an `entry_headers` one, and every build ignores a
+    /// key it does not know. So no declaration header is in either list, and a file naming one
+    /// there is refused here too, by name — the mistake that would stop every installed Nexus
+    /// receiving rules updates never gets as far as a published file.
+    #[test]
+    fn the_declarations_never_reach_a_list_an_installed_build_checks() {
+        let names = ["CATEGORY-TRANSMITTER", "CATEGORY-OVERLAY", "SOAPBOX"]
+            .into_iter()
+            .chain(crate::contest::CABRILLO_ADDRESS_HEADERS.iter().copied());
+        for h in names {
+            assert!(!CABRILLO_OPTIONAL_HEADERS.contains(&h), "{h} in headers");
+            assert!(!CABRILLO_ENTRY_HEADERS.contains(&h), "{h} in entry_headers");
+            for list in ["headers", "entry_headers"] {
+                let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+                v["rulesets"][0]["cabrillo"] = serde_json::json!({ list: [h] });
+                let e = parse_spec(&v.to_string()).expect_err("refused");
+                assert!(
+                    e.contains(&format!("{h:?} is not one this build can write")),
+                    "{e}"
+                );
+            }
+        }
+        // POSITIVE CONTROL: the same names on their own keys load, and the seed carries them.
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["cabrillo"] = serde_json::json!({
+            "transmitter_categories": ["ONE"],
+            "overlay_categories": ["ROOKIE"],
+            "address": crate::contest::CABRILLO_ADDRESS_HEADERS,
+            "soapbox": true,
+        });
+        let table = build(parse_spec(&v.to_string()).expect("the keys load"));
+        assert_eq!(table.rulesets[0].cabrillo_transmitter_categories, ["ONE"]);
+        assert!(table.rulesets[0].cabrillo_soapbox);
+    }
+
+    /// ⭐ **Every contest's declarations, as its sponsor names them** — the table the rules
+    /// file's `cabrillo_declarations` note quotes, by value, so a seed edit that drops or adds
+    /// one is a red here and a sentence in its commit.
+    #[test]
+    fn every_contest_declares_what_its_sponsor_names_and_nothing_else() {
+        type Row = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+            &'static [&'static str],
+            bool,
+        );
+        const ALL5: &[&str] = crate::contest::CABRILLO_ADDRESS_HEADERS;
+        const CQ: &[&str] = &["ONE", "TWO", "UNLIMITED"];
+        const VHF: &[&str] = &["ONE", "LIMITED", "UNLIMITED"];
+        const NONE: &[&str] = &[];
+        let table: [Row; 18] = [
+            ("arrlfd", NONE, NONE, NONE, false),
+            ("wfd", NONE, NONE, NONE, false),
+            ("tnqp", NONE, NONE, &["ADDRESS"], false),
+            ("ohqp", NONE, NONE, NONE, false),
+            ("cqp", NONE, NONE, NONE, true),
+            ("txqp", NONE, NONE, NONE, false),
+            (
+                "ilqp",
+                NONE,
+                NONE,
+                &[
+                    "ADDRESS",
+                    "ADDRESS-CITY",
+                    "ADDRESS-STATE-PROVINCE",
+                    "ADDRESS-POSTALCODE",
+                ],
+                true,
+            ),
+            (
+                "nyqp",
+                &["ONE", "UNLIMITED"],
+                &["ROOKIE", "YOUTH12", "YOUTH17", "YL"],
+                ALL5,
+                false,
+            ),
+            ("arrlss_cw", &["ONE"], NONE, &["ADDRESS"], false),
+            ("arrlss_ssb", &["ONE"], NONE, &["ADDRESS"], false),
+            ("cqww_cw", CQ, &["CLASSIC", "ROOKIE", "YOUTH"], ALL5, true),
+            ("cqww_ssb", CQ, &["CLASSIC", "ROOKIE", "YOUTH"], ALL5, true),
+            ("cqww_rtty", CQ, &["CLASSIC", "ROOKIE"], ALL5, true),
+            (
+                "cqwpx_cw",
+                CQ,
+                &["CLASSIC", "ROOKIE", "TB-WIRES", "YOUTH"],
+                ALL5,
+                true,
+            ),
+            (
+                "cqwpx_ssb",
+                CQ,
+                &["CLASSIC", "ROOKIE", "TB-WIRES", "YOUTH"],
+                ALL5,
+                true,
+            ),
+            ("arrlvhf_jan", VHF, NONE, &["ADDRESS"], true),
+            ("arrlvhf_jun", VHF, NONE, &["ADDRESS"], true),
+            ("arrlvhf_sep", VHF, NONE, &["ADDRESS"], true),
+        ];
+        let shipped = build(parse_spec(SEED).expect("the seed parses"));
+        assert_eq!(
+            shipped.rulesets.len(),
+            table.len(),
+            "a row for every shipped contest"
+        );
+        for (id, transmitters, overlays, address, soapbox) in table {
+            let rs = ruleset_by_id(id, CURRENT_RULES_YEAR).expect("shipped");
+            assert_eq!(rs.cabrillo_transmitter_categories, transmitters, "{id}");
+            assert_eq!(rs.cabrillo_overlay_categories, overlays, "{id}");
+            assert_eq!(rs.cabrillo_address_headers, address, "{id}");
+            assert_eq!(rs.cabrillo_soapbox, soapbox, "{id}");
+        }
+    }
+
+    /// ⭐ **The CQ contests' CATEGORY lines, as their sponsors name them, and no other contest's** —
+    /// the table the rules file's `cabrillo_category_lines` note quotes, by value: the headers every
+    /// installed build writes from a declaration, CLUB, the bands an entry may declare, the
+    /// contest's own mode and the lines the Contest screen names when one is left out. Every other
+    /// contest keeps the lists it had, so its file cannot move.
+    #[test]
+    fn the_cq_contests_declare_their_category_lines_and_no_other_contest_does() {
+        const BANDS: &[&str] = &["ALL", "160M", "80M", "40M", "20M", "15M", "10M"];
+        const REQUIRED: &[&str] = &[
+            "CATEGORY-ASSISTED",
+            "CATEGORY-BAND",
+            "CATEGORY-MODE",
+            "CATEGORY-POWER",
+            "CATEGORY-TRANSMITTER",
+            "OPERATORS",
+        ];
+        const WRITTEN: &[&str] = &["CATEGORY-ASSISTED", "CATEGORY-POWER", "EMAIL", "NAME"];
+        let shipped = build(parse_spec(SEED).expect("the seed parses"));
+        let mut cq = 0;
+        for rs in shipped.rulesets {
+            let got = (
+                rs.cabrillo_band_categories,
+                rs.cabrillo_mode_category,
+                rs.cabrillo_required,
+            );
+            let mode = match rs.event {
+                "cqww_cw" | "cqwpx_cw" => "CW",
+                "cqww_ssb" | "cqwpx_ssb" => "SSB",
+                "cqww_rtty" => {
+                    let rtty: &[&str] = &["ALL", "80M", "40M", "20M", "15M", "10M"];
+                    assert_eq!(got, (rtty, "RTTY", REQUIRED), "cqww_rtty");
+                    // Its headers stay the ones it has written since it shipped (its band and
+                    // mode read off the log in a build that knows neither key above).
+                    assert_eq!(
+                        rs.cabrillo_headers,
+                        [
+                            "CATEGORY-ASSISTED",
+                            "CATEGORY-BAND",
+                            "CATEGORY-MODE",
+                            "CATEGORY-POWER",
+                            "CLAIMED-SCORE",
+                            "EMAIL",
+                            "NAME"
+                        ]
+                    );
+                    assert_eq!(rs.cabrillo_entry_headers, ["CLUB"]);
+                    cq += 1;
+                    continue;
+                }
+                _ => {
+                    let none: &[&str] = &[];
+                    assert_eq!(got, (none, "", none), "{}", rs.event);
+                    continue;
+                }
+            };
+            assert_eq!(got, (BANDS, mode, REQUIRED), "{}", rs.event);
+            assert_eq!(rs.cabrillo_headers, WRITTEN, "{}", rs.event);
+            assert_eq!(rs.cabrillo_entry_headers, ["CLUB"], "{}", rs.event);
+            cq += 1;
+        }
+        assert_eq!(cq, 5, "CQ WW CW, SSB and RTTY, CQ WPX CW and SSB");
+        // The names in `headers` are ones every installed build can write: 1.14.0 (the oldest the
+        // publish workflow checks) and 1.17.0 list exactly these eight.
+        for rs in shipped.rulesets {
+            for h in rs.cabrillo_headers {
+                assert!(
+                    [
+                        "CATEGORY-ASSISTED",
+                        "CATEGORY-BAND",
+                        "CATEGORY-MODE",
+                        "CATEGORY-POWER",
+                        "CLAIMED-SCORE",
+                        "EMAIL",
+                        "IL-COUNTY",
+                        "NAME"
+                    ]
+                    .contains(h),
+                    "{}: {h}",
+                    rs.event
+                );
+            }
+        }
+    }
+
+    /// ⭐ The three keys refuse what would ship wrong — a band or a mode Cabrillo has no value for, a
+    /// band twice, a required line this build cannot name or this ruleset never writes, one twice —
+    /// each by name. CONTROL: the same keys with values the sponsor uses load.
+    #[test]
+    fn the_category_line_keys_refuse_what_would_ship_wrong() {
+        let with = |cabrillo: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["cabrillo"] = cabrillo;
+            parse_spec(&v.to_string())
+        };
+        let refused = |cabrillo: serde_json::Value| with(cabrillo).expect_err("refused");
+        assert!(with(serde_json::json!({
+            "headers": ["CATEGORY-ASSISTED", "CATEGORY-POWER"],
+            "transmitter_categories": ["ONE"],
+            "band_categories": ["ALL", "20M", "VHF-3-BAND", "Light"],
+            "mode_category": "SSB",
+            "required": ["CATEGORY-ASSISTED", "CATEGORY-BAND", "CATEGORY-MODE", "CATEGORY-POWER",
+                         "CATEGORY-TRANSMITTER", "OPERATORS"],
+        }))
+        .is_ok());
+        assert!(refused(serde_json::json!({"band_categories": ["20m"]}))
+            .contains("cabrillo band category \"20m\" is not a Cabrillo CATEGORY-BAND value"));
+        assert!(
+            refused(serde_json::json!({"band_categories": ["20M", "20M"]}))
+                .contains("cabrillo band category \"20M\" is listed twice")
+        );
+        assert!(refused(serde_json::json!({"mode_category": "PH"}))
+            .contains("cabrillo mode category \"PH\" is not CW, DIGI, FM, RTTY, SSB or MIXED"));
+        assert!(
+            refused(serde_json::json!({"soapbox": true, "required": ["SOAPBOX"]})).contains(
+                "cabrillo required line \"SOAPBOX\" is not one this build can name as missing"
+            )
+        );
+        assert!(refused(serde_json::json!({"required": ["CATEGORY-BAND"]}))
+            .contains("cabrillo requires \"CATEGORY-BAND\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({"required": ["OPERATORS"]}))
+            .contains("cabrillo requires \"OPERATORS\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({
+            "headers": ["CATEGORY-POWER"],
+            "required": ["CATEGORY-POWER", "CATEGORY-POWER"]
+        }))
+        .contains("cabrillo requires \"CATEGORY-POWER\" twice"));
+        // A band, a mode or a power from the log's own header names counts as written.
+        assert!(with(serde_json::json!({
+            "headers": ["CATEGORY-BAND", "CATEGORY-MODE"],
+            "power_categories": ["QRP", "LOW"],
+            "entry_headers": ["OPERATORS"],
+            "required": ["CATEGORY-BAND", "CATEGORY-MODE", "CATEGORY-POWER", "OPERATORS"]
+        }))
+        .is_ok());
     }
 
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
@@ -5162,6 +6230,36 @@ mod tests {
             assert_eq!(
                 x.cabrillo_location_slot, y.cabrillo_location_slot,
                 "{}: location slot",
+                x.event
+            );
+            assert_eq!(
+                (
+                    x.cabrillo_transmitter_categories,
+                    x.cabrillo_overlay_categories,
+                    x.cabrillo_address_headers,
+                    x.cabrillo_soapbox
+                ),
+                (
+                    y.cabrillo_transmitter_categories,
+                    y.cabrillo_overlay_categories,
+                    y.cabrillo_address_headers,
+                    y.cabrillo_soapbox
+                ),
+                "{}: declarations",
+                x.event
+            );
+            assert_eq!(
+                (
+                    x.cabrillo_band_categories,
+                    x.cabrillo_mode_category,
+                    x.cabrillo_required
+                ),
+                (
+                    y.cabrillo_band_categories,
+                    y.cabrillo_mode_category,
+                    y.cabrillo_required
+                ),
+                "{}: category lines",
                 x.event
             );
             assert_eq!(x.bands, y.bands, "{}: bands", x.event);

@@ -14,7 +14,7 @@ import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 // Nothing that stops or keys a transmission is in this file: Operate's stop line is Stop TX
 // and Tune in `OperateQsoStrip.tsx` (both deferred, see that file's header) plus the Esc
 // binding below, which is a keyboard handler with no string of its own.
-import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, createRef, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { engagedInQso } from '../alerts'
@@ -50,7 +50,7 @@ import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, s
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
-import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
@@ -65,16 +65,17 @@ import { FT_PALETTE_SCOPE } from '../waterfallPalette'
 import { PaneSeam } from './PaneSeam'
 import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
-import { DecodeHistory } from '../decodeHistory'
+import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
-import { OperateRoster } from './OperateRoster'
+import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, usePaneDrag, type PaneDropTarget } from './panes/PaneDrag'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { paneRoleStyle } from './panes/CockpitPaneFrame'
 import {
@@ -91,7 +92,7 @@ import {
   type PanelLayoutApi,
   type PanelState,
 } from '../features/panelState'
-import { columnsOf, placedColumns, stockColumn, type PaneColumn } from '../features/panelPlace'
+import { columnsOf, placedColumns, stockColumn, type PaneColumn, type PaneDrop } from '../features/panelPlace'
 import { panelHost, type PanelHostSpec } from '../features/panelHost'
 import {
   CLASSIC_FLOOR,
@@ -521,6 +522,12 @@ export function OperateCockpit({
   // mid-session (operator report 2026-07-21).
   const bandHistRef = useRef(new DecodeHistory())
   const rxHistRef = useRef(new DecodeHistory())
+  // Band Activity's and the Call Roster's sorts live here too, for the same reason: the region remounts
+  // its panes when it switches between today's tree and the arranged columns (⊞ Arrange's first move,
+  // and the dashboard rail's boxes folding in below `lg` and out again), and a sort held in the pane
+  // went back to Time or Need each time.
+  const [bandSort, setBandSort] = useState<DecodeSort>('time')
+  const [rosterSort, setRosterSort] = useState<RosterSort>(DEFAULT_ROSTER_SORT)
   // The RF scope pane's FT overlay: the newest slot's decodes and the RX/TX offsets, at dial ± offset.
   const rfFt = useMemo(
     () => ftOverlay(snap.recentDecodes ?? [], snap.radio.rxOffsetHz, snap.radio.txOffsetHz, snap.radio.sideband),
@@ -759,8 +766,8 @@ export function OperateCockpit({
   // the update: OperateCockpit.arrange.test.tsx holds it to a golden of the tree as it was. Once arranged,
   // each column is a keyed stack of role-typed frames (the arranged branch; cockpit-panes.css "FT'S
   // ARRANGED COLUMNS"), and a pane moved up or down in its column is moved, not remounted. The first
-  // arranging act remounts the region's panes once, which loses a sort; the decode windows' history is
-  // this cockpit's, so their rows come back.
+  // arranging act remounts the region's panes once; the decode windows' history and the two sorts are
+  // this cockpit's (and the Stations list's chip and search are App's), so they come back as they were.
   const arrangeSpec = OPERATE_ARRANGE[layoutMode]
   const place = placeOf(OPERATE_PANELS, panels.layout, layoutMode)
   // A box arranges only a window that lends boxes: in the pop-out and on the hosted page a box in the record,
@@ -845,10 +852,10 @@ export function OperateCockpit({
 
   // Waterfall pop-out: 'popped' unmounts the docked copy so the decode lists + roster
   // reclaim the space (that's the whole point of popping it out) and leaves the re-dock
-  // bar behind; 'removed' renders nothing at all. The torn-off window still signals its
-  // close through the app-global legacy flag (localStorage is shared across Tauri
-  // windows), so closing it re-docks automatically — but only a POPPED waterfall
-  // follows, or that signal would resurrect one the operator deleted.
+  // bar behind; 'removed' renders nothing at all. The torn-off window clears the
+  // app-global legacy flag in its `beforeunload` (localStorage is shared across Tauri
+  // windows), and closing it re-docks automatically (below) — but only a POPPED waterfall
+  // follows, or the close would resurrect one the operator deleted.
   const wfStateRef = useRef(wfState)
   wfStateRef.current = wfState
   useEffect(() => {
@@ -859,14 +866,43 @@ export function OperateCockpit({
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [setPanelState])
+  // A close does not run that `beforeunload`: on Windows wry closes the webview with WebView2's
+  // `Close`, which "is synchronous and won't trigger the beforeunload event", and on Linux the
+  // real app's close left the flag set too (2026-10-12). So the close is heard as Tauri's own
+  // `tauri://destroyed` for that window, which arrives however it went, as
+  // `useContestScreenWindow` hears its window. `panel-waterfall` is `open_panel_window`'s label
+  // for the slug (`chains::panel_label`).
+  useEffect(() => {
+    const listen = window.__TAURI__?.event?.listen
+    if (!listen) return
+    let alive = true
+    let unlisten: (() => void) | undefined
+    listen(
+      'tauri://destroyed',
+      () => {
+        if (wfStateRef.current === 'popped') setPanelState('waterfall', 'docked')
+      },
+      { target: { kind: 'WebviewWindow', label: 'panel-waterfall' } },
+    )
+      .then((un) => {
+        if (alive) unlisten = un
+        else un()
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+      unlisten?.()
+    }
+  }, [setPanelState])
   const popOutWaterfall = () => {
     setPanelState('waterfall', 'popped')
     void openPanelWindow('waterfall')
   }
   // #263: re-dock also closes the torn-off window. It used to flip the state only, so the
   // strip came back in the cockpit while the pop-out stayed up beside it — two waterfalls.
-  // The pop-out's own unmount then clears the detached flag; the storage listener above sees
-  // a waterfall that is already docked and does nothing.
+  // The window's close then reaches the listeners above (its flag where its webview fires
+  // `beforeunload`, and Tauri's destroyed event), which see a waterfall that is already docked
+  // and do nothing.
   const redockWaterfall = () => {
     setPanelState('waterfall', 'docked')
     void closePanelWindow('waterfall').catch(() => {})
@@ -977,12 +1013,37 @@ export function OperateCockpit({
     }
   }, [snap.qso?.dxcall, snap.qso?.dxgrid])
 
+  // ⭐ WHILE A CONTEST RUNS THAT WSJT-X HAS AN ACTIVITY FOR, THE TX6 ROW IS THE CONTEST'S CQ.
+  // WSJT-X's Tx6 is its activity's CQ once one is set (`genCQMsg`): `CQ FD`, `CQ TEST`. The engine
+  // names the CQ the contest's Running calls (`snap.contestCq`, present only while such a contest
+  // runs, for a standard call); the row shows it, read-only, and on this computer Tx 6 calls
+  // the contest's Running exactly as the strip's Call CQ does, so what goes on the air is what the
+  // row shows. The operator's own Tx6 text stays underneath and is back when the contest ends. The
+  // Remote page's row keeps its own CQ and `startCq`, as its Call CQ does.
+  const contestCq = control ? (snap.contestCq ?? null) : null
+  // …and where WSJT-X has no activity for the running contest, its Tx6 is the operator's own,
+  // directed or plain, as in its normal mode: the row stays editable, and on this computer Tx 6 and
+  // Call CQ hand the direction typed there to the contest's Running (`snap.contestCqTyped`).
+  const contestCqTyped = control && snap.contestCqTyped === true
+
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
   // follows qso.txNow when it matches a row, else the operator's local pick.
-  const rowTexts = stdMessageList({ ...msgs, tx5, tx6 })
+  const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
   const txNow = snap.qso?.txNow ?? null
   const liveNext = txNow ? rowTexts.indexOf(txNow) : -1
   const nextIndex = liveNext >= 0 ? liveNext : localNext
+
+  /** #254's refusal of a Tx6 text that is not a CQ in WSJT-X's grammar, naming the form that
+   *  would work when `cqSuggestionFromText` can derive one from the operator's own words. */
+  const refuseMalformedCq = () => {
+    const fix = cqSuggestionFromText(tx6, snap.mycall)
+    pushToast(
+      fix
+        ? t('operate.tx.cq.malformed.try', { fix })
+        : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
+      'error',
+    )
+  }
 
   /** Fire Tx row n (1-based).
    * Tx6 = Call CQ — parse the editable Tx6 text for a directed token and call
@@ -991,6 +1052,13 @@ export function OperateCockpit({
   const doTx = (n: number) => {
     if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
+      // In a contest: the contest's Running, as the strip's Call CQ asks for it — the station
+      // refuses it with its reason when the contest cannot start, and the reason is shown.
+      if (contestCq) {
+        setLocalNext(5)
+        void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
       const dir = cqDirFromText(tx6, snap.mycall)
       // ⭐ #254 — A MALFORMED CQ IS REFUSED, NOT REPLACED.
       //
@@ -1004,13 +1072,12 @@ export function OperateCockpit({
       // and nothing is auto-rewritten — we refuse before anything keys and name the form that
       // would work when `cqSuggestionFromText` can derive one from the operator's OWN words.
       if (dir === undefined) {
-        const fix = cqSuggestionFromText(tx6, snap.mycall)
-        pushToast(
-          fix
-            ? t('operate.tx.cq.malformed.try', { fix })
-            : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
-          'error',
-        )
+        refuseMalformedCq()
+        return
+      }
+      if (contestCqTyped) {
+        setLocalNext(5)
+        void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
         return
       }
       if (control) setLocalNext(5)
@@ -1178,8 +1245,8 @@ export function OperateCockpit({
     : null
   // In the arranged columns the card keeps its size and the column scrolls (`.cockpit-recall-kept`).
   const recallCard = shownRecallCall && shown('recall') ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
-    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
   ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
@@ -1189,6 +1256,11 @@ export function OperateCockpit({
     if (mode === 'qso-monitor') {
       setDismissedCall(recallCallRef.current)
       onClearSelection?.()
+      // This computer's S&P asks for it by its own verb; the Remote page's goes on as before.
+      if (control) {
+        void startSearchAndPounce().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
     }
     if (expectedQso === undefined) onSetMode(mode)
     else onSetMode(mode, expectedQso)
@@ -1221,7 +1293,10 @@ export function OperateCockpit({
           <OperateDecodes
             {...closeProps('bandActivity')}
             paneTitle={labels.bandActivity}
+            grip="bandActivity"
             history={bandHistRef.current}
+            sort={bandSort}
+            onSort={setBandSort}
             decodes={snap.recentDecodes}
             slot={snap.radio.slot}
             rxOffsetHz={snap.radio.rxOffsetHz}
@@ -1244,6 +1319,7 @@ export function OperateCockpit({
           <OperateDecodes
             {...closeProps('rxfreq')}
             paneTitle={labels.rxfreq}
+            grip="rxfreq"
             history={rxHistRef.current}
             decodes={snap.recentDecodes}
             slot={snap.radio.slot}
@@ -1270,6 +1346,7 @@ export function OperateCockpit({
           <OperateRoster
             {...closeProps('callRoster')}
             paneTitle={labels.callRoster}
+            grip="callRoster"
             stations={snap.stations}
             myGrid={snap.mygrid}
             currentSlot={snap.radio.slot}
@@ -1284,6 +1361,8 @@ export function OperateCockpit({
             ignoredCalls={ignored}
             onToggleIgnore={handleToggleIgnore}
             onSpot={(call) => openSpot(call)}
+            sort={rosterSort}
+            onSort={setRosterSort}
           />,
         )
       case 'stations':
@@ -1294,6 +1373,7 @@ export function OperateCockpit({
             <TxPanel
               {...closeProps('txmsgs')}
               paneTitle={labels.txmsgs}
+              grip="txmsgs"
               compact
               dxCall={dxCall}
               dxGrid={dxGrid}
@@ -1304,6 +1384,7 @@ export function OperateCockpit({
               onTx5={handleTx5}
               tx6={tx6}
               onTx6={handleTx6}
+              tx6Contest={contestCq}
               nextIndex={nextIndex}
               onTx={doTx}
               onGenerate={handleGenerate}
@@ -1393,6 +1474,32 @@ export function OperateCockpit({
           b: { name: t('panels.arrange.column.b'), addAria: t('panels.box.add.b.aria') },
           log: { name: t('operate.arrange.rail'), addAria: t('operate.arrange.rail.add.aria') },
         }
+  // ⊞ ARRANGE BY DRAG (2026-10-08, the operator's "drag with the mouse"): a pane is picked up by its title and
+  // dropped onto a column or between two panes, in the region itself and in ⊞ Arrange's list; the drop is the
+  // arrows' moves with the arrows' own arguments, so it stores the record they would (panes/PaneDrag). The
+  // places are this layout's columns in their order on screen, each the element the dividers measure in
+  // either branch; a column with nothing on screen gets a zone where it would stand. The QSO strip with Stop
+  // TX is no place and holds no grip, so a release over it cancels.
+  const columnEls: Record<PaneColumn, RefObject<HTMLElement | null>> =
+    layoutMode === 'roster' ? { a: rosterMainRef, b: qsocolRef, log: rosterSideRef } : { a: decodesRef, b: qsocolRef, log: classicSideRef }
+  const dropPane = panels.dropPane
+    ? (id: OperatePanelId, drop: PaneDrop<OperatePanelId>) => panels.dropPane?.(id, drop, arrangeListed, false, { layout: layoutMode, order: colOrder })
+    : undefined
+  const cockpitRef = useRef<HTMLElement>(null)
+  const paneDrag = usePaneDrag<OperatePanelId>({
+    root: cockpitRef,
+    region: lowerRef,
+    enabled: dropPane != null,
+    spec: arrangeSpec,
+    arrangement: { place },
+    shown: arrangeListed,
+    sideShows: false,
+    order: colOrder,
+    targets: () => colOrder.map((col): PaneDropTarget => ({ el: columnEls[col].current, areas: [col] })),
+    labels,
+    names: Object.fromEntries(colOrder.map((col) => [col, columnNames[col].name])),
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
   const arrangeMenu = panels.movePane ? (
     <ArrangePanes
       spec={arrangeSpec}
@@ -1400,6 +1507,7 @@ export function OperateCockpit({
       shown={arrangeListed}
       labels={labels}
       onMove={(id, move) => panels.movePane?.(id, move, arrangeListed, false, { layout: layoutMode, order: colOrder })}
+      onDrop={dropPane}
       // "+ Add a box" only where the window lends them (never the hosted Remote page or the pop-out).
       onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, layoutMode, boxes.rail?.shows) : undefined}
       boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -1409,7 +1517,7 @@ export function OperateCockpit({
   ) : null
 
   return (
-    <main className="layout single operate-cockpit">
+    <main className="layout single operate-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
         snap={snap}
         onSnap={onSnap}
@@ -1841,6 +1949,7 @@ export function OperateCockpit({
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
           qso={snap.qso}
+          contestRunning={snap.fieldDay?.running}
           radio={snap.radio}
           rxOnly={isRxOnly(tier)}
           beacon={isBeacon(tier)}
@@ -1861,7 +1970,26 @@ export function OperateCockpit({
           onCallCq={() => {
             // The labelled "Call CQ" is always a PLAIN run — it also clears a
             // sticky directed token so a leftover "CQ DX" can't surprise.
-            void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
+            // This computer's strip asks for it by its own verb: the contest's Running while a
+            // contest runs, which the station refuses with its reason when the contest cannot
+            // start. A control that keys must not fail silently, so the reason is shown. The
+            // Remote page's is `startCq`, as before.
+            //
+            // Where WSJT-X has no activity for the running contest, Call CQ calls the CQ typed in
+            // Tx6, as WSJT-X's CQ is its Tx6 then: the direction rides along, and a Tx6 that is no
+            // CQ is refused as Tx 6 refuses it.
+            if (control) {
+              let dir: string | null = null
+              if (contestCqTyped) {
+                const typed = cqDirFromText(tx6, snap.mycall)
+                if (typed === undefined) {
+                  refuseMalformedCq()
+                  return
+                }
+                dir = typed
+              }
+              void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+            } else void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
           }}
           onResend={onResend}
           onFreetext={onFreetext}
@@ -1929,6 +2057,7 @@ export function OperateCockpit({
                   <OperateRoster
                     {...closeProps('callRoster')}
                     paneTitle={labels.callRoster}
+                    grip="callRoster"
                     stations={snap.stations}
                     myGrid={snap.mygrid}
                     currentSlot={snap.radio.slot}
@@ -1953,6 +2082,8 @@ export function OperateCockpit({
                     // cluster deserves a glance before it goes out); the dialog seeds the dial + a mode
                     // comment itself.
                     onSpot={(call) => openSpot(call)}
+                    sort={rosterSort}
+                    onSort={setRosterSort}
                   />
                 </div>
               )}
@@ -1967,7 +2098,10 @@ export function OperateCockpit({
                       <OperateDecodes
                         {...closeProps('bandActivity')}
                         paneTitle={labels.bandActivity}
+                        grip="bandActivity"
                         history={bandHistRef.current}
+                        sort={bandSort}
+                        onSort={setBandSort}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
                         slot={snap.radio.slot}
@@ -2001,6 +2135,7 @@ export function OperateCockpit({
                       <OperateDecodes
                         {...closeProps('rxfreq')}
                         paneTitle={labels.rxfreq}
+                        grip="rxfreq"
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
@@ -2046,7 +2181,10 @@ export function OperateCockpit({
                   <OperateDecodes
                     {...closeProps('bandActivity')}
                     paneTitle={labels.bandActivity}
+                    grip="bandActivity"
                     history={bandHistRef.current}
+                    sort={bandSort}
+                    onSort={setBandSort}
                     decodes={snap.recentDecodes}
                     late={snap.lateDecodes}
                     slot={snap.radio.slot}
@@ -2074,6 +2212,7 @@ export function OperateCockpit({
                       <OperateDecodes
                         {...closeProps('rxfreq')}
                         paneTitle={labels.rxfreq}
+                        grip="rxfreq"
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
@@ -2124,6 +2263,7 @@ export function OperateCockpit({
                       stripRef={txRef}
                       {...closeProps('txmsgs')}
                       paneTitle={labels.txmsgs}
+                      grip="txmsgs"
                       compact
                       dxCall={dxCall}
                       dxGrid={dxGrid}
@@ -2134,6 +2274,7 @@ export function OperateCockpit({
                       onTx5={handleTx5}
                       tx6={tx6}
                       onTx6={handleTx6}
+                      tx6Contest={contestCq}
                       nextIndex={nextIndex}
                       onTx={doTx}
                       onGenerate={handleGenerate}
@@ -2152,6 +2293,8 @@ export function OperateCockpit({
             </>
           )}
           {columnSeams}
+          {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+          <PaneDropLayer drag={paneDrag} host={lowerRef} />
         </div>
       </div>
       <SpotDialog
@@ -2207,6 +2350,7 @@ function OperateRecall({
   onRemove,
   hideNote,
   paneTitle,
+  grip,
 }: {
   snap: AppSnapshot
   call: string
@@ -2219,6 +2363,8 @@ function OperateRecall({
   onRemove?: () => void
   hideNote?: string
   paneTitle?: string
+  /** The id the card's head is dragged by (RecallPanel `grip`). */
+  grip?: string
   onOpenLog?: (call: string) => void
   /** #204: open the card of the station this one is calling. */
   onShowCall?: (call: string) => void
@@ -2324,8 +2470,6 @@ function OperateRecall({
       // one state while the award maths counts another. #237.
       state={station?.state}
       grid={book?.grid || station?.grid}
-      lat={book?.lat ?? null}
-      lon={book?.lon ?? null}
       country={book?.country}
       image={book?.image}
       myGrid={snap.mygrid}
@@ -2352,6 +2496,7 @@ function OperateRecall({
       onRemove={onRemove}
       hideNote={hideNote}
       paneTitle={paneTitle}
+      grip={grip}
     />
   )
 }

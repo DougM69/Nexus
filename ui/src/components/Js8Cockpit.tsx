@@ -23,10 +23,11 @@ import { regionColsStyle } from '../features/paneColumns'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
+import { PaneDropLayer, gridTargets, usePaneDrag, type DropArea } from './panes/PaneDrag'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
 import { panelHost } from '../features/panelHost'
 import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, type Js8PanelId, type PanelLayoutApi } from '../features/panelState'
-import { regionGroups } from '../features/panelPlace'
+import { regionGroups, type PaneDrop } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
@@ -58,8 +59,7 @@ import {
   setTxOffset,
 } from '../api'
 import { bandLabelForMhz } from '../band'
-import { emptyAnswer } from '../features/logAnswers'
-import { useLogAnswer } from '../features/logSource'
+import { failureToShow, useLatestLogAnswer, useLogStatus } from '../features/logSource'
 import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../features/js8Pins'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useUnits } from '../units'
@@ -100,6 +100,8 @@ import {
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
   onOpenLogbook?: (call: string) => void
+  /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
+  onEntryCall?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting. */
   snap?: AppSnapshot | null
   /** Apply a snapshot returned by a command without waiting for the poll. */
@@ -190,6 +192,7 @@ export function Js8Cockpit({
   callsignAgingMin = 0,
   activityAgingMin = 0,
   onOpenLogbook,
+  onEntryCall,
   panels,
   onOpenSettings,
   boxes,
@@ -394,7 +397,7 @@ export function Js8Cockpit({
       return true
     }
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast(t('js8.toast.txLocked'), 'info', 3500)
+      pushToast(snapRef.current.radio.txRefusal ?? t('js8.toast.txLocked'), 'info', 3500)
       return true
     }
     return false
@@ -535,6 +538,41 @@ export function Js8Cockpit({
     cols === 3 || auxInLogTrack
       ? placed3.map((g) => g.ids)
       : [[...placed3[0].ids, ...placed3[1].ids], placed3[2].ids]
+  // ⊞ ARRANGE BY DRAG (2026-10-08): Phone's (PhoneCockpit, the same words): a pane is picked up by its title
+  // and dropped onto a column or between two panes, the drop the arrows' moves with their own arguments; the
+  // log stays in its column, as its arrows keep it (pinned). The dock with its stop controls is no place.
+  const cockpitRef = useRef<HTMLElement>(null)
+  const dropPane = panels?.dropPane != null ? (id: Js8PanelId, drop: PaneDrop<Js8PanelId>) => panels.dropPane?.(id, drop, paneShown) : undefined
+  const holds = (area: DropArea) => placed3.some((g) => g.col === area && g.ids.length > 0)
+  const paneDrag = usePaneDrag<Js8PanelId>({
+    root: cockpitRef,
+    region: panesRef,
+    enabled: dropPane != null,
+    spec: JS8_PANELS.arrange!,
+    arrangement: { place },
+    shown: paneShown,
+    sideShows: false,
+    stacked: flow === 'stack',
+    // The columns as this tier draws them (`rendered`): a | b | log, or a | b with the log column empty, or a
+    // + b | log.
+    targets: () =>
+      gridTargets(
+        cols === 3 || auxInLogTrack
+          ? [
+              { el: mainColRef.current, areas: ['a'] },
+              { el: auxColRef.current, areas: ['b'] },
+              { el: cols === 3 ? logColRef.current : null, areas: ['log'] },
+            ]
+          : [
+              { el: mainColRef.current, areas: ['a', 'b'] },
+              { el: logColRef.current, areas: ['log'] },
+            ],
+        holds,
+      ),
+    labels,
+    names: { a: t('panels.arrange.column.a'), b: t('panels.arrange.column.b'), log: t('panels.arrange.column.log') },
+    onDrop: (id, drop) => dropPane?.(id, drop),
+  })
   /** Whether `below` sits directly under `above` in one rendered column — what makes them a pair. */
   const adjacent = (above: Js8PanelId, below: Js8PanelId) =>
     rendered.some((ids) => {
@@ -601,13 +639,21 @@ export function Js8Cockpit({
   // JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE, any band,
   // any mode (features/callHistory `callsSummary`). The band/mode dupe scope belongs to the log
   // strip, not here.
+  //
+  // Each newly heard station asks a new question, and until its answer lands the rows keep the
+  // latest answer for the calls it covered: no row loses its marks for the round trip. A call that
+  // answer did not cover shows "—" (below), as the Remote path does when it cannot tell.
   const summaryQuestion = { kind: 'callsSummary', calls: stationCalls.split(' ').filter(Boolean) } as const
-  const summary =
-    useLogAnswer(active && !remote ? summaryQuestion : null, snap?.logTick) ?? emptyAnswer(summaryQuestion)
+  const reading = active && !remote ? summaryQuestion : null
+  const summary = useLatestLogAnswer(reading, snap?.logTick)
+  const summaryFailed = failureToShow(useLogStatus(reading))
   const logDetail = useMemo(() => {
     if (remote) return new Map(Object.entries(context.value?.history ?? {}).filter(([,h]) => h.count > 0))
-    return new Map(Object.entries(summary))
+    return new Map(Object.entries(summary?.answer ?? {}))
   }, [summary, remote, context.value])
+  /** The heard calls the log has answered about. */
+  const answeredCalls = useMemo(() => new Set(summary?.question.calls), [summary])
+  const unansweredTitle = summaryFailed !== null ? t('logbook.readFailed', { reason: summaryFailed }) : t('logbook.reading')
 
   const sending = js8?.sending === true
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
@@ -891,6 +937,7 @@ export function Js8Cockpit({
                 </span>
               )}
               {remote && !context.value?.history[h.call.trim().toUpperCase()] && <span className="js8-cell js8-b4" title={t('remote.collectionUnavailable')}>—</span>}
+              {reading && !answeredCalls.has(h.call) && <span className="js8-cell js8-b4" title={unansweredTitle}>—</span>}
               {det && (
                 <span
                   className="js8-cell js8-b4"
@@ -1018,6 +1065,7 @@ export function Js8Cockpit({
     >
       {!canControl ? <RemoteRecallEntry snap={snap} mode={JS8} selectedCall={selectedCall} onOpenLog={onOpenLogbook}/> : <LogEntry
         onOpenLogbook={onOpenLogbook}
+        onEntryCall={onEntryCall}
         snap={snap}
         // The ADIF token: written as MODE=MFSK SUBMODE=JS8 by the logbook (B5).
         mode={JS8}
@@ -1029,7 +1077,9 @@ export function Js8Cockpit({
             ? { call: selected.call, rst: fmtSnr(selected.snrDb), name: null, confirmed: true }
             : null
         }
+        onSnap={onSnap}
         fieldDay={snap.fieldDay ?? null}
+        active={active}
         fdMode="DIG"
         fdSubmode={JS8}
       />}
@@ -1104,7 +1154,7 @@ export function Js8Cockpit({
     ])
 
   return (
-    <main className="layout single js8-cockpit">
+    <main className="layout single js8-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       {snap && (
         <CockpitHeader
           snap={snap}
@@ -1197,6 +1247,7 @@ export function Js8Cockpit({
                       shown={paneShown}
                       labels={labels}
                       onMove={(id, move) => panels.movePane!(id, move, paneShown)}
+                      onDrop={dropPane}
                       // "+ Add a box" only where the window lends them (never the hosted Remote page).
                       onAddBox={boxes && panels.addBox ? (area) => panels.addBox?.(area, undefined, boxes.rail?.shows) : undefined}
                       boxesFull={BOX_IDS.every((b) => shown(b))}
@@ -1344,6 +1395,8 @@ export function Js8Cockpit({
             widthLabel={auxInLogTrack ? t('js8.seam.auxWidth.label') : t('pane.seam.logWidth.label')}
           />
         )}
+        {/* A drag in flight, drawn inside the region (panes/PaneDrag); nothing at all otherwise. */}
+        <PaneDropLayer drag={paneDrag} host={panesRef} />
       </div>
 
       {/* TX DOCK — every transmit control, pinned OUTSIDE the pane region. None has a ⊞ id.

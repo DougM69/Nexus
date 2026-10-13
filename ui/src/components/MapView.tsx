@@ -77,6 +77,7 @@ import {
 import { heatBoost, sectorPulse } from '../features/pulse'
 import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
 import { openingModeColor } from '../bandColors'
+import { relLuminance } from '../colormaps'
 import {
   APRS_HOME_ZOOM,
   MAX_ZOOM,
@@ -647,6 +648,38 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb.
  *  Exported for the 3-D globe's sun and moon, which are the same glyphs (features/skyGlyphs). */
 export const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
+
+/** ⭐ A LABEL'S HALO FOLLOWS ITS INK. MARKER_HALO under a label is the contrast step that lifts a
+ *  LIGHT ink off the map (the dark theme's --text, a band colour). The light theme letters its labels
+ *  in DARK inks (--text #14202e, --accent #0174ab), and a near-black halo under a near-black ink is a
+ *  blot the letters drown in (1.2:1). So each label is haloed in whichever of the two halos stands
+ *  further from its own ink by WCAG contrast: MARKER_HALO, or this white twin of it. The ink decides,
+ *  not the theme: the band and need colours are light inks in every theme, and keep the dark halo.
+ *  The two cross at an ink luminance of about 0.18, and every ink a dark theme letters a label in sits
+ *  above it, so the dark themes keep MARKER_HALO on every label and do not change by a pixel
+ *  (MapView.labelHalo.contrast.test.tsx holds that, and 4.5:1 for every label, over every theme). */
+const LABEL_HALO_LIGHT = 'rgba(255, 255, 255, 0.9)'
+/** A colour as a canvas hands it back (#rrggbb, or rgba() when translucent) as its RGB, alpha left
+ *  out; null for anything else. */
+function rgbOf(c: string): [number, number, number] | null {
+  const hex = /^#([0-9a-f]{6})$/i.exec(c)
+  if (hex) {
+    const n = parseInt(hex[1], 16)
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  }
+  const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(c)
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+}
+// Each halo's own luminance: the alpha (0.9) is the same on both, so it does not move the choice.
+const Y_HALO_DARK = relLuminance(rgbOf(MARKER_HALO)!)
+const Y_HALO_LIGHT = relLuminance(rgbOf(LABEL_HALO_LIGHT)!)
+/** The halo for a label lettered in `ink`. An ink it cannot read keeps MARKER_HALO, as every label did. */
+function labelHalo(ink: string): string {
+  const c = rgbOf(ink)
+  if (!c) return MARKER_HALO
+  const y = relLuminance(c)
+  return (y + 0.05) / (Y_HALO_DARK + 0.05) >= (Y_HALO_LIGHT + 0.05) / (y + 0.05) ? MARKER_HALO : LABEL_HALO_LIGHT
+}
 
 /** ⭐ MARKER SCALE — one factor, derived from the canvas, applied to every station/spot/park/
  *  satellite/APRS/QTH marker and its label.
@@ -1583,14 +1616,15 @@ export function MapView({
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
-    /** A marker label with a dark halo, so it reads over land, sea, relief raster and the
-     *  greyline alike — MARKER_HALO's contrast trick applied to text. Preserves the caller's
-     *  fillStyle (the label's own ink) and only borrows the stroke. */
+    /** A marker label with a halo, so it reads over land, sea, relief raster and the greyline
+     *  alike — MARKER_HALO's contrast trick applied to text, in the halo that stands off the
+     *  label's own ink (`labelHalo`). Preserves the caller's fillStyle (the label's own ink) and
+     *  only borrows the stroke. */
     const haloText = (s: string, x: number, y: number) => {
       const fill = ctx.fillStyle
       ctx.lineJoin = 'round'
       ctx.lineWidth = Math.max(2, 2.6 * ms)
-      ctx.strokeStyle = MARKER_HALO
+      ctx.strokeStyle = typeof fill === 'string' ? labelHalo(fill) : MARKER_HALO
       ctx.strokeText(s, x, y)
       ctx.fillStyle = fill
       ctx.fillText(s, x, y)

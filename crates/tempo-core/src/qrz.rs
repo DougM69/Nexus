@@ -635,6 +635,18 @@ pub fn parse_status_response(body: &str) -> QrzStatus {
 pub struct QrzFetch {
     /// `RESULT=OK` (or `STATUS=OK`).
     pub ok: bool,
+    /// QRZ's answer that **no record matched**: a delta with nothing changed since its date, or
+    /// an empty book. It is not a refusal, though `ok` is false. QRZ's guide gives FETCH
+    /// `RESULT=OK` only *"if any QSO's matched the fetch option(s)"*, and *"COUNT always returns
+    /// the number of records matching"*, so a FETCH that found nothing comes back `RESULT=FAIL`
+    /// with `COUNT=0` and either no `REASON` or QRZ's own "no log entries found". Clients written
+    /// against the live service read it the same way (k0swe/qrz-logbook: *"having a logbook with
+    /// 0 QSOs will always result in a FAIL"*).
+    ///
+    /// ⚠️ All of it, or it is a refusal: `FAIL` (never `AUTH`, QRZ's word for a key that lacks
+    /// the privilege), a `COUNT` that says 0, no records, and no other reason. A `FAIL` that
+    /// states no count is not this answer.
+    pub nothing_matched: bool,
     /// Records returned (QRZ `COUNT`).
     pub count: u32,
     /// The ADIF text QRZ returned (may be empty), taken verbatim.
@@ -861,26 +873,45 @@ fn html_unescape(s: &str) -> String {
 pub fn parse_fetch(body: &str) -> QrzFetch {
     let (head, adif) = split_adif(body);
     let mut ok = false;
-    let mut count = 0u32;
-    let mut reason = None;
+    let mut failed = false;
+    let mut said_count = None;
+    let mut reason: Option<String> = None;
     for pair in head.split('&') {
         let Some((k, v)) = pair.split_once('=') else {
             continue;
         };
         let val = urldecode(v.trim());
         match k.trim().to_ascii_uppercase().as_str() {
-            "RESULT" | "STATUS" => ok = val.eq_ignore_ascii_case("OK"),
-            "COUNT" => count = val.parse().unwrap_or(0),
+            "RESULT" | "STATUS" => {
+                ok = val.eq_ignore_ascii_case("OK");
+                failed = val.eq_ignore_ascii_case("FAIL");
+            }
+            "COUNT" => said_count = val.parse::<u32>().ok(),
             "REASON" if !val.is_empty() => reason = Some(val),
             _ => {}
         }
     }
+    let nothing_matched = failed
+        && said_count == Some(0)
+        && crate::logbook::parse_adif(&adif).is_empty()
+        && reason
+            .as_deref()
+            .is_none_or(|r| r.to_ascii_lowercase().contains("no log entries"));
     QrzFetch {
         ok,
-        count,
+        nothing_matched,
+        count: said_count.unwrap_or(0),
         adif,
         reason,
     }
+}
+
+/// Whether a FETCH's answer is the whole of what QRZ sent: as many records as its `COUNT` says. An
+/// answer cut short, inside a record or at the end of one, holds fewer. Logbook ▸ Check
+/// confirmations checks nothing from one, since it would take a confirmation that was cut off for
+/// a misplaced one.
+pub fn is_whole_fetch(f: &QrzFetch) -> bool {
+    crate::logbook::parse_adif(&f.adif).len() == f.count as usize
 }
 
 /// Parse a QRZ Logbook `name=value` response. A `RESULT=FAIL` whose `REASON`
@@ -1859,6 +1890,52 @@ mod tests {
         assert!(!f.ok);
         assert_eq!(f.adif, "");
         assert_eq!(f.reason.as_deref(), Some("invalid api key"));
+    }
+
+    /// QRZ answers a FETCH that matched nothing with a FAIL: a delta with nothing new since its
+    /// date, or an empty book. Read as a refusal, it put "QRZ rejected the FETCH — check your
+    /// Logbook API key" in the connection log on every automatic sync that found nothing new.
+    #[test]
+    fn a_fetch_that_matched_nothing_is_told_from_a_refusal() {
+        for nothing in [
+            "RESULT=FAIL&COUNT=0",
+            "RESULT=FAIL&COUNT=0&REASON=",
+            "RESULT=FAIL&REASON=no+log+entries+found&COUNT=0",
+            "STATUS=FAIL&RESULT=FAIL&COUNT=0",
+        ] {
+            let f = parse_fetch(nothing);
+            assert!(f.nothing_matched, "{nothing}: QRZ matched nothing");
+            assert!(!f.ok, "{nothing}: and it is still not an OK");
+        }
+        for refused in [
+            "RESULT=FAIL&REASON=invalid+api+key",
+            "RESULT=FAIL&COUNT=0&REASON=invalid+api+key",
+            "RESULT=AUTH&COUNT=0",
+            "RESULT=AUTH&REASON=invalid+api+key",
+            "RESULT=FAIL",
+            "RESULT=FAIL&COUNT=2",
+            "",
+        ] {
+            assert!(
+                !parse_fetch(refused).nothing_matched,
+                "{refused:?}: a refusal"
+            );
+        }
+        // An OK answer, or one carrying a record, is not it either.
+        assert!(!parse_fetch("RESULT=OK&COUNT=0&ADIF=").nothing_matched);
+        assert!(!parse_fetch("RESULT=FAIL&COUNT=0&ADIF=<CALL:4>W1AW<eor>").nothing_matched);
+    }
+
+    #[test]
+    fn a_fetch_is_whole_only_with_every_record_its_count_says() {
+        let two = "<CALL:4>W1AW<QSO_DATE:8>20240101<eor>\n<CALL:5>K1ABC<QSO_DATE:8>20240102<eor>\n";
+        let answer =
+            |count: u32, adif: &str| parse_fetch(&format!("RESULT=OK&COUNT={count}&ADIF={adif}"));
+        assert!(is_whole_fetch(&answer(2, two)));
+        assert!(is_whole_fetch(&answer(0, "")), "an empty book is whole");
+        // Cut at the end of a record, or inside one: fewer records than the count.
+        assert!(!is_whole_fetch(&answer(3, two)));
+        assert!(!is_whole_fetch(&answer(2, &two[..two.len() - 8])));
     }
 
     #[test]

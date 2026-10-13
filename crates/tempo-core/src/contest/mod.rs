@@ -73,8 +73,9 @@ pub use exchanges::{casual, field_day};
 pub use adif::directed_columns;
 
 pub use cabrillo::{
-    cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call, CabrilloColumn,
-    CabrilloEntrant, CabrilloHeaders, OperatorCategory,
+    address_lines, cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call,
+    soapbox_lines, CabrilloAddress, CabrilloColumn, CabrilloEntrant, CabrilloHeaders,
+    OperatorCategory, CABRILLO_ADDRESS_HEADERS,
 };
 
 pub use callsign::{
@@ -88,7 +89,10 @@ pub use dupe::{DupeRule, SatKey, KEY_SEP};
 
 pub use render::{role_for, sent_exchange, sent_exchange_string};
 
-pub use merge::{merge_into_general, plan_merge, qid_for, seq_from_qid, MergeReport};
+pub use merge::{
+    merge_into_general, merged_row, plan_aged_merge, plan_merge, qid_for, session_of, settle_aged,
+    MergeIdentity, MergeReport, Unmerged,
+};
 
 pub use session::{
     ContestSession, InFlightQso, LocationWarning, MyLocation, StationData, UploadPolicy,

@@ -20,8 +20,10 @@ import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
+import { StationControlContext } from '../stationAccess'
 
 const startCq = vi.fn(async () => null)
+const startRunning = vi.fn(async (_dir?: string | null): Promise<null> => null)
 const pushToast = vi.fn()
 
 vi.mock('../api', () => ({
@@ -34,6 +36,7 @@ vi.mock('../api', () => ({
   pointRotatorAtCall: vi.fn(async () => null),
   redecode: vi.fn(async () => null),
   startCq: (...a: unknown[]) => startCq(...(a as [])),
+  startRunning: (...a: unknown[]) => startRunning(...(a as [string | null])),
   startQsoRecording: vi.fn(async () => null),
   stopQsoRecording: vi.fn(async () => null),
   setSkipTx1: vi.fn(async () => null),
@@ -122,11 +125,15 @@ function panelsApi(): PanelLayoutApi<OperatePanelId> {
   }
 }
 
-function renderCockpit() {
+function renderCockpit(snap: AppSnapshot = makeSnap()) {
+  return render(cockpit(snap))
+}
+
+function cockpit(snap: AppSnapshot) {
   const noop = () => {}
-  return render(
+  return (
     <OperateCockpit
-      snap={makeSnap()}
+      snap={snap}
       theme="dark"
       tier="FT8"
       onTierChange={noop}
@@ -153,7 +160,7 @@ function renderCockpit() {
       onLayoutMode={noop}
       panels={panelsApi()}
       active
-    />,
+    />
   )
 }
 
@@ -175,6 +182,8 @@ beforeEach(() => {
     unobserve() {}
   } as unknown as typeof ResizeObserver
   startCq.mockClear()
+  startRunning.mockReset()
+  startRunning.mockImplementation(async () => null)
   pushToast.mockClear()
 })
 afterEach(cleanup)
@@ -231,5 +240,158 @@ describe('#254 — a malformed directed CQ is refused, never quietly replaced', 
     await waitFor(() => expect(startCq).toHaveBeenCalledTimes(1))
     expect(startCq).toHaveBeenCalledWith(null)
     expect(pushToast).not.toHaveBeenCalled()
+  })
+})
+
+// THE STRIP'S CALL CQ IS THE CONTEST'S RUNNING WHILE A CONTEST RUNS. The engine decides that
+// (`Engine::start_running`); on this computer the strip asks for it by its own verb — outside a
+// contest the Tx6 row keeps `startCq`, which sends the CQ it shows — says why when it is refused,
+// and shows the contest's run as its own: in a contest the snapshot carries it in `fieldDay`.
+describe("the strip's Call CQ", () => {
+  const roles = () => screen.getByRole('group', { name: 'Sequencer role' })
+  const stripButton = (name: 'Call CQ' | 'S&P') => {
+    const found = [...roles().querySelectorAll('button')].find((b) => b.textContent === name)
+    if (!found) throw new Error(`no ${name} in the strip`)
+    return found
+  }
+  const inContest = (running: boolean) =>
+    ({ ...makeSnap(), mode: 'fieldDay', qso: null, fieldDay: { running, state: running ? 'CallingCq' : 'Listening', dxcall: null } }) as unknown as AppSnapshot
+
+  it('asks for the run by its own verb, never the Tx6 one', async () => {
+    renderCockpit()
+    fireEvent.click(stripButton('Call CQ'))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledTimes(1))
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it('says why when the run is refused', async () => {
+    const why = 'Set your Field Day class and ARRL/RAC section in Settings first'
+    startRunning.mockImplementation(async () => {
+      throw why
+    })
+    renderCockpit()
+    fireEvent.click(stripButton('Call CQ'))
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(why, 'error'))
+  })
+
+  it("lights Call CQ while the contest's run is on, and S&P while its S&P is", () => {
+    renderCockpit(inContest(true))
+    expect(stripButton('Call CQ').getAttribute('aria-pressed')).toBe('true')
+    expect(stripButton('S&P').getAttribute('aria-pressed')).toBe('false')
+    cleanup()
+    renderCockpit(inContest(false))
+    expect(stripButton('Call CQ').getAttribute('aria-pressed')).toBe('false')
+    expect(stripButton('S&P').getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+// WHILE A CONTEST RUNS, THE TX6 ROW IS THE CONTEST'S CQ, as WSJT-X's Tx6 is its activity's CQ. The
+// engine names the CQ the contest's Running calls (`contestCq`); the row shows it, read-only, and
+// Tx 6 asks for the contest's Running by the strip's own verb, so what goes on the air is what the
+// row shows. The operator's own CQ, directed or plain, stays underneath and is back when the contest
+// ends; on the Remote page the row never changes, as its Call CQ does not.
+describe('the Tx6 row while a contest runs', () => {
+  /** The Tx6 box, found by its place in the panel rather than by its label, which changes. */
+  const tx6Box = () => document.querySelector('.txp-cq-field input') as HTMLInputElement
+  const inContest = (snap: AppSnapshot = makeSnap()) =>
+    ({ ...snap, contestCq: `CQ FD ${MYCALL} EN61` }) as AppSnapshot
+
+  it("shows the contest's CQ, read-only, and calls the contest's Running", async () => {
+    renderCockpit(inContest())
+    expect(tx6Box().value).toBe(`CQ FD ${MYCALL} EN61`)
+    expect(tx6Box().readOnly, 'what the row shows is what is sent, so it is not edited here').toBe(true)
+    expect(tx6Box().getAttribute('aria-label')).toBe("Tx6 Call CQ (the contest's CQ)")
+    expect(screen.getByText("The contest's CQ — Tx 6 calls it as Call CQ does")).toBeTruthy()
+    fireEvent.click(cqButton())
+    await waitFor(() => expect(startRunning).toHaveBeenCalledTimes(1))
+    expect(startCq, 'never the plain CQ the row no longer shows').not.toHaveBeenCalled()
+  })
+
+  it('says why when the contest cannot start, and sends nothing else', async () => {
+    const why = 'Set your Field Day class and ARRL/RAC section in Settings first'
+    startRunning.mockImplementation(async () => {
+      throw why
+    })
+    renderCockpit(inContest())
+    fireEvent.click(cqButton())
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(why, 'error'))
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it("keeps the operator's own CQ underneath and gives it back when the contest ends", async () => {
+    const { rerender } = renderCockpit()
+    fireEvent.change(tx6Box(), { target: { value: `CQ POTA ${MYCALL}` } })
+    rerender(cockpit(inContest()))
+    expect(tx6Box().value).toBe(`CQ FD ${MYCALL} EN61`)
+    rerender(cockpit(makeSnap()))
+    expect(tx6Box().value, 'the directed CQ is back').toBe(`CQ POTA ${MYCALL}`)
+    expect(tx6Box().readOnly).toBe(false)
+    fireEvent.click(cqButton())
+    await waitFor(() => expect(startCq).toHaveBeenCalledWith('POTA'))
+    expect(startRunning).not.toHaveBeenCalled()
+  })
+
+  it('on the Remote page the row keeps its own CQ', () => {
+    render(
+      <StationControlContext.Provider value={false}>{cockpit(inContest())}</StationControlContext.Provider>,
+    )
+    expect(tx6Box().value).toBe(`CQ ${MYCALL} EN61`)
+    expect(tx6Box().readOnly).toBe(false)
+    expect(tx6Box().getAttribute('aria-label')).toBe('Tx6 Call CQ (edit for a directed CQ)')
+  })
+})
+
+// WHERE WSJT-X HAS NO ACTIVITY FOR THE RUNNING CONTEST, TX6 IS THE OPERATOR'S OWN, as in WSJT-X's
+// normal mode ("What I typed, like WSJT-X"): the row stays editable, and on this computer Tx 6 and
+// Call CQ hand the direction typed there to the contest's Running (`contestCqTyped`), so the contact
+// stays the contest's. A Tx6 that is no CQ is refused by both, as #254 refuses it.
+describe('the Tx6 row in a contest WSJT-X has no activity for', () => {
+  const tx6Box = () => document.querySelector('.txp-cq-field input') as HTMLInputElement
+  const typedContest = () => ({ ...makeSnap(), contestCqTyped: true }) as AppSnapshot
+  const callCqButton = () => {
+    const roles = screen.getByRole('group', { name: 'Sequencer role' })
+    const found = [...roles.querySelectorAll('button')].find((b) => b.textContent === 'Call CQ')
+    if (!found) throw new Error('no Call CQ in the strip')
+    return found
+  }
+
+  it("keeps the row editable and sends what was typed through the contest's Running", async () => {
+    renderCockpit(typedContest())
+    expect(tx6Box().readOnly).toBe(false)
+    expect(tx6Box().value, 'the generated CQ, until edited').toBe(`CQ ${MYCALL} EN61`)
+    callCq(`CQ QP ${MYCALL} EN61`)
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith('QP'))
+    expect(startCq, 'the contact stays the contest’s').not.toHaveBeenCalled()
+  })
+
+  it('a plain Tx6 calls the Running with no direction', async () => {
+    renderCockpit(typedContest())
+    callCq(`CQ ${MYCALL} EN61`)
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null))
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it('Call CQ calls the CQ typed in Tx6', async () => {
+    renderCockpit(typedContest())
+    fireEvent.change(tx6Box(), { target: { value: `CQ TEST ${MYCALL} EN61` } })
+    fireEvent.click(callCqButton())
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith('TEST'))
+  })
+
+  it('a Tx6 that is no CQ is refused, by Tx 6 and by Call CQ alike', async () => {
+    renderCockpit(typedContest())
+    callCq(`CQ ${MYCALL} POTA`)
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(1))
+    fireEvent.click(callCqButton())
+    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(2))
+    expect(startRunning, 'nothing different from the row goes on the air').not.toHaveBeenCalled()
+    expect(startCq).not.toHaveBeenCalled()
+  })
+
+  it('outside such a contest Call CQ stays plain, whatever Tx6 says', async () => {
+    renderCockpit()
+    fireEvent.change(tx6Box(), { target: { value: `CQ QP ${MYCALL} EN61` } })
+    fireEvent.click(callCqButton())
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null))
   })
 })

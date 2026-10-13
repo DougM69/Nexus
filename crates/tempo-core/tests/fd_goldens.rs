@@ -39,6 +39,21 @@
 //! and must keep doing so — not one byte of any `.adi` file. `wfd.cbr` and
 //! `wfd-classes.cbr` did not move either: `WFD` is the same string in both
 //! registries, and is the one token of the six that its sponsor actually publishes.
+//!
+//! ⚠️ **A third deliberate movement, Winter Field Day's 2027 rules.** Line 7 of
+//! `wfd.cbr` and `wfd-classes.cbr` changed from `X-NEXUS-RULES-YEAR: 2026` to `2027`,
+//! because the bundled WFD ruleset is now the sponsor's 2027 one and that header says
+//! which rules data scored the entry. `arrlfd.cbr` did not move, and neither did any
+//! `.adi` file: ADIF carries no rules year. One pinned number moved with it: WFD's bonus in
+//! `both_events_score_exactly_what_head_scored`, from 150 to 0. The two bonuses that test
+//! claims are ARRL Field Day's, and Winter Field Day no longer carries a copy of ARRL's
+//! menu; its objectives multiply instead (2027 rules, p.7). With the objectives modelled,
+//! both WFD files also gained line 6, `CLAIMED-SCORE: 11` and `CLAIMED-SCORE: 6`: the sponsor
+//! asks for *"your calculated total score including multipliers"* (p.10), and with no
+//! objective ticked that is the QSO points × 1. And both gained `X-EXCHANGE:` before
+//! `X-NEXUS-RULES-YEAR`, the class the entry sends (p.10's `X-EXCHANGE: 3O`): `3A` in
+//! `wfd.cbr`, whose frozen fixture sends an ARRL class, and `2O` in `wfd-classes.cbr`.
+//! Neither declares a power, so neither carries CATEGORY-POWER.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.
@@ -172,10 +187,12 @@ fn both_events_score_exactly_what_head_scored() {
     // is not a golden. Hand-checked against the fixture: 2 CW rows x 2 pts + 3 phone
     // rows x 1 pt + 2 digital rows x 2 pts = 11 QSO points. ARRL FD multiplies by the
     // legal 5x power tier (55); WFD's Objectives model applies no on-air power
-    // multiplier, so powered == qso. Bonus = w1aw-bulletin + web-submission.
+    // multiplier, so powered == qso. Bonus = w1aw-bulletin + web-submission, which are
+    // ARRL Field Day's bonuses: Winter Field Day has carried no copy of that menu since
+    // its 2027 rules, so they are worth nothing there (the one deliberate movement here).
     for (event, want_qso, want_powered, want_bonus) in [
         (FdEvent::ArrlFd, 11u32, 55u32, 150u32),
-        (FdEvent::WinterFd, 11u32, 11u32, 150u32),
+        (FdEvent::WinterFd, 11u32, 11u32, 0u32),
     ] {
         let log = capture::golden_log(event);
         let rs = ruleset(event, CURRENT_RULES_YEAR);
@@ -288,16 +305,17 @@ fn the_1x_journal_restore_discriminates() {
     );
 }
 
-/// ⭐ **A Field Day journal carries NO private carrier**, and that is what keeps the
+/// ⭐ **A Field Day log's ADIF carries NO private carrier**, and that is what keeps the
 /// golden above byte-identical rather than a coincidence.
 ///
 /// The writer emits `APP_NEXUS_EX`/`MYEX` exactly when the declared fallback would not
 /// give the row back — for Field Day it always would, because class + section ARE the
 /// received exchange and the sent exchange does not move. Asserted directly, because
 /// "the golden did not move" and "no tag is written" are the same fact and a reader
-/// should not have to infer one from the other.
+/// should not have to infer one from the other. (The journal adds each row's sent side
+/// whether it moved or not: the test after this one.)
 #[test]
-fn field_days_journal_carries_no_private_carrier() {
+fn field_days_adif_carries_no_private_carrier() {
     for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
         let adi = capture::golden_log(event).adif();
         for tag in ["APP_NEXUS_EX", "APP_NEXUS_MYEX", "APP_NEXUS_ROLE"] {
@@ -309,4 +327,53 @@ fn field_days_journal_carries_no_private_carrier() {
         // POSITIVE CONTROL: the matcher can see a tag that IS there.
         assert!(adi.contains("APP_NEXUS_QSEQ"), "{event:?}: no tag at all?");
     }
+}
+
+/// `golden` with each record's own row's sent exchange, `APP_NEXUS_MYEX`, before its
+/// `APP_NEXUS_QSEQ`: what the journal writes for that log. Every other byte is the file's.
+fn with_sent_side(golden: &str, log: &tempo_core::fieldday::FieldDayLog) -> String {
+    let mut rows = log.qsos().iter();
+    golden
+        .split_inclusive('\n')
+        .map(|line| match line.find("<APP_NEXUS_QSEQ:") {
+            Some(at) => {
+                let q = rows.next().expect("a row for every record");
+                let sent = tempo_core::contest::carrier::encode(&q.tx);
+                format!(
+                    "{}<APP_NEXUS_MYEX:{}>{} {}",
+                    &line[..at],
+                    sent.len(),
+                    sent,
+                    &line[at..]
+                )
+            }
+            None => line.to_string(),
+        })
+        .collect()
+}
+
+/// ⭐ **The journal is that ADIF with each row's sent exchange, and nothing else.** It writes
+/// a row's `APP_NEXUS_MYEX` whether the exchange moved or not: the session a row is read back
+/// into is built from Settings, and a class or section changed there put the new one on every
+/// row journaled without it. Compared with the 1.x files, which are the ADIF exactly, so every
+/// other byte of the journal is still theirs.
+#[test]
+fn the_journal_is_the_adif_with_each_rows_sent_exchange() {
+    for (log, adi) in [
+        (capture::golden_log(FdEvent::ArrlFd), ARRLFD_ADI),
+        (capture::golden_log(FdEvent::WinterFd), WFD_ADI),
+        (capture::wfd_class_log(), WFD_CLASSES_ADI),
+    ] {
+        let journal = log.journal_adif();
+        assert_eq!(journal, with_sent_side(adi, &log));
+        assert_eq!(
+            journal.matches("<APP_NEXUS_MYEX:").count(),
+            log.qsos().len(),
+            "a sent side on every row"
+        );
+    }
+    // The value itself, read off the golden's session (3A from WI) rather than the encoder.
+    assert!(capture::golden_log(FdEvent::ArrlFd).journal_adif().contains(
+        "<ARRL_SECT:3>EMA <APP_NEXUS_MYEX:32>CLASS::3A;SECTION:fd_sections:WI <APP_NEXUS_QSEQ:1>1 <EOR>"
+    ));
 }

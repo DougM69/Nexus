@@ -216,7 +216,8 @@ showing their name and your history with them while you operate. CW macros greet
 by name and send your state (`{HISNAME}` / `{MYSTATE}` / `{HISSTATE}`). Your local repeaters and nets
 are a hotkey away, with distance and bearing to each machine.
 
-**The club.** Field Day mode reshapes the app for the event weekend and feeds club infrastructure
+**The club.** Contest mode reshapes the app for the event weekend, Field Day or any contest in the
+picker, and feeds club infrastructure
 natively, with no JTAlert bridge and no end-of-day log merges. Plus a built-in CAT broker so other
 shack software can share the radio *through* Nexus.
 
@@ -447,6 +448,14 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   `ui/src/waterfallHistory.ts`, `ui/src/spectrum/ring.ts`) from its `DssRenderer` /
   `WaterfallHistoryBuffer`; its `PanadapterStream` was a wire-format reference for the native Flex
   DAX/VITA path (see **[NOTICE](NOTICE)**).
+- **[Hamlib](https://github.com/Hamlib/Hamlib)'s Icom network backend** (LGPL-2.1-or-later; the copies
+  here are under the GPL, as the LGPL's section 3 allows) — **Mikael Nousiainen OH3BHX**. The protocol
+  core of Nexus's Icom network client (`crates/tempo-net/src/icom/`: the packets, the login, the session
+  and its keepalive) is ported from the backend in
+  [Hamlib pull request #2178](https://github.com/Hamlib/Hamlib/pull/2178). That work descends from
+  **[kappanhang](https://github.com/nonoo/kappanhang)** (MIT) by **Norbert Varga HA2NON** and **Akos
+  Marton ES1AKOS**, whose README credits **W6EL** with the login passcode algorithm (see
+  **[NOTICE](NOTICE)**).
 - **[fldigi](http://www.w1hkj.com/)** (GPL-3.0-or-later) — **Dave Freese W1HKJ** and **Stefan Fendt
   DL1SMF** (descended from **Tomi Manninen OH2BNS**'s gmfsk). Nexus's RTTY demodulator
   (`crates/tempo-core/src/rtty/demod.rs`) is **ported from fldigi's receive path** (`rtty.cxx` +
