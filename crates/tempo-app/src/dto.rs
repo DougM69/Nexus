@@ -509,10 +509,11 @@ pub use js8::proto::station::InboxEntry as Js8InboxEntry;
 /// The inbox row state — lowercase on the wire (`"unread" | "read" | "store" | "delivered"`).
 pub use js8::proto::station::InboxState as Js8InboxState;
 
-/// Which automatic origins may actually key RIGHT NOW: `switch && tx_enabled &&
-/// !idle_tripped`, per origin. The cockpit paints "armed" from THIS, never from the
-/// persisted switch alone — a switch that is on while the TX latch is off must never look
-/// armed (the AprsCockpit rule).
+/// Which automatic origins may actually key RIGHT NOW, per origin: the switch on and nothing
+/// in the station's readiness stopping it (`Station::readiness`: an idle trip, the TX latch,
+/// what the origin needs besides its switch). The cockpit paints "armed" from THIS, never from
+/// the persisted switch alone — a switch that is on while the TX latch is off must never look
+/// armed (the AprsCockpit rule), nor HB ACK while HB is off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Js8Armed {
@@ -520,10 +521,17 @@ pub struct Js8Armed {
     pub relay: bool,
     pub hb_ack: bool,
     pub hb: bool,
-    /// The repeating CQ — armed only when the session switch, the TX latch and a clear idle
-    /// watchdog all agree, exactly like `hb`.
+    /// The repeating CQ — armed only when the session switch, the TX latch, a clear idle
+    /// watchdog and a scheduled call all agree, exactly like `hb`.
     pub cq: bool,
 }
+
+/// Per origin, why it is not armed while its switch is on: `None` when it is armed or off.
+/// The same five camelCase keys as [`Js8Armed`].
+pub use js8::proto::station::Readiness as Js8NotArmed;
+/// Why an automatic origin whose switch is on is not armed, the station's own reason
+/// (`"idle" | "txOff" | "needsHb" | "needsAuto" | "needsHbAndAuto" | "unscheduled"`).
+pub use js8::proto::station::Unarmed as Js8Unarmed;
 
 /// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -605,6 +613,8 @@ pub struct Js8State {
     pub relay: bool,
     pub hb_ack: bool,
     pub armed: Js8Armed,
+    /// Why each origin that is on is not armed, named on its chip.
+    pub not_armed: Js8NotArmed,
     pub idle_minutes: u16,
     pub idle_limit_min: u16,
     pub idle_tripped: bool,
@@ -4919,6 +4929,13 @@ mod tests {
                 hb: false,
                 cq: false,
             },
+            not_armed: Js8NotArmed {
+                autoreply: Some(Js8Unarmed::TxOff),
+                relay: Some(Js8Unarmed::TxOff),
+                hb_ack: None,
+                hb: None,
+                cq: Some(Js8Unarmed::TxOff),
+            },
             idle_minutes: 3,
             idle_limit_min: 60,
             idle_tripped: false,
@@ -4956,6 +4973,7 @@ mod tests {
             "\"hbIntervalMin\":0",
             "\"hbAck\":false",
             "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false,\"cq\":false}",
+            "\"notArmed\":{\"autoreply\":\"txOff\",\"relay\":\"txOff\",\"hbAck\":null,\"hb\":null,\"cq\":\"txOff\"}",
             "\"cqOn\":true",
             "\"cqNextAtMs\":9000",
             "\"cqIntervalMin\":5",
@@ -4976,6 +4994,17 @@ mod tests {
         }
         let back: Js8State = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+        // Every reason as the chips' titles key on it (`Js8Unarmed` in types.ts).
+        for (why, wire) in [
+            (Js8Unarmed::Idle, "idle"),
+            (Js8Unarmed::TxOff, "txOff"),
+            (Js8Unarmed::NeedsHb, "needsHb"),
+            (Js8Unarmed::NeedsAuto, "needsAuto"),
+            (Js8Unarmed::NeedsHbAndAuto, "needsHbAndAuto"),
+            (Js8Unarmed::Unscheduled, "unscheduled"),
+        ] {
+            assert_eq!(serde_json::to_value(why).unwrap(), wire);
+        }
     }
 
     /// ⭐ An export's wire keys, as `LogExport` in the UI reads them: the file, and each of the

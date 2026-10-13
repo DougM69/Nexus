@@ -9970,6 +9970,8 @@ export const EN = {
     'Repeating CQ is on, but TX is off — nothing keys. Enable TX (the header pill) to let the CQs go out.',
   'js8.dock.cqRepeat.title.armed':
     'Calling CQ every {{min}} min, on your TX offset. Stops on its own when a station answers you, or at the idle watchdog. Click to stop the schedule — a CQ already on the air finishes; Stop TX cuts it.',
+  'js8.dock.cqRepeat.notArmed.unscheduled':
+    'Repeating CQ is on, but no CQ is scheduled: the interval was 0 when the last one went. Turn it off and on to call again.',
   'js8.dock.repeat.now': 'now',
   'js8.dock.hb.title.off':
     'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
@@ -9977,6 +9979,8 @@ export const EN = {
     'Heartbeat schedule is on, but TX is off — nothing keys. Enable TX (the header pill) to let heartbeats go out.',
   'js8.dock.hb.title.armed':
     'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
+  'js8.dock.hb.notArmed.unscheduled':
+    'HB is on, and HB ACK answers only while it is, but no heartbeat of yours is scheduled: with the interval at 0 (Settings ▸ Digital ▸ JS8), HB sends one when it is turned on, and that one has gone. Turn HB off and on for another.',
 
   // ── JS8 ▸ the dock: command palette, the estimate, the second-act chips, pending, queue ──
   'js8.dock.cmd.aria': 'Directed command',
@@ -9998,16 +10002,26 @@ export const EN = {
     'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
   'js8.dock.relay.title.armed':
     'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. With Auto-reply off, it is put in the message box for you to send instead. Click to turn it off.',
+  'js8.dock.relay.notArmed.needsAuto':
+    'Relay is on, but with AUTOREPLY off a relay is put in the message box for you to send, and nothing keys by itself. Turn AUTOREPLY on to relay on the air.',
   'js8.dock.hbAck.title.off':
     'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
   'js8.dock.hbAck.title.on':
     'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
   'js8.dock.hbAck.title.armed':
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  'js8.dock.hbAck.notArmed.needsHb':
+    'Heartbeat acknowledgements are on, but they answer only while HB is on, as in JS8Call. Turning HB on also sends your own heartbeat.',
+  'js8.dock.hbAck.notArmed.needsAuto':
+    'Heartbeat acknowledgements are on, but they answer only while AUTOREPLY is on, as in JS8Call. Turn AUTOREPLY on.',
+  'js8.dock.hbAck.notArmed.needsHbAndAuto':
+    'Heartbeat acknowledgements are on, but they answer only while HB and AUTOREPLY are both on, as in JS8Call. Turning HB on also sends your own heartbeat.',
   // Appended to all three faces of the three arm chips (the reason it is its own key rather
   // than nine edits is the same as js8.panel.activity.differs).
   'js8.dock.arm.differs':
     'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
+  'js8.dock.notArmed.idle':
+    'Not armed: nothing from you for {{min}} min, so the idle watchdog holds it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings it back.',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
   'js8.toast.idleTripped':
     'JS8 idle watchdog: no operator activity for {{min}} min — HB, AUTOREPLY, RELAY, HB ACK and the repeating CQ are off. TX stays as you left it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings back AUTOREPLY, RELAY and HB ACK as Settings has them; HB and the repeating CQ stay off until you switch them on.',

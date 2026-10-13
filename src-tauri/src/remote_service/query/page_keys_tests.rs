@@ -1663,10 +1663,10 @@ fn the_satellite_sample_carries_only_the_keys_the_page_takes() {
     );
 }
 
-/// The JS8 cockpit's sample (`js8.ts`): two keys at its root, twenty-three the state, five what is
-/// armed, nine each station heard and each inbox message, eleven a decoded row, and four a queued
-/// row and a pending reply. The station and the message come from the station's own journal; a
-/// decoded row, a queued one and a pending reply are written field by field.
+/// The JS8 cockpit's sample (`js8.ts`): two keys at its root, twenty-four the state, five what is
+/// armed and five why not, nine each station heard and each inbox message, eleven a decoded row,
+/// and four a queued row and a pending reply. The station and the message come from the station's
+/// own journal; a decoded row, a queued one and a pending reply are written field by field.
 #[test]
 fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     const DECODED: &[&str] = &[
@@ -1718,6 +1718,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
             "relay",
             "hbAck",
             "armed",
+            "notArmed",
             "idleMinutes",
             "idleLimitMin",
             "idleTripped",
@@ -1732,6 +1733,11 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     takes(
         "js8: what is armed",
         &state["armed"],
+        &["autoreply", "relay", "hbAck", "hb", "cq"],
+    );
+    takes(
+        "js8: why not armed",
+        &state["notArmed"],
         &["autoreply", "relay", "hbAck", "hb", "cq"],
     );
     let (stations, inbox) = (

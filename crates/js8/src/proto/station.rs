@@ -355,6 +355,40 @@ pub struct PendingReply {
     pub fires_at_ms: u64,
 }
 
+/// Why an automatic origin whose switch is on would not act now: the first rule in
+/// [`Station::readiness`]'s order that stops it. The cockpit names it on that origin's chip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Unarmed {
+    /// The idle watchdog stands: nothing is acted on until the operator's next act
+    /// (`if(m_tx_watchdog) continue;`, mainwindow.cpp:8817-8820).
+    Idle,
+    /// The engine's TX latch is down: nothing keys.
+    TxOff,
+    /// An HB ACK answers a heartbeat only while HB is on (mainwindow.cpp:9061).
+    NeedsHb,
+    /// An HB ACK answers only with AUTO on (:9061), and a relay keys only with AUTO on: with AUTO
+    /// off it is put in the compose box (`processTxQueue`, :9674-9685).
+    NeedsAuto,
+    /// An HB ACK with neither HB nor AUTO on.
+    NeedsHbAndAuto,
+    /// The heartbeat or the repeating CQ has nothing scheduled: an on-demand one (interval 0) has
+    /// gone, and the next waits for its switch to be turned on again.
+    Unscheduled,
+}
+
+/// Each automatic origin as [`Station::readiness`] answers for it: `None` when the station would
+/// act on it now, given its switch is on, else why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Readiness {
+    pub autoreply: Option<Unarmed>,
+    pub relay: Option<Unarmed>,
+    pub hb_ack: Option<Unarmed>,
+    pub hb: Option<Unarmed>,
+    pub cq: Option<Unarmed>,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StationSnapshot {
@@ -1883,6 +1917,47 @@ impl Station {
         self.idle_tripped
     }
 
+    /// Would the station act on each automatic origin now, its switch being on (the switches are
+    /// the engine's to say, as the cockpit shows them)? `tx_on` is the engine's TX latch, which
+    /// the station does not hold. Read by the cockpit's chips, so a chip reads armed only when
+    /// the rules that decide each origin here would let it go out. In order:
+    /// - the idle trip stops every origin: `on_event` acts on nothing (`replies`) and the engine
+    ///   withholds whatever would key;
+    /// - then the latch: with it down nothing keys, and what falls due is dropped;
+    /// - an automatic reply needs nothing more;
+    /// - a relay keys only with AUTO on: `process_tx_queue` otherwise puts it in the compose box
+    ///   (mainwindow.cpp:9674-9685);
+    /// - an HB ACK needs HB and AUTO on (`maybe_hb_ack`, mainwindow.cpp:9061);
+    /// - a heartbeat or a repeating CQ needs something scheduled (`next_frame`, `tick`).
+    pub fn readiness(&self, tx_on: bool) -> Readiness {
+        let every = |why| Readiness {
+            autoreply: Some(why),
+            relay: Some(why),
+            hb_ack: Some(why),
+            hb: Some(why),
+            cq: Some(why),
+        };
+        if self.idle_tripped {
+            return every(Unarmed::Idle);
+        }
+        if !tx_on {
+            return every(Unarmed::TxOff);
+        }
+        let auto = self.cfg.autoreply;
+        Readiness {
+            autoreply: None,
+            relay: (!auto).then_some(Unarmed::NeedsAuto),
+            hb_ack: match (self.hb_on, auto) {
+                (true, true) => None,
+                (false, true) => Some(Unarmed::NeedsHb),
+                (true, false) => Some(Unarmed::NeedsAuto),
+                (false, false) => Some(Unarmed::NeedsHbAndAuto),
+            },
+            hb: self.hb_next_ms.is_none().then_some(Unarmed::Unscheduled),
+            cq: self.cq_next_ms.is_none().then_some(Unarmed::Unscheduled),
+        }
+    }
+
     pub fn last_tx_display(&self) -> Option<&str> {
         self.last_tx_display.as_deref()
     }
@@ -2219,6 +2294,129 @@ mod tests {
         s3.set_hb(true, 0);
         s3.on_event(&heartbeat("W1AW", -5), 1000);
         assert!(drain(&mut s3, 100000).is_none());
+    }
+
+    /// What `readiness` says of HB ACK is what a heard heartbeat draws, HB ACK on and TX on, for
+    /// each of HB and AUTO on or off: the ACK on the air with both, nothing otherwise, and each
+    /// time the reason names what is missing. Our own heartbeat is periodic and not yet due, so
+    /// anything drained is the ACK.
+    #[test]
+    fn readiness_says_what_a_heard_heartbeat_draws() {
+        let ack = Some((Origin::HbAck, "KD9TAW: W1AW HEARTBEAT SNR -05".to_string()));
+        for (hb_on, autoreply, want) in [
+            (true, true, (None, ack)),
+            (false, true, (Some(Unarmed::NeedsHb), None)),
+            (true, false, (Some(Unarmed::NeedsAuto), None)),
+            (false, false, (Some(Unarmed::NeedsHbAndAuto), None)),
+        ] {
+            let mut s = Station::new(StationConfig {
+                hb_ack: true,
+                autoreply,
+                hb_interval_min: 5,
+                ..cfg()
+            });
+            s.set_hb(hb_on, 0);
+            let ready = s.readiness(true).hb_ack;
+            s.on_event(&heartbeat("W1AW", -5), 1000);
+            let keyed = drain(&mut s, 15_000).map(|f| (f.origin, f.display));
+            assert_eq!(
+                (ready, keyed),
+                want,
+                "HB {hb_on}, AUTO {autoreply}: what readiness says is what keys"
+            );
+        }
+    }
+
+    /// A relay request keys only with AUTO on; with AUTO off it is put in the compose box, and
+    /// `readiness` says the relay needs AUTO.
+    #[test]
+    fn readiness_says_whether_a_relay_keys() {
+        let relay = directed(
+            "W1AW",
+            "KD9TAW",
+            Some(Command::Relay),
+            None,
+            "K1ABC HELLO WORLD",
+            -5,
+        );
+        for autoreply in [true, false] {
+            let mut s = Station::new(StationConfig { autoreply, ..cfg() });
+            let ready = s.readiness(true).relay;
+            s.on_event(&relay, 1000);
+            let keyed = drain(&mut s, 15_000).map(|f| (f.origin, f.display));
+            let boxed = s.sync_composer(false, None).1.map(|c| c.1);
+            let text = "K1ABC HELLO WORLD *DE* KD9TAW";
+            let want = if autoreply {
+                (None, Some((Origin::Relay, format!("KD9TAW: {text}"))), None)
+            } else {
+                (Some(Unarmed::NeedsAuto), None, Some(text.to_string()))
+            };
+            assert_eq!((ready, keyed, boxed), want, "AUTO {autoreply}");
+        }
+    }
+
+    /// A heartbeat or a repeating CQ at interval 0 goes once: then nothing is scheduled, and
+    /// `readiness` says so, while one with an interval stays scheduled.
+    #[test]
+    fn readiness_says_unscheduled_once_an_on_demand_heartbeat_or_cq_has_gone() {
+        for interval in [0, 5] {
+            for origin in [Origin::Heartbeat, Origin::CqRepeat] {
+                let mut s = Station::new(StationConfig {
+                    hb_interval_min: interval,
+                    cq_interval_min: interval,
+                    ..cfg()
+                });
+                let of = |r: Readiness| match origin {
+                    Origin::Heartbeat => r.hb,
+                    _ => r.cq,
+                };
+                match origin {
+                    Origin::Heartbeat => s.set_hb(true, 0),
+                    _ => s.set_cq(true, 0, 0),
+                }
+                let before = of(s.readiness(true));
+                let mut keyed = 0;
+                for k in 0..40u64 {
+                    let t = k * 15_000;
+                    s.tick(t);
+                    keyed += usize::from(drain(&mut s, t).is_some_and(|f| f.origin == origin));
+                }
+                let want = (interval == 0).then_some(Unarmed::Unscheduled);
+                assert_eq!(
+                    (before, of(s.readiness(true))),
+                    (None, want),
+                    "{origin:?} at interval {interval}"
+                );
+                assert!(keyed > 0, "control: {origin:?} at interval {interval} went");
+            }
+        }
+    }
+
+    /// The idle trip comes first, then the TX latch, whatever else holds: each stops every
+    /// origin, autoreply included, which otherwise needs nothing more.
+    #[test]
+    fn readiness_puts_the_idle_trip_then_the_latch_first() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 5;
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        let every = |why| Readiness {
+            autoreply: Some(why),
+            relay: Some(why),
+            hb_ack: Some(why),
+            hb: Some(why),
+            cq: Some(why),
+        };
+        assert_eq!(s.readiness(false), every(Unarmed::TxOff), "TX off");
+        assert_eq!(
+            s.readiness(true).autoreply,
+            None,
+            "control: TX on, an automatic reply needs nothing more"
+        );
+        s.tick(5 * 60 * 1000);
+        assert!(s.idle_tripped(), "control: the watchdog tripped");
+        assert_eq!(s.readiness(true), every(Unarmed::Idle), "tripped, TX on");
+        assert_eq!(s.readiness(false), every(Unarmed::Idle), "tripped, TX off");
     }
 
     #[test]

@@ -307,6 +307,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field that fills it, with a button to Settings ▸ Contesting ▸ Your entry, as it does for the CQ
   contests' category lines. An Entry class counts only when it is one of the party's own classes,
   and the file still exports either way.
+- **JS8: a switch lights green only when it can transmit now, and says why when it cannot.** HB
+  ACK answers a heard heartbeat only while HB and AUTOREPLY are on as well, as in JS8Call, but its
+  chip lit green with HB off, so a station with TX on and HB ACK on looked ready to answer
+  heartbeats and answered none. Now HB ACK, AUTOREPLY, RELAY, HB and the repeating CQ each light
+  green only when what they switch can go out. One that is on but cannot stays amber and says why
+  when you point at it: TX is off, the idle watchdog is holding it, HB ACK needs HB or AUTOREPLY,
+  RELAY needs AUTOREPLY to relay by itself, or a heartbeat or CQ sent once at interval 0 has
+  nothing more scheduled. The Remote page shows the same. When and what Nexus transmits is
+  unchanged.
 
 ## [1.18.0] — 2026-10-12
 
