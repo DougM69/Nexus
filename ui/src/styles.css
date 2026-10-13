@@ -6495,8 +6495,15 @@ body.resizing {
   padding: 6px var(--space-1);
   border-top: 1px solid var(--border-soft);
   text-align: center;
+  /* It names the contest running ("CQ WW RTTY", or the rules-file id of one the picker does not
+     list), so a word wider than the rail breaks inside the badge rather than run past the rail's
+     edge, which clips. Every shipped name breaks only between its words (measured in Chrome at
+     each text size). */
+  overflow-wrap: anywhere;
 }
 .mode-current-dot {
+  /* The dot keeps its size beside a name that wraps: it was squeezed thinner, out of round. */
+  flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -15944,6 +15951,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-top: none;
   border-right: 1px solid var(--border-soft);
   padding: 0 10px;
+  /* The top bar scrolls sideways, so the badge keeps its widest word whole there: breaking
+     anywhere let a crowded bar squeeze NYQP to one letter a line. */
+  overflow-wrap: normal;
 }
 [data-viewport='sm'] .layout,
 [data-viewport='xs'] .layout {

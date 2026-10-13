@@ -31,6 +31,7 @@ import { Tooltip, TooltipProvider } from './ui/Tooltip'
 import { t, type MessageKey } from '../i18n'
 import { type FeatureId, type View } from '../features/registry'
 import { orderNav, moveNav, loadNavOrder, saveNavOrder, resetNavOrder } from '../navOrder'
+import { contestBadgeName } from '../fdEvent'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every button's
 // TOOLTIP is prose and lives in the catalog. Its LABEL is prose only where the section is
@@ -65,6 +66,9 @@ interface Props {
   /** The picked contest's own name (`contestName(settings.fdEvent)`), for the Contest item's
    *  tooltip. Absent until the settings arrive, when the tooltip is the label alone. */
   contest?: string
+  /** The rules-file id of the contest the engine runs (`snap.fieldDay.event`), which the mode badge
+   *  names in Contest mode. Blank or absent is ARRL Field Day, as it is everywhere else. */
+  runningContest?: string
   /** Whether the Club Board button shows under the Contest item: the Field Day master switch.
    *  The Contest item itself stays with the mode off (its screen is where the mode is turned
    *  on), so the board cannot ride the item's own visibility. */
@@ -236,14 +240,15 @@ export const ITEMS: Item[] = [
 // Roam is no longer a rail section — it lives INSIDE the Tempo cockpit
 // (header chip + settings panel), per operator request.
 
-// The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's own name — both
-// invariant — so only the conversational mode's word resolves from the catalog.
-const MODE_LABEL: Record<OpMode, string> = {
-  get chat() {
-    return t('nav.mode.chat')
-  },
-  qso: 'QSO',
-  fieldDay: 'FIELD DAY',
+// The operating-mode badge. `QSO` is a Q-code, and Contest mode reads the running contest's short
+// form, the one the Contest screen's header shows, in the badge's capitals (`FIELD DAY`, `NYQP`;
+// `contestBadgeName` has the VHF contests' shorter ones): the sponsor's own name, invariant, so only
+// the conversational mode's word resolves from the catalog. A contest the picker does not list reads
+// its rules-file id, as that header does.
+function modeLabel(mode: OpMode, runningContest: string | undefined): string {
+  if (mode === 'chat') return t('nav.mode.chat')
+  if (mode === 'qso') return 'QSO'
+  return contestBadgeName(runningContest || 'arrlfd').toUpperCase()
 }
 
 export function ModeNav({
@@ -255,6 +260,7 @@ export function ModeNav({
   onDigitalMode,
   onClubBoard,
   contest,
+  runningContest,
   clubBoard = true,
 }: Props) {
   // A button's tooltip and accessible name. The Contest item's names the picked contest.
@@ -427,7 +433,7 @@ export function ModeNav({
         <div className="mode-nav-bottom">
           <span className="mode-current" title={t('nav.mode.title')}>
             <span className="mode-current-dot" aria-hidden="true" />
-            {MODE_LABEL[mode]}
+            {modeLabel(mode, runningContest)}
           </span>
           {/* One word for the gear: tooltip, accessible name and visible label are the same
               claim about the same button, so they are one entry. */}

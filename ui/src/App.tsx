@@ -3900,6 +3900,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // The Contest item's tooltip names the picked contest; a blank pick is ARRL Field
           // Day, as it is to the engine.
           contest={settings ? contestName(settings.fdEvent?.trim() || 'arrlfd') : undefined}
+          // The mode badge names the contest the engine runs: the session's, never the pick, which
+          // the engine runs as ARRL Field Day when the loaded rules do not carry it.
+          runningContest={snap.fieldDay?.event}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field
