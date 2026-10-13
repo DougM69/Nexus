@@ -3052,6 +3052,67 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// TQSL drops a contact whose mode it does not know yet — a JTTY contact, written bare as
+    /// WSJT-X writes it — and the batch then exits 9 and is read as rejected for every contact in
+    /// it. So the JTTY contact never reaches TQSL: the others are signed and stamped, it stays
+    /// unstamped (still owed to LoTW), the report counts it and the connection log says why. A
+    /// batch of nothing else runs no TQSL at all.
+    #[test]
+    fn a_jtty_contact_is_held_back_from_tqsl_and_the_log_says_so() {
+        let (dir, engine, ids) = station("lotw-jtty", 3);
+        let mut jtty = QsoRecord::clone(&engine.lock().unwrap().stored_log()[1]);
+        jtty.mode = "JTTY".into();
+        let edit = tempo_core::logbook::LogOp::Edit {
+            id: ids[1],
+            rec: Box::new(jtty),
+        };
+        assert!(
+            super::durable_command_tests::by_command(&engine, ids[1], edit).0,
+            "premise: one contact is a JTTY contact"
+        );
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            let batch = std::fs::read_to_string(args.last().expect("the batch file"))
+                .expect("TQSL can read it");
+            assert!(
+                !batch.to_ascii_uppercase().contains("<MODE:4>JTTY"),
+                "TQSL is never handed the JTTY contact: {batch}"
+            );
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str(), report.held_mode),
+            (2, "pending", 1)
+        );
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["read", "database"])
+        {
+            assert_eq!(
+                held,
+                &vec![pending, Some(None), pending],
+                "{what}: the JTTY contact is unstamped, the others are marked"
+            );
+        }
+        assert!(
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == "LoTW"
+                    && e.message == tempo_core::lotw_upload::held_sentence(1)),
+            "the connection log says why"
+        );
+        let report = lotw_upload_batch_with(&engine, LotwPick::Ids(vec![ids[1]]), true, |_, _| {
+            panic!("TQSL ran for a batch of nothing it could take")
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str(), report.held_mode),
+            (0, "none", 1)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A contact CORRECTED while TQSL signs is not the contact TQSL signed: LoTW holds the old
     /// version. Marked sent, the correction would never be uploaded. So it is left unmarked —
     /// offered again with the next upload, as it now stands — and the connection log says why.
@@ -25120,6 +25181,21 @@ fn lotw_upload_batch_with(
     .into_iter()
     .filter(|r| r.time_known)
     .collect();
+    // A contact TQSL would drop (its mode is one TQSL does not know yet: a JTTY contact, written
+    // bare as WSJT-X writes it) is held back here, at the same choke point: sent, it would vanish
+    // inside TQSL and make the whole batch read as rejected. Held, it stays unsent and unstamped,
+    // and the connection log says why.
+    let (held, batch): (Vec<_>, Vec<_>) = batch
+        .into_iter()
+        .partition(tempo_core::lotw_upload::tqsl_drops);
+    if !held.is_empty() {
+        conn_log(
+            "LoTW",
+            "info",
+            tempo_core::lotw_upload::held_sentence(held.len()),
+        );
+    }
+    let held_mode = held.len();
     if batch.is_empty() {
         return Ok(UploadReportDto {
             dispatched: 0,
@@ -25127,6 +25203,7 @@ fn lotw_upload_batch_with(
             detail: None,
             skipped_edited: 0,
             skipped_deleted: 0,
+            held_mode,
         });
     }
     let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
@@ -25185,6 +25262,7 @@ fn lotw_upload_batch_with(
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
             skipped_edited: 0,
             skipped_deleted: 0,
+            held_mode,
         }),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
@@ -25273,6 +25351,7 @@ fn lotw_upload_batch_with(
                 // count that does not clear otherwise reads as an upload that failed.
                 skipped_edited: done.changed,
                 skipped_deleted: done.gone,
+                held_mode,
             })
         }
     }
@@ -27347,6 +27426,7 @@ fn eqsl_push_qso_impl(
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
             skipped_edited: 0,
             skipped_deleted: 0,
+            held_mode: 0,
         }),
         Some(outcome) => {
             // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
@@ -27381,6 +27461,7 @@ fn eqsl_push_qso_impl(
                 detail: None,
                 skipped_edited: 0,
                 skipped_deleted: 0,
+                held_mode: 0,
             })
         }
     }

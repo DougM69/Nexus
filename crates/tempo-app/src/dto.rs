@@ -3515,6 +3515,11 @@ pub struct UploadReportDto {
     /// Contacts of the batch DELETED from the log while TQSL was signing it.
     #[serde(default)]
     pub skipped_deleted: usize,
+    /// Contacts held back from the batch because TQSL does not know their mode yet (a JTTY
+    /// contact, written bare as WSJT-X writes it): left unsent and unstamped, and named in the
+    /// connection log, rather than dropped inside TQSL. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub held_mode: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
