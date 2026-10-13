@@ -2843,6 +2843,7 @@ export const JA: PartialCatalog = {
   "fieldDay.club.link.hosting": "ポート {{port}} でホスト中。ポジションの参加先:",
   "fieldDay.club.link.hostingNoAddress": "ポート {{port}} でホスト中。",
   "fieldDay.club.link.connected": { "other": "ほかに {{count}} ポジションが接続中。" },
+  "fieldDay.club.link.otherCall": { "other": "クラブとは別のコールサインで記録した交信が {{count}} 件あります。このノートPCのログに残り、クラブには送られません。" },
   "fieldDay.club.link.heard": "ホストに接続中、最終受信 {{ago}}。",
   "fieldDay.club.link.reconnecting": "{{addr}} のホストに再接続しています: 最終受信 {{ago}}。",
   "fieldDay.club.link.lostHeard": "{{addr}} のホストとの接続が切れました。最終受信 {{ago}}。再試行しています。",

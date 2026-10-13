@@ -47,7 +47,22 @@ fn party_engine(posid: &str, name: &str, join_addr: &str) -> Shared {
 
 /// [`party_engine`]'s position, on the station call `call`.
 fn party_engine_on(call: &str, posid: &str, name: &str, join_addr: &str) -> Shared {
+    party_engine_kept(call, posid, name, join_addr, None)
+}
+
+/// [`party_engine_on`]'s position, keeping its own contest journal at `journal` as every laptop
+/// does: Contest mode turned off and on again, or Nexus reopened, brings its contacts back.
+fn party_engine_kept(
+    call: &str,
+    posid: &str,
+    name: &str,
+    join_addr: &str,
+    journal: Option<&std::path::Path>,
+) -> Shared {
     let mut e = Engine::new(call, "EN50", 0);
+    if let Some(path) = journal {
+        e.set_fd_log_path(path.to_path_buf());
+    }
     let mut s = e.settings().clone();
     s.fd_active = true;
     s.fd_event = "ilqp".into();
@@ -973,6 +988,266 @@ fn a_laptop_on_the_club_call_rejoins_after_the_hosts_put_back() {
     );
 
     for sd in [cw_sd, host2_sd, host2_pump_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A laptop's own contest log, by call.
+fn own_calls(eng: &Shared) -> Vec<String> {
+    engine_lock(eng)
+        .snapshot()
+        .field_day
+        .map(|f| f.log.iter().map(|r| r.call.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// A journal as a Nexus older than the call on each contact wrote it: every `APP_NEXUS_ONAIR`
+/// field, and the space after it, taken out.
+fn as_an_older_nexus_wrote_it(adif: &str) -> String {
+    const TAG: &str = "<APP_NEXUS_ONAIR:";
+    let mut out = String::new();
+    let mut rest = adif;
+    while let Some(at) = rest.find(TAG) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + TAG.len()..];
+        let close = after.find('>').expect("a closed field");
+        let len: usize = after[..close].parse().expect("a field length");
+        rest = &after[close + 1 + len + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// ⭐ **The club's log takes a contact only on the call it holds.** After "Contest over?" on the
+/// host, which puts the operator's own call back, the host turns Contest mode on again under that
+/// call to reach the Club Cabrillo button, still hosting. A contact it then logged went up over its
+/// own link into the club's log and its files, under the club's call. A contact logged on another
+/// call than the club's now stays in that laptop's own log: it is never sent, the club chip does
+/// not count it as owed, and the laptop's own screen says so.
+///
+/// CONTROL first: the party merges, the put-back lands and the mode is back on under the
+/// operator's own call while the host holds the club's. Then the host's contact on its own call
+/// is in its own log and nowhere in the club's, while a contact on the club's call after it is
+/// taken. A contact that carries no call (a journal an older Nexus wrote) follows the call its
+/// link joined under, the club's, and is taken. A joined laptop that changes its call keeps its
+/// link, and its next contact stays out. And the host reopened with the club's call typed back
+/// still keeps out the contact it logged on its own call: each contact's call is in its journal.
+#[test]
+fn a_contact_logged_on_another_call_stays_out_of_the_club_log() {
+    let dir = std::env::temp_dir().join(format!("ilqp-other-call-loopback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let journal = dir.join("fd_event_event.ilqp.jsonl");
+    let hq_log = dir.join("hq.adi");
+    let ssb_log = dir.join("ssb.adi");
+    let listener = reusable_listener(0);
+    let port = listener.local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let host = party_engine_kept("W9XYZ", "aaaa0001", "HQ", &addr, Some(&hq_log));
+    engine_lock(&host).fd_host_start(journal.clone()).unwrap();
+    let host_sd = start_host(&host, listener);
+    let host_pump_sd = start_pump(&host, &addr);
+    let cw = party_engine("bbbb0002", "CW tent", &addr);
+    let cw_sd = start_pump(&cw, &addr);
+    log_party(&host, "K9AAA", "COOK", "PH");
+    log_party(&cw, "K9BBB", "KANE", "CW");
+    wait_until("the party's two contacts merged", 10, || {
+        club_rows(&host) == 2
+    });
+
+    // Where a laptop's link stands.
+    let link = |eng: &Shared| {
+        engine_lock(eng)
+            .fd_club_link()
+            .map(|l| l.state)
+            .unwrap_or_default()
+    };
+    // A laptop's club chip: its state and the contacts the club's log does not have yet.
+    let chip = |eng: &Shared| {
+        engine_lock(eng)
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .map(|c| (c.sync_state, c.queued))
+            .unwrap_or_default()
+    };
+    let synced = || ("synced".to_string(), 0);
+    // What a laptop's own screen says it logged on another call than the club's.
+    let other_call = |eng: &Shared| {
+        engine_lock(eng)
+            .fd_club_link()
+            .and_then(|l| l.other_call)
+            .unwrap_or(0)
+    };
+    // The Club Cabrillo's contacts, (call sent, call worked), in call order.
+    let club_file = |eng: &Shared| {
+        let cab = engine_lock(eng)
+            .fd_club_export(true)
+            .expect("club cabrillo");
+        let mut worked = worked(&cab);
+        worked.sort();
+        worked
+    };
+    let sent_as_the_club = |calls: &[&str]| {
+        calls
+            .iter()
+            .map(|c| ("W9XYZ".to_string(), c.to_string()))
+            .collect::<Vec<_>>()
+    };
+    let club_adif = |eng: &Shared| engine_lock(eng).fd_club_export(false).expect("club adif");
+
+    // "Contest over?" on the host, ONE save, then Contest mode back on under the operator's own
+    // call to reach the Club Cabrillo button.
+    {
+        let mut e = engine_lock(&host);
+        let mut s = e.settings().clone();
+        s.fd_active = false;
+        s.mycall = "K9OWN".into();
+        s.contest_entry_class = String::new();
+        e.apply_settings(s);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        e.apply_settings(s);
+    }
+    {
+        let e = engine_lock(&host);
+        assert_eq!(
+            (
+                e.settings().mycall.as_str(),
+                e.fd_hosting(),
+                e.fd_club_call(),
+                e.snapshot().field_day.and_then(|f| f.club).is_some()
+            ),
+            ("K9OWN", true, "W9XYZ".to_string(), true),
+            "CONTROL: the put-back landed, the host holds the club's call, and the mode is back on"
+        );
+    }
+    log_party(&host, "K9EEE", "COOK", "PH");
+    // A contact on the club's call after it, from the CW tent.
+    log_party(&cw, "K9FFF", "WILL", "CW");
+    wait_until("the CW tent's contact merged", 10, || club_rows(&host) >= 3);
+    // Long enough for the host's own link to send anything it was going to.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        club_file(&host),
+        sent_as_the_club(&["K9AAA", "K9BBB", "K9FFF"]),
+        "the contact the host logged on its own call is not in the Club Cabrillo"
+    );
+    assert_eq!(club_rows(&host), 3, "…nor in the club's log");
+    assert!(!club_adif(&host).contains("K9EEE"), "…nor in the Club ADIF");
+    assert_eq!(
+        own_calls(&host),
+        ["K9AAA", "K9EEE"],
+        "it is in the host's own log"
+    );
+    wait_until("the host's chip settles", 10, || chip(&host) == synced());
+    assert_eq!(
+        other_call(&host),
+        1,
+        "the host's own screen counts the contact logged on another call"
+    );
+    assert_eq!(
+        (chip(&cw), other_call(&cw)),
+        (synced(), 0),
+        "CONTROL: the CW tent, on the club's call"
+    );
+
+    // A laptop whose journal an older Nexus wrote: the contact it logged before its link came up
+    // carries no call.
+    {
+        let first = party_engine_kept("W9XYZ", "cccc0003", "SSB tent", &addr, Some(&ssb_log));
+        log_party(&first, "K9GGG", "KANE", "PH");
+        let mark = engine_lock(&first).journal_mark();
+        mark.wait();
+    }
+    let written = std::fs::read_to_string(&ssb_log).unwrap();
+    let older = as_an_older_nexus_wrote_it(&written);
+    assert!(
+        written.contains("<APP_NEXUS_ONAIR:5>W9XYZ")
+            && !older.contains("APP_NEXUS_ONAIR")
+            && older.contains("<CALL:5>K9GGG"),
+        "CONTROL: this build writes the call, and the older journal carries none: {older}"
+    );
+    std::fs::write(&ssb_log, older).unwrap();
+    let ssb = party_engine_kept("W9XYZ", "cccc0003", "SSB tent", &addr, Some(&ssb_log));
+    assert_eq!(
+        own_calls(&ssb),
+        ["K9GGG"],
+        "CONTROL: its contact is back from the journal"
+    );
+    let ssb_sd = start_pump(&ssb, &addr);
+    wait_until("the SSB tent's contact merged", 10, || {
+        club_rows(&host) == 4
+    });
+    assert_eq!(
+        club_file(&host),
+        sent_as_the_club(&["K9AAA", "K9BBB", "K9FFF", "K9GGG"]),
+        "a contact with no call, on a link joined on the club's call, is taken"
+    );
+    wait_until("the SSB tent's chip settles", 10, || chip(&ssb) == synced());
+    assert_eq!(other_call(&ssb), 0, "nothing of the SSB tent's is kept out");
+
+    // The CW tent, joined, changes its call; its link stays up.
+    {
+        let mut e = engine_lock(&cw);
+        let mut s = e.settings().clone();
+        s.mycall = "K9ABC".into();
+        e.apply_settings(s);
+    }
+    log_party(&cw, "K9HHH", "WILL", "CW");
+    log_party(&ssb, "K9JJJ", "WILL", "CW");
+    wait_until("the SSB tent's second contact merged", 10, || {
+        club_rows(&host) >= 5
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(link(&cw), "joined", "CONTROL: the CW tent's link stays up");
+    assert_eq!(
+        club_file(&host),
+        sent_as_the_club(&["K9AAA", "K9BBB", "K9FFF", "K9GGG", "K9JJJ"]),
+        "the CW tent's contact on its new call is not in the Club Cabrillo"
+    );
+    wait_until("the CW tent's chip settles", 10, || chip(&cw) == synced());
+    assert_eq!(
+        other_call(&cw),
+        1,
+        "the CW tent's own screen counts its contact on the new call"
+    );
+
+    // The host closes Nexus and is reopened with the club's call typed back in Settings.
+    host_sd.store(true, Ordering::Relaxed);
+    host_pump_sd.store(true, Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(600));
+    let host2 = party_engine_kept("W9XYZ", "aaaa0001", "HQ", &addr, Some(&hq_log));
+    assert_eq!(
+        own_calls(&host2),
+        ["K9AAA", "K9EEE"],
+        "CONTROL: the host's journal brings both its contacts back"
+    );
+    engine_lock(&host2).fd_host_start(journal.clone()).unwrap();
+    assert_eq!(
+        (club_rows(&host2), engine_lock(&host2).fd_club_call()),
+        (5, "W9XYZ".to_string()),
+        "CONTROL: the reopened host rebuilds the club's log under the club's call"
+    );
+    let host2_sd = start_host(&host2, reusable_listener(port));
+    let host2_pump_sd = start_pump(&host2, &addr);
+    wait_until("the host's own laptop joins again", 20, || {
+        link(&host2) == "joined"
+    });
+    wait_until("the reopened host's chip settles", 10, || {
+        chip(&host2) == synced()
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        club_file(&host2),
+        sent_as_the_club(&["K9AAA", "K9BBB", "K9FFF", "K9GGG", "K9JJJ"]),
+        "the contact the host logged on its own call stays out after it reopens on the club's call"
+    );
+    assert_eq!(other_call(&host2), 1, "and its screen still says so");
+
+    for sd in [cw_sd, ssb_sd, host2_sd, host2_pump_sd] {
         sd.store(true, Ordering::Relaxed);
     }
     std::thread::sleep(Duration::from_millis(300));

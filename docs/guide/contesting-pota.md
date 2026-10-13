@@ -234,7 +234,9 @@ At a club it also says how many of this laptop's contacts the club's log does no
 still go to the host once this laptop is back with it, with the mode on or off, as long as Nexus
 stays open with club sync on. On the host, putting your own call and entry class back changes
 nothing in the club's files: Club Cabrillo and Club ADIF keep the call and class the club was
-hosted under, even with the mode turned back on to reach them.
+hosted under, even with the mode turned back on to reach them. A contact you then log on your own
+call stays in that laptop's own log and is not sent: the club's log takes a contact only on the
+club's call, and the club block says how many it kept out.
 
 **Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
 mode stays on. The merge and the export are done before the mode goes off, because they need the

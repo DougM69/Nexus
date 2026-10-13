@@ -181,6 +181,28 @@ describe("the host's line", () => {
   })
 })
 
+describe("contacts logged on another call than the club's", () => {
+  const ONE =
+    "1 contact was logged on another call than the club's, so it stays in this laptop's own log and is not sent to the club."
+  const TWO =
+    "2 contacts were logged on another call than the club's, so they stay in this laptop's own log and are not sent to the club."
+  const IN: ClubLink = { ...JOINER, state: 'joined', event: 'ILQP', hostCall: 'W9XYZ', status: 'connected', heardSecs: 3 }
+
+  it('are said last, on a joined laptop and on the host', () => {
+    expect(said({ ...IN, otherCall: 1 }, true)).toEqual([
+      ['This laptop is CW tent in this event.', false],
+      ['Connected to the host, heard 3 s ago.', false],
+      [ONE, true],
+    ])
+    expect(said({ ...HOST, otherCall: 2 })).toEqual([...said(HOST), [TWO, true]])
+  })
+
+  it('CONTROL: none, nothing said', () => {
+    expect(said({ ...IN, otherCall: 0 }, true)).toEqual(said(IN, true))
+    expect(said(IN, true)).toHaveLength(2)
+  })
+})
+
 describe('Find club events', () => {
   it('says the time the search listens for', () => {
     const fdsync = readFileSync(

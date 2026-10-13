@@ -4627,6 +4627,7 @@ export const DE: PartialCatalog = {
   "fieldDay.club.link.hosting": "Hostet auf Port {{port}}. Positionen treten bei unter:",
   "fieldDay.club.link.hostingNoAddress": "Hostet auf Port {{port}}.",
   "fieldDay.club.link.connected": { "one": "{{count}} weitere Position verbunden.", "other": "{{count}} weitere Positionen verbunden." },
+  "fieldDay.club.link.otherCall": { "one": "{{count}} Kontakt wurde unter einem anderen Rufzeichen als dem des Clubs geloggt. Er bleibt im eigenen Log dieses Laptops und wird nicht an den Club geschickt.", "other": "{{count}} Kontakte wurden unter einem anderen Rufzeichen als dem des Clubs geloggt. Sie bleiben im eigenen Log dieses Laptops und werden nicht an den Club geschickt." },
   "fieldDay.club.link.heard": "Mit dem Host verbunden, zuletzt gehört {{ago}}.",
   "fieldDay.club.link.reconnecting": "Verbindet neu mit dem Host unter {{addr}}: zuletzt gehört {{ago}}.",
   "fieldDay.club.link.lostHeard": "Verbindung zum Host unter {{addr}} verloren, zuletzt gehört {{ago}}. Neuer Versuch läuft.",
