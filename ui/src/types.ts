@@ -1575,6 +1575,10 @@ export interface RadioStatus {
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
    *  keys or fails for another reason; absent otherwise, and from a station older than it. */
   pttRefused?: PttRefused | null
+  /** The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
+   *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
+   *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
+  voiceDropped?: VoiceDropped | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -1720,6 +1724,9 @@ export interface CwDecodeResult {
   sent: string[]
   /** A CW-keyer failure to surface (e.g. the rig rejected CAT keying), else null. */
   keyerError: string | null
+  /** The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+   *  (Nexus's Flex client): an information line until the next send. Absent from an older station. */
+  paddleTookOver?: boolean
   /** CW copilot: ranked worked-station callsign candidates from the decode (click to confirm). */
   candidates: { call: string; best: boolean }[]
   /** RST they sent us, read from the decode (e.g. "599"), else null. */
@@ -4991,6 +4998,17 @@ export interface PttRefused {
   at: number
   /** The transmit slice's mode, in the radio's own word (USB): data, never translated. */
   mode: string
+}
+
+/** A voice-keyer message Nexus's own Flex client dropped without keying the radio (mirror of the
+ *  Rust VoiceDropped). The words are the UI's, in features/voiceDropped.ts. */
+export interface VoiceDropped {
+  /** When it happened (unix seconds). */
+  at: number
+  /** `noDax`: the radio did not take its transmit audio from DAX within 2 seconds of the press, or
+   *  no longer took it when the message was to key. `keyed`: something else keyed the radio, or held
+   *  the transmitter, before the message could key. */
+  cause: 'noDax' | 'keyed'
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words

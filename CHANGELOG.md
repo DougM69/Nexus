@@ -5,6 +5,47 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **FlexRadio: your paddle wins over Nexus's CW on the Flex native client (Beta), built and off
+  until a tester has checked it on a radio.** Once a tester's bench has shown what the radio
+  reports for a paddle or key in its key jack, touching it while Nexus sends CW clears the radio's
+  CW buffer at once: the rest of the message is dropped and never resent, with no alarm, no
+  reconnect and no unkey sent against your paddle, and the CW screen says your paddle took over.
+  An F-key pressed while your paddle keys the radio is refused with that reason, and the next one
+  after it sends as usual. If the radio refuses that clear while your paddle keys, the unkey Nexus
+  would send 5 seconds later waits while the radio shows your paddle keying, and goes as soon as
+  the radio shows Nexus's own CW, or once you have let go with Nexus's CW not shown to have
+  stopped. Any other keying during Nexus's CW (your mic's PTT, a foot switch, the
+  accessory jack, another program) still gets the amber alarm, and so does Nexus's own CW still
+  keying after its clear. The unkey that follows Stop TX's clear now goes out only while the radio
+  still shows Nexus's own CW transmitting. Until the bench has shown it, a paddle touch during
+  Nexus's CW gets the amber alarm and a reconnect, as now. Meanwhile each check the Flex native
+  client makes that a transmission ended, when it fails, writes one line to Nexus's diagnostic log
+  naming the check and the radio's own line, for the bench to send back; it changes nothing on the
+  air. NEEDS-BENCH on a FLEX radio.
+
+### Changed
+
+- **FlexRadio: the voice keyer plays in Phone through the Flex native client with native DAX
+  audio on (Beta).** It used to refuse there, because the radio keeps its own mic in Phone. Now
+  each message switches the radio for its own length: Nexus asks the radio to take its transmit
+  audio from DAX, keys only once the radio reports it, plays the message, unkeys, and gives the
+  radio its mic back once the unkey is confirmed. A message the radio has not switched for within 2
+  seconds, or that something else keys first, is dropped, never played later, and the status bar
+  says why; a message longer than 20 seconds, or one sent while something else is transmitting, is
+  refused with the reason. Stop TX ends a message at once, and so does turning native DAX audio off
+  while it plays, in Phone or on a digital slice: the rest is dropped and the radio unkeyed, and
+  TX On stays as it was. Right after
+  a message Nexus's own PTT can be refused for a moment, until the mic is back; the mic's own PTT
+  works throughout, and a message plays with the radio's VOX on. Pressing the mic's PTT during a
+  message still gets the amber alarm and a reconnect, as before, until a tester's bench shows what
+  the radio reports for it; from then on your mic wins: Nexus drops the message and ends its own
+  key, with no alarm (built now, off until then). SSTV and APRS stay refused in Phone and FM.
+  NEEDS-BENCH on a FLEX radio.
+
 ## [1.18.0] — 2026-10-12
 
 ### Added

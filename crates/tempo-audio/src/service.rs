@@ -3353,6 +3353,17 @@ struct RadioLoop {
     /// A future slot path that forgets to stamp it fails SAFE (TX Off cuts, the old
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed
+    /// through Nexus's Flex client's switch to DAX, the radio having had the mic: its over ends at
+    /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
+    /// operator's voice. Matches `tx_until_ms` only while that over is the one held.
+    flex_voice_until_ms: Option<f64>,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last handed
+    /// whole to the DAX tee of Nexus's Flex client at its key: through the switch to DAX in Phone
+    /// (`flex_voice_until_ms`), or over the DAX a digital slice already takes. The tee going takes
+    /// the rest of it, and the tee sync then ends it. Matches `tx_until_ms` only while that over is
+    /// the one held.
+    voice_tee_until_ms: Option<f64>,
     tuning_keyed: bool,
     /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
     /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
@@ -3689,8 +3700,8 @@ struct RadioLoop {
     /// The radio's DAX source as last pushed to the engine (the Phone cockpit's "mic
     /// disconnected").
     flex_mic_off_pushed: Option<bool>,
-    /// Whether the radio has the mic while native audio is on, as last pushed to the engine (the
-    /// voice keyer's refusal).
+    /// Whether the radio has the mic while native audio is on, as last pushed to the engine (APRS
+    /// and SSTV refuse on it; a voice-keyer message waits for the switch to DAX).
     flex_radio_has_mic_pushed: Option<bool>,
     /// What the Flex client's radio reports beside Tune while Tune is its own carrier, as last
     /// pushed to the engine (`None` inside: Tune is Nexus's tone).
@@ -4139,6 +4150,8 @@ impl RadioLoop {
             prev_slot_was_tx: false,
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
+            flex_voice_until_ms: None,
+            voice_tee_until_ms: None,
             tuning_keyed: false,
             tune_native: false,
             tune_was_data: false,
@@ -5244,17 +5257,20 @@ impl RadioLoop {
         {
             return;
         }
-        let browser_voice = {
+        let (browser_voice, voice_keyer) = {
             let eng = engine_lock(engine);
             if !self.tx_routing_quiet(&eng, rig, now_end) {
                 return;
             }
-            eng.remote_presence_live(self.mono_now(now_end))
+            (
+                eng.remote_presence_live(self.mono_now(now_end)),
+                eng.voice_waits_for_dax().is_some(),
+            )
         };
         let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
             return;
         };
-        if let Some(done) = d.sync_tx_routing(browser_voice) {
+        if let Some(done) = d.sync_tx_routing(browser_voice, voice_keyer) {
             crate::civ::diag::note(&format!("Flex client: {done}"));
         }
     }
@@ -5388,6 +5404,42 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// The voice keyer's message for this tick, if one may go out, and whether it rides Nexus's
+    /// Flex client's switch to DAX (the radio having had the mic; operator ruling, 2026-10-12,
+    /// "Change it now"). A message waiting for that switch ([`Engine::voice_waits_for_dax`]) is
+    /// taken only once the radio reports DAX on Nexus's own stream, with the DAX tee in place and
+    /// nothing keyed; until then it is held, and the routing's quiet point asks the radio for DAX.
+    /// It is dropped, with the reason on the status lane and never played later, when anything else
+    /// keys first or holds the transmitter, or when the radio has not switched 2 seconds (the
+    /// routing's own confirm window) after the press. Only the up half waits: the message's unkey
+    /// and every stop are the loop's as for any over.
+    fn take_voice(&self, eng: &mut Engine, rig: &Rig) -> Option<(Vec<f32>, bool)> {
+        let Some(since) = eng.voice_waits_for_dax() else {
+            return eng.poll_voice().map(|message| (message, false));
+        };
+        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+        let keyed_first = eng.tx_owner_beside_voice().is_some()
+            || self.holds_tx()
+            || self.tuning_keyed
+            || self.mic_keyed
+            || rig.keyed
+            || flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another);
+        if keyed_first {
+            eng.drop_flex_voice(tempo_app::dto::VoiceDropCause::Keyed);
+            return None;
+        }
+        if since.elapsed() >= Duration::from_millis(crate::flex::routing::CONFIRM_MS) {
+            eng.drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
+            return None;
+        }
+        let ready =
+            self.dax_tee_id.is_some() && flex.is_some_and(crate::flex::FlexDaemon::takes_voice_dax);
+        if !ready {
+            return None;
+        }
+        eng.poll_voice().map(|message| (message, true))
     }
 
     /// Whether Nexus's own Flex client believes a transmission of ours may be on the air
@@ -6322,14 +6374,15 @@ impl RadioLoop {
         // `flex_native_audio` setting: with native audio off too, while Nexus's own write still
         // has the radio on DAX (the toggle, or the receive floor above, takes the tee out at once;
         // the routing puts the mic back at its next quiet point). The Phone cockpit renders it;
-        // nothing gates on it.
+        // nothing gates on it. Not for the DAX a voice-keyer message has for its own length: the
+        // mic is the operator's again after it, and the marker would flash for every message.
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
         let client = flex.filter(|_| self.flex_client_audio);
         let want_tee: Option<crate::backend::TxTeeHandle> = client
             .filter(|d| d.tx_route_ready())
             .and_then(crate::flex::FlexDaemon::tx_tee);
         let mic_off = match client {
-            Some(d) => d.radio_dax() == Some(true),
+            Some(d) => d.radio_dax() == Some(true) && !d.dax_for_keyer(),
             None => flex.is_some_and(crate::flex::FlexDaemon::leaves_dax),
         };
         let want_id = want_tee
@@ -6351,6 +6404,25 @@ impl RadioLoop {
             {
                 engine_lock(engine).halt_tx_for_lost_slot_audio();
             }
+            // …and a voice-keyer message the tee carries, through the client's switch to DAX in
+            // Phone or over the DAX a digital slice already takes, which hands its whole waveform
+            // to the tee at its key in the same way: it ends as the keyer's own Stop ends it, the
+            // rest dropped and the radio unkeyed in this same tick (the voice block below), with
+            // TX On left as it was (operator rulings, 2026-10-12, "End the message and unkey" and,
+            // for a digital slice, "Yes, end it the same way"). Only while its audio is still
+            // going out, as for a slot over. Any other over on DAX is left as it was.
+            if self.dax_tee_id.is_some()
+                && self.voice_tee_until_ms.is_some_and(|t| {
+                    self.tx_until_ms == Some(t) && now < t - crate::slot::TX_TAIL_MS
+                })
+            {
+                tempo_core::applog::info(
+                    "tx",
+                    "voice-keyer message ended: its Flex native DAX audio went part way through \
+                     (unkeyed; TX On unchanged)",
+                );
+                engine_lock(engine).stop_voice();
+            }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
@@ -6360,9 +6432,10 @@ impl RadioLoop {
             engine_lock(engine).observe_flex_dax_tx(mic_off);
         }
         // …and whether the radio has the mic while native audio is on (Phone at the shack): a
-        // recorded message would leave over DAX, which the radio then ignores, so the voice keyer
-        // refuses (operator ruling, 2026-10-04). Pushed on the transition, and before the voice
-        // keyer below takes a message this tick.
+        // packet or a picture would leave over DAX, which the radio then ignores, so APRS and SSTV
+        // refuse, and a voice-keyer message waits for the switch to DAX around it (operator
+        // rulings, 2026-10-04 and 2026-10-12). It stays up through that switch. Pushed on the
+        // transition, and before the voice keyer below takes a message this tick.
         let radio_has_mic = client.is_some_and(crate::flex::FlexDaemon::radio_has_mic);
         if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
             self.flex_radio_has_mic_pushed = Some(radio_has_mic);
@@ -9402,8 +9475,20 @@ impl RadioLoop {
                     }
                 }
             }
+            // THE OPERATOR'S PADDLE TOOK OVER (Nexus's Flex client, once a tester's bench has named
+            // what the radio reports for it): the client has cleared the radio's CW buffer, and the
+            // rest of the message is dropped here, before another word is taken, never resent. Not
+            // Stop TX: nothing here stops anything, so no stop is aimed at the operator's keying.
+            let paddle = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(crate::flex::FlexDaemon::take_operator_break);
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
+                if paddle {
+                    eng.cw_operator_break();
+                }
                 (
                     eng.take_cw_abort(),
                     eng.cw_wpm(),
@@ -9416,6 +9501,9 @@ impl RadioLoop {
                     eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
+            if paddle {
+                self.cw_busy_until = 0.0; // the operator's next send keys as usual
+            }
             // ARM THE ZERO-BEAT MEASUREMENT at the operator's pitch while the CW section is
             // up, and disarm it everywhere else. The rx-dsp thread does the measuring (see
             // `rxdsp::measure_zero_beat`); this loop is simply the only thread that can see
@@ -10614,10 +10702,22 @@ impl RadioLoop {
                 &captured
             };
 
+            // THE OPERATOR'S MIC TOOK OVER (Nexus's Flex client, once a tester's bench has named
+            // what the radio reports for it): the client has sent our own unkey and stopped the
+            // message's DAX audio, and the message ends here as the keyer's own Stop ends it. Not
+            // Stop TX: the latch, the stop hold and every other gate stay as they were.
+            let mic_took_over = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(crate::flex::FlexDaemon::take_operator_mic);
             let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine_lock(engine);
                 if eng.is_recording() {
                     eng.push_record_samples(rec_samples);
+                }
+                if mic_took_over {
+                    eng.stop_voice();
                 }
                 (
                     eng.take_voice_abort(),
@@ -10625,7 +10725,7 @@ impl RadioLoop {
                     // ([`Self::may_key`]) — `poll_voice` TAKES the message, so skipping the
                     // call is what keeps it for the rig it was recorded to go out on.
                     if self.may_key() {
-                        eng.poll_voice()
+                        self.take_voice(&mut eng, rig)
                     } else {
                         None
                     },
@@ -10638,23 +10738,56 @@ impl RadioLoop {
                 let _ = rig.ptt(false);
                 self.tx_until_ms = None;
             }
-            if let Some(buf) = samples {
+            if let Some((buf, dax)) = samples {
                 if !buf.is_empty() {
                     let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                                                   // A NAK here used to play the message into a receiving rig: it is not played
                                                   // (`key_over`), and the line says why instead of silent dead air.
-                    let key = self.key_over(rig, false);
+
+                    // A message on the Flex client's switch to DAX: its one key is marked as
+                    // carrying Nexus's audio, which the client keys only while the radio takes
+                    // DAX. Refused that way (the radio left DAX between the look and the key),
+                    // it is the keyer's drop, and its lane says so in place of the PTT advice.
+                    let (key, not_on_dax) = {
+                        let flex = dax
+                            .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                            .flatten();
+                        let asked = Instant::now();
+                        if let Some(d) = flex {
+                            d.set_voice_key(true);
+                        }
+                        let key = self.key_over(rig, false);
+                        if let Some(d) = flex {
+                            d.set_voice_key(false);
+                        }
+                        let not_on_dax = matches!(key, KeyUp::Refused(_))
+                            && flex
+                                .and_then(|d| d.key_refused_since(asked))
+                                .is_some_and(|(_, cause)| cause.is_some());
+                        (key, not_on_dax)
+                    };
                     if key.sends() {
                         backend.play(&buf);
                         let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        if dax {
+                            self.flex_voice_until_ms = self.tx_until_ms;
+                        }
+                        // Handed whole to the client's DAX tee (the switch's, or a digital slice's
+                        // own DAX): the tee going ends it (the tee sync above).
+                        if self.dax_tee_id.is_some() {
+                            self.voice_tee_until_ms = self.tx_until_ms;
+                        }
                     }
                     if let KeyUp::Refused(why) = &key {
                         note_refused_key("voice-keyer message not played", why);
                     }
-                    self.report_ptt(engine, key.warns());
+                    if not_on_dax {
+                        engine_lock(engine).drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
+                    }
+                    self.report_ptt(engine, key.warns() && !not_on_dax);
                 }
             }
             // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
@@ -11305,8 +11438,18 @@ impl RadioLoop {
         // unkey while the operator is holding live PTT — they own the key then, so a
         // voice/CW message tail ending must not cut a live phone over (the manual-PTT
         // applier handles unkeying when the operator actually releases).
+        //
+        // Except a voice-keyer message through Nexus's Flex client's switch to DAX: the radio
+        // takes its audio from that DAX until the mic is back, so a held PTT would hold the
+        // transmitter with no voice on it. Its over ends at its deadline, and the held PTT is
+        // asked for again, which the client keeps off the air with its reason until the mic is
+        // back ("Same rule for Phone").
         if let Some(t) = self.tx_until_ms {
             if now >= t {
+                let flex_voice = self.flex_voice_until_ms == Some(t);
+                if flex_voice && self.manual_ptt_applied {
+                    self.manual_ptt_applied = false;
+                }
                 if !self.manual_ptt_applied {
                     // ⚠️ FLUSH BEFORE THE UNKEY, OR THE DEADLINE DOES NOTHING ON VOX. Dropping
                     // CAT PTT is not what stops a VOX rig — the AUDIO is. Queued playback keeps

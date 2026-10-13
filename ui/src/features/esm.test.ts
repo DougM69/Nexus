@@ -393,7 +393,6 @@ describe('esmTxRefusal — each refusal by its reason', () => {
     keyerShown: true,
     pttHeld: false,
     recording: false,
-    radioHasMic: false,
     ...over,
   })
 
@@ -418,10 +417,9 @@ describe('esmTxRefusal — each refusal by its reason', () => {
       expect(esmTxRefusal(g)).toEqual({ why: 'clockRepair' })
   })
 
-  it('Phone: the keyer recording, PTT held, the radio holding the mic', () => {
+  it('Phone: the keyer recording, PTT held', () => {
     expect(esmTxRefusal(phone({ recording: true }))).toEqual({ why: 'recording' })
     expect(esmTxRefusal(phone({ pttHeld: true }))).toEqual({ why: 'pttHeld' })
-    expect(esmTxRefusal(phone({ radioHasMic: true }))).toEqual({ why: 'radioHasMic' })
   })
 
   it('ESM steps aside (Enter logs as with ESM off) while the keyer is hidden, the RTTY auto sequence runs, or Continuous TX is latched', () => {
@@ -568,7 +566,6 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       keyerShown: true,
       pttHeld: false,
       recording: false,
-      radioHasMic: false,
     }
     const slots = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'].map((key) => ({ key, text: `${key}.wav` }))
     const ph = (over: Partial<EsmPressInput>) => press({ guards: phone, roles: VOICE_SLOT_ROLES, slots, ...over })
@@ -611,10 +608,9 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       })
     })
 
-    it('refuses while recording, while PTT is held, and while the radio has the mic', () => {
+    it('refuses while recording and while PTT is held', () => {
       expect(ph({ guards: { ...phone, recording: true } })).toEqual({ kind: 'refuse', refusal: { why: 'recording' } })
       expect(ph({ guards: { ...phone, pttHeld: true } })).toEqual({ kind: 'refuse', refusal: { why: 'pttHeld' } })
-      expect(ph({ guards: { ...phone, radioHasMic: true } })).toEqual({ kind: 'refuse', refusal: { why: 'radioHasMic' } })
     })
 
     it('steps aside while the keyer is hidden, before anything else is asked', () => {

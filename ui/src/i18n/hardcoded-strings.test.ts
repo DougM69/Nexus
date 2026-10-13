@@ -602,6 +602,9 @@ const MIGRATED = [
   'features/slotAudioLost.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
+  // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from
+  // birth.
+  'features/voiceDropped.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
   // …and the headline for the station's audio-error line, by the kind the station names —

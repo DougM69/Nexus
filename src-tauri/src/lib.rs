@@ -16148,6 +16148,9 @@ struct CwDecodeResult {
     sent: Vec<String>,
     /// A CW-keyer failure to surface (e.g. the rig rejected CAT `send_morse`), else null.
     keyer_error: Option<String>,
+    /// The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+    /// (Nexus's Flex client): an information line, not a warning, until the next send.
+    paddle_took_over: bool,
     /// Ranked worked-station callsign candidates from the decode (click to confirm).
     candidates: Vec<CwCandidateDto>,
     /// The RST they sent us, read from the decode (e.g. "599"), else null.
@@ -16197,6 +16200,7 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
         wpm: d.wpm,
         sent,
         keyer_error: eng.cw_keyer_error(),
+        paddle_took_over: eng.cw_paddle_took_over(),
         candidates: assist
             .candidates
             .into_iter()

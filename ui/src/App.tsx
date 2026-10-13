@@ -187,6 +187,7 @@ import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { pttRefusedLane } from './features/pttRefused'
+import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
@@ -757,6 +758,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   useEffect(() => {
     setStatus('pttRefused', remote ? null : pttRefusedLane(snap?.radio.pttRefused))
   }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode, remote])
+
+  // A voice-keyer message Nexus's own Flex client dropped before the radio took DAX for it (Phone at
+  // the shack, native audio on): the lane says why, since the keyer's toast answered the press
+  // before the drop, until the next message the keyer accepts; not on the Remote page either.
+  useEffect(() => {
+    setStatus('voiceDropped', remote ? null : voiceDroppedLane(snap?.radio.voiceDropped))
+  }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause, remote])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on

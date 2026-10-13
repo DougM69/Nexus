@@ -14,6 +14,7 @@
 //! | `StuckTransmit` | the unkey readback; escalation; the next session will not key under the old handle | [`a_stuck_transmitter_escalates_and_the_next_session_will_not_key`] |
 //! | `ForeignClient` | ownership by client handle; never key a transmitter that is not ours | [`another_clients_objects_are_shown_never_touched`], [`another_clients_transmitter_is_never_taken`] |
 //! | `DisconnectMidOver` | unkey locally first; never swap under a keyed transmitter | [`a_session_lost_mid_over_unkeys_first_and_reconnects_without_a_swap`] |
+//! | `OperatorMic` | an over handed to the operator's mic carries none of our audio from the hand-over on | [`an_over_handed_to_the_operators_mic_carries_no_more_of_our_audio`] |
 //! | `Vita` | frame assembly by per-bin coverage: a lost fragment costs its own frame, a reordered one costs nothing | [`a_lost_or_reordered_display_packet_trips_the_coverage_guard`] |
 
 use std::io::{ErrorKind, Read};
@@ -27,8 +28,9 @@ use tempo_flexsim::{
 };
 
 use super::admission::Refusal;
-use super::encode::{Command, Station, TxStart, TxStop};
+use super::encode::{Command, StartKind, Station, TxStart, TxStop};
 use super::model::{ObjectRef, Owner};
+use super::ptt_evidence::{KeyHandle, OperatorKey};
 use super::reconnect::{End, Ladder, Step};
 use super::session::{Announcement, Config, ConnError, Connection, Event, SendError, StopOutcome};
 use super::vita::{
@@ -827,6 +829,83 @@ fn another_clients_transmitter_is_never_taken() {
             c.conn.stop(TxStop::Unkey);
             c.wait("UnkeyConfirmed", |e| *e == Event::UnkeyConfirmed);
         }
+    }
+}
+
+#[test]
+fn an_over_handed_to_the_operators_mic_carries_no_more_of_our_audio() {
+    // Fault::OperatorMic → the mic's hand-over (operator rulings, 2026-10-12, "Your mic wins, like
+    // the paddle", built switched off). With a mic named as a bench would name it (`MIC` under our
+    // handle, supposed), the radio's first line for the mic hands our over to the operator: held
+    // right after the take-over is announced, the over is still ours (keyed, on the air) but no
+    // longer one our DAX audio may ride, and our unkey is on the wire. The control, no mic named:
+    // the mic's line fails the readback, and the over goes on carrying our audio until our own stop.
+    for named in [false, true] {
+        let sim = simulator(
+            SimSession::v4_gui_client(),
+            vec![Fault::OperatorMic {
+                after: Duration::from_millis(300),
+                source: "MIC".into(),
+                handle: None,
+                hold: Duration::from_millis(2_000),
+            }],
+        );
+        let mut config = config(vec![]);
+        config.operator_mic = named.then_some(OperatorKey {
+            source: "MIC",
+            handle: KeyHandle::Ours,
+        });
+        let mut c = Client::ready(&sim, config);
+        c.create_slice();
+        c.wait_transmit_ready();
+        let took_over = Event::OperatorTookOver {
+            kind: StartKind::Key,
+        };
+        let release = c.conn.hold_after(Announcement::Event(took_over.clone()));
+        c.conn.start(TxStart::Key).expect("keyed");
+        c.wait_interlock("TRANSMITTING");
+        assert!(c.conn.over_keyed(), "an over of ours, before the mic");
+        let state = if named {
+            c.wait("the take-over", |e| *e == took_over);
+            let snap = c.conn.snapshot();
+            (c.conn.over_keyed(), snap.keyed, c.conn.ours_on_air())
+        } else {
+            assert!(
+                c.conn.wait_until(WAIT, |s| s
+                    .model
+                    .interlock
+                    .sample
+                    .as_ref()
+                    .is_some_and(|x| x.source == "MIC")),
+                "the radio shows the mic"
+            );
+            (
+                c.conn.over_keyed(),
+                c.conn.snapshot().keyed,
+                c.conn.ours_on_air(),
+            )
+        };
+        drop(release);
+        assert_eq!(
+            (state, named),
+            (((!named), true, true), named),
+            "(over keyed, keyed, ours on the air)"
+        );
+        if named {
+            assert!(
+                sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+                    &l.event,
+                    SimEvent::Command { text, .. } if text == "xmit 0"
+                ))),
+                "our unkey on the wire with the take-over"
+            );
+        }
+        let unkeys = commands(&sim, 0)
+            .iter()
+            .filter(|c| c.as_str() == "xmit 0")
+            .count();
+        assert_eq!((unkeys, named), (usize::from(named), named));
+        assert_keys(&sim, 1);
     }
 }
 

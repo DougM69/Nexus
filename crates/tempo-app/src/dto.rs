@@ -1219,6 +1219,27 @@ pub struct PttRefused {
     pub mode: String,
 }
 
+/// A voice-keyer message Nexus's own Flex client dropped without keying the radio
+/// ([`RadioStatus::voice_dropped`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceDropped {
+    /// When, in Unix seconds.
+    pub at: u64,
+    pub cause: VoiceDropCause,
+}
+
+/// Why a voice-keyer message was dropped ([`VoiceDropped`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceDropCause {
+    /// The radio did not report taking its transmit audio from DAX within 2 seconds of the press,
+    /// or no longer took it when the message was to key.
+    NoDax,
+    /// Something else keyed the radio, or held the transmitter, before the message could key.
+    Keyed,
+}
+
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1540,6 +1561,13 @@ pub struct RadioStatus {
     /// every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ptt_refused: Option<PttRefused>,
+    /// The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
+    /// at the shack with native audio on, where a message waits for the radio to take DAX): the
+    /// radio did not take DAX within 2 seconds, or something else keyed it first. Cleared by the
+    /// next message the keyer accepts. ABSENT until it happens, so every snapshot before one is
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_dropped: Option<VoiceDropped>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]

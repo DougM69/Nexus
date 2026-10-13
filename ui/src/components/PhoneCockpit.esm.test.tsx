@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 //
 // ⭐ ENTER SENDS MESSAGE IN THE PHONE COCKPIT — the REAL cockpit, voice keyer and contest strip.
-// Enter plays a recording through the keyer's own checks (empty slot, recording, PTT held, the
-// radio holding the mic, TX off) and the engine's; when running, his call and the exchange play
-// nothing, because the operator says them (decision 10); and with the keyer hidden ESM steps
-// aside, and Enter logs as it does with ESM off.
+// Enter plays a recording through the keyer's own checks (empty slot, recording, PTT held, TX off)
+// and the engine's; when running, his call and the exchange play nothing, because the operator
+// says them (decision 10); and with the keyer hidden ESM steps aside, and Enter logs as it does
+// with ESM off. The radio holding the mic (Nexus's own Flex client, native audio on) is no
+// refusal: the station switches the radio to DAX around each message.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, fireEvent, act, screen } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
+import { pushToast } from '../toast'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 
@@ -89,6 +91,7 @@ afterEach(() => {
   playVoiceMessage.mockClear()
   stopVoice.mockClear()
   contestLogManual.mockClear()
+  vi.mocked(pushToast).mockClear()
   localStorage.clear()
 })
 
@@ -320,17 +323,20 @@ describe('Enter Sends Message in the Phone cockpit', () => {
     )
   })
 
-  it('refuses while the radio has the mic: nothing plays, nothing logs, and the contact stays in the strip', async () => {
+  // The radio having the mic (Nexus's own Flex client, native audio on) is no refusal since the
+  // operator's ruling of 2026-10-12, "Change it now": the station switches the radio to DAX for
+  // each message.
+  it('plays while the radio has the mic: my call, then my exchange, which logs the contact', async () => {
     await renderCockpit({ snap: makeSnap({ flexRadioHasMic: true }) })
     fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall())
+    expect(played(), 'F4, my call').toEqual([4])
     fireEvent.change(qthBox(), { target: { value: 'COOK' } })
     await flush()
     await enter(qthBox())
-    expect(played()).toEqual([])
-    expect(loggedCalls()).toEqual([])
-    expect(line()).toBe('The radio has the mic, so a recording would not go out.')
-    expect(stripCall().value).toBe('K9AAA')
-    expect(qthBox().value).toBe('COOK')
+    expect(played(), 'then F2, my exchange').toEqual([4, 2])
+    expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
   it('refuses while PTT is held: nothing plays and nothing logs', async () => {
@@ -379,5 +385,22 @@ describe('the contest score chip', () => {
     expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
     expect(document.querySelector('.log-entry-fd')).not.toBeNull()
     expect(document.querySelector('.le-fd-score')).toBeNull()
+  })
+})
+
+// ⭐ THE VOICE KEYER WHILE THE RADIO HAS THE MIC (Nexus's own Flex client, native DAX audio on, Phone at
+// the shack): no refusal since the operator's ruling of 2026-10-12, "Change it now". The station
+// switches the radio to DAX around each message, so a slot's click and its F-key play, with no toast.
+describe('the voice keyer while the radio has the mic', () => {
+  it('plays by click and by F-key, with no toast', async () => {
+    await renderCockpit({ snap: makeSnap({ flexRadioHasMic: true }) })
+    const f1 = document.querySelector<HTMLButtonElement>('.vk-play')
+    expect(f1, 'precondition: F1 holds a message').not.toBeNull()
+    fireEvent.click(f1!)
+    await flush()
+    fireEvent.keyDown(window, { key: 'F1' })
+    await flush()
+    expect(played()).toEqual([1, 1])
+    expect(vi.mocked(pushToast)).not.toHaveBeenCalled()
   })
 })

@@ -4533,7 +4533,6 @@ export const EN = {
   'contest.esm.refused.clockRepair': 'A clock repair is holding transmit, so Enter sends nothing.',
   'contest.esm.refused.recording': 'The voice keyer is recording, so Enter plays nothing.',
   'contest.esm.refused.pttHeld': 'You are holding PTT, so Enter plays nothing.',
-  'contest.esm.refused.radioHasMic': 'The radio has the mic, so a recording would not go out.',
   'contest.esm.refused.unmapped':
     '{{step}}: no key is mapped, so Enter sends nothing and logs nothing at that step.',
   'contest.esm.refused.empty':
@@ -10299,6 +10298,7 @@ export const EN = {
   'cw.record.stop.aria': 'Stop recording this QSO',
   'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
   'cw.record.on.title': 'Recording — click to stop recording this QSO',
+  'cw.paddleTookOver': 'Your paddle took over: Nexus stopped its message.',
   'cw.record.startFailed': 'Could not start recording',
   'cw.record.stopFailed': 'Could not stop recording',
 
@@ -10773,8 +10773,6 @@ export const EN = {
   // NAME THE CONTROL THAT IS ON THIS SCREEN: Phone shows no Enable-Tx button, so PTT is the
   // switch when TX is off.
   'phone.keyer.txOff': 'TX is off — click PTT once to turn it back on, then play the message',
-  'phone.keyer.radioHasMic':
-    'The voice keyer can\'t play while the radio has the mic: with Flex native DAX audio on, Phone at the shack uses the radio\'s own mic, so a recorded message would not go out. Nothing was keyed.',
   'phone.keyer.playFailed': 'Could not play F{{slot}}',
   'phone.keyer.recordFailed': 'Could not start recording',
   'phone.keyer.saveFailed': 'Could not save recording',
@@ -10894,6 +10892,15 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
+  // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
+  // or something else keyed it first. Never played later; the next message the keyer accepts
+  // clears it.
+  'shell.lane.voiceDropped.message': 'VOICE MESSAGE DROPPED',
+  'shell.lane.voiceDropped.noDax':
+    'Nexus did not play the voice message at {{time}} UTC: the radio did not switch its transmit audio to DAX within 2 seconds, so nothing was keyed. The message was dropped, not held; press its key again.',
+  'shell.lane.voiceDropped.keyed':
+    'Nexus did not play the voice message at {{time}} UTC: something else was transmitting or keyed the radio first (your mic or PTT, a tune carrier, another program), so nothing was keyed. The message was dropped, not held.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.

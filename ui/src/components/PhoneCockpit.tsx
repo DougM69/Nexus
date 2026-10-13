@@ -1453,7 +1453,6 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
       keyerShown: hasKeyerPane && keyerForEnter !== null,
       pttHeld: keyedRef.current,
       recording: keyerForEnter?.recording ?? false,
-      radioHasMic: snapRef.current.radio.flexRadioHasMic === true,
     }),
     send: ({ keys }: EsmMessage) =>
       keyerForEnter ? keyerForEnter.play(Number(keys[0].slice(1))) : Promise.resolve(esmInertText('noKeyer')),
@@ -1873,7 +1872,6 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         keyed={keyed}
         transmitting={snap.radio.transmitting}
         fdExchange={fdExchange}
-        radioHasMic={snap.radio.flexRadioHasMic === true}
         esm={{
           lit: esmLitKeys(esm.preview),
           report: setKeyerForEnter,

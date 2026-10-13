@@ -749,6 +749,9 @@ export function CwCockpit({
   const closeProps = (id: CwPanelId) => (host ? host.closeProps(id) : {})
   // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
   const [keyerError, setKeyerError] = useState<string | null>(null)
+  // The operator's own paddle took over from Nexus's CW (Nexus's Flex client): the rest of the
+  // message was dropped. Information, not a failure: it reads as a notice until the next send.
+  const [paddleTookOver, setPaddleTookOver] = useState(false)
   // --- CW copilot: decoded-call chips only (Expert). The Guided/Expert selector + its bar were
   //     removed to reclaim vertical space for the decode transcript (operator ask). ---
   const [cand, setCand] = useState<{ call: string; best: boolean }[]>([])
@@ -865,6 +868,7 @@ export function CwCockpit({
             setDecoded({ text: d.text, wpm: d.wpm })
             setSent(d.sent)
             setKeyerError(d.keyerError)
+            setPaddleTookOver(d.paddleTookOver === true)
             setCand(d.candidates)
             setGuide({
               state: d.state,
@@ -2101,6 +2105,15 @@ export function CwCockpit({
       {keyerError && (
         <div className="cw-keyer-warn" role="alert">
           ⚠ {keyerError}
+        </div>
+      )}
+
+      {/* The operator's paddle took over from Nexus's CW: what happened, not a fault. The same
+          sanctioned `.cw-keyer-warn` shell-child kind as the caution below, in the information
+          colour, so it adds no shell-child kind and does not read as the error banner. */}
+      {paddleTookOver && (
+        <div className="cw-keyer-warn info" role="status">
+          {t('cw.paddleTookOver')}
         </div>
       )}
 
