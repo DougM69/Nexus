@@ -2460,7 +2460,20 @@ export function SettingsPanel({
       onSaved?.()
     })
   }
-  const handleAddRadio = () => {
+  const handleAddRadio = async () => {
+    // Selecting the new radio for editing (below) replaces what the rig form holds, so unsaved
+    // edits get the same confirm as Edit gives them.
+    if (
+      dirtyRef.current &&
+      !(await confirmDialog({
+        title: t('settings.radios.edit.confirm.title'),
+        body: t('settings.radios.edit.confirm.body'),
+        confirmLabel: t('settings.radios.edit.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
     // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
     // for EDITING instead, so the operator lands on the profile they just made and can configure
     // it, while the rig they are actually operating keeps running.
@@ -2469,7 +2482,13 @@ export function SettingsPanel({
       reloadRadios()
       const fresh = await getSettings()
       const added = fresh.radios?.[fresh.radios.length - 1]
-      if (added) setEditingRadioId(added.id)
+      if (!added) return
+      // …with ITS config in the form, as Edit loads one. Selected without it, the form still held
+      // the radio it was editing before, and the first Save copied that radio's port, baud and
+      // sound card onto the new one (two Yaesus on a Mac, 2026-10-14).
+      setForm((prev) => (prev ? { ...prev, ...radioPatch(added) } : prev))
+      setEditingRadioId(added.id)
+      dirtyRef.current = false
     })
   }
   const handleRemoveRadio = async (id: number) => {
@@ -2488,8 +2507,16 @@ export function SettingsPanel({
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then((s) => {
+    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then(async (s) => {
       if (!s) return
+      // …and its fields with it. Handed to the operating radio still holding the deleted radio's
+      // port, baud and sound card, the form's next Save folded them into the operating radio.
+      if (editingRadioId === id) {
+        const fresh = await getSettings()
+        const operating = fresh.radios?.find((p) => p.id === (activeRadioId ?? fresh.activeRadio))
+        if (operating) setForm((prev) => (prev ? { ...prev, ...radioPatch(operating) } : prev))
+        dirtyRef.current = false
+      }
       // If the deleted radio was the one the rig form is editing, retarget the form: a
       // dangling editingRadioId routes every later Save through update_radio_profile(<gone
       // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
@@ -2933,6 +2960,13 @@ export function SettingsPanel({
     } else {
       await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
+    // The form's `radios` is a copy, and the writes above changed the profiles it copies, so take
+    // it again. Edit loads a radio from this copy and `withActiveRadioConfig` writes the operating
+    // radio back from it: left stale, a saved baud, port or sound card came back on the radio
+    // re-opened for Edit, and the operating radio's went back at the next save of the other one.
+    const { radios } = await getSettings()
+    setForm((prev) => (prev ? { ...prev, radios } : prev))
+    return { ...next, radios }
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -3552,9 +3586,9 @@ export function SettingsPanel({
       // Editing a NON-active radio writes ONLY that radio's CAT/audio/PTT/rotator/native config;
       // the active radio, its flat mirror and station-wide settings are untouched (the backend
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
-      await persistRadioForm(next, forced)
+      const saved = await persistRadioForm(next, forced)
       dirtyRef.current = false
-      savedRef.current = next
+      savedRef.current = saved
       setStatus('saved')
       onSaved?.()
     } catch (err) {
