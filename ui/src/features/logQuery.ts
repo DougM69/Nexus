@@ -85,6 +85,9 @@ export function matchesLogQuery(q: LoggedQso, query: LogQuery): boolean {
   return (
     q.call.toLowerCase().includes(t) ||
     (q.country?.toLowerCase().includes(t) ?? false) ||
+    // …and the country the Logbook shows, the DXCC entity, so a QRZ "Germany" row is found by
+    // "Fed. Rep. of Germany" as well as by its stored text.
+    (q.entity?.toLowerCase().includes(t) ?? false) ||
     (q.grid?.toLowerCase().includes(t) ?? false) ||
     q.band.toLowerCase().includes(t) ||
     q.mode.toLowerCase().includes(t) ||

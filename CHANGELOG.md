@@ -130,6 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opened the QRZ page for PORTABLE and `K1A/QRP` the one for QRP, because the longest part of the
   call was taken as the callsign. The part with a digit in it is the callsign now, so they open
   W1AW and K1A, on the desktop, on the Remote page and from the DXpedition list alike.
+- **Searching the Logbook by country finds the country it shows.** The Country column shows the
+  DXCC entity, but the search still looked only at the country text stored with the contact, so a
+  contact stored as `Germany` from a QRZ lookup was not found by "Fed. Rep. of Germany", the name
+  on its row. The search now looks in both, on the desktop and on the Remote page.
 - **One band is one band, whatever its letter case.** Contacts imported from another logger kept
   that logger's spelling of the band, so a log with `20M` from an import and `20m` from Nexus
   showed 20 m twice in the statistics' By band, listed both on the QSO globe, and the globe's 20 m

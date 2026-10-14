@@ -3,7 +3,7 @@
 //! image files; no collection has vault or TX access.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 mod configuration;
@@ -678,6 +678,8 @@ fn log_window(
     let search = search.trim().to_lowercase();
     let mut selected = BinaryHeap::new();
     let mut total = 0;
+    // Each call's DXCC entity, lower-cased, resolved once per call and only for a search.
+    let mut entity_of: HashMap<String, Option<String>> = HashMap::new();
     let mut test =
         |pick: picture::Pick, q: &tempo_core::logbook::QsoRecord| -> Result<(), &'static str> {
             if unconfirmed && q.award_confirmed {
@@ -700,6 +702,15 @@ fn log_window(
                 .into_iter()
                 .flatten()
                 .any(|s| s.to_lowercase().contains(&search))
+                // …and the country the page shows, the call's DXCC entity, so a QRZ `Germany`
+                // row is found by "fed. rep" as well as by its stored text.
+                && !entity_of
+                    .entry(q.call.clone())
+                    .or_insert_with(|| {
+                        propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_lowercase())
+                    })
+                    .as_deref()
+                    .is_some_and(|e| e.contains(&search))
             {
                 return Ok(());
             }
@@ -879,6 +890,42 @@ mod tests {
             (2, vec!["K2BBB".to_string(), "K1AAA".to_string()])
         );
     }
+    /// The search finds a contact by the country the page shows, its call's DXCC entity, as
+    /// well as by its stored text: a QRZ `Germany` row is found by "fed. rep".
+    #[test]
+    fn a_search_finds_a_contact_by_the_country_shown() {
+        let engine = engine();
+        let row = |call: &str, time: &str, country: &str| {
+            format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<COUNTRY:{}>{country}<QSO_DATE:8>20260909<TIME_ON:6>{time}<EOR>\n",
+                call.len(),
+                country.len()
+            )
+        };
+        engine.lock().unwrap().import_adif(
+            &[
+                row("DL1ABC", "010000", "Germany"),
+                row("TA1XX", "010100", "Freedonia"),
+                adif("K3CCC", "010200"),
+            ]
+            .concat(),
+        );
+        // The premise: what each call resolves to.
+        let entity = |call: &str| propagation::dxcc::resolve(call).map(|i| i.entity.to_string());
+        assert_eq!(entity("DL1ABC").as_deref(), Some("Fed. Rep. of Germany"));
+        assert_eq!(entity("TA1XX").as_deref(), Some("European Turkey"));
+        let log = engine.lock().unwrap().log_rows();
+        let window = |search| {
+            let (rows, total) = picture::read(&log, |p| log_window(p, search, false)).unwrap();
+            (total, rows.into_iter().map(|q| q.call).collect::<Vec<_>>())
+        };
+        assert_eq!(window("fed. rep"), (1, vec!["DL1ABC".to_string()]));
+        assert_eq!(window("european turkey"), (1, vec!["TA1XX".to_string()]));
+        // The stored text still finds its contact.
+        assert_eq!(window("germany"), (1, vec!["DL1ABC".to_string()]));
+        assert_eq!(window("freedonia"), (1, vec!["TA1XX".to_string()]));
+        assert_eq!(window("nowhere"), (0, vec![]));
+    }
     #[test]
     fn missing_feeds_and_a_busy_engine_are_not_empty_collections() {
         let engine = engine();
@@ -996,8 +1043,9 @@ mod tests {
 
     use super::log_tests::{launch, memory, settle, synthetic_log, Dir, Gen, CALLS};
 
-    /// `log_window` as C12 left it, VERBATIM, but for one field decided since: the search looks
-    /// in the SUBMODE too, which a whole record carries in its passthrough.
+    /// `log_window` as C12 left it, VERBATIM, but for two fields decided since: the search looks
+    /// in the SUBMODE too, which a whole record carries in its passthrough, and in the country the
+    /// page shows, the call's DXCC entity.
     fn old_log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
         records: &[R],
         search: &str,
@@ -1026,6 +1074,8 @@ mod tests {
                 .into_iter()
                 .flatten()
                 .any(|s| s.to_lowercase().contains(&search))
+                && !propagation::dxcc::resolve(&q.call)
+                    .is_some_and(|i| i.entity.to_lowercase().contains(&search))
             {
                 continue;
             }

@@ -340,18 +340,26 @@ fn sort_val_cmp(a: &SortVal, b: &SortVal) -> Ordering {
 }
 
 /// Whether the Logbook shows `r` under `query` (`matchesLogQuery`, verbatim): not an
-/// award-confirmed contact under the chip, and the search in any of eight fields — the formatted
-/// time among them, whose trailing `Z` is why a search for "z" finds every row.
-pub fn matches(r: &QsoRecord, query: &LogQuery) -> bool {
+/// award-confirmed contact under the chip, and the search in any of nine fields — the formatted
+/// time among them, whose trailing `Z` is why a search for "z" finds every row, and the country
+/// the Logbook shows, the call's DXCC entity (`resolve`).
+pub fn matches(r: &QsoRecord, query: &LogQuery, resolve: &dyn Fn(&str) -> Option<String>) -> bool {
     shown(
         r,
         query.needs_confirm_only,
         &js_lower(js_trim(&query.search)),
+        || resolve(&r.call),
     )
 }
 
-/// [`matches`], with the search already trimmed and lower-cased (`t`).
-fn shown(r: &QsoRecord, needs_confirm_only: bool, t: &str) -> bool {
+/// [`matches`], with the search already trimmed and lower-cased (`t`). `entity` is the row's
+/// DXCC entity, asked for last and only when no other field has the search.
+fn shown(
+    r: &QsoRecord,
+    needs_confirm_only: bool,
+    t: &str,
+    entity: impl FnOnce() -> Option<String>,
+) -> bool {
     if needs_confirm_only && r.award_confirmed {
         return false;
     }
@@ -367,6 +375,9 @@ fn shown(r: &QsoRecord, needs_confirm_only: bool, t: &str) -> bool {
         || has(&mode_key(&r.mode))
         || submode(r).is_some_and(has)
         || has(&fmt_utc(r.when_unix))
+        // …and the country the Logbook shows, so a QRZ `Germany` row is found by its entity,
+        // "Fed. Rep. of Germany", as well as by the stored text above.
+        || entity().as_deref().is_some_and(has)
 }
 
 /// A contact's SUBMODE, from its passthrough: among them the sideband of a phone contact, which
@@ -380,9 +391,22 @@ fn submode(r: &QsoRecord) -> Option<&str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// `call`'s DXCC entity, resolved once per distinct call (`cache`).
+fn entity_of<'m>(
+    cache: &'m mut HashMap<String, Option<String>>,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    call: &str,
+) -> Option<&'m str> {
+    cache
+        .entry(call.to_string())
+        .or_insert_with(|| resolve(call))
+        .as_deref()
+}
+
 /// The rows `query` shows, as their handles in display order — the order vector (`logOrder`,
 /// SPEC-2 v3 §4.3). `rows` are `(handle, row)` in LOG ORDER; a row the query does not show is
-/// left out; `resolve` is a call's live DXCC entity, which the country column sorts on. See
+/// left out; `resolve` is a call's live DXCC entity, which the country column sorts on and the
+/// search looks in. See
 /// [`OrderBuilder`], which this is.
 pub fn order<H, R>(
     rows: impl IntoIterator<Item = (H, R)>,
@@ -411,7 +435,7 @@ pub struct OrderBuilder<'a, H> {
     /// The search, trimmed and lower-cased once.
     t: String,
     /// A call's live DXCC entity, resolved once per distinct call and only for the country
-    /// column, as the statistics resolve theirs ([`LogStatCounter`]).
+    /// column or a search, as the statistics resolve theirs ([`LogStatCounter`]).
     resolve: &'a dyn Fn(&str) -> Option<String>,
     entity_of: HashMap<String, Option<String>>,
     kept: Vec<(H, SortVal, u64)>,
@@ -439,17 +463,15 @@ impl<'a, H> OrderBuilder<'a, H> {
 
     /// The next row, in LOG ORDER after every row pushed before it.
     pub fn push(&mut self, h: H, r: &QsoRecord) {
-        if !shown(r, self.needs_confirm_only, &self.t) {
+        let resolve = self.resolve;
+        let cache = &mut self.entity_of;
+        if !shown(r, self.needs_confirm_only, &self.t, || {
+            entity_of(cache, resolve, &r.call).map(str::to_string)
+        }) {
             return;
         }
         let entity = match self.sort {
-            SortKey::Country => {
-                let resolve = self.resolve;
-                self.entity_of
-                    .entry(r.call.clone())
-                    .or_insert_with(|| resolve(&r.call))
-                    .as_deref()
-            }
+            SortKey::Country => entity_of(&mut self.entity_of, resolve, &r.call),
             _ => None,
         };
         self.kept

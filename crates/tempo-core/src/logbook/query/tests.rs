@@ -762,3 +762,54 @@ fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
         ["Q0ZZZ", "F5ABC", "DL2XYZ", "DL1ABC", "G4ABC"]
     );
 }
+
+/// ★ The search finds a contact by the country the Logbook shows, its DXCC entity, as well as
+/// by its stored text: a QRZ `Germany` row is found by "fed. rep", and still by "germany".
+#[test]
+fn a_search_finds_a_contact_by_the_country_the_logbook_shows() {
+    // (call, the entity its call resolves to, the stored COUNTRY)
+    let rows: [(&str, Option<&str>, Option<&str>); 4] = [
+        ("DL1ABC", Some("Fed. Rep. of Germany"), Some("Germany")),
+        ("TA1XX", Some("Turkey"), Some("Türkiye")),
+        ("G4ABC", Some("England"), Some("England")),
+        ("Q0ZZZ", None, Some("Freedonia")),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &(call, _, country))| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.when_unix += i as u64 * 60;
+            r
+        })
+        .collect();
+    let entity = |call: &str| {
+        rows.iter()
+            .find(|r| r.0 == call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let found = |search: &str, sort: SortKey| -> Vec<&str> {
+        let query = LogQuery {
+            sort,
+            asc: true,
+            search: search.to_string(),
+            needs_confirm_only: false,
+        };
+        reference::order(&log, &query, &entity)
+            .into_iter()
+            .map(|i| log[i].call.as_str())
+            .collect()
+    };
+    for sort in [SortKey::Call, SortKey::Country, SortKey::Time] {
+        assert_eq!(found("fed. rep", sort), ["DL1ABC"], "{sort:?}");
+        assert_eq!(found("TURKEY", sort), ["TA1XX"], "{sort:?}");
+        // The stored text still finds its contact.
+        assert_eq!(found("germany", sort), ["DL1ABC"], "{sort:?}");
+        assert_eq!(found("türkiye", sort), ["TA1XX"], "{sort:?}");
+        assert_eq!(found("freedonia", sort), ["Q0ZZZ"], "{sort:?}");
+        assert!(found("nowhere", sort).is_empty(), "{sort:?}");
+    }
+}

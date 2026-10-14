@@ -192,3 +192,26 @@ describe('the country column sorts on the country the Logbook shows', () => {
     expect(sorted(false)).toEqual(['Q0ZZZ', 'F5ABC', 'DL2XYZ', 'DL1ABC', 'G4ABC'])
   })
 })
+
+describe('the search finds a contact by the country the Logbook shows', () => {
+  it('finds a QRZ Germany by its entity, Fed. Rep. of Germany, and still by the stored text', () => {
+    const row = (call: string, entity: string | null, country: string, i: number) =>
+      ({ ...FIXTURE[0], call, entity, country, whenUnix: FIXTURE[0].whenUnix + i * 60 }) as LoggedQso
+    const log = [
+      row('DL1ABC', 'Fed. Rep. of Germany', 'Germany', 0),
+      row('TA1XX', 'Turkey', 'Türkiye', 1),
+      row('G4ABC', 'England', 'England', 2),
+      row('Q0ZZZ', null, 'Freedonia', 3),
+    ]
+    for (const sort of ['call', 'country', 'time'] as const) {
+      const found = (search: string) => logOrder(log, { sort, asc: true, search, needsConfirmOnly: false }).map((i) => log[i].call)
+      expect(found('fed. rep'), sort).toEqual(['DL1ABC'])
+      expect(found('TURKEY'), sort).toEqual(['TA1XX'])
+      // The stored text still finds its contact.
+      expect(found('germany'), sort).toEqual(['DL1ABC'])
+      expect(found('türkiye'), sort).toEqual(['TA1XX'])
+      expect(found('freedonia'), sort).toEqual(['Q0ZZZ'])
+      expect(found('nowhere'), sort).toEqual([])
+    }
+  })
+})
