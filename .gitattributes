@@ -20,6 +20,8 @@
 # TLE is a test fixture whose bytes are the point.
 crates/propagation/data/cty.dat            -text
 crates/propagation/tests/fixtures/*.tle    -text
+# cty.dat's licence notice: the copyright.txt from the same AD1C release zip, as received.
+crates/propagation/data/cty.dat_copyright.txt -text
 
 # Vendored hamlib licence texts, bundled as Tauri resources. Licence files are reproduced
 # as received — rewriting their line endings edits third-party legal text.

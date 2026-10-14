@@ -477,6 +477,9 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
   and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
+- **[AD1C Country Files](https://www.country-files.com/)** (MIT) — **Jim Reisert AD1C**. `cty.dat`
+  maps callsigns to DXCC entities and CQ/ITU zones for the awards, the map and the Needed board
+  (see **[NOTICE](NOTICE)**).
 - **Street maps** (optional download) — map data © **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
   contributors (ODbL), from the **[Protomaps basemap](https://github.com/protomaps/basemaps)**;
   drawn with **[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js)** (BSD-3-Clause) and
