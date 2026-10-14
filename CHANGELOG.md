@@ -126,6 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CQ WW CW and SSB and CQ WPX CW and SSB logs claim their score.** The Cabrillo file now carries
+  `CLAIMED-SCORE`, the score the Contest screen shows, as the CQ WW RTTY file already did. A
+  single-band entry (Band category set to one band) whose log also holds a contact on another band
+  writes no claimed score, in these four and in CQ WW RTTY: CQ scores only the declared band, and
+  the screen's score counts them all. The guide's note on logging the Scandinavian Activity Contest
+  as CQ WPX again says to delete the claimed score before sending the log.
 - **One band is one band, whatever its letter case.** Contacts imported from another logger kept
   that logger's spelling of the band, so a log with `20M` from an import and `20m` from Nexus
   showed 20 m twice in the statistics' By band, listed both on the QSO globe, and the globe's 20 m
