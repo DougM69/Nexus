@@ -406,6 +406,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tells you once per session, with where to turn the auto-arm off (Settings ▸ Digital ▸ SSTV), and
   then leaves the radio and the screen alone.
 
+### Security
+
+- **The TLS library behind Nexus's downloads is on its security release.** Nexus uses rustls for
+  HTTPS (propagation data, maps and the other downloads); 0.23.46 fixes the four issues published
+  on 14 October 2026 (RUSTSEC-2026-0346, 0347, 0348 and 0349). Nothing to do on your side.
+
 ## [1.18.0] — 2026-10-12
 
 ### Added
