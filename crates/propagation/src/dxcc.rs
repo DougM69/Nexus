@@ -23,6 +23,23 @@
 //!
 //! NB cty.dat stores **West-positive longitude**; we negate it to the usual
 //! East-positive convention the rest of the crate uses.
+//!
+//! # DXCC entity numbers
+//!
+//! cty.dat names an entity; it carries no ARRL DXCC entity number, and it lists no deleted
+//! entity. A logged contact's record can carry the number (ADIF `DXCC`, which LoTW and other
+//! loggers write), and the awards count by it ([`entity_by_dxcc`]). Two embedded tables give the
+//! numbers:
+//!
+//! - **`data/cty.csv`**, AD1C's file from the same release zip as the embedded `cty.dat`, kept
+//!   as published. Only its first and third fields are read: each entity's primary prefix and
+//!   its DXCC number. It is joined to cty.dat by that **primary prefix, never by name** (the two
+//!   files spell a few names differently), so a weekly-downloaded cty.dat gets the same numbers
+//!   while AD1C's prefixes hold. A WAE/CQ-only area (Sicily) carries its parent's number
+//!   (Italy's), which is how ARRL credits it. An entity with no row — a newer cty.dat's new
+//!   entity — has no number and counts by its name, as before.
+//! - **`data/dxcc_deleted.csv`**, the 62 deleted entities, transcribed from TrustedQSL's
+//!   configuration data (see that file's header and NOTICE).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -58,6 +75,10 @@ pub struct DxccInfo {
     /// WAZ on a non-DXCC entity, so callers gate DXCC credit on this flag while
     /// still using `cq_zone`.
     pub is_dxcc: bool,
+    /// The entity's ARRL DXCC number, from the embedded cty.csv — for a WAE/CQ-only area, its
+    /// parent's (Sicily carries Italy's 248), which is how ARRL credits it. `None` for an entity
+    /// that table has no row for (see the module header).
+    pub dxcc: Option<u32>,
 }
 
 struct Entity {
@@ -70,6 +91,8 @@ struct Entity {
     cont: String,
     /// `false` if the primary-prefix field is `*`-marked (WAE/CQ-only, non-DXCC).
     is_dxcc: bool,
+    /// The DXCC number cty.csv gives this entity's primary prefix — see [`DxccInfo::dxcc`].
+    dxcc: Option<u32>,
 }
 
 struct Resolver {
@@ -82,10 +105,57 @@ struct Resolver {
     /// list (`=VER20250115` in the vendored file). `None` if the file carries
     /// no marker.
     ver: Option<String>,
+    /// DXCC number → the index of the DXCC (non-WAE) entity carrying it, the first if two did.
+    by_dxcc: HashMap<u32, u32>,
 }
 
 static CTY: &str = include_str!("../data/cty.dat");
 static RESOLVER: OnceLock<Resolver> = OnceLock::new();
+
+/// AD1C's cty.csv from the embedded cty.dat's own release, as published — read only for each
+/// entity's primary prefix (field 1) and DXCC number (field 3). See the module header.
+static CTY_CSV: &str = include_str!("../data/cty.csv");
+
+/// The deleted DXCC entities, `number,name` per line after a `#` header.
+static DELETED_CSV: &str = include_str!("../data/dxcc_deleted.csv");
+
+/// ADIF's DXCC code for a station known to be in no DXCC entity (a ship at sea, an aircraft):
+/// a contact whose record carries it earns no DXCC entity.
+pub const NO_DXCC_ENTITY: u32 = 0;
+
+/// cty.csv's primary prefix → DXCC number, parsed once.
+fn csv_numbers() -> &'static HashMap<&'static str, u32> {
+    static N: OnceLock<HashMap<&'static str, u32>> = OnceLock::new();
+    N.get_or_init(|| parse_csv_numbers(CTY_CSV))
+}
+
+/// The primary prefix and DXCC number of each cty.csv row. A row whose third field is not a
+/// number is skipped rather than guessed at.
+fn parse_csv_numbers(text: &str) -> HashMap<&str, u32> {
+    text.lines()
+        .filter_map(|line| {
+            let mut f = line.split(',');
+            let prefix = f.next()?.trim();
+            let number = f.nth(1)?.trim().parse().ok()?;
+            (!prefix.is_empty()).then_some((prefix, number))
+        })
+        .collect()
+}
+
+/// The deleted entities, number → name, parsed once.
+fn deleted_entities() -> &'static HashMap<u32, &'static str> {
+    static D: OnceLock<HashMap<u32, &'static str>> = OnceLock::new();
+    D.get_or_init(|| {
+        DELETED_CSV
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .filter_map(|l| {
+                let (number, name) = l.split_once(',')?;
+                Some((number.trim().parse().ok()?, name.trim()))
+            })
+            .collect()
+    })
+}
 
 fn resolver() -> &'static Resolver {
     RESOLVER.get_or_init(|| parse_cty(CTY))
@@ -127,6 +197,9 @@ fn parse_cty(text: &str) -> Resolver {
             // Island, Vienna Intl Ctr). 346 cty.dat entities − 6 of these = the
             // 340 current DXCC entities.
             let is_dxcc = !parts[7].trim().starts_with('*');
+            // The number cty.csv gives the same primary prefix, `*` and all — the join is on
+            // the prefix, never the name (see the module header).
+            let dxcc = csv_numbers().get(parts[7].trim()).copied();
             entities.push(Entity {
                 name,
                 lat,
@@ -134,6 +207,7 @@ fn parse_cty(text: &str) -> Resolver {
                 cq_zone,
                 cont,
                 is_dxcc,
+                dxcc,
             });
             cur = Some((entities.len() - 1) as u32);
             buf.clear();
@@ -182,11 +256,19 @@ fn parse_cty(text: &str) -> Resolver {
         }
     }
 
+    let mut by_dxcc: HashMap<u32, u32> = HashMap::new();
+    for (i, e) in entities.iter().enumerate() {
+        if let (true, Some(n)) = (e.is_dxcc, e.dxcc) {
+            by_dxcc.entry(n).or_insert(i as u32);
+        }
+    }
+
     Resolver {
         entities,
         exact,
         prefixes,
         ver,
+        by_dxcc,
     }
 }
 
@@ -490,7 +572,40 @@ fn info(r: &'static Resolver, i: u32, zone_override: Option<u8>) -> DxccInfo {
         cq_zone: zone_override.unwrap_or(e.cq_zone),
         cont: e.cont.as_str(),
         is_dxcc: e.is_dxcc,
+        dxcc: e.dxcc,
     }
+}
+
+/// A DXCC entity named by its ARRL number, as a contact's record carries it (ADIF `DXCC`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DxccEntity {
+    pub code: u32,
+    /// A current entity's cty.dat name — the name [`resolve`] gives its calls, so a contact
+    /// counted by number and one counted by call land on the same entity — or a deleted entity's
+    /// name as the ARRL lists it.
+    pub name: &'static str,
+    /// One of the 62 deleted entities, which count only toward a "total" (never toward a current
+    /// count, Honor Roll or the Challenge).
+    pub deleted: bool,
+}
+
+/// The DXCC entity `code` names: a current entity through cty.csv's numbers, or a deleted one.
+/// `None` for [`NO_DXCC_ENTITY`] and for a number neither table holds — a garbled one, or one
+/// the ARRL added after this table — so the caller can fall back to the call.
+pub fn entity_by_dxcc(code: u32) -> Option<DxccEntity> {
+    let r = resolver();
+    if let Some(&i) = r.by_dxcc.get(&code) {
+        return Some(DxccEntity {
+            code,
+            name: r.entities[i as usize].name.as_str(),
+            deleted: false,
+        });
+    }
+    deleted_entities().get(&code).map(|&name| DxccEntity {
+        code,
+        name,
+        deleted: true,
+    })
 }
 
 /// Is `entity` one of the DXCC entities whose stations carry a **US state** as their ADIF
@@ -502,6 +617,12 @@ fn info(r: &'static Resolver, i: u32, zone_override: Option<u8>) -> DxccInfo {
 /// `tempo_core::diagnostics` groups a logged QSO by, deliberately.
 pub fn is_us_state_entity(entity: &str) -> bool {
     matches!(entity, "United States" | "Alaska" | "Hawaii")
+}
+
+/// [`is_us_state_entity`] by DXCC number — the United States (291), Alaska (6) and Hawaii (110) —
+/// for a contact whose record carries the number.
+pub fn is_us_state_dxcc(code: u32) -> bool {
+    matches!(code, 291 | 6 | 110)
 }
 
 /// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
@@ -1159,5 +1280,143 @@ mod non_ascii_calls {
             ["W1AW", "W1A", "W1", "W"]
         );
         assert_eq!(prefixes_longest_first("").count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod dxcc_numbers {
+    use super::*;
+
+    /// cty.csv and cty.dat are one release's pair, so the join is exact: the same `=VER` marker,
+    /// every embedded cty.dat entity numbered through its primary prefix (346 of 346), and one
+    /// number per DXCC entity.
+    #[test]
+    fn the_embedded_pair_is_one_release_and_numbers_every_entity() {
+        assert_eq!(
+            ver_marker(CTY_CSV),
+            embedded_ver(),
+            "cty.csv must come from the embedded cty.dat's own release"
+        );
+        let r = resolver();
+        assert_eq!(r.entities.len(), 346, "premise: the 2025-01-15 file");
+        let missing: Vec<&str> = r
+            .entities
+            .iter()
+            .filter(|e| e.dxcc.is_none())
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "entities with no DXCC number: {missing:?}"
+        );
+        assert_eq!(
+            r.by_dxcc.len(),
+            current_dxcc_entities(),
+            "one distinct number per current DXCC entity"
+        );
+        assert_eq!(r.by_dxcc.len(), 340);
+    }
+
+    /// A WAE/CQ-only area carries its parent's number — which is how ARRL credits it — while its
+    /// own name and CQ zone stay what cty.dat says.
+    #[test]
+    fn a_wae_area_carries_its_parents_number() {
+        for (wae, parent, code) in [
+            ("IT9ABC", "I1ABC", 248),
+            ("IG9ABC", "I1ABC", 248),
+            ("TA1ABC", "TA2ABC", 390),
+        ] {
+            let area = resolve(wae).unwrap();
+            assert!(!area.is_dxcc, "premise: {wae} is a WAE area");
+            assert_eq!(area.dxcc, Some(code), "{wae}");
+            assert_eq!(resolve(parent).unwrap().dxcc, Some(code), "{parent}");
+            let named = entity_by_dxcc(code).unwrap();
+            assert_eq!(named.name, resolve(parent).unwrap().entity, "{code}");
+            assert!(!named.deleted);
+        }
+    }
+
+    /// Each number the reports and the awards' tests rest on, checked against the table: it names
+    /// the entity whose own calls resolve to it. (Taken from cty.csv and TrustedQSL, never from
+    /// memory: Navassa is 182, and 79 is Guadeloupe.)
+    #[test]
+    fn numbers_name_the_entities_their_own_calls_resolve_to() {
+        for (code, call, name) in [
+            (291, "W1AW", "United States"),
+            (6, "KL7XX", "Alaska"),
+            (110, "KH6ABC", "Hawaii"),
+            (202, "KP4ABC", "Puerto Rico"),
+            (20, "KH1ABC", "Baker & Howland Islands"),
+            (182, "KP1AA", "Navassa Island"),
+            (123, "KH3ABC", "Johnston Island"),
+            (43, "KP5AA", "Desecheo Island"),
+            (174, "KH4XYZ", "Midway Island"),
+            (197, "KH5AA", "Palmyra & Jarvis Islands"),
+            (515, "KH8SI", "Swains Island"),
+            (79, "FG5ABC", "Guadeloupe"),
+            (248, "I1ABC", "Italy"),
+            (230, "DL1ABC", "Fed. Rep. of Germany"),
+        ] {
+            assert_eq!(
+                entity_by_dxcc(code).map(|e| (e.name, e.deleted)),
+                Some((name, false)),
+                "{code}"
+            );
+            assert_eq!(resolve(call).and_then(|i| i.dxcc), Some(code), "{call}");
+        }
+        for code in [291, 6, 110] {
+            assert!(is_us_state_dxcc(code));
+            assert!(is_us_state_entity(entity_by_dxcc(code).unwrap().name));
+        }
+        assert!(!is_us_state_dxcc(202), "Puerto Rico is no WAS state");
+    }
+
+    /// The 62 deleted entities: none is a current number, and with the 340 current ones they are
+    /// the ARRL's 402. A name keeps its commas and its XML escapes come out read.
+    #[test]
+    fn the_deleted_entities_are_62_and_never_a_current_number() {
+        let deleted = deleted_entities();
+        assert_eq!(deleted.len(), 62);
+        let current = &resolver().by_dxcc;
+        let both: Vec<&u32> = deleted.keys().filter(|n| current.contains_key(n)).collect();
+        assert!(both.is_empty(), "deleted and current at once: {both:?}");
+        assert_eq!(current.len() + deleted.len(), 402);
+        for (code, name) in [
+            (229, "GERMAN DEMOCRATIC REPUBLIC"),
+            (134, "KINGMAN REEF"),
+            (85, "BONAIRE,CURACAO (NETH ANTILLES)"),
+            (255, "SINT MAARTEN, SABA, SAINT EUSTATIUS"),
+            (243, "PEOPLE'S DEM REP OF YEMEN"),
+            (30, "CELEBES & MOLUCCA ISLANDS"),
+        ] {
+            assert_eq!(
+                entity_by_dxcc(code),
+                Some(DxccEntity {
+                    code,
+                    name,
+                    deleted: true
+                })
+            );
+        }
+    }
+
+    /// ADIF's 0 ("no DXCC entity") and a number neither table holds name nothing, so a caller can
+    /// tell them from a real entity.
+    #[test]
+    fn no_entity_and_an_unknown_number_name_nothing() {
+        assert_eq!(entity_by_dxcc(NO_DXCC_ENTITY), None);
+        assert_eq!(entity_by_dxcc(73), None, "a number the ARRL never assigned");
+        assert_eq!(entity_by_dxcc(523), None, "past the last one assigned");
+        // Control: the neighbours of that gap do name entities.
+        assert!(entity_by_dxcc(72).is_some() && entity_by_dxcc(74).is_some());
+    }
+
+    /// The join is on the primary prefix: a row whose number is not a number is skipped, never
+    /// read as some other field.
+    #[test]
+    fn a_csv_row_without_a_number_is_skipped() {
+        let parsed = parse_csv_numbers("K,United States,291,NA\r\nXX,Nowhere,abc,EU\r\n");
+        assert_eq!(parsed.get("K"), Some(&291));
+        assert_eq!(parsed.get("XX"), None);
     }
 }

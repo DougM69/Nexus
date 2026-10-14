@@ -14,6 +14,11 @@ const fields = (v: unknown, names: string[], check: (v: unknown) => boolean = co
 const list = (v: unknown, check: (v: unknown) => boolean, max = 2048): boolean => Array.isArray(v) && v.length <= max && v.every(check)
 const band = (v: unknown) => fields(v, ['worked', 'confirmed']) && fields(v, ['band'], string)
 const need = (v: unknown) => fields(v, ['entity'], string) && object(v) && list(v.bands, string, 64)
+// Absent from a station older than the count by each record's own DXCC number; checked when present.
+const optional = (v: unknown, check: (v: unknown) => boolean) => v === undefined || check(v)
+const named = (v: unknown) => v === null || string(v)
+const disagreement = (v: unknown) => fields(v, ['call', 'band', 'mode'], string) &&
+  fields(v, ['whenUnix', 'loggedDxcc', 'lotwDxcc']) && object(v) && optional(v.loggedEntity, named) && optional(v.lotwEntity, named)
 function awards(v: unknown, total: number): v is AwardSummary {
   if (!object(v) || v.qsos !== total || !fields(v, ['qsos', 'confirmedQsos', 'dxccWorked', 'dxccConfirmed', 'dxccCredited',
     'readyToSubmit', 'slotsWorked', 'slotsConfirmed', 'fiveBandWorked', 'fiveBandConfirmed', 'satDxccWorked', 'satDxccConfirmed', 'wazWorked', 'wazConfirmed'])) return false
@@ -25,7 +30,9 @@ function awards(v: unknown, total: number): v is AwardSummary {
     fields(v.was, ['worked', 'confirmed', 'fiveBandWorked', 'fiveBandConfirmed']) && object(v.was) && list(v.was.needed, string, 50) &&
     fields(v.vucc, ['worked', 'confirmed', 'satWorked', 'satConfirmed']) && object(v.vucc) && list(v.vucc.bands, band) &&
     list(v.vucc.awards, a => band(a) && fields(a, ['threshold']) && fields(a, ['achieved'], boolean)) &&
-    fields(v.iota, ['worked', 'confirmed', 'cardConfirmed'])
+    fields(v.iota, ['worked', 'confirmed', 'cardConfirmed']) &&
+    optional(v.dxccWorkedTotal, count) && optional(v.dxccConfirmedTotal, count) &&
+    optional(v.dxccDisagreements, d => list(d, disagreement))
 }
 function tallies(v: unknown, total: number): boolean {
   if (!list(v, t => fields(t, ['label'], string) && fields(t, ['count']) && Number((t as Record<string, unknown>).count) <= total)) return false

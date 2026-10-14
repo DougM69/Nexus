@@ -42324,6 +42324,7 @@ mod tests {
             rec.grid.as_deref(),
             rec.ota.iota.as_deref(),
             qso_is_sat(rec.prop_mode.as_deref()),
+            crate::log_folds::award_fields(rec),
         );
         awards.summary()
     }
@@ -44827,6 +44828,7 @@ mod tests {
                 q.grid.as_deref(),
                 q.ota.iota.as_deref(),
                 qso_is_sat(q.prop_mode.as_deref()),
+                crate::log_folds::award_fields(&q),
             );
         }
         awards.summary()

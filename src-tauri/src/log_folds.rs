@@ -53,7 +53,7 @@ use std::sync::{Arc, Mutex};
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::logstore::{Freshness, LogRows};
 use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
-use tempo_core::logbook::QsoRecord;
+use tempo_core::logbook::{QsoRecord, AWARD_EXTRAS};
 
 use crate::{qso_is_sat, LogTallies, Tally};
 
@@ -79,7 +79,7 @@ const NEEDS: Narrow = Narrow {
     uploads: false,
 };
 
-/// [`award_add`]'s inputs.
+/// [`award_add`]'s inputs — with the passthrough fields [`AWARD_EXTRAS`] names, read beside them.
 const AWARDS: Narrow = Narrow {
     columns: &[
         "call",
@@ -94,6 +94,8 @@ const AWARDS: Narrow = Narrow {
         "grid",
         "ota_iota",
         "prop_mode",
+        "dxcc",
+        "when_unix",
     ],
     uploads: false,
 };
@@ -267,7 +269,7 @@ pub(crate) fn awards_kept(
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
     awards.set_home_call(&my_call);
     let fresh = rows
-        .each(AWARDS, Scope::All, Order::Log, &mut |q| {
+        .each_with(AWARDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
             award_add(&mut awards, q);
             ControlFlow::Continue(())
         })
@@ -291,6 +293,18 @@ pub(crate) fn awards_for_records<R: std::borrow::Borrow<QsoRecord>>(
     awards.summary()
 }
 
+/// What a contact's record carries for the awards beyond its call: its DXCC number, LoTW's where
+/// that differs, its CQ zone, and when it was made. The one reading [`award_add`] and Remote's
+/// award fold both take.
+pub(crate) fn award_fields(q: &QsoRecord) -> propagation::RecordFields {
+    propagation::RecordFields {
+        dxcc: q.dxcc,
+        lotw_dxcc: tempo_core::logbook::record_lotw_dxcc(q),
+        cqz: tempo_core::logbook::record_cq_zone(q),
+        when_unix: q.when_unix,
+    }
+}
+
 /// One contact into the award fold — the one step [`awards_kept`] and [`awards_for_records`]
 /// both take.
 fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
@@ -311,6 +325,7 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         q.grid.as_deref(),
         q.ota.iota.as_deref(),
         qso_is_sat(q.prop_mode.as_deref()),
+        award_fields(q),
     );
 }
 
@@ -885,6 +900,9 @@ mod tests {
                 q.grid.as_deref(),
                 q.ota.iota.as_deref(),
                 qso_is_sat(q.prop_mode.as_deref()),
+                // Since the awards count by the record's own numbers, the oracle reads them off
+                // the whole record — the store's narrow read must carry them to match it.
+                award_fields(q),
             );
         }
         awards.summary()
@@ -1396,6 +1414,68 @@ mod tests {
         ));
         r.when_unix = when;
         r
+    }
+
+    /// Contacts whose records carry what the awards count by beyond the call — LoTW-confirmed,
+    /// 20 m CW. The numbers are cty.csv's and TrustedQSL's.
+    fn by_record_log() -> String {
+        let row = |call: &str, date: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>{date}<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len()
+            )
+        };
+        [
+            // Navassa on a US 1×1 call, its zone with it.
+            row("K1N", "20150210", "<DXCC:3>182<CQZ:1>8"),
+            // A logger that wrote the call's US number; LoTW's Baker & Howland kept beside it.
+            row("K1B", "20021201", "<DXCC:3>291<APP_NEXUS_LOTW_DXCC:2>20"),
+            row("K3J", "20010101", "<DXCC:3>123"),
+            // The German Democratic Republic, deleted in 1990.
+            row("Y24UK", "19890101", "<DXCC:3>229"),
+            // A W1 licensee in California (zone 3), and a KP4 licensee in Florida.
+            row("K1ABC", "20200101", "<CQZ:1>3<STATE:2>CA"),
+            row("KP4ABC", "20200102", "<DXCC:3>291<STATE:2>FL"),
+        ]
+        .concat()
+    }
+
+    /// ★ The award fold reads what each record carries beyond its call — its DXCC number, CQ zone
+    /// and LoTW's DXCC — from the store as the whole record holds it, and counts by them: the
+    /// answer the fold over whole records gives, and each count by value. (The golden runs above
+    /// are blind to this: their synthetic contacts carry none of the three.)
+    #[test]
+    fn the_awards_read_from_the_store_count_by_each_records_own_numbers() {
+        let d = Dir::new("by-record");
+        std::fs::write(
+            d.log(),
+            format!("{}{}", tempo_core::logbook::adif_header(), by_record_log()),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 6, "premise: every contact converted");
+        let kept = awards_kept(&e, &tallies).unwrap();
+        assert_eq!(
+            *kept,
+            awards_for_records(&held, MY_CALL),
+            "the store's narrow read must carry what the whole record does"
+        );
+        // Navassa, Baker & Howland (LoTW's), Johnston, the United States; and the GDR in total.
+        assert_eq!((kept.dxcc_confirmed, kept.dxcc_confirmed_total), (4, 5));
+        // Zones 8 (K1N's record), 5 (K1B, K3J), 14 (Y2), 3 (K1ABC's record) and 8 (KP4).
+        assert_eq!(kept.waz_confirmed, 4);
+        // CA, and FL by the KP4 contact's DXCC 291.
+        assert_eq!(kept.was.confirmed, 2);
+        assert_eq!(
+            kept.dxcc_disagreements
+                .iter()
+                .map(|x| (x.call.as_str(), x.logged_dxcc, x.lotw_dxcc))
+                .collect::<Vec<_>>(),
+            [("K1B", 291, 20)]
+        );
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.

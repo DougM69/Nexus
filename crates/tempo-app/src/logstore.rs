@@ -1544,6 +1544,27 @@ impl LogRows {
             .map(|((), fresh)| fresh)
     }
 
+    /// [`Self::each`], each row with the passthrough fields `extras` names as well
+    /// ([`LogDb::each_narrow_with`]) — the award folds' CQ zone and LoTW DXCC.
+    ///
+    /// ⚠️ **Never call it holding the Engine lock**, as [`Self::each`].
+    pub fn each_with(
+        &self,
+        narrow: sqlite::Narrow,
+        extras: &[&str],
+        scope: sqlite::Scope<'_>,
+        order: sqlite::Order,
+        each: &mut dyn FnMut(&QsoRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<Freshness, sqlite::Error> {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("a pass over the log's rows");
+        let LogRows::Store(reads) = self;
+        reads
+            .read(READ_WAIT, |db| {
+                db.each_narrow_with(narrow, extras, scope, order, each)
+            })
+            .map(|((), fresh)| fresh)
+    }
+
     /// Hand `each` every record of the log, WHOLE, in log order — the store streamed a chunk at a
     /// time ([`LogDb::each_record`]), so a pass holds one chunk of the log and never the whole of
     /// it. `each` answering

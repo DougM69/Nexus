@@ -39,3 +39,31 @@ it('refuses mismatched, incomplete, malformed and expired insight pages', () => 
   ;(broken.meta as { source: { awards: { vucc: unknown } } }).source.awards.vucc = null
   expect(() => parseInsights(broken, 'awards')).toThrow()
 })
+it('reads the DXCC totals and LoTW disagreements when a station sends them, and a station without them', () => {
+  const page = insightPage('awards')
+  const result = parseInsights(page, 'awards')
+  if (result.kind !== 'awards') throw new Error('awards')
+  expect(result.awards.dxccConfirmedTotal).toBe(3)
+  expect(result.awards.dxccDisagreements?.[0]).toMatchObject({ call: 'K1N', loggedDxcc: 291, lotwDxcc: 182 })
+  // A station older than the count by each record's own number sends none of the three.
+  const older = insightPage('awards')
+  const awards = (older.meta as { source: { awards: Record<string, unknown> } }).source.awards
+  delete awards.dxccWorkedTotal
+  delete awards.dxccConfirmedTotal
+  delete awards.dxccDisagreements
+  expect(parseInsights(older, 'awards').kind).toBe('awards')
+  // An entity the station's table does not know arrives as null, and is accepted.
+  const unnamed = insightPage('awards')
+  ;(unnamed.meta as { source: { awards: { dxccDisagreements: { lotwEntity: unknown }[] } } }).source.awards.dxccDisagreements[0].lotwEntity = null
+  expect(parseInsights(unnamed, 'awards').kind).toBe('awards')
+  for (const mutate of [
+    (a: Record<string, unknown>) => { a.dxccConfirmedTotal = -1 },
+    (a: Record<string, unknown>) => { a.dxccDisagreements = [{ call: 'K1N' }] },
+    (a: Record<string, unknown>) => { a.dxccDisagreements = [{ ...(a.dxccDisagreements as object[])[0], lotwDxcc: '182' }] },
+    (a: Record<string, unknown>) => { a.dxccDisagreements = [{ ...(a.dxccDisagreements as object[])[0], loggedEntity: 7 }] },
+  ]) {
+    const broken = insightPage('awards')
+    mutate((broken.meta as { source: { awards: Record<string, unknown> } }).source.awards)
+    expect(() => parseInsights(broken, 'awards')).toThrow()
+  }
+})

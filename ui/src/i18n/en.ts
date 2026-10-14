@@ -2093,6 +2093,13 @@ export const EN = {
     'DXCC achieved ✓ · {{confirmed}} entities · {{worked}} worked · {{credited}} credited',
   'awards.dxcc.note.toGo': '{{remaining}} confirmed to go · {{worked}} worked · {{credited}} credited',
   'awards.dxcc.note.readyToSubmit': ' · {{count}} ready to submit',
+  'awards.dxcc.note.currentTotal':
+    '{{current}} current · {{total}} total, deleted entities included',
+  'awards.dxccDiffer.head': 'LoTW counts as another entity ({{count}})',
+  'awards.dxccDiffer.note':
+    'LoTW confirmed these contacts under a different DXCC entity than your log has. The awards count LoTW’s entity; your log is not changed.',
+  'awards.dxccDiffer.row': 'Your log: {{logged}} · LoTW: {{lotw}}',
+  'awards.dxccDiffer.unknown': 'DXCC {{code}}',
   'awards.honorRoll.note.numberOne': '#1 Honor Roll ✓ — all {{total}} entities',
   'awards.honorRoll.note.achieved': 'Honor Roll ✓ · {{needed}} to #1',
   'awards.honorRoll.note.toGo':

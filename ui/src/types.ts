@@ -2452,6 +2452,20 @@ export interface EntityNeed {
   bands: string[]
 }
 
+/** A contact LoTW confirmed under another DXCC entity than the log records for it. The awards
+ * count it by LoTW's; the log keeps its own. An entity name is absent when the number is one the
+ * station's table does not know. */
+export interface DxccDisagreement {
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  loggedDxcc: number
+  loggedEntity?: string | null
+  lotwDxcc: number
+  lotwEntity?: string | null
+}
+
 /** A gamification milestone (unlocked, or locked-with-progress). */
 export interface Achievement {
   /** Stable id (e.g. "dxcc-100") — the key the UI tracks "seen" by. */
@@ -3093,9 +3107,15 @@ export interface DiagnosticsReport {
 export interface AwardSummary {
   qsos: number
   confirmedQsos: number
-  /** Distinct DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
+  /** Distinct CURRENT DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
   dxccWorked: number
   dxccConfirmed: number
+  /** The same, the deleted entities included — LoTW's "total". Absent from a station older
+   * than the count by each record's own DXCC number. */
+  dxccWorkedTotal?: number
+  dxccConfirmedTotal?: number
+  /** Contacts LoTW confirmed under another DXCC entity than the log records, in log order. */
+  dxccDisagreements?: DxccDisagreement[]
   /** Distinct DXCC entities with ARRL credit granted (official standing). */
   dxccCredited: number
   /** Confirmed-but-not-credited entities (confirmed − credited) — ready to submit. */

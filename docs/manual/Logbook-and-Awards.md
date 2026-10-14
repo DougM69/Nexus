@@ -70,11 +70,11 @@ Every award computation — DXCC, Challenge, Honor Roll, WAZ, WAS — uses `awar
 
 ## Awards Engine
 
-Award tracking is computed entirely offline from the logbook using cty.dat entity resolution — no internet connection is required.
+Award tracking is computed entirely offline from the logbook — no internet connection is required. DXCC, WAS and WAZ count each contact by the DXCC entity number and CQ zone its record carries (ADIF `DXCC` and `CQZ`, from an ADIF import or a LoTW download), and by cty.dat's reading of the callsign where the record carries none. Where LoTW confirmed a contact under a different DXCC entity than your log has, the awards count LoTW's; your log keeps its own, and the Awards view lists each such contact.
 
 **Shipped awards:**
 
-- **DXCC** — worked and confirmed counts toward 100 entities; per-band and per-mode (CW / Phone / Digital) breakdowns
+- **DXCC** — worked and confirmed counts toward 100 entities, the current count beside the total with deleted entities; per-band and per-mode (CW / Phone / Digital) breakdowns. A WAE area such as Sicily counts as the DXCC entity it belongs to (Italy).
 - **DXCC Challenge** — entity × band slots (160–6m) toward 1000
 - **DXCC Honor Roll** — confirmed entities within 9 of the current DXCC total; `#1 Honor Roll` flag when you hold every current entity; "N to #1" metric displayed
 - **5-Band DXCC** — coverage on 80/40/20/15/10m simultaneously
@@ -82,7 +82,7 @@ Award tracking is computed entirely offline from the logbook using cty.dat entit
 - **WAS** — 50 US states
 - **5-Band WAS** — WAS across five bands
 
-CQ zone (WAZ) is derived from cty.dat entity resolution. Contacts whose callsign cannot be resolved to a DXCC entity do not advance WAZ. No IOTA, WWFF, or Worked-All-Grids tracking is present.
+CQ zone (WAZ) is the zone the contact's record carries, else the one cty.dat gives its callsign. A contact with neither does not advance WAZ. No IOTA, WWFF, or Worked-All-Grids tracking is present.
 
 The Awards view includes a per-QSO confirmation diagnostics panel. It lists the reason each contact is not yet credited (not uploaded, waiting on partner, recently worked, mode-class mismatch, etc.) and provides action affordances: LoTW contacts get a live one-click Upload / Re-upload button (shelling out to TQSL) — and the same batch can be run on a timer with **Upload to LoTW automatically** in Settings; QRZ, ClubLog, and eQSL contacts show guidance chips but no in-app bulk-upload path.
 
@@ -277,7 +277,7 @@ Journey is deliberately white-hat: there are no decaying streaks (the streak wid
 - **ClubLog developer API key** is baked into official installer builds but never committed to the public GPLv3 source. Operators building from source must supply their own key via the build environment or Settings.
 - **eQSL InBox download** is a page-scrape that depends on the "Your ADIF log file has been built" HTML marker. A change in eQSL's page structure will break the extractor until an update ships.
 - **Background timers are opt-in and few.** LoTW, eQSL, QRZ, and ClubLog syncs are triggered manually or on log entry (for outbound auto-push). The two exceptions are both off by default and both switched on in Settings: the QRZ delta pull (**Pull confirmations automatically**) and the LoTW batch upload (**Upload to LoTW automatically**). There is no automatic scheduled pull for eQSL or ClubLog.
-- **WAZ** does not advance for contacts whose callsign cannot be resolved to a DXCC entity by cty.dat.
+- **WAZ** does not advance for a contact whose record carries no CQ zone and whose callsign cty.dat cannot resolve.
 - **No IOTA, WWFF, or Worked-All-Grids award tracking** in the current awards engine.
 - **Journey streak** is opt-in; the widget is hidden until you enable `journey_streak_enabled` in Settings.
 - **Desktop-only** (Tauri v2). No mobile or web-based logbook sync path.

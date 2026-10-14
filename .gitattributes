@@ -17,8 +17,10 @@
 #
 # Third-party data shipped as published. cty.dat is AD1C's country file and the .tle is a
 # captured Celestrak payload; both are line-oriented formats consumed verbatim, and the
-# TLE is a test fixture whose bytes are the point.
+# TLE is a test fixture whose bytes are the point. cty.csv is AD1C's, from the same release
+# zip as cty.dat, kept with the CRLF line ends it was published with.
 crates/propagation/data/cty.dat            -text
+crates/propagation/data/cty.csv            -text
 crates/propagation/tests/fixtures/*.tle    -text
 
 # Vendored hamlib licence texts, bundled as Tauri resources. Licence files are reproduced

@@ -64,7 +64,7 @@ pub mod live;
 
 pub use achievements::Achievement;
 pub use advisor::{BandReport, PropAdvisor, PropAdvisory, RegionReport};
-pub use awards::{AwardSummary, Awards, BandAward, EntityNeed};
+pub use awards::{AwardSummary, Awards, BandAward, DxccDisagreement, EntityNeed, RecordFields};
 pub use dxped::{
     CalendarEntry, DxpedDashboard, DxpeditionPlan, DxpeditionTracker, Ft8DxpMode, LogNeeds,
     NeedKind, NeedsSet, OperatorNeeds, WorkStatus, WorkableCard,

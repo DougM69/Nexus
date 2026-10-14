@@ -131,6 +131,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the
   tune-up. Nexus now sends the FT-710 its own tuning-start command; every other radio gets the
   same command as before. NEEDS-BENCH: an FT-710 into a dummy load.
+- **DXCC, WAS and WAZ now count each contact by the country LoTW or your log records for it.**
+  They used to read every contact's country from its call alone, so a DXpedition on a US-style
+  call counted as the United States: K1N (Navassa Island, 2015), K1B (Baker & Howland Islands,
+  2002), K3J (Johnston Island, 2001) and others like them. A contact now counts by the DXCC
+  number its record carries, from an ADIF import or a LoTW download, and by LoTW's when LoTW
+  confirmed it under a different one. Your log's own country is never changed, and the Awards
+  view lists every contact where LoTW and your log disagree. A contact with no number counts by
+  its call, as before. The DXCC card shows the current count beside the total with the deleted
+  entities (such as East Germany); Sicily and the other WAE areas count as the DXCC entity they
+  belong to (Sicily as Italy); a LoTW download or an ADIF import keeps the DXCC number and CQ
+  zone it brings for a contact already in your log; WAS counts a state by the contact's DXCC (a
+  KP4 call signing from Florida counts Florida); and WAZ counts the CQ zone the contact's record
+  carries. The numbers come from AD1C's cty.csv and, for the deleted entities, the ARRL's
+  TrustedQSL (see NOTICE).
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
   save were in memory only and nothing on screen said so; a power cut would have lost them. The
