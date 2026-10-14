@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel, radioPatch } from './SettingsPanel'
 import { confirmDialog } from '../confirm'
+import type { RadioProfilePatch } from '../api'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -52,8 +53,10 @@ vi.mock('../toast', () => ({
 }))
 vi.mock('../confirm', () => ({ confirmDialog: vi.fn(async () => true) }))
 
-type Profile = Record<string, unknown> & { id: number }
-type Station = Record<string, unknown> & { radios: Profile[]; activeRadio: number }
+// The patch fields typed, so `radioPatch` accepts both; anything else rides along untyped.
+type Profile = Partial<RadioProfilePatch> & Record<string, unknown> & { id: number }
+type Station = Partial<RadioProfilePatch> &
+  Record<string, unknown> & { radios: Profile[]; activeRadio: number }
 
 const FT710: Profile = {
   id: 0,
