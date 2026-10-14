@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   went quiet, about 20 seconds later. Club sync is still v4: a laptop or host on an earlier v4 build
   works with one on this one as before, and shows its own board. The hosted Remote page is sent
   nothing new and shows the station's own board, and the score is unchanged (the club score was
-  already the club's).
+  already the club's). NEEDS-BENCH: two laptops on a LAN.
 - **The contest logger window says to log a satellite pass's contacts on the Satellites screen.**
   Its log line logs every contact on the band the radio is on, with no satellite, so at ARRL Field
   Day a pass contact logged there would count as an ordinary 2 m or 70 cm contact, and Winter Field
@@ -86,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before, and so do the hosted Remote page and its station monitor. Settings ▸ Appearance ▸ Theme ▸
   System is there on every computer. A theme you picked stays as you picked it. Earlier versions
   saved Dark for everyone who never picked one, so a computer that ran them keeps Dark: pick System
-  to follow the computer.
+  to follow the computer. NEEDS-BENCH: Windows, switched between light and dark.
 - **Light has the softer silver look of the Silver chassis theme.** A pale silver page, white
   panels, graphite text and steel blue keys, by day and with Night on, and the scopes and meters
   take Silver's lit keys and digits. If you had Silver chassis picked, you see Light, which looks
@@ -114,8 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen's header no longer show the long amber sentence. A small outlined **FT8 · no credit** (or
   **FT4 · no credit**) chip says it instead, beside the mode on the log line and where the sentence
   was in the banner (on the Remote page's Contest view too) and the FT header; hovering it shows the
-  whole sentence. It shows on exactly the modes the warning did, and the contact still logs: what is
-  logged and scored is unchanged.
+  whole sentence. It shows on exactly the modes the warning did, and the contact still logs, though
+  it now scores nothing (see Fixed).
 - **The manual's Illinois QSO Party club checklists gain three lines.** No test contacts from 1700Z
   on Saturday: every contact logged with Contest mode on from then is in the party's log, so in the
   club's file and its claimed score, even before the party starts, and Ctrl+D twice takes back one
@@ -220,13 +220,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings ▸ Radio shows the same note under PTT Method for these radios, and still warns when you
   save one of them with PTT on CAT. Nothing you saved before changes until you pick, and a saved
   Serial RTS or Serial DTR counts as the answer. The Malachite DSP SDR is a receiver, so it is not
-  asked.
+  asked. NEEDS-BENCH: one of these radios, keyed by VOX and by a serial line.
 - **F5, Ctrl+F5 and Ctrl+R no longer reload Nexus on Windows.** One of them pressed by mistake
   reloaded the whole window, in a contest in the middle of a contact. WebView2's own browser
   shortcuts are now off in every Nexus window, as they already were in the Remote stations window:
   the main window, the splash and every pop-out, the Contest screen and the Contest logger among
   them. With them, Ctrl+P no longer prints the window and Ctrl+F no longer opens a find bar. Copy,
-  paste, cut, undo and select all work as before, and so do Nexus's own F-keys. Not yet tried on
+  paste, cut, undo and select all work as before, and so do Nexus's own F-keys. NEEDS-BENCH:
   Windows.
 - **The Contest screen's Export ADIF and Club ADIF files have the report you sent.** They had the
   report you received on each contact but not the one you sent, so a program reading them found no
@@ -337,6 +337,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call was changed while it was joined, stays in that laptop's own log and is not sent; the club
   block says how many, and the club chip still reaches Synced. Nothing already in the club's log
   changes, and at ARRL Field Day the GOTA station still sends its contacts under its own call.
+  Each laptop holds back its own contacts, so a laptop on an earlier version still sends a contact
+  logged on another call to the club's log: put every laptop on this version before the contest.
 - **A contact in a mode the contest does not allow now scores nothing.** FT8 and FT4 at the Illinois
   QSO Party, and the WSJT modes at Winter Field Day, were scored like any other contact although the
   chip beside the mode said no credit: their points, their county or section, and a bonus station's

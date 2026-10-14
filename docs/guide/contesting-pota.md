@@ -9,7 +9,10 @@ top of the **Contest** screen (the tent in the left bar) or in
 [Contesting ▸ Contest](settings-reference.md#contest), under the picker, because it
 reshapes the app for a weekend most operators are not having. It is one switch for
 whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
-Field Day or any other, and it names that contest wherever it is shown.
+Field Day or any other, and it names that contest wherever it is shown: with the
+mode on, the badge with the blue dot at the foot of the left rail reads its short
+name (**ILQP**, **NYQP**, **WFD**, **CQ WW CW**, **JAN VHF**, and **FIELD DAY** for
+ARRL Field Day).
 
 ---
 

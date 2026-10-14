@@ -154,8 +154,10 @@ this station has been in the roster; **decoded weather** for a weather station â
 temperature, wind and gust, humidity, pressure, rain in the last hour and 24 h,
 with any sensor the station does not carry simply omitted rather than shown as a
 zero; and a **Raw packet** disclosure holding the TNC2 monitor line verbatim.
-Two links close it out: **QRZ** and **aprs.fi** â€” the latter just opens that
-station's page in your browser, nothing is sent to it. `Esc` closes the card and
+Two links close it out: **QRZ** and **aprs.fi**. QRZ opens the callsign alone,
+without the SSID (`PI1UTR-10` opens `PI1UTR`), since the SSID is not part of the
+call; aprs.fi opens that exact station, SSID included. Both just open a page in
+your browser, nothing is sent to it. `Esc` closes the card and
 hands focus back where it came from; as everywhere on this screen, the same press
 also stops transmit.
 
