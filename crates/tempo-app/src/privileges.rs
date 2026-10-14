@@ -79,15 +79,22 @@ const REGION1: &[Seg] = &[
     s(70.1, 70.5, true, true, true),  // 4 m all-mode; SSB/CW calling 70.200
 ];
 
-// 60 m (General/Extra): the 5.3515–5.3665 subband + 4 retained legacy channel centers
-// (±1.4 kHz = 2.8 kHz BW), all-mode. 60 m is channelized — excluded from the band dropdown
-// but enforced by the lockout.
+// 60 m (General/Extra): the 5.3515–5.3665 subband, all-mode, + 4 channels, per 47 CFR
+// 97.303(h)(3). Each channel is its centre ±1.4 kHz (the 2.8 kHz the rule allows) for CW and
+// data, which the gate judges at the emitted tone. Phone is judged as [carrier, carrier +
+// 2.8 kHz], and the rule sets its carrier 1.5 kHz below the centre, so its row runs from that
+// carrier to the channel's top: the rule's carrier keys, and no passband leaves the channel.
+// 60 m is channelized — excluded from the band dropdown but enforced by the lockout.
 const SIXTY: &[Seg] = &[
     s(5.3515, 5.3665, true, true, true),
-    s(5.3306, 5.3334, true, true, true), // ch 5.3320
-    s(5.3466, 5.3494, true, true, true), // ch 5.3480
-    s(5.3716, 5.3744, true, true, true), // ch 5.3730
-    s(5.4036, 5.4064, true, true, true), // ch 5.4050
+    s(5.3306, 5.3334, true, true, false),  // ch 5.3320
+    s(5.3305, 5.3334, false, false, true), // ch 5.3320 phone, carrier 5.3305
+    s(5.3466, 5.3494, true, true, false),  // ch 5.3480
+    s(5.3465, 5.3494, false, false, true), // ch 5.3480 phone, carrier 5.3465
+    s(5.3716, 5.3744, true, true, false),  // ch 5.3730
+    s(5.3715, 5.3744, false, false, true), // ch 5.3730 phone, carrier 5.3715
+    s(5.4036, 5.4064, true, true, false),  // ch 5.4050
+    s(5.4035, 5.4064, false, false, true), // ch 5.4050 phone, carrier 5.4035
 ];
 
 fn technician() -> Vec<Seg> {
@@ -611,7 +618,7 @@ mod tests {
         );
         assert!(general_phone.contains(&(7.175, 7.300)));
         // 60 m's channels stay apart: the gaps between them are no privilege.
-        assert!(general_phone.contains(&(5.3306, 5.3334)));
+        assert!(general_phone.contains(&(5.3305, 5.3334)));
         let tech_data = allowed_spans(Technician, Digital).unwrap();
         // Data on HF only on 10 m, and band-wide from 6 m up.
         assert!(tech_data.contains(&(28.000, 28.300)), "{tech_data:?}");
@@ -640,5 +647,51 @@ mod tests {
         assert!(tx_allowed(General, 5.3320, Phone)); // a legacy channel center
         assert!(!tx_allowed(General, 5.3400, Phone)); // between channels → blocked
         assert!(!tx_allowed(Technician, 5.3590, Phone)); // Tech not authorized on 60 m
+    }
+
+    /// 47 CFR 97.303(h)(3): on a 60 m channel the phone carrier is set 1.5 kHz below the centre,
+    /// so phone keys from that carrier to the channel's top, while CW and data keep the channel.
+    #[test]
+    fn sixty_meter_phone_keys_from_the_rules_carrier_and_cw_and_data_keep_the_channel() {
+        // (carrier, centre, the channel's top) in MHz, as literals so no sum rounds across an edge.
+        for (carrier, centre, top) in [
+            (5.3305, 5.3320, 5.3334),
+            (5.3465, 5.3480, 5.3494),
+            (5.3715, 5.3730, 5.3744),
+            (5.4035, 5.4050, 5.4064),
+        ] {
+            for class in [General, Extra] {
+                assert!(
+                    tx_allowed(class, carrier, Phone),
+                    "{class:?} phone carrier {carrier}"
+                );
+                assert!(
+                    tx_allowed(class, carrier + SSB_BW_MHZ, Phone),
+                    "{class:?} {carrier}"
+                );
+                assert!(
+                    !tx_allowed(class, carrier - 0.0001, Phone),
+                    "{class:?} {carrier}"
+                );
+                assert!(
+                    !tx_allowed(class, top, Phone),
+                    "{class:?} phone at the top {top}"
+                );
+                assert!(!tx_allowed(class, carrier, Cw), "{class:?} CW at {carrier}");
+                assert!(
+                    !tx_allowed(class, carrier, Digital),
+                    "{class:?} data at {carrier}"
+                );
+                assert!(tx_allowed(class, centre, Cw), "{class:?} CW at {centre}");
+                assert!(
+                    tx_allowed(class, centre, Digital),
+                    "{class:?} data at {centre}"
+                );
+            }
+            assert!(
+                !tx_allowed(Technician, carrier, Phone),
+                "Technician at {carrier}"
+            );
+        }
     }
 }

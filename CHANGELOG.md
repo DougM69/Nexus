@@ -133,6 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The Phone screen, an SSTV image sent from it, the transmit lock and the sideband a contact is
   logged with now all use USB on 60 m; every other band is unchanged. NEEDS-BENCH: a radio on 60 m
   into a dummy load, checking the mode on the radio's own display.
+- **US General and Extra operators can now talk on the four 60 m channels.** The rule sets a 60 m
+  phone carrier 1.5 kHz below the channel centre (5330.5, 5346.5, 5371.5 and 5403.5 kHz), but the
+  transmit lock only accepted a carrier at least 1.4 kHz below it, so it showed TX LOCKED on the
+  very frequency the rule names. Phone now keys on that carrier, in USB, and is still refused
+  anywhere the voice would leave the 2.8 kHz channel. CW, data, the 5351.5 to 5366.5 kHz segment,
+  Technician and non-US operators are unchanged. NEEDS-BENCH: a radio on a 60 m channel carrier
+  into a dummy load, checking that Nexus lets it key.
 
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
