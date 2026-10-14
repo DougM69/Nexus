@@ -313,6 +313,36 @@ fn rows() -> Vec<Row> {
             emission_mhz: 14.200,
             phone_seg: None,
         },
+        // 60 m phone is USB, so the passband is [dial, dial + 2.8 kHz]. The table's channels are
+        // centre +/- 1.4 kHz, so a dial on the rule's carrier (centre - 1.5 kHz) is 100 Hz short.
+        Row {
+            name: "IC-7300 phone 5.3305 USB, the 5332.0 kHz channel's carrier, General",
+            build: || station(3073, "general", "phone", 5.3305, "60m", "LSB"),
+            tx_allowed: false,
+            emission_mhz: 5.3305,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3530 USB, the passband inside the 60 m segment, General",
+            build: || station(3073, "general", "phone", 5.3530, "60m", "LSB"),
+            tx_allowed: true,
+            emission_mhz: 5.3530,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3570 USB, mid-segment, General",
+            build: || station(3073, "general", "phone", 5.3570, "60m", "LSB"),
+            tx_allowed: true,
+            emission_mhz: 5.3570,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3650 USB, the passband over the 60 m segment top, General",
+            build: || station(3073, "general", "phone", 5.3650, "60m", "LSB"),
+            tx_allowed: false,
+            emission_mhz: 5.3650,
+            phone_seg: None,
+        },
         // ── Dual-receiver radios, normal operation ─────────────────────────────────────
         Row {
             name: "IC-7610 phone 14.250, General",

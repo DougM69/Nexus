@@ -9320,7 +9320,7 @@ impl Engine {
                 let lsb = self
                     .sideband_override
                     .as_deref()
-                    .map_or(self.settings.dial_mhz < 10.0, |m| {
+                    .map_or(crate::bandplan::phone_is_lsb(self.settings.dial_mhz), |m| {
                         m.eq_ignore_ascii_case("lsb")
                     });
                 // Same per-radio opt-out as Digital and RTTY-AFSK: a mic-jack interface needs
@@ -22926,12 +22926,13 @@ contact yourself."
                 allow(if lsb { dial - off } else { dial + off })
             }
             OperatingMode::Phone => {
-                // The band CONVENTION's sideband (LSB below 10 MHz, USB from 30 m up) through the
+                // The band CONVENTION's sideband (LSB below 10 MHz except 60 m, USB from 30 m up) through the
                 // one phone passband model. Right as it stands for a band pick and a dial-memory
                 // recall — both follow a band change, which drops the cockpit's pick — and the
                 // key-time gate judges the mode the rig is actually in on top of it
                 // (`emission_in_use_allowed`).
-                self.phone_emission_allowed(dial, if dial < 10.0 { "LSB" } else { "USB" })
+                let lsb = crate::bandplan::phone_is_lsb(dial);
+                self.phone_emission_allowed(dial, if lsb { "LSB" } else { "USB" })
             }
             // CW: the carrier sits at the dial.
             OperatingMode::Cw => allow(dial),
@@ -49371,6 +49372,48 @@ mod tests {
             !adif.contains("<SUBMODE:"),
             "neither CW nor RTTY needs one, and neither may acquire the phone answer: {adif}"
         );
+    }
+
+    /// 60 m phone is USB end to end: the mode the radio loop commands, the passband the
+    /// key-time gate judges, the DATA submode an SSTV image would ride, and the SUBMODE the
+    /// contact logs once the rig reads back what it was told (47 CFR 97.303(h): the carrier
+    /// sits 1.5 kHz below the channel centre). 40 m stays LSB as the control.
+    #[test]
+    fn phone_on_60m_is_usb_from_the_command_to_the_logged_submode() {
+        for (dial, band, want) in [(7.185, "40m", "LSB"), (5.3305, "60m", "USB")] {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.settings.operating_mode = crate::settings::OperatingMode::Phone;
+            e.set_frequency(dial, band, "USB");
+            assert_eq!(e.rig_mode_effective(), want, "{band}: the commanded mode");
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+            // The rig echoes what it was commanded over a healthy link.
+            e.set_cat_status(Some(true), "up".into());
+            let commanded = e.rig_mode_effective();
+            e.observe_rig_mode(commanded);
+            assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "PH").unwrap());
+            let adif = e.field_day_log_adif().expect("an FD log to flush");
+            assert!(
+                adif.contains(&format!("<SUBMODE:3>{want} ")),
+                "{band}: {adif}"
+            );
+        }
+        // An SSTV image queued in the Phone section rides the DATA submode on the same side.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(7.171, "40m", "USB");
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert_eq!(e.rig_mode_effective(), "PKTLSB", "40 m SSTV data submode");
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.3570, "60m", "LSB");
+        e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
+        assert_eq!(e.rig_mode_effective(), "PKTUSB", "60 m SSTV data submode");
     }
 
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter

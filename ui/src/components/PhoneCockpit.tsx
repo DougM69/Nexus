@@ -106,7 +106,7 @@ import { rotorPointAt } from './rotorPointAt'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
 import { setFrequency, openPanelWindow, getSettings } from '../api'
-import { bandLabelForMhz, sidebandForQsy } from '../band'
+import { bandLabelForMhz, sidebandForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
@@ -951,9 +951,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   })
 
   // AUTO sideband from the rig-mode policy — FM when the FM sub-mode is selected, else sideband
-  // by band (LSB <10 MHz, USB above). The operator can override this transiently (below).
+  // by band (LSB <10 MHz except 60 m, USB above). The operator can override this transiently (below).
   const sidebandAuto =
-    phoneMode?.toLowerCase() === 'fm' ? 'FM' : snap.radio.dialMhz < 10 ? 'LSB' : 'USB'
+    phoneMode?.toLowerCase() === 'fm' ? 'FM' : sidebandForMhz(snap.radio.dialMhz)
   // Transient operator override ("USB"/"LSB"/"FM") or null = AUTO. The COMMANDED mode (canonical
   // for TX/logging + what the rig is set to) is the override when set, else the band-auto sideband.
   const modeOverride = snap.radio.sidebandOverride ?? null
@@ -1049,7 +1049,7 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   // change, so the closed Mode enumeration that keeps USB/LSB out of `LOG_MODES` is untouched.
   //
   // ⛔ THE SIDEBAND COMES FROM THE RIG OR NOT AT ALL, and that is the whole gate. The fallback
-  // this line does NOT use is `commandedMode`, whose AUTO face is `dialMhz < 10 ? LSB : USB` —
+  // this line does NOT use is `commandedMode`, whose AUTO face is `sidebandForMhz(dialMhz)` —
   // a BAND DEFAULT. Writing that into a permanent record would be inventing the operator's
   // sideband from the band, which is exactly the claim nobody can check later: the rig may have
   // been on the other one all along. Without CAT, or with the rig sitting in CW/PKTUSB where

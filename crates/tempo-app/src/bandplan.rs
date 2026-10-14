@@ -654,6 +654,15 @@ pub fn band_for_dial(dial_mhz: f64) -> Option<&'static str> {
     Some(b)
 }
 
+/// Is phone on the LOWER sideband at this dial? The convention is LSB below 10 MHz and USB
+/// from 10 MHz up, with 60 m the exception: it is USB. 47 CFR 97.303(h) sets the J3E carrier
+/// 1.5 kHz below each channel centre with the emission held to 2.8 kHz, which only upper
+/// sideband fits, and the IARU Region 1 and RAC band plans call for USB there too. The 60 m
+/// edges are [`band_for_dial`]'s, so the commanded mode and the band label cannot disagree.
+pub fn phone_is_lsb(dial_mhz: f64) -> bool {
+    dial_mhz < 10.0 && band_for_dial(dial_mhz) != Some("60m")
+}
+
 #[cfg(test)]
 mod tests {
     /// 4 m is the one band Nexus ships that exists ALMOST EVERYWHERE EXCEPT THE US

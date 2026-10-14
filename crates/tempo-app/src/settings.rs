@@ -6513,13 +6513,15 @@ impl Settings {
         // WHICH SIDE the section policy below works on. Two different questions,
         // deliberately not unified: Digital's side is a property of the tuned CHANNEL
         // (FT8 on 40 m is USB-side — the band convention would say LSB and be wrong),
-        // while Phone and CW follow the hard band convention (LSB below 10 MHz).
+        // while Phone and CW follow the hard band convention (LSB below 10 MHz; Phone is USB on
+        // 60 m, `bandplan::phone_is_lsb`).
         let lsb = match self.operating_mode {
             OperatingMode::Digital => sideband.trim().eq_ignore_ascii_case("LSB"),
             // Keyboard modes are ALWAYS USB-side: the PSK31 convention is USB on
             // every band (80/40 m included — unlike RTTY's LSB and phone's
             // below-10-MHz rule), so the band fallthrough would be wrong here.
             OperatingMode::Keyboard => false,
+            OperatingMode::Phone => crate::bandplan::phone_is_lsb(dial_mhz),
             _ => dial_mhz < 10.0,
         };
         self.rig_mode_on_sideband(lsb)
@@ -8085,6 +8087,26 @@ mod tests {
         assert_eq!(s.rig_mode(), "USB");
         s.dial_mhz = 7.200;
         assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    /// 60 m phone is upper sideband. 47 CFR 97.303(h) sets the J3E carrier 1.5 kHz BELOW each
+    /// channel centre and holds the emission to 2.8 kHz, which only USB satisfies; the IARU
+    /// Region 1 plan and RAC's plan say USB too. The below-10-MHz LSB convention stops at 60 m.
+    #[test]
+    fn phone_on_60m_commands_usb_and_the_other_bands_keep_their_convention() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Phone;
+        s.phone_mode = "ssb".into();
+        // Controls first: the bands either side keep their sideband.
+        for (dial, want) in [(3.8, "LSB"), (7.2, "LSB"), (14.2, "USB")] {
+            s.dial_mhz = dial;
+            assert_eq!(s.rig_mode(), want, "phone at {dial} MHz");
+        }
+        // The four US channel carriers and one dial inside the 5351.5-5366.5 kHz segment.
+        for dial in [5.3305, 5.3465, 5.3570, 5.3715, 5.4035] {
+            s.dial_mhz = dial;
+            assert_eq!(s.rig_mode(), "USB", "60 m phone at {dial} MHz");
+        }
     }
 
     #[test]

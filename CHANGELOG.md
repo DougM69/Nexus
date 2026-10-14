@@ -126,6 +126,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Phone on 60 m now sets the radio to USB.** Nexus put every band below 10 MHz on LSB, 60 m
+  included, so picking a 60 m channel in the Phone screen set the radio to LSB and the voice went
+  out on the wrong side of the channel. US rules put the 60 m carrier 1.5 kHz below each channel
+  centre, which only works on USB, and the IARU Region 1 and Canadian band plans use USB there too.
+  The Phone screen, an SSTV image sent from it, the transmit lock and the sideband a contact is
+  logged with now all use USB on 60 m; every other band is unchanged. NEEDS-BENCH: a radio on 60 m
+  into a dummy load, checking the mode on the radio's own display.
+
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
   save were in memory only and nothing on screen said so; a power cut would have lost them. The
