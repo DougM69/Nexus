@@ -3381,6 +3381,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 operatorAsk={operatorAsk}
                 onOperatorFocused={() => setOperatorAsk(0)}
                 operatorBoxAbove={snap.fieldDay != null}
+                entryAbove={snap.fieldDay != null}
                 onPopOut={contestScreen.popOut}
               />
             )}

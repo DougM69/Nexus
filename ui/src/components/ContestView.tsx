@@ -213,6 +213,10 @@ interface Props {
    *  so the screen has one. Absent, the scoreboard keeps its box, as with no contest running, in the
    *  torn-off scoreboard and on the Remote page. */
   operatorBoxAbove?: boolean
+  /** The contest entry (`ContestLargeEntry`) is drawn above this screen in the same window: the main
+   *  window and the logger window. It carries the save-failure line, so the screen draws none of its
+   *  own and the window shows it once. Absent in the popped-out screen, which has no entry. */
+  entryAbove?: boolean
   /** Opens this screen in a window of its own (App's, in the main window only — never the logger
    *  window's copy, the window itself or the Remote page): its Pop out, at the end of the banner. */
   onPopOut?: () => void
@@ -2970,6 +2974,7 @@ export function ContestView({
   operatorAsk,
   onOperatorFocused,
   operatorBoxAbove = false,
+  entryAbove = false,
   onPopOut,
 }: Props) {
   const observed = observation !== undefined
@@ -3880,8 +3885,8 @@ export function ContestView({
       {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
       {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
       {/* The contest journal's writes are failing: the contacts since the last good one are in
-          memory only. Red until a write lands. */}
-      {fieldDay?.unsaved && (
+          memory only. Red until a write lands. Once per window: the entry above says it when there is one. */}
+      {fieldDay?.unsaved && !entryAbove && (
         <p className="fd-score-note fd-unsaved" role="alert">
           {contestUnsavedText(fieldDay.unsaved)}
         </p>
