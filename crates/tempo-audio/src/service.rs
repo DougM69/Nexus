@@ -3353,6 +3353,11 @@ struct RadioLoop {
     /// A future slot path that forgets to stamp it fails SAFE (TX Off cuts, the old
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
+    /// When the FT8/FT4 slot over this loop last keyed stops its audio, and the PTT deadline that
+    /// over holds: WSJT-X's window ends the audio 200 ms before PTT (`slot::wsjtx_over_end`). It
+    /// fires only while that over is still the one held (`tx_until_ms` still its deadline), so a
+    /// Stop TX, a tune or a rebuild that ended the over leaves nothing here to act on.
+    slot_audio_stop: Option<(f64, f64)>,
     /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed
     /// through Nexus's Flex client's switch to DAX, the radio having had the mic: its over ends at
     /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
@@ -4150,6 +4155,7 @@ impl RadioLoop {
             prev_slot_was_tx: false,
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
+            slot_audio_stop: None,
             flex_voice_until_ms: None,
             voice_tee_until_ms: None,
             tuning_keyed: false,
@@ -11460,6 +11466,19 @@ impl RadioLoop {
             }
         }
 
+        // WSJT-X'S AUDIO STOP. An FT8/FT4 over's audio ends with WSJT-X's window, 200 ms before its
+        // PTT (`slot::wsjtx_over_end`): anything still queued is dropped then, as WSJT-X's stop
+        // drops what its output still holds (`stopTx` → `Modulator::stop`). Only for the over it
+        // was set for, and not while the operator holds live PTT (as the unkey below).
+        if let Some((stop, held_until)) = self.slot_audio_stop {
+            if self.tx_until_ms != Some(held_until) {
+                self.slot_audio_stop = None;
+            } else if now >= stop && !self.manual_ptt_applied {
+                backend.flush_output();
+                self.slot_audio_stop = None;
+            }
+        }
+
         // Drop PTT once the transmitted audio has played out (+ a small tail). Do NOT
         // unkey while the operator is holding live PTT — they own the key then, so a
         // voice/CW message tail ending must not cut a live phone over (the manual-PTT
@@ -12461,11 +12480,15 @@ impl RadioLoop {
             // samples (the 0.5 s silence lead-in first, then leading symbols).
             // The remote decoder still syncs (dt ≈ 0, just fewer symbols), so
             // stock keys the CURRENT period rather than eating a full T/R cycle.
+            // FT8 and FT4 now do exactly that, as the boundary does (`slot::play_keyed_over`,
+            // WSJT-X's Modulator): what they drop is all of the slot already gone. This used to
+            // trim the wave so its END met the boundary, which put every tone of a late start
+            // 1.86 s (FT8) or 1.96 s (FT4) late and held PTT 250 ms into the next slot.
             //
             // Budget = how much leading audio a late over may drop and still decode.
             // FT8 carries three 7-symbol Costas sync arrays (start / middle ≈6.3 s in
             // / end); dropping only the head keeps the middle+end, so a click up to
-            // ~7.9 s into the period still syncs. FT4's ~half-signal edge is ~3 s of
+            // 6.0 s into the period still syncs. FT4's ~half-signal edge is ~3 s of
             // tones. The old shared 2 s cap deferred a click landing >~3.9 s in to the
             // NEXT same-parity boundary (a full cycle later) — the "clicked 1 s too
             // late, wait 30 s" complaint. Per-tier, Costas-preserving budgets mirror
@@ -12476,7 +12499,12 @@ impl RadioLoop {
                 tempo_app::dto::Tier::Ft4 => 3_000.0,
                 _ => 0.0,
             };
-            let deficit_ms = (need_ms - room_ms).max(0.0);
+            let on_slot_clock = crate::slot::wsjtx_tx_window_ms(eng.tier()).is_some();
+            let deficit_ms = if on_slot_clock {
+                now - slot_now as f64 * self.cur_slot_secs * 1000.0
+            } else {
+                (need_ms - room_ms).max(0.0)
+            };
             if on_our_parity && deficit_ms <= allowed_deficit {
                 // CONSUME the request only now that it actually fires — a click
                 // outside the window used to be swallowed here and then wait an
@@ -12484,8 +12512,13 @@ impl RadioLoop {
                 let _ = eng.take_immediate_tx();
                 let waves = eng.poll_tx(slot_now);
                 if !waves.is_empty() {
-                    let trim_samples =
-                        ((deficit_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
+                    // On the slot clock the skip is taken after the key, from where the slot is
+                    // then (`slot::play_keyed_over`); nothing is trimmed here.
+                    let trim_samples = if on_slot_clock {
+                        0
+                    } else {
+                        ((deficit_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize
+                    };
                     // Must leave a transmittable remainder (always true within the
                     // per-tier budget — trimming ≤6 s of FT8's 12.6 s keeps ≥6.6 s).
                     let trimmable = waves
@@ -12509,31 +12542,44 @@ impl RadioLoop {
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`).
                         if crate::slot::key_slot_transmitter(&mut eng, rig, backend, held) {
-                            let mut secs = 0.0f32;
-                            let last = waves.len() - 1;
-                            for (i, w) in waves.iter().enumerate() {
-                                let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
-                                    &w[trim_samples..]
-                                } else {
-                                    w
-                                };
-                                // The generated buffer can carry TRAILING silence
-                                // (FT4: ~1.0 s of zero pad). On a LATE start the fit
-                                // math is airtime-based — playing that pad would
-                                // hold PTT past the boundary into the partner's
-                                // period. Strip it; it carries nothing.
-                                if i == last {
-                                    let end =
-                                        w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
-                                    w2 = &w2[..end];
+                            if on_slot_clock {
+                                // The boundary's own play and end: the tones on the slot
+                                // clock, the over ended on WSJT-X's window.
+                                let keyed_ms =
+                                    (now_unix_ms() - self.clock_offset_ms as f64).max(now);
+                                let over = crate::slot::play_keyed_over(
+                                    &eng, backend, &waves, keyed_ms, now,
+                                );
+                                self.tx_until_ms = Some(over.tx_until_ms);
+                                self.slot_audio_stop =
+                                    over.audio_until_ms.map(|a| (a, over.tx_until_ms));
+                            } else {
+                                let mut secs = 0.0f32;
+                                let last = waves.len() - 1;
+                                for (i, w) in waves.iter().enumerate() {
+                                    let mut w2: &[f32] = if i == 0 && trim_samples > 0 {
+                                        &w[trim_samples..]
+                                    } else {
+                                        w
+                                    };
+                                    // The generated buffer can carry TRAILING silence
+                                    // (FT4: ~1.0 s of zero pad). On a LATE start the fit
+                                    // math is airtime-based — playing that pad would
+                                    // hold PTT past the boundary into the partner's
+                                    // period. Strip it; it carries nothing.
+                                    if i == last {
+                                        let end =
+                                            w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
+                                        w2 = &w2[..end];
+                                    }
+                                    secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
+                                    backend.play(w2);
                                 }
-                                secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
-                                backend.play(w2);
+                                self.tx_until_ms =
+                                    Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
                             }
                             self.rx.clear(); // our just-started carrier must not be decoded
-                            self.tx_until_ms =
-                                Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
-                            // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
+                                             // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
                             self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                             self.last_slot = Some(slot_now); // slot handled; skip the boundary
                             self.prev_slot_was_tx = true;
@@ -12767,6 +12813,23 @@ impl RadioLoop {
                     // (or front-padding) would wreck the decoder's dt alignment.
                     let n = ((elapsed_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
                     let frame = self.rx.frame_latest_padded(n);
+                    // ⭐ BUILD THE NEXT OVER BEFORE THIS DECODE TAKES THE MODEM. The decode
+                    // holds `MODEM_LOCK` for its whole length, and building an over needs it
+                    // too, so an early decode still running at the boundary made the key wait
+                    // for it: the over went out late, by however long the decode overran. WSJT-X
+                    // never waits; its decoder is another process. The over the boundary will
+                    // key if nothing changes first is built now, while the modem is free, and a
+                    // boundary whose decoder is still busy keys it as built when its plan asks
+                    // for exactly this over (`Engine::prebuilt_wave`). A guess only: a plan that
+                    // asks for anything else builds it then, as before.
+                    if let Some(next) = eng.next_over_hint(slot + 1) {
+                        if eng.prebuilt_wave(&next).is_none() {
+                            drop(eng);
+                            let wave = next.build();
+                            eng = engine_lock(engine);
+                            eng.keep_prebuilt_wave(&next, &wave);
+                        }
+                    }
                     // Dispatch the early partial decode (boundary-slot index = audio
                     // slot + 1, matching the boundary ingest's parity/history). The
                     // result folds in — and publishes its spots — via the drain block.
@@ -12897,10 +12960,11 @@ impl RadioLoop {
                     // went "not responding" for as long as the decoder took
                     // (sub-second here, seconds on a Pi).
                     //
-                    // Plan under the lock, release, build, re-acquire, commit. On
-                    // the air nothing changes: the same wait happens at the same
-                    // point, and `commit_tx` refuses the plan if the tier moved
-                    // underneath us while the engine was unlocked.
+                    // Plan under the lock, release, build, re-acquire, commit. An over
+                    // built before the decode took the modem is not built again, and
+                    // nothing waits (below); any other over still waits here, and
+                    // `commit_tx` refuses the plan if the tier moved underneath us while
+                    // the engine was unlocked.
                     //
                     // Skipped entirely when this slot was already keyed at its
                     // boundary — `finish_boundary` is then housekeeping-only and
@@ -12914,9 +12978,20 @@ impl RadioLoop {
                     } else {
                         match eng.plan_tx(slot) {
                             Some(plan) => {
-                                drop(eng);
-                                let wave = plan.waveform.build();
-                                eng = engine_lock(engine);
+                                // ⭐ NOT BUILT AGAIN WHEN IT WAS BUILT BEFORE THE DECODE TOOK THE
+                                // MODEM: the over keyed last, or the one the early pass built just
+                                // before it dispatched this decode (`Engine::prebuilt_wave`). Then
+                                // nothing waits, and the key is on time, as WSJT-X's is: its decoder
+                                // is another process. Any other over is built here and waits.
+                                let wave = match eng.prebuilt_wave(&plan.waveform) {
+                                    Some(wave) => wave.to_vec(),
+                                    None => {
+                                        drop(eng);
+                                        let wave = plan.waveform.build();
+                                        eng = engine_lock(engine);
+                                        wave
+                                    }
+                                };
                                 // Re-read the clock AFTER the build (it waited out
                                 // MODEM_LOCK): commit_tx refuses if the T/R slot
                                 // rolled over meanwhile, and the PTT-hold deadline
@@ -13136,6 +13211,7 @@ impl RadioLoop {
             self.tx_until_ms = Some(t);
             // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).
             self.slot_tx_until_ms = t;
+            self.slot_audio_stop = action.audio_until_ms.map(|a| (a, t));
             // The slot core just keyed (slot.rs) — publish TX intent immediately rather
             // than waiting for the next tick's scope-gate publish (~20 ms), so the broker's
             // disconnect fail-safe can't race the fresh key-up.
@@ -15938,6 +16014,7 @@ mod tests {
     mod failed_unkey;
     mod filter_width;
     mod flex_audio;
+    mod ft_window;
     mod ic905_ten_ghz;
     mod icom_lan;
     mod omnirig_coverage;

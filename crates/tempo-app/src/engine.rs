@@ -3195,6 +3195,12 @@ pub struct Engine {
     /// Split Operation — the audio was reduced into 1500–2000 Hz and the loop
     /// must move the TX dial by this much before keying. 0 = no shift.
     tx_dial_shift_hz: i64,
+    /// The FT8/FT4 over built most recently ahead of its key: the one this station keyed last
+    /// ([`Engine::commit_tx`]), or the next one, built before the early decode took the modem
+    /// ([`Engine::keep_prebuilt_wave`]). A key whose plan asks for exactly this over uses it rather
+    /// than build it again, which would wait for a decode still holding the modem
+    /// ([`Engine::prebuilt_wave`]).
+    prebuilt_over: Option<PrebuiltOver>,
     /// TX-gate generation, stamped into every [`TxPlan`] and bumped by the
     /// arming/QSY verbs so `commit_tx` refuses an over planned before them —
     /// see [`TxGateStamp`].
@@ -5109,6 +5115,15 @@ impl TxWaveform {
     }
 }
 
+/// An FT8/FT4 over's audio built ahead of its key, with what it was built from
+/// ([`Engine::prebuilt_wave`]).
+struct PrebuiltOver {
+    kind: modes::ModeKind,
+    text: String,
+    f0: f32,
+    wave: Vec<f32>,
+}
+
 /// A decided over: what to send, and the slot/tier/gate state it was decided for.
 ///
 /// `slot`, `tier` and `stamp` are carried so [`Engine::commit_tx`] can REFUSE a
@@ -5632,6 +5647,7 @@ impl Engine {
             cq_dir: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
+            prebuilt_over: None,
             tx_gate_gen: 0,
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
@@ -25199,6 +25215,74 @@ contact yourself."
         self.app.set_transmitting(on);
     }
 
+    /// The audio already built for `waveform`, when this station built exactly this FT8/FT4 over
+    /// ahead of its key: the same mode, text and audio frequency, so what keys is always what the
+    /// plan asked for. Used where the over would otherwise be built at its key, which waits for
+    /// any decode then holding the modem, and the key with it; WSJT-X's decoder is another process
+    /// and never delays a key.
+    pub fn prebuilt_wave(&self, waveform: &TxWaveform) -> Option<&[f32]> {
+        let TxWaveform::Native { kind, text, f0 } = waveform else {
+            return None;
+        };
+        self.prebuilt_over
+            .as_ref()
+            .filter(|p| p.kind == *kind && p.text == *text && p.f0 == *f0)
+            .map(|p| p.wave.as_slice())
+    }
+
+    /// Keep `wave`, built from `waveform`, for [`Self::prebuilt_wave`]. FT8 and FT4 only: the
+    /// tiers whose early decode can still hold the modem when their slot keys.
+    pub fn keep_prebuilt_wave(&mut self, waveform: &TxWaveform, wave: &[f32]) {
+        if let TxWaveform::Native { kind, text, f0 } = waveform {
+            if matches!(kind, modes::ModeKind::Ft8 | modes::ModeKind::Ft4) && !wave.is_empty() {
+                self.prebuilt_over = Some(PrebuiltOver {
+                    kind: *kind,
+                    text: text.clone(),
+                    f0: *f0,
+                    wave: wave.to_vec(),
+                });
+            }
+        }
+    }
+
+    /// The FT8/FT4 over this station would send in `slot` if it were planned now and nothing
+    /// changed first, so the radio loop can build it before the early decode takes the modem. A
+    /// guess, never a plan: it reads what [`Self::plan_tx`] would choose and changes nothing, and
+    /// its audio goes out only to a plan that asks for exactly this over
+    /// ([`Self::prebuilt_wave`]). `None` where it cannot say, or `slot` is not this station's.
+    pub fn next_over_hint(&self, slot: u64) -> Option<TxWaveform> {
+        let tier = self.app.tier();
+        if !self.slot_tx_armed()
+            || self.tuning
+            || slot % 2 != self.tx_parity
+            || !matches!(tier, Tier::Ft8 | Tier::Ft4)
+        {
+            return None;
+        }
+        let text = match &self.mode {
+            Mode::Qso { station, .. } => match self
+                .recent_partner
+                .as_ref()
+                .filter(|p| slot <= p.until_slot)
+                .and_then(|p| p.owed.as_ref())
+            {
+                Some(owed) => owed.to_text(),
+                None => station.outgoing_rv()?.0.to_text(),
+            },
+            Mode::FieldDay { station, .. } => station.outgoing()?.to_text(),
+            Mode::Chat => self
+                .broadcast_queue
+                .front()
+                .or_else(|| self.tx_queue.front())?
+                .clone(),
+        };
+        Some(TxWaveform::Native {
+            kind: self.tier_mode_kind(tier)?,
+            text,
+            f0: self.split_reduce(self.tx_offset_hz).0,
+        })
+    }
+
     /// Decide, build and commit an over in one call — the whole transmit decision
     /// for `slot`, exactly as it has always behaved.
     ///
@@ -25210,7 +25294,11 @@ contact yourself."
         let Some(plan) = self.plan_tx(slot) else {
             return Vec::new();
         };
-        let wave = plan.waveform.build();
+        // An over built ahead of its key is not built again (`prebuilt_wave`).
+        let wave = match self.prebuilt_wave(&plan.waveform) {
+            Some(wave) => wave.to_vec(),
+            None => plan.waveform.build(),
+        };
         // One thread, no unlock between plan and commit — but `slot` is the CALLER's
         // claim, not a clock reading, so commit's `plan.slot != current_slot` check is
         // vacuous on this path. A caller holding a stale slot index (a decode-worker
@@ -25278,6 +25366,9 @@ contact yourself."
         if plan.beacon {
             self.app.set_transmitting(true);
         }
+        // Kept, so the next over that is the same one (a CQ called again, a message repeated
+        // while the reply is not yet heard) keys without being built again (`prebuilt_wave`).
+        self.keep_prebuilt_wave(&plan.waveform, &wave);
         vec![wave]
     }
 
@@ -36783,6 +36874,100 @@ mod tests {
             None,
             "absent for a radio's refusal, so its snapshot is byte-identical to before"
         );
+    }
+
+    /// The over built ahead of its key is handed only to a plan that asks for exactly that over:
+    /// the same mode, text and audio frequency. Anything else builds its own, as before.
+    #[test]
+    fn a_prebuilt_over_is_used_only_for_exactly_the_same_over() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.broadcast("CQ K2DEF FN31");
+        let slot = 0;
+        let hint = e.next_over_hint(slot).expect("the CQ about to go out");
+        let plan = e.plan_tx(slot).expect("the CQ");
+        assert!(
+            matches!((&hint, &plan.waveform), (
+                TxWaveform::Native { kind: hk, text: ht, f0: hf },
+                TxWaveform::Native { kind: pk, text: pt, f0: pf },
+            ) if hk == pk && ht == pt && hf == pf),
+            "the hint is not the over plan_tx chose"
+        );
+        assert_eq!(e.prebuilt_wave(&plan.waveform), None, "nothing built yet");
+        let wave = plan.waveform.build();
+        assert!(!wave.is_empty(), "premise: the CQ builds");
+        e.keep_prebuilt_wave(&hint, &wave);
+        assert_eq!(e.prebuilt_wave(&plan.waveform), Some(wave.as_slice()));
+        // Any difference, and it is not this over.
+        let TxWaveform::Native { kind, text, f0 } = &plan.waveform else {
+            unreachable!("FT8 is a native mode");
+        };
+        for other in [
+            TxWaveform::Native {
+                kind: *kind,
+                text: "CQ K2DEF FN32".into(),
+                f0: *f0,
+            },
+            TxWaveform::Native {
+                kind: *kind,
+                text: text.clone(),
+                f0: f0 + 1.0,
+            },
+            TxWaveform::Native {
+                kind: modes::ModeKind::Ft4,
+                text: text.clone(),
+                f0: *f0,
+            },
+        ] {
+            assert_eq!(e.prebuilt_wave(&other), None);
+        }
+        // An over keyed is kept, so the same over keyed again is not built again.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.broadcast("CQ K2DEF FN31");
+        let plan = e.plan_tx(slot).expect("the CQ");
+        let built = plan.waveform.build();
+        assert_eq!(e.commit_tx(&plan, built.clone(), slot), vec![built.clone()]);
+        assert_eq!(e.prebuilt_wave(&plan.waveform), Some(built.as_slice()));
+    }
+
+    /// The hint says nothing where no over of this station's would go out: another station's slot,
+    /// TX off, a tier the early decode never delays, or a tripped watchdog. A watchdog trip keys
+    /// nothing and builds nothing ahead (WSJT-X's own watchdog, `tx_watchdog`, disables transmit).
+    #[test]
+    fn the_next_over_hint_is_none_where_no_over_of_this_station_would_go_out() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // the QSO's own over, on this station's even slots
+        assert!(
+            e.next_over_hint(0).is_some(),
+            "premise: the QSO's next over"
+        );
+        assert!(e.next_over_hint(1).is_none(), "the other station's slot");
+        e.set_tier(Tier::TempoFast);
+        e.call_station("W9XYZ");
+        assert!(
+            e.next_over_hint(0).is_none(),
+            "FT1 has no early decode to wait for"
+        );
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.set_tx_enabled(false);
+        assert!(e.next_over_hint(0).is_none(), "TX off");
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            e.poll_tx(0).is_empty(),
+            "premise: the watchdog trips at the plan"
+        );
+        assert!(e.take_slot_tx_abort(), "and cuts what is on the air");
+        assert!(
+            e.next_over_hint(2).is_none(),
+            "a tripped watchdog: nothing ahead"
+        );
+        assert!(e.poll_tx(2).is_empty(), "and nothing after");
     }
 
     /// Slot TX is armed only where the slot sequencer can key: TX on, in the Digital section.

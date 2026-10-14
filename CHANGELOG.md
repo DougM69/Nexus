@@ -80,6 +80,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **FT8 and FT4 overs now start and end on the slot clock, as WSJT-X's do.** An over used to run
+  from the moment the radio keyed, so anything that made the key late (a CAT exchange at the start
+  of the slot, a decode still running, a busy computer) moved every tone late by the same amount and
+  cut the end of the over at the next boundary. The tones are now placed on the slot clock, as
+  WSJT-X places them: a late key skips the first symbols and the over still ends on time, and an
+  on-time over is unchanged (its tones start 0.5 s into the slot). The over now ends where WSJT-X
+  ends it: FT8's audio stops 13.64 s into the slot and PTT drops at 13.84 s (it dropped at about
+  13.39 s, 0.45 s before WSJT-X, with half the room for the sound card's delay); FT4's audio stops
+  at 6.04 s and PTT drops at 6.24 s (it held about 0.56 s longer). FT4 keeps its tones 0.5 s into
+  the slot. A decode still running when your slot starts no longer delays your over: Nexus builds
+  the over it is about to send before that decode begins, and keys it on time; an over you change in
+  the last seconds of the slot (a new TX frequency or message) is built then and can still wait,
+  with its tones on the slot clock. A Call CQ or double-click inside your own slot still keys at
+  once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
+  the next one); it keys up to 6 s into an FT8 slot or 3 s into FT4, the same amount of leading
+  audio dropped as before, and later than that waits for your next slot. A slot keyed so late that
+  every one of its tones has already passed no longer keys at all. NEEDS-BENCH: an FT8 and an FT4
+  over on a dummy load beside WSJT-X, and FT8 on a slow computer (a Raspberry Pi) watching the TX
+  start against the clock.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as
