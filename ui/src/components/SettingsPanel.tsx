@@ -1955,12 +1955,19 @@ export function SettingsPanel({
     )
   }
 
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
+  // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
+  // satellite VFO map's guard is, because that is the radio the two verbs act on.
+  const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
+
   // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
   // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
   // operator lets go of the slider rather than on every drag tick (which would
   // disk-thrash). The RX Level meter then responds within a poll, so the control
   // visibly "works" instead of appearing dead until a full Save.
   const applyRxGainLive = (value: number) => {
+    if (editingOtherRadio) return
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
@@ -1972,6 +1979,7 @@ export function SettingsPanel({
   // bypasses the throttle window so the final settled value is never silently dropped by it.
   const txLevelThrottleRef = useRef(0)
   const applyTxLevelLive = (value: number, force = false) => {
+    if (editingOtherRadio) return
     const now = Date.now()
     if (!force && now - txLevelThrottleRef.current < 60) return
     txLevelThrottleRef.current = now
@@ -1982,8 +1990,11 @@ export function SettingsPanel({
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
+  // Not while the form edits another radio: the live value is the drive of the radio in use, and
+  // mirrored into another radio's form it was saved as that radio's drive.
   useEffect(() => {
     if(remote)return
+    if (editingOtherRadio) return
     const live = radio?.txLevel
     if (live == null) return
     setForm((prev) => (prev && Math.abs(prev.txLevel - live) > 1e-6 ? { ...prev, txLevel: live } : prev))

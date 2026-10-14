@@ -17,11 +17,17 @@
 //     other's old values back the same way;
 //   - removing the radio being edited handed the form to the operating radio still holding the
 //     removed radio's fields, and the next Save stamped them onto the operating radio.
+//
+// Tx Power and RX Gain are per radio as well, and their sliders act on the radio in use as they
+// move (`set_tx_level` / `set_rx_gain` take no radio). While the form edited a radio that is not
+// the one in use, they changed the radio in use anyway, and the radio in use's live drive was
+// mirrored into the edited radio's form, so Save gave the edited radio that drive.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel, radioPatch } from './SettingsPanel'
 import { confirmDialog } from '../confirm'
 import type { RadioProfilePatch } from '../api'
+import type { RadioStatus } from '../types'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -179,6 +185,16 @@ function installStation(radios: Profile[], activeRadio = 0) {
     station = { ...station, radios: station.radios.filter((r) => r.id !== id) }
     return {}
   })
+  // `set_tx_level` / `set_rx_gain` write the flat field only: the live drive and gain of the radio
+  // in use, which its profile takes at the next fold.
+  api.get('setTxLevel').mockImplementation(async (level: number) => {
+    station = { ...station, txLevel: level }
+    return {}
+  })
+  api.get('setRxGain').mockImplementation(async (gain: number) => {
+    station = { ...station, rxGain: gain }
+    return {}
+  })
 }
 
 const features: FeaturesApi = {
@@ -189,10 +205,12 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel() {
-  return render(
+/** The panel with radio 0 in use; `radio` is the live status the app hands it (the cockpit's Pwr). */
+function panel(radio?: Partial<RadioStatus>) {
+  return (
     <SettingsPanel
       activeRadioId={0}
+      radio={radio as RadioStatus | undefined}
       scale={1 as never}
       scaleMode={'auto' as never}
       scaleCap={1 as never}
@@ -202,8 +220,12 @@ function renderPanel() {
       onDensityChange={() => {}}
       onResetLayout={() => {}}
       features={features}
-    />,
+    />
   )
+}
+
+function renderPanel(radio?: Partial<RadioStatus>) {
+  return render(panel(radio))
 }
 
 beforeEach(() => {
@@ -373,5 +395,87 @@ describe('each radio keeps its own port, baud and sound card', () => {
 
     await save()
     expect(held(profile(0))).toEqual(held(FT710))
+  })
+})
+
+/** The Audio section's sliders. Tx Power's POSITION is √level (its square-law curve). */
+const txPower = () => screen.getByLabelText('Transmit drive level') as HTMLInputElement
+const rxGain = () => screen.getByLabelText('RX capture gain') as HTMLInputElement
+
+/** Move a slider and let go of it, by pointer and by key: every handler the slider has. */
+function move(slider: HTMLInputElement, value: string) {
+  fireEvent.change(slider, { target: { value } })
+  fireEvent.pointerUp(slider, { target: { value } } as never)
+  fireEvent.keyUp(slider, { target: { value } } as never)
+}
+
+/** The radio in use (the FT-710) at drive 0.25 and gain ×1.5; the FT-991A at 0.36 and ×2. */
+const IN_USE: Profile = { ...FT710, txLevel: 0.25, rxGain: 1.5 }
+const OTHER: Profile = { ...FT991A, txLevel: 0.36, rxGain: 2 }
+const levels = (p: Profile | Station) => ({ txLevel: p.txLevel, rxGain: p.rxGain })
+
+describe('Tx Power and RX Gain belong to the radio being edited', () => {
+  it('Tx Power, moved while editing a radio not in use, changes nothing live and Save stores it on that radio', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    expect(txPower().value).toBe('0.6')
+
+    move(txPower(), '0.8')
+    // The FT-710's live drive, which its cockpit Pwr slider shows, did not move.
+    expect(levels(station)).toEqual(levels(IN_USE))
+    expect(api.get('setTxLevel')).not.toHaveBeenCalled()
+
+    await save()
+    expect(levels(profile(1))).toEqual({ txLevel: 0.8 ** 2, rxGain: 2 })
+    expect(levels(profile(0))).toEqual(levels(IN_USE))
+  })
+
+  it('RX Gain, moved while editing a radio not in use, changes nothing live and Save stores it on that radio', async () => {
+    installStation([IN_USE, OTHER])
+    renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    expect(rxGain().value).toBe('2')
+
+    move(rxGain(), '3.5')
+    expect(levels(station)).toEqual(levels(IN_USE))
+    expect(api.get('setRxGain')).not.toHaveBeenCalled()
+
+    await save()
+    expect(levels(profile(1))).toEqual({ txLevel: 0.36, rxGain: 3.5 })
+    expect(levels(profile(0))).toEqual(levels(IN_USE))
+  })
+
+  it("the drive of the radio in use does not follow into the form of the radio being edited", async () => {
+    installStation([IN_USE, OTHER])
+    const { rerender } = renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await editTheOtherRadio('FT-991A')
+    expect(txPower().value).toBe('0.6')
+
+    // The cockpit's Pwr slider moves the FT-710 to 0.81 while the FT-991A is open for Edit.
+    station = { ...station, txLevel: 0.81 }
+    rerender(panel({ txLevel: 0.81 }))
+    await save()
+    expect(profile(1).txLevel).toBe(0.36)
+    expect(txPower().value).toBe('0.6')
+  })
+
+  it('control: editing the radio in use, both sliders act on it live and Tx Power follows its cockpit Pwr', async () => {
+    installStation([IN_USE, OTHER])
+    const { rerender } = renderPanel({ txLevel: 0.25 })
+    await openRadioTab()
+    await waitFor(() => expect(txPower().value).toBe('0.5'))
+
+    move(txPower(), '0.8')
+    expect(api.get('setTxLevel')).toHaveBeenLastCalledWith(0.8 ** 2)
+    move(rxGain(), '3.5')
+    expect(api.get('setRxGain')).toHaveBeenLastCalledWith(3.5)
+    expect(levels(station)).toEqual({ txLevel: 0.8 ** 2, rxGain: 3.5 })
+
+    rerender(panel({ txLevel: 0.81 }))
+    expect(txPower().value).toBe('0.9')
   })
 })

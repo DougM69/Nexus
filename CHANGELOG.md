@@ -126,17 +126,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **With two radios, each one keeps its own serial port, baud and sound card.** Three things in
-  Settings ▸ Radio could put one radio's settings on the other. **+ Add radio** left the radio you
+- **With two radios, each one keeps its own serial port, baud, sound card and drive.** Four things
+  in Settings ▸ Radio could put one radio's settings on the other. **+ Add radio** left the radio you
   had been editing in the form, so the first Save gave the new radio that radio's port, baud and
   audio devices. A radio you opened again with **Edit** after saving it showed what it had before
   the save, and saving it put those values back; saving one radio could also put back the other
-  radio's last-saved changes. And removing the radio you were editing left its settings in the
-  form, so the next Save put them on the radio you operate. The form now loads the radio it is
-  editing every time and reads both radios again after each save, and + Add radio asks before it
-  drops unsaved edits, as Edit does. If your radios ended up sharing a baud, a port or a sound card,
-  set each one again under Settings ▸ Radio. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on
-  a Mac.
+  radio's last-saved changes. Removing the radio you were editing left its settings in the form, so
+  the next Save put them on the radio you operate. And while you edited a radio that is not the one
+  in use, its **Tx Power** and **RX Gain** sliders changed the radio in use as you moved them, and a
+  change to the drive of the radio in use (its cockpit **Pwr** slider) showed up in the form, so
+  Save gave the radio you were editing that drive. The form now loads the radio it is editing every
+  time and reads both radios again after each save, and + Add radio asks before it drops unsaved
+  edits, as Edit does. While you edit a radio that is not in use, the two sliders now set only that
+  radio's saved levels, which it takes up when it becomes the radio in use; on the radio in use they
+  work as before. If your radios ended up sharing a baud, a port, a sound card or a drive level, set
+  each one again under Settings ▸ Radio. NEEDS-BENCH: two Yaesus (an FT-710 and an FT-991A) on a
+  Mac.
 - **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
   command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the
