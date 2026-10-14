@@ -12457,10 +12457,11 @@ impl RadioLoop {
         }
 
         // Immediate first over: a just-armed directed call (double-click) keys on
-        // the CURRENT period if it's our TX parity AND the whole over still fits
-        // before the next boundary — instead of waiting a full T/R cycle for the
-        // next boundary (the "a few cycles go by" lag). If it doesn't fit / wrong
-        // parity, the normal boundary path transmits at the next valid period.
+        // the CURRENT period if it's our TX parity AND the over can still start in it
+        // (FT8/FT4: under WSJT-X's 75 % of the period; every other tier: the whole
+        // over still fits before the next boundary) — instead of waiting a full T/R
+        // cycle for the next boundary (the "a few cycles go by" lag). If it can't /
+        // wrong parity, the normal boundary path transmits at the next valid period.
         // `may_key()`: not onto a rig the loop doesn't own. This path only ever `peek_`s, so
         // skipping it CONSUMES nothing — the request is still there for the next tick, and
         // whichever comes first (a later tick with the rig owned, or the slot boundary, which
@@ -12485,27 +12486,29 @@ impl RadioLoop {
             // trim the wave so its END met the boundary, which put every tone of a late start
             // 1.86 s (FT8) or 1.96 s (FT4) late and held PTT 250 ms into the next slot.
             //
-            // Budget = how much leading audio a late over may drop and still decode.
-            // FT8 carries three 7-symbol Costas sync arrays (start / middle ≈6.3 s in
-            // / end); dropping only the head keeps the middle+end, so a click up to
-            // 6.0 s into the period still syncs. FT4's ~half-signal edge is ~3 s of
-            // tones. The old shared 2 s cap deferred a click landing >~3.9 s in to the
-            // NEXT same-parity boundary (a full cycle later) — the "clicked 1 s too
-            // late, wait 30 s" complaint. Per-tier, Costas-preserving budgets mirror
-            // WSJT-X keying a late over. (WSJT-X keys even later; we stop at the
-            // decodable edge, which is the strictly safer product choice.)
-            let allowed_deficit = match eng.tier() {
-                tempo_app::dto::Tier::Ft8 => 6_000.0,
-                tempo_app::dto::Tier::Ft4 => 3_000.0,
-                _ => 0.0,
-            };
+            // ⭐ HOW LATE: WSJT-X'S OWN LIMIT. FT8 and FT4 key a late start while the slot is
+            // under 75 % of its period (`slot::wsjtx_may_key_at`; `mainwindow.cpp:5126`,
+            // `fTR < 0.75`): up to 11.25 s into an FT8 slot, 5.625 s into FT4, sending the
+            // symbols that remain. Later, the request stays and the over waits for this
+            // station's next slot. The slot's place is read again here, not taken from the
+            // tick's clock, which CAT earlier in the tick can leave behind. This replaced a
+            // budget of Nexus's own, the leading audio a late over could drop and still
+            // decode (6.0 s of FT8, 3.0 s of FT4): a Call CQ 6-11 s into an FT8 slot waited
+            // for this station's next slot where WSJT-X keys it at once. Every other tier keys
+            // only an over that still fits whole before the next boundary.
             let on_slot_clock = crate::slot::wsjtx_tx_window_ms(eng.tier()).is_some();
-            let deficit_ms = if on_slot_clock {
-                now - slot_now as f64 * self.cur_slot_secs * 1000.0
+            let deficit_ms = (need_ms - room_ms).max(0.0);
+            let starts_now = if on_slot_clock {
+                let period_ms = self.cur_slot_secs * 1000.0;
+                let reread_ms = now_unix_ms() - self.clock_offset_ms as f64;
+                crate::slot::wsjtx_may_key_at(
+                    crate::slot::into_tick_slot_ms(reread_ms, now, period_ms),
+                    period_ms,
+                )
             } else {
-                (need_ms - room_ms).max(0.0)
+                deficit_ms <= 0.0
             };
-            if on_our_parity && deficit_ms <= allowed_deficit {
+            if on_our_parity && starts_now {
                 // CONSUME the request only now that it actually fires — a click
                 // outside the window used to be swallowed here and then wait an
                 // EXTRA full cycle past the boundary it should have keyed at.
@@ -12519,8 +12522,8 @@ impl RadioLoop {
                     } else {
                         ((deficit_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize
                     };
-                    // Must leave a transmittable remainder (always true within the
-                    // per-tier budget — trimming ≤6 s of FT8's 12.6 s keeps ≥6.6 s).
+                    // Must leave a transmittable remainder (always true: FT8/FT4 trim
+                    // nothing, and every other tier starts only when the whole over fits).
                     let trimmable = waves
                         .first()
                         .map(|w| trim_samples < w.len())

@@ -17231,7 +17231,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Consume the one-shot "key the current period now" request set by a directed
     /// call (double-click). The radio loop honors it only if the current slot is
-    /// our TX parity and the whole over still fits before the next boundary.
+    /// our TX parity and the over can still start in it: FT8 and FT4 while the slot
+    /// is under 75 % of its period (WSJT-X's late start), every other tier while the
+    /// whole over still fits before the next boundary.
     pub fn take_immediate_tx(&mut self) -> bool {
         let v = self.immediate_tx;
         self.immediate_tx = false;

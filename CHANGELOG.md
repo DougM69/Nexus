@@ -94,11 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the last seconds of the slot (a new TX frequency or message) is built then and can still wait,
   with its tones on the slot clock. A Call CQ or double-click inside your own slot still keys at
   once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
-  the next one); it keys up to 6 s into an FT8 slot or 3 s into FT4, the same amount of leading
-  audio dropped as before, and later than that waits for your next slot. A slot keyed so late that
-  every one of its tones has already passed no longer keys at all. NEEDS-BENCH: an FT8 and an FT4
-  over on a dummy load beside WSJT-X, and FT8 on a slow computer (a Raspberry Pi) watching the TX
-  start against the clock.
+  the next one), and it now keys as late as WSJT-X does: while the slot is under 75 % of its period,
+  up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (it stopped at
+  6 s and 3 s). Later than that it waits for your next slot. The same limit holds when your slot's
+  own key comes late (a decode that finished late, a busy computer): past 75 % of the slot Nexus
+  does not key it, as WSJT-X does not, and the over goes out at your next slot instead (it used to
+  key as long as one of its tones was still ahead). NEEDS-BENCH: an FT8 and an FT4 over on a dummy
+  load beside WSJT-X, a Call CQ about 10 s into an FT8 slot and another about 12 s in (the first
+  keys at once, the second waits for the next slot, in both programs), and FT8 on a slow computer
+  (a Raspberry Pi) watching the TX start against the clock.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as

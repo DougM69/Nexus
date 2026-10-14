@@ -233,19 +233,60 @@ fn a_late_start_ft8_cq_plays_on_the_slot_clock_and_ends_with_the_window() {
     assert_eq!(s.state.tx_until_ms, Some(t0 + 13_840.0), "PTT off");
 }
 
-/// THE LATE START'S BUDGET IS UNCHANGED, AND NOW MEANS WHAT IT SAYS: at most 6.0 s of FT8's leading
-/// audio may be dropped (the middle and end sync arrays survive). On the slot clock that is a CQ up
-/// to 6.0 s into the slot; later, it waits for this station's next slot, as a CQ outside the budget
-/// always did. (On the old placement the budget reached 7.86 s only because the tones went out
-/// 1.86 s late.)
+// ── How late a late key may be: WSJT-X's 75 % of the period ────────────────────────────────────
+// WSJT-X asserts PTT only while the slot is under 75 % of its period (`widgets/mainwindow.cpp:5114`,
+// `:5126`, `fTR < 0.75`, "Allow late starts"): FT8 to 11.25 s, FT4 to 5.625 s, the symbols that remain
+// sent on the clock. Later, the over waits for the next own slot. Nexus stopped a late start at its
+// own budget (6.0 s of FT8's leading audio, 3.0 s of FT4's) and keyed a late boundary as long as any
+// tone remained.
+
+/// ⭐ A CALL CQ INSIDE THIS STATION'S OWN SLOT KEYS AT ONCE UNTIL 75 % OF IT, AS WSJT-X'S DOES: 6.5 s
+/// and 11.2 s into an FT8 slot, the symbols that remain on the slot clock and the over ended with
+/// the window. Both waited for the next own slot under the old budget.
 #[test]
-fn a_late_start_past_the_budget_waits_for_the_next_own_slot() {
+fn a_late_start_ft8_cq_keys_at_once_until_75_percent_of_the_slot() {
+    let mut on_time = Over::new(Tier::Ft8);
+    on_time.cq();
+    let t0 = on_time.t;
+    on_time.run_to(t0);
+
+    let mut waited = Vec::new();
+    for at_ms in [6_500.0, 11_200.0] {
+        let mut s = Over::new(Tier::Ft8);
+        let t0 = s.t;
+        s.run_to(t0 + at_ms - 20.0);
+        s.cq_now();
+        s.run_to(t0 + at_ms);
+        if s.sent("T 1") != 1 {
+            waited.push(at_ms);
+            continue;
+        }
+        let skipped = (at_ms * 12.0) as usize;
+        if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[skipped..]) {
+            panic!("the CQ {at_ms} ms in is not the on-time over's audio from there on: {why}");
+        }
+        assert_eq!(
+            s.state.tx_until_ms,
+            Some(t0 + 13_840.0),
+            "{at_ms} ms in: PTT off"
+        );
+    }
+    assert!(
+        waited.is_empty(),
+        "a CQ this many ms into its own slot did not key at once: {waited:?}"
+    );
+}
+
+/// AND FROM 75 % IT WAITS FOR THIS STATION'S NEXT SLOT, AS WSJT-X'S DOES: a CQ 11.3 s into an FT8
+/// slot keys nothing in it, and goes out whole, on time, at the next own boundary.
+#[test]
+fn a_late_start_past_75_percent_waits_for_the_next_own_slot() {
     let mut s = Over::new(Tier::Ft8);
     let t0 = s.t;
-    s.run_to(t0 + 6_480.0);
+    s.run_to(t0 + 11_280.0);
     s.cq_now();
     s.run_to(t0 + 29_980.0);
-    assert_eq!(s.sent("T 1"), 0, "a CQ 6.5 s in keyed this slot");
+    assert_eq!(s.sent("T 1"), 0, "a CQ 11.3 s in keyed this slot");
     s.run_to(t0 + 30_000.0);
     assert_eq!(
         s.sent("T 1"),
@@ -253,6 +294,109 @@ fn a_late_start_past_the_budget_waits_for_the_next_own_slot() {
         "and it keys at the next own boundary, on time"
     );
     assert_eq!(s.backend.played.len(), FT8_WAVE);
+}
+
+/// FT4 THE SAME WAY: 75 % of its 7.5 s slot is 5.625 s. A CQ 5.5 s in keys at once with the 40 ms of
+/// tones still ahead of the clock (FT4's 0.5 s lead-in puts its last tone at 5.54 s) and ends with
+/// the window; 5.7 s in, it waits for the next own slot. The old budget stopped FT4 at 3.0 s.
+#[test]
+fn an_ft4_late_start_keys_until_75_percent_and_later_waits() {
+    let mut on_time = Over::new(Tier::Ft4);
+    on_time.cq();
+    let t0 = on_time.t;
+    on_time.run_to(t0);
+
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 5_480.0);
+    s.cq_now();
+    s.run_to(t0 + 5_500.0);
+    assert_eq!(s.sent("T 1"), 1, "a CQ 5.5 s in did not key at once");
+    if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[66_000..]) {
+        panic!("the CQ 5.5 s in is not the on-time over's audio from there on: {why}");
+    }
+    assert_eq!(s.state.tx_until_ms, Some(t0 + 6_240.0), "PTT off");
+
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 5_680.0);
+    s.cq_now();
+    s.run_to(t0 + 14_980.0);
+    assert_eq!(s.sent("T 1"), 0, "a CQ 5.7 s in keyed this slot");
+    s.run_to(t0 + 15_000.0);
+    assert_eq!(s.sent("T 1"), 1, "and it keys at the next own boundary");
+    assert_eq!(
+        s.backend.played.len(),
+        on_time.backend.played.len(),
+        "and whole"
+    );
+}
+
+/// ⭐ A BOUNDARY WHOSE KEY COMES PAST 75 % OF THE SLOT IS NOT KEYED, AND ITS OVER WAITS: the loop's
+/// first tick in the slot is 11.3 s in (a decode that drained that late, a stalled computer), where
+/// WSJT-X never asserts PTT. Nothing keys, and the CQ, never planned, goes out whole at the next own
+/// boundary. It used to key and send the symbols still ahead (to 13.14 s). The control, 11.2 s in,
+/// keys and sends what remains on the slot clock, ending with the window.
+#[test]
+fn a_boundary_keyed_past_75_percent_waits_for_the_next_own_slot() {
+    let mut on_time = Over::new(Tier::Ft8);
+    on_time.cq();
+    let t0 = on_time.t;
+    on_time.run_to(t0);
+
+    let mut late = Over::new(Tier::Ft8);
+    let t0 = late.t;
+    late.cq();
+    late.t = t0 + 11_300.0; // the loop's first tick in the slot, 11.3 s in
+    late.run_to(t0 + 29_980.0);
+    assert_eq!(late.sent("T 1"), 0, "a boundary keyed 11.3 s in");
+    late.run_to(t0 + 30_000.0);
+    assert_eq!(
+        late.sent("T 1"),
+        1,
+        "the CQ did not go out at the next own boundary"
+    );
+    // The same over, whole: the CQ's first frame, which a plan at 11.3 s would have spent.
+    if let Err(why) = same_audio(&late.backend.played, &on_time.backend.played) {
+        panic!("the next own boundary did not send the over that waited, whole: {why}");
+    }
+
+    let mut control = Over::new(Tier::Ft8);
+    let t0 = control.t;
+    control.cq();
+    control.t = t0 + 11_200.0;
+    control.run_to(t0 + 11_200.0);
+    assert_eq!(control.sent("T 1"), 1, "control: a boundary 11.2 s in");
+    if let Err(why) = same_audio(&control.backend.played, &on_time.backend.played[134_400..]) {
+        panic!("control: not the on-time over's audio from 11.2 s on: {why}");
+    }
+    assert_eq!(
+        control.state.tx_until_ms,
+        Some(t0 + 13_840.0),
+        "control: PTT off"
+    );
+}
+
+/// CONTROL: FT2 KEEPS ITS OWN LATE START. WSJT-X's 75 % is FT8's and FT4's; FT2 still keys a late start
+/// only while its whole over (2.52 s) fits before the next boundary: 1.2 s into its 3.75 s slot it
+/// keys at once, 1.3 s in (75 % would reach 2.81 s) it waits for the next own slot.
+#[test]
+fn an_ft2_late_start_keeps_its_whole_over_rule() {
+    let mut s = Over::new(Tier::Ft2);
+    let t0 = s.t;
+    s.run_to(t0 + 1_180.0);
+    s.cq_now();
+    s.run_to(t0 + 1_200.0);
+    assert_eq!(s.sent("T 1"), 1, "a CQ 1.2 s in did not key at once");
+
+    let mut s = Over::new(Tier::Ft2);
+    let t0 = s.t;
+    s.run_to(t0 + 1_280.0);
+    s.cq_now();
+    s.run_to(t0 + 7_480.0);
+    assert_eq!(s.sent("T 1"), 0, "a CQ 1.3 s in keyed this slot");
+    s.run_to(t0 + 7_500.0);
+    assert_eq!(s.sent("T 1"), 1, "and it keys at the next own boundary");
 }
 
 /// ⭐ STOP TX MID-OVER STILL CUTS AT ONCE, AND NOTHING OF THE CUT OVER FIRES AFTER IT. The window's
@@ -346,6 +490,12 @@ fn steer_to_before(over: &mut Over, boundary: f64, before_ms: f64) {
 impl Over {
     /// One loop tick on the real clock; returns when the tick ended.
     fn tick_now(&mut self) -> std::time::Instant {
+        self.tick_read_early(0.0)
+    }
+
+    /// One loop tick on the real clock, its clock read `early_ms` before the tick runs on (a tick
+    /// that spent that long on CAT before it reached what is measured); returns when it ended.
+    fn tick_read_early(&mut self, early_ms: f64) -> std::time::Instant {
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
         self.state
@@ -354,7 +504,7 @@ impl Over {
                 &mut self.backend,
                 &mut self.rig,
                 &sinks,
-                now_unix_ms(),
+                now_unix_ms() - early_ms,
                 &mut ra,
                 &mut rr,
                 &mut station,
@@ -497,5 +647,33 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
             );
             assert!(skipped < FT8_WAVE, "{what}: the over was dropped");
         }
+    }
+}
+
+/// THE LATE START DECIDES ON THE CLOCK AT ITS DECISION, NOT ON ITS TICK'S, as WSJT-X decides on a
+/// clock it has just read. A tick that read its clock 2 s before it reached the CQ (CAT earlier in
+/// the tick) finds the slot 11.5 s in: it keys nothing, though its own clock said 9.5 s. At 10.5 s it
+/// keys. On the real clock, steered into this station's own slot.
+#[test]
+fn a_late_start_decides_on_the_clock_at_the_decision_not_on_its_ticks() {
+    for (at_ms, keys) in [(11_500.0, false), (10_500.0, true)] {
+        let mut s = Over::new(Tier::Ft8);
+        let even = steer_into_the_odd_slot(&mut s, 0.0);
+        steer_to_before(&mut s, even - 15_000.0, 15_000.0 - at_ms);
+        // The rig's own reads held off, as in the busy scene: the steering made them all due.
+        let later = even + 60_000.0;
+        s.state.last_rig_poll = later;
+        s.state.last_freq_poll = later;
+        s.state.last_smeter_poll = later;
+        s.state.last_ptt_poll = later;
+        s.tick_now(); // this slot's boundary, with nothing to send
+        assert_eq!(s.sent("T 1"), 0, "premise: nothing to send at the boundary");
+        s.cq_now();
+        s.tick_read_early(2_000.0);
+        assert_eq!(
+            s.sent("T 1"),
+            usize::from(keys),
+            "a CQ {at_ms} ms in, its tick's clock 2 s behind"
+        );
     }
 }
