@@ -7292,6 +7292,8 @@ export const DE: PartialCatalog = {
   "rotor.pane.aim.point.title": "Antenne auf {{call}} ausrichten, kurzer Weg",
   "rotor.pane.aim.unknown": "Standort unbekannt",
   "rotor.pane.aim.noGrid": "für eine Peilung den eigenen Locator in den Einstellungen eintragen",
+  "rotor.pane.aim.off": "{{deg}}° Abweichung",
+  "rotor.pane.aim.off.title": "Die Antenne weicht {{deg}}° von der Peilung zu {{call}} ab (die gepunktete Linie auf der Kompassrose), auf dem kürzeren Weg gemessen",
   "roam.chip.title": "Roam — koordinierter QSY: Sie und Ihr Partner wechseln den Kanal gemeinsam, offen angesagt (nie privat). Zum Ein-/Ausschalten klicken.",
   "roam.chip.launch.on": "Roam an",
   "roam.chip.launch.on.status": "Roam an · {{status}}",

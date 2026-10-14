@@ -77,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until one sends the club's county again. Its contacts are still taken as sent. A state, province
   or section that differs is named the same way. The host sees what a laptop sends once it has
   logged a contact, and the warning is on the host's own screen only, not on the Remote page.
+- **The Rotor box shows on its rose where the station in your log entry is.** Beside a cockpit, the
+  bearing on the box's second line is now drawn on the rose as well: a dotted line from the middle
+  with a small marker on the rim, in amber, under the antenna's own needle. The second line also
+  says how far the antenna is off that bearing the short way round, for example "→ EC1DD 227°
+  (1531 km) 20° off", so you can tell at a glance whether to press Point. The line and the number
+  follow the call and the antenna as they move. With no call in the entry, a station Nexus cannot
+  place, or no grid of your own there is no line and no number, and a rotator that does not report
+  its position gets the line without a number. Nexus Remote is unchanged.
 
 ### Changed
 

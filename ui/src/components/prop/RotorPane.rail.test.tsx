@@ -80,6 +80,14 @@ const drawn = (scope: string) =>
     return pane
   })
 
+/** The station's line on the rose, once line 2's bearing has arrived (Point shows before it does). */
+const stationLine = (pane: HTMLElement) =>
+  vi.waitFor(() => {
+    const line = pane.querySelector<SVGElement>('.rotor-bearing-line')
+    if (!line) throw new Error('the Rotor pane has not drawn the station’s line yet')
+    return line
+  })
+
 const parts = (pane: HTMLElement) => {
   const q = (s: string) => {
     const el = pane.querySelector<HTMLElement>(s)
@@ -213,6 +221,14 @@ describe('the Rotor box in the dashboard rail', () => {
     expect(css(p.aim, 'flex-wrap'), 'Point squeezes line 2’s words to a word a line').toBe('wrap')
   })
 
+  it('draws the station’s line at the needle’s own fixed width, not the rose’s scale: a third of a pixel at the floor', async () => {
+    mountRail()
+    const line = await stationLine(await drawn('.dash-rail'))
+    expect(css(line, 'vector-effect'), 'the line is drawn at the rose’s scale, 0.4 px wide in a 56 px rose').toBe('non-scaling-stroke')
+    expect(css(line, 'stroke-width')).toBe('1.5')
+    expect(css(line, 'stroke-dasharray'), 'the line is no longer dotted in the rail').toBe('0 4')
+  })
+
   it('■ STOP is the same button, enabled, with nothing between it and the box that could hide it', async () => {
     mountRail()
     const pane = await drawn('.dash-rail')
@@ -258,6 +274,7 @@ describe('everywhere else the pane keeps its own layout', () => {
       expect(css(p.input, 'min-height')).toBe('44px')
       expect(css(p.aim, 'flex-wrap')).toBe('wrap')
       expect(css(p.az, 'font-size')).toBe('1.6em')
+      expect(css(await stationLine(p.row.closest<HTMLElement>('.rotor-pane')!), 'vector-effect'), 'the rail’s fixed widths reach the line').toBeNull()
       // The drawing is the same at its own size: a viewBox of the size it is drawn at changes nothing.
       expect([p.rose.getAttribute('width'), p.rose.getAttribute('height')]).toEqual(['148', '148'])
     })

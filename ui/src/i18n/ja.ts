@@ -7376,6 +7376,8 @@ export const JA: PartialCatalog = {
   "rotor.pane.aim.point.title": "アンテナを{{call}}に向ける・ショートパス",
   "rotor.pane.aim.unknown": "位置不明",
   "rotor.pane.aim.noGrid": "方位を出すには設定で自局のグリッドを入力",
+  "rotor.pane.aim.off": "{{deg}}°ずれ",
+  "rotor.pane.aim.off.title": "アンテナは{{call}}への方位 (ローズ上の点線) から{{deg}}°ずれています・近い側で測った角度",
   "cockpit.header.readout.wheelTune.title": "スクロールで同調",
   "cockpit.header.readout.digitTune.title": "桁の上でスクロールして同調",
   "cockpit.header.bandEdge.up": "{{band}}のバンド端 {{edge}} MHzで停止しました — もう一度スクロールで上へ続行",
