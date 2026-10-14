@@ -126,6 +126,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A QRZ button opens the station's own page for a call with a word after it.** `W1AW/PORTABLE`
+  opened the QRZ page for PORTABLE and `K1A/QRP` the one for QRP, because the longest part of the
+  call was taken as the callsign. The part with a digit in it is the callsign now, so they open
+  W1AW and K1A, on the desktop, on the Remote page and from the DXpedition list alike.
 - **One band is one band, whatever its letter case.** Contacts imported from another logger kept
   that logger's spelling of the band, so a log with `20M` from an import and `20m` from Nexus
   showed 20 m twice in the statistics' By band, listed both on the QSO globe, and the globe's 20 m

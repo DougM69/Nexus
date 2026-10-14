@@ -32394,10 +32394,11 @@ fn qrz_url(call: &str) -> Option<String> {
         .split(|c: char| c.is_whitespace() || c == '-')
         .next()
         .unwrap_or("");
-    // Longest slash-separated token = the base call (portable prefixes/suffixes are
-    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P), the last of equal
-    // ones. Each is sanitized BEFORE it is measured: the browser's copy counts UTF-16
-    // units, not bytes, so measuring the raw text could pick a different token there.
+    // The base call is the slash-separated token that looks like a callsign, one with a
+    // digit (W1AW/PORTABLE, K1A/QRP), and among those the longest (PJ4/K1ABC, K1ABC/P),
+    // the last of equal ones; with no digit anywhere, the longest. Each is sanitized
+    // BEFORE it is measured: the browser's copy counts UTF-16 units, not bytes, so
+    // measuring the raw text could pick a different token there.
     let base = station
         .split('/')
         .map(|t| {
@@ -32405,7 +32406,7 @@ fn qrz_url(call: &str) -> Option<String> {
                 .filter(|c| c.is_ascii_alphanumeric())
                 .collect::<String>()
         })
-        .max_by_key(String::len)
+        .max_by_key(|t| (t.bytes().any(|b| b.is_ascii_digit()), t.len()))
         .unwrap_or_default()
         .to_ascii_uppercase();
     (!base.is_empty()).then(|| format!("https://www.qrz.com/db/{base}"))
