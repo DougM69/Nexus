@@ -561,8 +561,8 @@ impl Authority {
     }
     /// The LAN road's paired computers hold station control while LAN is on, whatever clears
     /// grants: `reconcile` reads `devices` each time and gives each one it names its grant back,
-    /// so a local decision that clears every grant (`invalidate`: Turn Remote on or off, take over,
-    /// revoking a browser) leaves them theirs before any next request is answered, as `restore`
+    /// so a local decision that clears every grant (`invalidate`: Turn Remote on or off, take over)
+    /// leaves them theirs before any next request is answered, as `restore`
     /// does for hosted browsers once the service lists them. It only ever gives: a computer
     /// removed at the shack, or LAN going off, is first dropped from `devices` and then revoked
     /// (`permit_station`), and the revoke stands. Set once, by the LAN road at its start; with no
@@ -862,7 +862,8 @@ impl Authority {
         )
     }
     /// The epoch every local grant belongs to. Any local decision that clears permissions
-    /// (Turn off Remote, take over, revoking a browser, turning Remote on again) moves it.
+    /// (Turn off Remote, take over, turning Remote on again) moves it. Revoking one browser does not:
+    /// it takes that browser's grants alone (`permit`, `permit_station`, `permit_transmit`).
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }

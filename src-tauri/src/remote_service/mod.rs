@@ -355,7 +355,8 @@ enum Persist {
     /// disconnected and every live permission cleared, but the remembered grants stay, so Turn on
     /// or a restart restores them for browsers still approved at the same approval.
     Paused,
-    /// A local decision cleared every browser permission (revoking a browser).
+    /// A local decision cleared every browser permission: a browser's removal that could not be
+    /// applied to that browser alone (see `Control::revoke_browser`).
     ClearGrants,
     /// One browser's grants changed. `approval` is the approval the change was made against: a grant
     /// is only ever created against a known approval, and a grant against a different approval (not
@@ -606,6 +607,33 @@ impl Control {
         self.stop();
         self.enabled = true;
         self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Removing one device's approval at the shack ends that device's grants at once (a lease it
+    /// holds with them), remembered and live, and its pin; every other device keeps its own
+    /// (operator decision 2026-10-14). A revoke never waits for Core. Should one not be taken, the
+    /// whole authority is cleared instead, as it was before: fail closed.
+    fn revoke_browser(&mut self, device_id: &str) {
+        let operations = self.operations.clone();
+        let taken = operations.permit(device_id, false).is_ok()
+            && operations.permit_station(device_id, false).is_ok()
+            && operations.permit_transmit(device_id, false).is_ok();
+        if taken {
+            self.remember(Persist::Browser {
+                device_id: device_id.to_string(),
+                approval: None,
+                logging: Some(false),
+                control: Some(false),
+                transmit: Some(false),
+            });
+        } else {
+            operations.invalidate();
+            self.remember(Persist::ClearGrants);
+        }
+        // A5: revoking ends the approval, and its pin with it.
+        self.remember(Persist::Pin {
+            device_id: device_id.to_string(),
+            key: None,
+        });
     }
     /// Hand a decision to the vault writer. Never called from `stop`: `stop` also runs when Nexus
     /// exits, and an exit must not be remembered as the operator turning Remote off.
@@ -1130,13 +1158,7 @@ impl Service {
                 ..
             } = &action
             {
-                control.operations.invalidate();
-                control.remember(Persist::ClearGrants);
-                // A5: revoking ends the approval, and its pin with it.
-                control.remember(Persist::Pin {
-                    device_id: device_id.clone(),
-                    key: None,
-                });
+                control.revoke_browser(device_id);
             }
             if matches!(
                 action,
@@ -1202,8 +1224,8 @@ struct Controller {
 }
 /// Remote came on with grants remembered; they wait for the service's browser list.
 struct Restore {
-    /// The authority epoch when Remote came on. Any local decision since then (Turn off, take over,
-    /// revoking a browser) moves it, and that decision wins.
+    /// The authority epoch when Remote came on. Any local decision since then (Turn off, take over)
+    /// moves it, and that decision wins. A browser revoked since is read out of the record.
     epoch: u64,
     at: tokio::time::Instant,
     attempts: u32,
@@ -1497,8 +1519,8 @@ impl Controller {
     /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control
     /// and logging, and FT8/FT4 transmit when the approval ticked it. With Remote on they take
     /// effect at once; with Remote off they wait in the record for Turn on. A local decision made
-    /// after the approval was asked for (Turn off or on, take over, revoking a browser) wins, and
-    /// nothing is granted. ⛔ Granting transmit arms nothing: the browser still has to press TX On.
+    /// after the approval was asked for (Turn off or on, take over) wins, and nothing is granted;
+    /// revoking this device does too (the revoke is taken again after this, `Controller::handle`). ⛔ Granting transmit arms nothing: the browser still has to press TX On.
     ///
     /// A5: the device key the operator was shown (`shown`) is pinned if the service still lists that
     /// key for the browser now that it has approved it. A key that changed in between pins nothing,
@@ -1599,8 +1621,8 @@ impl Controller {
         // Remote is on and connecting: the next launch turns it back on.
         control.remember(Persist::Enabled);
         // Remembered grants come back once the service confirms each browser is still approved at
-        // the same approval. The epoch is read here, under the lock: a later take over, revocation
-        // or Turn off moves it, and that decision wins.
+        // the same approval. The epoch is read here, under the lock: a later take over or Turn off
+        // moves it, and that decision wins; a later revocation is read out of the record.
         if !control.remembered.grants().is_empty() {
             self.restore = Some(Restore {
                 epoch: control.operations.epoch(),
@@ -1868,6 +1890,14 @@ impl Controller {
             } => {
                 if !identifier(&device_id) || key.as_deref().is_some_and(|key| !pin_shape(key)) {
                     return Err("invalidRequest");
+                }
+                if !approve {
+                    // Taken when the press was made (`Service::action`); taken again here, after
+                    // any approval of this device that was already on its way when it was made,
+                    // so that approval cannot hand the grants back.
+                    if let Ok(mut control) = self.control.lock() {
+                        control.revoke_browser(&device_id);
+                    }
                 }
                 let (binding, token) = self.bound()?;
                 self.client

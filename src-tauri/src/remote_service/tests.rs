@@ -1854,7 +1854,8 @@ struct FakeCloud {
     devices: Arc<Mutex<String>>,
     /// The signing key the service holds for the station (S3-M1): the first one sent to it.
     station_key: Arc<Mutex<Option<String>>>,
-    /// While set, the device list is not answered (a 503), as a service that is down answers.
+    /// While set, the device list and a removal are not answered (a 503), as a service that is down
+    /// answers.
     refusing: Arc<AtomicBool>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
@@ -2021,6 +2022,24 @@ async fn fake_cloud() -> FakeCloud {
                         }
                     }
                     *served.lock().unwrap() = approved.to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
+                } else if head.contains("/native/revoke-device ") && down.load(Ordering::SeqCst) {
+                    ("503 Service Unavailable", "{}".to_string())
+                } else if head.contains("/native/revoke-device ")
+                    && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .is_ok_and(|l| l["devices"].as_array().is_some_and(|d| d.len() > 1))
+                {
+                    // Of several devices, only the one the request names stops being listed.
+                    let asked = serde_json::from_slice::<serde_json::Value>(&request[head_end..])
+                        .ok()
+                        .and_then(|v| v["deviceId"].as_str().map(str::to_string));
+                    let mut listed: serde_json::Value =
+                        serde_json::from_str(&served.lock().unwrap()).unwrap();
+                    listed["devices"]
+                        .as_array_mut()
+                        .unwrap()
+                        .retain(|d| d["id"].as_str() != asked.as_deref());
+                    *served.lock().unwrap() = listed.to_string();
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke-device ") {
                     // A revoked browser's expiry becomes "now", so the service stops listing it.
@@ -2451,6 +2470,183 @@ async fn turn_off_and_ending_remote_control_pause_but_revoking_a_browser_clears(
         };
         assert!(on(&status), "{case}: Remote is back on");
         assert!(transmitter_idle(&engine), "{case}: the latch is still off");
+    }
+}
+
+/// Removing one browser's approval at the shack takes that browser's grants, and only its (operator
+/// decision 2026-10-14): every other browser keeps logging, station control, its transmit tick and a
+/// lease it holds, now and at the next Turn on. REFUSED: the removed browser at its next command, and
+/// a browser never approved here. Nothing is keyed throughout.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_one_browser_leaves_every_other_device_its_grants() {
+    const OTHER: &str = "10000000-0000-4000-8000-00000000000e";
+    const NEVER: &str = "10000000-0000-4000-8000-00000000000f";
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    *cloud.devices.lock().unwrap() = json!({"devices":[
+        {"id":BROWSER,"name":"Test browser","approved":0,"expiresAt":APPROVED_UNTIL - 1},
+        {"id":OTHER,"name":"Other browser","approved":0,"expiresAt":APPROVED_UNTIL - 1}]})
+    .to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    for id in [BROWSER, OTHER] {
+        service
+            .action(Action::Device {
+                device_id: id.into(),
+                approve: true,
+                transmit: true,
+                key: None,
+                kind: Some(Kind::Browser),
+            })
+            .await
+            .unwrap();
+    }
+    let holds = |s: &Status, id: &str| {
+        let id = id.to_string();
+        (
+            s.logging_permissions.contains(&id),
+            s.station_permissions.contains(&id),
+            s.transmit_permissions.contains(&id),
+        )
+    };
+    let both = service.status().unwrap();
+    assert_eq!(holds(&both, BROWSER), (true, true, true), "premise");
+    assert_eq!(holds(&both, OTHER), (true, true, true), "premise");
+
+    // The other browser holds the lease, through a connection that stays open.
+    let authority = service.control.lock().unwrap().operations.clone();
+    let connection = operations::LanConnection::new(authority.clone());
+    let acquire = |device: &str| -> String {
+        let session = lan_grants::fresh_id();
+        let ask = |request: operations::Request| {
+            for _ in 0..50 {
+                match authority.handle_version(
+                    (connection.id, 4),
+                    &session,
+                    device,
+                    &request,
+                    &engine,
+                    Instant::now(),
+                ) {
+                    Err("stationBusy" | "remoteBusy") => {
+                        std::thread::sleep(Duration::from_millis(20))
+                    }
+                    other => return other,
+                }
+            }
+            Err("busy throughout")
+        };
+        let boot = match ask(operations::Request::State {
+            request_id: lan_grants::fresh_id(),
+        }) {
+            Ok(state) => state["stationBootId"].as_str().unwrap().to_string(),
+            Err(refused) => return refused.into(),
+        };
+        match ask(operations::Request::Acquire {
+            request_id: lan_grants::fresh_id(),
+            station_boot_id: boot,
+        }) {
+            Ok(acquired) => acquired["phase"].as_str().unwrap_or("none").into(),
+            Err(refused) => refused.into(),
+        }
+    };
+    assert_eq!(acquire(OTHER), "controlling", "premise: the other's lease");
+
+    service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            transmit: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    let after = service.status().unwrap();
+    assert_eq!(holds(&after, BROWSER), (false, false, false), "removed");
+    assert_eq!(
+        holds(&after, OTHER),
+        (true, true, true),
+        "removing one browser took another's grants: {}",
+        serde_json::to_string(&after).unwrap()
+    );
+    assert_eq!(
+        authority.local_status()["controller"],
+        json!(OTHER),
+        "removing one browser ended another's lease"
+    );
+    assert_eq!(acquire(BROWSER), "localPermissionRequired", "removed");
+    assert_eq!(acquire(NEVER), "localPermissionRequired", "never approved");
+    assert!(transmitter_idle(&engine));
+
+    // Turn off and on: the other browser's grants come back, the removed one's never do.
+    service.action(Action::Disable {}).await.unwrap();
+    service.action(Action::Enable {}).await.unwrap();
+    eventually(&service, "the other browser's grants came back", |s| {
+        holds(s, OTHER) == (true, true, true)
+    })
+    .await;
+    settle().await;
+    let back = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(holds(&back, BROWSER), (false, false, false), "came back");
+    assert_eq!(holds(&back, OTHER), (true, true, true));
+    assert_eq!(acquire(BROWSER), "localPermissionRequired", "removed");
+    assert_eq!(acquire(NEVER), "localPermissionRequired", "never approved");
+    assert!(transmitter_idle(&engine), "the latch is still off");
+}
+
+/// A removal the service never heard still stands at the shack: the browser's grants end at once and
+/// are forgotten, so Turn on gives them back to nobody, though the service still lists the approval
+/// as it was. CONTROL: the same Turn on with no removal gives them back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_the_service_never_heard_still_stands_at_the_shack() {
+    for removed in [false, true] {
+        let cloud = fake_cloud().await;
+        let engine = engine();
+        let service = on_at(&cloud, &engine).await;
+        pending_browser(&cloud);
+        service.action(Action::Refresh {}).await.unwrap();
+        assert_eq!(approve(&service, true).await.station_permissions, [BROWSER]);
+        if removed {
+            cloud.refusing.store(true, Ordering::SeqCst);
+            let refused = service
+                .action(Action::Device {
+                    device_id: BROWSER.into(),
+                    approve: false,
+                    transmit: false,
+                    key: None,
+                    kind: None,
+                })
+                .await;
+            assert!(refused.is_err(), "premise: the service never heard it");
+            let status = service.status().unwrap();
+            assert!(
+                status.station_permissions.is_empty()
+                    && status.logging_permissions.is_empty()
+                    && status.transmit_permissions.is_empty(),
+                "the removal did not stand at once"
+            );
+            cloud.refusing.store(false, Ordering::SeqCst);
+        }
+        service.action(Action::Disable {}).await.unwrap();
+        service.action(Action::Enable {}).await.unwrap();
+        let status = if removed {
+            eventually(&service, "Remote back on", on).await;
+            settle().await;
+            service.action(Action::Refresh {}).await.unwrap()
+        } else {
+            eventually(&service, "control: the grants came back", |s| {
+                s.station_permissions == [BROWSER]
+            })
+            .await
+        };
+        assert_eq!(
+            status.station_permissions.is_empty() && status.logging_permissions.is_empty(),
+            removed,
+            "removed={removed}: {}",
+            serde_json::to_string(&status).unwrap()
+        );
+        assert!(transmitter_idle(&engine));
     }
 }
 

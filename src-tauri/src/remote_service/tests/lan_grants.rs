@@ -1,6 +1,6 @@
 //! Remote over this network beside the hosted mode (the operator's ruling of 2026-10-04, "Both at
 //! once"): a computer paired over the network keeps its station control through every hosted
-//! decision that clears the browsers' grants (Turn Remote on, Turn it off, revoking a browser), as
+//! decision that clears the browsers' grants (Turn Remote on, Turn it off), and through revoking a browser, as
 //! `restore` gives approved browsers theirs, and loses it with "End remote control", which turns
 //! LAN off.
 use super::*;
@@ -97,8 +97,8 @@ pub(super) fn lan_acquire(service: &Service, engine: &crate::SharedEngine, devic
     }
 }
 
-/// ★ Hosted Turn on, Turn off, Turn on again and revoking a browser each clear every grant the
-/// station holds, and each leaves the LAN computer able to take control. "End remote control"
+/// ★ Hosted Turn on, Turn off and Turn on again each clear every grant the station holds, revoking
+/// a browser clears that browser's, and each leaves the LAN computer able to take control. "End remote control"
 /// turns LAN off and takes its control with it, and LAN on gives it back. CONTROL: the hosted
 /// browser's own grant goes with Turn off, as it always has.
 #[tokio::test(flavor = "multi_thread")]

@@ -142,19 +142,20 @@ that browser remembers; see [Talk from Remote](phone.md#talk-from-remote).
 **How long a browser stays approved.** Until you remove it. An approval never runs out, whether
 the browser is used or not: only **Revoke browser approval** (or **Remove**) here, the browser
 forgetting itself, or **Revoke station access** ends it. Nexus shows each one as approved until
-you remove it, and so does the browser. Approvals given under the earlier rule (30 days from last
-use, 90 at most) become ones that last until removed the next time the station connects or the
-browser is used; one that had already run out stays ended, and you approve that browser again.
+you remove it, and so does the browser (Nexus 1.17 and 1.18 show such an approval as "Approved
+until 9999-12-31 UTC"). Approvals given under the earlier rule (30 days from last use, 90 at most)
+last until removed too; one that had already run out stays ended, and you approve that browser
+again.
 
 While it holds station control, a browser can press **Listen** to hear the station's receive
 audio; **Volume** beside it sets how loud, and that browser remembers it. **Revoke browser
-approval** removes one browser.
+approval** removes that one browser: every other browser and computer keeps what it has.
 **Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
 gives each still-approved browser back what it had, with the TX switch off. **End remote
 control** does the same for everyone at once: it turns Remote off (it stays off after a restart),
 disconnects every browser and every computer, and turns off Remote over this network; nobody
 is approved again afterwards, and turning Remote on gives each approved device back what it
-had. **Revoke browser approval** clears permissions for good.
+had. **Revoke browser approval** clears that browser's permissions for good.
 **Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
