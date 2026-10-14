@@ -20,7 +20,7 @@
 //! depending on a country file that is refreshed weekly. The binding to the REAL resolver
 //! is asserted where both crates are in scope, in `src-tauri`.
 use tempo_core::contest::{
-    install_call_resolver, wpx_prefix, CallLocation, ContestSession, StationData,
+    install_call_resolver, wpx_prefix, CabrilloEntrant, CallLocation, ContestSession, StationData,
 };
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
 use tempo_core::fieldday::FieldDayLog;
@@ -934,4 +934,48 @@ fn power_category_is_declared_and_power_sent_goes_nowhere() {
             "cqwpx_ssb HIGH: CATEGORY-POWER: HIGH",
         ]
     );
+}
+
+/// ⭐ **CQ WW and CQ WPX claim the score the screen shows.** Both sponsors' Cabrillo pages
+/// (cqww.com/cabrillo.htm, cqwpx.com/cabrillo.htm) list `CLAIMED-SCORE`, and for an all-band
+/// entry every contact counts, so the line is the screen's total. CQ WW CW from the United
+/// States, and CQ WPX SSB, each declared `ALL`.
+#[test]
+fn cq_ww_cw_and_wpx_ssb_all_band_files_claim_the_score_shown() {
+    let all = CabrilloEntrant {
+        band: "ALL".into(),
+        ..Default::default()
+    };
+
+    let mut ww = FieldDayLog::new("W9XYZ", select("cqww_cw", &station("W9XYZ", "4")), "20m");
+    let ex = [("RST", "599"), ("ZN", "14")];
+    assert!(work(&mut ww, "20m", "DL1ABC", &ex, 100));
+    assert!(work(&mut ww, "40m", "DL1ABC", &ex, 110));
+    assert!(work(
+        &mut ww,
+        "20m",
+        "VE3XYZ",
+        &[("RST", "599"), ("ZN", "5")],
+        120
+    ));
+    // 3 + 3 + 2 points; zones {14, 5} on 20 m and {14} on 40 m, countries {DE, CA} and {DE}.
+    assert_eq!(score(&ww).3, 8 * (3 + 3), "the score the screen shows");
+    let cab = ww.cabrillo_with(14_030, &all).expect("one entry");
+    assert!(cab.contains("CATEGORY-BAND: ALL\n"), "{cab}");
+    assert!(cab.contains("CLAIMED-SCORE: 48\n"), "{cab}");
+
+    let mut wpx = FieldDayLog::new("W9XYZ", select("cqwpx_ssb", &station("W9XYZ", "")), "20m");
+    let mut phone = |band: &str, call: &str, nr: &str, at: u64| {
+        wpx.band = band.to_string();
+        wpx.session.compose_for(call, at);
+        wpx.log_fields_at(call, &fields(&[("RST", "59"), ("NR", nr)]), "PH", "", 0, at)
+    };
+    assert!(phone("20m", "DL1ABC", "1", 100));
+    assert!(phone("40m", "DL1ABC", "2", 110));
+    assert!(phone("20m", "VE3XYZ", "3", 120));
+    // 3 + 6 + 2 points (the low bands double); prefixes DL1 and VE3, once per log.
+    assert_eq!(score(&wpx).3, 11 * 2, "the score the screen shows");
+    let cab = wpx.cabrillo_with(14_230, &all).expect("one entry");
+    assert!(cab.contains("CONTEST: CQ-WPX-SSB\n"), "{cab}");
+    assert!(cab.contains("CLAIMED-SCORE: 22\n"), "{cab}");
 }

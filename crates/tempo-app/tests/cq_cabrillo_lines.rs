@@ -89,7 +89,8 @@ fn missing(e: &Engine) -> Vec<String> {
 
 /// ⭐ **Every declaration made: the header is the sponsor's sample's, line for line, each value
 /// from Settings, and nothing is named as missing.** CQ WW SSB, as cqww.com/cabrillo.htm heads its
-/// own example: the category lines, CLUB, NAME and EMAIL (the operator name from the Station tab).
+/// own example: the category lines, CLAIMED-SCORE (the score the Contest screen shows), CLUB, NAME
+/// and EMAIL (the operator name from the Station tab).
 #[test]
 fn every_declaration_made_heads_the_file_the_way_the_sponsor_shows() {
     let mut e = running("cqww_ssb", |s| {
@@ -116,6 +117,7 @@ fn every_declaration_made_heads_the_file_the_way_the_sponsor_shows() {
             "CATEGORY-MODE: SSB",
             "CATEGORY-POWER: LOW",
             "LOCATION: WI",
+            "CLAIMED-SCORE: 12",
             "CLUB: EXAMPLE CONTEST CLUB",
             "CREATED-BY: Nexus",
             "EMAIL: k1abc@example.com",
@@ -124,6 +126,10 @@ fn every_declaration_made_heads_the_file_the_way_the_sponsor_shows() {
         ],
         "{cab}"
     );
+    // The claimed score is the one on the screen: K1ABC 0 points (same country), DL1ABC 3, times
+    // zones 5 and 14 and countries US and DE.
+    let fd = e.snapshot().field_day.expect("Contest mode is on");
+    assert_eq!(fd.total_score, 3 * 4);
     assert_eq!(qso_lines(&cab).len(), 2, "{cab}");
     assert_eq!(missing(&e), Vec::<String>::new());
 }

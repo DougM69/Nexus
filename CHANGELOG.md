@@ -405,6 +405,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tuned a channel the radio refuses. When your only radio cannot receive 145.800 MHz, Nexus now
   tells you once per session, with where to turn the auto-arm off (Settings ▸ Digital ▸ SSTV), and
   then leaves the radio and the screen alone.
+- **CQ WW CW and SSB and CQ WPX CW and SSB logs claim their score.** The Cabrillo file now carries
+  `CLAIMED-SCORE`, the score the Contest screen shows, as the CQ WW RTTY file already did. A
+  single-band entry (Band category set to one band) whose log also holds a contact on another band
+  writes no claimed score, in these four and in CQ WW RTTY: CQ scores only the declared band, and
+  the screen's score counts them all. The guide's note on logging the Scandinavian Activity Contest
+  as CQ WPX again says to delete the claimed score before sending the log.
 
 ## [1.18.0] — 2026-10-12
 

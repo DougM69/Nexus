@@ -2736,6 +2736,22 @@ impl FieldDayLog {
             } else {
                 String::new()
             };
+        // The band the ENTRY declares, when it is one of the sponsor's (`ALL` or one band).
+        let declared_band = rs
+            .cabrillo_band_categories
+            .iter()
+            .find(|b| b.eq_ignore_ascii_case(entrant.band.trim()));
+        // ⭐ A SINGLE-BAND ENTRY WHOSE LOG HOLDS ANOTHER BAND. CQ WW and WPX (X.2, and WPX's own
+        // log instructions): *"Single band entrants are required to include all contacts made
+        // during the contest period, even if on other bands. Only contacts made on the band
+        // specified in the Cabrillo header will be considered for scoring purposes."* The score
+        // here counts every band, so for such an entry it is more than the sponsor credits.
+        let off_declared_band = declared_band.is_some_and(|b| {
+            !b.eq_ignore_ascii_case("ALL")
+                && self.qsos.iter().any(|q| {
+                    !cabrillo_category_band(std::slice::from_ref(q)).eq_ignore_ascii_case(b)
+                })
+        });
         let headers = crate::contest::CabrilloHeaders {
             // ⭐ …then translated out of ADIF's namespace into Cabrillo's. The id
             // above is an ADIF `CONTEST_ID` enumeration value, which is NOT the
@@ -2826,14 +2842,10 @@ impl FieldDayLog {
             // individual bands shown"); a band picked for another contest claims nothing. A
             // sponsor whose template takes the band off the log (CQ WW RTTY, X.2) still gets that
             // for an entry that declares none.
-            category_band: rs
-                .cabrillo_band_categories
-                .iter()
-                .find(|b| b.eq_ignore_ascii_case(entrant.band.trim()))
-                .map_or_else(
-                    || declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
-                    |b| b.to_string(),
-                ),
+            category_band: declared_band.map_or_else(
+                || declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
+                |b| b.to_string(),
+            ),
             // The contest's own mode where the ruleset names it (every CQ WW CW entry is a CW
             // entry), and otherwise the log's, where the sponsor's template takes that.
             category_mode: if rs.cabrillo_mode_category.is_empty() {
@@ -2845,9 +2857,11 @@ impl FieldDayLog {
             // the whole score: no power tier or ticked bonus after it, and no note saying
             // it leaves something out. An objectives contest WITH its menu (Winter Field
             // Day) is whole too: the sponsor asks for "your calculated total score
-            // including multipliers", and the objectives ticked are the entrant's own.
+            // including multipliers", and the objectives ticked are the entrant's own. A
+            // single-band entry with a contact on another band claims nothing (above).
             claimed_score: (rs.cabrillo_headers.contains(&"CLAIMED-SCORE")
                 && !self.qsos.is_empty()
+                && !off_declared_band
                 && (rs.scoring.post.is_empty() || !rs.objective_menu.is_empty())
                 && rs.score_note_key.is_empty())
             .then(|| {

@@ -501,8 +501,8 @@ reaches the contact.
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
   Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
-  line to `SAC-SSB` (or `SAC-CW`). The score Nexus shows is WPX's; the sponsor
-  works out its own.
+  line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
+  Nexus shows is WPX's, and the sponsor works out its own.
 - **You can't tell the Field Day log which band a contact was on** — it records
   a band per contact, but always the one the radio is on at the moment you type
   the entry; nothing lets you name a different one. Log as you work, not
