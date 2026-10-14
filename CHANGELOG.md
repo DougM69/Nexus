@@ -126,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
+  command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
+  accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the
+  tune-up. Nexus now sends the FT-710 its own tuning-start command; every other radio gets the
+  same command as before. NEEDS-BENCH: an FT-710 into a dummy load.
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
   save were in memory only and nothing on screen said so; a power cut would have lost them. The

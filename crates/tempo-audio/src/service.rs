@@ -35,7 +35,7 @@ use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
 use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
-use crate::rig::{FuncSet, PttMode, Rig, SerialLine, ATU_START_TUNE};
+use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
 mod monitor_claims;
@@ -8769,7 +8769,9 @@ impl RadioLoop {
                         // brand STARTS a tune-up or only switches the tuner in-line — turned out
                         // to be the defect rather than a caveat. See `rig::ATU_START_TUNE` for
                         // the Hamlib source this was read out of, and for why 2 is a no-op
-                        // rather than a new behaviour on Icom and Kenwood.
+                        // rather than a new behaviour on Icom and Kenwood. The FT-710 is the
+                        // exception: its 2 is unused and its start is 3, so the value comes
+                        // from the model (`rigmodels::hamlib_atu_start_tune_value`).
                         let fire_atu = engine_lock(engine).take_atu_tune();
                         if fire_atu && self.may_key() {
                             crate::civ::diag::note("ATU: operator asked the rig to tune up");
@@ -8784,7 +8786,12 @@ impl RadioLoop {
                             // asks for 2000 ms × 3 of them. One Hamlib read outlasts our whole
                             // window; our deadline then drops the stream. TX stayed armed and
                             // the next period boundary keyed an over into a running tune-up.
-                            match rig.set_func_value("TUNER", ATU_START_TUNE) {
+                            match rig.set_func_value(
+                                "TUNER",
+                                crate::rigmodels::hamlib_atu_start_tune_value(
+                                    self.applied.rig_model,
+                                ),
+                            ) {
                                 // ⭐ #322 / review R4: THE RADIO TOOK IT, so the Digital section
                                 // stands down (`Engine::note_atu_tune_started`). Here and not at
                                 // the drain above, because a press this block cannot send — the
@@ -16084,6 +16091,7 @@ mod tests {
     }
     use super::*;
     use crate::backend::MockBackend;
+    use crate::rig::ATU_START_TUNE;
 
     /// THE WFD-RTTY-PUSHED-AS-FT8 BUG: the core records the actual on-air mode
     /// behind a "DIG" contact (`LoggedQso::submode` — ADIF and Cabrillo already
@@ -29685,6 +29693,61 @@ mod tests {
                 sent.iter().any(|l| l == "U TUNER 2"),
                 tunes,
                 "model {model}: what reached the radio — saw {sent:?}"
+            );
+        }
+    }
+
+    /// Every `U TUNER` line an operator's ATU press puts on the wire for a radio of Hamlib
+    /// `model`: the scene, the stub and the press of `an_atu_press_never_reaches_a_hamlib_icom`,
+    /// with only the model differing.
+    fn tuner_lines_an_atu_press_sends(model: u32) -> Vec<String> {
+        let engine = atu_engine();
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rig_model = model;
+            e.apply_settings(s);
+            assert!(
+                e.tx_enabled() && e.tx_allowed(),
+                "model {model}: scene guard: still armed + legal after the model change"
+            );
+        }
+        let (addr, log) = mock_rigctld_with_atu(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        let press = engine.lock().unwrap().atu_tune();
+        assert!(press.is_ok(), "model {model}: the gate passes — {press:?}");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        let sent = log.lock().unwrap().clone();
+        sent.into_iter()
+            .filter(|l| l.starts_with("U TUNER"))
+            .collect()
+    }
+
+    /// ⭐ THE FT-710 STARTS ITS TUNER ON 3, NOT 2. A user's FT-710 (Hamlib model 1049) pressed
+    /// ATU and nothing tuned. Hamlib's `newcat_set_func` passes the value straight through as
+    /// `AC00<n>`, and Yaesu's FT-710 CAT manual (page 8, AC ANTENNA TUNER CONTROL) has P3 `2`
+    /// "(unused)" and `3` "tuning start". Asserted by value, so a red shows what went out.
+    #[test]
+    fn an_ft710_atu_press_starts_its_tuner_with_tuner_3() {
+        assert_eq!(
+            tuner_lines_an_atu_press_sends(1049),
+            ["U TUNER 3"],
+            "FT-710: AC003 starts the tune-up, AC002 is unused"
+        );
+    }
+
+    /// …and every other radio is told what it was told before: the FTDX10 the `2` was reported
+    /// and fixed on (`AC002`, start tuning), and a model nobody names.
+    #[test]
+    fn every_other_radios_atu_press_still_sends_tuner_2() {
+        for model in [1042, 999_999] {
+            assert_eq!(
+                tuner_lines_an_atu_press_sends(model),
+                ["U TUNER 2"],
+                "model {model}: unchanged"
             );
         }
     }
