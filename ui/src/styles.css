@@ -25029,6 +25029,12 @@ button.sat-chip:disabled {
   font-weight: 600;
   color: var(--alert-warning);
 }
+/* The contest journal's writes are failing (Contest screen and log strip): red, not amber —
+   contacts are in memory only. */
+.fd-unsaved {
+  font-weight: 600;
+  color: var(--state-bad);
+}
 
 /* ── Repeaters (the radio-programming workbench; the code still calls it Program): SOURCE pane
    (query + results) left, CHANNEL LIST (the artifact) right. After a fetch the results are a map

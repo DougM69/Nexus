@@ -2876,6 +2876,8 @@ export const JA: PartialCatalog = {
   "fieldDay.keptOut.running": "このコンピューターのコンテストジャーナルの{{count}}件の交信は {{contest}} の別の開催回（その前のリハーサルなど）に記録されたため、このログには入っていません。",
   "fieldDay.keptOut.contest": "このコンピューターのコンテストジャーナルの{{count}}件の交信は別のコンテストのものなので、このログには入っていません。",
   "fieldDay.keptOut.kept": "何も削除されていません。記録されたとおりジャーナルに残っています。",
+  "fieldDay.unsaved.since": "交信がディスクに保存されていません。{{time}} UTC 以降に記録した交信はメモリ上にしかなく、停電で失われます。今すぐ Cabrillo ファイルをエクスポートしてください。",
+  "fieldDay.unsaved.session": "交信がディスクに保存されていません。このセッションで記録した交信はメモリ上にしかなく、停電で失われます。今すぐ Cabrillo ファイルをエクスポートしてください。",
   "fieldDay.unmerged.day": "{{contest}} の{{count}}件の交信（{{date}} UTC に記録）はログブックに入っていません。ログブックに入るまで、このコンピューターのコンテストジャーナルに残ります。",
   "fieldDay.unmerged.days": "{{contest}} の{{count}}件の交信（{{first}}〜{{last}} UTC に記録）はログブックに入っていません。ログブックに入るまで、このコンピューターのコンテストジャーナルに残ります。",
   "fieldDay.unmerged.merge": "この{{count}}件をログブックに統合",

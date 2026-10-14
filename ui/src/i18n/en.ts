@@ -4329,6 +4329,13 @@ export const EN = {
     other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
   },
   'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
+  // The contest journal's writes are failing (a full disk, a file held by another program): the
+  // contacts since the last good write are in memory only. Red, on the Contest screen and the log
+  // strip, until a write lands.
+  'fieldDay.unsaved.since':
+    'Contacts are not being saved to disk. Those logged since {{time}} UTC are in memory only, and a power cut would lose them. Export a Cabrillo file now.',
+  'fieldDay.unsaved.session':
+    'Contacts are not being saved to disk. Those logged this session are in memory only, and a power cut would lose them. Export a Cabrillo file now.',
   // The contest contacts the journal keeps past its four days that the logbook does not hold,
   // offered for the merge (ContestView's FdUnmergedNote). The dates are UTC days, YYYY-MM-DD;
   // `days` is only ever said of two contacts or more.

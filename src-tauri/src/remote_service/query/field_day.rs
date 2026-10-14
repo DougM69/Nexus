@@ -52,6 +52,7 @@ pub(in crate::remote_service) fn leave_out_the_hosts_own(
     if let Some(f) = field_day.as_mut() {
         f.composing_text_phone.clear();
         f.cabrillo_missing.clear();
+        f.unsaved = None;
         for b in &mut f.boards {
             b.club.clear();
         }

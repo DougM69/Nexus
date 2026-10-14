@@ -2596,6 +2596,25 @@ pub struct FieldDayStatus {
     /// that takes it is deployed before the release that writes it. Absent when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_out: Option<FdKeptOutDto>,
+    /// ⭐ **The contest journal's last writes FAILED** — the contacts since the last good one are
+    /// in memory only, and a power cut loses them. The Contest screen and the log strip say so in
+    /// red. `None` when the last write was good. A later good write clears it.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `cabrillo_missing`'s reason: the hosted page refuses a key
+    /// it does not list, so `leave_out_the_hosts_own` empties it. The remedy is at the station.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsaved: Option<FdUnsavedDto>,
+}
+
+/// [`FieldDayStatus::unsaved`]: the contest journal writes that failed since the last good one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdUnsavedDto {
+    /// Writes that failed in a row.
+    pub failed_writes: u32,
+    /// When the last good write landed (Unix UTC seconds); absent when none has this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_saved_unix: Option<u64>,
 }
 
 /// [`FieldDayStatus::kept_out`]: the journal's rows of another contest, and of another

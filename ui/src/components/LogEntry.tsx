@@ -41,6 +41,7 @@ import { scpLine } from '../features/scp'
 import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
 import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
+import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestDupe, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
@@ -2456,6 +2457,13 @@ export function LogEntry({
         {fieldDay?.locationWarning ? (
           <div className="fd-section-warn le-fd-location-warn" role="alert">
             {locationWarningText(fieldDay.locationWarning)}
+          </div>
+        ) : null}
+        {/* The contest journal's writes are failing: the contacts since the last good one are in
+            memory only. Its own line, red, until a write lands. */}
+        {fieldDay?.unsaved ? (
+          <div className="fd-section-warn fd-unsaved" role="alert">
+            {contestUnsavedText(fieldDay.unsaved)}
           </div>
         ) : null}
 

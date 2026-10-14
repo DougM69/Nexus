@@ -31,6 +31,7 @@ import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlS
 import { contestDomain, multCode, multTotal, type DomainGroup } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
+import { contestUnsavedText } from '../features/contestUnsaved'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { stationMode, usePskName } from '../features/contestMode'
 import { REMOVE_CONFIRM_MS, SERVICE_NAMES, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
@@ -3878,6 +3879,13 @@ export function ContestView({
       )}
       {/* What the journal restore kept out of this session, and why. Nothing was deleted. */}
       {fieldDay?.keptOut && <FdKeptOutNote keptOut={fieldDay.keptOut} contest={eventName} />}
+      {/* The contest journal's writes are failing: the contacts since the last good one are in
+          memory only. Red until a write lands. */}
+      {fieldDay?.unsaved && (
+        <p className="fd-score-note fd-unsaved" role="alert">
+          {contestUnsavedText(fieldDay.unsaved)}
+        </p>
+      )}
       {/* …and the ones past its four days that the logbook does not hold, with their merge: never
           asked for by a Remote observer, so never shown there, and never pressed from afar. */}
       {(unmerged.length > 0 || unmergedReport || unmergedError) && (

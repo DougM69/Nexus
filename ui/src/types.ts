@@ -3452,6 +3452,11 @@ export interface FieldDayStatus {
    *  contest's, and another running of this one's (a rehearsal before it). They stay in the
    *  journal, untouched. Absent when nothing was kept out, and from an older station. */
   keptOut?: { otherContest: number; otherRunning: number }
+  /** ⭐ The contest journal's last writes FAILED: the contacts since the last good one
+   *  (`lastSavedUnix`, Unix UTC; absent when none landed this run) are in memory only. The
+   *  Contest screen and the log strip say so in red. Absent when the last write was good, from
+   *  an older station, and on Remote. Worded by `features/contestUnsaved.ts`. */
+  unsaved?: { failedWrites: number; lastSavedUnix?: number }
 }
 
 /** One exchange slot, as the entry strip renders a box for it.
