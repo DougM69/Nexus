@@ -212,8 +212,9 @@ impl Stage1 {
     pub(crate) fn merge_lotw_report(
         &mut self,
         text: &str,
+        settings_call: Option<&str>,
     ) -> tempo_core::reconcile::ReconcileSummary {
-        self.logbook.merge_report(text)
+        self.logbook.merge_lotw_report(text, settings_call)
     }
 
     /// `StationCore::import_pota_log`.
@@ -222,8 +223,13 @@ impl Stage1 {
     }
 
     /// `StationCore::merge_lotw_own_echo`.
-    pub(crate) fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
-        self.logbook.merge_own_echo(text, when_unix)
+    pub(crate) fn merge_lotw_own_echo(
+        &mut self,
+        text: &str,
+        when_unix: i64,
+        settings_call: Option<&str>,
+    ) -> usize {
+        self.logbook.merge_own_echo(text, when_unix, settings_call)
     }
 
     /// `StationCore::stamp_qrz_upload`.
@@ -434,6 +440,8 @@ mod lockstep {
     const BANDS: &[&str] = &["20m", "40m", "2m", ""];
     const MODES: &[&str] = &["FT8", "CW", "SSB"];
     const T0: u64 = 1_788_000_000;
+    /// The call in Settings that both sides' LoTW merges are given.
+    const CALL: Option<&str> = Some("K2DEF");
 
     /// The station's resolvers, and Stage 1's: a country from the call, a state for W calls.
     fn country(call: &str) -> Option<String> {
@@ -628,7 +636,10 @@ mod lockstep {
             }
             9 if n > 0 => {
                 let report = restated(&any(rng), "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC");
-                assert_eq!(sc.merge_lotw_report(&report), s1.merge_lotw_report(&report));
+                assert_eq!(
+                    sc.merge_lotw_report(&report, CALL),
+                    s1.merge_lotw_report(&report, CALL)
+                );
                 "LoTW confirmation"
             }
             10 if n > 0 => {
@@ -757,8 +768,8 @@ mod lockstep {
             20 if n > 0 => {
                 let text = restated(&any(rng), "");
                 assert_eq!(
-                    sc.merge_lotw_own_echo(&text, 7),
-                    s1.merge_lotw_own_echo(&text, 7)
+                    sc.merge_lotw_own_echo(&text, 7, CALL),
+                    s1.merge_lotw_own_echo(&text, 7, CALL)
                 );
                 "LoTW own echo"
             }
@@ -851,11 +862,11 @@ mod lockstep {
         assert_same(&sc, &s1, "the upload stamp");
         let echo = restated(&r, "");
         assert_eq!(
-            sc.merge_lotw_own_echo(&echo, 7),
+            sc.merge_lotw_own_echo(&echo, 7, CALL),
             0,
             "premise: nothing newly promoted"
         );
-        assert_eq!(s1.merge_lotw_own_echo(&echo, 7), 0);
+        assert_eq!(s1.merge_lotw_own_echo(&echo, 7, CALL), 0);
         let stamp = s1.logbook.records()[0]
             .upload
             .lotw

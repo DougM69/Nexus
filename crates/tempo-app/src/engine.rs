@@ -22,20 +22,59 @@ mod clock_repair_hold_tests;
 /// A message of several overs part-way through, which a clock repair must not pause.
 #[cfg(test)]
 mod clock_repair_message_tests;
+/// The host's club log as its own screen lists it: the host's alone, newest first, and the Club
+/// ADIF's contacts by value.
+#[cfg(test)]
+mod club_log_tests;
+/// The contacts a laptop still owes its club once the mode has left the contest: counted and
+/// sent, and only to that club, in that running, for that contest.
+#[cfg(test)]
+mod club_queue_tests;
+mod contest_before;
+/// The station as it was before the contest changed it: taken, kept, let go, round-tripped.
+#[cfg(test)]
+mod contest_before_tests;
+/// A dupe typed into the contest strip: logged, marked, worth nothing, in every contest.
+#[cfg(test)]
+mod contest_dupe_tests;
+pub mod contest_edit;
+/// Editing a contest contact in place, through the engine.
+#[cfg(test)]
+mod contest_edit_tests;
 pub mod contest_entry;
 /// The contest strip's contact in progress, shared with the logger window, through the engine.
 #[cfg(test)]
 mod contest_entry_tests;
+/// Each contest's own FT8/FT4 messages, Running and S&P, against a WSJT-X partner.
+#[cfg(test)]
+mod contest_ft_messages_tests;
+/// A contest log merged into the Logbook twice, across a move and a restart, through the engine.
+#[cfg(test)]
+mod contest_merge_tests;
+/// One power story per contest: Power category is what the log declares; Power sent and Field
+/// Day's power multiplier reach no shipped contest's log headers or sent exchange.
+#[cfg(test)]
+mod contest_power_tests;
 pub mod contest_removal;
 /// Removing the newest contest contact, through the engine.
 #[cfg(test)]
 mod contest_removal_tests;
+/// The plain modes never wait on the contest picked in Settings.
+#[cfg(test)]
+mod contest_setup_tests;
+pub mod contest_unmerged;
 mod field_day_display;
+/// Every contact held in one form: one band, one phone mode, whichever way it came in.
+#[cfg(test)]
+mod held_form_tests;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
 mod kept_files_tests;
 mod mode_entry;
 pub mod parsec_presence;
+/// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
+#[cfg(test)]
+mod pick_switch_tests;
 pub mod radio_selection;
 pub mod receivers;
 pub mod remote_logging;
@@ -45,10 +84,16 @@ pub mod remote_selection;
 mod remote_settings;
 pub mod remote_stream;
 pub mod remote_transmit;
+/// A restored backup opens its contest session as a settings save does. Debug builds only, like
+/// `session_tests`: they read the debug build's counters.
+#[cfg(all(test, debug_assertions))]
+mod restore_session_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
 pub mod slices;
+#[cfg(test)]
+mod stop_hold_tests;
 pub mod sub_controls;
 mod tx_alarms;
 #[cfg(test)]
@@ -106,7 +151,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tempo_core::contest::ContestSession;
-use tempo_core::fieldday::FieldDayStation;
+use tempo_core::fieldday::{FieldDayStation, FtMessages};
 use tempo_core::logbook::QsoRecord;
 use tempo_core::qso::{State as QsoState, Station as QsoStation};
 use tempo_core::qsy::{Directive, Roamer};
@@ -1562,14 +1607,18 @@ const AB_NO_DRIVABLE_MAPPING: &str =
     "Nexus drives Main = downlink / Sub = uplink only through its own native CI-V backend, and \
      that backend has no path to this radio — so no VFO mapping carries this pass's uplink here.";
 
-/// What [`Engine::send_voice`] answers while the radio has the mic (Nexus's own Flex client with
-/// native audio on, Phone at the shack). The keyer says it first, in the operator's language,
-/// from the snapshot; this English answer is for a send that reaches the engine anyway.
-const FLEX_RADIO_HAS_MIC: &str = "The voice keyer can't play while the radio has the mic: with \
-     Flex native DAX audio on, Phone at the shack uses the radio's own mic, so a recorded message \
-     would not go out. Nothing was keyed.";
-/// …and what [`Engine::aprs_tx_gate`] answers then, for a beacon or a message: the APRS cockpit
-/// says it first, in the operator's language.
+/// The longest voice-keyer message Nexus's own Flex client plays while the radio has the mic, in
+/// samples at the keyer's 12 kHz: 20 seconds, what the client's DAX transmit queue holds. The queue
+/// keeps the newest audio past that, so a longer message would lose its start and go out with dead
+/// air at its end. The client's queue is checked against it where it is defined.
+pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
+/// What [`Engine::send_voice`] answers for a message longer than that.
+const FLEX_VOICE_TOO_LONG: &str = "The voice keyer can't play this message through the Flex \
+     native client: it is longer than 20 seconds, the most the client's DAX carries, so its start \
+     would be lost. Nothing was keyed.";
+/// What [`Engine::aprs_tx_gate`] answers while the radio has the mic (Nexus's own Flex client with
+/// native audio on, a voice mode), for a beacon or a message: the APRS cockpit says it first, in
+/// the operator's language.
 const APRS_RADIO_HAS_MIC: &str = "APRS can't send while the radio has the mic: with Flex native \
      DAX audio on, a voice mode such as FM uses the radio's own mic, so the packet would not go \
      out. Nothing was keyed.";
@@ -2751,6 +2800,31 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// ⭐ **The contest log the mode left, kept for club sync, and when it left it**
+    /// ([`Self::fd_sync_log`]).
+    ///
+    /// Club sync runs whatever the operating mode (hosting on, or a join address set), while the
+    /// contest log lives in `Mode::FieldDay`. Every send and every count read it there, so a laptop
+    /// whose Contest mode went off with contacts queued counted none and sent none until the mode
+    /// came back on: at the end of a party, never. So the log stays here as the mode leaves Field
+    /// Day, for Chat or for another mode ([`Self::leave_field_day`], `set_mode`), and is let go as
+    /// Field Day is entered again, whose journal restore brings the same rows back, and as the
+    /// club link is pointed at another club (`apply_settings`): its rows were that club's. Nothing
+    /// logs into it; club sync only reads it.
+    fd_left_log: Option<(tempo_core::fieldday::FieldDayLog, u64)>,
+    /// ⭐ **Which position pump owns the club link** ([`Self::fd_link_take_over`]): the
+    /// generation the newest pump's bridge carries. The shell's supervisor stops a pump and
+    /// starts the next for the same address when the contest changes; the stopped one notices
+    /// within a quarter of a second and then reports its link down, and on a LAN the next one is
+    /// often in by then. That late report took the chip Offline and the line to "Lost the host"
+    /// while the new link was up. Every call a pump makes into the mirror is checked against
+    /// this, so a stopped pump's last calls land on nothing.
+    fd_link_gen: u64,
+    /// The host's network addresses as its beacon last listed them (`fdsync::lan_addrs`): where
+    /// its hosting line tells a joiner to join. Empty while not hosting.
+    fd_host_lan: Vec<tempo_net::fdsync::LanAddr>,
+    /// Why hosting is not up, as the shell's supervisor last found ([`Self::fd_host_result`]).
+    fd_host_failure: Option<crate::fdevent::HostFailure>,
     /// ⛔ **This position's club key** — what its JOIN proves the position with, which the shell
     /// reads (or makes) once at startup and hands here ([`Self::set_fd_position_key`]). Held
     /// apart from Settings on purpose: Settings reach the screen, Remote and settings.json, and
@@ -2768,6 +2842,16 @@ pub struct Engine {
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
+    /// ⛔ **A STOP HOLDS** until the operator's own act turns TX back on (the operator,
+    /// 2026-10-11: "After Stop TX, Esc or the watchdog, TX stays off until your own act").
+    /// Set by every halt ([`Engine::halt_tx`]: Stop TX, Esc, an FT Halt, WSJT-X's HaltTx, the
+    /// Remote's Stop, a rig or SWR failure) and by the operator's TX Off
+    /// ([`Engine::set_tx_enabled_by_operator`]). A tripped watchdog holds by its own flag, and
+    /// keeps holding through a watchdog restart that is not an arm ([`Engine::reset_tx_watchdog`]).
+    /// Every arm clears it ([`Engine::set_tx_enabled`], and [`Engine::send_cw`]'s own). Read in
+    /// one place: entering Phone, CW, RTTY or PSK arms TX only while nothing holds it. It keys,
+    /// refuses and stops nothing itself. Runtime only, never persisted.
+    tx_stop_hold: bool,
     /// One-shot "cut the shared TX hold NOW" — armed by [`Engine::halt_tx`] (Stop TX /
     /// UDP HaltTx / CAT-failure halts), by every TX-watchdog trip, and by the cockpit
     /// Stop buttons ([`Engine::stop_cw`] / [`Engine::rtty_stop`] / [`Engine::sstv_stop`],
@@ -2832,9 +2916,9 @@ pub struct Engine {
     /// [`Self::observe_flex_dax_tx`].
     flex_dax_tx: bool,
     /// The radio has the mic while Nexus's native Flex audio is on (Phone at the shack, or APRS
-    /// in FM), so a recorded message, a packet or a picture sent over DAX would not reach the
-    /// air. The voice keyer, APRS and SSTV refuse while it stands; see
-    /// [`Self::observe_flex_radio_has_mic`].
+    /// in FM), so a packet or a picture sent over DAX would not reach the air: APRS and SSTV
+    /// refuse while it stands, and a voice-keyer message waits for the radio to take DAX for it;
+    /// see [`Self::observe_flex_radio_has_mic`].
     flex_radio_has_mic: bool,
     /// While Nexus's own Flex client tunes with the radio's own carrier: what the radio reports
     /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
@@ -2863,6 +2947,9 @@ pub struct Engine {
     /// window (band map / board) can prefill the MAIN window's log Call field. Cleared on a
     /// call-less work so a stale call never prefills.
     work_call: Option<String>,
+    /// The park or summit of the last worked spot, when a Needed row named one: the MAIN window's
+    /// log line fills it with `work_call`. Cleared with `work_call`; never a hunt, never a tag.
+    work_park: Option<crate::dto::WorkPark>,
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
@@ -3045,7 +3132,8 @@ pub struct Engine {
     /// would trip the hard-stop path and cut the 73 itself mid-over.
     pending_tx_disable: bool,
     /// Deferred WSJT-X-style CW ID (armed when the final 73 leaves; consumed
-    /// by the service on TX-idle so the ID never keys over the FT8 audio).
+    /// by the service on TX-idle so the ID never keys over the over's audio).
+    /// Never armed in FT8, FT4, FT2, FT1 or DX1 (WSJT-X sends none in FT8/FT4).
     pending_cw_id: bool,
     /// JTAlert-style callsign highlights from UDP HighlightCallsign (type 13):
     /// uppercased call → (bg, fg) CSS hex. None/None entries are removed.
@@ -3392,6 +3480,10 @@ pub struct Engine {
     /// every word it hands a keyer, so a word that keys clears a refusal; cleared too when the
     /// operator switches keyer back-end.
     cw_keyer_error: Option<String>,
+    /// The operator's own paddle took over from Nexus's CW and the rest of the message was
+    /// dropped ([`Self::cw_operator_break`]): the CW screen's information line, until the next
+    /// send.
+    cw_paddle_took_over: bool,
     /// Worked-station QRZ info for the `{HISNAME}`/`{HISSTATE}` CW-macro tokens, pushed by the
     /// frontend on a callbook lookup and keyed to the contact (`cw_peer_call`) so a stale
     /// lookup can't key the wrong name. All empty until a lookup resolves. See `set_cw_peer_info`.
@@ -3615,6 +3707,15 @@ pub struct Engine {
     /// held), keys PTT, plays it, and drops PTT when it's out — the same path the soundcard CW
     /// keyer uses. Set by `send_voice`.
     voice_tx: Option<Vec<f32>>,
+    /// When the pending message was queued for Nexus's own Flex client's DAX switch, the radio
+    /// having the mic: the radio loop asks the radio for DAX, keys only once it reports it, and
+    /// drops the message when that has not happened 2 seconds after the press, or something else
+    /// keys first ([`Engine::voice_waits_for_dax`]). `None` for a message the radio takes as it
+    /// is.
+    voice_dax: Option<Instant>,
+    /// The last such message the Flex client dropped without keying, and why
+    /// ([`Engine::drop_flex_voice`]). Kept until the keyer accepts the next message.
+    voice_dropped: Option<crate::dto::VoiceDropped>,
     /// One-shot voice-keyer abort: the loop flushes the output ring + unkeys, then clears it.
     voice_abort: bool,
     /// True while recording a voice message — the radio loop appends captured audio to
@@ -5346,6 +5447,9 @@ impl Engine {
         for r in &mut settings.radios {
             r.last_band = crate::bandplan::canonical_band(&r.last_band);
         }
+        // A note of the station before the contest, stored with the mode off and no contest near,
+        // is one whose contest is over or an earlier build's everyday one (`contest_before.rs`).
+        Self::forget_an_everyday_note(&mut settings);
         let mut app = AppState::new(&settings.mycall, &settings.mygrid);
         app.set_radio(settings.dial_mhz, &settings.band, &settings.sideband);
         app.set_implicit_ack(settings.chat_implicit_ack);
@@ -5430,6 +5534,10 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_left_log: None,
+            fd_link_gen: 0,
+            fd_host_lan: Vec::new(),
+            fd_host_failure: None,
             fd_position_key: Default::default(),
             fd_position_key_hash: String::new(),
             fd_forwarded_seq: 0,
@@ -5441,6 +5549,8 @@ impl Engine {
             // station / arming Monitor all set it true explicitly. (Fixes the reported
             // unsolicited call on open.)
             tx_enabled: false,
+            // …and nothing has stopped it yet, so the first manual-mode entry arms as always.
+            tx_stop_hold: false,
             slot_tx_abort: false,
             skip_tx1: false,
             tuning: false,
@@ -5464,6 +5574,7 @@ impl Engine {
             work_tick: 0,
             work_view: None,
             work_call: None,
+            work_park: None,
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
@@ -5583,6 +5694,7 @@ impl Engine {
             cw_queue: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
+            cw_paddle_took_over: false,
             cw_peer_call: String::new(),
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
@@ -5649,6 +5761,8 @@ impl Engine {
             broker_ptt: false,
             broker_context_hold: false,
             voice_tx: None,
+            voice_dax: None,
+            voice_dropped: None,
             voice_abort: false,
             recording: false,
             record_buf: Vec::new(),
@@ -5888,8 +6002,8 @@ impl Engine {
     /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place.
     ///
     /// The operating mode is touched ONLY to reconcile Field Day with the
-    /// `fd_active` master switch — a contact in flight survives a save and stays
-    /// loggable (#100). Still heavyweight in every other respect: the TX gate
+    /// `fd_active` master switch and the contest pick — a contact in flight survives a
+    /// save and stays loggable (#100). Still heavyweight in every other respect: the TX gate
     /// generation bumps and the TX/broadcast queues are cleared, so a save is
     /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
     /// and the other narrow setters — #54).
@@ -5919,6 +6033,9 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // The address the club link line is about, before the save: a save that moves it
+        // starts the line afresh at the end of this function.
+        let club_target_was = self.fd_sync_targets().1;
         // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
         // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
         // new settings land, because after the assignment the old answer is gone and the edge is
@@ -5944,6 +6061,10 @@ impl Engine {
         // submode fields live in `Settings`, so this can change under us. See the
         // decoder rebuild at the end of this function.
         let kind_before = self.tier_mode_kind(self.tier());
+        // Whether this save moves the contest pick off the contest running, read before the new
+        // settings land for the same reason: the reconcile below ends that session and opens the
+        // new one ([`Self::save_switches_contest`]).
+        let switches_contest = self.save_switches_contest(&s);
         // Rebind identity IN PLACE (not a fresh AppState) so editing the callsign or
         // grid in Settings — or a GPS/UDP grid update routed through a save — does
         // NOT wipe conversation history, the `*` band feed, or the roster.
@@ -6073,6 +6194,17 @@ impl Engine {
         } else {
             s.active_radio
         };
+        // THE NOTE OF THE STATION BEFORE THE CONTEST is the engine's (`contest_before.rs`): read
+        // what it covers before the save lands, and hold the engine's own note over the payload's.
+        let contest_was = crate::settings::ContestBefore::of(&self.settings);
+        let contest_was_active = self.settings.fd_active;
+        let live_contest_before = self.settings.contest_before.take();
+        // …and the call and class a hosted club's files are written under: the save that turns
+        // the mode off holds them there (`fdevent::ClubLog::note_host_settings`).
+        let hosted_was = (
+            contest_was.mycall.clone(),
+            contest_was.contest_entry_class.clone(),
+        );
         self.settings = s;
         // A settings save can carry a new position id.
         self.sync_log_posid();
@@ -6124,6 +6256,18 @@ impl Engine {
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
             self.settings.macros.psk_profiles = live_psk_profiles;
             self.settings.macros.active_psk_profile = live_active_psk_profile;
+            // A form never writes or wipes the note; the save itself may take it or end it.
+            self.settings.contest_before = live_contest_before;
+            self.note_contest_before(contest_was, contest_was_active);
+        }
+        if let Some(club) = self.fd_club.as_mut() {
+            club.note_host_settings(
+                (&hosted_was.0, &hosted_was.1),
+                (&self.settings.mycall, &self.settings.contest_entry_class),
+                contest_was_active,
+                self.settings.fd_active,
+                now_unix_secs(),
+            );
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -6234,6 +6378,15 @@ impl Engine {
         // generation still bumps and the TX/broadcast queues are still cleared
         // below, so no over planned before the save can key after it.
         if self.settings.fd_active {
+            // ⭐ A NEW PICK TAKES EFFECT ON SAVE: a save that moves the pick off the contest
+            // running ends that session here and the restore below opens the new one — the
+            // master's off half, then its on half, so the save switches exactly as turning the
+            // mode off and on does (the journal keeps the two contests' rows apart, and the new
+            // one is entered passive, in S&P). Only the pick moving does this; every other save
+            // with the master on keeps the session, as below.
+            if switches_contest {
+                self.leave_field_day();
+            }
             // Master ON. PRESERVE an already-active FD session in place: the
             // Mode::FieldDay variant carries the whole dupe-checked contest log
             // in memory, and rebuilding it would drop everything logged since
@@ -6263,13 +6416,7 @@ impl Engine {
             // Gated on actually being in FD (#100): a save made in Chat wrote
             // Chat — a no-op — and a save made mid-QSO wrote away the contact.
             // Only the FD exit ever needed this line.
-            self.mode = Mode::Chat;
-            // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
-            // sets it, and leaving it stale-true after the exit suppresses the
-            // smart auto-cycle on the next chat answer. Scoped to the reset for
-            // the same reason: outside an FD exit the flag belongs to the run
-            // that is still going.
-            self.cq_running = false;
+            self.leave_field_day();
         }
         // …and the RTTY auto-sequencer is reconciled with the SAME switch, for the same
         // reason the mode is: it caches the exchange it was armed with, so the master
@@ -6331,12 +6478,20 @@ impl Engine {
         if scope_was_on && !scope_now {
             self.clear_scope_state();
         }
+        // Another join address (or hosting switched on or off): what the link line knew was
+        // about another host.
+        if self.fd_sync_targets().1 != club_target_was {
+            self.fd_mirror.forget_host();
+            // …and the contacts the mode left were that host's to have ([`Self::fd_left_log`]).
+            self.fd_left_log = None;
+        }
     }
 
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
     /// on. Called by the shell at startup (AFTER [`set_fd_log_path`](Self::set_fd_log_path),
     /// so the durable journal restores the contest log) and by
-    /// [`apply_settings`](Self::apply_settings) when a save turns the master on.
+    /// [`apply_settings`](Self::apply_settings) when a save turns the master on, or moves the
+    /// pick off the contest running.
     /// Enters passive S&P (`fieldday-sp`) so every cockpit goes FD-aware and the
     /// journal is merged in. This is the ONLY code path that auto-enters FD, and
     /// only because the operator left the master on — no date/default logic ever
@@ -6369,6 +6524,51 @@ impl Engine {
         self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. })
     }
 
+    /// Whether applying `next` opens a contest session — the question a settings SAVE hands
+    /// [`with_session_rows`] as `opens`, so the session's rows are read before the lock is taken:
+    /// the master on while Field Day is not running, and a save that moves the pick off the
+    /// contest running ([`Self::save_switches_contest`]), which ends that session and opens the
+    /// new one.
+    pub fn save_opens_session(&self, next: &Settings) -> bool {
+        next.fd_active
+            && (self.mode_opens_session("fieldday-sp") || self.save_switches_contest(next))
+    }
+
+    /// ⭐ **Whether saving `next` moves the contest pick off the contest running** — the save that
+    /// switches the session (`apply_settings`): Field Day is running, the pick moved in this
+    /// save, and not to the contest already running.
+    ///
+    /// Bound to the operator's act, the pick moving, and never to a difference between the pick
+    /// and the session: a pick the rules data cannot resolve runs Field Day's session under
+    /// another id, and a save that left that pick where it was would restart the contest, its CQ
+    /// run with it, on every bonus tick. Contests compare as club sync names them
+    /// ([`crate::fdevent::canonical_contest`]: the blank default is ARRL Field Day).
+    fn save_switches_contest(&self, next: &Settings) -> bool {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return false;
+        };
+        let picked = crate::fdevent::canonical_contest(&next.fd_event);
+        picked != crate::fdevent::canonical_contest(&self.settings.fd_event)
+            && picked != crate::fdevent::canonical_contest(&station.log.session.event_id)
+    }
+
+    /// Leave Field Day for Chat: the master switch's off half, and so the first half of a save
+    /// that switches the contest ([`Self::save_switches_contest`]) — one function, so both end
+    /// a session the same way.
+    fn leave_field_day(&mut self) {
+        // The contest log stays with club sync ([`Self::fd_left_log`]): contacts the host does not
+        // have yet still go up, and are still counted, with the mode off.
+        if let Mode::FieldDay { station, .. } = std::mem::replace(&mut self.mode, Mode::Chat) {
+            self.fd_left_log = Some((station.log, now_unix_secs()));
+        }
+        // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
+        // sets it, and leaving it stale-true after the exit suppresses the
+        // smart auto-cycle on the next chat answer. Scoped to the reset for
+        // the same reason: outside an FD exit the flag belongs to the run
+        // that is still going.
+        self.cq_running = false;
+    }
+
     /// Is the contest the picker names one of the two Field Day events (or the blank
     /// default, which is ARRL Field Day)? The same test `set_mode` applies before it
     /// asks for a class and section, so the two cannot disagree about which contests
@@ -6382,9 +6582,11 @@ impl Engine {
     /// no TX-queue clear, no QSY reconcile). Returns the updated [`Settings`] so the
     /// caller can persist them. The LoTW confirmation download must be invisible to
     /// live operation — a mid-QSO sync must not kick the operator back to Chat or
-    /// drop queued TX.
+    /// drop queued TX. The high-water is a download of every call on the account's, which is
+    /// what lets the next download ask from it (`Settings::lotw_cursor_every_call`).
     pub fn set_lotw_cursor(&mut self, high_water: String) -> Settings {
         self.settings.lotw_last_qsl = high_water;
+        self.settings.lotw_cursor_every_call = true;
         self.settings.clone()
     }
 
@@ -6480,7 +6682,9 @@ impl Engine {
     /// the three callers cannot disagree about the stored shape; returns the updated
     /// [`Settings`] for the caller to persist.
     pub fn set_fd_operator(&mut self, call: String) -> Settings {
+        let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.fd_operator = call.trim().to_ascii_uppercase();
+        self.note_contest_before(was, self.settings.fd_active);
         // The next contact is theirs, whichever path logs it (the digital sequencer's
         // included), so the running log learns the name now rather than at the next QSY.
         let operator = self.fd_row_operator();
@@ -6658,14 +6862,17 @@ impl Engine {
             }
         };
         let (on_air_mhz, on_air_rx_mhz) = self.log_frequencies();
-        // …and who is at the key, which a Save can change exactly as it changes the band.
+        // …and who is at the key, which a Save can change exactly as it changes the band, and
+        // the call on the air.
         let operator = self.fd_row_operator();
+        let on_air_call = self.fd_row_call();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
             station.log.on_air_hz = hz(on_air_mhz);
             station.log.on_air_rx_hz = on_air_rx_mhz.map(hz).filter(|v| *v > 0);
             station.log.operator = operator;
+            station.log.on_air_call = on_air_call;
         }
     }
 
@@ -6675,6 +6882,13 @@ impl Engine {
     /// chose would be indistinguishable from one somebody did.
     fn fd_row_operator(&self) -> String {
         self.settings.fd_operator.trim().to_ascii_uppercase()
+    }
+
+    /// The call a contest row is logged on (`LoggedQso::on_air_call`): Settings' "Callsign on the
+    /// air", uppercase, as the JOIN sends it to a club's host. Club sync keeps a contact logged on
+    /// another call than the club's out of the club's log ([`Self::fd_on_another_call`]).
+    fn fd_row_call(&self) -> String {
+        self.settings.mycall.trim().to_ascii_uppercase()
     }
 
     /// ⭐ **The contest whose rules forbid posting a spot over the internet RIGHT NOW**, by its
@@ -7612,12 +7826,17 @@ impl Engine {
     /// On a radio Nexus's own Flex client serves, the transmit slice's mode decides where the
     /// transmitter takes its audio from (operator ruling, 2026-10-03): DAX for the digital modes
     /// and the stream's browser voice, the radio's own mic for Phone at the shack. Audio Nexus
-    /// makes still leaves over DAX, so while the radio has the mic a recorded voice message would
-    /// not reach the air and the mic would carry the over in its place. The voice keyer refuses
-    /// while this stands and keys nothing (operator ruling, 2026-10-04, "Refuse with a message"),
-    /// and so do APRS and SSTV, whose packets and pictures leave over DAX the same way: APRS in
-    /// FM, a voice mode to the radio, and SSTV in plain SSB (operator ruling, 2026-10-04, "Refuse
-    /// like the voice keyer"). An automatic APRS ack that can't go out is skipped and logged.
+    /// makes still leaves over DAX, so while the radio has the mic a packet or a picture would not
+    /// reach the air and the mic would carry the over in its place: APRS and SSTV refuse while
+    /// this stands and key nothing, APRS in FM, a voice mode to the radio, and SSTV in plain SSB
+    /// (operator ruling, 2026-10-04, "Refuse like the voice keyer"; kept 2026-10-12, "Stay
+    /// refused"). An automatic APRS ack that can't go out is skipped and logged.
+    ///
+    /// The voice keyer plays then, through a switch around each message (operator ruling,
+    /// 2026-10-12, "Change it now", which replaced the refusal of 2026-10-04): a message sent while
+    /// this stands waits for the radio to take DAX for it ([`Self::send_voice`],
+    /// [`Self::voice_waits_for_dax`]). The client keeps this standing while the radio is on DAX
+    /// only for such a message, so APRS and SSTV stay refused through it.
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
@@ -8404,6 +8623,15 @@ impl Engine {
         // still waits for an explicit operator send. (Digital is NOT auto-armed: the FT8
         // slot TX stays behind the Monitor / double-click / Call-CQ gate, so the app
         // never auto-keys FT8 on launch — the safety invariant.)
+        //
+        // ⛔ …BUT NEVER BEHIND A STOP (the operator, 2026-10-11: "Stop holds"). After Stop TX,
+        // Esc, TX Off, an FT Halt or the watchdog, TX stays off until the operator's own act
+        // turns it back on: TX On, a CW F-key, the first PTT press, RTTY's TX button, or an FT
+        // arm (`tx_stop_hold`). Entry is not one of those, and the UI re-asserts the section on
+        // every view change, so this arm used to undo a stop on a trip to the Contest screen and
+        // back: ESM's Enter then sent against its rule 5, a program on the CAT share could key,
+        // and the watchdog's trip was cleared. With nothing held (at launch, or coming from FT8
+        // with no Halt) entry arms as it always has.
         if matches!(
             om,
             OperatingMode::Phone
@@ -8411,7 +8639,7 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         ) {
-            if arm_manual {
+            if arm_manual && !self.tx_stop_hold && !self.tx_watchdog {
                 self.set_tx_enabled(true);
             }
         } else if left_a_manual_mode {
@@ -8604,6 +8832,7 @@ impl Engine {
         self.work_tick += 1;
         self.work_view = Some(mode.to_string());
         self.work_call = None; // the command that has the call sets it via note_work_call
+        self.work_park = None; // …and the park, via note_work_park
     }
 
     /// Tune to an SSTV calling channel: claim the PHONE section (SSTV rides Phone — idle is
@@ -8688,6 +8917,16 @@ impl Engine {
     /// window's log directly, so the call rides the snapshot and the main window prefills from it.
     pub fn note_work_call(&mut self, call: Option<String>) {
         self.work_call = call.filter(|c| !c.trim().is_empty());
+    }
+
+    /// Record the park or summit of the just-worked Needed row, after [`Self::note_work_call`]
+    /// (same lock). The main window's log line fills it with the call: a pop-out board's click
+    /// reaches that line only through the snapshot, and setting a hunt to carry it there left a
+    /// "Hunted" park waiting for four hours after a station the operator never heard. A park with
+    /// no call to belong to, or a blank reference, is dropped.
+    pub fn note_work_park(&mut self, park: Option<crate::dto::WorkPark>) {
+        self.work_park =
+            park.filter(|p| self.work_call.is_some() && !p.reference.trim().is_empty());
     }
 
     /// Request a RIT (receive incremental tuning) offset in Hz (0 = off); the radio loop applies it.
@@ -9457,15 +9696,41 @@ impl Engine {
     /// `ContestSession::move_to` writes that number into `my_exchange` — after which
     /// `serial_now`'s no-in-flight branch parses it and returns it instead of
     /// `next_serial`, and **the run freezes at that number for the rest of the
-    /// contest**. Unreachable today only because `contest_i_moved` refuses any exchange
-    /// not named `"fieldday"`, which arms the moment the `contest_qth_*` mirror lands.
-    /// So the rendered string and the editable vector are deliberately two things.
+    /// contest**. Unreachable because `contest_i_moved` lets a move change only where the
+    /// operator is — Field Day's class and section, a QSO party's QTH — and refuses a
+    /// serial by name (`ContestSession::check_move`). So the rendered string and the
+    /// editable vector are deliberately two things.
+    ///
+    /// ⚠️ **The report is the session's, the 3-digit form** — what a CW or digital
+    /// contact sends. A phone contact sends `59`, and reads
+    /// [`contest_composing_text_phone`](Self::contest_composing_text_phone).
     pub fn contest_composing_text(&self) -> Option<String> {
+        self.composing_text_as(None)
+    }
+
+    /// ⭐ **The same exchange as a PHONE contact sends it** — the report at phone's two
+    /// digits, `59 MCHE` where [`contest_composing_text`](Self::contest_composing_text) reads
+    /// `599 MCHE`. The session has no mode, so it holds the 3-digit constant, and a phone row
+    /// is stamped `59` when it is logged (`ContestSession::fit_sent_rst`, from `tx_for_row`).
+    /// This is rendered through that same function, so the line the phone operator reads
+    /// aloud and the row the file carries cannot disagree: the phone cockpit's Give line and
+    /// a phone strip's Sending line read this. An exchange with no report reads the same.
+    pub fn contest_composing_text_phone(&self) -> Option<String> {
+        self.composing_text_as(Some("PH"))
+    }
+
+    /// The composing exchange in send order, with the issued serial, and — for a
+    /// `mode_class` — its report fitted as a row of that class is stamped.
+    fn composing_text_as(&self, mode_class: Option<&str>) -> Option<String> {
         use tempo_core::contest::FieldKind;
         let Mode::FieldDay { station, .. } = &self.mode else {
             return None;
         };
         let session = &station.log.session;
+        let mut sent = session.my_exchange.clone();
+        if let Some(class) = mode_class {
+            session.fit_sent_rst(&mut sent, class);
+        }
         let serial = session.serial_now();
         let words: Vec<String> = session
             .role()
@@ -9474,7 +9739,12 @@ impl Engine {
             .filter_map(|key| match session.exchange.field(key).map(|f| f.kind) {
                 None => None,
                 Some(FieldKind::Serial { .. }) => serial.map(|n| n.to_string()),
-                Some(_) => Some(session.field(key).to_string()),
+                Some(_) => Some(
+                    sent.iter()
+                        .find(|v| v.key == *key)
+                        .map(|v| v.raw.clone())
+                        .unwrap_or_default(),
+                ),
             })
             .filter(|v| !v.is_empty())
             .collect();
@@ -9622,14 +9892,19 @@ impl Engine {
         }
         if !expanded.trim().is_empty() {
             // A deliberate CW send (F-key macro or typed text) IS the transmit action, so RE-ARM
-            // TX — exactly like entering a manual mode arms it (`set_operating_mode`). Without this,
-            // a prior Stop TX / halt_tx (which disables tx_enabled to stop the FT8 auto-sequencer)
-            // leaves `poll_cw_one` gated off, so the next F-key silently queues but never keys until
-            // the operator re-enters the mode (a band/contact switch). CW is manual keying: hitting
-            // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
-            // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
+            // TX. Without this, a prior Stop TX / halt_tx (which disables tx_enabled to stop the
+            // FT8 auto-sequencer) leaves `poll_cw_one` gated off, so the next F-key silently queues
+            // but never keys. CW is manual keying: hitting the key must always transmit (privilege
+            // permitting — tx_allowed still gates). FT8 is unaffected: it never calls send_cw and
+            // keeps its Monitor/double-click keying gate.
+            //
+            // It is the operator's own act, so it ends a stop's hold, a watchdog trip's included,
+            // as TX On does (`tx_stop_hold`): entering a cockpit after it arms again. Entry alone
+            // never re-arms behind a stop; this does.
             tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
+            self.tx_stop_hold = false;
+            self.tx_watchdog = false;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
             // radio loop's mid-over cut. `send_cw` is the only self-re-arming transmit
             // action, so it is the one path where a Stop TX the loop has not consumed yet
@@ -9699,6 +9974,8 @@ impl Engine {
     /// Queue an EXPANDED CW message for the radio loop, shared by [`Self::send_cw`] and
     /// [`Self::send_cw_armed`], which have already decided it may go.
     fn queue_cw(&mut self, expanded: String) {
+        // A new send is the operator's next key: the paddle's line has been read.
+        self.cw_paddle_took_over = false;
         // TX echo: show the operator what actually went out (tokens resolved).
         self.cw_sent.push_back(expanded.clone());
         while self.cw_sent.len() > 50 {
@@ -9832,6 +10109,33 @@ impl Engine {
     /// Take + reset the one-shot CW abort flag (the loop calls `rig.stop_morse`).
     pub fn take_cw_abort(&mut self) -> bool {
         std::mem::take(&mut self.cw_abort)
+    }
+
+    /// The operator's own paddle or key took over from Nexus's CW: Nexus's Flex client saw the
+    /// radio report it keying during a message and cleared the radio's CW buffer (operator
+    /// ruling, 2026-10-12: the paddle wins). Every word still queued is dropped and never resent,
+    /// and the CW screen says so, in place of a warning.
+    ///
+    /// ⛔ NOT STOP TX. No halt, no stop hold, no TX off, no CW abort and no slot-TX abort: the
+    /// abort's `\stop_morse` and the hard stop's `T 0` are stops, and with nothing of ours left on
+    /// the air a stop is aimed at whatever the radio says is ours, which here is the operator's
+    /// own keying. The next send passes every gate [`Self::poll_cw_one`] holds, as always.
+    pub fn cw_operator_break(&mut self) {
+        if !self.cw_queue.is_empty() {
+            tempo_core::applog::info(
+                "tx",
+                "CW: the operator's paddle took over; the rest of the message is dropped",
+            );
+        }
+        self.cw_queue.clear();
+        self.cw_keyer_error = None;
+        self.cw_paddle_took_over = true;
+    }
+
+    /// Whether the CW screen shows that the operator's paddle took over from Nexus's CW
+    /// ([`Self::cw_operator_break`]), until the next send.
+    pub fn cw_paddle_took_over(&self) -> bool {
+        self.cw_paddle_took_over
     }
 
     /// The radio refused the key for the CW word the loop just took from [`Self::poll_cw_one`]
@@ -10912,11 +11216,18 @@ impl Engine {
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
 
     /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. REFUSED while
-    /// TX is disabled (Monitor), the dial is outside the licence's privileges, or the radio has
-    /// the mic ([`Self::observe_flex_radio_has_mic`]), so a stray F-key never keys unexpectedly
-    /// and a message never puts the mic on the air in its place: nothing is queued, the log says
-    /// why, and so does the `Err`, which the keyer's toast shows. It used to be ignored without a
-    /// word. Replaces any still-pending message (one voice over at a time).
+    /// TX is disabled (Monitor) or the dial is outside the licence's privileges, so a stray F-key
+    /// never keys unexpectedly: nothing is queued, the log says why, and so does the `Err`, which
+    /// the keyer's toast shows. It used to be ignored without a word. Replaces any still-pending
+    /// message (one voice over at a time).
+    ///
+    /// While the radio has the mic ([`Self::observe_flex_radio_has_mic`]: Nexus's own Flex client,
+    /// native audio on, Phone at the shack) the message goes out through a switch around it
+    /// (operator ruling, 2026-10-12, "Change it now"): it waits for the radio to take its transmit
+    /// audio from DAX, keys only then, and the mic comes back after its proven unkey
+    /// ([`Self::voice_waits_for_dax`]). Two more refusals then: anything else already holding the
+    /// transmitter, in that transmission's own words, and a message longer than the client's DAX
+    /// can carry ([`FLEX_VOICE_MAX_SAMPLES`]), which would lose its start.
     pub fn send_voice(&mut self, samples: Vec<f32>) -> Result<(), String> {
         // A streamed operator's microphone over owns the transmitter from its arm: a canned
         // message queued under it would be appended to the output ring behind their voice, and
@@ -10927,16 +11238,6 @@ impl Engine {
                 "voice-keyer over refused: the Remote microphone is transmitting",
             );
             return Err(TxOwner::Mic.busy_reason());
-        }
-        // Nexus's own Flex client with native audio on, in Phone at the shack: the message would
-        // leave over DAX while the radio takes the mic, so the mic would carry the over. Refused
-        // before anything is queued, so nothing keys (operator ruling, 2026-10-04).
-        if self.flex_radio_has_mic {
-            tempo_core::applog::info(
-                "tx",
-                "voice-keyer message refused: the radio has the mic (Flex native audio)",
-            );
-            return Err(FLEX_RADIO_HAS_MIC.to_string());
         }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
@@ -10964,23 +11265,57 @@ impl Engine {
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
         }
+        if self.flex_radio_has_mic {
+            // The pending message is the one this replaces, not something else transmitting.
+            if let Some(owner) = self.tx_owner_beside_voice() {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!("voice-keyer message refused: {owner:?} holds the transmitter"),
+                );
+                return Err(owner.busy_reason());
+            }
+            if samples.len() > FLEX_VOICE_MAX_SAMPLES {
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "voice-keyer message refused: {} samples, longer than the Flex client's \
+                         DAX carries",
+                        samples.len()
+                    ),
+                );
+                return Err(FLEX_VOICE_TOO_LONG.to_string());
+            }
+        }
         if !samples.is_empty() {
             tempo_core::applog::info(
                 "tx",
-                &format!("voice-keyer over queued: {} samples", samples.len()),
+                &format!(
+                    "voice-keyer over queued: {} samples{}",
+                    samples.len(),
+                    if self.flex_radio_has_mic {
+                        ", waiting for the radio to take DAX"
+                    } else {
+                        ""
+                    }
+                ),
             );
             self.voice_tx = Some(samples);
+            self.voice_dax = self.flex_radio_has_mic.then(Instant::now);
+            self.voice_dropped = None;
         }
         Ok(())
     }
 
-    /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges,
-    /// and on the radio not having the mic).
+    /// Take the pending voice samples for the radio loop to play (gated on Monitor + privileges).
+    /// A message waiting for the radio to take DAX ([`Self::voice_waits_for_dax`]) is taken only
+    /// once the radio loop has seen the radio report it, and passes these same gates then.
     ///
     /// ⛔ A message REFUSED here is DROPPED, never held (operator, 2026-09-30: the rule CW, RTTY
     /// and PSK follow): TX went off, the dial left the privileges, or the radio took the mic,
     /// after it was queued. Held, it played the moment TX was allowed again. The log says why;
     /// the keyer has no warning line to carry it, its toasts being the answer to the send itself.
+    /// "The radio took the mic" is for a message queued while it did not have it, which would
+    /// leave over DAX with nobody switching the radio to it.
     pub fn poll_voice(&mut self) -> Option<Vec<f32>> {
         self.voice_tx.as_ref()?;
         let refused = if self.clock_repair_holds_tx() {
@@ -10991,11 +11326,12 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
-        } else if self.flex_radio_has_mic {
+        } else if self.flex_radio_has_mic && self.voice_dax.is_none() {
             Some("the radio has the mic (Flex native audio)")
         } else {
             None
         };
+        self.voice_dax = None;
         if let Some(why) = refused {
             tempo_core::applog::info(
                 "tx",
@@ -11007,10 +11343,37 @@ impl Engine {
         self.voice_tx.take()
     }
 
+    /// When the pending message was queued, if it waits for Nexus's own Flex client to switch the
+    /// radio's transmit audio to DAX ([`Self::send_voice`]). The radio loop's presence for the
+    /// client's routing (DAX, then the mic back), and its hold before [`Self::poll_voice`]: it
+    /// takes the message only once the radio reports DAX, and drops it
+    /// ([`Self::drop_flex_voice`]) when that has not happened 2 seconds after the press, or when
+    /// anything else keys first. A dropped message is never played later.
+    pub fn voice_waits_for_dax(&self) -> Option<Instant> {
+        self.voice_dax.filter(|_| self.voice_tx.is_some())
+    }
+
+    /// Drop the voice-keyer message Nexus's own Flex client could not play, and keep why for the
+    /// status lane ([`crate::dto::RadioStatus::voice_dropped`]): the radio did not take DAX in
+    /// time, or something else keyed first. The radio loop's call; nothing was keyed for it.
+    pub fn drop_flex_voice(&mut self, cause: crate::dto::VoiceDropCause) {
+        tempo_core::applog::info(
+            "tx",
+            &format!("voice-keyer message not played: {cause:?} (Flex native audio, dropped)"),
+        );
+        self.voice_tx = None;
+        self.voice_dax = None;
+        self.voice_dropped = Some(crate::dto::VoiceDropped {
+            at: now_unix_secs(),
+            cause,
+        });
+    }
+
     /// Abort voice playback in progress: drop any pending message + raise the one-shot
     /// abort flag so the loop flushes the output ring and unkeys.
     pub fn stop_voice(&mut self) {
         self.voice_tx = None;
+        self.voice_dax = None;
         self.voice_abort = true;
     }
 
@@ -11492,7 +11855,8 @@ impl Engine {
 
     /// Manually log a Field Day contact from the CW/Phone cockpits (the
     /// digital sequencer logs its own). `mode` = scoring class "CW" | "PH".
-    /// Returns false on a band+mode dupe (nothing logged).
+    /// A band+mode dupe is logged too, marked and worth nothing (`DupeRule::log_dupes`);
+    /// false means nothing was written.
     pub fn fd_log_manual(
         &mut self,
         call: &str,
@@ -11620,7 +11984,7 @@ impl Engine {
         // here, which is exactly why the row used to leave without it.
         let submode = submode.or(self.contest_phone_submode(mode, submode));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         let logged = match submode {
             Some(sub) => station
@@ -11945,8 +12309,10 @@ impl Engine {
     /// `QsoRecord`.**
     ///
     /// Safe to run twice, and safe to run again after a restart: every row carries
-    /// `APP_NEXUS_QID`, and a row whose qid is already in the general log is skipped.
-    /// An operator who is not sure whether they already merged can simply merge again.
+    /// `APP_NEXUS_QID`, and a row whose copy is already in the general log is skipped
+    /// ([`MergeIdentity::names`](tempo_core::contest::MergeIdentity::names)) — after "I moved"
+    /// or a County edited in Settings too, and whichever build merged it. An operator who is
+    /// not sure whether they already merged can simply merge again.
     ///
     /// ⚠️ **It does NOT go through [`log_qso`](Self::log_qso), and that is the whole of
     /// §12(A).** `log_qso` enqueues every record it writes with `legs: ALL`, which is
@@ -11964,7 +12330,7 @@ impl Engine {
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
         for _ in 0..crate::station::PLANS {
             if !self.in_field_day() {
-                return Err("Field Day mode is not active".into());
+                return Err("Contest mode is not active".into());
             }
             let plan = self.station.plan_in_breath();
             let seen = plan.merge_identities()?;
@@ -11980,18 +12346,19 @@ impl Engine {
         matches!(self.mode, Mode::FieldDay { .. })
     }
 
-    /// [`Self::fd_merge_to_general`], planned: `seen` is every merge identity the general log held
-    /// when `plan` was taken ([`crate::station::LogPlan::merge_identities`], read with the lock
-    /// released). Made under the lock only if the log has not changed since — a row it did not
-    /// read could carry an identity it would merge again — and `Ok(None)` otherwise, changing
-    /// nothing: the caller plans again.
+    /// [`Self::fd_merge_to_general`], planned: `seen` is every merged copy the general log held
+    /// when `plan` was taken, as its merge identity and when it was made
+    /// ([`crate::station::LogPlan::merge_identities`], read with the lock released). Made under
+    /// the lock only if the log has not changed since — a row it did not read could carry an
+    /// identity it would merge again — and `Ok(None)` otherwise, changing nothing: the caller
+    /// plans again.
     pub(crate) fn fd_merge_planned(
         &mut self,
         plan: &crate::station::LogPlan,
-        seen: std::collections::HashSet<String>,
+        seen: Vec<(String, u64)>,
     ) -> Result<Option<tempo_core::contest::MergeReport>, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         if !self.station.unchanged_at_all_since(plan) {
             return Ok(None);
@@ -12048,7 +12415,7 @@ impl Engine {
         destinations: Vec<String>,
     ) -> Result<(), String> {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
         station.log.session.upload.enabled = enabled;
         station.log.session.upload.destinations = destinations;
@@ -12076,25 +12443,37 @@ impl Engine {
     /// when the new location resolves to a different role (§3.3 ruling 3). Nothing is
     /// written in that case, in either place.
     ///
-    /// ⚠️ **The settings mirror is Field Day's, because that is the only one that
-    /// exists.** The general `contest_qth_*` block lands in batch 8 with the QSO
-    /// parties that need it (§11 item 8); until then a session running any other
-    /// exchange has no setting to write, and this refuses rather than stamping a
-    /// Field Day setting from a slot that is not a Field Day slot.
+    /// **The setting written is the one the moved slot is read from.** Field Day's class
+    /// and section are `fd_class` and `fd_section`. A QSO party's QTH is the location
+    /// itself: the in-state role's county is `contest_qth_county`, and every other role's
+    /// state, province or country is `contest_qth_state` — the settings the session was
+    /// built from. Any other slot, and any contest whose exchange carries no county, state
+    /// or province of the operator's, is refused with a sentence saying why
+    /// ([`ContestSession::check_move`](tempo_core::contest::ContestSession::check_move)).
     pub fn contest_i_moved(&mut self, values: Vec<(String, String)>) -> Result<Settings, String> {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
-            return Err("Field Day mode is not active".into());
+            return Err("Contest mode is not active".into());
         };
-        if station.log.session.exchange.name != "fieldday" {
-            return Err(
-                "this session's exchange has no settings mirror yet (contest_qth_* is batch 8)"
-                    .into(),
-            );
-        }
         let pairs: Vec<(&str, &str)> = values
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
+        if station.log.session.exchange.name != "fieldday" {
+            // Only where I am moves, and only where the sponsor's mobile rule — the dupe
+            // key's sent slots — makes a station that moves a new station.
+            let moves = station.log.dupe_rule().by_sent_fields;
+            let session = &mut station.log.session;
+            session.check_move(&pairs, moves)?;
+            // Both halves or neither, as below.
+            session.move_to(&pairs)?;
+            if session.role().id == "in_state" {
+                self.settings.contest_qth_county =
+                    session.my_location.county.clone().unwrap_or_default();
+            } else {
+                self.settings.contest_qth_state = session.my_location.state.clone();
+            }
+            return Ok(self.settings.clone());
+        }
         // Both halves or neither: a refused move returns before either write.
         station.log.session.move_to(&pairs)?;
         let (class, section) = (
@@ -12228,19 +12607,49 @@ impl Engine {
         ContestSession::for_ruleset(club.ruleset(), &self.contest_station_data())
     }
 
-    /// The entrant's own Cabrillo lines — `NAME`, `EMAIL`, `CLUB`, `ENTRY-CLASS` and the
-    /// typed `OPERATORS` — read from Settings at export, so a corrected typo reaches the
-    /// next file. One builder for both files that carry them: a position's own and the
-    /// club's.
+    /// The entrant's own Cabrillo lines — `NAME`, `EMAIL`, `CLUB`, `ENTRY-CLASS`, the typed
+    /// `OPERATORS`, the multi-operator class, the overlay, the mailing address, the soapbox and the
+    /// band category — read from Settings at export, so a corrected typo reaches the next file. One
+    /// builder for both files that carry them, a position's own and the club's, and for the lines
+    /// the Contest screen names as missing ([`FieldDayStatus::cabrillo_missing`]).
+    ///
+    /// [`FieldDayStatus::cabrillo_missing`]: crate::dto::FieldDayStatus::cabrillo_missing
     fn contest_entrant(&self) -> tempo_core::contest::CabrilloEntrant {
+        let s = &self.settings;
         tempo_core::contest::CabrilloEntrant {
-            name: self.settings.op_name.trim().to_string(),
-            email: self.settings.contest_email.trim().to_string(),
-            club: self.settings.contest_club.trim().to_string(),
-            entry_class: self.settings.contest_entry_class.trim().to_string(),
-            operators: self.settings.contest_operators.trim().to_string(),
-            objectives: self.settings.fd_objectives.clone(),
+            name: s.op_name.trim().to_string(),
+            email: s.contest_email.trim().to_string(),
+            club: s.contest_club.trim().to_string(),
+            entry_class: s.contest_entry_class.trim().to_string(),
+            operators: s.contest_operators.trim().to_string(),
+            objectives: s.fd_objectives.clone(),
+            transmitter: s.contest_category_transmitter.trim().to_string(),
+            overlay: s.contest_category_overlay.trim().to_string(),
+            address: tempo_core::contest::CabrilloAddress {
+                street: s.contest_address.clone(),
+                city: s.contest_address_city.trim().to_string(),
+                state_province: s.contest_address_state.trim().to_string(),
+                postal_code: s.contest_address_postalcode.trim().to_string(),
+                country: s.contest_address_country.trim().to_string(),
+            },
+            soapbox: s.contest_soapbox.clone(),
+            band: s.contest_category_band.trim().to_string(),
         }
+    }
+
+    /// ⭐ **The Cabrillo lines a contest started as `session` would leave out**, named on the
+    /// Contest screen before Contest mode turns on, so a declaration the session reads as it
+    /// starts (power, assistance) is made in time. Read the way the running log's are
+    /// ([`FieldDayStatus::cabrillo_missing`]): the header an empty log of `session` writes for the
+    /// entrant's Settings, with the operator at the key among its operators, because every contact
+    /// this station logs will carry that call ([`Self::fd_row_operator`]).
+    ///
+    /// [`FieldDayStatus::cabrillo_missing`]: crate::dto::FieldDayStatus::cabrillo_missing
+    pub fn cabrillo_missing_at_start(&self, session: ContestSession) -> Vec<&'static str> {
+        let mut entrant = self.contest_entrant();
+        entrant.operators = format!("{} {}", entrant.operators, self.fd_row_operator());
+        tempo_core::fieldday::FieldDayLog::new(&self.settings.mycall, session, &self.settings.band)
+            .cabrillo_missing(&entrant)
     }
 
     /// Start hosting: build the club log for the configured contest and replay
@@ -12288,6 +12697,98 @@ impl Engine {
     /// re-porting). The journal file stays — a restart replays it.
     pub fn fd_host_stop(&mut self) {
         self.fd_club = None;
+        self.fd_host_lan.clear();
+        self.fd_host_failure = None;
+    }
+
+    /// What the shell's supervisor found when it last tried to host: `None` = the port is open
+    /// and the club is up, `Some` = why not. The host's hosting line says which.
+    pub fn fd_host_result(&mut self, failure: Option<crate::fdevent::HostFailure>) {
+        self.fd_host_failure = failure;
+    }
+
+    /// The host's network addresses, as its beacon lists them each second. Ignored while not
+    /// hosting: a beacon thread's last second after a stop describes no club.
+    pub fn fd_note_host_lan(&mut self, lan: Vec<tempo_net::fdsync::LanAddr>) {
+        if self.fd_club.is_some() {
+            self.fd_host_lan = lan;
+        }
+    }
+
+    /// ⭐ **This laptop's club link** ([`crate::dto::ClubLinkDto`]), for the screens that show it
+    /// whatever the Field Day mode switch says. `None` while club sync does not run.
+    pub fn fd_club_link(&self) -> Option<crate::dto::ClubLinkDto> {
+        let addr = self.fd_sync_targets().1?;
+        let m = &self.fd_mirror;
+        let state = m.link_state();
+        let port = self.settings.fd_host_port;
+        let now = now_unix_secs();
+        // A position's link in the host board's words; the host's own loopback link is its
+        // hosting line's business.
+        let status = (!self.settings.fd_host_enable)
+            .then(|| m.status(now))
+            .flatten();
+        let hosting = self
+            .settings
+            .fd_host_enable
+            .then(|| crate::dto::ClubHostingDto {
+                up: self.fd_club.is_some() && self.fd_host_failure.is_none(),
+                port,
+                addrs: self
+                    .fd_host_lan
+                    .iter()
+                    .map(|a| crate::dto::ClubLanAddrDto {
+                        addr: format!("{}:{port}", a.ip),
+                        adapter: a.adapter.clone(),
+                    })
+                    .collect(),
+                // The lines of the host's board that say Connected (`fdevent::PositionLink`), its
+                // own left out. Beside the board, the snapshot counts the board's own rows instead
+                // (`Self::snapshot`), so a second turning between two reads cannot split them.
+                connected: self.fd_club.as_ref().map_or(0, |club| {
+                    let own = self.settings.fd_position_id.as_str();
+                    self.fd_club_board_rows(now)
+                        .iter()
+                        .filter(|r| {
+                            r.pos != own
+                                && club.link(&r.pos, now) == crate::fdevent::PositionLink::Connected
+                        })
+                        .count() as u32
+                }),
+                failed: self.fd_host_failure.as_ref().map(|f| f.code().to_string()),
+                detail: self
+                    .fd_host_failure
+                    .as_ref()
+                    .map(|f| f.detail().to_string())
+                    .unwrap_or_default(),
+            });
+        Some(crate::dto::ClubLinkDto {
+            role: if hosting.is_some() {
+                "host"
+            } else {
+                "position"
+            }
+            .to_string(),
+            addr: tempo_net::fdsync::join_target(&addr),
+            state: state.code().to_string(),
+            why: state.why().map(|why| why.code().to_string()),
+            told: (state == crate::fdevent::LinkState::TurnedAway)
+                .then(|| m.last_error.clone())
+                .flatten(),
+            down_since_unix: if matches!(state, crate::fdevent::LinkState::Lost(_)) {
+                m.down_since_unix
+            } else {
+                0
+            },
+            event: m.event.clone(),
+            host_call: m.host_call.clone(),
+            position: self.fd_position_label(),
+            club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
+            status: status.map(|s| s.code().to_string()),
+            heard_secs: status.and(m.heard_secs(now)),
+            hosting,
+            other_call: Some(self.fd_on_another_call_count()).filter(|n| *n > 0),
+        })
     }
 
     pub fn fd_hosting(&self) -> bool {
@@ -12336,6 +12837,20 @@ impl Engine {
         self.fd_club.as_ref().map(|c| c.event_name.clone())
     }
 
+    /// ⭐ **The call the club is on the air under** (beacon + welcome + the JOIN's call gate + the
+    /// spectator board): the one its files are written under, held from the save that turned this host's Contest mode
+    /// off ([`crate::fdevent::ClubLog::hosted_call`]), else this station's own. So "Contest over?"
+    /// here, which puts the operator's own call back, does not turn away a laptop of the club
+    /// still on the club's call: it rejoins and sends what it still owes. While not hosting, this
+    /// station's own.
+    pub fn fd_club_call(&self) -> String {
+        let own = self.settings.mycall.as_str();
+        self.fd_club
+            .as_ref()
+            .map_or(own, |club| club.hosted_call(own))
+            .to_string()
+    }
+
     // --- host half (the ClubBackend impl calls these) ----------------------
 
     /// A position joined. Err when not hosting (a race with the toggle), Err when its position
@@ -12344,8 +12859,10 @@ impl Engine {
     /// when the position is logging a DIFFERENT contest — `contest` is the JOIN's own
     /// rules-file id — Err when it is set up in another exchange ROLE than the club's
     /// (`role`, the JOIN's: in a QSO party, inside the state against outside it), and Err
-    /// when it is on another station CALL than this host's, outside ARRL Field Day (`call`,
-    /// the JOIN's, against the call the club's file is written under). The wording lives on
+    /// when it is on another station CALL than the club's, outside ARRL Field Day (`call`, the
+    /// JOIN's, against the call the club's file is written under, [`Self::fd_club_call`], which
+    /// "Contest over?" on this host does not move; this laptop's own position, which joins on
+    /// this laptop's call, against that call, as it always was). The wording lives on
     /// `ClubLog` and in `fdevent` because only they know the contest to name. Every refusal
     /// is noted for the host's own screen too.
     ///
@@ -12378,9 +12895,18 @@ impl Engine {
             .and_then(|club| self.fd_club_session(club).ok())
             .map(|session| session.role().id.to_string())
             .unwrap_or_default();
+        // …and the call it is on the air under.
+        let club_call = self.fd_club_call();
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
+        // ⭐ A position the host's operator removed is turned away before anything else is asked of
+        // its JOIN, under its position id, whatever its key, name or call: not listed among the
+        // turned-away laptops either, as its own line on the board says Removed, beside the host's
+        // Allow back.
+        if club.is_removed(pos) {
+            return Err(crate::fdevent::POSITION_REMOVED.to_string());
+        }
         let theirs = role.trim();
         let refusal = (!crate::fdevent::club_position_id(pos))
             .then(|| crate::fdevent::NOT_A_POSITION_ID.to_string())
@@ -12395,7 +12921,16 @@ impl Engine {
                 (!theirs.is_empty() && !club_role.is_empty() && theirs != club_role)
                     .then(|| crate::fdevent::role_mismatch(&club.contest_id, &club_role, theirs))
             })
-            .or_else(|| club.call_refusal(&self.settings.mycall, call));
+            .or_else(|| {
+                // This laptop's own position joins on this laptop's call, which "Contest over?"
+                // here puts back; every other laptop of the club is on the club's.
+                let on = if pos == self.settings.fd_position_id {
+                    &self.settings.mycall
+                } else {
+                    &club_call
+                };
+                club.call_refusal(on, call)
+            });
         if let Some(msg) = refusal {
             club.note_refused(pos, key_hash, name, call, &msg, now);
             return Err(msg);
@@ -12404,7 +12939,7 @@ impl Engine {
         club.pin(pos, key_hash, now);
         Ok(tempo_net::fdsync::JoinAccept {
             event: club.event_name.clone(),
-            host_call: self.settings.mycall.clone(),
+            host_call: club_call,
             acked,
             contest: club.event_id.clone(),
             hold: club.hold(pos),
@@ -12416,17 +12951,73 @@ impl Engine {
     /// the connection is sent when the JOIN it came in on (`hold`) no longer holds its position:
     /// the host gave it to another laptop ([`Self::fd_club_give_position`]), under this same
     /// lock, so the row is neither merged nor acked.
+    ///
+    /// ⭐ **A contact this laptop's own position logged on another call than the club's is taken
+    /// off the wire and not added**: acked, so it is never asked for again. Its queue never sends
+    /// one ([`Self::fd_on_another_call`]), and the intake agrees should one come anyway. The wire
+    /// names no call, so this laptop's own contacts are the only ones the host can read the call
+    /// of; every other laptop's link joined on the club's call (the JOIN gate).
     pub fn fd_club_merge(
         &mut self,
         hold: u64,
         row: &tempo_net::fdsync::WireQso,
     ) -> Result<u64, String> {
         let now = now_unix_secs();
+        let off = row.pos == self.settings.fd_position_id
+            && self.fd_sync_log().is_some_and(|log| {
+                let other = self.fd_on_another_call();
+                log.qsos().iter().any(|q| q.seq == row.seq && other(q))
+            });
         let Some(club) = self.fd_club.as_mut() else {
             return Ok(0);
         };
         club.held(&row.pos, hold)?;
+        if off {
+            return Ok(club.take_off(&row.pos, row.seq));
+        }
         Ok(club.merge(row, now))
+    }
+
+    /// ⭐ **A position takes back its own row `seq`** — `pos` is the position the connection
+    /// JOINed as (the socket loop refuses any other), so no laptop can take back another's
+    /// contact; the host's own laptop takes back its own the same way, over its loopback. A
+    /// tombstone the club log keeps and journals ([`crate::fdevent::ClubLog::take_back`]).
+    /// `Err` with the sentence its connection is sent when the JOIN (`hold`) no longer holds the
+    /// position, as for a row.
+    pub fn fd_club_retract(&mut self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Ok(());
+        };
+        club.held(pos, hold)?;
+        club.take_back(pos, seq, now);
+        Ok(())
+    }
+
+    /// …and puts it back ([`crate::fdevent::ClubLog::put_back`]); as [`Self::fd_club_retract`].
+    pub fn fd_club_restore(&mut self, hold: u64, pos: &str, seq: u64) -> Result<(), String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Ok(());
+        };
+        club.held(pos, hold)?;
+        club.put_back(pos, seq, now);
+        Ok(())
+    }
+
+    /// The seqs of `pos`'s rows the club holds taken back, ascending — what its connection is
+    /// told after every welcome.
+    pub fn fd_club_retracted(&self, pos: &str) -> Vec<u64> {
+        self.fd_club
+            .as_ref()
+            .map(|club| club.taken_back(pos))
+            .unwrap_or_default()
+    }
+
+    /// How often the club rebuilt its dupe keys and sections: a new one sends every connection
+    /// a fresh snap.
+    pub fn fd_club_generation(&self) -> u64 {
+        self.fd_club.as_ref().map_or(0, |club| club.generation())
     }
 
     /// Does the JOIN served with `hold` still hold `pos`? Asked by its connection at every tick,
@@ -12455,6 +13046,38 @@ impl Engine {
             .as_mut()
             .ok_or(crate::fdevent::GiveRefusal::NotHosting)?
             .give(handle, now)
+    }
+
+    /// ⭐ **Remove a position from the club event** — the Remove button on the host's own board, by
+    /// the position's id ([`crate::fdevent::ClubLog::remove`]): its connection is told why and
+    /// closed within a tick, and every JOIN under it is turned away until
+    /// [`Self::fd_club_allow_back`]. Its contacts stay in the club's log exactly as they were.
+    /// Refused when this Nexus is not hosting, for this station's own position, and for a position
+    /// the club does not know.
+    ///
+    /// ⛔ The host's own screen only, as Give is: no Remote operation reaches it. It transmits
+    /// nothing, touches no radio, and deletes or rewrites no contact.
+    pub fn fd_club_remove_position(
+        &mut self,
+        posid: &str,
+    ) -> Result<(), crate::fdevent::RemoveRefusal> {
+        let now = now_unix_secs();
+        let own = self.settings.fd_position_id.clone();
+        self.fd_club
+            .as_mut()
+            .ok_or(crate::fdevent::RemoveRefusal::NotHosting)?
+            .remove(posid, &own, now)
+    }
+
+    /// Let a removed position back in ([`crate::fdevent::ClubLog::allow_back`]): its next JOIN is
+    /// served, and it catches up as an offline laptop does. Refused when this Nexus is not hosting
+    /// and for a position that is not removed. The host's own screen only.
+    pub fn fd_club_allow_back(&mut self, posid: &str) -> Result<(), crate::fdevent::RemoveRefusal> {
+        let now = now_unix_secs();
+        self.fd_club
+            .as_mut()
+            .ok_or(crate::fdevent::RemoveRefusal::NotHosting)?
+            .allow_back(posid, now)
     }
 
     pub fn fd_club_counts(&self) -> (usize, usize) {
@@ -12526,15 +13149,21 @@ impl Engine {
     /// ([`Self::fd_club_session`]) with the entrant's own header lines. `Err` = not
     /// hosting, a session Settings cannot build, or a log that is not one submittable
     /// Cabrillo entry (§6.2); every reason is named.
+    ///
+    /// ⭐ Under the station call and entry class the club was hosted under, whatever this laptop
+    /// is set to now: "Contest over?" puts the station's own back as the mode goes off, and the
+    /// club's are held from that save on ([`crate::fdevent::ClubLog::note_host_settings`]).
     pub fn fd_club_export(&self, cabrillo: bool) -> Result<String, String> {
         let club = self
             .fd_club
             .as_ref()
             .ok_or_else(|| "this station is not hosting a club event".to_string())?;
-        let mycall = self.settings.mycall.as_str();
+        let mycall = club.hosted_call(&self.settings.mycall);
         let session = self.fd_club_session(club)?;
         if cabrillo {
-            club.export_cabrillo_with(mycall, session, &self.contest_entrant())
+            let mut entrant = self.contest_entrant();
+            entrant.entry_class = club.hosted_class(&entrant.entry_class).to_string();
+            club.export_cabrillo_with(mycall, session, &entrant)
         } else {
             Ok(club.export_adif_with(mycall, session))
         }
@@ -12544,6 +13173,66 @@ impl Engine {
     /// that needs more than the counts.
     pub fn fd_club_log(&self) -> Option<&crate::fdevent::ClubLog> {
         self.fd_club.as_ref()
+    }
+
+    /// ⭐ **The host's club log, as its own screen lists it** — the newest
+    /// [`CLUB_LOG_SHOWN`](crate::fdevent::CLUB_LOG_SHOWN) of the club's merged contacts, newest
+    /// first ([`crate::fdevent::ClubLog::newest`]), each with the position that logged it, named as
+    /// the host's board names it, and whether it is a duplicate, beside how many the club holds.
+    /// Read from the rows the Club ADIF and Club Cabrillo are written from, under the same reading
+    /// of each, so the list and the files cannot disagree. Bounded; under the lock it costs the
+    /// dedupe every snapshot's board already runs ([`crate::fdevent::ClubLog::board_rows`]) and a
+    /// sort of the rows by time.
+    ///
+    /// `None` unless this Nexus is hosting: a joined position holds the club's counts and keys,
+    /// never its rows ([`crate::fdevent::ClubMirror`]).
+    ///
+    /// ⛔ The host's own screens only: no Remote query or operation reads it, and none of it rides
+    /// the snapshot, the club line every position is sent or the TV board.
+    pub fn fd_club_log_newest(&self) -> Option<crate::dto::FdClubLogDto> {
+        let club = self.fd_club.as_ref()?;
+        // The log table's columns: Field Day's class and section, and for any other contest one
+        // per received slot of the club's session, as the screen's own log has. A session Settings
+        // can no longer build (the export names why) leaves those columns blank, not guessed.
+        let receives: &[&str] = match club.field_day_event() {
+            Some(_) => &[],
+            None => self
+                .fd_club_session(club)
+                .map(|session| session.role().receives)
+                .unwrap_or(&[]),
+        };
+        let shown = club.shown_names();
+        let rows = club
+            .newest(crate::fdevent::CLUB_LOG_SHOWN)
+            .into_iter()
+            .map(|e| {
+                let raw = |key: &str| {
+                    e.rx.iter()
+                        .find(|v| v.key == key)
+                        .map(|v| v.raw.clone())
+                        .unwrap_or_default()
+                };
+                crate::dto::FdClubLogRow {
+                    call: e.row.call.clone(),
+                    class: raw("CLASS"),
+                    section: raw("SECTION"),
+                    rcvd: receives.iter().map(|k| raw(k)).collect(),
+                    band: e.row.band.clone(),
+                    // As the contest log the files are written from keeps them.
+                    mode: e.row.mode_class.to_ascii_uppercase(),
+                    submode: e.row.submode.trim().to_ascii_uppercase(),
+                    when_unix: e.row.when_unix,
+                    posid: e.row.posid.clone(),
+                    seq: e.row.seq,
+                    pos_name: shown.get(e.row.posid.as_str()).cloned().unwrap_or_default(),
+                    dupe: e.dupe,
+                }
+            })
+            .collect();
+        Some(crate::dto::FdClubLogDto {
+            total: club.qsos_raw(),
+            rows,
+        })
     }
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
@@ -12556,6 +13245,10 @@ impl Engine {
     /// merged rows (`contest`), which the board scores by that contest's own ruleset off
     /// this lock. It used to hand a non-Field-Day club nothing, so hosting the Illinois QSO
     /// Party put "served from the host station" on the host's own TV.
+    ///
+    /// The board names the call the club is on the air under ([`Self::fd_club_call`]), so after
+    /// "Contest over?" on the host, which puts the operator's own call back, the TV still names
+    /// the club's.
     pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
         let club = self.fd_club.as_ref()?;
         let contest =
@@ -12585,7 +13278,7 @@ impl Engine {
         positions.sort_by(|a, b| a.id.cmp(&b.id));
         Some(crate::fd_scoreboard::FdBoardData {
             event: club.event,
-            call: self.settings.mycall.clone(),
+            call: self.fd_club_call(),
             class: self.settings.fd_class.clone(),
             section: self.settings.fd_section.clone(),
             power_mult: self.settings.fd_power_mult,
@@ -12675,10 +13368,7 @@ impl Engine {
     /// An empty posid means the shell has not initialized identity yet — the
     /// pump treats that as "don't connect".
     pub fn fd_sync_identity(&self) -> (String, String, String, u64) {
-        let max_seq = match &self.mode {
-            Mode::FieldDay { station, .. } => station.log.max_seq(),
-            _ => 0,
-        };
+        let max_seq = self.fd_sync_log().map_or(0, |log| log.max_seq());
         (
             self.settings.fd_position_id.clone(),
             self.fd_position_label(),
@@ -12687,16 +13377,87 @@ impl Engine {
         )
     }
 
+    /// ⭐ **The contest log club sync sends and counts from**: the live session's while Field Day
+    /// runs, and outside it the one the mode left ([`Self::fd_left_log`]) while it is a log of the
+    /// contest the club runs, in the running it was left in.
+    ///
+    /// A left log of another contest is no club's here to send: switching contest while the mode
+    /// is on leaves its rows behind the same way. Nor is one of an earlier running
+    /// ([`tempo_core::fd_rules::FdRuleset::running_of`]): a club's rehearsal belongs to the
+    /// running before, and a laptop asleep with its mode off from the rehearsal to the day must
+    /// not send the rehearsal's contacts to the party's host, which the journal restore keeps
+    /// out of the party's log for the same reason.
+    fn fd_sync_log(&self) -> Option<&tempo_core::fieldday::FieldDayLog> {
+        match &self.mode {
+            Mode::FieldDay { station, .. } => Some(&station.log),
+            _ => self.fd_left_log.as_ref().and_then(|(log, left_at)| {
+                let rs = log.ruleset();
+                (crate::fdevent::canonical_contest(&log.session.event_id) == self.fd_club_contest()
+                    && rs.running_of(*left_at) == rs.running_of(now_unix_secs()))
+                .then_some(log)
+            }),
+        }
+    }
+
+    /// ⭐ **Whether a contact of this laptop's was logged on another call than the club's** — the
+    /// one question the outbox, the club chip and the link line ask of each row past the host's
+    /// ack. A club entry is one station on the air under one call, and the club's files write
+    /// every contact under the club's, so the club's log takes a contact only on the call it is
+    /// on the air under. One logged on another (the host's own after its "Contest over?", Contest
+    /// mode back on under the operator's call to reach the Club Cabrillo button; a laptop whose
+    /// call was changed while it was joined) stays in this laptop's own log: it is never sent, it
+    /// is not owed, so the chip still reaches Synced, and the link line counts it
+    /// (`ClubLinkDto::other_call`). Decided here, where the contact is queued, because the wire
+    /// names no call; the host's intake agrees for its own laptop ([`Self::fd_club_merge`]).
+    ///
+    /// A contact's call is the one it was logged on (`LoggedQso::on_air_call`); one that carries
+    /// none (logged before the call was recorded) follows the call this laptop's link joined
+    /// under (`ClubMirror::link_call`). The club's call is the host's own on the host
+    /// ([`Self::fd_club_call`], held through "Contest over?") and the one the host's welcome
+    /// named on any other laptop. Both are read as club sync reads a call
+    /// ([`crate::fdevent::club_call`]), and a call either side cannot say keeps the contact
+    /// flowing, as the JOIN gate serves it. ARRL Field Day takes every call: its GOTA station is on
+    /// another call by rule, and the club's file writes its contacts under it.
+    fn fd_on_another_call(&self) -> impl Fn(&tempo_core::fieldday::LoggedQso) -> bool + '_ {
+        let gota = self.fd_club_contest() == tempo_core::fieldday::FdEvent::ArrlFd.code();
+        let club = crate::fdevent::club_call(&match &self.fd_club {
+            Some(_) => self.fd_club_call(),
+            None => self.fd_mirror.host_call.clone(),
+        });
+        let link = self.fd_mirror.link_call.as_str();
+        move |q| {
+            let call = match q.on_air_call.as_str() {
+                "" => link,
+                call => call,
+            };
+            !gota
+                && club.as_deref().is_some_and(|club| {
+                    crate::fdevent::club_call(call).is_some_and(|call| call != club)
+                })
+        }
+    }
+
     /// THE OUTBOX: own FD rows with `seq > after`, as wire rows — derived
     /// from the journal-backed log, so there is no separate queue file to
-    /// corrupt.
+    /// corrupt. Never a contact logged on another call than the club's
+    /// ([`Self::fd_on_another_call`]).
     ///
     /// The operator is the ROW's own — who was at the key when it was logged — so a
     /// seat change during an outage cannot re-attribute the contacts still queued. A row
     /// that names nobody falls back to what the wire has always carried: the
     /// `fd_operator` setting, else the station call.
     pub fn fd_sync_outbox(&self, after: u64) -> Vec<tempo_net::fdsync::WireQso> {
-        let Mode::FieldDay { station, .. } = &self.mode else {
+        let other = self.fd_on_another_call();
+        self.fd_sync_rows(|q| q.seq > after && !other(q))
+    }
+
+    /// Own live FD rows `keep` takes, as wire rows, ascending — the outbox's rows and a
+    /// restore's ([`Self::fd_sync_marks`]).
+    fn fd_sync_rows(
+        &self,
+        keep: impl Fn(&tempo_core::fieldday::LoggedQso) -> bool,
+    ) -> Vec<tempo_net::fdsync::WireQso> {
+        let Some(log) = self.fd_sync_log() else {
             return Vec::new();
         };
         let posid = &self.settings.fd_position_id;
@@ -12708,11 +13469,10 @@ impl Engine {
         } else {
             self.settings.fd_operator.trim().to_uppercase()
         };
-        let mut rows: Vec<_> = station
-            .log
+        let mut rows: Vec<_> = log
             .qsos()
             .iter()
-            .filter(|q| q.seq > after)
+            .filter(|q| keep(q))
             .map(|q| tempo_net::fdsync::WireQso {
                 pos: posid.clone(),
                 seq: q.seq,
@@ -12746,9 +13506,61 @@ impl Engine {
         rows
     }
 
+    /// ⭐ **This position's take-backs the host does not hold yet** — derived, like the outbox,
+    /// from the journal-backed log and the host's own view
+    /// ([`crate::fdevent::ClubMirror::retracted`]), so there is no queue to lose: every removed
+    /// row the host does not hold taken back, and every live row it does (put back here, at
+    /// once or while away), as the row itself. Ascending by seq.
+    pub fn fd_sync_marks(&self) -> Vec<tempo_net::fdsync::Mark> {
+        use tempo_net::fdsync::Mark;
+        let Some(log) = self.fd_sync_log() else {
+            return Vec::new();
+        };
+        let posid = &self.settings.fd_position_id;
+        if posid.is_empty() {
+            return Vec::new();
+        }
+        let host = &self.fd_mirror.retracted;
+        let mut marks: Vec<Mark> = log
+            .removed()
+            .iter()
+            .flat_map(|entry| &entry.rows)
+            .filter(|q| q.seq > 0 && !host.contains(&q.seq))
+            .map(|q| Mark::Retract {
+                pos: posid.clone(),
+                seq: q.seq,
+            })
+            .collect();
+        if !host.is_empty() {
+            marks.extend(
+                self.fd_sync_rows(|q| host.contains(&q.seq))
+                    .into_iter()
+                    .map(|row| Mark::Restore(Box::new(row))),
+            );
+        }
+        marks.sort_by_key(|m| match m {
+            Mark::Retract { seq, .. } => *seq,
+            Mark::Restore(row) => row.seq,
+        });
+        marks
+    }
+
     /// The mirror, for the pump's welcome/ack/club/link callbacks.
     pub fn fd_mirror_mut(&mut self) -> &mut crate::fdevent::ClubMirror {
         &mut self.fd_mirror
+    }
+
+    /// ⭐ **A new position pump takes the club link over** (`fdbridge::EnginePositionSync::new`,
+    /// and the shell's supervisor as it stops one): from now on every older pump's calls into
+    /// the mirror are ignored ([`Self::fd_link_owned_by`]). Returns the new owner's generation.
+    pub fn fd_link_take_over(&mut self) -> u64 {
+        self.fd_link_gen = self.fd_link_gen.wrapping_add(1);
+        self.fd_link_gen
+    }
+
+    /// Is the pump with this generation the one that owns the club link now?
+    pub fn fd_link_owned_by(&self, gen: u64) -> bool {
+        self.fd_link_gen == gen
     }
 
     /// ⭐ **The contest this position's ROWS belong to** — the JOIN's `contest`.
@@ -12757,8 +13569,9 @@ impl Engine {
     /// logged under and what the outbox sends: the picker can move while a session runs
     /// (a session survives every change between Field Day modes), and a JOIN naming the
     /// picker's contest over another contest's rows is the mismatch the host exists to
-    /// catch. Outside Field Day there are no rows, and the picker's contest is the honest
-    /// answer.
+    /// catch. Outside Field Day the picker's contest is the honest answer: the only rows sent
+    /// then are those the mode left, and only while they are that contest's
+    /// ([`Self::fd_sync_log`]).
     pub fn fd_position_contest(&self) -> String {
         match &self.mode {
             Mode::FieldDay { station, .. } => {
@@ -12811,10 +13624,7 @@ impl Engine {
         if crate::fdevent::canonical_contest(theirs) == mine {
             return Ok(());
         }
-        Err(crate::fdevent::contest_mismatch(
-            &crate::fdevent::contest_name(theirs),
-            &mine,
-        ))
+        Err(crate::fdevent::contest_mismatch(theirs, &mine))
     }
 
     /// Presence for the club band board — the n3fjp `report_band` idea made
@@ -12843,16 +13653,62 @@ impl Engine {
     /// The sync chip — DERIVED from (enabled, link, queued = own max seq −
     /// host ack), so it can never disagree with the queue.
     pub fn fd_sync_state(&self) -> crate::fdevent::SyncState {
-        let own_max = match &self.mode {
-            Mode::FieldDay { station, .. } => station.log.max_seq(),
-            _ => 0,
-        };
+        // What the host lacks: own live rows past its ack, and the take-backs it does not hold.
+        // Never a seq past the ack that was taken back before it went up: the host is never
+        // sent that row, so counting it read "Behind 1" for good. Nor a contact logged on another
+        // call than the club's, which is never sent either ([`Self::fd_on_another_call`]).
+        let other = self.fd_on_another_call();
+        let rows = self.fd_sync_log().map_or(0, |log| {
+            log.qsos()
+                .iter()
+                .filter(|q| q.seq > self.fd_mirror.acked && !other(q))
+                .count() as u64
+        });
         crate::fdevent::SyncState::derive(
             self.fd_sync_enabled(),
             self.fd_mirror.connected,
-            own_max.saturating_sub(self.fd_mirror.acked),
+            rows + self.fd_sync_marks().len() as u64,
             self.fd_mirror.down_since_unix,
         )
+    }
+
+    /// How many of this laptop's contacts past the host's ack the club's log does not take, as
+    /// logged on another call than the club's ([`Self::fd_on_another_call`]): what the link line
+    /// says beside the chip, which does not count them.
+    fn fd_on_another_call_count(&self) -> u64 {
+        let other = self.fd_on_another_call();
+        self.fd_sync_log().map_or(0, |log| {
+            log.qsos()
+                .iter()
+                .filter(|q| q.seq > self.fd_mirror.acked && other(q))
+                .count() as u64
+        })
+    }
+
+    /// ⭐ **The club board's rows as this laptop's own screens show them**: on the HOST, every
+    /// position its live club log knows, removed ones included, however many, so the host's own
+    /// board is current from the moment a position joins, with or without its own loopback position
+    /// in, and every joined position has its line there with its Remove or Allow back. The board
+    /// every position is sent, and Remote, are cut ([`Self::fd_club_board_sent`]); a position left
+    /// out of that cut (one gone quiet while the club is full) must still be one the host can see
+    /// and remove. On a position, the board the host last sent.
+    pub(crate) fn fd_club_board_rows(&self, now: u64) -> Vec<tempo_net::fdsync::WireBoardRow> {
+        match &self.fd_club {
+            Some(club) => club.board_rows(now),
+            None => self.fd_mirror.board.clone(),
+        }
+    }
+
+    /// ⭐ **The club board as every position is sent it, and as Remote carries it**: on the HOST,
+    /// [`tempo_net::fdsync::board_fit`] of its live club log, cut to the positions heard from most
+    /// recently when one club line cannot carry them all, which is the board its club sends every
+    /// position now; on a position, the board the host last sent, as it came. What the Remote
+    /// capture's bound measures and what it ships (`bounded_field_day_status`).
+    pub(crate) fn fd_club_board_sent(&self, now: u64) -> Vec<tempo_net::fdsync::WireBoardRow> {
+        match &self.fd_club {
+            Some(club) => tempo_net::fdsync::board_fit(&club.board_rows(now)).rows,
+            None => self.fd_mirror.board.clone(),
+        }
     }
 
     /// The `FieldDayStatus.club` block, `None` while sync is not configured.
@@ -12879,8 +13735,16 @@ impl Engine {
             .cloned()
             .collect();
         dupes.sort();
-        let mut board: Vec<crate::dto::FdClubBoardRow> = m
-            .board
+        // ⭐ The rows are this laptop's own board (`Self::fd_club_board_rows`): on the HOST every
+        // position its club knows, uncut; the Remote capture cuts them to the board every position
+        // is sent. On the HOST each row also says where that position's link stands now, read from
+        // its live club log (`fdevent::PositionLink`), by the reading its hosting line counts
+        // connected positions by; a position holds only the rows the host sent it, which carry
+        // none but a removed position's flag.
+        let now = now_unix_secs();
+        let own = self.settings.fd_position_id.as_str();
+        let rows = self.fd_club_board_rows(now);
+        let mut board: Vec<crate::dto::FdClubBoardRow> = rows
             .iter()
             .map(|r| crate::dto::FdClubBoardRow {
                 posid: r.pos.clone(),
@@ -12894,6 +13758,26 @@ impl Engine {
                 // The HOST's column: each position's clock as it reported it to this host's
                 // club log. A position holds only the rows the host sent, which carry none.
                 clock_ms: self.fd_club.as_ref().and_then(|c| c.clock_ms(&r.pos)),
+                link: match self.fd_club.as_ref() {
+                    Some(c) => Some(
+                        if r.pos == own {
+                            "host"
+                        } else {
+                            c.link(&r.pos, now).code()
+                        }
+                        .to_string(),
+                    ),
+                    // A position's board has one link word, the one its host sends: a position
+                    // the host's operator removed (`WireBoardRow::removed`).
+                    None => r
+                        .removed
+                        .then(|| crate::fdevent::PositionLink::Removed.code().to_string()),
+                },
+                heard_secs: self
+                    .fd_club
+                    .as_ref()
+                    .filter(|_| r.pos != own)
+                    .and_then(|c| c.heard_secs(&r.pos, now)),
             })
             .collect();
         // Named positions first, alphabetically; unnamed ones after, in id order so
@@ -12972,6 +13856,27 @@ impl Engine {
                         .collect(),
                 })
             }),
+            // The host's alone: each position whose newest contact sent another county than the
+            // club's own session sends, named as its line on the board names it.
+            other_location: self
+                .fd_club
+                .as_ref()
+                .map(|c| {
+                    let sent = self
+                        .fd_club_session(c)
+                        .map(|s| crate::fdevent::to_wire_fields(&s.my_exchange))
+                        .unwrap_or_default();
+                    c.other_location(&sent)
+                        .into_iter()
+                        .map(|o| crate::dto::FdClubOtherLocationDto {
+                            pos_name: o.name,
+                            operator: o.operator,
+                            sent: o.sent,
+                            club: o.club,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             club_code: crate::fdevent::club_code(&self.fd_position_key_hash),
         })
     }
@@ -13280,6 +14185,13 @@ impl Engine {
         source: StateSource,
         park_places: Vec<String>,
     ) -> LogWriteOutcome {
+        // The contact in the log's one form before anything here reads it — the band in the
+        // ADIF enumeration's lower case, a phone sideband as SSB's SUBMODE
+        // (`tempo_core::logbook::canonical`). FIRST, because the duplicate guard below compares
+        // the band and the mode as given: the log holds a phone contact as SSB, and the same
+        // contact handed in again as "USB" must still read as that contact. An FT contact is
+        // already in that form (its band is the band plan's, its mode the tier's) and is untouched.
+        tempo_core::logbook::canonical::contact(&mut rec);
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
         self.logged_tick = self.logged_tick.wrapping_add(1);
@@ -13821,8 +14733,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // while there is no "end this session" action — a session that outlived
         // leaving the mode entirely could not be corrected from Settings at all, since
         // `restore_field_day_if_enabled` is a deliberate no-op while the mode is live.
+        //
+        // ⭐ **ONLY THE CONTEST'S OWN MODES BUILD IT.** It was built for every switch, so a
+        // contest picked in Settings whose exchange is not filled in refused FT8 QSO mode's Call
+        // CQ and S&P, and Chat, with that contest's complaint, Contest mode on or off. A plain
+        // mode needs nothing from the contest.
         let session = match &self.mode {
-            Mode::FieldDay { station, .. } => station.log.session.clone(),
+            Mode::FieldDay { station, .. } => Some(station.log.session.clone()),
+            _ if !spec.starts_with("fieldday") => None,
             _ => {
                 // ⭐ THE CONTEST THE OPERATOR PICKED, whichever it is. The picker writes
                 // `fd_event` and this is the one place it is turned into a session, so
@@ -13861,7 +14779,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 ) {
                     s.entry_category = cat;
                 }
-                s
+                Some(s)
             }
         };
         // ⚠️ **FLUSH BEFORE THE REBUILD, and this is a mechanism rather than a rule to
@@ -13885,9 +14803,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .and_then(|_| self.field_day_log_adif());
         self.persist_fd_log();
         let band = self.settings.band.clone();
-        let next_mode = match spec {
-            "chat" => Mode::Chat,
-            "qso-run" => Mode::Qso {
+        let next_mode = match (spec, session) {
+            ("chat", _) => Mode::Chat,
+            ("qso-run", _) => Mode::Qso {
                 station: Box::new({
                     let mut s = QsoStation::calling_cq(&mycall, &mygrid);
                     s.cq_call_cap = self.cq_call_budget();
@@ -13903,11 +14821,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 }),
                 running: true,
             },
-            "qso-monitor" => Mode::Qso {
+            ("qso-monitor", _) => Mode::Qso {
                 station: Box::new(QsoStation::monitoring(&mycall, &mygrid)),
                 running: false,
             },
-            "fieldday-run" => Mode::FieldDay {
+            ("fieldday-run", Some(session)) => Mode::FieldDay {
                 station: Box::new({
                     // `log.event` comes from the SESSION (`FieldDayLog::new`), not from
                     // settings: which sponsor's rules are running is part of what a
@@ -13917,39 +14835,68 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // The submode funnel: the sequencer's log() calls record
                     // the tier actually keyed (set_tier re-stamps on a change).
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
-                    // …and who is at the key, by the same funnel.
+                    // …and who is at the key, by the same funnel, and the call on the air.
                     st.log.operator = self.fd_row_operator();
+                    st.log.on_air_call = self.fd_row_call();
                     st
                 }),
                 running: true,
             },
-            "fieldday-sp" => Mode::FieldDay {
+            ("fieldday-sp", Some(session)) => Mode::FieldDay {
                 station: Box::new({
                     let mut st =
                         FieldDayStation::search_and_pounce(&mycall, &mygrid, session, &band);
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st.log.operator = self.fd_row_operator();
+                    st.log.on_air_call = self.fd_row_call();
                     st
                 }),
                 running: false,
             },
-            other => return Err(format!("unknown mode {other:?}")),
+            (other, _) => return Err(format!("unknown mode {other:?}")),
         };
         // A valid local operating-spec gesture owns the newer station context,
         // even when its label and CAT mode are unchanged. Do not let older
         // Remote work overwrite that intent; invalid specs above change nothing.
         self.remote_actuation.revoke();
-        self.mode = next_mode;
+        let left = std::mem::replace(&mut self.mode, next_mode);
+        // The contest log a switch out of Field Day leaves stays with club sync
+        // ([`Self::fd_left_log`]); one into Field Day lets it go, because the journal restore
+        // below brings the same rows into the new station.
+        match (&self.mode, left) {
+            (Mode::FieldDay { .. }, _) => self.fd_left_log = None,
+            (_, Mode::FieldDay { station, .. }) => {
+                self.fd_left_log = Some((station.log, now_unix_secs()))
+            }
+            _ => {}
+        }
         // Carry the operator's RR73/RRR preference into a fresh QSO sequencer.
         if let Mode::Qso { station, .. } = &mut self.mode {
             station.confirm_with_rrr = self.settings.prefer_rrr;
         }
+        // ⭐ THE CONTEST'S OWN FT8/FT4 MESSAGES — chosen here and in `set_tier`, the two places
+        // the contest and the tier meet. A new station speaks Field Day's, so for Field Day,
+        // for a contest that bans the mode and for every tier but FT8/FT4 this changes nothing.
+        // Where the caller runs WSJT-X's Field Day activity (ARRL Field Day on FT8/FT4), Field
+        // Day's runner answers its RR73 with 73, as WSJT-X's does.
+        let air_mode = self.adif_mode_for_tier();
+        if let Mode::FieldDay { station, running } = &mut self.mode {
+            let ruleset = station.log.ruleset();
+            // The direction typed in the Tx6 row, which a Running calls where WSJT-X has no
+            // activity ([`Self::start_running_with_cq`]); the other messages pass it by.
+            station.set_cq_dir(self.cq_dir.as_deref().unwrap_or(""));
+            station.set_messages(FtMessages::for_contest(ruleset, air_mode), *running);
+            station.set_wsjtx_field_day(FtMessages::wsjtx_field_day(ruleset, air_mode));
+        }
         // Restore the durable FD journal into the fresh station — entering Field
         // Day used to build an EMPTY log, so a restart (or a run↔S&P toggle)
         // mid-event dropped every contact and the next exit flush overwrote the
-        // backup with just the new session. Rows older than 4 days are a
-        // previous event's journal and self-expire.
+        // backup with just the new session. The session's own contacts come back whatever
+        // their age; another contest's, or another running's, stay out of its log, and past
+        // the journal's four days are kept until the Logbook holds them
+        // (`FieldDayLog::restore_journal`).
         if let Mode::FieldDay { station, .. } = &mut self.mode {
+            let window = now_unix_secs().saturating_sub(4 * 86_400);
             if let Some(path) = &self.station.fd_log_path {
                 // The flush at the top of this call handed the journal to its thread; read it
                 // back once it is on disk. The wait is the one the write used to make here.
@@ -13957,7 +14904,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 restore_fd_journal(
                     &mut station.log,
                     path,
-                    now_unix_secs().saturating_sub(4 * 86_400),
+                    window,
                     carried.as_deref(),
                     now_unix_secs() as i64,
                 );
@@ -13969,12 +14916,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // earliest restored contact as the start when it is earlier, never later:
             // widening the window can only under-report a dupe, which is the safe
             // direction, while narrowing it refuses nothing but hides real ones.
+            // Only a contact inside the journal's four days moves it: the rows read before the
+            // session opened reach no further back (`SESSION_READ_WINDOW`), and an older one of
+            // the session's own is in the contest log's dupe index already (`session_b4`).
             if let Some(first) = station
                 .log
                 .qsos()
                 .iter()
                 .map(|q| q.when_unix)
-                .filter(|&w| w > 0)
+                .filter(|&w| w >= window)
                 .min()
             {
                 station.log.session.start_unix = station.log.session.start_unix.min(first);
@@ -14408,6 +15358,188 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // `qso_logged` / `qso_report_sent` / `qso_start_unix` are set with the Station above —
         // they belong to the CONTACT, so a re-arm of the one in progress must not restamp them.
         self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
+        Ok(())
+    }
+
+    /// The cockpit's "work this station" — the `call_station` command: a double-click on a
+    /// decode, a roster row, a station card, an alert — and a logger's WSJT-X UDP Reply, which is
+    /// WSJT-X's double-click from another program. Each is [`Self::call_station_ctx`], WSJT-X's
+    /// double-click, but one:
+    ///
+    /// ⭐ **A double-click on a CQ while a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]) hands that station to the contest's S&P**
+    /// ([`Self::answer_cq_in_contest`]): the contest's messages, the contest log. WSJT-X answers
+    /// a double-clicked CQ with its contest activity's messages (`processMessage`); this left the
+    /// contest for FT8 QSO mode and the standard messages, which a WSJT-X station in its Field Day
+    /// or NA VHF activity never answers.
+    ///
+    /// The Remote page calls `call_station_ctx` directly, unchanged.
+    pub fn work_station(
+        &mut self,
+        dxcall: &str,
+        dxgrid: Option<&str>,
+        reply_msg: Option<&str>,
+        reply_snr: Option<i32>,
+        dx_freq: Option<f32>,
+    ) -> Result<(), String> {
+        if let (Some(text), Some((messages, de, grid))) =
+            (reply_msg, self.contest_cq(dxcall, reply_msg))
+        {
+            return self.answer_cq_in_contest(messages, &de, &grid, text, dx_freq);
+        }
+        self.call_station_ctx(dxcall, dxgrid, reply_msg, reply_snr, dx_freq)
+    }
+
+    /// The CQ a click hands to the running contest's S&P ([`Self::work_station`]): the click's
+    /// message is a CQ from the clicked station, not from you, while the contest's own FT8/FT4
+    /// messages apply. Those messages, and the CQ's sender and grid.
+    fn contest_cq(
+        &self,
+        dxcall: &str,
+        reply_msg: Option<&str>,
+    ) -> Option<(FtMessages, String, String)> {
+        let messages = self.contest_ft_messages()?;
+        let Msg::Cq { de, grid, .. } = Msg::parse(reply_msg?) else {
+            return None;
+        };
+        (tempo_core::message::same_call(&de, dxcall)
+            && !tempo_core::message::same_call(&de, &self.settings.mycall))
+        .then_some((messages, de, grid))
+    }
+
+    /// Whether [`Self::work_station`] for this click opens a contest session: a CQ handed to a
+    /// contest the station is not in. A command that may open one runs through
+    /// [`act_opening_session`], so the session opens with its rows (SPEC-2 v3 C19).
+    pub fn work_station_opens_session(&self, dxcall: &str, reply_msg: Option<&str>) -> bool {
+        self.contest_cq(dxcall, reply_msg).is_some() && self.mode_opens_session("fieldday-sp")
+    }
+
+    /// The messages a running contest's own FT8/FT4 sequencer sends — what the Operate cockpit's
+    /// Call CQ and a double-click on a CQ follow. `Some` while the contest switch is on, on FT8
+    /// or FT4, in a contest whose rules do not ban the mode ([`FtMessages::follows_contest`]);
+    /// `None` everywhere else, where both behave as outside a contest. The contest is the running
+    /// session's in Field Day mode, else the picker's, as [`Self::set_mode`] opens it.
+    fn contest_ft_messages(&self) -> Option<FtMessages> {
+        if !self.settings.fd_active {
+            return None;
+        }
+        let ruleset = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.ruleset(),
+            _ => {
+                let year = tempo_core::fd_rules::CURRENT_RULES_YEAR;
+                tempo_core::fd_rules::ruleset_by_id(self.settings.fd_event.trim(), year)
+                    .unwrap_or_else(|| {
+                        tempo_core::fd_rules::ruleset(
+                            tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event),
+                            year,
+                        )
+                    })
+            }
+        };
+        let mode = self.adif_mode_for_tier();
+        FtMessages::follows_contest(ruleset, mode).then(|| FtMessages::for_contest(ruleset, mode))
+    }
+
+    /// ⭐ **The CQ the contest's Running calls, as it goes on the air** — what the Operate
+    /// cockpit's Tx6 row shows while a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), and on this computer calls through the contest's Running,
+    /// as Call CQ does ([`Self::start_running`]). WSJT-X's Tx6 is its activity's CQ once one is
+    /// set (`genCQMsg`, mainwindow.cpp 9502-9524): `CQ FD` or `CQ TEST`. `None` everywhere else,
+    /// where the row keeps its own CQ: outside those contests, where WSJT-X has no activity (the
+    /// Running calls the row's CQ there, [`Self::contest_cq_typed`]), and for a nonstandard call.
+    ///
+    /// Built as the Running builds its CQ ([`FtMessages::cq`]) from what it would be built from
+    /// now: the Settings call and locator, and inside the contest its session's own GRID (a
+    /// rover's move); a Running entered from outside it starts a session whose GRID is the
+    /// Settings locator's four characters.
+    pub fn contest_running_cq(&self) -> Option<String> {
+        let messages = self.contest_ft_messages()?;
+        // Where WSJT-X has no activity the row is the operator's own ([`Self::contest_cq_typed`]),
+        // and it gives the row an activity's CQ only for a standard call (`genCQMsg`:
+        // `stdCall(my_callsign)`): a nonstandard call's row keeps its own CQ, `CQ <call>`.
+        if messages == FtMessages::Standard
+            || !tempo_core::message::is_std_call(&self.settings.mycall)
+        {
+            return None;
+        }
+        let session_grid = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.session.field("GRID"),
+            _ => "",
+        };
+        Some(messages.cq_on_air(&self.settings.mycall, &self.settings.mygrid, session_grid))
+    }
+
+    /// ⭐ **A contest runs whose Running calls the CQ typed in the Tx6 row**: one whose own FT8/FT4
+    /// messages apply ([`Self::contest_ft_messages`]) and which WSJT-X has no activity for, where
+    /// its Tx6 is the operator's own, directed or plain, as in its normal mode. The row stays the
+    /// operator's, and on this computer Tx 6 and Call CQ hand its direction to the contest's
+    /// Running ([`Self::start_running_with_cq`]). A standard call only, as WSJT-X's
+    /// (`genCQMsg`: `stdCall(my_callsign)`): the packer has no form for a nonstandard call's
+    /// directed CQ, and its row keeps its own CQ.
+    pub fn contest_cq_typed(&self) -> bool {
+        self.contest_ft_messages() == Some(FtMessages::Standard)
+            && tempo_core::message::is_std_call(&self.settings.mycall)
+    }
+
+    /// A double-click on `de`'s CQ (`text`, which carried `grid`) while a contest runs whose
+    /// own FT8/FT4 `messages` apply: the contest's S&P works that station
+    /// ([`FieldDayStation::answer_cq`]). The rest is what a double-click does outside a contest
+    /// ([`Self::call_station_ctx`]): the answer goes on the period opposite the CQ's, RX moves
+    /// onto the station and TX with it unless Hold is on, TX is enabled where "Double-click on
+    /// call sets Tx enable" is on, and the current period keys if the over still fits.
+    ///
+    /// After the contact the station is the contest's S&P, as the Contest screen's S&P leaves it.
+    ///
+    /// ⚠️ **REFUSED BEFORE ANYTHING CHANGES**, as `call_station_ctx` refuses: with no decode to
+    /// take the period from; for a CQ with no grid where the contest answers with the grid (the
+    /// contest's S&P passes such a CQ by: its call is one the grid message cannot carry); and
+    /// when the contest cannot start (its exchange not filled in), which `set_mode` refuses
+    /// without changing anything.
+    fn answer_cq_in_contest(
+        &mut self,
+        messages: FtMessages,
+        de: &str,
+        grid: &str,
+        text: &str,
+        dx_freq: Option<f32>,
+    ) -> Result<(), String> {
+        let slot = self
+            .decode_history
+            .iter()
+            .rev()
+            .find(|(_, d)| d.message.eq_ignore_ascii_case(text.trim()))
+            .map(|(s, _)| *s)
+            .or_else(|| self.latest_decode_slot_from(de))
+            .or(self.last_decode_slot)
+            .ok_or_else(|| {
+                format!(
+                    "No recent decode from {de} — wait for their next transmission, \
+                     then click again."
+                )
+            })?;
+        if messages != FtMessages::FieldDay && grid.is_empty() {
+            return Err(format!(
+                "{de}'s CQ carries no grid: in this contest Nexus answers a CQ that carries one."
+            ));
+        }
+        self.set_mode("fieldday-sp")?;
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.answer_cq(de, grid);
+        }
+        // WSJT-X sets Tx 1st from the clicked message's time (`processMessage`): the opposite of
+        // the CQ's period, whose decode lands at the boundary after it.
+        self.apply_cycle_parity(slot % 2 == 0);
+        if let Some(hz) = dx_freq.filter(|h| *h > 0.0) {
+            self.set_rx_offset(hz);
+            if !self.hold_tx_freq {
+                self.set_tx_offset(hz);
+            }
+        }
+        if self.settings.double_click_sets_tx {
+            self.set_tx_enabled(true);
+        }
+        self.pending_tx_disable = false;
+        self.immediate_tx = true;
         Ok(())
     }
 
@@ -15056,8 +16188,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // so the log's funnel follows it (FD entry stamps it the same way) —
         // an FT4-tier WFD contact must never export or push as "FT8".
         let fd_submode = self.adif_mode_for_tier();
-        if let Mode::FieldDay { station, .. } = &mut self.mode {
+        if let Mode::FieldDay { station, running } = &mut self.mode {
             station.log.current_submode = fd_submode.to_string();
+            // …and so do its messages: FT8 and FT4 speak the contest's own, every other tier
+            // Field Day's. A change re-arms the sequencer; FT8↔FT4 is no change. Whether the
+            // caller runs WSJT-X's Field Day follows the tier too, and re-arms nothing.
+            let ruleset = station.log.ruleset();
+            station.set_messages(FtMessages::for_contest(ruleset, fd_submode), *running);
+            station.set_wsjtx_field_day(FtMessages::wsjtx_field_day(ruleset, fd_submode));
         }
         // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
         // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
@@ -15399,6 +16537,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             tempo_core::applog::info("tx", "transmit disarmed by halt");
         }
         self.tx_enabled = false;
+        // …and it HOLDS: entering a cockpit leaves TX off until the operator's own act turns it
+        // back on (`tx_stop_hold`). A context change halts through here too, and keeps whatever
+        // hold there was ([`Self::halt_tx_for_context_change`]): it is not a stop.
+        self.tx_stop_hold = true;
         // Halt is the IMMEDIATE kill: arm the one-shot the radio loop consumes to
         // cut a slot over in flight (drop PTT + flush). A plain TX-disable
         // (`set_tx_enabled(false)`) deliberately does NOT arm this — operator
@@ -15441,9 +16583,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.drop_psk_latch();
         self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
-                              // Cut any in-progress SSTV image the same way: drop the queued job and arm the
-                              // one-shot abort so the radio loop drops the feed, flushes the output ring and
-                              // unkeys on its next tick.
+        self.voice_dax = None;
+        // Cut any in-progress SSTV image the same way: drop the queued job and arm the
+        // one-shot abort so the radio loop drops the feed, flushes the output ring and
+        // unkeys on its next tick.
         self.sstv_tx = None;
         self.sstv_abort = true;
         self.sstv_tx_mode = None;
@@ -15457,6 +16600,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // invariant 7). `slot_tx_abort` above cuts a JS8 frame in flight exactly as it
         // cuts an FT8 over.
         self.js8_halt_clear();
+        // …and an RTTY Auto run, the same way (the operator, 2026-10-11: "Like JS8's schedule: a
+        // halt is total. The run must be restarted on purpose."). Left running, it called CQ again
+        // at the end of its listen window, and that CQ keyed the moment TX was back on, with no
+        // press. Ended as its own Abort ends it ([`Self::rtty_auto_abort`]; its queue and the over
+        // in flight went above). Auto stays on, and Auto CQ starts a new run.
+        if let Some(seq) = self.rtty_seq.as_mut() {
+            if !matches!(
+                seq.state(),
+                tempo_core::rtty::SeqState::Idle | tempo_core::rtty::SeqState::Done
+            ) {
+                tempo_core::applog::info("tx", "RTTY auto run ended by the halt");
+            }
+            seq.abort();
+        }
+        self.rtty_auto_over = false;
         // A halt ends the one over still owed to a partner the run has left (#170, #153):
         // it is a queued transmission like any other, and this is the universal stop. It
         // matters most on the path that is NOT an operator press — `halt_tx_for_context_change`
@@ -15514,8 +16672,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///   that never asked for this band an immediate grant. `broker_context_hold` holds it to
     ///   the next operator arm — the surface it had before this method existed.
     ///
-    /// Net effect versus [`Self::halt_tx`]: exactly one bit of state differs, `tx_enabled`,
-    /// and it is the OPERATOR's.
+    /// - **Not a stop.** A stop holds TX off on the next cockpit entry (`tx_stop_hold`); a
+    ///   context change keeps whatever hold there was, neither setting one (a band change in
+    ///   FT8 must not take Phone's mic away) nor letting one go.
+    ///
+    /// Net effect versus [`Self::halt_tx`]: exactly the OPERATOR's state differs: `tx_enabled`,
+    /// and the stop's hold.
     ///
     /// ⚠️ THE LOOP MUST STILL REFUSE TO KEY THE WRONG RADIO. Keeping the latch up means the
     /// engine now says "key" during windows where the radio loop is holding a `Rig` that is
@@ -15539,10 +16701,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
             );
         // A context halt is not a Stop TX: it neither asks the loop for a voice-memory stop nor
         // drops one the operator's own halt asked for a moment ago (see `voice_mem_halt`).
-        let (retune, watchdog_start, voice_mem_halt) = (
+        let (retune, watchdog_start, voice_mem_halt, stop_hold) = (
             self.immediate_retune,
             self.tx_watchdog_start,
             self.voice_mem_halt,
+            self.tx_stop_hold,
         );
         // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
         // before the `if restore` below, so a context change still printed TWO lines — the
@@ -15568,6 +16731,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // the arm above, which clears it.
             self.broker_context_hold = true;
         }
+        // Not a stop: the halt above set the hold and the restore cleared it; put back what was.
+        self.tx_stop_hold = stop_hold;
         self.quiet_tx_log = false;
     }
 
@@ -15896,8 +17061,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.pending_tx_disable = false;
             // An operator arm is the consent a foreign broker key waits for after the station
             // moved band/radio under it (see `broker_context_hold`). Cleared HERE and only
-            // here, so every arm path — the TX button, section entry, Call CQ, a UDP Reply —
-            // releases it, and nothing else can.
+            // here, so every arm path — the TX button, section entry where no stop holds TX
+            // off (`tx_stop_hold`), Call CQ, a UDP Reply — releases it, and nothing else can.
             self.broker_context_hold = false;
         }
         self.tx_enabled = on;
@@ -15906,6 +17071,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
             self.tx_watchdog_start = None;
+            // …and a stop's hold. Every arm here is the operator's own act but section entry,
+            // which arms only where nothing holds (`tx_stop_hold`).
+            self.tx_stop_hold = false;
             // …and a refused slot key's halt: turning TX on again is the operator's answer to it.
             self.slot_key_refused = None;
             // …and a failed slot unkey's, the same way.
@@ -15969,6 +17137,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Slot while it drains (no other keying source may grab the rig).
             // plan_tx stamps it false at the next boundary, where the down latch
             // refuses the over.
+        }
+    }
+
+    /// The operator's TX On/Off: every cockpit's TX strip, Operate's Enable TX, Phone's first
+    /// PTT press (which turns TX back on instead of keying), RTTY's TX button, and the Remote's TX
+    /// On/Off and Disarm. TX On is an arm like any other. TX Off is a STOP: it holds, so entering
+    /// a cockpit after it leaves TX off until the operator turns it back on (`tx_stop_hold`). The
+    /// engine's own disarms (FT's "Disable Tx after sending 73") go straight to
+    /// [`Self::set_tx_enabled`] and hold nothing.
+    #[track_caller]
+    pub fn set_tx_enabled_by_operator(&mut self, on: bool) {
+        self.set_tx_enabled(on);
+        if !on {
+            self.tx_stop_hold = true;
         }
     }
 
@@ -16179,6 +17361,54 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.set_sat_pass_engaged(false);
             }
         }
+    }
+
+    /// THE PICK'S HOLD: hold `tp` as the transponder to work, as
+    /// [`Self::set_sat_transponder`] does, unless no radio on this station can
+    /// receive its downlink. The command layer's pick holds through here.
+    ///
+    /// A hold on a radio that cannot hear the bird drives nothing (both legs
+    /// refuse there, [`Self::sat_doppler_legs`]), yet everything that defers to
+    /// a held pass still defers to it: entering the Digital section leaves the
+    /// dial put, an FT8 to FT4 flip does not QSY, the TX gate stamps the pass's
+    /// identity instead of the dial ([`TxGateStamp`]), and the logger window
+    /// says a bird is picked. Right for a pass being worked, wrong for one that
+    /// cannot be. So the pick refuses it, with the reason, and holds nothing;
+    /// none of those paths changes, they simply have no hold to defer to.
+    ///
+    /// Refused only when both are KNOWN: the active radio's probed coverage
+    /// leaves the downlink out (the question `sat_doppler_legs` asks every
+    /// tick), and no other enabled radio exists to work the pass on. Unknown
+    /// coverage holds, failing open as [`Self::rig_covers_mhz`] does
+    /// everywhere. So does a station with another enabled radio: its coverage
+    /// has never been probed here, the pick may hand the pass to it
+    /// ([`Self::sat_tune_nominal`]), and Doppler resumes on it after a switch.
+    ///
+    /// A refusal changes nothing, as every other refused pick does: a hold
+    /// already standing stays, and the reason names it.
+    pub fn hold_sat_transponder(
+        &mut self,
+        tp: (String, usize, tempo_core::doppler::Transponder),
+    ) -> Result<(), String> {
+        let downlink_mhz = tp.2.downlink_centre_hz as f64 / 1_000_000.0;
+        let another_radio = self
+            .settings
+            .radios
+            .iter()
+            .any(|p| p.enabled && p.id != self.settings.active_radio);
+        if self.rig_covers_mhz(downlink_mhz) == Some(false) && !another_radio {
+            return Err(match self.sat_tune.as_ref() {
+                None => {
+                    format!("This radio doesn't cover {downlink_mhz:.4} MHz — nothing is held.")
+                }
+                Some(held) => format!(
+                    "This radio doesn't cover {downlink_mhz:.4} MHz — {} stays held.",
+                    held.label.split('|').next().unwrap_or("").trim()
+                ),
+            });
+        }
+        self.set_sat_transponder(Some(tp));
+        Ok(())
     }
 
     /// The tracked pass is UP (the track loop's `tracking` phase) — or is not.
@@ -17502,7 +18732,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// engine wrote nothing.
     ///
     /// Both legs are `false` with no HELD transponder — there is nothing to
-    /// tune. Inside a hold:
+    /// tune — and on a radio KNOWN unable to receive the held downlink
+    /// ([`Self::rig_covers_mhz`] answering `Some(false)`): a radio that cannot
+    /// hear the bird is not working the pass. The pick asks exactly that before
+    /// it tunes ([`Self::sat_tune_nominal`]'s capability gate) and refuses both
+    /// legs on it; the tick never asked, so a bird held on an HF-only rig was
+    /// steered onto it at AOS anyway. An FT-710 working FT8 on 20 m was sent
+    /// the 70 cm downlink three times a correction, refused each time and read
+    /// back, and its band picker flickered "20m (custom)" for the whole pass
+    /// (measured 2026-10-13). Re-asked every tick against the radio active RIGHT
+    /// NOW, like the uplink consent: a switch to a rig that covers the bird
+    /// resumes Doppler there, and unknown coverage fails open, as everywhere.
+    ///
+    /// Inside a hold, on a radio that can hear the bird:
     /// - downlink = the off switch + a mapping that leaves the dial ours
     ///   ([`crate::settings::Settings::sat_doppler_downlink`]);
     /// - uplink = the per-radio confirmed consent
@@ -17512,12 +18754,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///   SIMPLEX channel — one dial carries both legs there, and a split would
     ///   engage the rig's cross-band satellite mode on a same-band channel.
     pub fn sat_doppler_legs(&self) -> tempo_core::doppler::Legs {
-        let Some(st) = self.sat_tune.as_ref() else {
-            return tempo_core::doppler::Legs {
-                downlink: false,
-                uplink: false,
-            };
+        let neither = tempo_core::doppler::Legs {
+            downlink: false,
+            uplink: false,
         };
+        let Some(st) = self.sat_tune.as_ref() else {
+            return neither;
+        };
+        let downlink_mhz = st.transponder.downlink_centre_hz as f64 / 1_000_000.0;
+        if self.rig_covers_mhz(downlink_mhz) == Some(false) {
+            return neither;
+        }
         tempo_core::doppler::Legs {
             downlink: self.settings.sat_doppler_downlink(),
             uplink: self.settings.sat_doppler_uplink()
@@ -17963,7 +19210,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// model's copy visible after the model has been switched off would be stale text
     /// presented as live decode.
     pub fn set_unassisted_mode(&mut self, on: bool) {
+        let was = crate::settings::ContestBefore::of(&self.settings);
         self.settings.unassisted_mode = on;
+        self.note_contest_before(was, self.settings.fd_active);
         if on {
             self.ai_cw_text.clear();
             self.ai_cw_status.clear();
@@ -18858,6 +20107,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// is pending work, not ownership — it keys only through `poll_aprs_tx`,
     /// behind this arbiter.
     pub fn tx_owner(&self) -> Option<TxOwner> {
+        self.tx_owner_with(self.voice_tx.is_some())
+    }
+
+    /// [`Self::tx_owner`] apart from the voice keyer's own pending message: what ELSE holds the
+    /// transmitter. Asked for a message that waits for Nexus's own Flex client to switch the radio
+    /// to DAX, at its send and while it waits: anything here refuses or drops it.
+    pub fn tx_owner_beside_voice(&self) -> Option<TxOwner> {
+        self.tx_owner_with(false)
+    }
+
+    /// The arbiter's one chain, with the voice keyer's pending message as `voice`.
+    fn tx_owner_with(&self, voice: bool) -> Option<TxOwner> {
         if self.app.radio.transmitting {
             Some(TxOwner::Slot)
         } else if self.tuning {
@@ -18868,7 +20129,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // From the arm, before any audio: an armed over owns the transmitter the way a
             // latched RTTY stream does from its first tick, so nothing else can key under it.
             Some(TxOwner::Mic)
-        } else if self.voice_tx.is_some() {
+        } else if voice {
             Some(TxOwner::Voice)
         } else if !self.cw_queue.is_empty() {
             Some(TxOwner::Cw)
@@ -20452,9 +21713,9 @@ contact yourself."
                 ) {
                     // "DIG" is the scoring class (2 points); "RTTY" is what was
                     // actually on the air, so the export says RY and not FT8.
-                    // Ok(false) = already worked this band+class, the NORMAL
-                    // outcome for a repeat and nothing to report — the contact
-                    // is in the log already. Err is unreachable: FD is the mode.
+                    // A repeat of a station already worked on this band+class is
+                    // logged too, marked a dupe and worth nothing: the contact was
+                    // made (`DupeRule::log_dupes`). Err is unreachable: FD is the mode.
                     let _ = self.fd_log_manual_submode(&call, &class, &section, "DIG", "RTTY");
                     return;
                 }
@@ -21958,6 +23219,77 @@ contact yourself."
         self.set_mode("qso-run")
     }
 
+    /// The Operate strip's Call CQ: a plain CQ run ([`Self::start_cq`]), but one:
+    ///
+    /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), Call CQ is the contest's Running** — `CQ FD`, `CQ TEST`,
+    /// or where WSJT-X has no activity the CQ typed in the Tx6 row — as WSJT-X's CQ is the
+    /// activity's once one is set, and its Tx6 where none is (`genCQMsg`, mainwindow.cpp
+    /// 9466-9531). Before, it left the contest for FT8 QSO mode, so a station that started its run
+    /// here lost it to S&P on opening the Contest screen. A contest that cannot start (its exchange
+    /// not filled in) refuses it, as the Contest screen's Running does, and nothing changes. Like
+    /// any Call CQ it clears a directed-CQ token left from the Tx6 row, except where the Running
+    /// calls the row's CQ ([`Self::start_running_with_cq`]).
+    ///
+    /// The Remote page calls `start_cq` directly, with the CQ it shows. On this computer the Tx6
+    /// row calls this while a contest runs, the CQ it shows then being the contest's
+    /// ([`Self::contest_running_cq`]) or its own ([`Self::contest_cq_typed`]), and `start_cq`
+    /// everywhere else.
+    pub fn start_running(&mut self) -> Result<(), String> {
+        self.start_running_with_cq(None)
+    }
+
+    /// [`Self::start_running`] with the direction of the CQ typed in the Tx6 row (`None` for a
+    /// plain one), which the contest's Running calls where WSJT-X has no activity for the contest
+    /// ([`Self::contest_cq_typed`]), on its first CQ and after every contact; the Contest screen's
+    /// Running keeps it. Everywhere else it is set aside: the contests WSJT-X has an activity for
+    /// call their own CQ, and outside a contest Call CQ is a plain run.
+    pub fn start_running_with_cq(&mut self, dir: Option<&str>) -> Result<(), String> {
+        if self.contest_ft_messages().is_some() {
+            // The screen's Running refuses a run without a valid callsign at the command (the
+            // `set_mode` command's identity check), and so does this one.
+            self.structured_tx_ready(false)?;
+            let typed = dir
+                .map(|d| d.trim().to_uppercase())
+                .filter(|d| !d.is_empty() && self.contest_cq_typed());
+            // In place before the Running is built, which reads it; a refusal puts it back.
+            let before = std::mem::replace(&mut self.cq_dir, typed);
+            if let Err(why) = self.set_mode("fieldday-run") {
+                self.cq_dir = before;
+                return Err(why);
+            }
+            return Ok(());
+        }
+        self.start_cq(None)
+    }
+
+    /// Whether [`Self::start_running`] opens a contest session: the contest's Running entered
+    /// from another mode. See [`Self::work_station_opens_session`].
+    pub fn start_running_opens_session(&self) -> bool {
+        self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-run")
+    }
+
+    /// The Operate strip's S&P: FT8 QSO monitoring (`qso-monitor`), but:
+    ///
+    /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
+    /// ([`Self::contest_ft_messages`]), S&P is the contest's S&P**, its messages and its log, as
+    /// the strip's Call CQ is its Running ([`Self::start_running`]) and as the Contest screen's
+    /// S&P is: with TX on it answers the next CQ it hears. A contest that cannot start (its
+    /// exchange not filled in) refuses it, as the Contest screen's S&P does, and nothing changes.
+    /// The Remote page's S&P keeps its own path.
+    pub fn start_search_and_pounce(&mut self) -> Result<(), String> {
+        if self.contest_ft_messages().is_some() {
+            return self.set_mode("fieldday-sp");
+        }
+        self.set_mode("qso-monitor")
+    }
+
+    /// Whether [`Self::start_search_and_pounce`] opens a contest session: the contest's S&P
+    /// entered from another mode. See [`Self::work_station_opens_session`].
+    pub fn start_search_and_pounce_opens_session(&self) -> bool {
+        self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-sp")
+    }
+
     /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.
     /// Starts (or retargets) the QSO when needed; the auto-sequencer's observe
     /// still advances on the partner's matching reply, so a forced message
@@ -22057,7 +23389,15 @@ contact yourself."
 
     /// Reset the transmit-watchdog: clear the tripped flag and restart the wall-clock
     /// timer on the next over. Called on any operator-initiated action.
+    ///
+    /// A trip still standing with TX off is a stop nobody has answered. It holds TX off on the
+    /// next cockpit entry by its own flag, and that flag comes down here without an arm too (the
+    /// Contest screen's `set_mode`, an FT sequence step), so the trip becomes the stop's hold
+    /// (`tx_stop_hold`), which only an arm lets go.
     fn reset_tx_watchdog(&mut self) {
+        if self.tx_watchdog && !self.tx_enabled {
+            self.tx_stop_hold = true;
+        }
         self.tx_watchdog = false;
         self.tx_watchdog_start = None;
     }
@@ -22457,6 +23797,7 @@ contact yourself."
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
         s.radio.slot_audio_lost = self.slot_audio_lost.clone();
         s.radio.ptt_refused = self.ptt_refused.clone();
+        s.radio.voice_dropped = self.voice_dropped.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
@@ -22743,6 +24084,23 @@ contact yourself."
                 s.mode = OpMode::FieldDay;
                 s.field_day = self.field_day_status();
             }
+        }
+        // Outside the Field Day block, which exists only while the mode is on.
+        s.club_link = self.fd_club_link();
+        // ⭐ Beside the host's board, its hosting line counts that board's Connected rows: one
+        // reading in one snapshot, so the line and the board agree even when the clock's second
+        // turns between the two reads.
+        if let (Some(hosting), Some(club)) = (
+            s.club_link.as_mut().and_then(|l| l.hosting.as_mut()),
+            s.field_day.as_ref().and_then(|f| f.club.as_ref()),
+        ) {
+            hosting.connected = club
+                .board
+                .iter()
+                .filter(|r| {
+                    r.link.as_deref() == Some(crate::fdevent::PositionLink::Connected.code())
+                })
+                .count() as u32;
         }
 
         // #64, display side only: a DXpedition Fox packs two messages into one frame —
@@ -23037,6 +24395,7 @@ contact yourself."
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
+        s.work_park = self.work_park.clone();
         s.hunt = self
             .station
             .hunt_target() // TTL-filtered: an expired pend never shows a chip
@@ -23060,6 +24419,8 @@ contact yourself."
         s.parsec_presence = self.parsec_presence_dto();
         s.tx_alarms = self.tx_alarms.clone();
         s.contest_entry = self.contest_entry_dto();
+        s.contest_cq = self.contest_running_cq();
+        s.contest_cq_typed = self.contest_cq_typed();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -23304,8 +24665,12 @@ contact yourself."
         // tier, not an Ft8|Ft4 list); FT1/DX1 free-text isn't grid-bound, so it's
         // exempt. This is the last line of defense — the command layer also blocks
         // entering a keying mode without a valid identity (with a clear message).
-        // (Field Day exchanges carry no grid, so only the callsign is required.)
-        let needs_grid = !matches!(self.mode, Mode::FieldDay { .. });
+        // (Field Day exchanges carry no grid, so only the callsign is required; every other
+        // contest's FT8/FT4 messages carry one.)
+        let needs_grid = match &self.mode {
+            Mode::FieldDay { station, .. } => station.sends_grid(),
+            _ => true,
+        };
         if self.structured_tx_ready(needs_grid).is_err() {
             self.app.set_transmitting(false);
             return None;
@@ -23505,7 +24870,21 @@ contact yourself."
                             // this final over finishes (the service drains it
                             // on TX-idle, same timing as the deferred disable —
                             // keying CW mid-FT8-over would splatter both).
-                            if self.settings.cw_id_after_73 {
+                            // Never in FT8 or FT4: WSJT-X 3.0.2 clears the ID on
+                            // every GUI tick in those two modes
+                            // (`widgets/mainwindow.cpp:7673`), so the setting
+                            // sends nothing there. FT2, FT1 and DX1 do as FT8
+                            // does; Q65, FST4 and MSK144 keep it.
+                            if self.settings.cw_id_after_73
+                                && !matches!(
+                                    self.app.tier(),
+                                    Tier::Ft8
+                                        | Tier::Ft4
+                                        | Tier::Ft2
+                                        | Tier::TempoFast
+                                        | Tier::TempoDeep
+                                )
+                            {
                                 self.pending_cw_id = true;
                             }
                         }
@@ -23561,6 +24940,13 @@ contact yourself."
                 let m = station.outgoing();
                 if m.is_some() {
                     station.after_tx();
+                    // Stock "Disable Tx after sending 73" after a contact the operator picked (a
+                    // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
+                    // it, and the radio loop turns TX off once it has played, as WSJT-X does after
+                    // a double-clicked contact's RR73 or 73. S&P's own pounces keep TX on.
+                    if station.done() && station.picked() && self.settings.disable_tx_after_73 {
+                        self.pending_tx_disable = true;
+                    }
                 }
                 m.map(|x| x.to_text())
             }
@@ -24850,6 +26236,8 @@ contact yourself."
         let mut sequence_advanced = false;
         // Did the Field Day sequencer log a contact this slot (→ journal it)?
         let mut fd_logged = false;
+        // Did the contest's S&P pick a CQ out of this slot's decodes to answer?
+        let mut fd_answered_cq = false;
         // Hound: TX frequency to adopt for the R+report (the Fox's freq).
         let mut hound_move_tx: Option<f32> = None;
         match &mut self.mode {
@@ -24994,12 +26382,19 @@ contact yourself."
             }
             Mode::FieldDay { station, running } => {
                 let state_before = station.state;
-                let count_before = station.log.qso_count();
+                // Rows, not `qso_count`: a contest that logs its duplicates (the ARRL VHF
+                // contests do) writes a marked row that the count leaves out, and that row
+                // must reach the journal like any other.
+                let rows_before = station.log.qsos().len();
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
+                // S&P (the role that listens) going from listening to awaiting the runner's
+                // exchange has just answered a CQ in these decodes.
+                fd_answered_cq = state_before == tempo_core::fieldday::FdState::Listening
+                    && station.state == tempo_core::fieldday::FdState::AwaitExchange;
                 // The FD sequencer logged a contact this slot → journal it
                 // (after the match — persist_fd_log needs `self` unborrowed).
-                fd_logged = station.log.qso_count() > count_before;
+                fd_logged = station.log.qsos().len() > rows_before;
                 // Run/S&P resilience: once the contact is fully closed (Done and
                 // the closing frame has gone out, so `done()` is true), re-arm to
                 // work the NEXT station instead of transmitting nothing forever —
@@ -25012,6 +26407,13 @@ contact yourself."
                     sequence_advanced = true;
                 }
             }
+        }
+        // ⭐ The contest's S&P answers the CQ it picked on the period opposite the CQ's, as WSJT-X
+        // takes Tx 1st from the CQ it answers (`processMessage`) and as a double-click on one
+        // here does: the CQ's audio is from the period before `slot`, so the opposite of its
+        // period is `slot`'s.
+        if fd_answered_cq {
+            self.apply_cycle_parity(slot.is_multiple_of(2));
         }
         // The one over still owed to a partner the run has already left (#170, #153). Runs
         // AFTER the sequencer has had this slot's decodes, so it can never take a message the
@@ -25585,7 +26987,27 @@ contact yourself."
         self.app.pending_count()
     }
 
-    #[cfg(test)]
+    /// Test hook for the shell's tests (the `test-util` feature, never in a shipped build): hear
+    /// `message` at `snr`, decoded at the boundary of `slot`, through
+    /// [`Self::ingest_decodes_for_test`]'s fold.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn hear_for_test(&mut self, message: &str, snr: i32, slot: u64) {
+        let d = modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        self.ingest_decodes_for_test(&[d], slot);
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.
         let decodes: Vec<modes::Decode> = self.hound_split(decodes.to_vec());
@@ -25640,14 +27062,15 @@ contact yourself."
                     // The file the entry submits: a satellite contact the contest gives
                     // no credit is left out (the journal keeps it).
                     "adif" => Ok(station.log.submission_adif()),
-                    // NAME and EMAIL, CLUB, ENTRY-CLASS and the typed OPERATORS are the
-                    // entrant's own settings, read at export so a corrected typo reaches the
-                    // next file; the log writes each only where the contest's rules list that
-                    // header (never for Field Day).
+                    // NAME and EMAIL, CLUB, ENTRY-CLASS, the typed OPERATORS, the multi-operator
+                    // class, the overlay, the mailing address and the soapbox are the entrant's
+                    // own settings, read at export so a corrected typo reaches the next file;
+                    // the log writes each only where the contest's rules list that header (never
+                    // for Field Day).
                     _ => station.log.cabrillo_with(freq_khz, &self.contest_entrant()),
                 }
             }
-            _ => Err("nothing to export (enter Field Day mode first)".to_string()),
+            _ => Err("nothing to export (turn Contest mode on first)".to_string()),
         }
     }
 
@@ -26207,10 +27630,13 @@ contact yourself."
     /// ⛔ **Three things stop this reaching a row it does not name**, and an edit that
     /// trips any of them is an ordinary general-log edit with no contest effect:
     /// a record with no contest block has an empty `qid`, which parses as nothing;
-    /// [`seq_from_qid`](tempo_core::contest::seq_from_qid) compares the WHOLE session id,
-    /// because seqs are per position and restart at 1 — so `1` names a row in every log
-    /// the operator has ever run, and last weekend's correction must not rewrite this
-    /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    /// [`merged_row`](tempo_core::contest::merged_row) holds the copy to the WHOLE identity
+    /// of the row its seq finds — this contest, this position, and the running the row was
+    /// logged in — because seqs are per position and restart at 1, so `1` names a row in
+    /// every log the operator has ever run, and last weekend's correction must not rewrite
+    /// this weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    /// A copy merged under the name an earlier build gave the row (built from where the
+    /// operator was) still reaches it, after a move and a restart too.
     pub fn update_qso(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
         let Some(after) = self.station.update_row(id, rec) else {
             return false;
@@ -26228,8 +27654,11 @@ contact yourself."
             .as_deref()
             .map_or(String::new(), |c| c.qid.clone());
         let (call, band) = (row.call.clone(), row.band.clone());
+        let posid = self.settings.fd_position_id.clone();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
-            if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
+            if let Some(seq) =
+                tempo_core::contest::merged_row(&station.log, &posid, &qid, row.when_unix)
+            {
                 // Unconditional for a row this session owns: the band is a dupe-key
                 // component too, so an edit that left the call alone still has to be
                 // propagated, and a rebuild over a log that did not move is a no-op by
@@ -26334,7 +27763,7 @@ contact yourself."
         let Some(gone) = self.station.delete_row(id) else {
             return false;
         };
-        self.contest_row_deleted(&gone);
+        self.contest_row_deleted(&gone, None);
         true
     }
 
@@ -26363,9 +27792,10 @@ contact yourself."
         self.station.import_adif(text)
     }
 
-    /// See [`StationCore::merge_lotw_report`].
+    /// See [`StationCore::merge_lotw_report`], with the call in Settings.
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        self.station.merge_lotw_report(text)
+        self.station
+            .merge_lotw_report(text, Some(&self.settings.mycall))
     }
 
     /// See [`StationCore::import_pota_log`].
@@ -26373,9 +27803,10 @@ contact yourself."
         self.station.import_pota_log(text)
     }
 
-    /// See [`StationCore::merge_lotw_own_echo`].
+    /// See [`StationCore::merge_lotw_own_echo`], with the call in Settings.
     pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
-        self.station.merge_lotw_own_echo(text, when_unix)
+        self.station
+            .merge_lotw_own_echo(text, when_unix, Some(&self.settings.mycall))
     }
 
     /// See [`StationCore::stamp_qrz_upload`].
@@ -26742,10 +28173,10 @@ fn report_in(msg: Option<Msg>) -> Option<i32> {
 
 /// How far back a contest session's rows are read before the command that opens it
 /// ([`Engine::session_read`]). A new session starts now, or at its oldest contact restored from
-/// the Field Day journal if that is earlier — and the journal gives back only the last four
-/// days ([`Engine::set_mode`] merges it from `now - 4 days`). So four days reach every row a
-/// session can hold, and the hour on top absorbs a clock step between the read and the switch.
-/// A test pins the journal's window to this one.
+/// the Field Day journal's last four days if that is earlier ([`Engine::set_mode`]: the session's
+/// older contacts come back too, and start nothing). So four days reach back to every session's
+/// start, and the hour on top absorbs a clock step between the read and the switch. A test pins
+/// the journal's window to this one.
 pub const SESSION_READ_WINDOW: u64 = 4 * 86_400 + 3_600;
 
 /// What a command that opens a contest session answers when the session's rows could not be read
@@ -26797,6 +28228,54 @@ pub fn with_session_rows_at_launch<T>(
 ) -> Result<T, String> {
     session_rows_within(engine, opens, then, 3, crate::logstore::SESSION_READ_WAIT)
         .map_err(|()| SESSION_NOT_RESUMED.to_string())
+}
+
+/// ★ A command that may open a contest session, run as the `set_mode` command runs one: `act`
+/// under the Engine lock, the session's rows read before it when `opens` says it opens one
+/// ([`with_session_rows`]), the session's sweep installed from them right after `act`, and only
+/// then `finish` (a snapshot, say), all in the same hold. The cockpit's own gestures that can
+/// enter a contest from another mode (Call CQ, a double-click on a CQ) take it, so a session is
+/// opened with its rows or not at all (SPEC-2 v3 C19). `act` failing installs nothing and does
+/// not `finish`; a log too busy to read refuses with [`SESSION_BUSY`] before `act`.
+pub fn act_opening_session<T>(
+    engine: &std::sync::Mutex<Engine>,
+    opens: impl Fn(&Engine) -> bool,
+    act: impl FnOnce(&mut Engine) -> Result<(), String>,
+    finish: impl FnOnce(&mut Engine) -> T,
+) -> Result<T, String> {
+    with_session_rows(engine, opens, |eng, rows| {
+        act(eng)?;
+        if let Some(rows) = rows {
+            eng.open_session_from(rows);
+        }
+        Ok(finish(eng))
+    })?
+}
+
+/// ★ A restored backup applied ([`Engine::apply_restored_settings`]) with the contest session it
+/// opens, as a settings save opens one: a bundle that turns Contest mode on, or moves the pick
+/// off the contest running, asks [`Engine::save_opens_session`], and [`with_session_rows`] reads
+/// the session's rows first and builds its dupe sweep from them in the same hold as the restore.
+/// `then` runs in that hold too, after the restore — the shell persists there. When the logbook
+/// is too busy to read the rows, the restore is refused whole with [`SESSION_BUSY`], the Save's
+/// own words: neither it nor `then` runs.
+pub fn restore_with_session_rows<T>(
+    engine: &std::sync::Mutex<Engine>,
+    restored: Settings,
+    then: impl FnOnce(&mut Engine) -> T,
+) -> Result<T, String> {
+    let asked = restored.clone();
+    with_session_rows(
+        engine,
+        |eng| eng.save_opens_session(&asked),
+        |eng, rows| {
+            eng.apply_restored_settings(restored);
+            if let Some(rows) = rows {
+                eng.open_session_from(rows);
+            }
+            then(eng)
+        },
+    )
 }
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.
@@ -26920,11 +28399,12 @@ pub fn log_plan(engine: &std::sync::Mutex<Engine>) -> crate::station::LogPlan {
     engine_lock(engine).station_mut().log_plan()
 }
 
-/// Restore the Field Day journal at `path` into the fresh contest log `log` (rows from before
-/// `min_when_unix` self-expire). A journal this build cannot read in full, whether cut off
-/// mid-record, a record with no call, bytes that are not UTF-8, or a file it cannot open, is
-/// kept aside ([`tempo_core::keep_aside`]) once the rows it could read are in: the next contact
-/// rewrites the journal from the log, which would drop the rest for good.
+/// Restore the Field Day journal at `path` into the fresh contest log `log` (the session's own
+/// rows whatever their age; `min_when_unix` ages only the rest). A journal this build cannot
+/// read in full, whether cut off mid-record, a record with no call, bytes that are not UTF-8, or
+/// a file it cannot open, is kept aside ([`tempo_core::keep_aside`]) once the rows it could read
+/// are in: the next contact rewrites the journal from the log, which would drop the rest for
+/// good.
 ///
 /// Only the session's own rows are loaded: its contest's, from the running of it `now_unix`
 /// belongs to ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). The rest — a
@@ -29814,32 +31294,51 @@ mod tests {
         );
     }
 
-    /// ⭐ THE VOICE KEYER CAN'T PLAY WHILE THE RADIO HAS THE MIC (operator ruling, 2026-10-04,
-    /// "Refuse with a message"). With Nexus's own Flex client and native audio on, Phone at the
-    /// shack puts the radio on its own mic while a recorded message still leaves over DAX, so the
-    /// message would not reach the air and the mic would carry the over. The send is refused with
-    /// the reason and nothing is queued; a message queued before the radio took the mic is
-    /// dropped, never held; and once the radio is off the mic, a message plays as before.
-    #[test]
-    fn the_voice_keyer_refuses_while_the_radio_has_the_mic() {
+    /// Phone at the shack on Nexus's own Flex client with native audio on: TX armed, a dial inside
+    /// the privileges, and the radio on its own mic.
+    fn engine_with_the_radio_on_its_mic() -> Engine {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_license_class("general");
         e.set_operating_mode("phone", false); // arms TX
         e.set_frequency(14.250, "20m", "USB");
         e.observe_flex_radio_has_mic(true);
+        e
+    }
+
+    /// ⭐ THE VOICE KEYER PLAYS WHILE THE RADIO HAS THE MIC, THROUGH THE SWITCH (operator ruling,
+    /// 2026-10-12, "Change it now"; it replaced the refusal of 2026-10-04). A message is queued to
+    /// wait for the radio to take DAX, and the loop takes it once it has; a message queued while
+    /// the radio did not have the mic, which would leave over a DAX nobody switched it to, is still
+    /// dropped once the radio has it; and without the mic a message plays as it always has.
+    #[test]
+    fn the_voice_keyer_waits_for_dax_while_the_radio_has_the_mic() {
+        let mut e = engine_with_the_radio_on_its_mic();
         assert!(e.snapshot().radio.flex_radio_has_mic, "the keyer is told");
-        let why = e.send_voice(vec![0.5; 100]).unwrap_err();
-        assert!(
-            why.contains("the radio has the mic"),
-            "the send says why: {why}"
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert!(e.voice_waits_for_dax().is_some(), "it waits for DAX");
+        assert_eq!(
+            e.tx_owner(),
+            Some(TxOwner::Voice),
+            "and holds the transmitter"
         );
-        assert_eq!(e.tx_owner(), None, "nothing was queued");
-        assert_eq!(e.poll_voice(), None, "nothing plays");
+        assert_eq!(
+            e.tx_owner_beside_voice(),
+            None,
+            "nothing else does: the message is not its own rival"
+        );
+        // What the loop does once the radio reports DAX.
+        assert_eq!(e.poll_voice(), Some(vec![0.5; 100]));
+        assert_eq!(e.voice_waits_for_dax(), None, "taken");
 
         // Queued while the radio took DAX (the stream's browser voice, say), and the radio took
         // the mic before the loop played it: dropped, not held for later.
         e.observe_flex_radio_has_mic(false);
         e.send_voice(vec![0.5; 100]).unwrap();
+        assert_eq!(
+            e.voice_waits_for_dax(),
+            None,
+            "a message the radio takes as it is"
+        );
         e.observe_flex_radio_has_mic(true);
         assert_eq!(
             e.poll_voice(),
@@ -29857,6 +31356,100 @@ mod tests {
         e.send_voice(vec![0.5; 100]).unwrap();
         assert_eq!(e.poll_voice(), Some(vec![0.5; 100]));
         assert!(!e.snapshot().radio.flex_radio_has_mic);
+    }
+
+    /// ⭐ THE TWO REFUSALS OF THE SWITCH, BY VALUE: anything else holding the transmitter, in its own
+    /// words, and a message longer than the 20 seconds the Flex client's DAX carries; a message of
+    /// exactly 20 seconds is taken. Nothing refused is queued, and a message still pending is not
+    /// touched. Neither refusal applies while the radio does not have the mic: the sound card or
+    /// another program's DAX carries the message there, as it always has.
+    #[test]
+    fn the_switch_refuses_a_busy_transmitter_and_a_message_longer_than_twenty_seconds() {
+        let mut e = engine_with_the_radio_on_its_mic();
+        e.set_ptt(true);
+        assert_eq!(
+            e.send_voice(vec![0.5; 100]),
+            Err("Mic PTT is held — release it first".to_string())
+        );
+        e.set_ptt(false);
+        e.set_tune(true);
+        assert_eq!(
+            e.send_voice(vec![0.5; 100]),
+            Err("Tune carrier is up — stop tuning first".to_string())
+        );
+        e.set_tune(false);
+        assert_eq!(e.tx_owner(), None, "nothing refused was queued");
+
+        let longest = vec![0.5; FLEX_VOICE_MAX_SAMPLES];
+        assert_eq!(e.send_voice(longest), Ok(()), "exactly 20 seconds is taken");
+        assert_eq!(
+            e.send_voice(vec![0.5; FLEX_VOICE_MAX_SAMPLES + 1]),
+            Err(FLEX_VOICE_TOO_LONG.to_string())
+        );
+        assert_eq!(
+            e.poll_voice().map(|m| m.len()),
+            Some(FLEX_VOICE_MAX_SAMPLES),
+            "the pending message is the one taken, untouched by the refusal"
+        );
+
+        // The radio not on its mic: neither refusal, as before.
+        e.observe_flex_radio_has_mic(false);
+        assert_eq!(e.send_voice(vec![0.5; FLEX_VOICE_MAX_SAMPLES + 1]), Ok(()));
+        e.set_ptt(true);
+        assert_eq!(e.send_voice(vec![0.5; 100]), Ok(()));
+    }
+
+    /// ⭐ A MESSAGE THAT WAITS PASSES EVERY GATE AGAIN WHEN THE LOOP TAKES IT: TX turned off
+    /// meanwhile (the latch), or the dial gone outside the privileges, drops it, never held; and
+    /// Stop TX, Halt or the keyer's ■ Stop drops it outright.
+    #[test]
+    fn a_waiting_message_meets_the_latch_the_privileges_and_the_stops() {
+        let mut e = engine_with_the_radio_on_its_mic();
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.set_tx_enabled(false);
+        assert_eq!(e.poll_voice(), None, "TX went off while it waited");
+        e.set_tx_enabled(true);
+        assert_eq!(e.poll_voice(), None, "dropped, not held");
+
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.set_frequency(14.200, "20m", "USB");
+        assert_eq!(e.poll_voice(), None, "the dial left the privileges");
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(e.poll_voice(), None, "dropped, not held");
+
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.halt_tx();
+        assert_eq!(e.voice_waits_for_dax(), None, "Stop TX drops it");
+        assert_eq!(e.tx_owner(), None);
+        e.set_tx_enabled(true);
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.stop_voice();
+        assert_eq!(e.voice_waits_for_dax(), None, "the keyer's ■ Stop drops it");
+        assert_eq!(e.tx_owner(), None);
+    }
+
+    /// The loop's drop: the message goes, and the status lane says why, as the UI receives it,
+    /// until the keyer accepts the next message.
+    #[test]
+    fn a_message_the_flex_client_drops_is_on_the_status_lane_until_the_next() {
+        let mut e = engine_with_the_radio_on_its_mic();
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.drop_flex_voice(crate::dto::VoiceDropCause::NoDax);
+        assert_eq!(e.voice_waits_for_dax(), None);
+        assert_eq!(e.tx_owner(), None);
+        let lane = |e: &Engine| {
+            serde_json::to_value(e.snapshot()).unwrap()["radio"]["voiceDropped"]["cause"].clone()
+        };
+        assert_eq!(lane(&e), "noDax");
+        e.send_voice(vec![0.5; 100]).unwrap();
+        e.drop_flex_voice(crate::dto::VoiceDropCause::Keyed);
+        assert_eq!(lane(&e), "keyed");
+        e.send_voice(vec![0.5; 100]).unwrap();
+        assert_eq!(
+            lane(&e),
+            serde_json::Value::Null,
+            "a new message answers anew"
+        );
     }
 
     /// …and a send made while TX is off or outside the privileges, which was ignored without
@@ -31246,8 +32839,9 @@ mod tests {
         assert!(!e.sstv_sending());
         assert!(!e.tx_enabled(), "halt_tx also disarms TX");
 
-        // TX disarm (Monitor off).
-        e.set_operating_mode("phone", false); // re-arm
+        // TX disarm (Monitor off). After the halt, TX stays off until the operator turns it
+        // back on: entering Phone does not re-arm behind a stop.
+        e.set_tx_enabled_by_operator(true);
         e.sstv_send(sstv_img_samples(), "PD-120".into()).unwrap();
         e.set_tx_enabled(false);
         assert!(e.take_sstv_abort(), "disarm aborts the image in flight");
@@ -34688,8 +36282,10 @@ mod tests {
 
     #[test]
     fn cw_id_after_73_arms_on_the_final_over_and_halt_clears_it() {
-        // Mirrors disable_tx_after_73_is_deferred_and_snp_only's drive exactly.
+        // Mirrors disable_tx_after_73_is_deferred_and_snp_only's drive exactly, on Q65, which
+        // keeps the ID (FT8 sends none, as WSJT-X).
         let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::Q65);
         e.settings.cw_id_after_73 = true;
         e.call_station("W9XYZ"); // S&P: we answer them
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
@@ -34699,6 +36295,7 @@ mod tests {
         assert!(!e.take_pending_cw_id(), "one-shot");
         // Default-off: without the setting the flag never arms.
         let mut d = Engine::new("K2DEF", "FN31", 0);
+        d.set_tier(Tier::Q65);
         d.call_station("W9XYZ");
         d.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         d.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
@@ -34712,6 +36309,88 @@ mod tests {
         let _ = e.poll_tx(8);
         e.halt_tx();
         assert!(!e.take_pending_cw_id(), "halt clears a pending CW ID");
+    }
+
+    /// ⭐ NO CW ID IN THE FT MODES, AS WSJT-X. WSJT-X 3.0.2 arms its CW ID on the over that
+    /// carries a contact's first 73 in every mode, then clears it on every 100 ms GUI tick in
+    /// FT8 and FT4 (`widgets/mainwindow.cpp:7673`), long before the modulator reads it after the
+    /// last symbol, so "CW ID after 73" sends nothing in those two modes. FT2, FT1 and DX1 do as
+    /// FT8 does. Q65, FST4 and MSK144 keep it: the ID is armed when the final 73 leaves and the
+    /// radio loop keys MYCALL once that over has played. The stored setting is left as it is.
+    #[test]
+    fn the_cw_id_after_73_keys_only_outside_the_ft_modes() {
+        let mut armed = Vec::new();
+        for tier in [
+            Tier::Ft8,
+            Tier::Ft4,
+            Tier::Ft2,
+            Tier::TempoFast,
+            Tier::TempoDeep,
+            Tier::Q65,
+            Tier::Fst4,
+            Tier::Msk144,
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.cw_id_after_73 = true;
+            e.set_tier(tier);
+            // The final 73 of an S&P contact, as the sequencer drives it.
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+            assert_eq!(
+                e.snapshot().qso.and_then(|q| q.tx_now).as_deref(),
+                Some("W9XYZ K2DEF 73"),
+                "{tier:?}: the closing over"
+            );
+            assert!(
+                !e.poll_tx(4).is_empty(),
+                "{tier:?}: the closing 73 transmits"
+            );
+            let id = e.take_pending_cw_id();
+            if id {
+                // What the radio loop does with it once the over has played out.
+                let mycall = e.settings.mycall.clone();
+                e.send_cw(&mycall);
+                assert_eq!(
+                    e.poll_cw_one().as_deref(),
+                    Some("K2DEF"),
+                    "{tier:?}: the ID keys"
+                );
+            }
+            armed.push((tier, id));
+            assert!(
+                e.settings.cw_id_after_73,
+                "{tier:?}: the setting is as stored"
+            );
+        }
+        assert_eq!(
+            armed,
+            [
+                (Tier::Ft8, false),
+                (Tier::Ft4, false),
+                (Tier::Ft2, false),
+                (Tier::TempoFast, false),
+                (Tier::TempoDeep, false),
+                (Tier::Q65, true),
+                (Tier::Fst4, true),
+                (Tier::Msk144, true),
+            ],
+            "a CW ID armed after the final 73"
+        );
+        // …and the stored choice round-trips through the settings file, on and off.
+        let dir = std::env::temp_dir().join(format!("tempo_cw_id_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for on in [true, false] {
+            let s = Settings {
+                cw_id_after_73: on,
+                ..Settings::default()
+            };
+            s.save(&path).unwrap();
+            assert_eq!(Settings::load(&path).cw_id_after_73, on);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -34909,10 +36588,13 @@ mod tests {
         //
         // It was never a guard, because the only surface with a PTT button is an operating
         // section, and ENTERING one arms transmit (`set_operating_mode`, the manual-mode arm
-        // — a rig's live mic). So the shipped path "pick a bird → open Phone → press PTT"
-        // ends with an armed mic on the downlink whatever the halt did. Proven the strong
-        // way: force the latch DOWN with a full `halt_tx` (harder than the old halt) and
-        // walk the operator's real path anyway.
+        // — a rig's live mic) wherever no stop holds it off. A pick is not a stop: its halt is
+        // a context change, which keeps the operator's latch and holds nothing
+        // (`halt_tx_for_context_change`). So the shipped path "pick a bird → open Phone →
+        // press PTT" ends with an armed mic on the downlink. Proven the strong way: force the
+        // latch DOWN the hardest way that is not a stop (leaving Phone for FT8 disarms it) and
+        // walk the operator's real path anyway. Only the operator's own Stop TX, Esc or TX Off,
+        // or a watchdog trip, keeps the mic off on entry, until the next PTT press turns it on.
         //
         // Refusing the mic under a pass instead is an OPERATOR's ruling, not a quiet one:
         // SSB satellite work IS the mic, and on a rig put into satellite mode by hand there
@@ -34928,7 +36610,7 @@ mod tests {
             "scene guard: the pick parked the rig on the DOWNLINK, got {}",
             e.settings().dial_mhz
         );
-        e.halt_tx(); // the pre-fix context halt, and then some
+        e.set_operating_mode("digital", false); // the latch down, and not by a stop
         assert!(!e.tx_enabled(), "scene guard: the latch is down");
 
         e.set_operating_mode("phone", false); // the operator opens the Phone cockpit
@@ -35471,6 +37153,56 @@ mod tests {
             e.cw_keyer_error().is_some(),
             "the next refusal is noticed again"
         );
+    }
+
+    /// ⭐ THE PADDLE'S STOP IS NOT STOP TX (operator ruling, 2026-10-12: the paddle wins). When the
+    /// operator's paddle takes over from Nexus's CW, the rest of the message is dropped and the CW
+    /// screen says so, in place of a warning, and nothing else moves: TX stays on with no stop hold,
+    /// and neither the CW abort nor the slot-TX abort is armed, each of which would put a stop on
+    /// the wire at the operator's own keying. The next send takes the line down and goes through
+    /// every gate as always: the TX latch and the licence's privileges.
+    #[test]
+    fn the_paddle_stop_is_not_stop_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.030, "40m", "CW");
+        assert!(e.tx_enabled(), "control: entering CW arms TX");
+        e.send_cw("CQ TEST DE KD9TAW");
+        assert_eq!(e.poll_cw_one().as_deref(), Some("CQ"));
+        e.set_cw_keyer_error(Some("an earlier refusal".into()));
+        e.cw_operator_break();
+        assert_eq!(
+            (e.poll_cw_one(), e.cw_paddle_took_over(), e.cw_keyer_error()),
+            (None, true, None),
+            "(the next word, the paddle's line, the warning line)"
+        );
+        assert_eq!(
+            (
+                e.tx_enabled(),
+                e.tx_stop_hold,
+                e.take_cw_abort(),
+                e.take_slot_tx_abort()
+            ),
+            (true, false, false, false),
+            "(TX on, the stop hold, the CW abort, the slot-TX abort)"
+        );
+        e.send_cw("TEST");
+        assert!(
+            !e.cw_paddle_took_over(),
+            "the next send takes the line down"
+        );
+        assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"));
+        // The latch: TX lowered after the send, the send keys nothing.
+        e.send_cw("TEST");
+        e.set_tx_enabled(false);
+        assert_eq!(e.poll_cw_one(), None);
+        // The privileges: 7.020 is not a General's.
+        e.set_license_class("general");
+        e.set_frequency(7.020, "40m", "CW");
+        e.send_cw("TEST");
+        assert_eq!(e.poll_cw_one(), None);
+        assert_eq!(e.cw_keyer_error().as_deref(), Some(CW_REFUSED_PRIVILEGES));
     }
 
     /// An Extra in the CW section on 40 m CW, TX on, working K9AAA: where Enter's CW is sent from.
@@ -36493,7 +38225,8 @@ mod tests {
     /// armed anything.
     ///
     /// Digital now disarms on entry, so FT8 is armed only by its own three gates: Monitor,
-    /// a double-click, or Call CQ.
+    /// a double-click, or Call CQ. (And the manual-mode arm no longer runs behind a stop: after
+    /// Stop TX, Esc, TX Off, an FT Halt or the watchdog it leaves TX off, `stop_hold_tests`.)
     #[test]
     fn returning_to_digital_from_a_manual_mode_disarms_transmit() {
         use crate::settings::OperatingMode;
@@ -36507,7 +38240,8 @@ mod tests {
             e.set_operating_mode(wire, false);
             assert!(
                 e.tx_enabled(),
-                "{manual:?}: control — a manual mode still arms on entry (it is a live key)"
+                "{manual:?}: control — with nothing stopped, a manual mode still arms on entry \
+                 (it is a live key)"
             );
             e.set_operating_mode("digital", false);
             assert!(
@@ -37701,6 +39435,58 @@ mod tests {
         let s = e.snapshot();
         assert_eq!(s.work_tick, t0 + 1);
         assert_eq!(s.work_view.as_deref(), Some("cw"));
+    }
+
+    #[test]
+    fn a_worked_needed_rows_park_rides_the_hint_and_is_never_a_hunt() {
+        // A pop-out Needed board reaches the MAIN window's log line only through the snapshot, so
+        // the row's park rides the hint with its call, and nothing is hunted.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let park = crate::dto::WorkPark {
+            program: "POTA".into(),
+            reference: "US-1000".into(),
+        };
+        e.work_spot_split("phone", 14.285, "20m", None);
+        e.note_work_call(Some("K9ABC".into()));
+        e.note_work_park(Some(park.clone()));
+        let s = e.snapshot();
+        assert_eq!(s.work_call.as_deref(), Some("K9ABC"));
+        assert_eq!(s.work_park, Some(park.clone()));
+        assert_eq!(
+            serde_json::to_value(&s).unwrap()["workPark"],
+            serde_json::json!({ "program": "POTA", "reference": "US-1000" })
+        );
+        assert!(s.hunt.is_none(), "a worked park set a hunt");
+        // Nothing at log time reads it: a contact with that call logged without a park of its own
+        // has none, which is what tells it apart from a hunt (`hunt_target_tags_only_the_matching_qso`).
+        let mut rec = e.qso_record("K9ABC".into(), None, Some(-7));
+        rec.when_unix = 1;
+        e.log_qso(rec);
+        let hit = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "K9ABC")
+            .unwrap();
+        assert_eq!(hit.ota.their_ref, None, "the hint tagged a contact");
+        // The next work ends it, park or not: a stale park must never fill another call.
+        e.work_spot_split("cw", 14.030, "20m", None);
+        e.note_work_call(Some("W1AW".into()));
+        assert_eq!(e.snapshot().work_park, None);
+        // A blank reference is no park.
+        e.work_spot_split("phone", 14.285, "20m", None);
+        e.note_work_call(Some("K9ABC".into()));
+        e.note_work_park(Some(crate::dto::WorkPark {
+            program: "POTA".into(),
+            reference: " ".into(),
+        }));
+        assert_eq!(e.snapshot().work_park, None);
+        // A park with no call to belong to is dropped, and the wire then leaves the key out.
+        e.work_spot_split("phone", 14.285, "20m", None);
+        e.note_work_call(None);
+        e.note_work_park(Some(park));
+        let s = e.snapshot();
+        assert_eq!(s.work_park, None);
+        assert!(serde_json::to_value(&s).unwrap().get("workPark").is_none());
     }
 
     #[test]
@@ -41995,6 +43781,42 @@ mod tests {
         e
     }
 
+    /// ⭐ **With no contest running, the contest commands say so by the switch's own name.**
+    /// The switch is Contest mode, whichever contest is picked, so its refusals name it that
+    /// way: "Field Day mode is not active" is what an Illinois QSO Party operator was told for
+    /// a manual contact, a merge, the upload control, "I moved" or an export with it off.
+    #[test]
+    fn with_no_contest_running_the_contest_commands_name_contest_mode() {
+        const OFF: &str = "Contest mode is not active";
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.settings().fd_active, "a fresh engine has the switch off");
+        assert_eq!(
+            e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap_err(),
+            OFF
+        );
+        assert_eq!(e.fd_merge_to_general().unwrap_err(), OFF);
+        assert_eq!(e.fd_set_upload(true, vec!["wrl".into()]).unwrap_err(), OFF);
+        assert_eq!(
+            e.contest_i_moved(vec![("SECTION".to_string(), "IL".to_string())])
+                .unwrap_err(),
+            OFF
+        );
+        assert_eq!(
+            e.export_log("cabrillo").unwrap_err(),
+            "nothing to export (turn Contest mode on first)"
+        );
+        // The logbook's merge, which plans with the Engine lock released, says the same.
+        let shared = std::sync::Mutex::new(e);
+        assert_eq!(
+            crate::logwrite::fd_merge_to_general(&shared).0.unwrap_err(),
+            OFF
+        );
+        // CONTROL: in a session the same commands go through.
+        let mut on = fd_session("W9XYZ");
+        assert!(on.fd_set_upload(true, vec!["wrl".into()]).is_ok());
+        assert!(on.export_log("cabrillo").is_ok());
+    }
+
     /// ⭐ **The ruling, both directions.** The merge writes the contacts into the
     /// general logbook whatever the control says; it QUEUES them only when the
     /// operator turned this session's control on, and only then.
@@ -42170,6 +43992,270 @@ mod tests {
         assert_eq!(station.log.session.field("SECTION"), "WI");
     }
 
+    /// A QSO party engine in the contest, from `state` and, inside the state, `county`.
+    fn party_engine(event: &str, state: &str, county: &str) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.contest_qth_state = state.into();
+            s.contest_qth_county = county.into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        e
+    }
+
+    /// The strip's received vector for one contact of `event`: California's is a serial and
+    /// a QTH, every other party's a report and a QTH.
+    fn party_rcvd(event: &str, qth: &str) -> Vec<(String, String)> {
+        let (key, value) = if event == "cqp" {
+            ("NR", "5")
+        } else {
+            ("RST", "599")
+        };
+        vec![
+            (key.to_string(), value.to_string()),
+            ("QTH".to_string(), qth.to_string()),
+        ]
+    }
+
+    /// ⭐ **"I moved" in the Illinois QSO Party — the mobile the button is for.** An Illinois
+    /// mobile drives from Kane into Will and presses I moved. The move is accepted; the next
+    /// contact SENDS and LOGS Will; a station worked from Kane is a new contact again,
+    /// because the dupe key carries the county sent; the score counts it; the file carries
+    /// each contact's own county; and the setting a restart starts from is Will. Every party
+    /// refused the move before, so the mobile kept sending the county it had left.
+    #[test]
+    fn an_illinois_mobile_moves_county_and_every_surface_follows() {
+        let (mut e, ex) = ilqp_from_kane();
+        assert!(e
+            .contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+            .unwrap());
+        // CONTROL: from the same county, the same station on the same band is a dupe, logged
+        // and marked as every contest logs one since the operator's ruling of 2026-10-11.
+        assert!(
+            e.contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+                .unwrap(),
+            "a dupe from Kane is logged"
+        );
+        let marks: Vec<bool> = e
+            .snapshot()
+            .field_day
+            .expect("in the party")
+            .log
+            .iter()
+            .map(|q| q.dupe)
+            .collect();
+        assert_eq!(marks, [false, true], "a dupe from Kane");
+
+        let moved = e.contest_i_moved(vec![("QTH".to_string(), "WILL".to_string())]);
+        assert_eq!(
+            moved
+                .as_ref()
+                .map(|s| (s.contest_qth_county.as_str(), s.contest_qth_state.as_str())),
+            Ok(("WILL", "IL")),
+            "accepted, and a new session starts in Will"
+        );
+        assert_eq!(e.settings().contest_qth_county, "WILL");
+        // SENDS: what {EXCH} keys, and the strip's Sending line.
+        assert_eq!(e.contest_sent_exchange().as_deref(), Some("WILL"));
+        assert_eq!(e.contest_composing_text().as_deref(), Some("599 WILL"));
+
+        assert!(
+            e.contest_log_manual("K9NR", &ex("COOK"), "CW", None)
+                .unwrap(),
+            "a new contact from Will"
+        );
+        let fd = e.snapshot().field_day.expect("still in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            ["599 KANE", "599 KANE", "599 WILL"]
+        );
+        assert_eq!(
+            (fd.qso_count, fd.points, fd.mult_count),
+            (2, 4, Some(1)),
+            "two CW contacts at 2 points, the dupe worth nothing; Cook is one multiplier"
+        );
+
+        let cab = e.export_log("cabrillo").expect("one entry");
+        for (line, n) in [
+            (" W9XYZ 599 KANE K9NR 599 COOK\n", 2),
+            (" W9XYZ 599 WILL K9NR 599 COOK\n", 1),
+        ] {
+            assert_eq!(cab.matches(line).count(), n, "{line:?} in\n{cab}");
+        }
+        // The header still names the county by name after the move: the one being sent
+        // when the file is written. (First county or last is the sponsor's to say; this is
+        // what the header reads today.)
+        assert!(cab.contains("IL-COUNTY: Will\n"), "{cab}");
+
+        // A RESTART builds the session from Settings, and starts in Will.
+        let mut r = Engine::new("W9XYZ", "EN61", 0);
+        r.apply_settings(moved.expect("checked above"));
+        r.set_mode("fieldday-run").unwrap();
+        assert_eq!(r.contest_composing_text().as_deref(), Some("599 WILL"));
+    }
+
+    /// ⭐ **The same in every party whose exchange carries the sender's QTH** — New York,
+    /// California, Ohio, Tennessee and Texas, each sponsor's mobile rule making a station that
+    /// changes county a new station: from one of its counties to another the move is
+    /// accepted, the setting follows, and the next contact sends and logs the new county, as
+    /// a new contact with the station worked before the move. California's serial runs on.
+    #[test]
+    fn every_partys_mobile_moves_county() {
+        for (event, state, from, to, rcvd, rows) in [
+            ("nyqp", "NY", "ALB", "SUF", "MON", ["599 ALB", "599 SUF"]),
+            ("cqp", "CA", "ALAM", "SFRA", "SDIE", ["1 ALAM", "2 SFRA"]),
+            (
+                "ohqp",
+                "OH",
+                "FRAN",
+                "DELA",
+                "CUYA",
+                ["599 FRAN", "599 DELA"],
+            ),
+            (
+                "tnqp",
+                "TN",
+                "WILL",
+                "DAVI",
+                "KNOX",
+                ["599 WILL", "599 DAVI"],
+            ),
+            (
+                "txqp",
+                "TX",
+                "TRAV",
+                "HARR",
+                "BEXA",
+                ["599 TRAV", "599 HARR"],
+            ),
+        ] {
+            let mut e = party_engine(event, state, from);
+            assert!(
+                e.contest_log_manual("K1AAA", &party_rcvd(event, rcvd), "CW", None)
+                    .unwrap(),
+                "{event}"
+            );
+            let moved = e.contest_i_moved(vec![("QTH".to_string(), to.to_string())]);
+            assert_eq!(
+                moved
+                    .as_ref()
+                    .map(|s| (s.contest_qth_county.as_str(), s.contest_qth_state.as_str())),
+                Ok((to, state)),
+                "{event}"
+            );
+            assert!(
+                e.contest_log_manual("K1AAA", &party_rcvd(event, rcvd), "CW", None)
+                    .unwrap(),
+                "{event}"
+            );
+            let fd = e.snapshot().field_day.expect("still in the party");
+            assert_eq!(
+                fd.log
+                    .iter()
+                    .map(|q| (q.mex.as_str(), q.dupe))
+                    .collect::<Vec<_>>(),
+                [(rows[0], false), (rows[1], false)],
+                "{event}: the new county is sent, logged, and a new contact"
+            );
+        }
+    }
+
+    /// ⭐ **A station outside the state moves its STATE**, where the sponsor provides for a
+    /// mobile outside the state: Ohio's rules (*"Mobile stations that change geographic area
+    /// (counties for Ohio stations, state or province for others)"*) and Illinois's, whose
+    /// Outside Illinois classes are *"Any fixed, portable or mobile station operating from
+    /// outside the state of Illinois"*. Crossing INTO the state is another entry, refused
+    /// with nothing written.
+    #[test]
+    fn a_mobile_outside_the_state_moves_state_and_cannot_cross_in() {
+        for (event, from, to, inside) in
+            [("ohqp", "MI", "IN", "FRAN"), ("ilqp", "IN", "WI", "COOK")]
+        {
+            let mut e = party_engine(event, from, "");
+            let moved = e.contest_i_moved(vec![("QTH".to_string(), to.to_string())]);
+            assert_eq!(
+                moved
+                    .as_ref()
+                    .map(|s| (s.contest_qth_state.as_str(), s.contest_qth_county.as_str())),
+                Ok((to, "")),
+                "{event}"
+            );
+            assert_eq!(
+                e.contest_composing_text(),
+                Some(format!("599 {to}")),
+                "{event}"
+            );
+            assert_eq!(
+                e.contest_i_moved(vec![("QTH".to_string(), inside.to_string())])
+                    .err()
+                    .as_deref(),
+                Some(tempo_core::contest::MOVE_CHANGES_ROLE),
+                "{event}: a county inside the state is another entry"
+            );
+            assert_eq!(
+                e.settings().contest_qth_state,
+                to,
+                "{event}: a refused move writes nothing"
+            );
+            assert_eq!(
+                e.contest_composing_text(),
+                Some(format!("599 {to}")),
+                "{event}"
+            );
+        }
+    }
+
+    /// CONTROLS, by value. A contest whose exchange carries no county, state or province of
+    /// mine still refuses, and says why. In a party only the QTH moves: California's serial
+    /// typed here would freeze the run at that number — refused, and the run goes on.
+    #[test]
+    fn i_moved_refuses_what_is_not_where_you_are_in_words() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "arrlvhf_sep".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert_eq!(
+            e.contest_i_moved(vec![("GRID".to_string(), "EN52".to_string())])
+                .err()
+                .as_deref(),
+            Some(
+                "ARRL-VHF-SEP does not send your county, state or province, so there is \
+                 nothing for I moved to change."
+            )
+        );
+        assert_eq!(e.settings().mygrid, "EN61", "nothing written");
+
+        let mut e = party_engine("cqp", "CA", "ALAM");
+        assert_eq!(
+            e.contest_i_moved(vec![("NR".to_string(), "45".to_string())])
+                .err()
+                .as_deref(),
+            Some("I moved changes only your QTH; NR is not part of where you are.")
+        );
+        // The number shown and keyed is still the run's own, and it runs on.
+        assert_eq!(e.contest_composing_text().as_deref(), Some("1 ALAM"));
+        for call in ["K1AAA", "K2AAA"] {
+            assert!(e
+                .contest_log_manual(call, &party_rcvd("cqp", "SDIE"), "CW", None)
+                .unwrap());
+        }
+        let fd = e.snapshot().field_day.expect("still in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            ["1 ALAM", "2 ALAM"],
+            "the run goes on"
+        );
+        assert_eq!(e.contest_composing_text().as_deref(), Some("3 ALAM"));
+    }
+
     /// ⭐ **The `CATEGORY-OPERATOR` declaration reaches the entry, both ways.**
     ///
     /// The header shipped as the string literal `MULTI-OP`, so every solo Field Day
@@ -42292,7 +44378,7 @@ mod tests {
     /// ⛔ An edit to an ORDINARY contact must not reach the contest log at all, and an
     /// edit to a contest row from a DIFFERENT session must not either.
     ///
-    /// `seq_from_qid` compares the whole session id for exactly this reason: seqs are per
+    /// `merged_row` holds a copy to the whole identity for exactly this reason: seqs are per
     /// position and restart at 1, so `1` alone names a row in every log ever run. Without
     /// the check, correcting a call in last weekend's contest would silently rewrite this
     /// weekend's row 1 — a contact that was made, replaced by one that was not.
@@ -42498,7 +44584,8 @@ mod tests {
 
         let confirmed = tempo_core::logbook::adif_record(&e.stored_log()[7])
             .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
-        e.station.merge_lotw_report(&confirmed);
+        e.station
+            .merge_lotw_report(&confirmed, Some(&e.settings.mycall));
         assert_eq!(
             next_contact_and_snapshot(&mut e, 106),
             (0, 0),
@@ -43469,6 +45556,10 @@ mod tests {
                     vec!["N0XYZ".into(), "40M".into(), "DIG".into()],
                 ],
                 sections: vec!["EMA".into(), "MN".into()],
+                mults: vec![
+                    ("SECTION".into(), "EMA".into()),
+                    ("SECTION".into(), "MN".into()),
+                ],
                 score: 42,
                 qsos: 7,
                 board: vec![tempo_net::fdsync::WireBoardRow {
@@ -43481,6 +45572,7 @@ mod tests {
                     uniq: 5,
                     rate: 12,
                     age: 3,
+                    removed: false,
                 }],
             });
         }
@@ -43492,6 +45584,12 @@ mod tests {
             "own-log keys are subtracted; club-only keys ship"
         );
         assert_eq!((club.score, club.qsos, club.sections), (42, 7, 2));
+        // ⭐ The sections board lights what the club worked, Minnesota another position's, and
+        // keeps this laptop's own apart.
+        let boards = e.snapshot().field_day.unwrap().boards;
+        assert_eq!(boards[0].slot, "SECTION");
+        assert_eq!(boards[0].worked, ["EMA"], "this laptop's own");
+        assert_eq!(boards[0].club, ["EMA", "MN"], "the club's");
         assert_eq!(club.skew_secs, 3);
         assert_eq!(club.board.len(), 1);
         assert_eq!(club.board[0].pos_name, "SSB tent");
@@ -43536,6 +45634,258 @@ mod tests {
         e.fd_host_start(dir.join("ilqp.ndjson"))
             .expect("the Illinois QSO Party is hosted");
         e
+    }
+
+    /// ⭐ **The spectator board names the call the club is on the air under**: the host's
+    /// Settings call while nothing is held, and the club's after "Contest over?" on the host,
+    /// which puts the operator's own call back in the save that turns the mode off. The board
+    /// read Settings, so after the put-back the TV named the operator's own call.
+    #[test]
+    fn the_board_names_the_clubs_call_after_the_hosts_put_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-board-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_host(&dir);
+        let board_call = |e: &Engine| e.fd_board_snapshot().expect("hosting").call;
+        let save = |e: &mut Engine, active: bool, call: &str| {
+            let mut s = e.settings().clone();
+            s.fd_active = active;
+            s.mycall = call.into();
+            e.apply_settings(s);
+        };
+        assert_eq!(board_call(&e), "W9XYZ", "CONTROL: nothing held");
+
+        // "Contest over?": the mode off and the operator's own call back, in one save.
+        save(&mut e, false, "K9OWN");
+        assert_eq!(
+            (e.settings().mycall.as_str(), e.fd_hosting()),
+            ("K9OWN", true),
+            "CONTROL: the put-back landed and the laptop still hosts"
+        );
+        assert_eq!(
+            board_call(&e),
+            "W9XYZ",
+            "after the put-back the board names the club's call"
+        );
+
+        // The mode back on with the club's call lets the hold go; then another call with the
+        // mode on, which holds nothing: the board names the Settings call.
+        save(&mut e, true, "W9XYZ");
+        save(&mut e, true, "W9NEW");
+        assert_eq!(
+            (e.fd_club_call(), board_call(&e)),
+            ("W9NEW".to_string(), "W9NEW".to_string()),
+            "with nothing held, the board names the Settings call"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An Illinois QSO Party position keeping its contest journal at `journal`, joined to a club
+    /// at a LAN address (nothing listens there: the tests below play the link's part).
+    fn party_position(journal: &std::path::Path) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_fd_log_path(journal.to_path_buf());
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "COOK".into();
+        s.fd_position_id = "eeee0001".into();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        e.apply_settings(s);
+        assert!(matches!(e.mode, Mode::FieldDay { .. }), "the party is on");
+        e
+    }
+
+    /// One party contact from the log strip.
+    fn party_contact(e: &mut Engine, call: &str) {
+        let rx = [
+            ("RST".to_string(), "599".to_string()),
+            ("QTH".to_string(), "KANE".to_string()),
+        ];
+        assert!(
+            e.contest_log_manual(call, &rx, "CW", None).unwrap(),
+            "{call}"
+        );
+    }
+
+    /// ⭐ **Every contest row records the call it was logged on** (`LoggedQso::on_air_call`):
+    /// stamped as Contest mode starts, however it is started, and again on every save, so a row
+    /// the digital sequencer logs between saves carries it too. Club sync keeps a contact logged
+    /// on another call than the club's out of the club's log by it.
+    #[test]
+    fn every_contest_row_records_the_call_it_was_logged_on() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-row-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_position(&dir.join("own.adi"));
+        let stamped = |e: &Engine| match &e.mode {
+            Mode::FieldDay { station, .. } => station.log.on_air_call.clone(),
+            _ => panic!("the party is on"),
+        };
+        assert_eq!(stamped(&e), "W9XYZ", "the call on the air");
+        // The mode started again with no save in between, as its buttons start it, running or
+        // searching.
+        for (mode, call) in [("fieldday-run", "K9RUN"), ("fieldday-sp", "K9NEW")] {
+            e.settings.mycall = call.into();
+            e.set_mode(mode).unwrap();
+            assert_eq!(stamped(&e), call, "stamped as {mode} starts");
+        }
+        let mut s = e.settings().clone();
+        s.mycall = " k9abc".into();
+        e.apply_settings(s);
+        assert_eq!(stamped(&e), "K9ABC", "…and on a save that changes it");
+        party_contact(&mut e, "K9AAA");
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("the party is on");
+        };
+        assert_eq!(
+            station.log.qsos().last().map(|q| q.on_air_call.as_str()),
+            Some("K9ABC"),
+            "the row carries the call it was logged on"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A contact that carries no call follows the call this laptop's link joined under**: one
+    /// logged by a Nexus from before the call was recorded, read back from its journal. Taken
+    /// while the link joined on the club's call; kept out, never sent and never owed, while it
+    /// joined on another (the host's own laptop, its link made on the operator's own call after
+    /// "Contest over?" on it, while the host holds the club's).
+    #[test]
+    fn a_contact_that_carries_no_call_follows_the_call_its_link_joined_under() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-no-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("own.adi");
+        {
+            let mut e = party_position(&journal);
+            party_contact(&mut e, "K9AAA");
+            e.journal_mark().wait();
+        }
+        let written = std::fs::read_to_string(&journal).unwrap();
+        let older = written.replace("<APP_NEXUS_ONAIR:5>W9XYZ ", "");
+        assert!(
+            written != older && !older.contains("APP_NEXUS_ONAIR"),
+            "CONTROL: this build wrote the call, and the older journal has none: {written}"
+        );
+        std::fs::write(&journal, older).unwrap();
+        let mut e = party_position(&journal);
+        let link = |e: &mut Engine, joined: &str| {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, now_unix_secs());
+            m.on_welcome(0, "ILQP", "W9XYZ", 0);
+            m.link_call = joined.into();
+        };
+        let chip = |e: &Engine| {
+            let club = e.snapshot().field_day.unwrap().club.unwrap();
+            (club.sync_state, club.queued)
+        };
+        let other_call = |e: &Engine| e.fd_club_link().and_then(|l| l.other_call);
+
+        link(&mut e, "K9OWN");
+        assert_eq!(
+            (e.fd_sync_outbox(0).len(), chip(&e), other_call(&e)),
+            (0, ("synced".to_string(), 0), Some(1)),
+            "on a link joined on another call: kept out, not owed, and said"
+        );
+        link(&mut e, "W9XYZ");
+        let out = e.fd_sync_outbox(0);
+        assert_eq!(
+            (
+                out.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+                chip(&e),
+                other_call(&e)
+            ),
+            (vec!["K9AAA"], ("behind".to_string(), 1), None),
+            "on a link joined on the club's call: sent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host takes a contact its own laptop logged on another call off the wire**, should
+    /// one come anyway: acked, so it is never asked for again, and not added to the club's log or
+    /// its files. Its queue never sends one; the wire names no call, so the host can read the call
+    /// of its own laptop's contacts alone.
+    #[test]
+    fn the_host_takes_its_own_contact_on_another_call_off_the_wire() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-own-other-call-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = party_position(&dir.join("own.adi"));
+        let mut s = e.settings().clone();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        e.apply_settings(s);
+        e.fd_host_start(dir.join("ilqp.ndjson")).unwrap();
+        let role = e.fd_position_role();
+        let hold = e
+            .fd_club_join(
+                tempo_net::fdsync::PROTO_VERSION,
+                "eeee0001",
+                "HQ",
+                "W9XYZ",
+                "ilqp",
+                &role,
+                &club_key_hash("eeee0001"),
+            )
+            .expect("its own laptop joins")
+            .hold;
+        {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, now_unix_secs());
+            m.on_welcome(0, "ILQP", "W9XYZ", 0);
+            m.link_call = "W9XYZ".into();
+        }
+        party_contact(&mut e, "K9AAA");
+        let row = e
+            .fd_sync_outbox(0)
+            .pop()
+            .expect("the party contact is queued");
+        assert_eq!(e.fd_club_merge(hold, &row), Ok(1), "CONTROL: it is merged");
+
+        // "Contest over?", then the mode back on under the operator's own call.
+        for active in [false, true] {
+            let mut s = e.settings().clone();
+            s.fd_active = active;
+            s.mycall = "K9OWN".into();
+            e.apply_settings(s);
+        }
+        party_contact(&mut e, "K9BBB");
+        assert!(
+            e.fd_sync_outbox(1).is_empty(),
+            "CONTROL: its queue keeps it out"
+        );
+        let sent = tempo_net::fdsync::WireQso {
+            seq: 2,
+            call: "K9BBB".into(),
+            ..row
+        };
+        assert_eq!(
+            e.fd_club_merge(hold, &sent),
+            Ok(2),
+            "acked, so it is never asked for again"
+        );
+        assert_eq!(
+            e.fd_club_log().map(|c| c.qsos_raw()),
+            Some(1),
+            "and not added"
+        );
+        let cab = e.fd_club_export(true).unwrap();
+        assert!(!cab.contains("K9BBB"), "{cab}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⭐ **A position set up in another exchange role than the club's is refused, by name,
@@ -44365,6 +46715,209 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **A joining laptop says where its join stands, whatever the Field Day mode switch
+    /// says.** At the rehearsal the joiner typed the host's address and saw nothing: the club
+    /// block lives inside the Field Day block, which is not there while the mode is off, and
+    /// nothing anywhere said whether the address was tried, refused, unanswered or let in.
+    #[test]
+    fn the_club_link_says_where_a_join_stands_with_the_field_day_mode_off() {
+        use tempo_net::fdsync::Unreachable;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_event = "ilqp".into();
+        s.fd_position_name = "CW tent".into();
+        s.fd_join_addr = " 192.168.1.10 ".into();
+        e.apply_settings(s);
+        e.set_fd_position_key(tempo_net::fdsync::PositionKey::new(club_key_hash(
+            "this laptop",
+        )));
+        assert!(!e.settings().fd_active, "premise: the mode is off");
+        let link = |e: &Engine| e.snapshot().club_link.expect("a join address is set");
+        assert_eq!(
+            e.snapshot().field_day,
+            None,
+            "no Field Day block to carry it"
+        );
+        let l = link(&e);
+        assert_eq!(
+            (l.role.as_str(), l.addr.as_str(), l.state.as_str()),
+            ("position", "192.168.1.10:42073", "looking"),
+            "the address as it is joined, the club's port added"
+        );
+        assert_eq!(l.position, "CW tent");
+        assert_eq!(
+            l.club_code,
+            crate::fdevent::club_code(&e.fd_position_key_hash)
+        );
+        assert!(!l.club_code.is_empty());
+        assert_eq!(l.hosting, None, "a position hosts nothing");
+        // No answer there.
+        e.fd_mirror_mut().on_unreachable(Unreachable::NoAnswer);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.why.as_deref()),
+            ("unreachable", Some("noAnswer"))
+        );
+        // Turned away, in the host's own words.
+        e.fd_mirror_mut().on_link(true, 100);
+        e.fd_mirror_mut().last_error = Some("this club is on the air as W9AAA".into());
+        e.fd_mirror_mut().on_link(false, 101);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.told.as_deref()),
+            ("turnedAway", Some("this club is on the air as W9AAA"))
+        );
+        // The host gone after it: the refusal is no longer what the line quotes.
+        e.fd_mirror_mut().on_unreachable(Unreachable::NoAnswer);
+        let l = link(&e);
+        assert_eq!((l.state.as_str(), l.told.as_deref()), ("unreachable", None));
+        // In: the event, the host, this laptop's position and its code.
+        e.fd_mirror_mut().on_link(true, 120);
+        e.fd_mirror_mut()
+            .on_welcome(0, "ILQP rehearsal", "W9AAA", 0);
+        let l = link(&e);
+        assert_eq!(
+            (
+                l.state.as_str(),
+                l.event.as_str(),
+                l.host_call.as_str(),
+                l.told.as_deref()
+            ),
+            ("joined", "ILQP rehearsal", "W9AAA", None)
+        );
+        // Lost, since when, and why the attempt since failed.
+        e.fd_mirror_mut().on_link(false, 200);
+        e.fd_mirror_mut().on_unreachable(Unreachable::Refused);
+        let l = link(&e);
+        assert_eq!(
+            (l.state.as_str(), l.why.as_deref(), l.down_since_unix),
+            ("lost", Some("refused"), 200)
+        );
+        // The JSON key the screens read.
+        assert_eq!(
+            serde_json::to_value(e.snapshot()).unwrap()["clubLink"]["state"],
+            "lost"
+        );
+        // A connection again: no longer down, so no time it went down.
+        e.fd_mirror_mut().on_link(true, 230);
+        let l = link(&e);
+        assert_eq!((l.state.as_str(), l.down_since_unix), ("looking", 0));
+        // Club sync off: no line. The control for every assertion above.
+        let mut s = e.settings().clone();
+        s.fd_join_addr.clear();
+        e.apply_settings(s);
+        assert_eq!(e.snapshot().club_link, None);
+        assert!(serde_json::to_value(e.snapshot())
+            .unwrap()
+            .get("clubLink")
+            .is_none());
+    }
+
+    /// A new join address starts the link line afresh: what it knew was about another host. The
+    /// same address saved again changes nothing.
+    #[test]
+    fn a_new_join_address_starts_the_link_line_afresh() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        e.apply_settings(s.clone());
+        e.fd_mirror_mut().on_link(true, 100);
+        e.fd_mirror_mut().last_error = Some("this club is on the air as W9AAA".into());
+        e.fd_mirror_mut().on_link(false, 101);
+        let state = |e: &Engine| e.snapshot().club_link.map(|l| l.state);
+        e.apply_settings(s.clone());
+        assert_eq!(state(&e).as_deref(), Some("turnedAway"), "the same address");
+        s.fd_join_addr = "192.168.1.11:42073".into();
+        e.apply_settings(s);
+        assert_eq!(state(&e).as_deref(), Some("looking"), "another address");
+    }
+
+    /// ⭐ **The host says that it is hosting, where a position joins it, and who is in** — or why
+    /// it is not hosting. A failed bind used to reach the Connections log only.
+    #[test]
+    fn the_host_line_says_where_to_join_and_who_is_in() {
+        let dir = std::env::temp_dir().join(format!(
+            "tempo-club-host-line-{}-{}",
+            std::process::id(),
+            now_unix_secs()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_host_enable = true;
+        s.fd_host_port = 42073;
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        e.set_fd_position_key(tempo_net::fdsync::PositionKey::new(club_key_hash(
+            "the host",
+        )));
+        let hosting = |e: &Engine| {
+            let l = e.snapshot().club_link.expect("hosting is on");
+            assert_eq!(l.role, "host");
+            assert_eq!(l.addr, "127.0.0.1:42073", "it joins itself");
+            l.hosting.expect("the host's line")
+        };
+        // Not up yet: the supervisor has not opened the port.
+        assert!(!hosting(&e).up);
+        e.fd_host_start(dir.join("club.ndjson")).unwrap();
+        // The club log is up, and the last try at the port failed: not up.
+        e.fd_host_result(Some(crate::fdevent::HostFailure::PortInUse));
+        assert!(!hosting(&e).up);
+        e.fd_host_result(None);
+        let lan = |adapter: &str, ip: [u8; 4]| tempo_net::fdsync::LanAddr {
+            adapter: adapter.into(),
+            ip: ip.into(),
+            prefix: 24,
+        };
+        e.fd_note_host_lan(vec![
+            lan("Wi-Fi", [192, 168, 1, 10]),
+            lan("Ethernet", [10, 0, 0, 5]),
+        ]);
+        let h = hosting(&e);
+        assert!(h.up);
+        assert_eq!(
+            (h.port, h.failed.as_deref(), h.detail.as_str()),
+            (42073, None, "")
+        );
+        assert_eq!(
+            h.addrs
+                .iter()
+                .map(|a| (a.addr.as_str(), a.adapter.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("192.168.1.10:42073", "Wi-Fi"),
+                ("10.0.0.5:42073", "Ethernet")
+            ]
+        );
+        assert_eq!(h.connected, 0, "nobody in yet");
+        // This laptop's own position and one more in: one other. Each leaves.
+        let own_hash = e.fd_position_key_hash.clone();
+        let other_hash = crate::fdevent::sha256_hex(&club_key_hash("the CW tent"));
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let own = e
+            .fd_club_join(v, "eeee0001", "", "W9XYZ", "arrlfd", "", &own_hash)
+            .expect("the host's own position");
+        let other = e
+            .fd_club_join(v, "aaaa0002", "CW tent", "W9XYZ", "arrlfd", "", &other_hash)
+            .expect("a position");
+        assert_eq!(hosting(&e).connected, 1, "the other position");
+        e.fd_club_disconnect("aaaa0002", other.link);
+        assert_eq!(hosting(&e).connected, 0);
+        e.fd_club_disconnect("eeee0001", own.link);
+        assert_eq!(hosting(&e).connected, 0);
+        // The port taken by another program: not up, and why.
+        e.fd_host_stop();
+        e.fd_host_result(Some(crate::fdevent::HostFailure::PortInUse));
+        let h = hosting(&e);
+        assert!(!h.up);
+        assert_eq!(h.failed.as_deref(), Some("portInUse"));
+        assert_eq!(h.addrs, vec![], "no addresses for a club that is not open");
+        // A beacon's last second after a stop lists nothing.
+        e.fd_note_host_lan(vec![lan("Wi-Fi", [192, 168, 1, 10])]);
+        assert_eq!(hosting(&e).addrs, vec![]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **Club sync runs the contest the picker names, and refuses — by name — the ones
     /// the club log cannot run.**
     ///
@@ -44541,13 +47094,14 @@ mod tests {
                 .unwrap()
         };
 
-        // A Field Day club turns away a v1 tent and a v2 one (every release up to 1.17).
-        for v in [1, 2] {
+        // A Field Day club turns away a v1 tent, a v2 one (every release up to 1.17) and a v3
+        // one (the test builds before a club could take a contact back).
+        for v in 1..PROTO_VERSION {
             let msg = backend
                 .join(v, "aaaa0001", "CW tent", "W9ABC", 0, "", "", &none)
-                .expect_err("an older tent cannot prove its position");
+                .expect_err("an older tent is turned away");
             assert!(
-                msg.contains(&format!("v{v}")) && msg.contains("v3"),
+                msg.contains(&format!("v{v}")) && msg.contains(&format!("v{PROTO_VERSION}")),
                 "the refusal that reaches the wire names both versions: {msg}"
             );
             assert!(msg.contains("Update Nexus on this laptop"), "{msg}");
@@ -44589,6 +47143,91 @@ mod tests {
         assert_eq!(accept.host_call, "W9ABC");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The entry's declarations reach the file from Settings, read at export** — set after
+    /// the contest started, each lands where the sponsor's template puts it: a New York
+    /// multi-operator entry's class with the operators it needs, its overlay and all five address
+    /// headers; an Illinois entry's soapbox. With none set, the same entry's file carries none.
+    #[test]
+    fn the_cabrillo_declarations_are_read_from_settings_at_export() {
+        let mut e = Engine::new("W2XYZ", "FN32", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "nyqp".into();
+        s.contest_qth_state = "NY".into();
+        s.contest_qth_county = "ALB".into();
+        s.contest_category_operator = "MULTI-OP".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-sp")
+            .expect("the New York QSO Party runs");
+        let declared = |file: &str| -> Vec<String> {
+            file.lines()
+                .filter(|l| {
+                    [
+                        "CATEGORY-TRANSMITTER",
+                        "CATEGORY-OVERLAY",
+                        "ADDRESS",
+                        "OPERATORS",
+                        "SOAPBOX",
+                    ]
+                    .iter()
+                    .any(|t| l.starts_with(t))
+                })
+                .map(String::from)
+                .collect()
+        };
+        let bare = e.export_log("cabrillo").expect("exports");
+        assert!(bare.contains("CONTEST: NY-QSO-PARTY\n"), "{bare}");
+        assert_eq!(
+            declared(&bare),
+            Vec::<String>::new(),
+            "nothing declared, nothing written"
+        );
+        let mut s = e.settings().clone();
+        s.contest_category_transmitter = "unlimited".into();
+        s.contest_category_overlay = "rookie".into();
+        s.contest_address = "1 Example Rd\nApt 2".into();
+        s.contest_address_city = "Albany".into();
+        s.contest_address_state = "NY".into();
+        s.contest_address_postalcode = "12207".into();
+        s.contest_address_country = "USA".into();
+        s.contest_soapbox = "A fine party.".into();
+        s.contest_operators = "W2DEF".into();
+        e.apply_settings(s);
+        assert_eq!(
+            declared(&e.export_log("cabrillo").expect("exports")),
+            [
+                "CATEGORY-TRANSMITTER: UNLIMITED",
+                "CATEGORY-OVERLAY: ROOKIE",
+                "ADDRESS: 1 Example Rd",
+                "ADDRESS: Apt 2",
+                "ADDRESS-CITY: Albany",
+                "ADDRESS-STATE-PROVINCE: NY",
+                "ADDRESS-POSTALCODE: 12207",
+                "ADDRESS-COUNTRY: USA",
+                "OPERATORS: W2DEF",
+            ],
+            "New York has no SOAPBOX line"
+        );
+        // The Illinois QSO Party's sample carries the soapbox, and no ADDRESS-COUNTRY.
+        let mut il = ilqp_engine("COOK", "");
+        let mut s = il.settings().clone();
+        s.contest_soapbox = "A fine party.\nBack next year.".into();
+        s.contest_address_country = "USA".into();
+        il.apply_settings(s);
+        let file = il.export_log("cabrillo").expect("exports");
+        assert_eq!(
+            declared(&file)
+                .into_iter()
+                .filter(|l| !l.starts_with("OPERATORS"))
+                .collect::<Vec<_>>(),
+            [
+                "ADDRESS: USA",
+                "SOAPBOX: A fine party.",
+                "SOAPBOX: Back next year."
+            ]
+        );
     }
 
     /// An Illinois QSO Party engine in Field Day mode, at an Illinois county, with the
@@ -44857,8 +47496,11 @@ mod tests {
             )
             .expect_err("a Field Day position cannot join the party's club");
         assert!(
-            refused.contains("IL QSO Party") && refused.contains("ARRL-FIELD-DAY"),
-            "{refused}"
+            refused.starts_with(
+                "this club is running Illinois QSO Party, and this Nexus is logging ARRL Field \
+                 Day."
+            ),
+            "both contests as the picker names them: {refused}"
         );
         let t = 1_792_342_800; // 1700Z, 18 October 2026
         for row in [
@@ -44935,11 +47577,10 @@ mod tests {
         ] {
             assert!(cab.contains(line), "missing {line:?} in:\n{cab}");
         }
-        assert_eq!(
-            cab.matches("QSO:").count(),
-            3,
-            "the RTTY repeat and the second tent's repeat are club dupes: {cab}"
-        );
+        // The RTTY repeat and the second tent's repeat are club dupes: in the file as zero-point
+        // lines (every contest logs its dupes since the operator's ruling of 2026-10-11), and
+        // out of the claimed score below, which is the three contacts'.
+        assert_eq!(cab.matches("QSO:").count(), 5, "{cab}");
         // CW 2 + CW 2 + phone 1 = 5 points, × 3 counties, + W9AWE's 100 once.
         assert!(cab.contains("CLAIMED-SCORE: 115\n"), "{cab}");
         assert_eq!(
@@ -44949,6 +47590,22 @@ mod tests {
         );
         let adif = e.fd_club_export(false).expect("the club ADIF");
         assert!(adif.contains("IL QSO Party"), "the ADIF contest id: {adif}");
+        // The report each row SENT under ADIF's own tag, once a record, as a position's own ADIF
+        // writes it: the SSB tent's 59 is not the club's 599.
+        let records: Vec<&str> = adif
+            .split("<EOR>")
+            .filter(|r| r.contains("<CALL:"))
+            .collect();
+        assert_eq!(records.len(), 5, "every contact, the dupes too: {adif}");
+        for r in records {
+            let rst_sent = if r.contains("<CALL:5>W9AWE ") {
+                "<RST_SENT:2>59 "
+            } else {
+                "<RST_SENT:3>599 "
+            };
+            assert!(r.contains(rst_sent), "{r}");
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{r}");
+        }
         // ⭐ …and the spectator board claims the SAME score, made of the same parts: the
         // club's own unique log under the party's rules, never a Field Day reading of it.
         let board: serde_json::Value =
@@ -44993,11 +47650,26 @@ mod tests {
         let other = e
             .fd_accept_host_contest("arrlfd")
             .expect_err("a host running another contest");
-        assert!(
-            other.contains("ARRL-FIELD-DAY") && other.contains("IL QSO Party"),
-            "{other}"
+        assert_eq!(
+            other,
+            "this club is running ARRL Field Day, and this Nexus is logging Illinois QSO \
+             Party. Pick ARRL Field Day as the contest on the Contesting tab in Settings, then \
+             rejoin. Contacts you log meanwhile stay in your own log.",
+            "both contests named as the picker names them"
         );
-        // The picker moves under the running session: the rows are still the party's.
+        // A pick that differs from the running session — set here directly, because a SAVE that
+        // moves the pick switches the session with it (`save_switches_contest`): the rows are
+        // still the party's.
+        e.settings.fd_event = "wfd".into();
+        assert_eq!(
+            e.fd_position_contest(),
+            "ilqp",
+            "the JOIN names what the rows are, not what the picker says now"
+        );
+        // Saved, the pick is the act: the party ends, and Winter Field Day, with no category or
+        // section here, cannot start, so no session runs and the JOIN names the pick. (From the
+        // party's own pick: a save switches only when it MOVES the pick.)
+        e.settings.fd_event = "ilqp".into();
         {
             let mut s = e.settings().clone();
             s.fd_event = "wfd".into();
@@ -45005,8 +47677,8 @@ mod tests {
         }
         assert_eq!(
             e.fd_position_contest(),
-            "ilqp",
-            "the JOIN names what the rows are, not what the picker says now"
+            "wfd",
+            "the saved pick, with no session"
         );
 
         // A Field Day position (the blank default): an older host is served as before.
@@ -45148,14 +47820,24 @@ mod tests {
         assert!(e
             .contest_log_manual("W4XYZ", &ex("DAVI"), "CW", None)
             .unwrap());
-        // THE DUPE VERDICT is this ruleset's own key…
-        assert!(!e
+        // THE DUPE VERDICT is this ruleset's own key: the repeat is logged, marked (every
+        // contest logs its dupes since the operator's ruling of 2026-10-11)…
+        assert!(e
             .contest_log_manual("K1ABC", &ex("CT"), "CW", None)
             .unwrap());
         // …and the positive control: another mode class is a legal second contact.
         assert!(e
             .contest_log_manual("K1ABC", &ex("CT"), "PH", None)
             .unwrap());
+        let marks: Vec<bool> = e
+            .snapshot()
+            .field_day
+            .expect("still in the contest")
+            .log
+            .iter()
+            .map(|q| q.dupe)
+            .collect();
+        assert_eq!(marks, [false, false, true, false]);
 
         // THE SCORE on screen: 3 points per QSO regardless of mode, times the
         // multipliers this role counts per band.
@@ -45315,6 +47997,129 @@ mod tests {
         (e, ex)
     }
 
+    /// ⭐ **What the Sending line says in each mode is what that mode's row is stamped with.** An
+    /// Illinois party runs CW and phone in ONE session, whose report is the 3-digit constant. A
+    /// phone strip reads [`Engine::contest_composing_text_phone`] (`59 KANE`) and a phone row's
+    /// sent exchange is the same; CW reads [`Engine::contest_composing_text`] (`599 KANE`) and a
+    /// CW row's is that. Phone used to read `599 KANE` and log `59 KANE`.
+    #[test]
+    fn the_sending_line_in_each_mode_is_what_that_modes_row_is_stamped_with() {
+        let (mut e, ex) = ilqp_from_kane();
+        assert_eq!(e.contest_composing_text().as_deref(), Some("599 KANE"));
+        assert_eq!(e.contest_composing_text_phone().as_deref(), Some("59 KANE"));
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            (fd.composing_text.as_str(), fd.composing_text_phone.as_str()),
+            ("599 KANE", "59 KANE"),
+            "the snapshot carries both"
+        );
+        assert!(e
+            .contest_log_manual("K9AAA", &ex("COOK"), "PH", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9BBB", &ex("COOK"), "CW", None)
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.mex.as_str()).collect::<Vec<_>>(),
+            [fd.composing_text_phone.as_str(), fd.composing_text.as_str()],
+            "the phone row, then the CW row"
+        );
+    }
+
+    /// ⭐ **Each contact carries its own mode's reports into the files the sponsor gets**, by
+    /// value: Cabrillo and ADIF. The SENT report is the row's — the session holds the 3-digit
+    /// constant and [`ContestSession::tx_for_row`](tempo_core::contest::ContestSession::tx_for_row)
+    /// stamps `59` on a phone row. The RECEIVED one is what the strip handed over, written as
+    /// given and never fitted, because it is what the other station sent. So the rehearsal's
+    /// CW contact — one the strip handed the phone default `59` — goes into both files as
+    /// `59`: no export can tell that from a report really heard, and the strip must not hand it
+    /// over (`LogEntry`'s `fdValue`).
+    #[test]
+    fn a_phone_and_a_cw_contact_carry_their_own_reports_into_the_cabrillo_and_the_adif() {
+        let (mut e, _) = ilqp_from_kane();
+        let rcvd = |rst: &str, qth: &str| {
+            vec![
+                ("RST".to_string(), rst.to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K9AAA", &rcvd("59", "COOK"), "PH", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9BBB", &rcvd("599", "WILL"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9EEE", &rcvd("59", "MCDN"), "CW", None)
+            .unwrap());
+
+        let cab = e.export_log("cabrillo").expect("one entry");
+        let qso = |call: &str| {
+            cab.lines()
+                .find(|l| l.starts_with("QSO:") && l.contains(&format!(" {call} ")))
+                .unwrap_or_else(|| panic!("no QSO line for {call} in\n{cab}"))
+                .to_string()
+        };
+        for (call, mode, tail) in [
+            ("K9AAA", " PH ", " W9XYZ 59 KANE K9AAA 59 COOK"),
+            ("K9BBB", " CW ", " W9XYZ 599 KANE K9BBB 599 WILL"),
+            ("K9EEE", " CW ", " W9XYZ 599 KANE K9EEE 59 MCDN"),
+        ] {
+            let line = qso(call);
+            assert!(
+                line.contains(mode) && line.trim_end().ends_with(tail),
+                "{call}: {line:?}"
+            );
+        }
+
+        // The contest's own ADIF: the received report under its standard tag, and the row's sent
+        // exchange in the carrier a restart reads back. An ADIF length is exact, so `<RST_RCVD:2>59`
+        // can only be 59.
+        let record = |adif: &str, call: &str| {
+            let tag = format!("<CALL:{}>{call}", call.len());
+            adif.split("<EOR>")
+                .find(|r| r.contains(&tag))
+                .unwrap_or_else(|| panic!("no ADIF record for {call} in\n{adif}"))
+                .to_string()
+        };
+        let adif = e.export_log("adif").expect("one entry");
+        for (call, sent, got) in [
+            ("K9AAA", "<APP_NEXUS_MYEX:28>RST::59;", "<RST_RCVD:2>59"),
+            ("K9BBB", "<APP_NEXUS_MYEX:29>RST::599;", "<RST_RCVD:3>599"),
+            ("K9EEE", "<APP_NEXUS_MYEX:29>RST::599;", "<RST_RCVD:2>59"),
+        ] {
+            let r = record(&adif, call);
+            assert!(r.contains(sent) && r.contains(got), "{call}: {r:?}");
+        }
+        // The report each row SENT under ADIF's own tag too, once, as the merged log below writes
+        // it: the phone row's 59 is not the session's 599, and K9EEE sent 599 where it got 59.
+        for (call, rst_sent) in [
+            ("K9AAA", "<RST_SENT:2>59 "),
+            ("K9BBB", "<RST_SENT:3>599 "),
+            ("K9EEE", "<RST_SENT:3>599 "),
+        ] {
+            let r = record(&adif, call);
+            assert!(r.contains(rst_sent), "{call}: {r:?}");
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{call}: {r:?}");
+        }
+        // …and the general log's, once merged: the ADIF the operator's uploads are made from.
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("still in the party")
+        };
+        let mut general = tempo_core::logbook::Logbook::new();
+        tempo_core::contest::merge::merge_into_general(&station.log, "pos", &mut general);
+        let merged = general.adif();
+        for (call, sent, got) in [
+            ("K9AAA", "<RST_SENT:2>59", "<RST_RCVD:2>59"),
+            ("K9BBB", "<RST_SENT:3>599", "<RST_RCVD:3>599"),
+            ("K9EEE", "<RST_SENT:3>599", "<RST_RCVD:2>59"),
+        ] {
+            let r = record(&merged, call);
+            assert!(r.contains(sent) && r.contains(got), "merged {call}: {r:?}");
+        }
+    }
+
     /// ⭐ **A county line is ONE call that logs one scored row PER COUNTY, at one time.**
     ///
     /// ILQP's 2026 rules: *"Contacts with/by stations at the border of 2/3/4 counties count as
@@ -45394,28 +48199,39 @@ mod tests {
         assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
     }
 
-    /// ⭐ **Each county of a line is dupe-checked on its own, and the others still log.**
+    /// ⭐ **Each county of a line is dupe-checked on its own, and the others still count.**
     ///
     /// ILQP keys a contact on call, band, mode (CW and digital one) AND county, so a station
-    /// already worked in DuPage is a dupe there and nowhere else on the line. The refusal is
-    /// exactly the one a single contact gets: `false`, nothing written for that county.
+    /// already worked in DuPage is a dupe there and nowhere else on the line. That county's row
+    /// is exactly what a single dupe gets: logged, marked, worth nothing (every contest logs
+    /// its dupes since the operator's ruling of 2026-10-11).
     #[test]
-    fn a_county_line_refuses_only_the_county_already_worked() {
+    fn a_county_line_marks_only_the_county_already_worked() {
         let (mut e, ex) = ilqp_from_kane();
         let rows = |qs: &[&str]| qs.iter().map(|q| ex(q)).collect::<Vec<_>>();
+        // The dupe marks of the newest `n` rows, oldest first.
+        let newest = |e: &Engine, n: usize| -> Vec<bool> {
+            let log = e.snapshot().field_day.expect("up").log;
+            log[log.len() - n..].iter().map(|q| q.dupe).collect()
+        };
         assert!(e
             .contest_log_manual("K9NR", &ex("DUPG"), "CW", None)
             .unwrap());
         assert_eq!(
             e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "CW", None)
                 .unwrap(),
-            vec![true, false, true],
+            vec![true; 3],
+            "every county enters the log"
+        );
+        assert_eq!(
+            newest(&e, 3),
+            [false, true, false],
             "DUPG is the dupe, COOK and KANE are new"
         );
         let fd = e.snapshot().field_day.expect("the contest workspace is up");
         assert_eq!(fd.qso_count, 3, "DUPG once, then COOK and KANE");
         let counties: Vec<String> = fd.log.iter().map(|q| q.rcvd.join(" ")).collect();
-        assert_eq!(counties, ["599 DUPG", "599 COOK", "599 KANE"]);
+        assert_eq!(counties, ["599 DUPG", "599 COOK", "599 DUPG", "599 KANE"]);
         // The same line on DIGITAL is three dupes — CW and digital are one mode here…
         assert_eq!(
             e.contest_log_manual_rows(
@@ -45425,15 +48241,17 @@ mod tests {
                 Some("RTTY")
             )
             .unwrap(),
-            vec![false; 3]
+            vec![true; 3]
         );
-        // …and on PHONE three new contacts, the positive control that the refusals above are
-        // the dupe key and not a line that refuses everything after its first dupe.
+        assert_eq!(newest(&e, 3), [true; 3]);
+        // …and on PHONE three new contacts, the positive control that the marks above are the
+        // dupe key and not a line that marks everything after its first dupe.
         assert_eq!(
             e.contest_log_manual_rows("K9NR", &rows(&["COOK", "DUPG", "KANE"]), "PH", None)
                 .unwrap(),
             vec![true; 3]
         );
+        assert_eq!(newest(&e, 3), [false; 3]);
         assert_eq!(e.snapshot().field_day.expect("up").qso_count, 6);
     }
 
@@ -46474,11 +49292,19 @@ mod tests {
             Transponder::channel(145_850_000, 436_795_000),
         )));
         e.set_sat_single_channel_fm(true);
+        // A repeat is logged, marked a dupe: every contest logs its dupes since the operator's
+        // ruling of 2026-10-11.
+        let last_dupe = |e: &Engine| match &e.mode {
+            Mode::FieldDay { station, .. } => station.log.qsos().last().is_some_and(|q| q.dupe),
+            _ => false,
+        };
         assert!(e.contest_log_satellite("K1ABC", &ex, "PH", None).unwrap());
+        assert!(!last_dupe(&e));
         assert!(
-            !e.contest_log_satellite("K1ABC", &ex, "DIG", Some("FT8"))
-                .unwrap(),
-            "a second QSO with the same station on a single-channel FM bird was admitted"
+            e.contest_log_satellite("K1ABC", &ex, "DIG", Some("FT8"))
+                .unwrap()
+                && last_dupe(&e),
+            "a second QSO with the same station on a single-channel FM bird is not a dupe"
         );
 
         // …and the classification survives the LOS handback, which is the whole reason
@@ -46486,12 +49312,13 @@ mod tests {
         // after the bird sets must be judged by the same rule as one written during it.
         e.set_sat_transponder(None);
         assert!(
-            !e.contest_log_satellite("K1ABC", &ex, "CW", None).unwrap(),
+            e.contest_log_satellite("K1ABC", &ex, "CW", None).unwrap() && last_dupe(&e),
             "after LOS the bird stopped being a single-channel FM one"
         );
-        // The control: a station NOT yet worked through it still logs after LOS, so the
-        // refusals above are the limit and not a path that stopped logging at all.
+        // The control: a station NOT yet worked through it still logs after LOS as a contact,
+        // so the marks above are the limit and not a path that marks everything.
         assert!(e.contest_log_satellite("W4XYZ", &ex, "PH", None).unwrap());
+        assert!(!last_dupe(&e));
     }
 
     /// ⭐ **A CONTEST PHONE CONTACT RECORDS THE MODE THAT WAS ACTUALLY ON THE AIR**
@@ -46884,12 +49711,16 @@ mod tests {
         assert!(a.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
         drop(a);
 
-        // Session B (a relaunch) restores both, still dupe-checks them, adds a third.
+        // Session B (a relaunch) restores both, still dupe-checks them (a repeat is logged,
+        // marked, as every contest logs one since the operator's ruling of 2026-10-11), adds a
+        // third.
         let mut b = fd_engine();
         let snap = b.snapshot().field_day.expect("in Field Day mode");
         assert_eq!(snap.qso_count, 2, "a restart restores the contest log");
+        assert!(b.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        let snap = b.snapshot().field_day.expect("in Field Day mode");
         assert!(
-            !b.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap(),
+            snap.log.last().is_some_and(|q| q.dupe),
             "restored contacts still dupe-check"
         );
         assert!(b.fd_log_manual("N0XYZ", "4A", "MN", "CW").unwrap());
@@ -46898,10 +49729,15 @@ mod tests {
         // Session C: B's quit must not have overwritten the journal with only
         // B's session — all three contacts survive the second relaunch.
         let c = fd_engine();
+        let snap = c.snapshot().field_day.expect("in Field Day mode");
         assert_eq!(
-            c.snapshot().field_day.expect("in Field Day mode").qso_count,
-            3,
+            snap.qso_count, 3,
             "the second quit keeps A's AND B's contacts"
+        );
+        assert_eq!(
+            snap.log.iter().filter(|q| q.dupe).count(),
+            1,
+            "and B's dupe, still marked"
         );
 
         let _ = std::fs::remove_file(&path);
@@ -48227,6 +51063,53 @@ mod tests {
             "the next LoTW sync must be a FULL pull, not an incremental one"
         );
         assert!(e.settings().eqsl_last_sync.is_empty(), "eQSL likewise");
+    }
+
+    /// ★ The first LoTW download after the update asks for the whole history. A settings file
+    /// from before it holds the cursor of a download that asked for the Settings call alone, and
+    /// LoTW lets a cursor stand only for the identical query: asked of every call on the account,
+    /// it would skip, for good, every confirmation of the operator's other calls that LoTW matched
+    /// before it. So that cursor is not asked from; the high-water the full download brings back
+    /// is, and survives a save; Download everything again empties it.
+    #[test]
+    fn the_first_lotw_download_after_the_update_asks_for_the_whole_history() {
+        let asks_from = |s: &Settings| {
+            tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
+                username: "k2def-test".into(),
+                password: "not-a-password".into(),
+                qsl_since: Some(s.lotw_sync_cursor().to_string()),
+            })
+        };
+        let before: Settings = serde_json::from_str(
+            r#"{"mycall":"K2DEF","lotwUsername":"k2def-test","lotwLastQsl":"2026-08-04 21:12:44"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            before.lotw_last_qsl, "2026-08-04 21:12:44",
+            "premise: the older file's cursor is read"
+        );
+        assert!(
+            asks_from(&before).contains("&qso_qslsince=1900-01-01"),
+            "the first download is a full one: {}",
+            asks_from(&before)
+        );
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings = before;
+        let saved = e.set_lotw_cursor("2026-10-12 10:00:00".to_string());
+        let reread: Settings =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert!(
+            asks_from(&reread).contains("&qso_qslsince=2026-10-12%2010%3A00%3A00"),
+            "the next asks from the full download's high-water: {}",
+            asks_from(&reread)
+        );
+        e.reset_lotw_cursor();
+        assert_eq!(
+            e.settings().lotw_sync_cursor(),
+            "",
+            "Download everything again"
+        );
     }
 
     #[test]
@@ -57340,6 +60223,335 @@ mod tests {
         assert!(b.note.is_some(), "and the refusal is said out loud");
     }
 
+    /// The station in the 2026-10-13 report: ONE radio, an FT-710 (HF + 6 m, its coverage
+    /// probed), working FT8 on 20 m, here with SO-50 held from earlier in the session. The pick
+    /// has already refused to tune it, out loud. (The pick now refuses such a hold outright when
+    /// it knows the coverage, `hold_sat_transponder`; set directly, this one stands for a hold
+    /// made before the probe answered.)
+    fn ft710_on_ft8_holding_so50() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        assert!(
+            b.note
+                .as_deref()
+                .is_some_and(|n| n.contains("doesn't cover")),
+            "scene: the pick refused the FT-710: {b:?}"
+        );
+        e
+    }
+
+    /// The armed track's Doppler ticks over the first minute of a pass, each on a slot boundary
+    /// (the Digital section steers only in the slot's quiet window), at a range rate stepped so
+    /// every tick wants a fresh frequency. What each tick wrote, in order.
+    fn doppler_at_aos(e: &mut Engine) -> Vec<Option<tempo_core::doppler::Correction>> {
+        e.set_sat_pass_engaged(true);
+        (1..=4u64)
+            .map(|n| e.sat_doppler_tick(-5.0 + n as f64, 1_005_000 + n * 15_000, false))
+            .collect()
+    }
+
+    #[test]
+    fn a_held_bird_the_radio_cannot_hear_never_steers_it_at_aos() {
+        // THE REPORT (2026-10-13): "I will be working ft8, I will get a pop up that a satellite
+        // is passing. My 20m band changes from 20m to 20m custom." Its pop up and retune were
+        // the ISS SSTV auto-arm (issAutoArm.ts); this is the other road to the same picker. The
+        // pick refuses a radio that cannot reach the downlink, but the Doppler tick never asked,
+        // so at AOS it steered the FT-710 to 436.8 MHz three times a correction, refused each
+        // time and read back, and the FT8 band picker flickered "20m (custom)" for the pass.
+        let mut e = ft710_on_ft8_holding_so50();
+        let wrote = doppler_at_aos(&mut e);
+        assert_eq!(
+            wrote,
+            vec![None; 4],
+            "Doppler wrote to a radio that cannot hear the bird"
+        );
+        let r = e.snapshot().radio;
+        assert_eq!(
+            (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+            (14.074, "20m", "USB"),
+            "the FT8 dial must stay where the operator put it"
+        );
+        assert_eq!(e.split_tx_mhz(), None, "no uplink reached the split either");
+        assert_eq!(
+            e.sat_doppler_legs(),
+            tempo_core::doppler::Legs {
+                downlink: false,
+                uplink: false
+            },
+            "the badge and the readout must not claim a leg the tick will not drive"
+        );
+        // Still HELD: the pass is the operator's to release, and nothing here released it.
+        assert!(e.sat_transponder_held().is_some());
+    }
+
+    #[test]
+    fn a_radio_that_hears_the_bird_is_still_steered_at_aos() {
+        // CONTROL — the single-radio satellite operator. The same section, the same bird and
+        // the same ticks on a radio whose probed coverage takes 70 cm: the pick tunes and every
+        // tick corrects, exactly as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+            (1_240_000_000, 1_300_000_000),
+        ]));
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let b = e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        assert_eq!(
+            b.note, None,
+            "scene: the pick tuned the radio that hears the bird"
+        );
+        let wrote = doppler_at_aos(&mut e);
+        assert!(
+            wrote
+                .iter()
+                .all(|c| c.is_some_and(|c| c.downlink_hz.is_some())),
+            "every tick corrects the downlink: {wrote:?}"
+        );
+        let dial = e.snapshot().radio.dial_mhz;
+        assert!(
+            (dial - 436.795).abs() < 0.02 && (dial - 436.795).abs() > 1e-6,
+            "the dial rides the CORRECTED downlink, got {dial}"
+        );
+
+        // …and a radio whose coverage is UNKNOWN is steered too: the probe can fail, and the
+        // range gate fails open everywhere (`rig_covers_mhz`).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_sat_transponder(Some((
+            "SO-50|FM repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
+        let wrote = doppler_at_aos(&mut e);
+        assert!(
+            wrote
+                .iter()
+                .all(|c| c.is_some_and(|c| c.downlink_hz.is_some())),
+            "unknown coverage must not stop Doppler: {wrote:?}"
+        );
+    }
+
+    #[test]
+    fn the_dual_radio_pass_is_steered_on_the_rig_the_pick_handed_it_to() {
+        // CONTROL — the dual-radio station: the FTdx10 active on 20 m, the IC-9700 beside it.
+        // The pick hands RS-44 to the 9700 and Doppler follows it there, before and after the
+        // 9700's own coverage probe answers.
+        let (mut e, ic9700) = fresh_dual_radio_sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "scene: the pick handed off"
+        );
+        e.set_sat_pass_engaged(true);
+        assert!(
+            e.sat_doppler_tick(-5.0, 1_020_000, false)
+                .is_some_and(|c| c.downlink_hz.is_some()),
+            "Doppler drives the 9700 before its probe answers"
+        );
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+        ]));
+        assert!(
+            e.sat_doppler_tick(-3.0, 1_035_000, false)
+                .is_some_and(|c| c.downlink_hz.is_some()),
+            "…and after it"
+        );
+    }
+
+    #[test]
+    fn a_mid_pass_switch_to_a_rig_that_cannot_hear_the_bird_leaves_its_dial_alone() {
+        // The same station mid-pass. A switch back to the FTdx10 — the HF rig, its coverage
+        // probed — hands the dial to a radio that cannot hear the bird: Doppler leaves it alone,
+        // and picks the pass up again on the 9700.
+        let (mut e, ic9700) = fresh_dual_radio_sat_station();
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "scene: the pick handed off"
+        );
+        e.set_sat_pass_engaged(true);
+        e.set_active_radio(0);
+        e.observe_rig_rx_ranges(Some(vec![(30_000, 75_000_000)]));
+        let hf = e.snapshot().radio.dial_mhz;
+        assert_eq!(e.sat_doppler_tick(-1.0, 1_050_000, false), None);
+        assert_eq!(
+            e.snapshot().radio.dial_mhz,
+            hf,
+            "the HF rig's dial is untouched"
+        );
+        e.set_active_radio(ic9700);
+        assert!(
+            e.sat_doppler_tick(1.0, 1_065_000, false)
+                .is_some_and(|c| c.downlink_hz.is_some()),
+            "back on the 9700, Doppler resumes"
+        );
+    }
+
+    /// AO-91: an FM bird, its uplink on 70 cm and its downlink on 2 m.
+    const AO91: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 435_250_000,
+        downlink_centre_hz: 145_960_000,
+        invert: false,
+        half_width_hz: 0,
+    };
+
+    /// The pick's engine half as the command layer runs it (`hold_sat_row`): hold, then tune what
+    /// the hold names. A refused hold is the pick's answer, and nothing is tuned.
+    fn pick_sat(
+        e: &mut Engine,
+        label: &str,
+        t: tempo_core::doppler::Transponder,
+        class: tempo_core::doppler::DownlinkClass,
+    ) -> Result<Option<String>, String> {
+        e.hold_sat_transponder((label.into(), 0, t))?;
+        Ok(e.sat_tune_nominal(class, 1_000_000).note)
+    }
+
+    /// From 20 m Phone: enter the FT8 section, read the TX gate's stamp there, then flip FT8 to
+    /// FT4. The dial after entry, the stamp's dial and pass identity, the dial after the flip.
+    fn ft8_entry_then_ft4(e: &mut Engine) -> (f64, Option<u64>, Option<(String, i64)>, f64) {
+        e.set_operating_mode("digital", true);
+        let entered = e.settings.dial_mhz;
+        let stamp = e.tx_gate_stamp();
+        e.set_tier(Tier::Ft4);
+        (
+            entered,
+            stamp.dial_hz,
+            stamp.sat_tuning,
+            e.settings.dial_mhz,
+        )
+    }
+
+    #[test]
+    fn a_bird_the_only_radio_cannot_receive_is_not_held_and_the_dial_stays_the_operators() {
+        // The 2026-10-13 station with nothing held yet: ONE radio, an FT-710 (HF + 6 m, its
+        // coverage probed), on 20 m. AO-91 is picked, a 2 m downlink it cannot receive. Held, the
+        // pass drove nothing (`sat_doppler_legs`), yet everything that defers to a held pass
+        // deferred to it: entering FT8 left the dial put, FT8 to FT4 did not QSY, and the TX gate
+        // stamped the pass's identity instead of the dial. Refused, nothing is held, and each of
+        // those does what it does with no pick at all. None of them is changed to get there.
+        let ft710 = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+            e
+        };
+        let mut no_pick = ft710();
+        let as_with_no_pick = ft8_entry_then_ft4(&mut no_pick);
+        assert_eq!(
+            as_with_no_pick,
+            (14.074, Some(14_074_000), None, 14.080),
+            "control: with no pick, FT8 re-homes, the gate judges the dial, and FT4 QSYs"
+        );
+
+        let mut e = ft710();
+        let picked = pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD);
+        let held = e.sat_transponder_held().map(|(label, _)| label.to_string());
+        assert_eq!(
+            (picked, held, ft8_entry_then_ft4(&mut e)),
+            (
+                Err("This radio doesn't cover 145.9600 MHz — nothing is held.".to_string()),
+                None,
+                as_with_no_pick,
+            ),
+            "the pick holds nothing and says so, and FT8, FT4 and the TX gate judge the dial"
+        );
+    }
+
+    #[test]
+    fn a_bird_a_radio_here_may_receive_is_still_held() {
+        // CONTROLS for the refusal above: every station here may work the pass, so the pick holds.
+        //
+        // A second enabled radio. The FTdx10 in use cannot hear AO-91, and the pick hands the
+        // pass to the IC-9700 beside it.
+        let (mut e, ic9700) = fresh_dual_radio_sat_station();
+        assert_eq!(
+            pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD).map(|_| ()),
+            Ok(()),
+            "another enabled radio: the pick holds"
+        );
+        assert_eq!(e.sat_transponder_held(), Some(("AO-91|FM", Some(0))));
+        assert_eq!(
+            e.settings.active_radio, ic9700,
+            "the pick handed the pass on"
+        );
+
+        // One radio of UNKNOWN coverage (no CAT, or the probe has not answered yet): fails open
+        // and holds, as the coverage gate does everywhere (`rig_covers_mhz`).
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+        assert_eq!(
+            pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD).map(|_| ()),
+            Ok(()),
+            "unknown coverage: the pick holds"
+        );
+        assert_eq!(e.sat_transponder_held(), Some(("AO-91|FM", Some(0))));
+
+        // One radio that covers 2 m: the single-radio satellite operator, tuned as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+        ]));
+        assert_eq!(pick_sat(&mut e, "AO-91|FM", AO91, FM_BIRD), Ok(None));
+        assert_eq!(e.sat_transponder_held(), Some(("AO-91|FM", Some(0))));
+    }
+
+    #[test]
+    fn a_refused_pick_leaves_the_pass_already_held() {
+        // A refused pick changes nothing, as every other refused pick does: an IC-9700 alone,
+        // RS-44 held, and AO-7's mode A picked (its downlink on 10 m, which the 9700 cannot
+        // receive). RS-44 stays held and keeps the dial, and the reason says so rather than
+        // claiming that nothing is held.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        e.observe_rig_rx_ranges(Some(vec![
+            (144_000_000, 148_000_000),
+            (430_000_000, 450_000_000),
+        ]));
+        pick_sat(&mut e, "RS-44|linear", RS44, SSB_BIRD).expect("scene: RS-44 held on the 9700");
+        let owner = e.sat_dial_owner().cloned();
+        let ao7_mode_a = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_900_000,
+            downlink_centre_hz: 29_450_000,
+            invert: false,
+            half_width_hz: 50_000,
+        };
+        assert_eq!(
+            pick_sat(&mut e, "AO-7|Mode A", ao7_mode_a, SSB_BIRD),
+            Err("This radio doesn't cover 29.4500 MHz — RS-44 stays held.".to_string())
+        );
+        assert_eq!(e.sat_transponder_held(), Some(("RS-44|linear", Some(0))));
+        assert_eq!(
+            e.sat_dial_owner().cloned(),
+            owner,
+            "the pass keeps the dial"
+        );
+    }
+
     #[test]
     fn the_nominal_tune_hands_the_pass_a_seeded_limiter_and_the_right_split_sideband() {
         // Two facts that only hold if the nominal tune records itself as SENT:
@@ -63089,6 +66301,23 @@ mod digital_side_licence_tests {
         e
     }
 
+    /// [`ft_station`] on Q65, which keeps the CW ID after its 73 (FT8 sends none, as WSJT-X), on
+    /// the same dial: the Digital verdict is the same carrier, one TX offset above it.
+    fn q65_station(
+        sc: Soundcard,
+        class: LicenseClass,
+        dial: f64,
+        sideband: &str,
+        off_hz: f32,
+        pitch: f32,
+    ) -> Engine {
+        let mut e = ft_station(sc, class, dial, sideband, off_hz, pitch);
+        e.set_tier(Tier::Q65);
+        let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+        e.set_frequency(dial, band, sideband);
+        e
+    }
+
     /// ⭐ THE CW ID AFTER AN FT 73, WHERE IT KEYS. With WSJT-X's "CW ID after 73" on, the radio
     /// loop keys MYCALL through the CW path once the final over has played out, from the Digital
     /// section, where the gate judged FT8's carrier one TX offset above the dial. The CW goes out
@@ -63097,7 +66326,8 @@ mod digital_side_licence_tests {
     /// General segment, keyed the call at 7.0246, or at 7.0240, below the 7.025 floor; and at
     /// 14.1496 with a 300 Hz offset (FT8 at 14.1499) the soundcard keyer's 600 Hz tone went out
     /// at 14.1502, past a General's 14.150, while the rig's own keyer keys legally on the dial.
-    /// The same QSO inside each segment keys its ID.
+    /// The same QSO inside each segment keys its ID. Driven on Q65, whose carrier sits where
+    /// FT8's did: FT8, FT4, FT2, FT1 and DX1 send no ID (WSJT-X clears it in FT8 and FT4).
     #[test]
     fn the_cw_id_after_an_ft_73_is_judged_where_it_keys() {
         let general = LicenseClass::General;
@@ -63117,11 +66347,11 @@ mod digital_side_licence_tests {
                 );
             }
             let keys = refused_at.is_none();
-            let mut e = ft_station(sc, general, dial, "USB", off_hz, 600.0);
+            let mut e = q65_station(sc, general, dial, "USB", off_hz, 600.0);
             e.settings.cw_id_after_73 = true;
             assert!(
                 e.tx_allowed(),
-                "precondition: FT8's carrier at {dial} + {off_hz} Hz"
+                "precondition: Q65's carrier at {dial} + {off_hz} Hz"
             );
             // The final 73 of an S&P contact, as the sequencer drives it.
             e.call_station("W9XYZ");
@@ -63158,11 +66388,12 @@ mod digital_side_licence_tests {
     /// ⛔ …AND THE CW SCREEN'S LEAVE RULE NEVER TOUCHES IT (the operator: "Leave it as is"). The
     /// rule drops what CW had queued when the CW section is LEFT; the ID is queued, and keyed,
     /// from Digital, so it keys there as before on both keyers, across the section re-assert an
-    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`.
+    /// FT8/FT4 sub-mode click makes on its way through `set_operating_mode_with_reset`. Driven on
+    /// Q65, which keeps the ID.
     #[test]
     fn the_cw_id_after_an_ft_73_still_keys_from_digital() {
         for sc in Soundcard::CW {
-            let mut e = ft_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
+            let mut e = q65_station(sc, LicenseClass::Extra, 14.074, "USB", 1_500.0, 600.0);
             e.settings.cw_id_after_73 = true;
             e.call_station("W9XYZ");
             e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ -10", -7)], 1);

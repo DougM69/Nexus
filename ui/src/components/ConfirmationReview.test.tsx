@@ -92,11 +92,12 @@ const QRZ_LINES: ConfirmationLine[] = [
   line('DL1ABC', { mark: 'qrz', whenUnix: at(3, 8), rowUnix: at(3, 8, 1), siblingUnix: at(3, 8, 1), decisive: false, unticked: 'notReplayed' }),
 ]
 const found = (service: CheckedService, lines: ConfirmationLine[], over: Partial<ConfirmationCheck> = {}): ConfirmationCheck => ({
-  session: 7, service, records: lines.length, lines, gainIds: ['id-W1AW-2'], unreached: 0, outOfScope: 0, uploadsUnreached: 0, uploadsOutOfScope: 0, ...over,
+  session: 7, service, records: lines.length, otherCallRecords: 0, lines, gainIds: ['id-W1AW-2'], unreached: 0, outOfScope: 0, uploadsUnreached: 0, uploadsOutOfScope: 0, ...over,
 })
-/** Each service's check. 18:00 W1AW gains all three services' confirmations, K2GAIN LoTW's. */
+/** Each service's check. 18:00 W1AW gains all three services' confirmations, K2GAIN LoTW's; five of
+ *  LoTW's records are a club call's on the account, which the log holds no contact under. */
 const FOUND: Record<CheckedService, ConfirmationCheck | string> = {
-  lotw: found('lotw', LOTW_LINES, { gainIds: ['id-W1AW-2', 'id-K2GAIN'], unreached: 12, outOfScope: 3, uploadsUnreached: 1 }),
+  lotw: found('lotw', LOTW_LINES, { gainIds: ['id-W1AW-2', 'id-K2GAIN'], unreached: 12, outOfScope: 3, uploadsUnreached: 1, otherCallRecords: 5 }),
   eqsl: found('eqsl', EQSL_LINES, { unreached: 4 }),
   qrz: found('qrz', QRZ_LINES),
 }
@@ -230,12 +231,14 @@ describe('Check confirmations', () => {
       t('logbook.confirmations.unreached', { count: 12, service: 'LoTW' }),
       t('logbook.confirmations.outOfScope', { count: 3, service: 'LoTW' }),
       t('logbook.confirmations.uploadsUnreached', { count: 1 }),
+      t('logbook.confirmations.otherCalls', { count: 5 }),
       t('logbook.confirmations.gains', { count: 1, service: 'eQSL' }),
       t('logbook.confirmations.unreached', { count: 4, service: 'eQSL' }),
       t('logbook.confirmations.gains', { count: 1, service: 'QRZ' }),
     ])
       expect(within(dialog).getByText(said)).toBeTruthy()
     expect(within(dialog).queryByText(t('logbook.confirmations.uploadsOutOfScope', { count: 0 }))).toBeNull()
+    expect(within(dialog).queryByText(t('logbook.confirmations.otherCalls', { count: 0 }))).toBeNull()
     expect(within(dialog).queryByText(t('logbook.confirmations.unreached', { count: 0, service: 'QRZ' }))).toBeNull()
   })
 

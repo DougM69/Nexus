@@ -130,7 +130,7 @@ async function renderCockpit() {
 }
 const stripCall = () => document.querySelector('.le-fd-input-call') as HTMLInputElement
 const qthBox = () => {
-  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'QTH')
+  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'County / State')
   return cap!.closest('label')!.querySelector('input') as HTMLInputElement
 }
 async function enter(el: Element) {
@@ -179,6 +179,56 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     expect(loggedCalls()).toEqual(['K9AAA'])
   })
 
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the contest set (the operator, 2026-10-10: as in N1MM's
+  // default message sets). Enter's AGN sends the text it sent from F7 before.
+  it('asks AGN from F8 while his exchange is not copied, and sends the AGN it always sent; F7 is B4', async () => {
+    await renderCockpit()
+    fireEvent.keyDown(window, { key: 'F1' }) // CQ, by hand: ESM goes to Run
+    await flush()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange
+    await enter(qthBox()) // his QTH not copied yet
+    expect(sent[sent.length - 1]).toBe('\r\nAGN? AGN? ')
+    expect(loggedCalls()).toEqual([])
+    fireEvent.keyDown(window, { key: 'F7' })
+    await flush()
+    expect(sent[sent.length - 1], 'F7 by hand').toBe('\r\nK9AAA QSO B4 TU KD9TAW ')
+    fireEvent.keyDown(window, { key: 'F8' })
+    await flush()
+    expect(sent[sent.length - 1], 'F8 by hand').toBe('\r\nAGN? AGN? ')
+  })
+
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM): Enter sends the
+  // contest set's QSO B4 from F7, through the same path, once; the next Enter logs the dupe.
+  it('running, a dupe gets QSO B4 from F7 once, and the next Enter logs it, sending nothing', async () => {
+    const worked = {
+      ...ILQP,
+      log: [{ call: 'K9AAA', class: '', section: '', band: '20m', mode: 'DIG', submode: 'RTTY', whenUnix: 1_792_342_800, rcvd: ['599', 'COOK'] }],
+    } as unknown as FieldDayStatus
+    render(
+      <RttyCockpit
+        snap={{ ...snap, fieldDay: worked } as unknown as AppSnapshot}
+        macros={CONTEST_SET}
+        esmSetting={{ on: true, callOnce: false, onSwitch: () => {} }}
+      />,
+    )
+    await flush()
+    await flush()
+    fireEvent.keyDown(window, { key: 'F1' }) // CQ, by hand: ESM goes to Run
+    await flush()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    await enter(qthBox())
+    expect(sent[sent.length - 1], 'F7, framed for the air').toBe('\r\nK9AAA QSO B4 TU KD9TAW ')
+    expect(loggedCalls()).toEqual([])
+    const before = sent.length
+    await enter(qthBox())
+    expect(sent, 'nothing more is sent').toHaveLength(before)
+    expect(loggedCalls()).toEqual(['K9AAA'])
+  })
+
   it('steps aside while the auto sequence runs: Enter logs and sends nothing', async () => {
     state.current = { ...idle(), auto: true, seqState: 'answering' } as RttyState
     await renderCockpit()
@@ -222,5 +272,17 @@ describe('Enter Sends Message in the RTTY cockpit', () => {
     await enter(qthBox())
     expect(sent).toEqual(['\r\nK9AAA 599 COOK COOK '])
     expect(loggedCalls()).toEqual([])
+  })
+})
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit()
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
+    expect(document.querySelector('.log-entry-fd')).not.toBeNull()
+    expect(document.querySelector('.le-fd-score')).toBeNull()
   })
 })

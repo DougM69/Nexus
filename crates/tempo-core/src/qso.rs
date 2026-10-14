@@ -142,7 +142,7 @@ pub struct Station {
 ///
 /// The operator's SETTINGS grid is untouched, and so is the logbook — a six-character locator is
 /// correct there and is what awards want. Only what leaves the antenna is cut.
-fn air_grid(mygrid: &str) -> String {
+pub(crate) fn air_grid(mygrid: &str) -> String {
     mygrid
         .trim()
         .chars()

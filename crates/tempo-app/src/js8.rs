@@ -27,8 +27,8 @@ use modes::Js8Speed;
 
 use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
-    Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8PendingReply, Js8QueueRow, Js8State,
-    SourceKind, Tier,
+    Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8NotArmed, Js8PendingReply, Js8QueueRow,
+    Js8State, Js8Unarmed, SourceKind, Tier,
 };
 use crate::settings::Settings;
 
@@ -227,12 +227,23 @@ impl Engine {
         Some(self.js8_state())
     }
 
-    /// The cockpit poll. Every field is engine truth at poll time; `armed` is
-    /// `switch && tx_enabled && !idle_tripped` per origin — never the switch alone.
+    /// The cockpit poll. Every field is engine truth at poll time; `armed` is, per origin, the
+    /// switch on and the station's own answer that it would act now (`Station::readiness`, with
+    /// the TX latch) — never the switch alone — and `not_armed` names why for a switch that is on.
     pub fn js8_state(&self) -> Js8State {
         let s = &self.settings;
         let idle_tripped = self.js8_station.idle_tripped();
-        let live = self.tx_enabled && !idle_tripped;
+        let cq_on = self.js8_station.cq_on();
+        let ready = self.js8_station.readiness(self.tx_enabled);
+        // A switch that is off has no reason: its chip reads off.
+        let why = |on: bool, why: Option<Js8Unarmed>| if on { why } else { None };
+        let not_armed = Js8NotArmed {
+            autoreply: why(s.js8_autoreply, ready.autoreply),
+            relay: why(s.js8_relay, ready.relay),
+            hb_ack: why(s.js8_hb_ack, ready.hb_ack),
+            hb: why(self.js8_hb_on, ready.hb),
+            cq: why(cq_on, ready.cq),
+        };
         Js8State {
             speed: self.js8_tx_speed_setting(),
             rx_speeds: s.js8_rx_speeds,
@@ -245,19 +256,20 @@ impl Engine {
             // is stopped from three places the engine never sees (the idle trip, `halt`, and
             // JS8Call's "somebody answered, stop calling" on directed RX), and a mirror would
             // have to be kept in step with each of them.
-            cq_on: self.js8_station.cq_on(),
+            cq_on,
             cq_next_at_ms: self.js8_station.cq_next_ms(),
             cq_interval_min: s.js8_cq_interval_min,
             autoreply: s.js8_autoreply,
             relay: s.js8_relay,
             hb_ack: s.js8_hb_ack,
             armed: Js8Armed {
-                autoreply: s.js8_autoreply && live,
-                relay: s.js8_relay && live,
-                hb_ack: s.js8_hb_ack && live,
-                hb: self.js8_hb_on && live,
-                cq: self.js8_station.cq_on() && live,
+                autoreply: s.js8_autoreply && not_armed.autoreply.is_none(),
+                relay: s.js8_relay && not_armed.relay.is_none(),
+                hb_ack: s.js8_hb_ack && not_armed.hb_ack.is_none(),
+                hb: self.js8_hb_on && not_armed.hb.is_none(),
+                cq: cq_on && not_armed.cq.is_none(),
             },
+            not_armed,
             idle_minutes: self
                 .js8_station
                 .idle_minutes(tempo_core::timing::now_unix_ms() as u64),
@@ -559,8 +571,8 @@ impl Engine {
                     // JS8Call parity: HB, autoreply and relay stand down and the queues
                     // drop; `tx_enabled` is UNTOUCHED (it is the operator's latch, not the
                     // station's). The persisted switches are NOT rewritten — `Js8State.armed`
-                    // reads `!idle_tripped`, and any operator verb ends the trip and gives the
-                    // station back its switches (`js8_restart_idle_clock`). The
+                    // reads the trip (`Station::readiness`), and any operator verb ends it and
+                    // gives the station back its switches (`js8_restart_idle_clock`). The
                     // cockpit toasts on the rising edge of `idle_tripped` (B7.9).
                     self.js8_hb_on = false;
                     self.js8_station.halt();
@@ -2017,6 +2029,61 @@ mod tests {
         );
     }
 
+    /// TX on, AUTOREPLY and HB ACK on, HB off: JS8Call answers a heartbeat only in its heartbeat
+    /// mode with AUTO and the acknowledgements on (mainwindow.cpp:9061), and so does the station
+    /// (`maybe_hb_ack`), so a heard heartbeat draws nothing. The HB ACK chip must not read armed
+    /// then, and it names HB as what it needs. With HB on it reads armed, and the heartbeat is
+    /// answered on the air.
+    #[test]
+    fn hb_ack_without_hb_is_not_armed_and_says_hb_is_what_it_needs() {
+        let mut e = hb_engine("EN52", 30, 1500.0); // our own heartbeat would be 30 min away
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+        let heard = |e: &mut Engine| {
+            e.js8_ingest(
+                &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Normal, 1200.0)],
+                now_unix_secs() / 15,
+            )
+        };
+        let st = e.js8_state();
+        assert!(
+            st.tx_enabled && st.autoreply && st.hb_ack && !st.hb_on,
+            "precondition: TX, AUTOREPLY and HB ACK on, HB off"
+        );
+        assert_eq!(
+            (st.armed.hb_ack, st.not_armed.hb_ack),
+            (false, Some(Js8Unarmed::NeedsHb)),
+            "HB ACK is not armed while HB is off, and says HB is what it needs"
+        );
+        heard(&mut e);
+        let overs = run_js8_loop(&mut e, 60);
+        assert!(
+            overs.is_empty(),
+            "…and a heard heartbeat draws nothing: {overs:?}"
+        );
+
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let st = e.js8_state();
+        assert_eq!(
+            (st.armed.hb_ack, st.not_armed.hb_ack),
+            (true, None),
+            "control: with HB on, HB ACK is armed"
+        );
+        heard(&mut e);
+        let overs = run_js8_loop(&mut e, 60);
+        let booked: Vec<String> = e
+            .js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(
+            booked,
+            ["KD9TAW: W1AW HEARTBEAT SNR -07"],
+            "…and the heartbeat is answered on the air: {overs:?}"
+        );
+    }
+
     /// A heartbeat that falls due while the TX latch is down is dropped and its interval
     /// re-based, as JS8Call's is (`startTx` → `ensureCanTransmit` fails →
     /// `on_stopTxButton_clicked`, mainwindow.cpp:5304 → :7397), so turning TX back on sends
@@ -2779,6 +2846,96 @@ mod tests {
         );
     }
 
+    /// Every origin armed, TX on, then the idle watchdog trips: nothing is armed. AUTOREPLY,
+    /// RELAY and HB ACK stay on and each says the watchdog is why; the trip turned HB and the
+    /// repeating CQ off, so those read off, with no reason. The TX latch is untouched.
+    #[test]
+    fn after_an_idle_trip_nothing_is_armed_and_each_switch_still_on_says_idle() {
+        let mut e = hb_engine("EN52", 30, 1500.0);
+        e.settings.js8_idle_watchdog_min = 5;
+        e.settings.js8_cq_interval_min = 10;
+        e.js8_apply_station_config();
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        let all = Js8Armed {
+            autoreply: true,
+            relay: true,
+            hb_ack: true,
+            hb: true,
+            cq: true,
+        };
+        assert_eq!(e.js8_state().armed, all, "control: every origin is armed");
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        e.js8_station.mark_active(t0 - 6 * 60_000); // the operator's last act, six minutes ago
+        e.js8_tick(t0);
+        let st = e.js8_state();
+        assert!(
+            st.idle_tripped && st.tx_enabled,
+            "control: tripped, TX untouched"
+        );
+        let idle = Some(Js8Unarmed::Idle);
+        assert_eq!(
+            (st.armed, st.not_armed),
+            (
+                Js8Armed {
+                    autoreply: false,
+                    relay: false,
+                    hb_ack: false,
+                    hb: false,
+                    cq: false,
+                },
+                Js8NotArmed {
+                    autoreply: idle,
+                    relay: idle,
+                    hb_ack: idle,
+                    hb: None,
+                    cq: None,
+                },
+            ),
+            "nothing armed; what is still on says idle"
+        );
+        assert!(
+            st.autoreply && st.relay && st.hb_ack && !st.hb_on && !st.cq_on,
+            "control: AUTOREPLY, RELAY and HB ACK are still on, HB and the CQ repeat off"
+        );
+        assert_eq!(
+            e.js8_station.readiness(true),
+            Js8NotArmed {
+                autoreply: idle,
+                relay: idle,
+                hb_ack: idle,
+                hb: idle,
+                cq: idle,
+            },
+            "the station: the trip stops every origin"
+        );
+    }
+
+    /// A switch that is off reads off, with no reason, whatever the station would need for it:
+    /// HB ACK off with HB off is not "HB ACK needs HB".
+    #[test]
+    fn a_switch_that_is_off_carries_no_reason() {
+        let e = hb_engine("EN52", 30, 1500.0);
+        let st = e.js8_state();
+        assert!(!st.hb_ack && !st.hb_on, "precondition: HB ACK and HB off");
+        assert_eq!(
+            e.js8_station.readiness(true).hb_ack,
+            Some(Js8Unarmed::NeedsHb),
+            "control: the station would need HB for an HB ACK"
+        );
+        assert_eq!(
+            (
+                st.armed.hb_ack,
+                st.not_armed.hb_ack,
+                st.armed.hb,
+                st.not_armed.hb
+            ),
+            (false, None, false, None),
+            "off reads off"
+        );
+    }
+
     /// Nothing that is not the operator's hand restarts the idle count, or the watchdog would
     /// never trip with the cockpit open: the cockpit's polls (`js8_state`, the message box's
     /// `js8_composer`), the locator check, what is heard, the clock, and a Remote's speed write
@@ -2892,12 +3049,13 @@ mod tests {
     /// The idle notice and the dock's idle line say what the next act gives back, and it is what
     /// the station does. With every automatic switch on, the watchdog trips; then one act the
     /// notice names (a send, a switch, a speed, Read or Delete in the Inbox) ends it. Measured on
-    /// the station, which is what keys, and on the dock, which must agree: AUTOREPLY, RELAY and HB
-    /// ACK come back as Settings has them, HB and the repeating CQ stay off until their own switch
-    /// (N68's (1a)). In every catalog the notice opens with the switches the trip turned off, and
-    /// in both strings the last clause names exactly the ones still off and the clause before it
-    /// exactly the ones back. The words said "any send or switch re-arms them", the heartbeat
-    /// included, and "off until you send something".
+    /// the station, which is what keys, and on the dock, which must agree, switch by switch and on
+    /// whether each would act now: AUTOREPLY, RELAY and HB ACK come back as Settings has them, HB
+    /// and the repeating CQ stay off until their own switch, so HB ACK is back on but not armed,
+    /// needing HB. In every catalog the notice opens with the switches the trip turned off, and in
+    /// both strings the last clause names exactly the ones still off and the clause before it
+    /// exactly the ones back. The words said "any send or switch re-arms them", the
+    /// heartbeat included, and "off until you send something".
     #[test]
     fn the_idle_notice_and_the_dock_line_say_what_the_next_act_gives_back() {
         type Act = fn(&mut Engine);
@@ -2923,23 +3081,45 @@ mod tests {
                     .unwrap()
             }),
         ];
-        // Each switch by the dock's label: on the station, and as the dock shows it.
-        let switches = |e: &Engine| -> [(&'static str, bool, bool); 5] {
+        // Each switch by the dock's label: on the station and on the dock, then whether the
+        // station would act on it now (`Station::readiness`) and whether the dock shows it armed.
+        type Switch = (&'static str, bool, bool, bool, bool);
+        let switches = |e: &Engine| -> [Switch; 5] {
             let s = &e.js8_station;
             let live = !s.idle_tripped();
-            let a = e.js8_state().armed;
+            let st = e.js8_state();
+            let (c, r, a) = (s.config(), s.readiness(e.tx_enabled()), st.armed);
+            let acts = |on: bool, why: Option<Js8Unarmed>| on && why.is_none();
             [
-                ("AUTOREPLY", s.config().autoreply && live, a.autoreply),
-                ("RELAY", s.config().relay && live, a.relay),
-                ("HB ACK", s.config().hb_ack && live, a.hb_ack),
-                ("HB", s.hb_on(), a.hb),
-                ("CQ", s.cq_on(), a.cq),
+                (
+                    "AUTOREPLY",
+                    c.autoreply && live,
+                    st.autoreply,
+                    acts(c.autoreply, r.autoreply),
+                    a.autoreply,
+                ),
+                (
+                    "RELAY",
+                    c.relay && live,
+                    st.relay,
+                    acts(c.relay, r.relay),
+                    a.relay,
+                ),
+                (
+                    "HB ACK",
+                    c.hb_ack && live,
+                    st.hb_ack,
+                    acts(c.hb_ack, r.hb_ack),
+                    a.hb_ack,
+                ),
+                ("HB", s.hb_on(), st.hb_on, acts(s.hb_on(), r.hb), a.hb),
+                ("CQ", s.cq_on(), st.cq_on, acts(s.cq_on(), r.cq), a.cq),
             ]
         };
-        let set = |sw: &[(&'static str, bool, bool); 5], on: bool| {
+        let set = |sw: &[Switch; 5], on: bool| {
             sw.iter()
-                .filter(|(_, station, _)| *station == on)
-                .map(|(label, _, _)| *label)
+                .filter(|(_, station, ..)| *station == on)
+                .map(|(label, ..)| *label)
                 .collect::<std::collections::BTreeSet<_>>()
         };
         let mut measured = None;
@@ -2964,8 +3144,10 @@ mod tests {
             e.js8_set_cq_repeat(true, 0).unwrap();
             let before = switches(&e);
             assert!(
-                before.iter().all(|&(_, station, dock)| station && dock),
-                "control: every switch is on before the trip: {before:?}"
+                before
+                    .iter()
+                    .all(|&(_, station, dock, acts, armed)| station && dock && acts && armed),
+                "control: every switch is on and armed before the trip: {before:?}"
             );
             let t0 = tempo_core::timing::now_unix_ms() as u64;
             e.js8_station.mark_active(t0 - 6 * 60_000);
@@ -2979,12 +3161,19 @@ mod tests {
                 "{name}: control: the act ended the trip"
             );
             let after = switches(&e);
-            for (label, station, dock) in after {
+            for (label, station, dock, acts, armed) in after {
                 assert_eq!(
-                    station, dock,
-                    "{name}: the dock shows {label} as the station has it"
+                    (station, acts),
+                    (dock, armed),
+                    "{name}: the dock shows {label} as the station has it, and armed as it acts"
                 );
             }
+            let st = e.js8_state();
+            assert_eq!(
+                (st.hb_ack, st.armed.hb_ack, st.not_armed.hb_ack),
+                (true, false, Some(Js8Unarmed::NeedsHb)),
+                "{name}: HB ACK is back on, and needs HB, still off, to answer"
+            );
             let now = (turned_off, set(&after, true), set(&after, false));
             match &measured {
                 None => measured = Some(now),

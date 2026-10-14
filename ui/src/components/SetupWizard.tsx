@@ -26,10 +26,11 @@ import {
   probeCatPorts,
   updateRadioProfile,
 } from '../api'
-import { baudForRig, radioPatch } from './SettingsPanel'
-import { SetupHealth } from './SetupHealth'
+import { baudForRig, radioPatch, RIG_EXAMPLES } from './SettingsPanel'
+import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
+import { ProveTxButton, SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
-import { IS_WINDOWS } from '../platform'
+import { IS_MAC, IS_WINDOWS } from '../platform'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
@@ -52,6 +53,9 @@ export interface WizardDraft {
   serialPort?: string
   baud?: number
   pttMethod?: string
+  /** The port an RTS/DTR keying line is on, as Settings' PTT Serial Port: blank = the CAT port.
+   * Asked only beside the keying choice (a radio Hamlib cannot key over CAT). */
+  pttSerialPort?: string
   audioIn?: string
   audioOut?: string
 }
@@ -115,6 +119,31 @@ const LICENSE: { id: string; labelKey: MessageKey; blurbKey: MessageKey }[] = [
     id: 'open',
     labelKey: 'setup.finish.license.open',
     blurbKey: 'setup.finish.license.open.blurb',
+  },
+]
+
+/**
+ * How the interface keys a radio Hamlib cannot key over CAT (`NO_CAT_PTT_TRANSCEIVERS`). The
+ * `value` is PTT Method's stored token and the label is PTT Method's own, so the wizard and
+ * Settings name each choice alike; the blurb says in one line what it means. CAT is not offered:
+ * on these radios it keys nothing. Each key is a literal `t()` call, so the catalog scanners can
+ * read it.
+ */
+const KEYING: { value: string; label: () => string; blurb: () => string }[] = [
+  {
+    value: 'vox',
+    label: () => t('settings.rigControl.ptt.vox'),
+    blurb: () => t('setup.rig.keying.vox.blurb'),
+  },
+  {
+    value: 'rts',
+    label: () => t('settings.rigControl.ptt.rts'),
+    blurb: () => t('setup.rig.keying.rts.blurb'),
+  },
+  {
+    value: 'dtr',
+    label: () => t('settings.rigControl.ptt.dtr'),
+    blurb: () => t('setup.rig.keying.dtr.blurb'),
   },
 ]
 
@@ -221,6 +250,16 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   // gap the wizard itself created.
   const [baud, setBaud] = useState<number>(() => settings?.baud ?? 38400)
   const [pttMethod, setPttMethod] = useState<string>(() => settings?.pttMethod ?? 'vox')
+  // The keying choice's two facts (a radio Hamlib cannot key over CAT): the port an RTS/DTR line
+  // keys on (Settings' PTT Serial Port, blank = the CAT port), and whether the owner picked the
+  // keying in this wizard. A VOX nobody picked may be only the default, so it answers nothing; a
+  // saved RTS or DTR was somebody's choice.
+  const [pttSerialPort, setPttSerialPort] = useState(() => settings?.pttSerialPort ?? '')
+  const [keyingPicked, setKeyingPicked] = useState(false)
+  const pickKeying = (value: string) => {
+    setPttMethod(value)
+    setKeyingPicked(true)
+  }
   // The Hamlib model catalog for the confirm dropdown ("found the port but not the
   // exact model" — an FT-991A answers the FTDX10 seed, so the GUESS must be confirmable).
   const [models, setModels] = useState<[number, string][]>([])
@@ -273,8 +312,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         setSerialPort(r.portName)
         setBaud(r.baud)
         setRigConn('serial')
-        // A real answer means CAT works — kill the silent-VOX default.
-        setPttMethod('cat')
+        // A real answer means CAT works — kill the silent-VOX default. Except on a radio Hamlib
+        // cannot key over CAT: its CAT answers, but CAT keying keys nothing, so PTT stays put.
+        if (!NO_CAT_PTT_MODELS.includes(r.model)) setPttMethod('cat')
         if (r.modelSeeded) {
           // Port + baud proven; the model is a guess. Keep the guess as the dropdown's
           // preselection and say plainly that picking the exact model is the next step.
@@ -305,7 +345,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setModelSeeded(false)
     const fixed = baudForRig(num, baud)
     if (fixed != null) setBaud(fixed)
-    if (pttMethod === 'vox') setPttMethod('cat')
+    if (NO_CAT_PTT_MODELS.includes(num)) {
+      // Hamlib cannot key this radio over CAT. Undo a CAT this wizard chose for an earlier pick or
+      // an Auto-test hit, back to what is saved; a saved CAT is the operator's own and stays.
+      if (pttMethod === 'cat') setPttMethod(settings?.pttMethod ?? 'vox')
+    } else if (pttMethod === 'vox') setPttMethod('cat')
   }
   // --- The SECOND radio: a card in this step, not a fifth step (multi-radio had zero
   // wizard presence — ~11 steps across three Settings sections, with a recorded field
@@ -355,7 +399,8 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
           rigModel: r.model,
           rigModelName: r.modelName,
           rigConn: 'serial',
-          pttMethod: 'cat',
+          // Never CAT for a radio Hamlib cannot key over CAT: the new profile keeps its own VOX.
+          ...(NO_CAT_PTT_MODELS.includes(r.model) ? {} : { pttMethod: 'cat' }),
           ...(row?.suggestedAudio ? { audioIn: row.suggestedAudio } : {}),
           ...(row?.suggestedAudioOut || row?.suggestedAudio
             ? { audioOut: row?.suggestedAudioOut ?? row?.suggestedAudio ?? '' }
@@ -483,6 +528,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     if (serialPort !== (settings?.serialPort ?? '')) d.serialPort = serialPort
     if (baud !== (settings?.baud ?? 38400)) d.baud = baud
     if (pttMethod !== (settings?.pttMethod ?? 'vox')) d.pttMethod = pttMethod
+    if (pttSerialPort !== (settings?.pttSerialPort ?? '')) d.pttSerialPort = pttSerialPort.trim()
     if (audioIn !== (settings?.audioIn ?? '')) d.audioIn = audioIn
     if (audioOut !== (settings?.audioOut ?? '')) d.audioOut = audioOut
     return d
@@ -547,10 +593,12 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setRigConn('serial')
     // PTT: a recognised interface cable names its keying line; a model-named rig
     // gets CAT keying (killing the silent-VOX default that made the wizard's own
-    // Test CAT report "✗ VOX — no CAT"). An unidentified bridge chip is left
-    // alone — the Auto-test chain below settles it when it finds the rig.
+    // Test CAT report "✗ VOX — no CAT"), unless Hamlib cannot key it over CAT. An
+    // unidentified bridge chip is left alone — the Auto-test chain below settles it
+    // when it finds the rig.
+    const catKeys = r.suggestedModel != null && !NO_CAT_PTT_MODELS.includes(r.suggestedModel)
     if (r.interfacePttMethod) setPttMethod(r.interfacePttMethod)
-    else if (r.suggestedModel != null && pttMethod === 'vox') setPttMethod('cat')
+    else if (catKeys && pttMethod === 'vox') setPttMethod('cat')
     // RX from the capture list, TX from the OUTPUT list — the rig's CODEC enumerates under
     // different input/output names on Windows, so reusing the input name for audioOut sent TX
     // audio to the PC speakers. Fall back to the input name only if no output paired.
@@ -594,16 +642,41 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         : t('setup.rig.flexNote.other', { radio: named, ip: f.ip }),
     )
   }
-  const runCatTest = () => {
+  const runCatTest = (andThen?: () => void) => {
     setCatTesting(true)
     setCatResult(null)
     onTestCat(draft())
-      .then(setCatResult)
+      .then((r) => {
+        setCatResult(r)
+        andThen?.()
+      })
       .catch((e) =>
         setCatResult({ ok: false, detail: e instanceof Error ? e.message : String(e) }),
       )
       .finally(() => setCatTesting(false))
   }
+  // Prove TX keys what is SAVED: the tune carrier goes out through the radio loop, which reads the
+  // saved settings, as Test CAT's probe does. So whatever the wizard holds unsaved (a keying line
+  // just picked) is saved first, by Test CAT's own path, which comes back once the loop has probed
+  // the rig on it. Keyed sooner, the carrier proves the old setting or nothing at all: the reopen
+  // a PTT change makes ends any tune it finds. A save that fails keys nothing. Withheld while a
+  // test runs, so one press keys once.
+  const proveTx =
+    onProveTx && !catTesting
+      ? () => (Object.keys(draft()).length === 0 ? onProveTx() : runCatTest(onProveTx))
+      : undefined
+
+  // The keying choice: a radio Hamlib cannot key over CAT, on the serial connection the model
+  // picker belongs to. A pick answers it, as does a recognised interface's line or an RTS or DTR
+  // already saved. Until it is answered, Next, the step dots and Finish keep the wizard at the
+  // rig step.
+  const asksKeying =
+    rigConn === 'serial' && rigModel != null && NO_CAT_PTT_TRANSCEIVERS.includes(rigModel)
+  const keyingChoice =
+    pttMethod === 'rts' || pttMethod === 'dtr' || (pttMethod === 'vox' && keyingPicked)
+      ? pttMethod
+      : null
+  const keyingMissing = asksKeying && keyingChoice == null
 
   // The four steps in order. One key per step, read by the dot, its tooltip AND the progress
   // label, so a reworded step cannot end up saying two different things in one dialog.
@@ -638,8 +711,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             key={s.titleKey}
             type="button"
             className={`wizard-dot${i === step ? ' cur' : ''}${i < step ? ' done' : ''}`}
-            // Same gate as Next: a malformed grid can't be walked past via the dots.
-            disabled={step === 0 && gridState === 'bad' && i !== 0}
+            // Same gates as Next: a malformed grid can't be walked past via the dots, and nor can
+            // an unanswered keying choice, from any step.
+            disabled={(step === 0 && gridState === 'bad' && i !== 0) || (keyingMissing && i > 1)}
             onClick={() => setStep(i)}
             title={t(s.titleKey)}
           >
@@ -855,6 +929,66 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               </label>
             </div>
           )}
+          {/* How the interface keys a radio Hamlib cannot key over CAT, with Prove TX beside the
+              answer so the owner sees the radio transmit on it. The note is PTT Method's own, the
+              sentence Settings shows under it. */}
+          {asksKeying && (
+            <div role="group" aria-labelledby="wizard-keying-title">
+              <h3 id="wizard-keying-title" className="wizard-modes-title">
+                {t('setup.rig.keying.title')}
+              </h3>
+              <div className="wizard-modes">
+                {KEYING.map((k) => (
+                  <button
+                    key={k.value}
+                    type="button"
+                    className={`wizard-mode${keyingChoice === k.value ? ' sel' : ''}`}
+                    aria-pressed={keyingChoice === k.value}
+                    onClick={() => pickKeying(k.value)}
+                  >
+                    <span className="wizard-mode-label">{k.label()}</span>
+                    <span className="wizard-mode-blurb">{k.blurb()}</span>
+                  </button>
+                ))}
+              </div>
+              {/* A row of its own, as the model picker has: in the column below the field
+                  shrinks to its input, and the placeholder lost "use the CAT port". */}
+              {(keyingChoice === 'rts' || keyingChoice === 'dtr') && (
+                <div className="wizard-fields">
+                  <label className="wizard-field">
+                    <span>{t('settings.rigControl.pttPort.label')}</span>
+                    <input
+                      type="text"
+                      list="wizard-ptt-port-list"
+                      value={pttSerialPort}
+                      placeholder={t('settings.rigControl.pttPort.placeholder', {
+                        example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
+                      })}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(e) => setPttSerialPort(e.target.value)}
+                    />
+                    <datalist id="wizard-ptt-port-list">
+                      {(detected ?? [])
+                        .filter((r) => r.portName !== serialPort)
+                        .map((r) => (
+                          <option key={r.portName} value={r.portName} />
+                        ))}
+                    </datalist>
+                  </label>
+                </div>
+              )}
+              <div className="wizard-detect">
+                <span
+                  className={`wizard-field-hint${keyingChoice ? '' : ' bad'}`}
+                  role={keyingChoice ? undefined : 'alert'}
+                >
+                  {t('settings.rigControl.ptt.noCatPtt')}
+                </span>
+                {proveTx && !radio?.tuning && <ProveTxButton onProveTx={proveTx} />}
+              </div>
+            </div>
+          )}
           <div className="wizard-rigconn">
             <button
               type="button"
@@ -939,7 +1073,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               type="button"
               className="wizard-btn"
               disabled={catTesting}
-              onClick={runCatTest}
+              onClick={() => runCatTest()}
               title={t('setup.rig.testCat.title')}
             >
               {catTesting ? t('setup.rig.testCat.busy') : t('setup.rig.testCat.action')}
@@ -955,7 +1089,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
           {/* The VERIFY stage — the same Setup-health strip Settings renders (extracted
               shared component), so the wizard ends on evidence, not faith: Rig / RX dB /
               TX, with Prove TX keying a bounded carrier behind its confirm. */}
-          <SetupHealth radio={radio} catResult={catResult} onProveTx={onProveTx} />
+          <SetupHealth radio={radio} catResult={catResult} onProveTx={proveTx} />
 
           {/* The SECOND radio — a card, not a fifth step. Offered once radio 1 has a
               port; the probe automatically skips radio 1's port (it's held). */}
@@ -1205,8 +1339,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <button
               type="button"
               className="wizard-go"
-              // A malformed grid must not ride into settings; empty is fine (skip).
-              disabled={step === 0 && gridState === 'bad'}
+              // A malformed grid must not ride into settings; empty is fine (skip). Nor does the
+              // rig step let go of a radio whose keying nobody has picked.
+              disabled={(step === 0 && gridState === 'bad') || (step === 1 && keyingMissing)}
               onClick={() => setStep(step + 1)}
             >
               {t('setup.nav.next')}
@@ -1215,6 +1350,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <button
               type="button"
               className="wizard-go"
+              disabled={keyingMissing}
               onClick={() => finish(['everything'], 'operate', [])}
             >
               {t('setup.nav.finish')}

@@ -14,6 +14,11 @@ import {
   isActivityTag,
   activityTypeByCall,
   workTarget,
+  ownScreen,
+  workTier,
+  pskSubmode,
+  WORK_SECTION,
+  workHintView,
 } from './needs'
 import type { BandChannel, NeedAlert, NeedTag } from '../types'
 
@@ -724,6 +729,69 @@ describe('the mode label the Needed board shows never changes where a click land
     expect(workTarget(alert('CW', null), [])?.view).toBe('cw')
     expect(workTarget(alert('Phone', null), [])?.view).toBe('phone')
     expect(workTarget(alert('RTTY'), [])?.view).toBe('rtty')
+  })
+})
+
+// A row opens the screen of its own mode (operator ruling 2026-10-12): JS8 → JS8, the PSK modes → PSK,
+// FT4 → the FT screen on FT4. The row's own mode is `exactMode`; `mode` is the class label unless the
+// source said FT8, FT4 or RTTY. App.neededOwnMode.test.tsx holds the windows to it.
+describe('a row opens the screen of its own mode', () => {
+  const row = (exactMode: string | null, over: Partial<NeedAlert> = {}): NeedAlert => ({
+    ...alert('K1JSE', 'Digital'),
+    exactMode,
+    ...over,
+  })
+  const ch = (band: string, dialMhz: number): BandChannel => ({ band, group: 'HF', dialMhz, mode: 'USB', label: band, note: '' })
+  const js8 = { view: 'js8' as const, plan: [ch('20m', 14.078)] }
+  const psk = { view: 'psk' as const, plan: [ch('40m', 7.07), ch('20m', 14.07)] }
+
+  it('names the own screen from the mode the station was heard in, never from the class', () => {
+    expect(ownScreen(row('JS8'))).toBe('js8')
+    for (const m of ['PSK31', 'PSK63', 'PSK125', 'QPSK31', 'BPSK31']) expect(ownScreen(row(m)), m).toBe('psk')
+    for (const m of ['FT8', 'FT4', 'FT2', 'Q65', 'RTTY', 'CW', 'SSB', null]) expect(ownScreen(row(m)), String(m)).toBeNull()
+  })
+
+  it('opens it at the screen’s channel for the band, or at the row’s own frequency', () => {
+    expect(workTarget(row('JS8'), BAND_PLAN, js8)).toEqual({ call: 'K1JSE', view: 'js8', freqMhz: 14.078, band: '20m' })
+    expect(workTarget(row('PSK31', { band: '40m' }), BAND_PLAN, psk)).toEqual({
+      call: 'K1JSE', view: 'psk', freqMhz: 7.07, band: '40m',
+    })
+    expect(workTarget(row('JS8', { freqMhz: 14.0795 }), BAND_PLAN, js8)?.freqMhz).toBe(14.0795)
+  })
+
+  it('keeps the target every such row had where the screen cannot place it, or was not handed over', () => {
+    const before = { call: 'K1JSE', view: 'operate', freqMhz: 7.074, band: '40m' }
+    // A band the JS8 screen has no channel on, and a row with no frequency of its own.
+    expect(workTarget(row('JS8', { band: '40m' }), BAND_PLAN, js8)).toEqual(before)
+    // A window that cannot open the screen (switched off, or a browser) hands none over.
+    expect(workTarget(row('JS8', { band: '40m' }), BAND_PLAN)).toEqual(before)
+    // A screen that is not the row's own is ignored: a JS8 row never lands on PSK.
+    expect(workTarget(row('JS8'), BAND_PLAN, psk)?.view).toBe('operate')
+    // CW, Phone and RTTY still route by their label.
+    expect(workTarget(row('CW', { mode: 'CW', freqMhz: 14.025 }), BAND_PLAN, js8)?.view).toBe('cw')
+  })
+
+  it('names the FT tier of the row’s own mode, label or not', () => {
+    expect(workTier(row('FT4'))).toBe('FT4')
+    expect(workTier(row('FT4', { mode: 'FT4' }))).toBe('FT4')
+    expect(workTier(row('FT8', { mode: 'FT8' }))).toBe('FT8')
+    expect(workTier(row(null, { mode: 'FT8' }))).toBe('FT8')
+    for (const m of ['JS8', 'FT2', 'Q65', null]) expect(workTier(row(m)), String(m)).toBeNull()
+  })
+
+  it('opens the PSK screen on the row’s own sub-mode only where the screen has it', () => {
+    expect(pskSubmode(row('PSK31'))).toBe('psk31')
+    expect(pskSubmode(row('QPSK31'))).toBe('qpsk31')
+    expect(pskSubmode(row('PSK63'))).toBeNull()
+    expect(pskSubmode(row('PSK125'))).toBeNull()
+  })
+
+  it('reads every screen back from the section it tells work_spot, and anything else as the FT screen', () => {
+    for (const view of Object.keys(WORK_SECTION) as (keyof typeof WORK_SECTION)[])
+      expect(workHintView(WORK_SECTION[view]), view).toBe(view)
+    expect(WORK_SECTION.psk).toBe('keyboard')
+    expect(WORK_SECTION.js8).toBe('js8')
+    for (const hint of ['psk', 'operate', '', null, undefined]) expect(workHintView(hint), String(hint)).toBe('operate')
   })
 })
 

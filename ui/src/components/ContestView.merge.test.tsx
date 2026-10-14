@@ -34,6 +34,7 @@ const fdMergeToGeneral = vi.fn<() => Promise<FdMergeReport>>()
 vi.mock('../api', () => ({
   // The contest screen's Removed list, read on mount: none removed.
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: '' })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
@@ -151,11 +152,11 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
   })
 
   it("surfaces the engine's own refusal rather than a second copy of it", async () => {
-    fdMergeToGeneral.mockRejectedValueOnce('Field Day mode is not active')
+    fdMergeToGeneral.mockRejectedValueOnce('Contest mode is not active')
     await show()
     fireEvent.click(screen.getByRole('button', { name: /Merge 3 contacts/ }))
     await settle()
-    expect(screen.getByRole('alert').textContent).toContain('Field Day mode is not active')
+    expect(screen.getByRole('alert').textContent).toContain('Contest mode is not active')
     expect(screen.queryByRole('status')).toBeNull()
   })
 
@@ -165,9 +166,41 @@ describe('the end-of-contest merge is reachable, and says what it will do', () =
     // "upload: off" plus a ClubLog upload anyway is us misleading them, not ClubLog
     // surprising them.
     expect(screen.getByRole('button', { name: /Merge 3 contacts/ })).toBeTruthy()
-    // By name: the Field Day mode switch shares the screen with it.
+    // By name: the Contest mode switch shares the screen with it.
     expect(screen.getByRole('switch', { name: "Upload this session's merged contacts" })).toBeTruthy()
+    // It uploads to the logbooks ticked beside it (`fd_set_upload`'s destinations); it never
+    // was the merge into my logbook, which is the button above. It read "Send merged contacts
+    // to my logbook".
+    expect(document.querySelector('.fd-upload-label')!.textContent).toBe('Upload merged contacts to:')
     expect(screen.getByRole('note').textContent).toContain('catch-up sweep')
+  })
+})
+
+// The upload ticks read `qrz`, `clublog`, `eqsl`…: the engine's ids, the last raw ids on the
+// screen. Each now shows the service's own name, the one the app uses elsewhere; what is
+// stored is still the id.
+describe('the upload ticks name the services', () => {
+  it('shows each service by its own name, and a tick still stores the id', async () => {
+    const available = ['qrz', 'clublog', 'eqsl', 'hrdlog', 'n3fjp', 'cloudlog', 'wrl']
+    await show(FD({ upload: { enabled: false, destinations: [], available, hint: HINT } }))
+    expect([...document.querySelectorAll('.fd-upload-dest')].map((n) => n.textContent)).toEqual([
+      'QRZ',
+      'Club Log',
+      'eQSL',
+      'HRDLog',
+      'N3FJP',
+      'Cloudlog',
+      'WRL',
+    ])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Club Log' }))
+    })
+    expect(fdSetUpload).toHaveBeenLastCalledWith(false, ['clublog'])
+  })
+
+  it('shows a service this build has no name for by its id', async () => {
+    await show(FD({ upload: { enabled: false, destinations: [], available: ['newlog'], hint: HINT } }))
+    expect(document.querySelector('.fd-upload-dest')!.textContent).toBe('newlog')
   })
 })
 

@@ -166,8 +166,10 @@ describe("the update banner's button reads in every light theme", () => {
   it('FIRES: the button as it shipped is caught in the light themes, at the ratios Chrome measured, and not in the dark ones', () => {
     const found = unreadable(SHIPPED, buttons, LIGHT)
     // The resolver must agree with what Chrome painted, or it is not measuring the same thing.
-    expect(found).toContain('Install and restart light: #0d1117 on #0174ab = 3.68:1')
-    expect(found).toContain('Download light skin=silver: #0d1117 on #3b5a7a = 2.64:1')
+    // The Light it shipped in is the Bright theme now, and Silver's look is the standard Light (2026-10-13):
+    // each pair is measured where that look lives.
+    expect(found).toContain('Install and restart light skin=bright: #0d1117 on #0174ab = 3.68:1')
+    expect(found).toContain('Download light: #0d1117 on #3b5a7a = 2.64:1')
     expect(found).toContain('Install and restart light-night accent=violet: #0d1117 on #5b2da5 = 2.13:1')
     expect(unreadable(SHIPPED, buttons, DARK)).toEqual([])
   }, 30_000)

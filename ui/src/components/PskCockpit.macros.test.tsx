@@ -152,7 +152,7 @@ describe('the F1–F8 row', () => {
         pskProfiles: [{ name: 'contest', macros: [{ key: 'F2', label: 'Run exch', text: '{CALL} 599 05 05' }] }],
       }),
     })
-    expect(['F1', 'F2', 'F3', 'F7', 'F8'].map(labelOf)).toEqual(['CQ', 'Run exch', 'TU', 'AGN', 'B4'])
+    expect(['F1', 'F2', 'F3', 'F7', 'F8'].map(labelOf)).toEqual(['CQ', 'Run exch', 'TU', 'B4', 'AGN'])
     expect(screen.getByRole('button', { name: 'Contest' }).getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -462,6 +462,120 @@ describe('the macro editor', () => {
   })
 })
 
+// RIGHT-CLICK, CTRL+SHIFT+F-KEY AND SEND ONCE — RTTY's, on PSK's own seam (`psk_send`) and
+// store (`set_psk_macros`). Every assertion is on those recorded calls, never on a caption.
+describe('right-click, Ctrl+Shift+F-key and Send once', () => {
+  const sendOnce = () => screen.getByRole('button', { name: 'Send once' }) as HTMLButtonElement
+  const locked = { ...snap, radio: { ...snap.radio, txAllowed: false, txRefusal: 'Outside your privileges here' } } as unknown as AppSnapshot
+  beforeEach(() => {
+    mocked(api.pskStop).mockClear()
+    mocked(api.haltTx).mockClear()
+  })
+
+  it('a right-click opens THAT key’s editor with the caret in Message, keeps the browser’s menu shut, and sends nothing', async () => {
+    await renderCockpit()
+    expect(fireEvent.contextMenu(key('F3')), 'the browser’s menu opened over a transmit key').toBe(false)
+    expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
+    expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
+    expect(field(/^message$/i).value).toBe('{CALL} de {MYCALL} ur 599 599 btu k')
+    fireEvent.contextMenu(key('F7'))
+    expect(editor()?.getAttribute('aria-label')).toBe('Edit F7')
+    await act(async () => {})
+    expect(pskSend, 'a right-click keyed the rig').not.toHaveBeenCalled()
+    // POSITIVE CONTROL: a left click on a key still sends it.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(key('F1'))
+    await waitFor(() => expect(pskSend).toHaveBeenCalledWith('CQ CQ CQ de W9XYZ W9XYZ pse k'))
+  })
+
+  it('Ctrl+Shift+F3 opens F3’s editor from the compose bar, keeps the key from the browser, and sends nothing', async () => {
+    await renderCockpit()
+    const compose = screen.getByLabelText('PSK compose')
+    compose.focus()
+    expect(press('F3', { ctrlKey: true, shiftKey: true }, compose), 'Ctrl+Shift+F3 reached the browser').toBe(false)
+    expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
+    expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(press('F3', { ctrlKey: true, shiftKey: true, altKey: true }), 'Ctrl+Shift+Alt+F3 is the system’s').toBe(true)
+    expect(editor()).toBeNull()
+    await act(async () => {})
+    expect(pskSend, 'the shortcut keyed the rig').not.toHaveBeenCalled()
+    // POSITIVE CONTROL: a bare key still sends (F1, which needs no call in the box).
+    press('F1')
+    await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(1))
+  })
+
+  it('the ✎ names the shortcut, for the keyboard and the screen reader', async () => {
+    await renderCockpit()
+    const edit = editOf('F4')!
+    expect(edit.getAttribute('aria-keyshortcuts')).toBe('Control+Shift+F4')
+    expect(edit.title).toBe('Edit the F4 macro. You can also right-click the key, or press Ctrl+Shift+F4.')
+  })
+
+  it('Send once keys the EDITED message through the key’s own path — and the key keeps its own', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.change(field(/^message$/i), { target: { value: '{CALL} de {MYCALL} qrz?' } })
+    fireEvent.click(sendOnce())
+    await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(1))
+    expect(pskSend).toHaveBeenCalledWith('K1ABC de W9XYZ qrz?')
+    expect(editor(), 'sent: the editor closes').toBeNull()
+    expect(setPskMacros, 'Send once saved the key').not.toHaveBeenCalled()
+    expect(setSettings).not.toHaveBeenCalled()
+    expect(labelOf('F2')).toBe('Answer')
+    press('F2')
+    await waitFor(() => expect(pskSend).toHaveBeenCalledTimes(2))
+    expect(pskSend.mock.calls[1][0]).toBe('K1ABC de W9XYZ W9XYZ k')
+  })
+
+  it('Send once is refused exactly where the key is — outside the licence, nothing reaches psk_send, and the draft stays', async () => {
+    await renderCockpit({ snap: locked })
+    press('F1')
+    await act(async () => {})
+    expect(pskSend, 'fixture: the key itself is refused').not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenLastCalledWith('Outside your privileges here', 'info', 3500)
+    pushToast.mockClear()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ de {MYCALL} k' } })
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(pskSend, 'Send once went round the licence gate').not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenCalledWith('Outside your privileges here', 'info', 3500)
+    expect(field(/^message$/i).value, 'a refused Send once keeps the draft').toBe('CQ de {MYCALL} k')
+    // …and a {CALL} with no call in the box is refused as the key's is.
+    cleanup()
+    pushToast.mockClear()
+    await renderCockpit()
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(pskSend).not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenCalledWith('Enter their call first (the {CALL} field)', 'info', 3000)
+  })
+
+  it('Esc with a right-click’s editor open: idle, it only closes; with an over on the air, it stops', async () => {
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(editor(), 'Esc on an idle station closes the editor').toBeNull()
+    expect(mocked(api.pskStop)).not.toHaveBeenCalled()
+    expect(mocked(api.haltTx), 'Esc-to-cancel turned TX off').not.toHaveBeenCalled()
+    cleanup()
+    // CONTROL: an over on the air — Esc is a stop, editor or no editor.
+    state = { ...IDLE, sending: true }
+    mocked(api.pskStop).mockResolvedValue(state)
+    mocked(api.haltTx).mockResolvedValue({})
+    await renderCockpit()
+    await waitFor(() => expect((document.querySelector('.psk-stop') as HTMLButtonElement).disabled).toBe(false))
+    press('F1', { ctrlKey: true, shiftKey: true })
+    expect(editor(), 'fixture: the shortcut opened the editor').not.toBeNull()
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(mocked(api.pskStop)).toHaveBeenCalled()
+    expect(mocked(api.haltTx)).toHaveBeenCalled()
+  })
+})
+
 describe('Everyday / Contest', () => {
   it('switching saves the choice and shows the other set', async () => {
     await renderCockpit()
@@ -494,5 +608,15 @@ describe('Everyday / Contest', () => {
   it('offers no reset for a set that is all built-ins', async () => {
     await renderCockpit()
     expect((screen.getByRole('button', { name: 'Reset set' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit({ snap: contest('IL') })
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('Field Day · 0 Q · 0 sections · —/hr')
   })
 })

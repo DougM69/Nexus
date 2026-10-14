@@ -17,6 +17,7 @@ import { t } from '../i18n'
 
 vi.mock('../api', () => ({
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdActive: true, fdEvent: 'arrlfd' })),
   setSettings: vi.fn(async () => ({})),
   getFdRuleset: vi.fn(async () => null),
@@ -79,7 +80,7 @@ describe('the contest logger window, from the contest screen', () => {
     const onSetMode = vi.fn()
     render(<ContestView fieldDay={fieldDay} fdActive onSetMode={onSetMode} logger />)
     await settle()
-    const sw = screen.getByRole('switch', { name: t('settings.fieldDay.mode.aria.disable') }) as HTMLButtonElement
+    const sw = screen.getByRole('switch', { name: t('settings.fieldDay.mode.aria.disable', { contest: 'ARRL Field Day' }) }) as HTMLButtonElement
     const run = screen.getByRole('button', { name: t('fieldDay.role.running') }) as HTMLButtonElement
     const sp = screen.getByRole('button', { name: t('fieldDay.role.sp') }) as HTMLButtonElement
     const bonuses = document.querySelectorAll<HTMLInputElement>('.fd-bonus-row input[type="checkbox"]')

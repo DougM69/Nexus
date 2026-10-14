@@ -20,6 +20,13 @@
       "hb": false,
       "cq": false
     },
+    "notArmed": {
+      "autoreply": "txOff",
+      "relay": "txOff",
+      "hbAck": null,
+      "hb": "txOff",
+      "cq": "txOff"
+    },
     "idleMinutes": 12,
     "idleLimitMin": 60,
     "idleTripped": false,

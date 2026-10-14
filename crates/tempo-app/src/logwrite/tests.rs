@@ -1898,7 +1898,7 @@ fn every_write_path_leaves_the_store_as_stage_1_would_and_the_index_follows() {
                         .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
                     let (made, _) = merge_lotw_report(&engine, &text);
                     made.expect("the report merges");
-                    s1.merge_lotw_report(&text);
+                    s1.merge_lotw_report(&text, Some("K2DEF"));
                     "report merge"
                 }
                 (12, Some(_)) => {
@@ -1937,7 +1937,7 @@ fn every_write_path_leaves_the_store_as_stage_1_would_and_the_index_follows() {
                     let text = adif_record(&row_at(&engine, at));
                     let (made, _) = merge_lotw_own_echo(&engine, &text, step as i64 + 1);
                     made.expect("the report merges");
-                    s1.merge_lotw_own_echo(&text, step as i64 + 1);
+                    s1.merge_lotw_own_echo(&text, step as i64 + 1, Some("K2DEF"));
                     "own echo"
                 }
                 (16, Some(id)) => {
@@ -2777,6 +2777,88 @@ fn checks_of(
     .collect()
 }
 
+/// One card of eQSL's InBox: `call` on 20 m FT8 at `hhmmss` UTC on 2026-10-01, with the fields
+/// eQSL's DownloadInBox spec puts on every row, its sender's `QSL_SENT` ("always Y") and
+/// `QSL_SENT_VIA` ("always E") among them.
+fn inbox_card(call: &str, hhmmss: &str) -> String {
+    adif_row(
+        call,
+        "20m",
+        "FT8",
+        hhmmss,
+        "<RST_SENT:3>-10<RST_RCVD:0><QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EQSL_QSL_RCVD:1>Y\
+         <EQSL_QSLRDATE:8>20261002",
+    )
+}
+
+/// ★ An eQSL sync brings the card and leaves the operator's own QSL mark alone. The card's
+/// `QSL_SENT`/`QSL_SENT_VIA` are its sender's, and the merge took them for the operator's: every
+/// contact a sync matched showed "QSL sent, electronic" whether the operator sent anything or not,
+/// and its export told every other logger so.
+#[test]
+fn an_eqsl_sync_brings_the_card_and_not_the_senders_sent_mark() {
+    let d = Dir::new("eqsl-sync-sent-mark");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row("W1AW", "20m", "FT8", "180000", "")]),
+    );
+    let inbox = eqsl_answer(&[inbox_card("W1AW", "180100")]);
+    let (summary, durability) = until_written(|| merge_eqsl_report(&engine, &inbox));
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(
+        summary.expect("merged").newly_confirmed_any,
+        1,
+        "premise: the card confirms the contact"
+    );
+    let held = engine.stored_records();
+    assert!(held[0].qsl_rcvd.eqsl, "{:?}", held[0]);
+    assert_eq!(
+        held[0].qsl_sent,
+        tempo_core::logbook::QslSent::default(),
+        "the operator sent nothing"
+    );
+    assert!(
+        !adif_record(&held[0]).contains("<QSL_SENT"),
+        "nor does the export say so"
+    );
+}
+
+/// ★ The same at Check confirmations' Apply, which merges eQSL's InBox as the sync does: the
+/// contact gains the card, and no QSL mark the operator never made.
+#[test]
+fn apply_brings_the_eqsl_card_and_not_the_senders_sent_mark() {
+    use tempo_core::reconcile::check::Channel;
+    let d = Dir::new("eqsl-apply-sent-mark");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row("W1AW", "20m", "FT8", "180000", "")]),
+    );
+    let inbox = eqsl_answer(&[inbox_card("W1AW", "180100")]);
+    let lines =
+        station::check_eqsl_confirmations(&crate::engine::log_plan(&engine), &inbox, Some("K2DEF"))
+            .expect("the check reads the log")
+            .check
+            .lines;
+    assert!(lines.is_empty(), "nothing to take off: {lines:#?}");
+    let (applied, durability) =
+        apply_confirmation_check(&engine, &[(Channel::Eqsl, inbox)], &lines, APPLIED_AT);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    let made: Vec<(Channel, usize, usize)> = applied
+        .expect("applied")
+        .services
+        .iter()
+        .map(|s| (s.channel, s.confirmations, s.gained))
+        .collect();
+    assert_eq!(made, [(Channel::Eqsl, 0, 1)], "W1AW gains eQSL's card");
+    let held = engine.stored_records();
+    assert!(held[0].qsl_rcvd.eqsl, "{:?}", held[0]);
+    assert_eq!(
+        held[0].qsl_sent,
+        tempo_core::logbook::QslSent::default(),
+        "the operator sent nothing"
+    );
+}
+
 /// ★ Apply takes off only what the operator ticked, service by service. #400's pair on W1AW has
 /// every service's confirmation of 18:00 on 06:00, each put there by 1.17.0's matcher, and K1ABC
 /// holds eQSL's card of a 15:00 QSO this log lacks. Of the four lines only 06:00's eQSL line is
@@ -3369,4 +3451,360 @@ fn sync_from_qrz_changes_only_which_contacts_go_to_lotw() {
         ],
         "LoTW: K1AAA, K1BBB and K5NEW are owed beside the rest"
     );
+}
+
+// ── LoTW, every call on the account ─────────────────────────────────────────────────────────
+
+/// A row of LoTW's downloads for a QSO made under `own` (its `STATION_CALLSIGN`, which LoTW names
+/// on every row with `qso_withown=yes`): W1AW on 20 m FT8 at `hhmmss`, with `more`.
+fn w1aw_under(own: &str, hhmmss: &str, more: &str) -> String {
+    adif_row(
+        "W1AW",
+        "20m",
+        "FT8",
+        hhmmss,
+        &format!("<STATION_CALLSIGN:{}>{own}{more}", own.len()),
+    )
+}
+
+/// The one contact the store holds made under `own` (its STATION_CALLSIGN; `None`: it names none).
+fn made_under(engine: &Mutex<Engine>, own: Option<&str>) -> QsoRecord {
+    let found: Vec<QsoRecord> = engine
+        .stored_records()
+        .into_iter()
+        .filter(|r| r.station_callsign.as_deref() == own)
+        .collect();
+    assert_eq!(found.len(), 1, "one contact made under {own:?}");
+    found.into_iter().next().unwrap()
+}
+
+/// LoTW's confirmation download `report`, merged as the sync merges it.
+fn lotw_synced(engine: &Mutex<Engine>, report: &str) -> tempo_core::reconcile::ReconcileSummary {
+    let (summary, durability) = merge_lotw_report(engine, report);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    summary.expect("merged")
+}
+
+/// The operator's two calls in one log: K2DEF now, the Settings call `engine_on_store` keeps,
+/// and N2OLD before, each with a contact with W1AW on 20 m FT8 in the same second, K2DEF's first
+/// in the log, and `k2def` saying whether K2DEF's names its call (an older build's contact names
+/// none). Each upload `outcome`, where one is given.
+fn two_calls(d: &Dir, k2def: bool, outcome: Option<UploadOutcome>) -> Arc<Mutex<Engine>> {
+    let mut log = contacts(&[
+        if k2def {
+            w1aw_under("K2DEF", "120000", "")
+        } else {
+            adif_row("W1AW", "20m", "FT8", "120000", "")
+        },
+        w1aw_under("N2OLD", "120000", ""),
+    ]);
+    for r in &mut log {
+        r.upload.lotw = outcome.map(|outcome| UploadStatus {
+            outcome,
+            when_unix: 1,
+            detail: None,
+        });
+    }
+    let engine = holding(d, &log);
+    assert_eq!(engine.stored_records().len(), 2, "premise: both contacts");
+    engine
+}
+
+/// The rows of LoTW's confirmation download for [`two_calls`], listed N2OLD's first, each with
+/// its own credit, so a contact shows by value whose row it took: N2OLD's brings DXCC, K2DEF's
+/// WAS.
+fn both_calls_confirmed() -> String {
+    lotw_answer(&[
+        w1aw_under("N2OLD", "120000", "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC"),
+        w1aw_under("K2DEF", "120000", "<QSL_RCVD:1>Y<CREDIT_GRANTED:3>WAS"),
+    ])
+}
+
+/// ★ Each LoTW confirmation lands only on the contact made under its own call. The operator
+/// changed calls, K2DEF now and N2OLD before, both on one LoTW account, and the download asks for
+/// every call on it. Two contacts with W1AW on 20 m FT8 in the same second, one under each call:
+/// N2OLD's row takes N2OLD's contact and K2DEF's row K2DEF's, each with its own credit, and
+/// neither takes the other's. The rows are listed N2OLD's first and the log holds K2DEF's contact
+/// first, so a matcher that compares no call crosses them.
+#[test]
+fn a_lotw_confirmation_lands_only_on_the_contact_made_under_its_own_call() {
+    let d = Dir::new("lotw-own-call");
+    let engine = two_calls(&d, true, None);
+    let summary = lotw_synced(&engine, &both_calls_confirmed());
+    assert_eq!((summary.matched, summary.newly_confirmed), (2, 2));
+    for (own, credit) in [("N2OLD", "DXCC"), ("K2DEF", "WAS")] {
+        let r = made_under(&engine, Some(own));
+        assert_eq!(
+            (r.qsl_rcvd.lotw, r.credit_granted),
+            (true, vec![credit.to_string()]),
+            "{own}'s contact takes its own row's {credit}, and nothing of the other call's"
+        );
+    }
+}
+
+/// A contact that names no call of its own (an older build's, or an import's without
+/// STATION_CALLSIGN) is the Settings call's, the call the LoTW upload signs it under: it takes
+/// K2DEF's confirmation and its WAS, and N2OLD's row in the same second takes N2OLD's contact,
+/// never this one.
+#[test]
+fn a_contact_naming_no_call_takes_the_settings_call_s_confirmation_alone() {
+    let d = Dir::new("lotw-no-call");
+    let engine = two_calls(&d, false, None);
+    lotw_synced(&engine, &both_calls_confirmed());
+    for (own, credit) in [(None, "WAS"), (Some("N2OLD"), "DXCC")] {
+        let r = made_under(&engine, own);
+        assert_eq!(
+            (r.qsl_rcvd.lotw, r.credit_granted),
+            (true, vec![credit.to_string()]),
+            "the contact made under {own:?} takes {credit} alone"
+        );
+    }
+}
+
+/// A call on the LoTW account that the log holds no contact under (a club call, say) changes
+/// nothing: its confirmation of W1AW on 20 m FT8 at 12:00 leaves K2DEF's contact at 12:00 and the
+/// contact naming no call at 12:00:10 exactly as they were. Nor is it an orphan: the diagnostics
+/// read an orphan as a gap in this log, and would offer to change a contact of another call to
+/// match it.
+#[test]
+fn a_lotw_row_for_a_call_the_log_does_not_hold_changes_nothing() {
+    let d = Dir::new("lotw-other-call");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under("K2DEF", "120000", ""),
+            adif_row("W1AW", "20m", "FT8", "120010", ""),
+        ]),
+    );
+    let before = engine.stored_records();
+    let summary = lotw_synced(
+        &engine,
+        &lotw_answer(&[w1aw_under(
+            "W1CLUB",
+            "120000",
+            "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        )]),
+    );
+    assert_eq!(
+        (summary.matched, summary.orphans.len()),
+        (0, 0),
+        "matched nothing, and no orphan"
+    );
+    assert_eq!(engine.stored_records(), before, "no contact changed");
+}
+
+/// LoTW's own-QSO list names the call each upload was signed under. N2OLD's upload marks N2OLD's
+/// contact as on file at LoTW, and never K2DEF's in the same second, which stays Pending: a
+/// contact marked on file is no longer owed to LoTW, so a wrong mark would keep K2DEF's from ever
+/// being uploaded.
+#[test]
+fn a_lotw_upload_marks_only_the_contact_made_under_its_own_call() {
+    let d = Dir::new("lotw-own-echo");
+    let engine = two_calls(&d, true, Some(UploadOutcome::Pending));
+    let own = lotw_answer(&[w1aw_under("N2OLD", "120000", "<QSL_RCVD:1>N")]);
+    let (promoted, durability) = merge_lotw_own_echo(&engine, &own, 7);
+    durability.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(promoted.expect("merged"), 1);
+    let outcome = |own: &str| {
+        made_under(&engine, Some(own))
+            .upload
+            .lotw
+            .map(|s| s.outcome)
+    };
+    assert_eq!(
+        (outcome("N2OLD"), outcome("K2DEF")),
+        (Some(UploadOutcome::Accepted), Some(UploadOutcome::Pending))
+    );
+}
+
+/// Check confirmations pairs as the sync merges: N2OLD's confirmation is a gain for N2OLD's
+/// contact, the one Apply's merge gives it to, and not for K2DEF's in the same second.
+#[test]
+fn check_confirmations_gains_only_the_contact_made_under_the_row_s_call() {
+    let d = Dir::new("lotw-check-gain");
+    let engine = two_calls(&d, true, None);
+    let report = lotw_answer(&[w1aw_under(
+        "N2OLD",
+        "120000",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let found = station::check_lotw_confirmations(
+        &crate::engine::log_plan(&engine),
+        &report,
+        &lotw_answer(&[]),
+        Some("K2DEF"),
+    )
+    .expect("the check reads the log");
+    assert_eq!(
+        found.gains,
+        [made_under(&engine, Some("N2OLD")).id.unwrap()]
+    );
+}
+
+/// The check replays 1.17.0's matcher over the rows 1.17.0 downloaded, and those were the Settings
+/// call's alone (it asked LoTW for K2DEF's): a row of another call on the account never explains a
+/// mark. K2DEF's contact at 06:00 holds a LoTW confirmation and its DXCC that no K2DEF row supports,
+/// and N2OLD's row at 18:00 (N2OLD's own contact's) is the oldest-first matcher's for 06:00 on that
+/// day. Replayed over it, the line would start ticked and take a confirmation off on the strength
+/// of a row 1.17.0 never saw. No row of K2DEF's reaches 06:00, so the mark is counted, not listed.
+#[test]
+fn the_check_never_explains_a_mark_with_another_call_s_row() {
+    let d = Dir::new("lotw-check-replay");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under(
+                "K2DEF",
+                "060000",
+                "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            w1aw_under("N2OLD", "180000", ""),
+        ]),
+    );
+    let report = lotw_answer(&[w1aw_under(
+        "N2OLD",
+        "180000",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let check = check_of(&engine, &report, &lotw_answer(&[]));
+    assert!(check.lines.is_empty(), "no line: {:#?}", check.lines);
+    assert_eq!((check.flags.unreached, check.flags.out_of_scope), (1, 0));
+    assert_eq!(check.gains.len(), 1, "N2OLD's contact gains its own row");
+}
+
+/// Check confirmations counts LoTW's confirmations for a call the log holds no contact under (a
+/// club call on the account, W1CLUB), and they change nothing: W1CLUB's row at 14:00 gains no
+/// contact, though K2DEF's contact at 14:00, which no row of K2DEF's confirms, is the one contact
+/// near it. The log holds K2DEF, also through a contact naming no call (the Settings call's), and
+/// N2OLD, so their rows, and a row naming no call, are not counted, and each gains its own contact.
+#[test]
+fn check_confirmations_counts_the_records_of_a_call_the_log_does_not_hold() {
+    let d = Dir::new("lotw-check-other-call");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            adif_row("W1AW", "20m", "FT8", "120000", ""),
+            w1aw_under("N2OLD", "120000", ""),
+            w1aw_under("K2DEF", "140000", ""),
+        ]),
+    );
+    let report = lotw_answer(&[
+        w1aw_under("W1CLUB", "140000", "<QSL_RCVD:1>Y"),
+        w1aw_under("W1CLUB", "160000", "<QSL_RCVD:1>Y"),
+        w1aw_under("N2OLD", "120000", "<QSL_RCVD:1>Y"),
+        adif_row("W1AW", "20m", "FT8", "120000", "<QSL_RCVD:1>Y"),
+    ]);
+    let found = station::check_lotw_confirmations(
+        &crate::engine::log_plan(&engine),
+        &report,
+        &lotw_answer(&[]),
+        Some("K2DEF"),
+    )
+    .expect("the check reads the log");
+    assert_eq!(found.other_call_records, 2, "W1CLUB's two");
+    let gains: HashSet<RecordId> = found.gains.iter().copied().collect();
+    let own: HashSet<RecordId> = [None, Some("N2OLD")]
+        .map(|own| made_under(&engine, own).id.unwrap())
+        .into();
+    assert_eq!(
+        (found.gains.len(), gains),
+        (2, own),
+        "each call's row gains its own contact; W1CLUB's never gains K2DEF's at 14:00"
+    );
+}
+
+/// ★ A portable suffix is no other call: the operator's contact imported as K2DEF/P, which the
+/// program that logged it signed to LoTW under K2DEF, takes K2DEF's confirmation and its WAS.
+/// N2OLD's row in the same second, listed first, takes N2OLD's contact, never this one.
+#[test]
+fn a_portable_contact_takes_its_base_call_s_lotw_confirmation() {
+    let d = Dir::new("lotw-portable");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under("K2DEF/P", "120000", ""),
+            w1aw_under("N2OLD", "120000", ""),
+        ]),
+    );
+    lotw_synced(&engine, &both_calls_confirmed());
+    for (own, credit) in [("K2DEF/P", "WAS"), ("N2OLD", "DXCC")] {
+        let r = made_under(&engine, Some(own));
+        assert_eq!(
+            (r.qsl_rcvd.lotw, r.credit_granted),
+            (true, vec![credit.to_string()]),
+            "{own}'s contact takes {credit} alone"
+        );
+    }
+}
+
+/// The rows 1.17.0 downloaded were the Settings call's as LoTW holds it, so a row LoTW holds under
+/// K2DEF/QRP was never one of them, though it pairs as K2DEF's: it never explains a mark. K2DEF's
+/// contact at 06:00 holds a LoTW confirmation and its DXCC that no row supports, and K2DEF/QRP's
+/// row at 18:00 (its own contact's) is the oldest-first matcher's for 06:00 on that day. Replayed
+/// over it, the line would start ticked and take a confirmation off on the strength of a row
+/// 1.17.0 never saw, so the mark is counted, not listed.
+#[test]
+fn the_check_never_explains_a_mark_with_a_suffixed_call_s_row() {
+    let d = Dir::new("lotw-check-suffix-replay");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under(
+                "K2DEF",
+                "060000",
+                "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            w1aw_under("K2DEF/QRP", "180000", ""),
+        ]),
+    );
+    let report = lotw_answer(&[w1aw_under(
+        "K2DEF/QRP",
+        "180000",
+        "<QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+    )]);
+    let check = check_of(&engine, &report, &lotw_answer(&[]));
+    assert!(check.lines.is_empty(), "no line: {:#?}", check.lines);
+    assert_eq!((check.flags.unreached, check.flags.out_of_scope), (1, 0));
+    assert_eq!(
+        check.gains.len(),
+        1,
+        "K2DEF/QRP's contact gains its own row"
+    );
+}
+
+/// Check confirmations counts LoTW's records for a call the log holds no contact under as its
+/// pairing compares calls: a portable suffix is its base call's, a prefix another call. The log
+/// holds K2DEF only as K2DEF/P, and N2OLD. K2DEF's row and K2DEF/QRP's are K2DEF's, which the
+/// log holds (K2DEF's lands on K2DEF/P's contact; K2DEF/QRP's at 16:00 finds none near it); the
+/// records counted are FG/K2DEF's, though at 12:00 and listed first, and the club call W1CLUB's.
+#[test]
+fn check_confirmations_counts_a_portable_call_as_its_base_call() {
+    let d = Dir::new("lotw-check-portable-count");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            w1aw_under("K2DEF/P", "120000", ""),
+            w1aw_under("N2OLD", "120000", ""),
+        ]),
+    );
+    let report = lotw_answer(&[
+        w1aw_under("FG/K2DEF", "120000", "<QSL_RCVD:1>Y"),
+        w1aw_under("K2DEF", "120000", "<QSL_RCVD:1>Y"),
+        w1aw_under("K2DEF/QRP", "160000", "<QSL_RCVD:1>Y"),
+        w1aw_under("W1CLUB", "140000", "<QSL_RCVD:1>Y"),
+        w1aw_under("N2OLD", "120000", "<QSL_RCVD:1>Y"),
+    ]);
+    let found = station::check_lotw_confirmations(
+        &crate::engine::log_plan(&engine),
+        &report,
+        &lotw_answer(&[]),
+        Some("K2DEF"),
+    )
+    .expect("the check reads the log");
+    assert_eq!(found.other_call_records, 2, "FG/K2DEF's and W1CLUB's");
+    let gains: HashSet<RecordId> = found.gains.iter().copied().collect();
+    let own: HashSet<RecordId> = ["K2DEF/P", "N2OLD"]
+        .map(|own| made_under(&engine, Some(own)).id.unwrap())
+        .into();
+    assert_eq!((found.gains.len(), gains), (2, own));
 }

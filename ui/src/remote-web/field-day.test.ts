@@ -67,15 +67,42 @@ it('takes a log holding a logged dupe or a contact that counts for nothing, coun
  expect(()=>parseFieldDay(arrl.page)).toThrow('invalidFieldDay')
 })
 
+// A contact in a mode its contest bans (FT8 at the Illinois QSO Party, the WSJT modes at Winter Field
+// Day) is logged and filed and counts for nothing, so the station leaves it out of `qsoCount` and
+// marks its row `banned`. A station older than the mark counted the row and sends none, and its
+// capture still has to validate: the page reads the mark, never the ruleset's list.
+it('takes a contact in a banned mode, marked and left out of the count as the station counts it',()=>{
+ const il=countedPage('ilqp')
+ il.fd.log.push({...il.fd.log[1],call:'K9FT8',whenUnix:1782583380,mode:'DIG',submode:'FT8',banned:true})
+ expect(parseFieldDay(il.page).fieldDay).toMatchObject({qsoCount:2,log:[{},{},{call:'K9FT8',banned:true}]})
+ // Still exactly: counting the marked contact, or leaving a real one out, is refused.
+ for(const count of [3,1]){
+  il.fd.qsoCount=count
+  expect(()=>parseFieldDay(il.page),`${count}`).toThrow('invalidFieldDay')
+ }
+ // CONTROL: a station older than the mark counted the same row and sent no mark.
+ const older=countedPage('ilqp')
+ older.fd.log.push({...older.fd.log[1],call:'K9FT8',whenUnix:1782583380,mode:'DIG',submode:'FT8'})
+ older.fd.qsoCount=3
+ expect(parseFieldDay(older.page).fieldDay?.qsoCount).toBe(3)
+ // A mark that is not a boolean is refused, whichever way the count reads it.
+ il.fd.log[2].banned='yes'
+ for(const count of [2,3]){
+  il.fd.qsoCount=count
+  expect(()=>parseFieldDay(il.page),`'yes' with ${count}`).toThrow('invalidFieldDay')
+ }
+})
+
 // Every ruleset the app ships, read from its own rules file. Where every row counts, the count must
 // equal the rows exactly as it always had to, one more or one fewer refused; a row leaves the count
 // only by a mark that ruleset's station sends: `sat` where it gives a satellite contact no credit
-// (the status then says `satelliteCredit: false`), and `dupe` where it logs duplicates.
+// (the status then says `satelliteCredit: false`), `dupe` where it logs duplicates, and `banned`
+// where it bans a mode.
 it('checks the count exactly under every shipped ruleset, for the rows that ruleset can send',()=>{
  const {rulesets}=JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)),'../../../crates/tempo-core/src/fd_rules.seed.json'),'utf8')) as
-  {rulesets:{event:string,dupe:{log_dupes?:boolean},scoring:{satellite_credit?:boolean}}[]}
- // Scene guard: the file holds rulesets of both kinds that leave a row out of the count.
- expect([rulesets.some(r=>r.dupe.log_dupes===true),rulesets.some(r=>r.scoring.satellite_credit===false)]).toEqual([true,true])
+  {rulesets:{event:string,dupe:{log_dupes?:boolean},scoring:{satellite_credit?:boolean},banned_modes:string[]}[]}
+ // Scene guard: the file holds rulesets of every kind that leaves a row out of the count.
+ expect([rulesets.some(r=>r.dupe.log_dupes===true),rulesets.some(r=>r.scoring.satellite_credit===false),rulesets.some(r=>r.banned_modes.length>0)]).toEqual([true,true,true])
  const off:string[]=[]
  for(const rs of rulesets){
   const {page,fd}=countedPage(rs.event)
@@ -90,6 +117,10 @@ it('checks the count exactly under every shipped ruleset, for the rows that rule
   if(rs.dupe.log_dupes){
    fd.log.push({...fd.log[0],whenUnix:1782583440,dupe:true})
    exactly('a logged dupe',rs.scoring.satellite_credit===false?2:3)
+  }
+  if(rs.banned_modes.length>0){
+   fd.log.push({...fd.log[1],call:'K4ABC',whenUnix:1782583500,mode:'DIG',submode:rs.banned_modes[0],banned:true})
+   exactly('a contact in a banned mode',rs.scoring.satellite_credit===false?2:3)
   }
  }
  expect(off).toEqual([])

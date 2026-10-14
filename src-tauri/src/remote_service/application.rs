@@ -315,6 +315,9 @@ impl Publisher {
                 }
                 Command::Snapshot => {
                     let mut snapshot = eng.snapshot();
+                    // The club board every position is sent, as the Field Day capture carries it:
+                    // the host's own list of every position is its own screen's.
+                    eng.fd_club_board_to_remote(&mut snapshot.field_day);
                     // The host's own Give handles and the club codes are its screen's alone.
                     super::query::field_day::leave_out_the_hosts_own(&mut snapshot.field_day);
                     let ft_runtime = eng.remote_ft_runtime();
@@ -326,10 +329,17 @@ impl Publisher {
                         // Paths on this computer, and the remedy is at this computer.
                         if let Some(fields) = value.as_object_mut() {
                             fields.remove("keptFiles");
+                            // This laptop's club link: its network addresses and its club
+                            // code, which are its own screen's, and the remedy is here too.
+                            fields.remove("clubLink");
                             // The contest strip's contact in progress is shared between this
                             // computer's own windows only (the contest logger beside the main
                             // window); a Remote viewer sees the main window's strip in the stream.
                             fields.remove("contestEntry");
+                            // The Tx6 row's contest CQ is this computer's cockpit's: on the
+                            // Remote page the row keeps `start_cq`, which sends the CQ it shows.
+                            fields.remove("contestCq");
+                            fields.remove("contestCqTyped");
                         }
                         value["remoteFtRuntime"] = serde_json::json!(ft_runtime);
                         value["remoteFtSettings"] = serde_json::json!(ft_settings);
@@ -733,7 +743,7 @@ mod tests {
         let mut engine = tempo_app::engine::Engine::with_settings(Default::default());
         engine.contest_entry_share(true);
         engine
-            .contest_entry_put("K1ABC", Default::default(), serde_json::Value::Null)
+            .contest_entry_put("K1ABC", Default::default(), serde_json::Value::Null, 0)
             .unwrap();
         assert!(
             engine.snapshot().contest_entry.is_some(),
@@ -753,6 +763,59 @@ mod tests {
             "the Remote's snapshot carries no shared contest entry"
         );
         assert!(!data.contains("K1ABC"), "nor the call typed into it");
+    }
+    /// The Tx6 row's contest CQ, which the cockpit on this computer shows and calls through the
+    /// contest's Running, never reaches the Remote: it is not one of the page's keys, and the
+    /// Remote page's Tx6 row keeps `start_cq`, which sends the CQ it shows.
+    #[test]
+    fn the_tx6_rows_contest_cq_never_reaches_the_remote() {
+        use std::sync::{Arc, Mutex};
+        let mut engine = tempo_app::engine::Engine::new("K1ABC", "FN42", 0);
+        let mut s = engine.settings().clone();
+        s.fd_event = "arrlfd".into();
+        s.fd_class = "2B".into();
+        s.fd_section = "EMA".into();
+        s.fd_active = true;
+        engine.apply_settings(s);
+        engine.set_tier(tempo_app::dto::Tier::Ft8);
+        assert_eq!(
+            engine.snapshot().contest_cq.as_deref(),
+            Some("CQ FD K1ABC FN42"),
+            "control: the station's own snapshot carries it"
+        );
+        let shared = Arc::new(Mutex::new(engine));
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("contestCq").is_none(),
+            "the Remote's snapshot carries no Tx6 contest CQ"
+        );
+        // …nor the flag that the Running calls the Tx6 row's own CQ, where WSJT-X has no activity.
+        let mut s = shared.lock().unwrap().settings().clone();
+        s.fd_event = "txqp".into();
+        shared.lock().unwrap().apply_settings(s);
+        assert!(
+            shared.lock().unwrap().snapshot().contest_cq_typed,
+            "control: the station's own snapshot carries it"
+        );
+        let data = Publisher::default()
+            .read(&shared, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let reply: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            reply["data"]["mycall"].is_string(),
+            "premise: the reply is the snapshot: {reply}"
+        );
+        assert!(
+            reply["data"].get("contestCqTyped").is_none(),
+            "the Remote's snapshot carries no typed-CQ flag"
+        );
     }
     #[test]
     fn keyboard_observer_reads_preserve_native_state_and_refuse_busy_engine() {
@@ -1073,6 +1136,10 @@ mod tests {
             // Repair clock raises Windows' administrator prompt on the STATION's screen, for the
             // same reason, and the repair waits on it.
             "repair_clock",
+            // So does the club section's Allow Nexus through Windows Firewall, and what it reads
+            // is the station's own firewall, for the station's own screen.
+            "club_firewall_press",
+            "club_firewall_status",
         ] {
             assert!(serde_json::from_value::<Command>(json!(command)).is_err());
         }
@@ -1120,6 +1187,85 @@ mod tests {
         assert_eq!(meter["data"]["smeterDb"], -12);
     }
 
+    /// ⭐ **Remote's snapshot carries the club board every position is sent, never the host's own
+    /// list**: a host whose club has more positions than one club line carries lists every one of
+    /// them on its own screen, each with its Remove, while Remote's snapshot carries the cut every
+    /// position gets, as the Field Day capture does (`Engine::fd_club_board_to_remote`), so no
+    /// Remote payload grows with each position that ever joined. CONTROL: the station's own
+    /// snapshot lists all of them.
+    #[test]
+    fn remotes_snapshot_carries_the_club_board_every_position_is_sent() {
+        use std::collections::BTreeSet;
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-snapshot-board-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "arrlfd".into(),
+            fd_class: "2A".into(),
+            fd_section: "WI".into(),
+            mycall: "K1ABC".into(),
+            fd_host_enable: true,
+            fd_position_id: "aaaa0001".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        e.fd_host_start(dir.join("fd_event_board.jsonl")).unwrap();
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        for i in 1..=70u32 {
+            let id = format!("{:08x}", 0xc000_0000u32 + i);
+            let name = format!("Position {i:02} tent, the north field");
+            assert!(e
+                .fd_club_join(v, &id, &name, "K1ABC", "arrlfd", "", &format!("{i:064x}"))
+                .is_ok());
+            e.fd_club_pos_status(
+                &id,
+                &tempo_net::fdsync::PosReport {
+                    band: "20m".into(),
+                    mode: "CW".into(),
+                    op: "K1ABC".into(),
+                    freq: 14_025_000,
+                    name,
+                    clock_ms: None,
+                },
+            );
+        }
+        let sent: BTreeSet<String> = tempo_net::fdsync::board_fit(&e.fd_club_state(0, 0, "").board)
+            .rows
+            .into_iter()
+            .map(|r| r.pos)
+            .collect();
+        assert!(sent.len() < 70, "premise: one club line cannot carry 70");
+        let own: BTreeSet<String> = e
+            .snapshot()
+            .field_day
+            .unwrap()
+            .club
+            .unwrap()
+            .board
+            .into_iter()
+            .map(|r| r.posid)
+            .collect();
+        assert_eq!(own.len(), 70, "CONTROL: the station's own snapshot");
+        let engine = Arc::new(Mutex::new(e));
+        let read = Publisher::default()
+            .read(&engine, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let value: Value = serde_json::from_str(&read).unwrap();
+        let remote: BTreeSet<String> = value["data"]["fieldDay"]["club"]["board"]
+            .as_array()
+            .expect("the board in Remote's snapshot")
+            .iter()
+            .map(|r| r["posid"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(remote, sent, "the board every position is sent");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **Remote's snapshot carries none of what only the host's own screen acts on**: the
     /// Give button's handle and the club codes, the host's own and the turned-away laptop's. The
     /// snapshot carries the entry, its name, call and sentence. CONTROL: the station's own
@@ -1145,6 +1291,10 @@ mod tests {
                 .is_some_and(|c| !c.contains_key("clubCode")),
             "{club}"
         );
+        // This laptop's club link (its addresses and its code) stays on its own screen. The
+        // control: the station's own snapshot carries it.
+        assert!(value["data"].get("clubLink").is_none(), "{}", value["data"]);
+        assert!(engine.lock().unwrap().snapshot().club_link.is_some());
         let mut keys: Vec<&str> = club["refused"][0]
             .as_object()
             .expect("the turned-away entry is in Remote's snapshot")
@@ -1159,6 +1309,39 @@ mod tests {
                 "Remote's snapshot holds {code}"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **Remote's snapshot is sent nothing new for the club-wide board**: its sections board is
+    /// the station's own, as before, with no list of what the club worked. CONTROL: the host's own
+    /// snapshot carries the list (`host_whose_tent_worked_a_section`).
+    #[test]
+    fn remotes_snapshot_carries_no_club_board_list() {
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-snapshot-board-club-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let e =
+            crate::remote_service::query::field_day::tests::host_whose_tent_worked_a_section(&dir);
+        let engine = Arc::new(Mutex::new(e));
+        let sent = Publisher::default()
+            .read(&engine, Command::Snapshot, REQUEST, None, Instant::now())
+            .unwrap();
+        let value: Value = serde_json::from_str(&sent).unwrap();
+        let board = value["data"]["fieldDay"]["boards"][0]
+            .as_object()
+            .expect("the sections board is in Remote's snapshot");
+        let mut keys: Vec<&str> = board.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["domain", "id", "scope", "slot", "worked"],
+            "{board:?}"
+        );
+        assert_eq!(board["worked"], serde_json::json!(["WI"]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

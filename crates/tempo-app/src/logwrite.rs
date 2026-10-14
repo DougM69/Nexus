@@ -88,6 +88,17 @@ pub fn change_row<T>(
             Ok(None) => return (Ok(Err(RowRefusal::Gone)), Durability::default()),
             Err(e) => return (Err(e), Durability::default()),
         };
+        // A merged contest contact's copies in the logbook, for a delete of this one: the contest
+        // row leaves with its last copy ([`Engine::contest_row_deleted`]). Read here, with the
+        // lock released, and only for a contact that is one.
+        let copies = if before.contest.as_deref().is_some_and(|c| !c.qid.is_empty()) {
+            match plan.merge_identities() {
+                Ok(copies) => Some(copies),
+                Err(e) => return (Err(e), Durability::default()),
+            }
+        } else {
+            None
+        };
         #[cfg(test)]
         tests::race();
         let mut e = engine_lock(engine);
@@ -106,7 +117,7 @@ pub fn change_row<T>(
             // browser's: the contest log's own row goes too, as a removal, in the same hold of
             // the lock, as an edit's correction reaches it ([`Engine::contest_row_deleted`]).
             if after.is_none() {
-                e.contest_row_deleted(&before);
+                e.contest_row_deleted(&before, copies.as_deref());
             }
             Some(Ok(Ok(Some(then(e, (Arc::clone(&before), after))))))
         });
@@ -567,8 +578,14 @@ pub fn import_logged_contact(
     (made.map(|(added, _, _)| added), durability)
 }
 
-/// A LoTW confirmation report merged ([`StationCore::merge_lotw_report`]), planned with the Engine
-/// lock released. Its summary.
+/// The call in Settings: the one a LoTW merge takes a contact or a row naming no call of its own
+/// to be under (`tempo_core::reconcile::lotw_own_call`).
+fn settings_call(engine: &Mutex<Engine>) -> String {
+    engine_lock(engine).settings().mycall.clone()
+}
+
+/// A LoTW confirmation report merged ([`StationCore::merge_lotw_report`], with the call in
+/// Settings), planned with the Engine lock released. Its summary.
 pub fn merge_lotw_report(
     engine: &Mutex<Engine>,
     text: &str,
@@ -576,10 +593,11 @@ pub fn merge_lotw_report(
     Result<tempo_core::reconcile::ReconcileSummary, String>,
     Durability,
 ) {
+    let call = settings_call(engine);
     bulk(
         engine,
         "merge_lotw_report",
-        |plan| station::plan_report(plan, text),
+        |plan| station::plan_lotw_report(plan, text, Some(&call)),
         |e, summary| {
             e.station_mut().last_lotw_reconcile = Some(summary.clone());
             summary
@@ -641,17 +659,18 @@ pub fn import_pota_log(
     )
 }
 
-/// LoTW's own-QSO report merged ([`StationCore::merge_lotw_own_echo`]), planned with the Engine
-/// lock released: how many uploads were newly promoted.
+/// LoTW's own-QSO report merged ([`StationCore::merge_lotw_own_echo`], with the call in
+/// Settings), planned with the Engine lock released: how many uploads were newly promoted.
 pub fn merge_lotw_own_echo(
     engine: &Mutex<Engine>,
     text: &str,
     when_unix: i64,
 ) -> (Result<usize, String>, Durability) {
+    let call = settings_call(engine);
     bulk(
         engine,
         "merge_lotw_own_echo",
-        |plan| station::plan_own_echo(plan, text, when_unix),
+        |plan| station::plan_own_echo(plan, text, when_unix, Some(&call)),
         |_, promoted| promoted,
     )
 }
@@ -669,7 +688,7 @@ pub fn fd_merge_to_general(
             let mut e = engine_lock(engine);
             if !e.in_field_day() {
                 return (
-                    Err("Field Day mode is not active".into()),
+                    Err("Contest mode is not active".into()),
                     Durability::default(),
                 );
             }
@@ -1028,15 +1047,18 @@ fn merged_for_check(
         Ok(((out, gained), planned))
     }
     match channel {
-        Channel::Lotw => bulk(
-            engine,
-            "merge_lotw_report",
-            |plan| gaining(station::plan_report(plan, text), channel),
-            |e, (summary, gained)| {
-                e.station_mut().last_lotw_reconcile = Some(summary);
-                gained
-            },
-        ),
+        Channel::Lotw => {
+            let call = settings_call(engine);
+            bulk(
+                engine,
+                "merge_lotw_report",
+                |plan| gaining(station::plan_lotw_report(plan, text, Some(&call)), channel),
+                |e, (summary, gained)| {
+                    e.station_mut().last_lotw_reconcile = Some(summary);
+                    gained
+                },
+            )
+        }
         Channel::Eqsl => bulk(
             engine,
             "merge_eqsl_report",

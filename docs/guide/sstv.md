@@ -257,8 +257,13 @@ sanctioned ARISS uplink event. Send anyway?"
 1. Turn on **ISS SSTV auto-arm** in
    [Settings ▸ Digital ▸ SSTV](settings-reference.md#sstv). It is
    off by default.
-2. At AOS of a pass, Nexus saves your dial, tunes 145.800 FM and arms the
-   receiver, telling you it has done so.
+2. At AOS of a pass, with the SSTV or Satellites screen open, Nexus saves your
+   dial, tunes 145.800 FM and arms the receiver, telling you it has done so. On
+   any other screen it only tells you the ISS is up and leaves your radio alone,
+   so an FT8 or CW session is never retuned; open SSTV during the pass and it
+   arms then. If your only radio cannot receive 145.800 MHz (an HF rig, say), it
+   tells you so once per session, with where to turn the auto-arm off, and does
+   nothing else on any screen.
 3. ARISS transmits PD-120, which decodes here like anything else.
 
    ![The SSTV header on 145.8000 MHz with a "2 m · ISS downlink" channel pick, a 2m band chip, USB and FM chips with FM selected, the Slant trim, and an Armed button.](../img/manual/sstv-iss-preset.webp)

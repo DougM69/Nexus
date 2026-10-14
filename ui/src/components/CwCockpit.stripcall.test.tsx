@@ -176,7 +176,7 @@ const hisCall = () => screen.getByRole('textbox', { name: EN['cw.hisCall.label']
 const stripCall = () => document.querySelector('.le-fd-input-call') as HTMLInputElement
 const casualCall = () => screen.getByPlaceholderText(EN['logEntry.call.placeholder']) as HTMLInputElement
 const qthBox = () => {
-  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'QTH')
+  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'County / State')
   return cap!.closest('label')!.querySelector('input') as HTMLInputElement
 }
 async function press(key: string, target: Element | Window = window) {

@@ -50,9 +50,18 @@ const bridgeCalls: string[] = []
 const ALLOWED = new Set([
   // the polls every pop-out runs
   'get_snapshot', 'get_settings', 'get_propagation', 'get_need_alerts', 'get_band_plan', 'get_fd_ruleset',
+  // this window's read of the satellite the engine holds, for the line that sends a pass's contacts to
+  // the Satellites screen: a read of the hold, which keys, tunes and holds nothing
+  'get_sat_transponder',
   // the contest screen: its log, the removed list, the operator box, exports, merge, upload, club
   'contest_removed', 'contest_remove_last', 'contest_restore', 'set_fd_operator', 'export_log',
+  // a contact's edit, which writes the contest log and its journal and nothing else
+  'contest_edit',
   'save_text_to_downloads', 'fd_merge_to_general', 'fd_set_upload', 'fd_club_export', 'fd_club_give_position',
+  // the host's Remove and Allow back on its club board: who is in the club, and nothing else
+  'fd_club_remove_position', 'fd_club_allow_back',
+  // the journal's contacts the logbook does not hold: the read, and their merge into the logbook
+  'contest_unmerged', 'contest_merge_unmerged',
   'open_panel_window',
   // the log line: the contact, its serial binding, its hints, its sent exchange, its log
   'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
@@ -118,12 +127,14 @@ function respond(cmd: string): unknown {
   if (cmd === 'get_snapshot') return snapshot
   if (cmd === 'get_settings') return { ...defaultSettings, fdActive: true, fdEvent: 'ilqp' }
   if (cmd === 'contest_entry_put') return ++rev
-  if (cmd === 'contest_removed') return []
+  if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (cmd === 'contest_log_manual' || cmd === 'contest_working' || cmd === 'contest_entry_reset') return snapshot
   if (cmd === 'contest_log_manual_rows') return [true]
   if (cmd === 'export_log' || cmd === 'fd_club_export') return 'QSO: …'
   if (cmd === 'save_text_to_downloads') return '/tmp/x'
-  if (cmd === 'contest_remove_last' || cmd === 'contest_restore') return { outcome: 'refused', refusal: 'changed' }
+  if (cmd === 'contest_remove_last' || cmd === 'contest_restore' || cmd === 'contest_edit') {
+    return { outcome: 'refused', refusal: 'changed' }
+  }
   if (cmd === 'fd_merge_to_general') return [{ added: 0, already: 1, refused: 0, queued: false }, snapshot]
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
   if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
@@ -246,6 +257,17 @@ describe('the contest logger window transmits nothing', () => {
     await mountLogger()
     for (let n = 1; n <= 12; n++) {
       expect(fireEvent.keyDown(document.body, { key: `F${n}`, code: `F${n}` }), `F${n} was left to the webview`).toBe(false)
+    }
+  })
+
+  it('with Alt, Ctrl or Cmd held an F-key is the system\'s, so Alt+F4 closes the window; F5 alone is still held', async () => {
+    await mountLogger()
+    const call = screen.getByPlaceholderText('W1AW')
+    for (const [where, target] of [['the window', document.body], ['the call box', call]] as const) {
+      expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5' }), `${where}: F5 was left to the webview`).toBe(false)
+      expect(fireEvent.keyDown(target, { key: 'F4', code: 'F4', altKey: true }), `${where}: Alt+F4 was held`).toBe(true)
+      expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5', ctrlKey: true }), `${where}: Ctrl+F5 was held`).toBe(true)
+      expect(fireEvent.keyDown(target, { key: 'F5', code: 'F5', metaKey: true }), `${where}: Cmd+F5 was held`).toBe(true)
     }
   })
 

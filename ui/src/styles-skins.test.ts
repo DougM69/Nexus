@@ -459,10 +459,12 @@ function fillProblems(rules: Rule[], id: string, base: Theme): string[] {
 // ── The table is well formed ────────────────────────────────────────────────────────────────
 
 describe('the theme table', () => {
-  it('holds the ten themes, the four rig looks first, each id once', () => {
-    expect(SKINS.map((s) => s.id)).toEqual(['amber-lcd', 'green-lcd', 'blue-vfd', 'silver', 'midnight', 'slate', 'lagoon', 'ember', 'nebula', 'paper'])
-    expect(SKINS.map((s) => s.family)).toEqual(['rig', 'rig', 'rig', 'rig', 'modern', 'modern', 'modern', 'modern', 'modern', 'modern'])
-    expect(SKINS.filter((s) => s.base === 'light').map((s) => s.id)).toEqual(['silver', 'paper'])
+  it('holds the ten themes, the three rig looks first, each id once', () => {
+    // Silver left the gallery when the standard Light took its look (2026-10-13), and the Light it
+    // replaced joined as Bright (styles-light-is-silver.test.ts).
+    expect(SKINS.map((s) => s.id)).toEqual(['amber-lcd', 'green-lcd', 'blue-vfd', 'midnight', 'slate', 'lagoon', 'ember', 'nebula', 'paper', 'bright'])
+    expect(SKINS.map((s) => s.family)).toEqual(['rig', 'rig', 'rig', 'modern', 'modern', 'modern', 'modern', 'modern', 'modern', 'modern'])
+    expect(SKINS.filter((s) => s.base === 'light').map((s) => s.id)).toEqual(['paper', 'bright'])
   })
 
   it('gives every theme the same tokens by day and at night: all of them on a dark theme, the wells apart on a light one', () => {
@@ -497,8 +499,10 @@ describe('the theme table', () => {
   it('hands the other guards the worst case of each base: the lightest dark surfaces, the darkest light ones', () => {
     // MODES carries these (cssCascade.ts SENTINEL_SKINS), so every guard that walks MODES measures
     // its component on the surfaces it reads worst on. Stated here so a table change that moves
-    // the worst case shows up as a change of this list, in review.
-    expect(SENTINEL_SKINS).toEqual(['silver', 'slate', 'lagoon'])
+    // the worst case shows up as a change of this list, in review. On the light base it is Paper since
+    // Silver's look became the standard Light (2026-10-13), which MODES carries as the base itself and
+    // which is darker still.
+    expect(SENTINEL_SKINS).toEqual(['slate', 'lagoon', 'paper'])
   })
 })
 
@@ -530,8 +534,24 @@ describe('lettering on a role-colour fill', () => {
   it('finds the known fills (the discovery cannot silently empty out)', () => {
     expect(FILLS.map((f) => f.selector)).toEqual(expect.arrayContaining(['.band-chip.active', '.theme-chip.active', '.bubble.mine', '.decode-tag.me']))
   })
-  it.each(SKINS.map((s) => [s.id, s] as const))('%s keeps it at least as readable as the standard theme', (_n, s) => {
+  it.each(SKINS.filter((s) => s.id !== 'bright').map((s) => [s.id, s] as const))('%s keeps it at least as readable as the standard theme', (_n, s) => {
     expect(fillProblems(RULES, s.id, s.base)).toEqual([])
+  })
+
+  // BRIGHT IS THE STANDARD LIGHT AS IT SHIPPED until Light took Silver's look (2026-10-13), kept value
+  // for value at the operator's ruling ("keep old"). Its page-coloured letters on the accent fill read
+  // 4.25:1 as they always did, where the standard Light now reads 5.72:1, so it is held to exactly what
+  // it shipped with: no fill may join this list and none on it may read lower.
+  it('bright keeps exactly the readability it shipped with as the standard Light, fill for fill', () => {
+    const cutOuts = ['.ba-view-btn.active', '.cq-btn', '.tuning-vfo button.active', '.mv-pack-add:hover', '.mv-empty-packs:hover']
+    const shipped = (mode: string, ink: string, fill: string, ratio: string, standard: string) =>
+      cutOuts.map((f) => `${f} ${mode} skin=bright: ink ${ink} on ${fill} = ${ratio}:1, the standard theme ${standard}:1`)
+    expect(fillProblems(RULES, 'bright', 'light')).toEqual([
+      ...shipped('light', '#e5eaf0', '#0174ab', '4.25', '5.72'),
+      ...shipped('light-high', '#dfe5ec', '#0174ab', '4.05', '5.65'),
+      ...shipped('light-night', '#eae4da', '#006fae', '4.27', '6.51'),
+      ...shipped('light-night-high', '#eae3db', '#006fae', '4.25', '6.47'),
+    ])
   })
 })
 

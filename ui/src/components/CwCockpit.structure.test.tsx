@@ -32,6 +32,7 @@ const decodeState = {
   wpm: 22,
   sent: [] as string[],
   keyerError: null as string | null,
+  paddleTookOver: false,
   candidates: [] as { call: string; best: boolean }[],
   state: 'listening',
   headline: '',
@@ -98,6 +99,7 @@ beforeEach(() => {
   fire = null
   decodeState.sent = []
   decodeState.keyerError = null
+  decodeState.paddleTookOver = false
   settingsState.rigModel = 0
   unprovenModels = []
   globalThis.ResizeObserver = class {
@@ -636,6 +638,34 @@ describe('the cockpit says when CAT keying is unproven on this radio', () => {
     expect(warns.filter((el) => el.matches('.caution')).length, 'exactly one is the caution').toBe(1)
     // The error outranks the standing notice, so it reads first.
     expect(warns[0].matches('.caution'), 'the caution jumped ahead of a live error').toBe(false)
+  })
+})
+
+/**
+ * ⭐ THE PADDLE TOOK OVER (operator ruling, 2026-10-12: the paddle wins). On Nexus's Flex client,
+ * once a tester's bench has named what the radio reports for a paddle, the operator's paddle during
+ * Nexus's CW stops the message, and the CW screen says so. It is information, not a fault: it must
+ * read as neither the error banner nor the standing caution, and it adds no shell-child kind.
+ */
+describe('the cockpit says when the paddle took over', () => {
+  const info = () => document.querySelector('.cw-keyer-warn.info')
+
+  it('says so as a notice, in the catalog words, as a shell child of the sanctioned kind', async () => {
+    decodeState.paddleTookOver = true
+    await renderCockpit()
+    const el = info()
+    expect(el, 'no line when the paddle took over').not.toBeNull()
+    expect(el!.textContent).toBe('Your paddle took over: Nexus stopped its message.')
+    expect(el!.getAttribute('role')).toBe('status')
+    expect(el!.matches('.caution'), 'it is not the caution').toBe(false)
+    expect(document.querySelector('.cw-keyer-warn[role="alert"]'), 'it is not the error banner').toBeNull()
+    const shell = document.querySelector('main.layout.single.cw-cockpit')!
+    expect(Array.from(shell.children).filter((c) => c === el).length, 'not a shell child').toBe(1)
+  })
+
+  it('is absent when the paddle did not take over', async () => {
+    await renderCockpit()
+    expect(info()).toBeNull()
   })
 })
 

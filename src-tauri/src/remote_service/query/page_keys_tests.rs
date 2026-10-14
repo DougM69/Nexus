@@ -672,8 +672,9 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 #[test]
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
-        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto, FdClubRefusedDto,
-        FdKeptOutDto, FieldDayQso, FieldDayStatus, LocationWarningDto,
+        DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto,
+        FdClubOtherLocationDto, FdClubRefusedDto, FdKeptOutDto, FieldDayQso, FieldDayStatus,
+        LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -734,7 +735,7 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 &[
                     "call", "class", "section", "band", "mode", "submode", "whenUnix",
                 ],
-                &["mex", "rcvd", "dkey", "dupe", "sat"],
+                &["mex", "rcvd", "dkey", "dupe", "sat", "banned"],
             );
         }
         if let Some(rule) = status.get("dupeRule") {
@@ -962,9 +963,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             when_unix: 1_782_510_000,
             sat: "AO-91".into(),
             mex: "1D EMA".into(),
+            sent: Vec::new(),
             rcvd: vec!["2A".into(), "WI".into()],
             dkey: vec!["K1ABC".into(), "20m".into(), "CW".into()],
             dupe: true,
+            banned: true,
             seq: 1,
         }],
         club: Some(FdClubDto {
@@ -991,6 +994,9 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                 rate: 30,
                 last_seen_secs: 5,
                 clock_ms: Some(-3_000),
+                // The host's link words and heard seconds: the capture leaves both out (below).
+                link: Some("reconnecting".into()),
+                heard_secs: Some(12),
             }],
             board_full: Some(FdBoardFullDto {
                 positions: 70,
@@ -1015,6 +1021,14 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
                     club_code: None,
                 }],
             }),
+            // The positions sending another county than the club: the host's screen's alone,
+            // left out too.
+            other_location: vec![FdClubOtherLocationDto {
+                pos_name: "CW tent".into(),
+                operator: "K9OPB".into(),
+                sent: "KANE".into(),
+                club: "MCLN".into(),
+            }],
             // This laptop's own club code: left out too.
             club_code: "3HV8-ZQ1P".into(),
         }),
@@ -1023,6 +1037,8 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
         composing: Vec::new(),
         sent_exchange: "1D EMA".into(),
         composing_text: "1D EMA".into(),
+        composing_text_phone: "1D EMA".into(),
+        cabrillo_missing: vec!["CATEGORY-POWER".into()],
         bands: vec!["20m".into()],
         dupe_mode_groups: vec![vec!["CW".into(), "DIG".into()]],
         dupe_rule: DupeRuleDto {
@@ -1049,8 +1065,15 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     assert!(
         native["club"]["refused"][0]["handle"] == 7
             && native["club"]["refused"][0]["clubCode"] == "7KQ2-M9XD"
-            && native["club"]["clubCode"] == "3HV8-ZQ1P",
-        "CONTROL: the station's own snapshot carries the Give button's handle and the club codes"
+            && native["club"]["clubCode"] == "3HV8-ZQ1P"
+            && native["club"]["board"][0]["link"] == "reconnecting"
+            && native["club"]["board"][0]["heardSecs"] == 12
+            && native["club"]["otherLocation"][0]["sent"] == "KANE"
+            && native["composingTextPhone"] == "1D EMA"
+            && native["cabrilloMissing"][0] == "CATEGORY-POWER",
+        "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
+         the host board's link words, the positions sending another county, the phone form of \
+         the exchange and the Cabrillo lines the export would leave out"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.
@@ -1640,10 +1663,10 @@ fn the_satellite_sample_carries_only_the_keys_the_page_takes() {
     );
 }
 
-/// The JS8 cockpit's sample (`js8.ts`): two keys at its root, twenty-three the state, five what is
-/// armed, nine each station heard and each inbox message, eleven a decoded row, and four a queued
-/// row and a pending reply. The station and the message come from the station's own journal; a
-/// decoded row, a queued one and a pending reply are written field by field.
+/// The JS8 cockpit's sample (`js8.ts`): two keys at its root, twenty-four the state, five what is
+/// armed and five why not, nine each station heard and each inbox message, eleven a decoded row,
+/// and four a queued row and a pending reply. The station and the message come from the station's
+/// own journal; a decoded row, a queued one and a pending reply are written field by field.
 #[test]
 fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     const DECODED: &[&str] = &[
@@ -1695,6 +1718,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
             "relay",
             "hbAck",
             "armed",
+            "notArmed",
             "idleMinutes",
             "idleLimitMin",
             "idleTripped",
@@ -1709,6 +1733,11 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     takes(
         "js8: what is armed",
         &state["armed"],
+        &["autoreply", "relay", "hbAck", "hb", "cq"],
+    );
+    takes(
+        "js8: why not armed",
+        &state["notArmed"],
         &["autoreply", "relay", "hbAck", "hb", "cq"],
     );
     let (stations, inbox) = (

@@ -648,8 +648,9 @@ impl Publisher {
     }
 }
 
-/// What the log window reads of every contact: the five fields a search looks in, the time the
-/// window is ordered by, and the four confirmation channels `award_confirmed` is read from.
+/// What the log window reads of every contact: five of the six fields a search looks in (the
+/// sixth, the SUBMODE, a search reads besides), the time the window is ordered by, and the four
+/// confirmation channels `award_confirmed` is read from.
 const WINDOW: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
     columns: &[
         "call",
@@ -677,31 +678,44 @@ fn log_window(
     let search = search.trim().to_lowercase();
     let mut selected = BinaryHeap::new();
     let mut total = 0;
-    log.each(WINDOW, &mut |pick, q| {
-        if unconfirmed && q.award_confirmed {
-            return Ok(());
-        }
-        if !search.is_empty()
-            && ![
-                Some(q.call.as_str()),
-                q.country.as_deref(),
-                q.grid.as_deref(),
-                Some(q.band.as_str()),
-                Some(q.mode.as_str()),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|s| s.to_lowercase().contains(&search))
-        {
-            return Ok(());
-        }
-        total += 1;
-        selected.push(std::cmp::Reverse((q.when_unix, pick)));
-        if selected.len() > 2000 {
-            selected.pop();
-        }
-        Ok(())
-    })?;
+    let mut test =
+        |pick: picture::Pick, q: &tempo_core::logbook::QsoRecord| -> Result<(), &'static str> {
+            if unconfirmed && q.award_confirmed {
+                return Ok(());
+            }
+            if !search.is_empty()
+                && ![
+                    Some(q.call.as_str()),
+                    q.country.as_deref(),
+                    q.grid.as_deref(),
+                    Some(q.band.as_str()),
+                    Some(q.mode.as_str()),
+                    // A phone contact is held as SSB with its sideband as the SUBMODE, so
+                    // "usb" and "lsb" find it there.
+                    q.extra
+                        .iter()
+                        .find(|(k, _)| k == "SUBMODE")
+                        .map(|(_, v)| v.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|s| s.to_lowercase().contains(&search))
+            {
+                return Ok(());
+            }
+            total += 1;
+            selected.push(std::cmp::Reverse((q.when_unix, pick)));
+            if selected.len() > 2000 {
+                selected.pop();
+            }
+            Ok(())
+        };
+    // Only a search reads the SUBMODE.
+    if search.is_empty() {
+        log.each(WINDOW, &mut test)?;
+    } else {
+        log.each_with_submode(WINDOW, &mut test)?;
+    }
     let mut selected: Vec<_> = selected.into_iter().map(|v| v.0).collect();
     selected.sort_unstable_by(|a, b| b.cmp(a));
     let picks: Vec<_> = selected.into_iter().map(|(_, pick)| pick).collect();
@@ -833,6 +847,38 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(rows[0].call, "ZL1OLD");
     }
+    /// ★ The log's search looks in a contact's SUBMODE as well as its MODE: a phone contact, held
+    /// as SSB with its sideband as the SUBMODE, is found by `usb` or `lsb`, and `ssb` finds both,
+    /// read from the store, where the sideband is a row of `qso_extra`.
+    #[test]
+    fn a_search_finds_a_phone_contact_by_its_sideband() {
+        let engine = engine();
+        let phone = |call: &str, time: &str, mode: &str| {
+            format!(
+                "<CALL:{}>{call}<BAND:3>20m{mode}<QSO_DATE:8>20260909<TIME_ON:6>{time}<EOR>\n",
+                call.len()
+            )
+        };
+        engine.lock().unwrap().import_adif(
+            &[
+                phone("K1AAA", "010000", "<MODE:3>SSB<SUBMODE:3>USB"),
+                phone("K2BBB", "010100", "<MODE:3>LSB"),
+                adif("K3CCC", "010200"),
+            ]
+            .concat(),
+        );
+        let log = engine.lock().unwrap().log_rows();
+        let window = |search| {
+            let (rows, total) = picture::read(&log, |p| log_window(p, search, false)).unwrap();
+            (total, rows.into_iter().map(|q| q.call).collect::<Vec<_>>())
+        };
+        assert_eq!(window("usb"), (1, vec!["K1AAA".to_string()]));
+        assert_eq!(window("lsb"), (1, vec!["K2BBB".to_string()]));
+        assert_eq!(
+            window("ssb"),
+            (2, vec!["K2BBB".to_string(), "K1AAA".to_string()])
+        );
+    }
     #[test]
     fn missing_feeds_and_a_busy_engine_are_not_empty_collections() {
         let engine = engine();
@@ -950,7 +996,8 @@ mod tests {
 
     use super::log_tests::{launch, memory, settle, synthetic_log, Dir, Gen, CALLS};
 
-    /// `log_window` as C12 left it, VERBATIM.
+    /// `log_window` as C12 left it, VERBATIM, but for one field decided since: the search looks
+    /// in the SUBMODE too, which a whole record carries in its passthrough.
     fn old_log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
         records: &[R],
         search: &str,
@@ -971,6 +1018,10 @@ mod tests {
                     q.grid.as_deref(),
                     Some(q.band.as_str()),
                     Some(q.mode.as_str()),
+                    q.extra
+                        .iter()
+                        .find(|(k, _)| k == "SUBMODE")
+                        .map(|(_, v)| v.as_str()),
                 ]
                 .into_iter()
                 .flatten()

@@ -17,6 +17,7 @@ import type { FieldDayQso, FieldDayStatus } from '../types'
 vi.mock('../api', () => ({
   // The contest screen's Removed list, read on mount: none removed.
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
@@ -158,5 +159,61 @@ describe('the Score Summary of a contest that is not Field Day', () => {
     for (const fdOnly of ['Station class', 'Sections worked', 'Power multiplier', 'Bonuses claimed']) {
       expect(text, fdOnly).not.toContain(fdOnly)
     }
+  })
+})
+
+describe('nothing on the screen of another contest is named for Field Day', () => {
+  /** Every name and tooltip the screen gives a control, and every word it shows. */
+  const said = () => [
+    ...[...document.querySelectorAll('[aria-label], [title]')].flatMap((el) =>
+      [el.getAttribute('aria-label'), el.getAttribute('title')].filter((v): v is string => !!v),
+    ),
+    document.body.textContent ?? '',
+  ]
+  const CQWW_NAME = 'CQ World-Wide DX Contest (CW)'
+
+  it('the switch, the operator box, Running / S&P and the exports name the contest, or nothing', async () => {
+    render(<ContestView fieldDay={CQWW} fdActive onSetMode={() => {}} />)
+    await settle()
+    expect(said().filter((s) => /Field Day/.test(s))).toEqual([])
+    // Each by value: the switch is Contest mode and names the contest it leaves.
+    expect(screen.getByRole('switch').getAttribute('aria-label')).toBe(`Disable Contest mode: ${CQWW_NAME}`)
+    expect(document.querySelector('.fd-mode-label')!.textContent).toBe('Contest mode')
+    expect(screen.getByRole('textbox', { name: 'Operator (call or initials)' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Running or S&P' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Export Cabrillo' }).getAttribute('title')).toBe(
+      `Export the ${CQWW_NAME} log as Cabrillo (.cbr), for submission to the sponsor`,
+    )
+    expect(screen.getByRole('button', { name: 'Export ADIF' }).getAttribute('title')).toBe(
+      `Export the ${CQWW_NAME} log as ADIF (.adi)`,
+    )
+  })
+
+  it('CONTROL: ARRL Field Day’s screen names ARRL Field Day in the same places', async () => {
+    render(
+      <ContestView
+        fieldDay={{
+          ...CQWW,
+          event: 'arrlfd',
+          receives: [
+            { key: 'CLASS', kind: 'pattern', required: true },
+            { key: 'SECTION', kind: 'enum', required: true, domain: 'fd_sections' },
+          ],
+          composing: [
+            { key: 'CLASS', raw: '1A' },
+            { key: 'SECTION', raw: 'IL', domain: 'fd_sections' },
+          ],
+          multCount: undefined,
+          log: [],
+        }}
+        fdActive
+        onSetMode={() => {}}
+      />,
+    )
+    await settle()
+    expect(screen.getByRole('switch').getAttribute('aria-label')).toBe('Disable Contest mode: ARRL Field Day')
+    expect(screen.getByRole('button', { name: 'Export Cabrillo' }).getAttribute('title')).toBe(
+      'Export the ARRL Field Day log as Cabrillo (.cbr), for submission to the sponsor',
+    )
   })
 })

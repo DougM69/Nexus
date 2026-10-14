@@ -756,8 +756,9 @@ impl RttySeq {
         }
         match self.state {
             SeqState::CallingCq => {
-                // Nobody answered — CQ again. Never aborts; the operator owns
-                // stopping a run.
+                // Nobody answered — CQ again. Never aborts on its own; the operator
+                // owns stopping a run, and Stop TX is that act (the engine's halt
+                // aborts the run, as it ends JS8's schedule).
                 let tpl = self.templates.cq.clone();
                 let text = self.render(&tpl);
                 self.send(text, now_ms);

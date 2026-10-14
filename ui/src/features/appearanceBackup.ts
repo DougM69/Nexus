@@ -37,7 +37,7 @@ import type { TextSize } from '../useTextSize'
 import type { ThemeChoice } from '../useTheme'
 import { WATERFALL_PALETTES } from '../waterfall'
 import { PALETTE_ROLES, type PaletteRoleId } from './paletteRoles'
-import { skinOf, type SkinId } from './skins'
+import { RETIRED_SKINS, skinOf, type SkinId } from './skins'
 
 export interface Appearance {
   theme: ThemeChoice
@@ -98,6 +98,8 @@ export function appearanceIn(bundle: string): Partial<Appearance> | null {
   const out: Partial<Appearance> = {}
   if (oneOf(THEMES, r.theme)) out.theme = r.theme
   if (r.skin === null || (typeof r.skin === 'string' && skinOf(r.skin))) out.skin = r.skin as SkinId | null
+  // A retired theme's look became the standard theme (Silver is Light now): it restores as that.
+  else if (typeof r.skin === 'string' && RETIRED_SKINS.includes(r.skin)) out.skin = null
   if (typeof r.highContrast === 'boolean') out.highContrast = r.highContrast
   if (oneOf(NIGHTS, r.night)) out.night = r.night
   if (oneOf(TEXT_SIZES, r.textSize)) out.textSize = r.textSize

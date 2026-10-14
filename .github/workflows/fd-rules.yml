@@ -78,6 +78,28 @@ jobs:
         with:
           toolchain: 1.93.1
 
+      # EVERY RELEASE STILL SUPPORTED, read from the repository's tags at run time: each `v*` tag
+      # from OLDEST up, in version order, point releases and prereleases included. Nothing here
+      # names them, so a release is checked from its first tag on with no step to remember. Raise
+      # OLDEST when a release stops being supported. No list is an error, never an empty pass.
+      - name: List the supported releases
+        id: releases
+        env:
+          OLDEST: v1.14.0
+        run: |
+          refs=$(git ls-remote --tags --refs origin 'refs/tags/v*') || { echo "cannot list the release tags" >&2; exit 2; }
+          tags=$(printf '%s\n' "$refs" | sed 's|.*refs/tags/||' | sort -V | awk -v oldest="$OLDEST" '$0 == oldest { on = 1 } on' | paste -sd ' ')
+          if [ -z "$tags" ]; then
+            echo "no release tag $OLDEST to start the list from" >&2
+            exit 2
+          fi
+          echo "Supported releases: $tags"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "key=$(printf '%s' "$tags" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # The key carries the release list as well as Cargo.lock: a run that hits its key exactly
+      # saves nothing, so a newly listed release's loader would otherwise be rebuilt on every run
+      # until the lockfile next changed.
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v6
         with:
@@ -85,7 +107,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-fd-rules-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-fd-rules-cargo-${{ hashFiles('Cargo.lock') }}-${{ steps.releases.outputs.key }}
           restore-keys: |
             ${{ runner.os }}-fd-rules-cargo-
 
@@ -95,17 +117,36 @@ jobs:
       - name: Validate the seed with the real loader (refuses a bad file, exit 1)
         run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
 
-      # THE OLDEST RELEASE STILL SUPPORTED. The step above is the landing's own loader, which knows
+      # EVERY SUPPORTED RELEASE'S LOADER. The step above is the landing's own loader, which knows
       # every new value; an install validates the downloaded file with ITS loader and refuses the
       # whole file over one value it cannot read, so it would keep its old rules with nothing here
-      # going red. Build fd-rules-check as the oldest supported release shipped it and require it to
-      # accept the seed too: exit 1 (refused) or 2 (could not fetch or build it) stops the publish.
-      # Raise OLDEST when a release stops being supported. Its build lands under `target`, which the
-      # cache above keeps.
-      - name: Validate the seed with the oldest supported release's loader
+      # going red. The oldest release alone is not enough: a value a middle release checks and the
+      # oldest ignores (a line added to a list only newer builds validate) passes it. So build
+      # fd-rules-check as each listed release shipped it and require every one to accept the seed:
+      # exit 1 (refused) or 2 (could not fetch or build) from any of them stops the publish. Every
+      # release is tried, so a red run names each one that does not accept the file. Each build
+      # lands under `target/fd-rules-loader/<tag>`, which the cache above keeps; a release's tree
+      # never changes, so a cached loader is a no-op build.
+      - name: Validate the seed with every supported release's loader
         env:
-          OLDEST: v1.14.0
-        run: scripts/fd-rules-released-loader.sh "$OLDEST" crates/tempo-core/src/fd_rules.seed.json
+          RELEASES: ${{ steps.releases.outputs.tags }}
+          SEED: crates/tempo-core/src/fd_rules.seed.json
+        run: |
+          if [ -z "$RELEASES" ]; then
+            echo "no release list to check the seed against" >&2
+            exit 2
+          fi
+          failed=
+          for tag in $RELEASES; do
+            echo "Nexus $tag:"
+            rc=0
+            scripts/fd-rules-released-loader.sh "$tag" "$SEED" || rc=$?
+            [ "$rc" -eq 0 ] || failed="$failed $tag (exit $rc)"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Not accepted by every supported release:$failed"
+            exit 1
+          fi
 
       - name: Stage the artifact
         run: |

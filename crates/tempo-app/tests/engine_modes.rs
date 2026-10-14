@@ -48,7 +48,9 @@ fn to_capture(mut rx: Vec<f32>) -> Vec<f32> {
 }
 
 /// Shuttle frames between two engines over the channel for `slots` slots.
-/// Engine `a` transmits on even slots, `b` on odd. Returns after `done(a,b)`.
+/// Engine `a` transmits on even slots, `b` on odd. Returns after `done(a,b)`. Each hears the
+/// other's over at the boundary after it (`slot + 1`), as the radio loop hands a period's decodes
+/// in: the period an answer goes out in is taken from that.
 fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engine) -> bool) {
     let mut a2b = VirtualAir::new(tempo_fast::SAMPLE_RATE, 11);
     let mut b2a = VirtualAir::new(tempo_fast::SAMPLE_RATE, 22);
@@ -56,12 +58,12 @@ fn run(a: &mut Engine, b: &mut Engine, slots: u64, done: impl Fn(&Engine, &Engin
         if slot % 2 == 0 {
             for w in a.poll_tx(slot) {
                 let rx = to_capture(a2b.receive(&w, ON_TIME_OFFSET, 15.0));
-                b.ingest(&rx, slot);
+                b.ingest(&rx, slot + 1);
             }
         } else {
             for w in b.poll_tx(slot) {
                 let rx = to_capture(b2a.receive(&w, ON_TIME_OFFSET, 15.0));
-                a.ingest(&rx, slot);
+                a.ingest(&rx, slot + 1);
             }
         }
         if done(a, b) {
@@ -215,7 +217,7 @@ fn the_club_clock_reaches_no_clock_slot_or_stamp_ft_reads() {
             "scene: FT steers by what SNTP measured, or by nothing"
         );
 
-        let club = EnginePositionSync(runner.clone());
+        let club = EnginePositionSync::new(runner.clone());
         club.on_welcome(0, "TEST FD", "W9ABC", now().as_secs());
         let base = now().as_millis() as u64;
         for i in 0..100u64 {

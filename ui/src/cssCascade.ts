@@ -107,7 +107,8 @@ export const SKIN_MODES: readonly Mode[] = SKINS.flatMap((s) =>
  * so every contrast only falls as a surface moves toward its ink, and a component that reads on
  * these themes reads on every other. Picked from the table, so a new theme that is a worse case
  * joins the sweep the day it lands: today Slate (the page) and Lagoon (the panel and both raised
- * surfaces) on dark, and Silver on light.
+ * surfaces) on dark, and Paper on light. The standard Light (Silver's look since 2026-10-13) is darker
+ * than every light theme, and MODES carries it as the base itself.
  */
 export const SENTINEL_SKINS: readonly SkinId[] = (() => {
   const worst = new Set<SkinId>()

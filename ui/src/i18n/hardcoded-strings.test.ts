@@ -123,6 +123,9 @@ const MIGRATED = [
   'components/MacroEditor.tsx',
   'components/PskMacroEditor.tsx',
   'features/pskMacros.ts',
+  // CW's half of the same surface: its keys and their editor, captioned from CW's own catalog
+  // keys. It stops nothing; CwCockpit.tsx's Esc and Stop TX are the stops.
+  'components/CwMacroEditor.tsx',
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
@@ -162,6 +165,15 @@ const MIGRATED = [
   'components/LogEntry.tsx',
   // Removing the newest contest contact: the strip's and the contest screen's sentences.
   'features/contestRemoval.ts',
+  // Editing a logged contest contact (2026-10-11): the edit's words and its in-place form, which
+  // the strip and the contest screen share — born migrated; mode and band names are tokens.
+  'features/contestEdit.ts',
+  'components/ContestContactEdit.tsx',
+  // The club link's words (2026-10-10), which Settings' club section and the Contest screen
+  // share — born migrated.
+  'features/clubLink.ts',
+  // Club sync's Windows Firewall lines (2026-10-10), Settings' club section — born migrated.
+  'features/clubFirewall.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
@@ -288,6 +300,11 @@ const MIGRATED = [
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',
+  // The contest screen window and the line left in its place (2026-10-12): born migrated — every
+  // string is a catalog key; the screen it hosts is ContestView, above.
+  'components/ContestScreenWindow.tsx',
+  'components/ContestOverDialog.tsx',
+  'components/ContestScoreChip.tsx',
   // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
   // the objective names are the sponsor's own worksheet names, invariant like the bonus names.
   'components/WfdObjectivesSection.tsx',
@@ -594,6 +611,9 @@ const MIGRATED = [
   'features/slotAudioLost.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
+  // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from
+  // birth.
+  'features/voiceDropped.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
   // …and the headline for the station's audio-error line, by the kind the station names —

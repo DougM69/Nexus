@@ -1,11 +1,11 @@
 {
   "about": "The dupe key a contest contact gets under its contest's own rule, the same in the engine and in the log strip. 'rules' is each ruleset's dupe rule as the snapshot ships it (FieldDayStatus.dupeRule). Each row is a contact (call, band, mode class, the exchange it received and the exchange this station sent, by slot) and the key the engine builds for it (DupeRule::key_of, crates/tempo-core/src/contest/dupe.rs). Read by crates/tempo-app/src/fdevent.rs (the engine's rule from the rules seed and its key for every row) and ui/src/features/contestDupe.keys.shared.test.ts (the strip's key, from the rule here). Change a row and both must agree again.",
   "rules": {
-    "ilqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [["CW", "DIG"]], "logDupes": false },
-    "ohqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [], "logDupes": false },
+    "ilqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [["CW", "DIG"]], "logDupes": true },
+    "ohqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [], "logDupes": true },
     "nyqp": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": ["QTH"], "bySentFields": ["QTH"], "modeClassGroups": [], "logDupes": true },
     "arrlvhf_jun": { "byCall": true, "byBand": true, "byModeClass": false, "byFields": ["GRID"], "bySentFields": ["GRID"], "modeClassGroups": [], "logDupes": true },
-    "arrlfd": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": [], "bySentFields": [], "modeClassGroups": [], "logDupes": false }
+    "arrlfd": { "byCall": true, "byBand": true, "byModeClass": true, "byFields": [], "bySentFields": [], "modeClassGroups": [], "logDupes": true }
   },
   "rows": [
     { "ruleset": "ilqp", "call": " k9aaa ", "band": "40m", "mode": "CW", "rx": { "RST": "599", "QTH": "cook" }, "tx": { "RST": "599", "QTH": "MCLN" }, "key": ["K9AAA", "40M", "CW", "COOK", "MCLN"] },

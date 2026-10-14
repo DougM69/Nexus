@@ -13,7 +13,7 @@ import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 import { js8DisplayNow } from '../remote-web/js8'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
-import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch } from '../types'
+import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch, Js8Unarmed } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -681,11 +681,25 @@ export function Js8Cockpit({
   // ⚑ and the lift to the top for a station with an unread message to me (js8Vocab.js8UnreadFrom).
   const unreadFrom = js8 ? js8UnreadFrom(js8.inbox, snap?.mycall ?? '') : new Set<string>()
 
+  /** What a switch that is on but not armed says: the station's reason (`notArmed`). The idle
+   *  watchdog's sentence is shared, TX off keeps the switch's own "on, but TX is off" title
+   *  (`txOff`), and the rest are that switch's own words (`own`), literal keys at each call site
+   *  so the orphan guard sees each referenced. An older station on the Remote page sends no
+   *  reason, and its chip keeps the title this page always gave it. */
+  const notArmedTitle = (
+    why: Js8Unarmed | null | undefined,
+    txOff: string,
+    own: Partial<Record<Js8Unarmed, string>> = {},
+  ): string =>
+    why === 'idle' ? t('js8.dock.notArmed.idle', { min: js8?.idleLimitMin ?? 60 }) : (why && own[why]) || txOff
+
   const hbTitle =
     js8?.hbOn && js8.armed.hb
       ? t('js8.dock.hb.title.armed')
       : js8?.hbOn
-        ? t('js8.dock.hb.title.on')
+        ? notArmedTitle(js8.notArmed?.hb, t('js8.dock.hb.title.on'), {
+            unscheduled: t('js8.dock.hb.notArmed.unscheduled'),
+          })
         : t('js8.dock.hb.title.off')
 
   /** JS8Call renders the countdown IN the button — `CQ (12)`, `HB (42)`, `HB (now)`
@@ -706,7 +720,9 @@ export function Js8Cockpit({
     js8?.cqOn && js8.armed.cq
       ? t('js8.dock.cqRepeat.title.armed', { min: js8?.cqIntervalMin ?? 0 })
       : js8?.cqOn
-        ? t('js8.dock.cqRepeat.title.on')
+        ? notArmedTitle(js8.notArmed?.cq, t('js8.dock.cqRepeat.title.on'), {
+            unscheduled: t('js8.dock.cqRepeat.notArmed.unscheduled'),
+          })
         : t('js8.dock.cqRepeat.title.off', { min: js8?.cqIntervalMin ?? 0 })
 
   // THE ESTIMATE beside Send — a hint, not a gate (js8Vocab.estimateFrames). The engine is
@@ -741,14 +757,15 @@ export function Js8Cockpit({
         return t('js8.dock.origin.cqRepeat')
     }
   }
-  /** One second-act chip with its three faces: off · on-but-TX-off · ARMED. */
+  /** One second-act chip with its three faces: off · on but not armed (`notArmedTitle` says
+   *  why) · ARMED. */
   const armChip = (
     which: Js8Switch,
     cls: string,
     label: string,
     on: boolean,
     armed: boolean,
-    titles: [off: string, on: string, armed: string],
+    titles: [off: string, notArmed: string, armed: string],
   ) => (
     <button
       type="button"
@@ -1077,6 +1094,7 @@ export function Js8Cockpit({
             ? { call: selected.call, rst: fmtSnr(selected.snrDb), name: null, confirmed: true }
             : null
         }
+        onSnap={onSnap}
         fieldDay={snap.fieldDay ?? null}
         active={active}
         fdMode="DIG"
@@ -1505,17 +1523,23 @@ export function Js8Cockpit({
           </button>
           {armChip('autoreply', 'js8-autoreply', AUTOREPLY, js8?.autoreply === true, js8?.armed.autoreply === true, [
             t('js8.dock.autoreply.title.off'),
-            t('js8.dock.autoreply.title.on'),
+            notArmedTitle(js8?.notArmed?.autoreply, t('js8.dock.autoreply.title.on')),
             t('js8.dock.autoreply.title.armed'),
           ])}
           {armChip('relay', 'js8-relay', RELAY, js8?.relay === true, js8?.armed.relay === true, [
             t('js8.dock.relay.title.off'),
-            t('js8.dock.relay.title.on'),
+            notArmedTitle(js8?.notArmed?.relay, t('js8.dock.relay.title.on'), {
+              needsAuto: t('js8.dock.relay.notArmed.needsAuto'),
+            }),
             t('js8.dock.relay.title.armed'),
           ])}
           {armChip('hback', 'js8-hback', HB_ACK, js8?.hbAck === true, js8?.armed.hbAck === true, [
             t('js8.dock.hbAck.title.off'),
-            t('js8.dock.hbAck.title.on'),
+            notArmedTitle(js8?.notArmed?.hbAck, t('js8.dock.hbAck.title.on'), {
+              needsHb: t('js8.dock.hbAck.notArmed.needsHb'),
+              needsAuto: t('js8.dock.hbAck.notArmed.needsAuto'),
+              needsHbAndAuto: t('js8.dock.hbAck.notArmed.needsHbAndAuto'),
+            }),
             t('js8.dock.hbAck.title.armed'),
           ])}
           {/* JS8Call's idle watchdog (60 min default, floor 5, 0 = off): trips HB / AUTOREPLY /

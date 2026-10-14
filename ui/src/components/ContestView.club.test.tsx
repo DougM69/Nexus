@@ -10,7 +10,7 @@ import { ContestView, FdClubSection } from './ContestView'
 import { exportLog, fdClubExport, getSettings, saveTextToDownloads } from '../api'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import defaultSettings from './__fixtures__/defaultSettings.json'
-import type { FdClubStatus, FieldDayStatus } from '../types'
+import type { ClubLink, FdClubStatus, FieldDayStatus } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "POSITIVE CONTROL: the Illinois QSO Party, both Field…", takes
 // 0.26 s and 0.19 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -20,12 +20,17 @@ vi.setConfig({ testTimeout: 15_000 })
 vi.mock('../api', () => ({
   // The contest screen's Removed list, read on mount: none removed.
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
   exportLog: vi.fn(async () => ''),
   fdClubExport: vi.fn(async () => ''),
+  // The host's club log under its board: none listed here.
+  fdClubLogNewest: vi.fn(async () => null),
   fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
+  fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
   openPanelWindow: vi.fn(async () => {}),
   saveTextToDownloads: vi.fn(async () => '/tmp/x'),
 }))
@@ -95,10 +100,11 @@ describe('ContestView club sync section', () => {
     expect(screen.getByText('W9ABC Field Day · host W9ABC')).toBeTruthy()
     // Both positions on the board; only the silent one is stale-marked, and
     // the mark carries WHEN it was last heard (never silently stale).
-    expect(screen.getByText('CW tent')).toBeTruthy()
-    const stale = screen.getByTitle('Last heard 44 s ago')
+    const table = within(document.querySelector<HTMLElement>('[data-club-board]')!)
+    expect(table.getByText('CW tent')).toBeTruthy()
+    const stale = table.getByTitle('Last heard 44 s ago')
     expect(stale.textContent).toContain('SSB tent')
-    expect(screen.getByTitle('Last heard 44 s ago')).toBeTruthy()
+    expect(table.getByTitle('Last heard 44 s ago')).toBeTruthy()
     expect(screen.queryByTitle('Last heard 2 s ago')).toBeNull()
     // Non-host: no club export buttons.
     expect(screen.queryByText('Club Cabrillo')).toBeNull()
@@ -331,21 +337,21 @@ describe('a press through the Remote stream exports no file', () => {
     await act(async () => { fireEvent.click(button()) })
     await settle()
     expect(fdClubExport).toHaveBeenCalledWith(format)
-    expect(saveTextToDownloads).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^fd-club-log-.*\\.${ext}$`)), '')
+    expect(saveTextToDownloads).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^arrlfd-club-log-\\d{4}-\\d{2}-\\d{2}\\.${ext}$`)), '')
     expect(exportAlert(), 'the export clears the refusal').toBeNull()
   })
 
   // The station log's own four, on a station with no club: Cabrillo and ADIF come from the
   // backend, Summary and Dupe sheet are built here, and all four are written to Downloads.
   it.each([
-    ['Export Cabrillo', 'pressed', [['cabrillo']], /^fd-log-.*\.cbr$/],
-    ['Export Cabrillo', 'keyed', [['cabrillo']], /^fd-log-.*\.cbr$/],
-    ['Export ADIF', 'pressed', [['adif']], /^fd-log-.*\.adi$/],
-    ['Export ADIF', 'keyed', [['adif']], /^fd-log-.*\.adi$/],
-    ['Summary', 'pressed', [], /^fd-summary-.*\.txt$/],
-    ['Summary', 'keyed', [], /^fd-summary-.*\.txt$/],
-    ['Dupe sheet', 'pressed', [], /^fd-dupesheet-.*\.txt$/],
-    ['Dupe sheet', 'keyed', [], /^fd-dupesheet-.*\.txt$/],
+    ['Export Cabrillo', 'pressed', [['cabrillo']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.cbr$/],
+    ['Export Cabrillo', 'keyed', [['cabrillo']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.cbr$/],
+    ['Export ADIF', 'pressed', [['adif']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.adi$/],
+    ['Export ADIF', 'keyed', [['adif']], /^arrlfd-log-\d{4}-\d{2}-\d{2}\.adi$/],
+    ['Summary', 'pressed', [], /^arrlfd-summary-\d{4}-\d{2}-\d{2}\.txt$/],
+    ['Summary', 'keyed', [], /^arrlfd-summary-\d{4}-\d{2}-\d{2}\.txt$/],
+    ['Dupe sheet', 'pressed', [], /^arrlfd-dupesheet-\d{4}-\d{2}-\d{2}\.txt$/],
+    ['Dupe sheet', 'keyed', [], /^arrlfd-dupesheet-\d{4}-\d{2}-\d{2}\.txt$/],
   ] as const)('refuses the station log’s own %s %s through the stream, and says why; CONTROL: at the station it exports', async (label, way, backend, file) => {
     render(<ContestView fieldDay={fd()} onSetMode={() => {}} />)
     await settle()
@@ -567,10 +573,152 @@ describe('the host\'s club block names who it turned away and how full its board
     expect(screen.getByText(/19 more, not listed here/)).toBeTruthy()
   })
 
+  // ⭐ A LAPTOP SET UP ON ANOTHER COUNTY sends it on the air under the club's call, a busted
+  // exchange for every station it works. The host names it, with what it sends and what the club
+  // sends, so it can be put right on that laptop; its contacts are still taken. An unnamed
+  // position reads as its line on the board does: who is at it, else the placeholder.
+  it('names each position sending another county than the club, with both', () => {
+    render(
+      <FdClubSection
+        club={{
+          ...HOST,
+          otherLocation: [
+            { posName: 'CW tent', operator: 'K9OPB', sent: 'KANE', club: 'MCLN' },
+            { posName: '', operator: 'K9OPD', sent: 'WILL', club: 'MCLN' },
+            { posName: '', operator: '', sent: 'LAKE', club: 'MCLN' },
+          ],
+        }}
+      />,
+    )
+    expect(screen.getByText(/^CW tent sends KANE, and this club sends MCLN\./)).toBeTruthy()
+    expect(screen.getByText(/^K9OPD sends WILL, and this club sends MCLN\./)).toBeTruthy()
+    expect(screen.getByText(/^Unnamed position sends LAKE, and this club sends MCLN\./)).toBeTruthy()
+    expect(screen.getAllByText(/set that laptop to MCLN so the next ones match/)).toHaveLength(3)
+  })
+
   it('POSITIVE CONTROL: a club with room and no refusals says neither', () => {
     render(<FdClubSection club={HOST} />)
     expect(screen.queryByText(/Turned away/)).toBeNull()
     expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
     expect(screen.queryByText(/not in the club's log/)).toBeNull()
+    expect(screen.queryByText(/and this club sends/)).toBeNull()
+  })
+})
+
+// ⭐ WHERE THIS LAPTOP'S CLUB LINK STANDS (2026-10-10). A laptop that typed the host's address said
+// nothing about whether it was connected, and with the Field Day mode off there is no club block
+// to say it in. So the line is said with the mode off, where the block would be, and beside the
+// block only what the block does not already say.
+describe("where this laptop's club link stands", () => {
+  const LINK: ClubLink = {
+    role: 'position',
+    addr: '192.168.1.10:42073',
+    state: 'unreachable',
+    why: 'noAnswer',
+    downSinceUnix: 0,
+    event: '',
+    hostCall: '',
+    position: 'CW tent',
+    clubCode: 'ABCD-EFGH',
+  }
+  const HOST_LINK: ClubLink = {
+    ...LINK,
+    role: 'host',
+    addr: '127.0.0.1:42073',
+    state: 'joined',
+    why: undefined,
+    hosting: {
+      up: true,
+      port: 42073,
+      addrs: [{ addr: '192.168.1.10:42073', adapter: 'Wi-Fi' }],
+      connected: 1,
+    },
+  }
+
+  it('says it with the Field Day mode off, where the club block would be', () => {
+    render(<ContestView fieldDay={null} clubLink={LINK} onSetMode={() => {}} />)
+    const block = screen.getByLabelText('Club sync')
+    expect(within(block).getByText('Cannot reach the host at 192.168.1.10:42073. Trying again.')).toBeTruthy()
+    expect(
+      within(block).getByText(/press Allow Nexus through Windows Firewall in Settings ▸ Contesting on the host\./),
+    ).toBeTruthy()
+  })
+
+  it('names the event, the host, this laptop’s position and its code once in, with the mode off', () => {
+    render(
+      <ContestView
+        fieldDay={null}
+        clubLink={{ ...LINK, state: 'joined', why: undefined, event: 'ILQP rehearsal', hostCall: 'W9AAA' }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Joined ILQP rehearsal, hosted by W9AAA, as CW tent.')).toBeTruthy()
+    expect(screen.getByText('Club code ABCD-EFGH')).toBeTruthy()
+  })
+
+  it('beside the club block, says only what the block does not', () => {
+    render(
+      <ContestView
+        fieldDay={fd({ ...CLUB, lastError: 'this club is on the air as W9AAA' })}
+        clubLink={{ ...LINK, state: 'turnedAway', why: undefined, told: 'this club is on the air as W9AAA' }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Host: this club is on the air as W9AAA')).toBeTruthy()
+    expect(screen.queryByText(/Turned away by the host/)).toBeNull()
+    cleanup()
+    render(
+      <ContestView
+        fieldDay={fd(CLUB)}
+        clubLink={{ ...LINK, state: 'lost', why: 'refused', event: 'W9ABC Field Day' }}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.getByText('Lost the host at 192.168.1.10:42073. Trying again.')).toBeTruthy()
+  })
+
+  it('gives the host the addresses a joining laptop types, and who is in', () => {
+    render(<ContestView fieldDay={fd({ ...CLUB, hosting: true })} clubLink={HOST_LINK} onSetMode={() => {}} />)
+    expect(screen.getByText(/^Hosting on port 42073\. Positions join at:/)).toBeTruthy()
+    expect(screen.getByText('192.168.1.10:42073 (Wi-Fi)')).toBeTruthy()
+    expect(screen.getByText('1 other position connected.')).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: no club link, no line', () => {
+    render(<ContestView fieldDay={null} onSetMode={() => {}} />)
+    expect(screen.queryByLabelText('Club sync')).toBeNull()
+    expect(screen.queryByText(/the host at/)).toBeNull()
+  })
+
+  it('says none of it to a Remote observer', () => {
+    render(
+      <ContestView
+        fieldDay={fd(CLUB)}
+        clubLink={LINK}
+        observation={defaultSettings as never}
+        onSetMode={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/the host at/)).toBeNull()
+  })
+})
+
+// ⭐ THE CLUB FILE'S TOOLTIP SAYS WHAT THE CLUB FILE DOES. Every contest logs its dupes now
+// (`DupeRule::log_dupes` is true for all of them), but a Field Day club still writes its
+// earliest-wins unique rows, the file 1.x wrote (`fdevent.rs` `export_indices`), so its export
+// buttons go on saying so. A party club keeps every contact and says that.
+describe('the club export buttons say what the club file keeps', () => {
+  const HOST: FdClubStatus = { ...CLUB, hosting: true }
+  const titles = () =>
+    ['Club Cabrillo', 'Club ADIF'].map((label) => screen.getByText(label).getAttribute('title') ?? '')
+
+  it('a Field Day club keeps the earliest contact, though the contest logs its dupes', () => {
+    render(<FdClubSection club={HOST} onExport={() => {}} fieldDay keepsDupes />)
+    for (const title of titles()) expect(title).toMatch(/deduped — the earliest contact wins/)
+  })
+
+  it('CONTROL — a party club keeps every contact, and says so', () => {
+    render(<FdClubSection club={HOST} onExport={() => {}} fieldDay={false} keepsDupes />)
+    for (const title of titles()) expect(title).toMatch(/every contact stays in/)
   })
 })

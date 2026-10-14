@@ -2894,7 +2894,7 @@ mod tests {
                     14 => {
                         let text = adif_text(&mut g, 3);
                         log.stamp_ota_refs(&text);
-                        log.merge_own_echo(&text, 1_700_000_000);
+                        log.merge_own_echo(&text, 1_700_000_000, None);
                         "ota + own echo"
                     }
                     15 if n > 0 => {

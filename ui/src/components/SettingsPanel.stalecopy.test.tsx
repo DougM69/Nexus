@@ -363,7 +363,7 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'n1mm', ...field('n1mmAddr', '', '10.0.0.2:12060', '10.0.0.9:12060'), edit: setIn('n1mm', 'textbox', /^N1MM contact broadcast address/, '10.0.0.9:12060') },
     { section: 'lotw-users', ...field('lotwMaxAgeDays', 365, 90, 180), edit: setIn('lotw-users', 'spinbutton', /^Count as a LoTW user/, '180') },
     { section: 'confirmations', ...field('lotwUsername', 'KD9TAW', 'KD9TAW/P', 'KD9TAW/M'), edit: setIn('confirmations', 'textbox', /^LoTW username/, 'KD9TAW/M') },
-    { section: 'contest-pick', ...field('contestEmail', '', 'a@example.org', 'b@example.org'), edit: setIn('contest-pick', 'textbox', /^Email for contest logs/, 'b@example.org') },
+    { section: 'contest-pick', ...field('fdEvent', 'arrlfd', 'wfd', 'ohqp'), edit: clickIn('contest-pick', 'button', 'Ohio QSO Party') },
     { section: 'contest-station', ...field('contestQthState', '', 'WI', 'IL'), edit: setIn('contest-station', 'textbox', /^State or province/, 'il') },
     { section: 'contest-category', ...field('unassistedMode', false, false, true), edit: clickIn('contest-category', 'switch', 'Declare an unassisted contest entry') },
     { section: 'scp-call-history', ...field('scpEnabled', true, true, false), edit: clickIn('scp-call-history', 'switch', 'Super Check Partial') },
@@ -380,7 +380,6 @@ describe('an edit made in any section of Settings is saved', () => {
       },
     },
     { section: 'connect-web', ...field('connectWeb', false, false, true), edit: clickIn('connect-web', 'switch', 'Serve Conditions on the local network') },
-    { section: 'features', ...field('fdActive', false, false, true), edit: clickIn('features', 'switch', 'Enable Field Day mode') },
   ]
 
   /** Sections whose controls never save through the form, and what they save through instead. */
@@ -402,6 +401,8 @@ describe('an edit made in any section of Settings is saved', () => {
     'this-computer': 'setClientAudio, kept in this computer’s own file and never sent to the station',
     'data-folder': 'setDataFolder',
     configurations: 'the backup, restore and reset verbs',
+    // Contest mode, the one field it saved through the form, is on the Contesting tab now.
+    features: 'which sections show and the goal profile, kept on this computer (useFeatures)',
   }
 
   it('names every section of the registry exactly once', () => {

@@ -11,7 +11,10 @@
 //! trailing transmitter column are all in the comparison.
 //!
 //! Regenerating them against today's writer would make this test prove nothing. A deliberate
-//! change to another contest's file is a new golden AND a sentence in its commit saying why.
+//! change to another contest's file is a new golden AND a sentence in its commit saying why —
+//! or, for one that only ADDS header lines, those lines by value: the CQ World-Wide and WPX
+//! files carry their sponsors' CATEGORY lines since those are written from the entry's
+//! declarations ([`cq_lines`]), and every other byte of theirs is still the golden.
 //! Every callsign is an example call.
 use tempo_core::contest::{install_call_resolver, CallLocation, ContestSession, StationData};
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
@@ -310,6 +313,38 @@ fn export_on(case: &Case, dial: impl Fn(&str) -> u32) -> String {
         .unwrap_or_else(|e| panic!("{} exports: {e}", case.event))
 }
 
+/// ⭐ What a CQ World-Wide or WPX file carries over its golden since the sponsors' CATEGORY lines
+/// are written from the entry's declarations (cqww.com/cabrillo.htm, cqwpx.com/cabrillo.htm): the
+/// declared assistance, the contest's own mode and the declared power, in file order. Empty for
+/// every other contest.
+fn cq_lines(event: &str) -> Vec<String> {
+    let mode = match event {
+        "cqww_cw" | "cqwpx_cw" => "CW",
+        "cqww_ssb" | "cqwpx_ssb" => "SSB",
+        _ => return Vec::new(),
+    };
+    vec![
+        "CATEGORY-ASSISTED: NON-ASSISTED".to_string(),
+        format!("CATEGORY-MODE: {mode}"),
+        "CATEGORY-POWER: LOW".to_string(),
+    ]
+}
+
+/// `got` without its [`cq_lines`], once they are seen there in order: the file this contest's
+/// golden is compared with.
+fn without_cq_lines(event: &str, got: &str) -> String {
+    let added = cq_lines(event);
+    let seen: Vec<&str> = got
+        .lines()
+        .filter(|l| added.iter().any(|a| a == l))
+        .collect();
+    assert_eq!(seen, added, "{event}: the CQ category lines");
+    got.lines()
+        .filter(|l| !added.iter().any(|a| a == l))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 #[test]
 fn every_other_contests_cabrillo_file_is_byte_identical() {
     let write = std::env::var_os("NEXUS_WRITE_CABRILLO_GOLDENS").is_some();
@@ -326,8 +361,19 @@ fn every_other_contests_cabrillo_file_is_byte_identical() {
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!("{path}: {e} (goldens are written by the pre-template writer)")
         });
-        assert_eq!(got, want, "{}: the Cabrillo file changed", case.event);
+        assert_eq!(
+            without_cq_lines(case.event, &got),
+            want,
+            "{}: the Cabrillo file changed",
+            case.event
+        );
     }
+    // POSITIVE CONTROL: four of the files were compared without lines they carry.
+    let cq = cases
+        .iter()
+        .filter(|c| !cq_lines(c.event).is_empty())
+        .count();
+    assert_eq!(cq, 4, "CQ WW CW and SSB, CQ WPX CW and SSB");
     assert!(
         !write,
         "goldens written — this run proves nothing; run again without the variable"
@@ -350,7 +396,7 @@ fn with_a_dial_only_the_frequency_column_moves() {
     };
     let mut moved = 0;
     for case in &cases() {
-        let got = export_on(case, dial);
+        let got = without_cq_lines(case.event, &export_on(case, dial));
         let want = std::fs::read_to_string(format!("{DIR}/{}.cbr", case.event)).expect("golden");
         let field_day = matches!(case.event, "arrlfd" | "wfd");
         assert_eq!(got.lines().count(), want.lines().count(), "{}", case.event);

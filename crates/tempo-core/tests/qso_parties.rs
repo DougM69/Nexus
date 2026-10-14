@@ -123,20 +123,20 @@ fn tnqp_from_tennessee_works_anyone_and_scores_per_band_multipliers() {
     ));
 
     // THE DUPE VERDICT — `(call, band, mode class, QTH)`, so the same station on the
-    // same band and mode is refused…
+    // same band and mode is a dupe, logged and marked…
     assert!(
-        !log.log_fields_at(
+        log.log_fields_at(
             "K1ABC",
             &fields(&[("RST", "599"), ("QTH", "CT")]),
             "CW",
             "",
             0,
             120
-        ),
+        ) && log.qsos()[2].dupe,
         "same call, band and mode class is a dupe"
     );
     // …and the POSITIVE CONTROL: a different mode class is a legal second contact, so
-    // the refusal above is about the key and not about a log that stopped accepting.
+    // the mark above is about the key and not about a log that marks everything.
     assert!(log.log_fields_at(
         "K1ABC",
         &fields(&[("RST", "59"), ("QTH", "CT")]),
@@ -145,6 +145,7 @@ fn tnqp_from_tennessee_works_anyone_and_scores_per_band_multipliers() {
         0,
         130
     ));
+    assert!(!log.qsos()[3].dupe);
 
     // THE SCORE. 3 points per QSO regardless of mode × 3 QSOs = 9. An in-state station
     // counts its `qth` universe per band: CT and DAVI on 20m = 2. (`dxcc` counts nothing
@@ -405,14 +406,14 @@ fn cqp_issues_serials_dupes_once_per_mode_per_band_and_scores_per_log() {
 
     // THE DUPE VERDICT, from THIS ruleset's own rule: once per mode per band.
     assert!(
-        !log.log_fields_at(
+        log.log_fields_at(
             "K1ABC",
             &fields(&[("NR", "18"), ("QTH", "CT")]),
             "CW",
             "",
             0,
             120
-        ),
+        ) && log.qsos().last().is_some_and(|q| q.dupe),
         "CW on 20m again is a dupe"
     );
     assert!(

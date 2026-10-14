@@ -46,8 +46,12 @@ export interface ContestDomain {
   codes: Set<string>
   /** The board's blocks, in display order. */
   groups: DomainGroup[]
-  /** The board's "N of TOTAL" denominator. */
+  /** How many values the list holds: the board's "N of TOTAL" denominator, less the codes that
+   *  count as another ([`multTotal`]). */
   total: number
+  /** Codes that are ONE multiplier with another code of this list, `code → the code it counts
+   *  as` ([`multCode`]). Absent for every list that names each place once. */
+  same?: Record<string, string>
 }
 
 /**
@@ -98,6 +102,12 @@ const VE_CODES = new Set([
   'NL', 'NF', 'LAB', 'PE', 'PEI', 'NS', 'NB', 'QC', 'ON', 'MB', 'SK', 'AB', 'BC', 'NT', 'NU', 'YT',
 ])
 
+/** ⭐ ONE PROVINCE, TWO SPELLINGS: Canada Post's NL and PE count as the sponsor's NF and PEI. Its
+ *  records table spells them so, and a VE station may send either, but *"VE provinces"* count
+ *  once each. A MIRROR of `SAME_PROVINCE` in tempo-core's `contest/scoring.rs`, which scores by
+ *  it; a test there reads this table. */
+const IL_MULTS_SAME: Record<string, string> = { NL: 'NF', PE: 'PEI' }
+
 /** What a station outside Illinois sends — the states and DC, then the Canadian codes.
  *  The two block labels are call-area TOKENS, never translated, the same convention the
  *  CQ WW RTTY board uses. */
@@ -108,6 +118,7 @@ const IL_MULTS: ContestDomain = {
     { label: 'VE', values: ILQP_MULTS.filter((c) => VE_CODES.has(c.code)) },
   ],
   total: ILQP_MULTS.length,
+  same: IL_MULTS_SAME,
 }
 
 /** ⭐ The New York QSO Party's 62 counties — the sponsor's own list, mirrored in
@@ -146,6 +157,19 @@ export function contestDomain(id: string | undefined): ContestDomain | undefined
   return id ? DOMAINS[id] : undefined
 }
 
+/** The multiplier a value of `domain` counts as, upper-cased: itself, or the other spelling of the
+ *  same place it is one multiplier with ([`ContestDomain.same`]) — what a board lights it as. */
+export function multCode(domain: ContestDomain | undefined, value: string): string {
+  const code = value.trim().toUpperCase()
+  return domain?.same?.[code] ?? code
+}
+
+/** How many multipliers a board over `domain` can light: its values, a place listed under two
+ *  spellings counted once. */
+export function multTotal(domain: ContestDomain): number {
+  return domain.total - Object.keys(domain.same ?? {}).length
+}
+
 /**
  * Is `value` a legal member of `domainId`?
  *
@@ -176,11 +200,16 @@ const nameKey = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
  *
  * Empty for an empty box (a list of 102 counties is not a suggestion) and for a domain
  * this build carries no table for — never a guess.
+ *
+ * `inside: false` leaves the names that merely contain the text out. The verdict line under a
+ * box offers only what a name or a prefix matches: "IL" is inside Hamilton and Will, and a
+ * station that sent IL meant neither.
  */
 export function domainSuggestions(
   domainIds: string[] | undefined,
   typed: string,
   limit = 6,
+  inside = true,
 ): DomainValue[] {
   const q = typed.trim().toUpperCase()
   if (q === '' || !domainIds?.length) return []
@@ -201,7 +230,7 @@ export function domainSuggestions(
   }
   take((v) => v.code.startsWith(q))
   take((v) => nameKey(v.name).startsWith(qk))
-  take((v) => nameKey(v.name).includes(qk))
+  if (inside) take((v) => nameKey(v.name).includes(qk))
   return out
 }
 
@@ -223,8 +252,9 @@ export function domainSuggestions(
  * not. What replaces the convenience is [`domainSuggestions`], which offers all four
  * while they type.
  *
- * Two values sharing a name (ILQP lists `PE` and `PEI` as Prince Edward Island) are
- * likewise several, and resolve to nothing.
+ * Two values sharing a name are likewise several, and resolve to nothing — unless they are one
+ * place's two spellings ([`ContestDomain.same`]): ILQP lists `PE` and `PEI`, both Prince Edward
+ * Island, and the name resolves to `PEI`, the spelling the province counts as.
  */
 export function resolveDomainValue(
   domainIds: string[] | undefined,
@@ -232,12 +262,19 @@ export function resolveDomainValue(
 ): string | undefined {
   const q = typed.trim().toUpperCase()
   if (q === '' || !domainIds?.length) return undefined
-  const values: DomainValue[] = []
+  // Each value with the list it is in, which says what it counts as.
+  const values: { id: string; value: DomainValue }[] = []
   for (const id of domainIds) {
-    for (const g of contestDomain(id)?.groups ?? []) values.push(...g.values)
+    for (const g of contestDomain(id)?.groups ?? []) values.push(...g.values.map((value) => ({ id, value })))
   }
-  if (values.some((v) => v.code === q)) return q
+  if (values.some(({ value }) => value.code === q)) return q
   const qk = nameKey(q)
-  const named = values.filter((v) => nameKey(v.name) === qk)
-  return named.length === 1 ? named[0].code : undefined
+  const named = values.filter(({ value }) => nameKey(value.name) === qk)
+  if (named.length === 1) return named[0].value.code
+  // Several named so are one answer only when they are one place's spellings in one list: the
+  // spelling it counts as.
+  const counts = ({ id, value }: (typeof values)[number]) => `${id} ${multCode(contestDomain(id), value.code)}`
+  return named.length > 1 && new Set(named.map(counts)).size === 1
+    ? multCode(contestDomain(named[0].id), named[0].value.code)
+    : undefined
 }

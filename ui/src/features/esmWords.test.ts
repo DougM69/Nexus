@@ -9,12 +9,12 @@ import { esmInertText, esmRefusalText, esmStepName } from './esmWords'
 // gains a reason nobody worded, or loses one this table still names.
 const REFUSALS = {
   dupe: { why: 'dupe' },
+  b4Sent: { why: 'b4Sent' },
   txOff: { why: 'txOff' },
   txLocked: { why: 'txLocked' },
   clockRepair: { why: 'clockRepair' },
   recording: { why: 'recording' },
   pttHeld: { why: 'pttHeld' },
-  radioHasMic: { why: 'radioHasMic' },
   unmapped: { why: 'unmapped', role: 'tu' },
   empty: { why: 'empty', role: 'callExch', key: 'F2' },
   oneSlot: { why: 'oneSlot', role: 'exch' },
@@ -23,7 +23,7 @@ const INERT = { noKeyer: true, auto: true, continuousTx: true, noRoles: true } s
 const inert = Object.keys(INERT) as EsmInert[]
 
 describe('Enter Sends Message — its words', () => {
-  it('names CQ, TU and AGN by the on-air words, and the other steps in words', () => {
+  it('names CQ, TU, AGN and QSO B4 by the on-air words, and the other steps in words', () => {
     expect(Object.fromEntries(ESM_ROLES.map((role) => [role, esmStepName(role)]))).toEqual({
       cq: 'CQ',
       callExch: 'His call and your exchange',
@@ -31,19 +31,20 @@ describe('Enter Sends Message — its words', () => {
       myCall: 'Your call',
       exch: 'Your S&P exchange',
       again: 'AGN',
+      b4: 'QSO B4',
     })
   })
 
   it('says why Enter sent nothing, for every refusal, naming the step and the key where there is one', () => {
     expect(Object.fromEntries(Object.entries(REFUSALS).map(([why, r]) => [why, esmRefusalText(r)]))).toEqual({
       dupe: 'A dupe of your own log: Enter sends nothing and logs nothing.',
+      b4Sent: 'QSO B4 went to this call. Enter logs it as a dupe once his exchange is copied.',
       txOff: 'TX is off, and Enter never turns it on. Turn TX on yourself, then press Enter.',
       txLocked:
         'TX is locked here: the dial is outside your license privileges, or this connection does not allow transmitting.',
       clockRepair: 'A clock repair is holding transmit, so Enter sends nothing.',
       recording: 'The voice keyer is recording, so Enter plays nothing.',
       pttHeld: 'You are holding PTT, so Enter plays nothing.',
-      radioHasMic: 'The radio has the mic, so a recording would not go out.',
       unmapped: 'TU: no key is mapped, so Enter sends nothing and logs nothing at that step.',
       empty: 'His call and your exchange: F2 is empty, so Enter sends nothing and logs nothing at that step.',
       oneSlot: 'Your S&P exchange: mapped to two recordings, and the keyer plays one per press.',

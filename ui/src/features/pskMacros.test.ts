@@ -41,8 +41,8 @@ describe('the built-in sets', () => {
       ['F4', '«psk.macro.myCall.label»', '{MYCALL} {MYCALL}'],
       ['F5', '«psk.macro.hisCall.label»', '{CALL}'],
       ['F6', '«psk.macro.spExch.label»', 'tu 599 {EXCH} {EXCH}'],
-      ['F7', 'AGN', 'agn? agn?'],
-      ['F8', 'B4', '{CALL} qso b4 tu {MYCALL}'],
+      ['F7', 'B4', '{CALL} qso b4 tu {MYCALL}'],
+      ['F8', 'AGN', 'agn? agn?'],
     ])
   })
 

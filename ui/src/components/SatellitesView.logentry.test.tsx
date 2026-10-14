@@ -22,7 +22,7 @@
 //     yet, and a QSO record is permanent. Asserting on the RECORD, never on
 //     what the panel displays: the display is not what LoTW reads.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, waitFor, within } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import type { AppSnapshot, LoggedQso, SatDetail, SatTrackStatus, SatTransponderHeld } from '../types'
 
@@ -575,6 +575,17 @@ describe('Satellites — logging the contact you just made', () => {
     const rec = await logCall('W1AW')
     expect(rec.mode).toBe('CW')
     expect(rec.rstSent, 'a CW contact defaults to a three-digit report').toBe('599')
+  })
+
+  it('an FM pass and then CW with the section on screen: the reports nobody typed become 599, and the contact logs them', async () => {
+    const view = render(<SatellitesView focusSat="RS-44" snap={snap({ sideband: 'FM' })} />)
+    const entry = (await screen.findByPlaceholderText('Call')).closest('.log-entry') as HTMLElement
+    const reports = () => ['Sent', 'Rcvd'].map((name) => (within(entry).getByLabelText(name) as HTMLInputElement).value)
+    expect(reports(), 'control: on FM').toEqual(['59', '59'])
+    view.rerender(<SatellitesView focusSat="RS-44" snap={snap({ sideband: 'CW' })} />)
+    expect(reports(), 'moved to CW').toEqual(['599', '599'])
+    const rec = await logCall('W1AW')
+    expect([rec.mode, rec.rstSent, rec.rstRcvd]).toEqual(['CW', '599', '599'])
   })
 
   // ---- THE TWO DISCLOSED DIVERGENCES ----

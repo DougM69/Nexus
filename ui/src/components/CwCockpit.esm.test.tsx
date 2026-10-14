@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
+import { CW_CONTEST_LAYOUT } from '../features/esmRoles'
 import { EN } from '../i18n'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import type { LogQuestion } from '../features/logAnswers'
@@ -198,7 +199,7 @@ async function renderCockpit(s?: AppSnapshot, on?: boolean) {
 
 const stripCall = () => document.querySelector('.le-fd-input-call') as HTMLInputElement
 const qthBox = () => {
-  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'QTH')
+  const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'County / State')
   return cap!.closest('label')!.querySelector('input') as HTMLInputElement
 }
 const line = () => document.querySelector('.le-fd-esm-line')?.textContent ?? null
@@ -266,6 +267,84 @@ describe('Enter Sends Message in the CW cockpit', () => {
     await enter(qthBox())
     expect(engine.keyed).toEqual(['KD9TAW', 'TU 5NN COOK'])
     expect(engine.calls).toContain('contestLogManual')
+  })
+
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the built-in sets (the operator, 2026-10-10: as in N1MM's
+  // default message sets). Enter's AGN keys the text it keyed from F7 before.
+  it('asks AGN on the built-in contest set from F8, and keys the AGN it always keyed; F7 is B4', async () => {
+    settings.macros.cwProfiles = []
+    await renderCockpit()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange
+    expect(lit(), 'his QTH not copied yet: AGN is next').toEqual(['F8'])
+    await enter(qthBox())
+    expect(engine.keyed[engine.keyed.length - 1]).toBe('AGN AGN')
+    expect(engine.calls).not.toContain('contestLogManual')
+    fireEvent.keyDown(window, { key: 'F7' })
+    await flush()
+    expect(engine.keyed[engine.keyed.length - 1], 'F7 by hand').toBe('K9AAA QSO B4')
+  })
+
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM): Enter keys the
+  // set's QSO B4 from F7, once, and the next Enter logs the dupe, keying nothing.
+  it('running, a dupe gets QSO B4 from F7 once, and the next Enter logs it, keying nothing', async () => {
+    settings.macros.cwProfiles = []
+    const worked = {
+      ...ILQP,
+      log: [{ call: 'K9AAA', class: '', section: '', band: '20m', mode: 'CW', submode: '', whenUnix: 1_792_342_800, rcvd: ['599', 'COOK'] }],
+    } as unknown as FieldDayStatus
+    render(
+      <CwCockpit snap={snap()} theme="dark" onWorkSpot={() => {}} spots={[]} fieldDay={worked} esmSetting={{ on: true, callOnce: false, onSwitch }} />,
+    )
+    await flush()
+    await flush()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    expect(lit(), 'the dock lights the B4 key').toEqual(['F7'])
+    engine.calls = []
+    await enter(stripCall())
+    expect(engine.keyed[engine.keyed.length - 1]).toBe('K9AAA QSO B4')
+    expect(engine.calls.filter((c) => !c.startsWith('selectPeer'))).toEqual(['sendCwArmed'])
+    fireEvent.change(qthBox(), { target: { value: 'COOK' } })
+    await flush()
+    expect(lit(), 'the next Enter sends nothing').toEqual([])
+    expect(plate()?.textContent).toContain('Enter logs the dupe and sends nothing')
+    const keyed = engine.keyed.length
+    engine.calls = []
+    await enter(qthBox())
+    expect(engine.keyed, 'nothing keyed').toHaveLength(keyed)
+    expect(engine.calls.filter((c) => !c.startsWith('selectPeer'))).toEqual(['contestLogManual'])
+  })
+
+  // ⭐ A PROFILE ON THE BUILT-IN SETS SENDS THEIR STEPS, the ones Settings shows for it. Reset to
+  // defaults used to empty a profile's keys and keep the steps mapped to them, where Settings can
+  // neither show nor clear them, and Enter then sent those keys of the built-in set: AGN on F7
+  // sent QSO B4.
+  it('a profile reset to the built-in sets sends their steps, not the keys its steps were mapped to', async () => {
+    settings.macros.cwProfiles = [{ name: 'Mine', macros: [], esmRoles: { callExch: ['F5'], again: ['F7'] } }]
+    await renderCockpit()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall()) // his call and the exchange
+    await enter(qthBox()) // his QTH not copied yet: AGN
+    expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K', 'K9AAA 5NN COOK', 'AGN AGN'])
+  })
+
+  // The control: the same steps over the same texts, on keys of the operator's own, are theirs.
+  it('the same steps mapped over keys of the operator’s own send the keys they were mapped to', async () => {
+    const own = CW_CONTEST_LAYOUT.map(({ key, label, text }) => ({ key, label: label ?? key, text }))
+    settings.macros.cwProfiles = [{ name: 'Mine', macros: own, esmRoles: { callExch: ['F5'], again: ['F7'] } }]
+    await renderCockpit()
+    await run()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall())
+    await enter(qthBox())
+    expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K', 'K9AAA', 'K9AAA QSO B4'])
   })
 
   it('sends through Enter’s own entry, never the F-keys’ re-arming one, with the strip’s call committed first', async () => {
@@ -386,5 +465,17 @@ describe('Enter Sends Message in the CW cockpit', () => {
     await enter(qthBox())
     expect(engine.calls).toContain('contestLogManual')
     expect(api.sendCwArmed).not.toHaveBeenCalled()
+  })
+})
+
+// ⭐ THE SCORE CHIP rides in this cockpit's Log pane HEAD, beside the one-word title — the strip below
+// sits in a 24–44em column whose own header row has no room left — and the strip carries no second copy.
+describe('the contest score chip', () => {
+  it('reads the running contest in the Log pane’s head', async () => {
+    await renderCockpit()
+    const head = document.querySelector('section.pane-frame[data-pane="log"] > .pane-head')
+    expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
+    expect(document.querySelector('.log-entry-fd')).not.toBeNull()
+    expect(document.querySelector('.le-fd-score')).toBeNull()
   })
 })

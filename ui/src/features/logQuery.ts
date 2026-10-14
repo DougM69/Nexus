@@ -51,7 +51,9 @@ export function sortVal(q: LoggedQso, k: LogSortKey): string | number {
     case 'call':
       return q.call.toUpperCase()
     case 'country':
-      return (q.country ?? '').toUpperCase()
+      // The country the Logbook shows: the DXCC entity, so a QRZ "Germany" and a "Fed. Rep. of
+      // Germany" sort together, and the stored text only where the call resolves to none.
+      return (q.entity ?? q.country ?? '').toUpperCase()
     case 'band':
     case 'freq':
       return q.freqMhz
@@ -91,6 +93,10 @@ export function matchesLogQuery(q: LoggedQso, query: LogQuery): boolean {
     // Nexus's own phone contacts, and any imported from a logger that spells it that
     // way. The raw spelling above still matches, so "usb" finds the USB rows alone.
     modeKey(q.mode).toLowerCase().includes(t) ||
+    // …and in its SUBMODE. The log holds a phone contact as SSB with its sideband as the
+    // SUBMODE, so "usb" and "lsb" find those contacts there, as they find a VarAC contact's
+    // "VARA HF" under its DYNAMIC mode.
+    (q.extra?.find(([k]) => k === 'SUBMODE')?.[1].toLowerCase().includes(t) ?? false) ||
     fmtUtc(q.whenUnix).toLowerCase().includes(t)
   )
 }

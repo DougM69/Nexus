@@ -78,6 +78,7 @@ import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
+import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
   armStreamMic,
@@ -1143,10 +1144,11 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     // TX pill is display-only here (CockpitHeader arms only when it is passed onSetTxEnabled,
     // which Phone deliberately does not: doing so would replace the ▲ TX on-air pill with an
     // arm button mid-over, since `transmitting` is the FT slot flag alone) — so a message that
-    // named a switch would name one that is not there, and he would stay stuck until he
-    // navigated out of Phone and back. Arming keys NOTHING by itself, and it is no more than
-    // entering Phone already does (`set_operating_mode` arms TX for the manual modes); the
-    // rig keys on the NEXT press, through the ordinary path below.
+    // named a switch would name one that is not there, and the operator would stay stuck:
+    // after a stop, leaving Phone and coming back leaves TX off too (`set_operating_mode` arms
+    // the manual modes only where nothing stopped TX). Arming keys NOTHING by itself, and this
+    // press is the operator's own act that a stop waits for; the rig keys on the NEXT press,
+    // through the ordinary path below.
     //
     // ⚠️ THE ENGINE'S GATE IS UNTOUCHED. This is what the operator is TOLD, not what he is
     // allowed: set_ptt still refuses while tx_enabled is false, and TX is still only ever
@@ -1313,8 +1315,11 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
 
   // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
   // slot) — what the SESSION is composing, which is what the next contact will hear. Empty
-  // until FD setup fills it in.
-  const fdExchange = fieldDay?.composingText || composingText(fieldDay?.composing)
+  // until FD setup fills it in. As a PHONE contact sends it: the report at two digits (59), as
+  // the engine stamps a phone row, never the session's 599; a station that sends no phone form
+  // reads as it always did.
+  const fdExchange =
+    fieldDay?.composingTextPhone || fieldDay?.composingText || composingText(fieldDay?.composing)
 
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ─────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in
@@ -1493,7 +1498,6 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
       keyerShown: hasKeyerPane && keyerForEnter !== null,
       pttHeld: keyedRef.current,
       recording: keyerForEnter?.recording ?? false,
-      radioHasMic: snapRef.current.radio.flexRadioHasMic === true,
     }),
     send: ({ keys }: EsmMessage) =>
       keyerForEnter ? keyerForEnter.play(Number(keys[0].slice(1))) : Promise.resolve(esmInertText('noKeyer')),
@@ -1913,7 +1917,6 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         keyed={keyed}
         transmitting={snap.radio.transmitting}
         fdExchange={fdExchange}
-        radioHasMic={snap.radio.flexRadioHasMic === true}
         esm={{
           lit: esmLitKeys(esm.preview),
           report: setKeyerForEnter,
@@ -2498,7 +2501,12 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
   ) : null
 
   const logPane = (
-    <CockpitPaneFrame title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')} paneId="log">
+    <CockpitPaneFrame
+      title={quick && !fieldDay ? t('remote.quick.logbook') : t('phone.pane.log.title')}
+      paneId="log"
+      // The contest score chip rides in this head: the strip below has no room left for it.
+      actions={fieldDay ? <ContestScoreChip place="head" fieldDay={fieldDay} /> : undefined}
+    >
       {/* compactRecall died here (2026-07-31). It existed because the pre-overhaul cockpit had
           no interposed scroller: the full recall card's height crushed the operating panes
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
@@ -2520,7 +2528,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         onCallChange={setWorkedCall}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
+        onSnap={onSnap}
         fieldDay={fieldDay}
+        scoreChip={false}
         active={active}
         fdMode="PH"
         esm={esm.host}

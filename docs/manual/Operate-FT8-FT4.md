@@ -74,7 +74,7 @@ The sequencer runs seven states: **Listening → CallingCq → AwaitReport → A
 
 **Return-to-CQ** — when you called CQ (Running mode), a completed QSO automatically restarts the CQ state machine for the next pileup caller. The directed-CQ token (e.g., `CQ DX`, `CQ POTA`) persists across the entire pileup run; you do not need to re-enter it between contacts. S&P double-clicks do **not** auto-resume.
 
-**Disable TX after 73** — default ON. TX is disarmed after the final 73 is sent in an S&P QSO. The flag is consumed only after the over fully plays out; it is never dropped mid-transmission.
+**Disable TX after 73** — default ON. TX is disarmed after the final 73 is sent in an S&P QSO. The flag is consumed only after the over fully plays out; it is never dropped mid-transmission. In an FT8/FT4 contest it applies to a contact started with a double-click on a CQ, or by a reply to one from JTAlert or GridTracker: TX goes off after its last over and you stay in the contest's S&P. A contact the contest's S&P starts by itself keeps TX on.
 
 **TX watchdog** — auto-halts TX after 6 minutes of continuous unattended transmit. Re-enable TX manually to clear it. The watchdog applies equally to Running, S&P, and any other keying path.
 
@@ -98,7 +98,13 @@ The Tx panel is visible only in Classic layout. It contains:
 - **Generate Std Msgs** button — rebuilds all six messages from the current DX fields
 - **Tx1–Tx6** message rows, each with a next-dot indicator showing which slot fires next
 - **Tx5** — editable free text, 13 character maximum; a QSO-macro datalist provides common expansions
-- **Tx6** — editable directed-CQ field (`CQ DX`, `CQ NA`, `CQ POTA`, `CQ TEST`, `CQ 040`, etc.)
+- **Tx6** — editable directed-CQ field (`CQ DX`, `CQ NA`, `CQ POTA`, `CQ TEST`, `CQ 040`, etc.).
+  In ARRL Field Day and the ARRL VHF contests it shows the contest's own CQ instead (`CQ FD`,
+  `CQ TEST`) and Tx 6 calls it through the contest's Running, as Call CQ does; your own Tx6 text
+  comes back when the contest ends. In the other FT8/FT4 contests Tx6 stays yours, and Tx 6 and
+  Call CQ send what you typed (`CQ QP …` included) through the contest's Running, as WSJT-X does
+  with no special activity set. With a compound call (PJ4/K1ABC) every contest CQ is the plain
+  `CQ <call>`, as in WSJT-X: FT8 cannot carry such a call beside a contest token or a grid.
 
 In Roster layout the equivalent information appears in the modern QSO strip alongside the Call Roster.
 

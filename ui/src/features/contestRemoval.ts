@@ -18,12 +18,18 @@ import { t } from '../i18n'
 export const REMOVE_CONFIRM_MS = 5000
 
 /** The services a merged copy can be uploaded to, by the engine's ids — product names, never
- *  translated. */
-const SERVICE_NAMES: Record<string, string> = {
+ *  translated, spelled as the app names each service elsewhere. The removal text names the
+ *  services holding a copy by these, and the contest screen's upload ticks the services one
+ *  can go to. */
+export const SERVICE_NAMES: Record<string, string> = {
   lotw: 'LoTW',
   qrz: 'QRZ',
   clublog: 'Club Log',
   eqsl: 'eQSL',
+  hrdlog: 'HRDLog',
+  n3fjp: 'N3FJP',
+  cloudlog: 'Cloudlog',
+  wrl: 'WRL',
 }
 
 export interface NewestContact {
@@ -88,20 +94,22 @@ export function isModifierKey(e: KeyboardEvent): boolean {
   return e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta'
 }
 
-/** What the strip says after Ctrl+D pressed twice: the contact removed and every place it had
- *  already gone — Nexus takes it back from none of them — or why nothing was removed. */
+/** What the strip says after Ctrl+D pressed twice: the contact removed, at a club when every
+ *  laptop drops it, and every place it had already gone — Nexus takes it back from none of
+ *  them — or why nothing was removed. */
 export function removalText(answer: ContestRemovalAnswer, label: string): string {
   if (answer.outcome === 'refused') {
     switch (answer.refusal) {
       case 'empty':
         return t('logEntry.remove.empty')
-      case 'clubSync':
-        return t('logEntry.remove.clubSync')
       default:
         return t('logEntry.remove.changed')
     }
   }
   const parts = [t('logEntry.remove.done', { contact: label })]
+  if (answer.club) {
+    parts.push(answer.club === 'away' ? t('logEntry.remove.clubAway') : t('logEntry.remove.club'))
+  }
   if (answer.outcome === 'removed') {
     const s = answer.sentTo
     const places = [
@@ -122,14 +130,17 @@ export function removalText(answer: ContestRemovalAnswer, label: string): string
   return parts.join(' ')
 }
 
-/** What the contest screen says after a Restore. */
+/** What the contest screen says after a Restore — at a club, when every laptop gets it back. */
 export function restoreText(answer: ContestRemovalAnswer, call: string): string {
-  if (answer.outcome !== 'refused') return t('fieldDay.removed.restored', { call })
+  if (answer.outcome !== 'refused') {
+    const restored = t('fieldDay.removed.restored', { call })
+    if (!answer.club) return restored
+    const club = answer.club === 'away' ? t('fieldDay.removed.clubAway') : t('fieldDay.removed.club')
+    return `${restored} ${club}`
+  }
   switch (answer.refusal) {
     case 'workedAgain':
       return t('fieldDay.removed.workedAgain', { call })
-    case 'clubSync':
-      return t('fieldDay.removed.clubSync')
     default:
       return t('fieldDay.removed.notRemoved')
   }

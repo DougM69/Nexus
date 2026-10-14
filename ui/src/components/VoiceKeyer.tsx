@@ -5,8 +5,8 @@
 // control however few sweeps look for it (it is pane-resident, so it is deliberately on no
 // stop-line list), and the second shares its vocabulary; they move together in the
 // transmit-path batch so the pair cannot be reworded apart. Everything else is in the
-// catalog under `phone.keyer.*` — F1–F6 are key names, a slot's own label is the operator's
-// words, and both stay in the code.
+// catalog under `phone.keyer.*` — F-key names, a slot's own label is the operator's words, and
+// both stay in the code.
 import { useEffect, useRef, useState } from 'react'
 import type { VoiceMessage } from '../types'
 import {
@@ -41,9 +41,6 @@ interface Props {
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
   fdExchange?: string | null
-  /** The radio has the mic while Nexus's native Flex audio is on (Phone at the shack), so a
-   * recorded message would not go out: playback is refused and says why. */
-  radioHasMic?: boolean
   /** ENTER SENDS MESSAGE in the Phone cockpit's contest strip: the slot the next Enter plays
    *  glows (`lit`), the keyer lends the strip its recordings and a player (`report`, null when it
    *  goes), its ■ Stop is a stop (`onStop`), and a slot played by hand is reported (`onPlay`), so
@@ -81,8 +78,9 @@ export interface VoiceKeyerForEnter {
 // whole sentence and pass their slot.
 
 /**
- * Phone voice keyer (casual) — F1–F6 message slots, each a recorded 12 kHz mono WAV played
- * to the rig with PTT keyed for the message (the same TX path the soundcard CW keyer uses).
+ * Phone voice keyer (casual) — message slots on F1–F6 and F8 (AGN, the slot Enter Sends Message
+ * plays for AGN in a contest), each a recorded 12 kHz mono WAV played to the rig with PTT keyed
+ * for the message (the same TX path the soundcard CW keyer uses).
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
  * `.wav`; ✕ clears; Esc / ■ Stop aborts.
  *
@@ -96,7 +94,7 @@ export interface VoiceKeyerForEnter {
  * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
  * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
-export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHasMic, esm }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: Props) {
   const [msgs, setMsgs] = useState<VoiceMessage[]>([])
   const [recording, setRecording] = useState<number | null>(null)
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({})
@@ -181,11 +179,9 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     if (!m || !m.file) return { text: t('phone.keyer.empty', { slot }), ms: 3000 }
     if (recording !== null) return { text: t('phone.keyer.busyRecording'), ms: 2500 }
     if (keyed) return { text: t('phone.keyer.releasePtt'), ms: 3000 }
-    // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse with a message"). With Nexus's
-    // own Flex client and native audio on, Phone at the shack takes the radio's own mic while a
-    // recorded message goes out over DAX, so the radio would ignore the message and the mic
-    // would carry the over. Nothing is sent, so nothing keys; the engine refuses the same send.
-    if (radioHasMic) return { text: t('phone.keyer.radioHasMic'), ms: 6000 }
+    // The radio having the mic (Nexus's own Flex client, native audio on, Phone at the shack) is
+    // not a refusal since 2026-10-12 ("Change it now"): the station switches the radio to DAX for
+    // the message and back. A message it then drops says why on the status lane.
     if (!txEnabled) {
       // NAME THE CONTROL THAT IS ON THIS SCREEN (#81). "enable transmit" was honest and
       // useless: the Phone cockpit shows no Enable-Tx button — App hides the TopBar's TX
@@ -289,30 +285,34 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     if (list) setMsgs(list)
   }
 
-  // F1–F6 play their slot; Esc stops. Ignored while typing in a field.
+  // A slot's F-key plays it from anywhere on the Phone screen, the log line's boxes included, as
+  // CW's macros send from anywhere in the CW cockpit (operator, 2026-10-11). F1–F12 are all held,
+  // with a slot or without, before the slot list is there, when it could not be read and while
+  // recording, so none reaches the webview, where F5 reloads the app on Windows. With Alt, Ctrl or
+  // Cmd held a key is the system's (Alt+F4 closes the window), as in CW. Esc stops; in a text box
+  // it is left to the shared Esc stop (useEscStop: App's halt), as it always was.
   useEffect(() => {
     const isField = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
     const onKey = (e: KeyboardEvent) => {
-      if (isField(e.target)) return
       // Esc always stops playback (and is the only key honored mid-record).
       if (e.key === 'Escape') {
+        if (isField(e.target)) return
         e.preventDefault()
         stop()
         return
       }
+      if (!/^F([1-9]|1[0-2])$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      e.preventDefault()
       // Don't let an F-key key the rig while a recording is in progress.
       if (recording !== null) return
-      const m = /^F([1-6])$/.exec(e.key)
-      if (m) {
-        e.preventDefault()
-        play(Number(m[1]))
-      }
+      const slot = Number(/^F(\d)$/.exec(e.key)?.[1])
+      if (msgs.some((x) => x.slot === slot)) play(slot)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, txEnabled, keyed, recording, radioHasMic])
+  }, [msgs, txEnabled, keyed, recording])
 
   return (
     <div className="vk">

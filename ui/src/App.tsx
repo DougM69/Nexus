@@ -6,7 +6,7 @@ import { publishBandConditions } from './bandConditions'
 import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
-import { rigModeTransition, type RigMode } from './rigModeForView'
+import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
   callStation as apiCallStation,
   overrideNextTx as apiOverrideNextTx,
@@ -85,7 +85,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
-import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, type OwnScreen } from './features/needs'
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
@@ -147,6 +147,9 @@ import {
   setOperatingMode,
   remoteRecallMemory,
   workSpot,
+  getLicensedBandPlan,
+  getPskState,
+  pskSetMode,
   setHuntTarget,
   setLicenseClass,
   stopQsoRecording,
@@ -184,6 +187,7 @@ import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { pttRefusedLane } from './features/pttRefused'
+import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
@@ -195,6 +199,10 @@ import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
+import { ContestLargeEntry } from './components/ContestLogger'
+import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
+import { useContestSwitch } from './contestSwitch'
+import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
 import { Logbook } from './components/Logbook'
 import { RoamPanel } from './components/RoamPanel'
@@ -403,11 +411,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [snap])
   // Click-to-work handoff: a Needed-board click on a voice/CW spot seeds this, the
   // matching cockpit consumes it to prefill the log. `ts` makes a re-click of the same
-  // call refire the cockpit's prefill effect. Cleared once consumed.
+  // call refire the cockpit's prefill effect. Cleared once consumed. `park`: the park or
+  // summit a Needed row is an activation of, filled into the log with the call (LogEntry).
   const [pendingWork, setPendingWork] = useState<{
     call: string
     view: 'cw' | 'phone'
     ts: number
+    park?: { program: string; reference: string } | null
   } | null>(null)
   // Roam settings panel (inside the Tempo cockpit) open/closed.
   const [roamOpen, setRoamOpen] = useState(false)
@@ -436,6 +446,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       features.landing,
     )
   })
+  // Live mirror of the screen in front of the operator, for the app-wide 30 s poll effect (empty
+  // deps): the ISS SSTV auto-arm may take the radio only while SSTV or Satellites is that screen.
+  const viewRef = useRef(view)
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
   // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
@@ -493,10 +509,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // launch and PERSISTED that over the operator's real saved mode (set_operating_mode saves
     // settings), so a station parked on 40m LSB for a net came up in DATA-L, unrecoverable by
     // relaunching. It would also ARM TRANSMIT, since set_operating_mode arms TX for the manual
-    // modes (engine.rs). SF ticket #3.
+    // modes (engine.rs) wherever no stop holds it off. SF ticket #3.
     //
     // This is a MOUNT guard, NOT the same-value guard the comment below rightly forbids —
-    // every subsequent view change still re-asserts unconditionally.
+    // every subsequent view change still re-asserts unconditionally. A re-assert after Stop TX,
+    // Esc, TX Off or the watchdog leaves TX off: the engine arms only where nothing stopped it.
     if (!didMountOpMode.current) {
       didMountOpMode.current = true
       return
@@ -749,6 +766,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     setStatus('pttRefused', remote ? null : pttRefusedLane(snap?.radio.pttRefused))
   }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode, remote])
 
+  // A voice-keyer message Nexus's own Flex client dropped before the radio took DAX for it (Phone at
+  // the shack, native audio on): the lane says why, since the keyer's toast answered the press
+  // before the drop, until the next message the keyer accepts; not on the Remote page either.
+  useEffect(() => {
+    setStatus('voiceDropped', remote ? null : voiceDroppedLane(snap?.radio.voiceDropped))
+  }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause, remote])
+
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
   // the Remote page either: that page is frozen.
@@ -889,27 +913,59 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // flight unwinds — the disabled path ignores the pass.
           // `tuneChannel` for the 145.800 ARM (the app's own channel — never remembered as
           // the operator's 2 m dial); `setFrequency` for the LOS restore, which puts back a
-          // dial that really is theirs.
+          // dial that really is theirs. The screen goes with every tick, read when the tick
+          // runs: on any screen but SSTV or Satellites the radio is in use, and the pass is
+          // only announced (issAutoArm.ts).
           const issDeps = {
             tuneChannel: handleTuneChannel,
             setFrequency: handleSetFrequency,
             sstvArm,
             sstvAutoDisarm,
           }
+          // The radio in use is the station's only enabled radio: with its probed coverage,
+          // that is how the tick knows 145.800 cannot be received here at all. Read when the
+          // tick runs, as the screen is.
+          const soleRadio = () =>
+            !(settingsRef.current?.radios ?? []).some(
+              (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
+            )
           if (settingsRef.current?.issSstvAutoArm === true) {
             getIssPass()
               .then((issPass) =>
-                tickIssAutoArm(issPass, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+                tickIssAutoArm(
+                  issPass,
+                  snapRef.current?.radio,
+                  true,
+                  issDeps,
+                  Date.now() / 1000,
+                  viewRef.current,
+                  soleRadio(),
+                ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
               // get_iss_pass refuse) — it must still tick with no pass, or an
               // arm in flight when the refusal begins never unwinds and the
               // rig strands on 145.800 with SSTV armed (review catch).
               .catch(() =>
-                tickIssAutoArm(null, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+                tickIssAutoArm(
+                  null,
+                  snapRef.current?.radio,
+                  true,
+                  issDeps,
+                  Date.now() / 1000,
+                  viewRef.current,
+                  soleRadio(),
+                ),
               )
           } else {
-            tickIssAutoArm(null, snapRef.current?.radio, false, issDeps, Date.now() / 1000)
+            tickIssAutoArm(
+              null,
+              snapRef.current?.radio,
+              false,
+              issDeps,
+              Date.now() / 1000,
+              viewRef.current,
+            )
           }
           // One-shot alert when a band comes alive, TIERED by propagation mode:
           // Es/F2/aurora loud (rare + fleeting, aurora with operating guidance),
@@ -1095,6 +1151,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const cwEnabled = features.isOn('cw')
   const phoneEnabled = features.isOn('phone')
   const rttyEnabled = features.isOn('rtty')
+  // A Needed row heard in JS8 or a PSK mode opens that screen only while it is on (`ownScreen`).
+  const pskEnabled = features.isOn('psk')
+  const js8Enabled = features.isOn('js8')
   // Work-a-spot navigation: whenever a spot is worked — from THIS window's
   // boards or a pop-out (which can't navigate the main window itself) — follow
   // to the matching cockpit (the operator's report: "if I click a contact, it
@@ -1112,33 +1171,37 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
     if (tick === workNavRef.current) return
     workNavRef.current = tick
-    const v = snap?.workView
-    const target: View =
-      v === 'cw' ? 'cw' : v === 'phone' ? 'phone' : v === 'rtty' ? 'rtty' : 'operate'
+    // The hint is the section the Work told `work_spot` (WORK_SECTION): 'keyboard' opens PSK and
+    // 'js8' JS8, the screens a Needed row of those modes works on.
+    const target: View = workHintView(snap?.workView)
     // Never navigate into a feature-disabled (hidden) cockpit — same gate as
     // handleWorkNeeded; the rig already switched, the view just stays put.
     if (
       (target === 'cw' && !cwEnabled) ||
       (target === 'phone' && !phoneEnabled) ||
-      (target === 'rtty' && !rttyEnabled)
+      (target === 'rtty' && !rttyEnabled) ||
+      (target === 'psk' && !pskEnabled) ||
+      (target === 'js8' && !js8Enabled)
     )
       return
     // Sync the rig-mode guard BEFORE navigating (same as handleWorkNeeded) —
     // otherwise the [view] effect sees a mode change and re-homes the dial to
     // the segment start, yanking the rig OFF the exact spot frequency the
-    // workSpot click just tuned (review-caught on the pop-out path).
-    lastOpModeRef.current = target === 'operate' ? 'digital' : target
+    // workSpot click just tuned (review-caught on the pop-out path). The guard
+    // holds the screen's RIG mode: PSK's is 'keyboard', JS8's is Digital's.
+    lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
     lastHomedModeRef.current = lastOpModeRef.current
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital
     // auto-sequences on a decode double-click, so it takes no prefill; RTTY's cockpit takes
-    // no prefill either (only the CW/Phone log forms consume pendingWork).
+    // no prefill either (only the CW/Phone log forms consume pendingWork). A Needed row's park
+    // comes with its call (`workPark`): the log line fills both, and no hunt is set.
     const wc = snap?.workCall
     if (wc && (target === 'cw' || target === 'phone')) {
-      setPendingWork({ call: wc, view: target, ts: Date.now() })
+      setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, remote])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled, remote])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
@@ -2148,18 +2211,41 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
         return
       }
+      // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
+      // switched on, at the row's own frequency or that screen's channel for the band. A browser has
+      // no Work for either, so its rows keep the target they always had.
+      const screen = remote ? null : ownScreen(alert)
+      let own: OwnScreen | null = null
+      if (screen && (screen === 'js8' ? js8Enabled : pskEnabled)) {
+        const plan = await withErrorToast(
+          () => getLicensedBandPlan(screen),
+          t('shell.work.failed.cat', { call: alert.call }),
+        )
+        if (!plan) return
+        own = { view: screen, plan }
+      }
       // `target`, not `t` — `t` is the translator in this file.
-      const target = workTarget(alert, bandPlan)
+      const target = workTarget(alert, bandPlan, own)
       if (!target) {
         handleQsy(alert.band)
         return
       }
-      // A POTA/SOTA row names the activation it IS (`park`), so working it tags the hunt before
-      // the QSY — the same order as the map's own setHuntTarget-then-QSY split — and the contact
-      // this leads to is logged with the park. Without it a contact worked from the Needed board
-      // was an ordinary QSO: no hunter credit, no SIG/SIG_INFO, and nothing for the POTA board's
-      // Hide worked to see. Native only: a browser's hunt is a station change under the logging
-      // grant (RemoteOta's own path), not this command.
+      // A POTA/SOTA row names the activation it IS (`park`), and the contact this leads to is
+      // logged with the park. Without it a contact worked from the Needed board was an ordinary
+      // QSO: no hunter credit, no SIG/SIG_INFO, and nothing for the POTA board's Hide worked to see.
+      //
+      // ⚠️ WHERE A LOG LINE TAKES THE PARK, IT IS NOT A HUNT (operator, 2026-10-10: "It should
+      // instead simply populate the call data (and the park number) without setting it as
+      // 'Hunted'. Hunted should only be used if you chase a park from the POTA tab."). A row that
+      // opens the Phone or CW cockpit hands its park to that cockpit's log line with the call
+      // (`pendingWork.park`), so nothing waits at the top of the POTA/SOTA view and the line's
+      // Clear really clears it. A hunt set here outlived a station the operator never heard by four
+      // hours (HUNT_TTL_SECS), and only that view could end it. A row with no log line to fill
+      // (FT8/FT4 logs from the engine, RTTY's cockpit takes no handoff, a switched-off cockpit is
+      // never opened) still tags the hunt before the QSY, the map's setHuntTarget-then-QSY order:
+      // that is the only way its park reaches the contact. Native only: a browser's hunt is a
+      // station change under the logging grant (RemoteOta's own path), not this command, and a
+      // browser's Work never carried a park.
       //
       // AFTER that bail-out, never before it. `workTarget` is null only when the row has no
       // frequency of its own, no mode default AND no band-plan channel — and `handleQsy` reads
@@ -2172,8 +2258,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // operator watching the QSY land, working the park, and logging it with no reference at
       // all. The work still proceeds on a failed tag — the station is real and the operator can
       // add the reference by hand; refusing the QSY would be the bigger surprise.
-      if (!remote && alert.park) {
-        const park = alert.park
+      const park = remote ? null : (alert.park ?? null)
+      const fillsLogLine = (target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled)
+      if (park && !fillsLogLine) {
         await withErrorToast(
           () => setHuntTarget(alert.call, park.program, park.reference),
           t('ota.hunt.setFailed', { call: alert.call }),
@@ -2193,27 +2280,34 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         handleQsy(alert.band, target.freqMhz)
         return
       }
-      // 'operate' is the digital cockpit, so its operating mode is 'digital'. RTTY passes
-      // through as 'rtty' — the backend + [view] rig-mode effect apply the RTTY policy.
-      const opMode: 'digital' | 'phone' | 'cw' | 'rtty' =
-        target.view === 'operate' ? 'digital' : target.view
+      // The section `work_spot` is told (WORK_SECTION): 'operate' is the digital cockpit, so
+      // 'digital'; RTTY passes through as 'rtty' and PSK is 'keyboard', whose policies the backend
+      // + [view] rig-mode effect apply; JS8 is 'js8', Digital under its own name so the hint every
+      // window follows says JS8. The guards below hold the screen's rig mode.
+      const section = WORK_SECTION[target.view]
+      const rigMode: RigMode = RIG_MODE_BY_VIEW[target.view] ?? 'digital'
       void (async () => {
-        // A digital spot carries its protocol in alert.mode — the FT8/FT4 tier rides the
-        // SAME atomic workSpot call, else clicking an FT4 spot QSYs but leaves the decoder
-        // on FT8. It used to be a separate set_tier call first, and in the gap between the
-        // two the radio loop could command the tier's DEFAULT dial (FT8 14.074 → FT4
+        // A digital spot carries its protocol in its own mode (`workTier`) — the FT8/FT4 tier
+        // rides the SAME atomic workSpot call, else clicking an FT4 spot QSYs but leaves the
+        // decoder on FT8. It used to be a separate set_tier call first, and in the gap between
+        // the two the radio loop could command the tier's DEFAULT dial (FT8 14.074 → FT4
         // 14.080) to the rig before the spot's exact frequency — the "hits a default
         // first, then switches" double-retune, whose stale read-back could race the
         // correction on slow serial and leave the wrong dial standing (operator report,
         // 2026-08-09). tierRef syncs from the returned snapshot (setSnap → link.tier).
-        let tier: 'FT8' | 'FT4' | undefined
-        if (opMode === 'digital') {
-          const m = alert.mode?.toUpperCase()
-          // A browser always names the tier: its Work intent carries no implicit current tier.
-          if ((m === 'FT4' || m === 'FT8') && (remote || tierRef.current !== m)) tier = m
-        }
+        // JS8's screen rides the same call as the JS8 tier.
+        let tier: 'FT8' | 'FT4' | 'JS8' | undefined
+        const named = target.view === 'js8' ? 'JS8' : target.view === 'operate' ? workTier(alert) : null
+        // A browser always names the tier: its Work intent carries no implicit current tier.
+        if (named && (remote || tierRef.current !== named)) tier = named
+        // The park rides the work too, so the work hint below says the same as this click, as it
+        // does for a pop-out board's: the snapshot's echo of a park row must not hand the log line
+        // the call alone.
         const s = await withErrorToast(
-          () => workSpot(opMode, target.freqMhz, target.band, target.call, tier),
+          () =>
+            park && fillsLogLine
+              ? workSpot(section, target.freqMhz, target.band, target.call, tier, park)
+              : workSpot(section, target.freqMhz, target.band, target.call, tier),
           t('shell.work.failed.cat', { call: target.call }),
         )
         // On failure DON'T navigate or poison the guard ref — the backend made no change
@@ -2222,12 +2316,21 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         setSnap(s)
         // Keep the rig-mode effect's guards in sync so it doesn't re-fire on the nav — and
         // the HOMED guard too, because this landed the dial on purpose (#143).
-        lastOpModeRef.current = opMode
-        lastHomedModeRef.current = opMode
+        lastOpModeRef.current = rigMode
+        lastHomedModeRef.current = rigMode
+        // The PSK screen opens on the row's own sub-mode where it has it (`pskSubmode`), its Rev
+        // setting kept. The engine refuses the switch while PSK is transmitting, and says why.
+        const slug = target.view === 'psk' ? pskSubmode(alert) : null
+        if (slug) {
+          const psk = await withErrorToast(() => getPskState(), t('psk.mode.failed'))
+          if (psk && psk.mode !== slug) {
+            await withErrorToast(() => pskSetMode(slug, psk.reverse === true), t('psk.mode.failed'))
+          }
+        }
         // CW/Phone log forms consume a prefill; the digital + RTTY cockpits don't (digital
         // auto-sequences on a decode double-click, RTTY has its own net picker) — just the QSY.
         if (target.view === 'cw' || target.view === 'phone') {
-          setPendingWork({ call: target.call, view: target.view, ts: Date.now() })
+          setPendingWork({ call: target.call, view: target.view, ts: Date.now(), park })
         }
         setView(target.view)
         pushToast(
@@ -2237,7 +2340,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, remote, canRemoteWork],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, js8Enabled, remote, canRemoteWork],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -2439,10 +2542,24 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // The contest only while its mode is on. With the mode off this is the screen that turns
       // it on, and a session entered behind the master switch is one the snapshot hides: a
       // Running started from it would call CQ unseen.
-      else if (next === 'fieldDay' && settings?.fdActive === true) handleSetMode('fieldday-sp')
+      // And only from another mode: `set_mode` replaces the mode wholesale, so re-entering S&P
+      // from inside the contest stopped a run's CQs and dropped the contact being worked —
+      // every time the operator looked at the score. A station already in the contest keeps
+      // its role.
+      else if (next === 'fieldDay' && settings?.fdActive === true && snap?.mode !== 'fieldDay')
+        handleSetMode('fieldday-sp')
     },
-    [handleSetMode, !!remote, settings?.fdActive],
+    [handleSetMode, !!remote, settings?.fdActive, snap?.mode],
   )
+
+  // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
+  // operator box answers by taking the caret. Only the view changes. A key in a log line leaves the
+  // station's mode as it is, so the FT8/FT4 role `handleView` enters on the way in is not touched.
+  const [operatorAsk, setOperatorAsk] = useState(0)
+  useOperatorBoxAsk(() => {
+    setView('fieldDay')
+    setOperatorAsk((n) => n + 1)
+  })
 
   /**
    * Open Settings AT a specific place. `where` is anything `resolveTarget` understands: a section
@@ -2761,11 +2878,38 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // station: in a browser that button is the TX strip's remote stop, this same haltTx (their own
   // verbs have no remote route). App sends it while one of them, with its Stop TX, is on show. The
   // desktop is unchanged: there `remote` is unset and each binds its own.
+  // THE CONTEST SCREEN TOO, WHILE ITS ENTRY SHOWS (2026-10-11). With a contest running the screen
+  // takes contacts in the logger window's large entry (`ContestLargeEntry`, in the workspace switch
+  // below), a contest strip in this window, so its Esc is this window's: the halt, as in the Phone
+  // LOG pane, and the entry keeps what it holds (the logger window's own Esc clears, because nothing
+  // there transmits). With no contest running there is no entry, and Esc there is as it was. Not on
+  // the hosted page, whose Contest screen is an observation with no entry.
+  const contestEntryShown = !remote && effectiveView === 'fieldDay' && snap?.fieldDay != null
   useEscStop(
     ESC_HALT_VIEWS.has(effectiveView) ||
-      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)),
+      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)) ||
+      contestEntryShown,
     handleHaltTx,
   )
+  // …AND ITS F-KEYS DO NOTHING, as in the logger window: nothing on that entry sends a message, and
+  // the webview's own F-key actions are held too, so an F5 reached for out of habit cannot reload the
+  // window in the middle of a contact. With Alt, Ctrl or Cmd held a key is the system's (Alt+F4
+  // still closes the window), as the voice keyer leaves it.
+  useEffect(() => {
+    if (!contestEntryShown) return
+    const onKey = (e: KeyboardEvent) => {
+      if (/^F\d{1,2}$/.test(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [contestEntryShown])
+
+  // ⭐ A contest switched by a saved pick, for the Contest screen to say so (`contestSwitch.ts`):
+  // kept here, because the pick is saved in Settings, where that screen is not mounted.
+  const contestSwitch = useContestSwitch(snap?.fieldDay)
+  // ⭐ …and whether the Contest screen below its log line is out in a window of its own: kept here too,
+  // so the window's close brings it back whichever screen the operator is on (ContestScreenWindow.tsx).
+  const contestScreen = useContestScreenWindow(handleSettingsSaved)
 
   if (!snap) {
     return (
@@ -3159,15 +3303,22 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   let workspace: JSX.Element | null
   switch (effectiveView) {
     case 'fieldDay':
-      // THE FIELD DAY SECTION IS SETUP, SCORE, SECTIONS, BONUSES, LOG AND THE CLUB BOARD.
-      // It is NOT an operating surface, and there is deliberately no second one: Field Day is
-      // a MODE the whole app enters (`Mode::FieldDay`), so the contacts are made in the
-      // primary sections — CW, Phone, RTTY, PSK and the digital Conversation view all take
-      // `fieldDay` and turn their log strips into FD entries with class/section and shared
-      // dupe checking. A parallel Field-Day-only cockpit shipped beside them for one build and
-      // was withdrawn: it was a weaker copy of surfaces that already exist (its digital pane
-      // was a read-only monitor), and it took the operator away from the mode's own features
-      // to get the exchange boxes those sections already draw.
+      // THE FIELD DAY SECTION IS SETUP, SCORE, SECTIONS, BONUSES, LOG AND THE CLUB BOARD — and,
+      // while a contest runs, a place to TYPE the contacts (the operator's pick, 2026-10-11,
+      // rehearsing the Illinois QSO Party: "The Logger window's large Call / RST / County boxes,
+      // dupe warning and last contacts at the top of the Contest screen. Same log line, so a
+      // contact logs once; it never transmits."). That entry is the logger window's own
+      // (`ContestLargeEntry`), mounted here as the main window's contest strip: the same
+      // `LogEntry`, the same shared contact as the cockpits' LOG panes, and no transmitter behind
+      // it — no PTT, no messages, no Enter Sends Message, no Tune — while Esc stays this window's
+      // stop (`useEscStop`, above). It is still NOT a cockpit, and there is deliberately no second
+      // one: Field Day is a MODE the whole app enters (`Mode::FieldDay`), the radio is worked in
+      // the primary sections — CW, Phone, RTTY, PSK and the digital Conversation view all take
+      // `fieldDay` and turn their log strips into FD entries with class/section and shared dupe
+      // checking. A parallel Field-Day-only cockpit shipped beside them for one build and was
+      // withdrawn: it was a weaker copy of surfaces that already exist (its digital pane was a
+      // read-only monitor), and it took the operator away from the mode's own features to get the
+      // exchange boxes those sections already draw.
       //
       // It does NOT go through `threePane`, and that helper is the reason: it is not a layout,
       // it is the digital OPERATING workspace, and it hardcodes its furniture. Until
@@ -3183,22 +3334,62 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // contacts are actually made; the stations rail is the Tempo mesh roster and
       // conversation picker, which this view never consulted.
       //
-      // No bespoke shell class, deliberately — this view's root IS a `.panel`, so
-      // `.layout.single > .panel` already gives it the definite height, the deficit valve and
-      // the measure it needs (styles.css; computed in layout-single-deficit.test.tsx and
-      // fdDashboardShell.test.tsx).
+      // ONE WRAPPER, `.contest-screen`: a column holding the entry over the screen, there whether
+      // or not the entry is, so a contest starting or ending never re-parents (and so never
+      // remounts) the screen; with no entry it lays the screen out exactly as before. The
+      // screen's root IS a `.panel`, so `.layout.single > .panel` still gives it the definite
+      // height, the deficit valve and the measure it needs (styles.css; computed in
+      // layout-single-deficit.test.tsx and fdDashboardShell.test.tsx).
+      //
+      // THE OPERATOR BOX goes with the entry, onto its title line beside Sending and I moved (the
+      // operator, 2026-10-12: "I want to move the field to change operators up near the top"), and
+      // the screen below draws none while it is there. It saves through `handleSetOperator`, the
+      // same narrow write the top bar's operator chip uses, so the chip follows what is typed.
+      //
+      // THE SCREEN BELOW THE ENTRY POPS OUT to a window of its own (the operator, 2026-10-12: "that
+      // whole window needs to pop out"; the pick: "While it's open, the main Contest screen shows just
+      // the big entry and last contacts; closing the window brings the section back"). Its Pop out is
+      // on its banner, here and nowhere else (not the logger window's copy, nor the Remote page's);
+      // while the window is open, one line stands where the screen was, with Bring it back, and the
+      // entry, its operator box and Ctrl+O stay this window's. ContestScreenWindow.tsx has the rest.
       workspace = remote ? <RemoteFieldDay tier={tier} /> : (
-        <main className="layout single">
-          <ContestView
-            fieldDay={snap.fieldDay}
-            onSetMode={handleSetMode}
-            fdActive={settings?.fdActive ?? false}
-            fdRuleset={fdRuleset}
-            tier={tier}
-            onOpenSettings={openSettingsAt}
-            onSettingsSaved={handleSettingsSaved}
-          />
-        </main>
+        <div className="contest-screen">
+          {snap.fieldDay && (
+            <ContestLargeEntry
+              snap={snap}
+              fieldDay={snap.fieldDay}
+              fdActive={settings?.fdActive ?? false}
+              fdRuleset={fdRuleset}
+              title={t('contestScreen.entry.title')}
+              operator={settings ? (settings.fdOperator ?? '') : null}
+              onSaveOperator={handleSetOperator}
+              operatorAsk={operatorAsk}
+              onOperatorFocused={() => setOperatorAsk(0)}
+            />
+          )}
+          <main className="layout single">
+            {contestScreen.out ? (
+              <ContestScreenAway onBringBack={contestScreen.bringBack} />
+            ) : (
+              <ContestView
+                fieldDay={snap.fieldDay}
+                clubLink={snap.clubLink}
+                onSetMode={handleSetMode}
+                fdActive={settings?.fdActive ?? false}
+                fdRuleset={fdRuleset}
+                tier={tier}
+                section={snap.radio.operatingMode}
+                onOpenSettings={openSettingsAt}
+                onSettingsSaved={handleSettingsSaved}
+                contestSwitch={contestSwitch}
+                operatorAsk={operatorAsk}
+                onOperatorFocused={() => setOperatorAsk(0)}
+                operatorBoxAbove={snap.fieldDay != null}
+                onPopOut={contestScreen.popOut}
+              />
+            )}
+          </main>
+        </div>
       )
       break
     case 'logbook':
@@ -3282,6 +3473,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         <main className="layout single">
           <SettingsPanel
             fieldDay={snap.fieldDay}
+            clubLink={snap.clubLink}
             key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
             target={settingsTarget?.where}
@@ -3308,6 +3500,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onThemeChange={setTheme}
             skin={skin}
             onSkinChange={setSkin}
+            paintedTheme={theme}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}
@@ -3422,6 +3615,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             focusSat={satFocus}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
+            onSnap={setSnap}
           />
         </main>
       )
@@ -3750,6 +3944,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // The Contest item's tooltip names the picked contest; a blank pick is ARRL Field
           // Day, as it is to the engine.
           contest={settings ? contestName(settings.fdEvent?.trim() || 'arrlfd') : undefined}
+          // The mode badge names the contest the engine runs: the session's, never the pick, which
+          // the engine runs as ARRL Field Day when the loaded rules do not carry it.
+          runningContest={snap.fieldDay?.event}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field

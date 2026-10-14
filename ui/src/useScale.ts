@@ -123,6 +123,10 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   // the line scrolls inside its own panel, so height is elastic down to the line plus a look at
   // the screen. Measured in Chrome at the sizes the ui-layout skill lists.
   ['contestlog', { w: 900, h: 560 }],
+  // The contest screen window: the same screen without the log line over it, so the logger's width
+  // for the header strip, and its height less the line: the banner, the controls and a look at the
+  // board, the rest scrolling inside the screen's own panel.
+  ['contestscreen', { w: 900, h: 480 }],
 ])
 
 /** This surface's natural footprint. No panel (the main window) → the cockpit box. */

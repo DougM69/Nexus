@@ -161,10 +161,10 @@ pub enum StateSource {
     Grid,
 }
 
-/// The park or summit a need row is an ACTIVATION of. Carried so a Work from the board can set
-/// the hunt the way HUNT and a map double-click already do — the contact it leads to is then
-/// logged with the reference, which is the only contact POTA credits as a hunt (and the only one
-/// [`HuntedActivations`] can see).
+/// The park or summit a need row is an ACTIVATION of. Carried so the contact a Work from the board
+/// leads to is logged with the reference — the Phone or CW log line the Work opens fills it with
+/// the call, and a row that opens none sets the hunt the way HUNT and a map double-click do — which
+/// is the only contact POTA credits as a hunt (and the only one [`HuntedActivations`] can see).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParkRef {
@@ -466,7 +466,8 @@ pub fn score_slots(
         NeedTag::NewBand => format!("New band — {} {}", info.entity, band),
         // Name the mode: the need is "never worked this entity in THIS mode", so the row says
         // which ("New mode — FT8 The Gambia" with FT4 in the log), or names the class for a
-        // station heard in a class alone, when no mode of it was ever worked.
+        // station heard in a class alone or in a mode no contact is logged in, when no mode of
+        // that class was ever worked.
         //
         // The band is deliberately ABSENT (operator report 2026-07-29). `LogNeeds`
         // keys `worked_mode` as (entity, mode) with NO band — a mode need means
@@ -701,9 +702,9 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         // "TempoFast" arm never matched and dropped Nexus's own tiers through to the
         // frequency fallback, which can answer Cw/Phone from the band plan alone and
         // fabricate a NewMode. Spell the tiers in upper case with the rest.
-        "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "RTTY" | "PSK"
-        | "PSK31" | "PSK63" | "JT65" | "JT9" | "JS8" | "MFSK" | "MSK144" | "OLIVIA" | "DATA"
-        | "DIGI" | "SSTV" => ModeClass::Digital,
+        "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "Q65" | "FST4"
+        | "RTTY" | "PSK" | "PSK31" | "PSK63" | "PSK125" | "QPSK31" | "JT65" | "JT9" | "JS8"
+        | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
         _ => crate::model::classify_spot_mode(freq_mhz),
     }
 }
@@ -3053,7 +3054,7 @@ mod tests {
             }
         }
         assert_eq!(
-            named, 22,
+            named, 26,
             "control: the tokens the feed names were all reached"
         );
     }

@@ -16,6 +16,7 @@ pub mod alltxt;
 pub mod bandplan;
 pub mod call_history;
 pub mod clocksync;
+pub mod club_firewall;
 pub mod clubclock;
 pub mod connect_web;
 pub mod dto;
@@ -341,6 +342,7 @@ impl AppState {
                 slot_unkey_failed: None,
                 slot_audio_lost: None,
                 ptt_refused: None,
+                voice_dropped: None,
                 decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,
@@ -989,7 +991,10 @@ impl AppState {
             work_tick: 0,
             work_view: None,
             work_call: None,
+            work_park: None,
             field_day: None,
+            // The engine's club link (fills in snapshot()).
+            club_link: None,
             // Filled by the engine from its last decodes; empty at the AppState layer.
             recent_decodes: Vec::new(),
             late_decodes: None,
@@ -1023,6 +1028,9 @@ impl AppState {
             tx_alarms: Vec::new(),
             // Filled by the engine while the contest logger window is open; none here.
             contest_entry: None,
+            // Filled by the engine while a contest runs whose FT8/FT4 messages apply; none here.
+            contest_cq: None,
+            contest_cq_typed: false,
         }
     }
 

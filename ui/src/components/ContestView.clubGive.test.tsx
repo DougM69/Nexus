@@ -22,12 +22,17 @@ vi.setConfig({ testTimeout: 15_000 })
 
 vi.mock('../api', () => ({
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings })),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
   exportLog: vi.fn(async () => ''),
   fdClubExport: vi.fn(async () => ''),
+  // The host's club log under its board: none listed here.
+  fdClubLogNewest: vi.fn(async () => null),
   fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
+  fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
   openPanelWindow: vi.fn(async () => {}),
   saveTextToDownloads: vi.fn(async () => '/tmp/x'),
 }))

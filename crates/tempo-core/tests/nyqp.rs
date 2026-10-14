@@ -242,7 +242,8 @@ fn phone_cw_and_digital_score_one_two_and_three_and_each_counts_once_per_band() 
         "RTTY then PSK31 on one band is one mode"
     );
     assert_eq!(log.qso_count(), 3, "and earns nothing");
-    // CONTROL: ILQP's rule groups CW and digital, so the RTTY contact above is a dupe there.
+    // CONTROL: ILQP's rule groups CW and digital, so the RTTY contact above is a dupe there,
+    // logged and marked.
     let mut il = FieldDayLog::new(
         "W9XYZ",
         ContestSession::for_ruleset(
@@ -254,15 +255,17 @@ fn phone_cw_and_digital_score_one_two_and_three_and_each_counts_once_per_band() 
     );
     let cook = fields(&[("RST", "599"), ("QTH", "COOK")]);
     assert!(il.log_fields_at("K9AAA", &cook, "CW", "", 0, START_2026));
-    assert!(!il.log_fields_at("K9AAA", &cook, "DIG", "RTTY", 0, START_2026 + 60));
+    assert!(il.log_fields_at("K9AAA", &cook, "DIG", "RTTY", 0, START_2026 + 60));
+    assert!(il.qsos()[1].dupe);
 }
 
 /// ⭐ **A duplicate is LOGGED, marked and worth nothing** — *"Do not remove duplicates from
 /// your log before submission. They are used for cross-checking other logs."* ILQP says
-/// nothing of the kind, so it refuses one; NYQP asks for the row.
+/// nothing of the kind, and since the operator's ruling of 2026-10-11 it logs the row too:
+/// every contest does.
 ///
-/// (The flag itself is pinned in `dupe_logging.rs`'s policy table. This test asserts only
-/// what it DOES, so a control that flips it reddens the behaviour and not a restatement.)
+/// (The flag itself is pinned in `dupe_logging.rs`. This test asserts only what it DOES, so a
+/// control that flips it reddens the behaviour and not a restatement.)
 #[test]
 fn a_duplicate_is_kept_in_the_log_and_the_file_and_scores_nothing() {
     let mut log = FieldDayLog::new("W2XYZ", select(&station("NY", "ALB")), "20m");
@@ -285,7 +288,8 @@ fn a_duplicate_is_kept_in_the_log_and_the_file_and_scores_nothing() {
         2,
         "both rows reach the file the checker reads:\n{cab}"
     );
-    // CONTROL: ILQP refuses the same second contact.
+    // CONTROL: ILQP, whose sponsor says nothing of the kind, logs the same second contact too,
+    // marked: every contest logs its dupes since the operator's ruling of 2026-10-11.
     let mut il = FieldDayLog::new(
         "W9XYZ",
         ContestSession::for_ruleset(
@@ -297,7 +301,9 @@ fn a_duplicate_is_kept_in_the_log_and_the_file_and_scores_nothing() {
     );
     let cook = fields(&[("RST", "599"), ("QTH", "COOK")]);
     assert!(il.log_fields_at("K9AAA", &cook, "CW", "", 0, START_2026));
-    assert!(!il.log_fields_at("K9AAA", &cook, "CW", "", 0, START_2026 + 60));
+    assert!(il.log_fields_at("K9AAA", &cook, "CW", "", 0, START_2026 + 60));
+    assert!(il.qsos()[1].dupe);
+    assert_eq!(il.qso_count(), 1);
 }
 
 /// ⭐ **A New York station's multipliers: counties, the states (New York among them) and the

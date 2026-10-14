@@ -62,6 +62,16 @@ describe('useSkin — the owner', () => {
     expect(root().getAttribute('data-skin')).toBeNull()
   })
 
+  it('a stored Silver is plain Light now: no attribute, and the retired key is cleared', () => {
+    // Silver's look became the standard Light (styles-light-is-silver.test.ts), so the gallery no
+    // longer offers it and an operator who picked it sees the same look as plain Light.
+    localStorage.setItem('nexus-skin', 'silver')
+    const { result } = mount('light')
+    expect(result.current.skin).toBeNull()
+    expect(root().getAttribute('data-skin')).toBeNull()
+    expect(localStorage.getItem('nexus-skin')).toBeNull()
+  })
+
   it('a pick sets the attribute and the key and tells the readers; the standard theme clears both', () => {
     const heard = vi.fn()
     window.addEventListener(PALETTE_EVENT, heard)

@@ -29,20 +29,44 @@ struct Capture {
 }
 
 /// ⭐ **What only the host's own screen acts on stays out of everything Remote reads**: the Give
-/// button's handle on a turned-away entry (`FdClubRefusedDto::handle`), and the club codes, this
-/// laptop's own (`FdClubDto::club_code`) and each turned-away laptop's. The button and its command
+/// button's handle on a turned-away entry (`FdClubRefusedDto::handle`), the club codes, this
+/// laptop's own (`FdClubDto::club_code`) and each turned-away laptop's, and the link words and
+/// heard seconds on each line of the host's board (`FdClubBoardRow::link`, beside its Remove). The button and its command
 /// exist on the host's desktop alone, and a code is shown only there and on that laptop's own
 /// screen: one read off any other page is one a peer could make a key to match. The page's Field
 /// Day check refuses a key it does not know, so leaving them out also keeps every published page
 /// able to read such a host. The Field Day capture and Remote's snapshot both go through here.
+///
+/// The phone form of the composing exchange (`FieldDayStatus::composing_text_phone`) stays out for
+/// that reason alone: no published page lists it yet, and emptied it is not serialised. The page
+/// reads `composing_text`, as it always did. So do the Cabrillo lines the export would leave out
+/// (`FieldDayStatus::cabrillo_missing`): no page lists them, and the export they are about runs
+/// only at the station. And so do the values the CLUB has worked on each multiplier board
+/// (`FdBoardDto::club`): Remote is sent nothing new for the club-wide board, and its board stays
+/// this station's own, as it always was. And the host's warnings about positions sending another
+/// county than the club (`FdClubDto::other_location`): no page lists them, and the laptop they are
+/// about is put right at the club.
 pub(in crate::remote_service) fn leave_out_the_hosts_own(
     field_day: &mut Option<tempo_app::dto::FieldDayStatus>,
 ) {
+    if let Some(f) = field_day.as_mut() {
+        f.composing_text_phone.clear();
+        f.cabrillo_missing.clear();
+        for b in &mut f.boards {
+            b.club.clear();
+        }
+    }
     if let Some(club) = field_day.as_mut().and_then(|f| f.club.as_mut()) {
         club.club_code.clear();
+        club.other_location.clear();
         for r in &mut club.refused {
             r.handle = None;
             r.club_code = None;
+        }
+        // The host board's link words and heard seconds: its own screen's, beside its Remove.
+        for r in &mut club.board {
+            r.link = None;
+            r.heard_secs = None;
         }
     }
 }
@@ -129,7 +153,17 @@ pub(in crate::remote_service) mod tests {
             let original = e.lock().unwrap().field_day_log_adif();
             let value = read_engine(&e).unwrap();
             let native = e.lock().unwrap().snapshot().field_day.unwrap();
-            assert_eq!(value["fieldDay"], serde_json::to_value(native).unwrap());
+            // The station's own status, less the one key no published page lists yet: the phone
+            // form of the exchange (`leave_out_the_hosts_own`). Everything else is the same.
+            let mut native = serde_json::to_value(native).unwrap();
+            assert!(
+                native
+                    .as_object_mut()
+                    .and_then(|o| o.remove("composingTextPhone"))
+                    .is_some(),
+                "CONTROL: the station's own status carries the phone form ({event})"
+            );
+            assert_eq!(value["fieldDay"], native);
             assert_eq!(value["fieldDay"]["qsoCount"], 2);
             assert_eq!(value["fieldDay"]["points"], 3);
             assert_eq!(
@@ -284,6 +318,92 @@ pub(in crate::remote_service) mod tests {
         for code in &codes {
             assert!(!text.contains(code.as_str()), "the capture holds {code}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host on ARRL Field Day whose CW tent worked Connecticut while the host itself worked
+    /// Wisconsin: its own screen's sections board lights both as the club's and Wisconsin as its
+    /// own. Read as the JSON the screens are sent.
+    pub(in crate::remote_service) fn host_whose_tent_worked_a_section(
+        dir: &std::path::Path,
+    ) -> tempo_app::engine::Engine {
+        let s = tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: "arrlfd".into(),
+            fd_class: "2A".into(),
+            fd_section: "WI".into(),
+            mycall: "W9XYZ".into(),
+            fd_host_enable: true,
+            fd_position_id: "aaaa0001".into(),
+            ..Default::default()
+        };
+        let mut e = tempo_app::engine::Engine::with_settings(s);
+        e.restore_field_day_if_enabled();
+        e.fd_host_start(dir.join("fd_event_board_club.jsonl"))
+            .unwrap();
+        // The host's own contact goes up its own loopback link in the shell; here it is merged
+        // as that link merges it, under the host's own position.
+        assert!(e.fd_log_manual("K9HHH", "1D", "WI", "CW").unwrap());
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        for (pos, name, key, seq, call, sect) in [
+            ("aaaa0001", "HQ", "c", 1, "K9HHH", "WI"),
+            ("bbbb0002", "CW tent", "a", 1, "W1AW", "CT"),
+        ] {
+            let accept = e
+                .fd_club_join(v, pos, name, "W9XYZ", "arrlfd", "", &key.repeat(64))
+                .expect("served");
+            e.fd_club_merge(
+                accept.hold,
+                &tempo_net::fdsync::WireQso {
+                    pos: pos.into(),
+                    seq,
+                    call: call.into(),
+                    class: "1D".into(),
+                    sect: sect.into(),
+                    band: "20m".into(),
+                    mode: "CW".into(),
+                    when: 1_782_583_500,
+                    ..Default::default()
+                },
+            )
+            .expect("merged");
+        }
+        let native = serde_json::to_value(e.snapshot().field_day).unwrap();
+        let board = &native["boards"][0];
+        assert_eq!(board["slot"], "SECTION", "{native}");
+        assert_eq!(
+            board["club"],
+            serde_json::json!(["CT", "WI"]),
+            "CONTROL: the host's own board lights what its club worked"
+        );
+        assert_eq!(board["worked"], serde_json::json!(["WI"]), "its own");
+        e
+    }
+
+    /// ⭐ **Remote is sent nothing new for the club-wide board**: the Field Day capture's sections
+    /// board is the station's own, exactly as before, with no list of what the club worked on
+    /// it. CONTROL: the host's own snapshot carries the list (`host_whose_tent_worked_a_section`).
+    #[test]
+    fn the_capture_carries_no_club_board_list() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-remote-fd-board-club-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let e = Arc::new(Mutex::new(host_whose_tent_worked_a_section(&dir)));
+        let value = read_engine(&e).unwrap();
+        let board = value["fieldDay"]["boards"][0]
+            .as_object()
+            .expect("the sections board is in the capture");
+        let mut keys: Vec<&str> = board.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["domain", "id", "scope", "slot", "worked"],
+            "{board:?}"
+        );
+        assert_eq!(board["worked"], serde_json::json!(["WI"]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

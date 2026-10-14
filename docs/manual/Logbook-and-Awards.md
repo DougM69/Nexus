@@ -64,7 +64,7 @@ Nexus enforces this distinction at the record level:
 | Paper QSL (`QSL_RCVD=Y`) | true | **true** |
 | eQSL (`EQSL_QSL_RCVD=Y`) | true | false |
 
-Every award computation — DXCC, Challenge, Honor Roll, WAZ, WAS — uses `award_confirmed` exclusively. An eQSL-only contact counts as confirmed for your own records but never inflates an official award total. This distinction is maintained at every reconcile merge, ADIF import, and awards query; it cannot be overridden by re-importing.
+Every award computation — DXCC, Challenge, Honor Roll, WAZ, WAS — uses `award_confirmed` exclusively. An eQSL-only contact counts as confirmed for your own records but never inflates an official award total. This distinction is maintained at every reconcile merge, ADIF import, and awards query; it cannot be overridden by re-importing. For WAZ this is stricter than CQ, which accepts eQSLs from Authenticity Guaranteed (AG) members for WAZ and WPX: Nexus does not count those toward WAZ yet.
 
 ---
 
@@ -126,7 +126,7 @@ Up to 1.17.0, a downloaded confirmation went on the oldest contact with its stat
 
 To undo it, import that file with **Logbook ▸ Import ADIF**. The import matches each contact on its exact call, band, mode and time and puts back the confirmations, credit codes and upload marks the check took off. Nothing else moves.
 
-This check is the one way a confirmation comes off a contact, and only from the lines you tick. It uploads nothing, never touches a paper card or a contact's own fields (call, band, mode, time, state, grid, references, comment, notes), and moves no sync cursor. A contact that loses a false LoTW confirmation and was never uploaded becomes due for LoTW: **Upload to LoTW** sends it, and so does **Upload to LoTW automatically** if you turned that on. Award totals move only where the two contacts differ in what an award counts, such as WAS, VUCC, IOTA or satellite DXCC. DXCC and WAZ totals do not, because both contacts are the same station on the same band. eQSL and QRZ confirmations never count for awards, so their lines change only whether a contact shows as confirmed.
+This check is the one way a confirmation comes off a contact, and only from the lines you tick. It uploads nothing, never touches a paper card or a contact's own fields (call, band, mode, time, state, grid, references, comment, notes), and moves no sync cursor. A contact that loses a false LoTW confirmation and was never uploaded becomes due for LoTW: **Upload to LoTW** sends it, and so does **Upload to LoTW automatically** if you turned that on. Award totals move only where the two contacts differ in what an award counts, such as WAS, VUCC, IOTA or satellite DXCC. DXCC and WAZ totals do not, because both contacts are the same station on the same band. Nexus counts eQSL and QRZ confirmations toward no award, so their lines change only whether a contact shows as confirmed.
 
 ---
 
@@ -158,13 +158,15 @@ Auto-push on log is controlled by `clublog_upload` (default: **off**). ClubLog i
 
 ## eQSL Integration
 
-**Outbound push:** one QSO is POSTed to `https://www.eqsl.cc/qslcard/ImportADIF.cfm`. Credentials travel inside the ADIF payload as `EQSL_USER`/`EQSL_PSWD` header tags, not as form fields. Responses are classified by text markers: "N out of M records added" (N > 0 → Accepted, N = 0 → Rejected), "duplicate" → Duplicate, credential errors → AuthFail, "system is down" → None (retryable, no stamp).
+**Outbound push:** one QSO is POSTed to `https://www.eqsl.cc/qslcard/ImportADIF.cfm`. Credentials travel inside the ADIF payload as `EQSL_USER`/`EQSL_PSWD` header tags, not as form fields. Responses are classified by text markers: "N out of M records added" (N > 0 → Accepted, N = 0 → Rejected), "duplicate" → Duplicate, a wrong or missing username or password → AuthFail, "system is down" → None (retryable, no stamp). Two refusals name the eQSL account rather than the login, and are Rejected with their own reason: "No match on eQSL_User/eQSL_Pswd for date …" means the contact is outside the dates of your eQSL account (the password is fine; check the dates under My Profile at eqsl.cc), and "Multiple accounts match …" or "No match on APP_EQSL_QTH_NICKNAME" means the QTH Nickname is missing or wrong (enter it in Settings exactly as My Profile spells it). The reason is kept on the contact, so the Connections row and Awards ▸ Confirmations say it.
+
+Every upload names Nexus in its ADIF header (`PROGRAMID` and `PROGRAMVERSION`), as eQSL asks client programs to.
 
 **InBox import (inbound confirmation sync):** a two-step HTTP flow:
 1. Fetch the `DownloadInBox.cfm` HTML, confirm the "Your ADIF log file has been built" marker, and extract the `.adi` download link.
-2. Fetch the `.adi` file; validate it starts with `ADIF`, contains "eqsl.cc DownloadInBox", includes `<eoh>`, and ends with `<eor>` (truncation detection). All URLs are forced to HTTPS and pinned to `*.eqsl.cc` to prevent a compromised redirect from substituting a forged confirmation payload.
+2. Fetch the `.adi` file; validate that it does not start like an HTML page, that its header carries eQSL's `PROGRAMID` ("eQSL.cc DownloadInBox") and `<eoh>`, and that it ends with `<eor>` (truncation detection). All URLs are forced to HTTPS and pinned to `*.eqsl.cc` to prevent a compromised redirect from substituting a forged confirmation payload.
 
-The incremental cursor is a `YYYYMMDDHHMM` timestamp (RcvdSince), floored to the minute. A fresh install performs a full InBox pull on first sync.
+The incremental cursor is a `YYYYMMDDHHMM` timestamp (RcvdSince), floored to the minute. A fresh install performs a full InBox pull on first sync. The cursor belongs to one eQSL account, its username and its QTH Nickname: changing either makes the next sync read that account's whole InBox.
 
 Remember: eQSL sets `confirmed=true` but `award_confirmed=false`. InBox contacts appear in your confirmation panel but do not advance DXCC or other award-body-gated counts.
 
@@ -228,7 +230,7 @@ Every QSO record carries a per-source `UploadOutcome` stamped at upload time and
 
 The connection event log (accessible from Settings → Logging & Connectors ▸ Connections) holds the last 200 events in a rolling buffer, covering every credential save, sync download, upload dispatch, and service rejection for all five connectors. Each event carries a timestamp, connector name, severity, and a sanitized message (absolute paths redacted to basenames, truncated to 200 characters).
 
-A per-row push button (↥) in the Logbook table lets you re-push any individual QSO to QRZ on demand without re-syncing the entire log. ClubLog and eQSL have no per-row push button; re-uploading to those services requires triggering a full sync.
+Per-row push buttons in the Logbook table re-push one QSO on demand without re-syncing the entire log: ↥ for QRZ, CL for ClubLog, HL for HRDLog.net and WRL for World Radio League. eQSL has none in the Logbook; Awards ▸ Confirmations offers **Push to eQSL** on a contact that was never uploaded to eQSL or whose upload bounced. There is no whole-log eQSL upload: saving the eQSL password queues the contacts not yet sent, as many as the upload queue has room for, one at a time.
 
 ---
 

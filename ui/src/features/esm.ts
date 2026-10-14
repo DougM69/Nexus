@@ -13,6 +13,11 @@
 // EARLIER in the contact and the operator stopped counts as not sent, so ESM sends it again
 // rather than logging on top of it.
 //
+// ⭐ A DUPE CALLING YOUR RUN GETS QSO B4, ONCE (operator, 2026-10-10: one rule, like N1MM — log it,
+// mark it, score it zero, and with ESM send QSO B4). N1MM's ESM table: "Duplicate Call | Empty or
+// invalid | QSO B4 (F6) | do nothing" — running, and nothing in S&P. Nexus sends it from the key
+// the sets hold it on, once per call, and the next press logs the dupe, sending nothing.
+//
 // The state is session state and never persisted: a remount starts in S&P with nothing sent.
 // When ESM does not know whether the exchange went out, it sends it again rather than logs — at
 // worst the runner hears the exchange twice.
@@ -27,14 +32,12 @@ export type EsmMode = 'run' | 'sp'
  *  is the set's role table (`esmRoles.ts`).
  *
  *  `cq` CQ · `callExch` his call and my exchange · `tu` TU, the end of a Run contact ·
- *  `myCall` my call · `exch` my exchange in S&P · `again` a request for a repeat.
- *
- *  There is no QSO B4: on a dupe of the operator's own log ESM sends nothing (operator,
- *  2026-10-08), so no step would ever send one. */
-export type EsmRole = 'cq' | 'callExch' | 'tu' | 'myCall' | 'exch' | 'again'
+ *  `myCall` my call · `exch` my exchange in S&P · `again` a request for a repeat · `b4` QSO B4,
+ *  to a dupe of the operator's own log that calls the run. */
+export type EsmRole = 'cq' | 'callExch' | 'tu' | 'myCall' | 'exch' | 'again' | 'b4'
 
-/** Every role, in the order a contact meets them. */
-export const ESM_ROLES: readonly EsmRole[] = ['cq', 'callExch', 'tu', 'myCall', 'exch', 'again']
+/** Every role, in the order a contact meets them; QSO B4 last, for the contact that is not one. */
+export const ESM_ROLES: readonly EsmRole[] = ['cq', 'callExch', 'tu', 'myCall', 'exch', 'again', 'b4']
 
 /** The three cockpits ESM lives in. FT and every other mode never have it. */
 export type EsmCockpit = 'cw' | 'rtty' | 'phone'
@@ -48,6 +51,9 @@ export interface EsmState {
   exchTo: string | null
   /** The call my call went out to (S&P, "call once" or not), or null. Per call, as above. */
   myCallTo: string | null
+  /** The call QSO B4 went out to (Run), or null. Per call, as above: while the strip holds that
+   *  call, the next press logs the dupe rather than sending QSO B4 again. */
+  b4To: string | null
 }
 
 /** What the strip holds at the press. */
@@ -71,8 +77,10 @@ export type EsmCaret = 'call' | 'ex0' | 'stay'
 
 /** Why Enter sent nothing and logged nothing. The strip says it in words. */
 export type EsmRefusal =
-  /** An own dupe. The strip's own-dupe sentence is already on screen. */
+  /** An own dupe in S&P. The strip's own-dupe sentence is already on screen. */
   | { why: 'dupe' }
+  /** An own dupe in Run: QSO B4 has gone to it, and the dupe logs once his exchange is copied. */
+  | { why: 'b4Sent' }
   /** TX is off. Enter never turns it on: the operator does, by a deliberate act. */
   | { why: 'txOff' }
   /** Outside the licence privileges, or a connection that refuses TX. */
@@ -83,8 +91,6 @@ export type EsmRefusal =
   | { why: 'recording' }
   /** Phone: the operator is holding PTT. */
   | { why: 'pttHeld' }
-  /** Phone: the radio has the mic (Nexus's own Flex audio), so a recording would not go out. */
-  | { why: 'radioHasMic' }
   /** The set has no message for this step: no key is mapped to it. */
   | { why: 'unmapped'; role: EsmRole }
   /** The key this step is on sends nothing (an empty macro, a voice slot with no recording). */
@@ -98,11 +104,15 @@ export type EsmRefusal =
  *  ESM's state once the message is on its way: kept only if the cockpit's send path took it.
  *  `speak` — Phone, Run: nothing plays. A recording cannot say a callsign, so the operator says
  *  his call and the exchange, and the press counts them as said.
- *  `refuse` — an own dupe: nothing is sent and nothing logs. */
+ *  `log` — the dupe QSO B4 went to: the contact logs at this press, and nothing is sent. The
+ *  strip's log clears it for the next contact, which is ESM's new contact too.
+ *  `refuse` — an own dupe in S&P, or one QSO B4 went to whose exchange is not copied: nothing is
+ *  sent and nothing logs. */
 export type EsmStep =
   | { kind: 'send'; role: EsmRole; log: boolean; caret: EsmCaret; next: EsmState }
   | { kind: 'speak'; caret: EsmCaret; next: EsmState }
-  | { kind: 'refuse'; refusal: { why: 'dupe' } }
+  | { kind: 'log'; caret: EsmCaret }
+  | { kind: 'refuse'; refusal: { why: 'dupe' } | { why: 'b4Sent' } }
 
 /** What ESM follows besides Enter.
  *
@@ -115,7 +125,7 @@ export type EsmEvent = 'cq' | 'spot' | 'toggle' | 'stopped' | 'cleared'
 
 /** A fresh strip: S&P, nothing sent (operator, 2026-10-08). Every remount starts here. */
 export function esmStart(): EsmState {
-  return { mode: 'sp', exchTo: null, myCallTo: null }
+  return { mode: 'sp', exchTo: null, myCallTo: null, b4To: null }
 }
 
 /** `state` after `event`. Switching between Run and S&P keeps what went out to the call in the
@@ -130,7 +140,7 @@ export function esmEvent(state: EsmState, event: EsmEvent): EsmState {
       return { ...state, mode: state.mode === 'run' ? 'sp' : 'run' }
     case 'stopped':
     case 'cleared':
-      return { mode: state.mode, exchTo: null, myCallTo: null }
+      return { mode: state.mode, exchTo: null, myCallTo: null, b4To: null }
   }
 }
 
@@ -138,11 +148,18 @@ export function esmEvent(state: EsmState, event: EsmEvent): EsmState {
  *
  *  Run: R1 no call → CQ · R2 a new call, exchange incomplete → his call and my exchange, caret to
  *  the first box · R3 incomplete, exchange already sent → AGN · R4 complete, not sent → his call
- *  and my exchange, no log · R5 complete and sent → TU, and the contact logs · R6 own dupe →
- *  nothing. S&P: S1 no call → my call · S2 incomplete → my call (with "call once": the first
- *  press also moves the caret to the first box, later presses send AGN) · S3 complete → my
- *  exchange, and the contact logs · S4 own dupe → nothing · S5 complete only because of a
- *  call-history fill, and my call not yet gone to this call → my call, as S2's first press.
+ *  and my exchange, no log · R5 complete and sent → TU, and the contact logs · R6 own dupe, my
+ *  exchange not gone to it → QSO B4, once, no log · R7 QSO B4 gone to it, exchange complete → the
+ *  contact logs, nothing sent · R8 QSO B4 gone, incomplete → nothing · R9 own dupe my exchange
+ *  has gone to → R3 or R5, as for any call. S&P: S1 no call → my call · S2 incomplete → my call
+ *  (with "call once": the first press also moves the caret to the first box, later presses send
+ *  AGN) · S3 complete → my exchange, and the contact logs · S4 own dupe → nothing · S5 complete
+ *  only because of a call-history fill, and my call not yet gone to this call → my call, as S2's
+ *  first press.
+ *
+ *  R9 is N1MM's "Duplicate Call (after sending exchange) | Valid | End QSO + Log": a QSO party
+ *  keys its dupes on the county, so the dupe shows only once his county is in the box, with the
+ *  contact under way. QSO B4 there would answer an exchange already given.
  *
  *  In Phone, R2 and R4 play nothing: the operator says his call and the exchange (operator,
  *  2026-10-08), as N1MM advises for a live exchange.
@@ -156,7 +173,6 @@ export function esmStep(
   opts: { cockpit: EsmCockpit; callOnce: boolean },
 ): EsmStep {
   const call = strip.call.trim().toUpperCase()
-  if (strip.dupe === 'own') return { kind: 'refuse', refusal: { why: 'dupe' } }
   const send = (role: EsmRole, log: boolean, caret: EsmCaret, next: EsmState): EsmStep => ({
     kind: 'send',
     role,
@@ -164,8 +180,16 @@ export function esmStep(
     caret,
     next,
   })
+  if (strip.dupe === 'own') {
+    if (state.mode !== 'run') return { kind: 'refuse', refusal: { why: 'dupe' } }
+    if (state.exchTo !== call) {
+      if (state.b4To !== call) return send('b4', false, 'stay', { ...state, b4To: call })
+      if (!strip.exchangeComplete) return { kind: 'refuse', refusal: { why: 'b4Sent' } }
+      return { kind: 'log', caret: 'call' }
+    }
+  }
   // The contact logs at this press, so the strip is a new contact from here on.
-  const logged: EsmState = { mode: state.mode, exchTo: null, myCallTo: null }
+  const logged: EsmState = { mode: state.mode, exchTo: null, myCallTo: null, b4To: null }
   if (state.mode === 'run') {
     if (!call) return send('cq', false, 'call', state)
     const sent = state.exchTo === call
@@ -213,7 +237,6 @@ export type EsmGuards =
       keyerShown: boolean
       pttHeld: boolean
       recording: boolean
-      radioHasMic: boolean
     } & TxGuards)
 
 /** Why ESM steps aside: Enter logs exactly as it does with ESM off, sends nothing, and the ESM
@@ -238,7 +261,6 @@ export function esmTxRefusal(guards: EsmGuards): EsmRefusal | null {
   if (guards.cockpit === 'phone') {
     if (guards.recording) return { why: 'recording' }
     if (guards.pttHeld) return { why: 'pttHeld' }
-    if (guards.radioHasMic) return { why: 'radioHasMic' }
   }
   return null
 }
@@ -261,6 +283,7 @@ export interface EsmPressInput {
  *  `inert` — ESM steps aside: Enter logs exactly as it does with ESM off; the plate says why.
  *  `refuse` — nothing is sent and nothing logs; the strip says why.
  *  `speak` — Phone, Run: nothing plays; the operator says his call and the exchange.
+ *  `log` — the dupe QSO B4 went to logs, through the strip's one log path, and nothing is sent.
  *  `send` — send `text` (the keys' messages joined) as `role`, through the cockpit's own send
  *  path; when `log`, the contact logs at this press as soon as that path takes the message — and
  *  stays logged if the message is then stopped. `next` is kept only if the message was taken. */
@@ -268,6 +291,7 @@ export type EsmDecision =
   | { kind: 'inert'; why: EsmInert }
   | { kind: 'refuse'; refusal: EsmRefusal }
   | { kind: 'speak'; caret: EsmCaret; next: EsmState }
+  | { kind: 'log'; caret: EsmCaret }
   | {
       kind: 'send'
       role: EsmRole

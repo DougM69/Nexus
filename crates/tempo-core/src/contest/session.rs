@@ -200,8 +200,6 @@ impl StationData {
 /// One run of one contest: the object BOTH logs carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContestSession {
-    /// Stable across restart; stamped on every row it owns.
-    pub id: String,
     /// ⭐ **The RULES-FILE event id** (`"arrlfd"`, `"wfd"`, `"tnqp"`, …) — how every
     /// reader of this session finds the ruleset that governs it.
     ///
@@ -218,10 +216,10 @@ pub struct ContestSession {
     /// ⚠️ **This is the ADIF `CONTEST_ID` value, NOT the Cabrillo `CONTEST:` token**,
     /// and for three shipped contests those differ; the header runs it through
     /// [`cabrillo_contest_token`](crate::contest::cabrillo_contest_token) first.
-    /// It is also the prefix of [`id`](Self::id) and of every row's `qid`, so it is
-    /// an identity as well as an export value. (The earlier `"CQP"` example here was
-    /// wrong twice over: on the Cabrillo master list `CQP` is the COLLEGIATE QSO
-    /// Party, not California.)
+    /// It is also the prefix of every merged row's `qid`
+    /// ([`session_of`](crate::contest::session_of)), so it is an identity as well as an
+    /// export value. (The earlier `"CQP"` example here was wrong twice over: on the
+    /// Cabrillo master list `CQP` is the COLLEGIATE QSO Party, not California.)
     pub contest_id: String,
     pub rules_year: u16,
     /// The exchange this session runs.
@@ -358,7 +356,6 @@ impl ContestSession {
             .filter_map(|(k, v)| exchange.value(k, &v))
             .collect();
         Self {
-            id: format!("{}:{}", event.contest_id(), section),
             event_id: event.code().to_string(),
             contest_id: event.contest_id().to_string(),
             rules_year: crate::fd_rules::CURRENT_RULES_YEAR,
@@ -457,7 +454,6 @@ impl ContestSession {
         // selector walk beside `role()` — one evaluation, one answer, and an "I moved"
         // that lands in a different role is detected by the same code path.
         let mut s = Self {
-            id: String::new(),
             event_id: rs.event.to_string(),
             contest_id: rs.contest_id.to_string(),
             rules_year: rs.rules_year,
@@ -574,17 +570,6 @@ Fill it in on the Contesting tab in Settings."
         {
             s.my_location.state = loc.raw.clone();
         }
-        // The id names the entry: one contest, from one place. `role()` is stable while
-        // the location is, and a location change that would move it ends the session
-        // (§3.3 ruling 3) rather than renaming this.
-        s.id = format!(
-            "{}:{}",
-            rs.contest_id,
-            s.my_location
-                .county
-                .clone()
-                .unwrap_or_else(|| s.my_location.state.clone())
-        );
         s.location_warning = location_warning(&s);
         Ok(s)
     }
@@ -876,15 +861,30 @@ Fill it in on the Contesting tab in Settings."
         // actually exchanged, and rewriting one is what `FieldSpec`'s own header
         // forbids.
         if mode_class.eq_ignore_ascii_case("PH") {
-            for v in &mut tx {
-                if let Some(f) = self.exchange.field(v.key) {
-                    if f.source == "constant" && matches!(f.kind, super::FieldKind::Rst { .. }) {
-                        v.raw = "59".to_string();
-                    }
-                }
-            }
+            self.fit_sent_rst(&mut tx, mode_class);
         }
         tx
+    }
+
+    /// A row's sent RST at the digit count its mode class takes: a slot the ruleset declares
+    /// `Rst` and sources as a `"constant"` is `59` on a phone row and the session's own (the
+    /// 3-digit form) on any other. Every other slot is left as it is, for the reason
+    /// [`tx_for_row`](Self::tx_for_row) gives — and that is where the phone half is applied to
+    /// a contact being logged; a contact edited into another mode class is re-fitted here.
+    pub fn fit_sent_rst(&self, tx: &mut [FieldValue], mode_class: &str) {
+        for v in tx.iter_mut() {
+            let Some(f) = self.exchange.field(v.key) else {
+                continue;
+            };
+            if f.source != "constant" || !matches!(f.kind, super::FieldKind::Rst { .. }) {
+                continue;
+            }
+            if mode_class.eq_ignore_ascii_case("PH") {
+                v.raw = "59".to_string();
+            } else if let Some(own) = self.my_exchange.iter().find(|m| m.key == v.key) {
+                v.raw = own.raw.clone();
+            }
+        }
     }
 
     /// The contact is logged (or abandoned): nothing is in flight any more.
@@ -904,9 +904,14 @@ Fill it in on the Contesting tab in Settings."
     ///
     /// **Where the location comes from.** The role's first sent [`FieldKind::Enum`]
     /// slot is the one a [`RoleSelector::MyLocationIn`] reads, so that slot's new
-    /// value is the new [`MyLocation::state`]. Field Day's is `SECTION`. (Batch 8's
-    /// QSO parties are where a second component — the county — joins it, and where a
-    /// role genuinely moves.)
+    /// value is the new [`MyLocation::state`]. Field Day's is `SECTION`.
+    ///
+    /// ⭐ **A QSO party's `QTH` is the location itself** — a `derived:` slot the role
+    /// fills from [`MyLocation`] — so a move there changes the half of the location the
+    /// role sends ([`moved_location`](Self::moved_location)): the COUNTY for the in-state
+    /// role, from the list the county it sends now came from, and the state, province or
+    /// country for every other role. Over the state line is refused below; a county line
+    /// is refused there, because it is two contacts and never one place to send from.
     ///
     /// ⚠️ **Refuses a move that changes ROLE** — §3.3 ruling 3. Crossing a state line
     /// flips `sends`, `receives` and the whole multiplier universe, which is a
@@ -925,6 +930,7 @@ Fill it in on the Contesting tab in Settings."
     pub fn move_to(&mut self, values: &[(&str, &str)]) -> Result<(), String> {
         let role = self.role();
         let mut next = self.my_exchange.clone();
+        let mut where_now = self.my_location.clone();
         for (key, raw) in values {
             if !role.sends.contains(key) {
                 return Err(format!("{key} is not a slot this role sends"));
@@ -950,16 +956,22 @@ Fill it in on the Contesting tab in Settings."
                     ));
                 }
             }
+            if is_my_location(field) {
+                where_now = self.moved_location(field, role, &raw, where_now)?;
+            }
+            // ⭐ CONFIRMED, as a session built at the new place confirms it: a `OneOf`
+            // records the arm its value matched — the list a county came from — which is
+            // what names it in a header (ILQP's `IL-COUNTY`) and picks its export tag. An
+            // `Enum` was checked above and records its one domain either way.
             let v = self
                 .exchange
-                .value(key, &raw)
+                .copied(key, &raw)
                 .expect("the slot resolved one line above");
             match next.iter_mut().find(|x| x.key == v.key) {
                 Some(slot) => *slot = v,
                 None => next.push(v),
             }
         }
-        let mut where_now = self.my_location.clone();
         if let Some(loc) = role
             .sends
             .iter()
@@ -983,6 +995,129 @@ Fill it in on the Contesting tab in Settings."
         self.my_exchange = next;
         self.my_location = where_now;
         Ok(())
+    }
+
+    /// Where I am once the location slot `field` sends `raw`, or the sentence refusing the
+    /// move — [`sent_value`]'s location arms run backwards, and checked against them.
+    ///
+    /// * **In the state** the slot is the COUNTY, and the new one must be on the list the
+    ///   county sent now came from (the arm recorded when the session was built). A place
+    ///   this contest knows that is not on it — a state, a province, `DX` — is over the
+    ///   line, in another role: another entry. Anything else is not a county.
+    /// * **Every other role** sends its state, province or country, so that is what moves:
+    ///   to a value the slot takes, in the same role. And it must be what a session at the
+    ///   new place SENDS — a dx entrant whose sponsor asks for the literal `DX` sends it
+    ///   from anywhere, and has nothing to move.
+    fn moved_location(
+        &self,
+        field: &'static super::FieldSpec,
+        role: &'static RoleSpec,
+        raw: &str,
+        mut at: MyLocation,
+    ) -> Result<MyLocation, String> {
+        // A station on a county line sends both counties and logs each contact once per
+        // county: two contacts, never one place to send from.
+        if raw.contains('/') {
+            return Err(
+                "I moved takes one place at a time. On a county line, send both \
+                 counties yourself and log each contact once per county, switching \
+                 between them with I moved."
+                    .to_string(),
+            );
+        }
+        let arm = self.exchange.copied(field.key, raw).and_then(|v| v.domain);
+        if role.id == "in_state" {
+            let counties = self
+                .my_exchange
+                .iter()
+                .find(|v| v.key == field.key)
+                .and_then(|v| v.domain);
+            return match arm {
+                Some(a) if Some(a) == counties => {
+                    at.county = Some(raw.to_string());
+                    Ok(at)
+                }
+                Some(_) if self.role_at(raw) != role.id => Err(MOVE_CHANGES_ROLE.to_string()),
+                _ => Err(format!("\"{raw}\" is not one of this contest's counties.")),
+            };
+        }
+        if !accepts(field, raw, role) {
+            return Err(format!(
+                "\"{raw}\" is not a value the {} slot of this contest accepts.",
+                field.key
+            ));
+        }
+        if self.role_at(raw) != role.id {
+            return Err(MOVE_CHANGES_ROLE.to_string());
+        }
+        at.state = raw.to_string();
+        at.dxcc = raw == "DX";
+        // A location source reads the role and the location and nothing else, so the
+        // station data it is asked with is never read.
+        let sends = sent_value(field, role, &StationData::default(), &at)?;
+        if sends != raw {
+            return Err(format!(
+                "Your {} in this contest is {sends} wherever you are, so there is nothing \
+                 for I moved to change.",
+                field.key
+            ));
+        }
+        Ok(at)
+    }
+
+    /// The role this exchange gives a station at `state` — `"DX"` declaring the dx role, as
+    /// `contest_qth_state` does.
+    fn role_at(&self, state: &str) -> &'static str {
+        let mut there = self.clone();
+        there.my_location = MyLocation {
+            county: None,
+            state: state.to_string(),
+            dxcc: state == "DX",
+        };
+        there.role().id
+    }
+
+    /// ⭐ **May "I moved" change these slots in this contest?** `Err` is the sentence saying
+    /// why not. Every contest but Field Day asks this before [`move_to`](Self::move_to):
+    /// Field Day's class and section have settings of their own.
+    ///
+    /// The slot a move changes is WHERE I AM — the QTH a QSO party fills from the location —
+    /// and only where the sponsor's rules make a station that changes it a new station,
+    /// which the rules data states as the dupe key's SENT slots (`moves`): each party's own
+    /// mobile rule. CQ WW RTTY's W/VE stations send a state as well, from one place for the
+    /// whole contest, and are refused.
+    ///
+    /// Nothing else is where I am: a report, a zone, a grid, and above all a SERIAL. The
+    /// composing exchange holds a placeholder where the number goes, and a number written
+    /// into it would freeze the run at that number for the rest of the contest.
+    pub fn check_move(&self, values: &[(&str, &str)], moves: &[&str]) -> Result<(), String> {
+        let Some(slot) = self
+            .role()
+            .sends
+            .iter()
+            .copied()
+            .find(|k| self.exchange.field(k).is_some_and(is_my_location))
+        else {
+            return Err(format!(
+                "{} does not send your county, state or province, so there is nothing for \
+                 I moved to change.",
+                self.contest_id
+            ));
+        };
+        if !moves.contains(&slot) {
+            return Err(format!(
+                "{}'s rules have no provision for a station that moves during the contest, \
+                 so your {slot} stays {}.",
+                self.contest_id,
+                self.field(slot)
+            ));
+        }
+        match values.iter().find(|(k, _)| *k != slot) {
+            Some((key, _)) => Err(format!(
+                "I moved changes only your {slot}; {key} is not part of where you are."
+            )),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1171,6 +1306,16 @@ not carry",
             )),
         },
     }
+}
+
+/// Is this slot the operator's LOCATION — a QSO party's `QTH`, which one of the two
+/// location sources [`sent_value`] reads fills from [`MyLocation`] through the role, and
+/// which `contest_qth_county` and `contest_qth_state` hold?
+fn is_my_location(field: &super::FieldSpec) -> bool {
+    matches!(
+        field.source,
+        "derived:my_location" | "derived:my_location_or_typed"
+    )
 }
 
 /// ⭐ **The one KIND-driven normalisation a sent value gets, and it is a CUT rather
@@ -1606,6 +1751,161 @@ mod tests {
         assert_eq!(s.field("QTH"), "TN", "a refused move moves nothing");
         assert_eq!(s.my_location.state, "TN");
         assert_eq!(s.role().id, "in_state");
+    }
+
+    /// A session of a shipped QSO party, built the way the engine builds one: through the
+    /// ruleset and the station data Settings holds. `state` `DX` declares the dx role, as
+    /// `contest_qth_state` does.
+    fn party_from(event: &str, state: &str, county: &str) -> ContestSession {
+        let rs = crate::fd_rules::ruleset_by_id(event, crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        ContestSession::for_ruleset(
+            rs,
+            &StationData {
+                contest_qth_state: state.to_string(),
+                contest_qth_county: county.to_string(),
+                dxcc: state == "DX",
+                ..Default::default()
+            },
+        )
+        .expect("a legal place to start from")
+    }
+
+    /// ⭐ **A QSO party's QTH is where I am: a mobile's move changes the COUNTY it sends from.**
+    ///
+    /// The Illinois mobile goes from Kane into Will. The location the role is derived from
+    /// moves with the exchange, and the county is recorded with the list it matched, as a
+    /// session built in Will records it, so the `IL-COUNTY` header can still name it.
+    #[test]
+    fn a_party_move_changes_the_county_it_sends_from() {
+        let mut s = party_from("ilqp", "IL", "KANE");
+        s.move_to(&[("QTH", " will ")])
+            .expect("Will is an Illinois county");
+        assert_eq!(s.field("QTH"), "WILL");
+        assert_eq!(
+            (
+                s.my_location.county.as_deref(),
+                s.my_location.state.as_str(),
+                s.role().id
+            ),
+            (Some("WILL"), "IL", "in_state"),
+            "the county moved; the state and the role did not"
+        );
+        let qth = s
+            .my_exchange
+            .iter()
+            .find(|v| v.key == "QTH")
+            .expect("QTH is sent");
+        assert_eq!(
+            (qth.domain, s.exchange.name_of(qth)),
+            (Some("il_counties"), Some("Will"))
+        );
+    }
+
+    /// An in-state move must land on one of the sponsor's counties. Over the state line is
+    /// another entry, a county line is two contacts, and anything else is not a county —
+    /// each refused in words, with the session where it was.
+    #[test]
+    fn a_party_move_refuses_what_is_not_one_county_in_words() {
+        let mut s = party_from("ilqp", "IL", "KANE");
+        for (typed, why) in [
+            ("ZZZ", "\"ZZZ\" is not one of this contest's counties."),
+            // Indiana: a state this contest knows, where an Illinois entry is not.
+            ("IN", MOVE_CHANGES_ROLE),
+            (
+                "COOK/WILL",
+                "I moved takes one place at a time. On a county line, send both counties \
+                 yourself and log each contact once per county, switching between them with \
+                 I moved.",
+            ),
+        ] {
+            assert_eq!(
+                s.move_to(&[("QTH", typed)]),
+                Err(why.to_string()),
+                "{typed}"
+            );
+        }
+        assert_eq!(
+            (s.field("QTH"), s.my_location.county.as_deref()),
+            ("KANE", Some("KANE")),
+            "a refused move moves nothing"
+        );
+    }
+
+    /// ⭐ **Every other role moves its STATE**, and stays in its role: a W/VE station in the
+    /// New York QSO Party drives from Pennsylvania into Ohio. Into New York is another
+    /// entry. And a DX entrant there sends the literal `DX` wherever it is, so it has
+    /// nothing to move.
+    #[test]
+    fn a_party_move_outside_the_state_changes_the_state_it_sends() {
+        let mut s = party_from("nyqp", "PA", "");
+        s.move_to(&[("QTH", "OH")])
+            .expect("Ohio keeps the W/VE role");
+        assert_eq!(
+            (s.field("QTH"), s.my_location.state.as_str(), s.role().id),
+            ("OH", "OH", "w_ve")
+        );
+        assert_eq!(
+            s.move_to(&[("QTH", "ALB")]),
+            Err(MOVE_CHANGES_ROLE.to_string()),
+            "Albany County is in New York"
+        );
+        assert_eq!(s.field("QTH"), "OH", "a refused move moves nothing");
+
+        let mut dx = party_from("nyqp", "DX", "");
+        assert_eq!(dx.role().id, "dx", "harness: the dx role");
+        // A place this contest has no code for is not a value the slot takes.
+        assert_eq!(
+            dx.move_to(&[("QTH", "DL")]),
+            Err("\"DL\" is not a value the QTH slot of this contest accepts.".to_string())
+        );
+        assert_eq!(
+            dx.move_to(&[("QTH", "ALB")]),
+            Err(
+                "Your QTH in this contest is DX wherever you are, so there is nothing for I \
+                 moved to change."
+                    .to_string()
+            )
+        );
+        // …and a W/VE state is a W/VE entry, which is another entry.
+        assert_eq!(
+            dx.move_to(&[("QTH", "OH")]),
+            Err(MOVE_CHANGES_ROLE.to_string())
+        );
+        assert_eq!(dx.field("QTH"), "DX");
+
+        // A moved session is where a session built at the new place would be: a station
+        // outside California that declares DX is a DX station.
+        let mut s = party_from("cqp", "NV", "");
+        s.move_to(&[("QTH", "DX")])
+            .expect("DX is outside California too");
+        assert_eq!(
+            (s.field("QTH"), &s.my_location),
+            ("DX", &party_from("cqp", "DX", "").my_location)
+        );
+    }
+
+    /// ⭐ **Whether the QTH may move at all is the sponsor's rule**, which the rules data
+    /// states as the dupe key's sent slots: each party's mobile rule. Under a sponsor with
+    /// none — CQ WW RTTY's W/VE stations send a state from one place for the whole contest,
+    /// and that session cannot be built here without a country file — the same session is
+    /// refused in words. And only the location moves: a report is not where I am.
+    #[test]
+    fn a_move_needs_the_sponsors_mobile_rule_and_moves_only_the_location() {
+        let s = party_from("ilqp", "IL", "KANE");
+        assert_eq!(s.check_move(&[("QTH", "WILL")], &["QTH"]), Ok(()));
+        assert_eq!(
+            s.check_move(&[("QTH", "WILL")], &[]),
+            Err(
+                "IL QSO Party's rules have no provision for a station that moves during the \
+                 contest, so your QTH stays KANE."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            s.check_move(&[("RST", "579")], &["QTH"]),
+            Err("I moved changes only your QTH; RST is not part of where you are.".to_string())
+        );
     }
 
     /// A two-role exchange whose roles are selected on location — the shape every QSO

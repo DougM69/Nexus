@@ -18,32 +18,37 @@ import type { BuiltinMacro, MacroKey, MacroSetId } from './macroSets'
  *  "his call and my exchange" as F5 followed by F2. A step with no keys has no message. */
 export type EsmRoleMap = Partial<Record<EsmRole, readonly MacroKey[]>>
 
-/** The contest layout — N1MM's, and RTTY's contest set's as it ships: F1 CQ · F2 his call and my
- *  exchange · F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 AGN · F8 QSO B4. ESM
- *  sends six of the eight; F5 and F8 stay keys the operator presses. */
+/** The contest layout — RTTY's contest set's as it ships: F1 CQ · F2 his call and my exchange ·
+ *  F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8 AGN. AGN is on F8 as in
+ *  N1MM's default message sets; it traded keys with B4 (operator, 2026-10-10), and nothing else
+ *  moved. ESM sends seven of the eight, QSO B4 to a dupe that calls the run; F5 stays a key the
+ *  operator presses. */
 export const CONTEST_LAYOUT_ROLES: EsmRoleMap = {
   cq: ['F1'],
   callExch: ['F2'],
   tu: ['F3'],
   myCall: ['F4'],
   exch: ['F6'],
-  again: ['F7'],
+  again: ['F8'],
+  b4: ['F7'],
 }
 
-/** The voice keyer's slots while ESM is on: F1 CQ · F2 my exchange · F3 TU · F4 my call · F5 AGN.
- *  A recording cannot say a callsign, so no slot holds "his call and my exchange" — running, the
- *  operator says it — and F6 stays the operator's own. An empty slot sends nothing, and the strip
- *  names the slot to record. */
+/** The voice keyer's slots while ESM is on: F1 CQ · F2 my exchange · F3 TU · F4 my call · F8 AGN,
+ *  AGN on the key the contest layout sends it from (operator, 2026-10-10; it was F5). A recording
+ *  cannot say a callsign, so no slot holds "his call and my exchange" — running, the operator says
+ *  it — and F5, his call alone in the contest layout, stays the operator's own, as F6 does. An
+ *  empty slot sends nothing, and the strip names the slot to record. The keyer has no QSO B4 slot
+ *  (no F7, and no slot labelled B4), so QSO B4 plays only once the operator maps it to a slot. */
 export const VOICE_SLOT_ROLES: EsmRoleMap = {
   cq: ['F1'],
   exch: ['F2'],
   tu: ['F3'],
   myCall: ['F4'],
-  again: ['F5'],
+  again: ['F8'],
 }
 
-/** The voice keyer's six slots, the keys a Phone step may be mapped to. */
-export const VOICE_KEYS: readonly MacroKey[] = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6']
+/** The voice keyer's slots, the keys a Phone step may be mapped to: F1–F6, and F8 for AGN. */
+export const VOICE_KEYS: readonly MacroKey[] = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F8']
 
 /** The voice keyer's slots as ESM reads them: each named by its label once it holds a
  *  recording, and empty while it holds none, so a step on an empty slot is refused by name. */
@@ -60,7 +65,8 @@ export const RTTY_SET_ROLES: Record<MacroSetId, EsmRoleMap | null> = {
 
 /** SIGNED (operator, 2026-10-09). The CW contest set for an exchange WITH a signal report (the
  *  QSO parties, CQ WW, CQ WPX) in the contest layout: the CQ and AGN it had before, its his-call
- *  text moved to F5, and {RST} before {EXCH} wherever the exchange goes, as before. */
+ *  text moved to F5, and {RST} before {EXCH} wherever the exchange goes, as before. AGN and B4
+ *  then traded keys, AGN to F8 (operator, 2026-10-10), in all three sets. */
 export const CW_CONTEST_LAYOUT: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.exch.label', text: '! {RST} {EXCH}' },
@@ -68,8 +74,8 @@ export const CW_CONTEST_LAYOUT: BuiltinMacro[] = [
   { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
   { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },
   { key: 'F6', labelKey: 'cw.macro.spExch.label', text: 'TU {RST} {EXCH}' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: 'B4', text: '! QSO B4' },
+  { key: 'F7', label: 'B4', text: '! QSO B4' },
+  { key: 'F8', label: 'AGN', text: 'AGN AGN' },
 ]
 
 /** SIGNED (operator, 2026-10-09). The same for an exchange with NO signal
@@ -82,8 +88,8 @@ export const CW_CONTEST_NO_REPORT_LAYOUT: BuiltinMacro[] = [
   { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
   { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },
   { key: 'F6', labelKey: 'cw.macro.spExch.label', text: 'TU {EXCH}' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: 'B4', text: '! QSO B4' },
+  { key: 'F7', label: 'B4', text: '! QSO B4' },
+  { key: 'F8', label: 'AGN', text: 'AGN AGN' },
 ]
 
 /** SIGNED (operator, 2026-10-09). The CW Field Day set (ARRL Field Day and
@@ -96,8 +102,8 @@ export const CW_FIELD_DAY_LAYOUT: BuiltinMacro[] = [
   { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
   { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },
   { key: 'F6', labelKey: 'cw.macro.spExch.label', text: 'TU {EXCH}' },
-  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
-  { key: 'F8', label: 'B4', text: '! QSO B4' },
+  { key: 'F7', label: 'B4', text: '! QSO B4' },
+  { key: 'F8', label: 'AGN', text: 'AGN AGN' },
 ]
 
 /** The role table for the CW set in use: the contest layout when the set IS one of the three

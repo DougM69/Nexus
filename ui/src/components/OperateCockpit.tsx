@@ -50,7 +50,7 @@ import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, s
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
-import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
+import { pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
@@ -852,10 +852,10 @@ export function OperateCockpit({
 
   // Waterfall pop-out: 'popped' unmounts the docked copy so the decode lists + roster
   // reclaim the space (that's the whole point of popping it out) and leaves the re-dock
-  // bar behind; 'removed' renders nothing at all. The torn-off window still signals its
-  // close through the app-global legacy flag (localStorage is shared across Tauri
-  // windows), so closing it re-docks automatically — but only a POPPED waterfall
-  // follows, or that signal would resurrect one the operator deleted.
+  // bar behind; 'removed' renders nothing at all. The torn-off window clears the
+  // app-global legacy flag in its `beforeunload` (localStorage is shared across Tauri
+  // windows), and closing it re-docks automatically (below) — but only a POPPED waterfall
+  // follows, or the close would resurrect one the operator deleted.
   const wfStateRef = useRef(wfState)
   wfStateRef.current = wfState
   useEffect(() => {
@@ -866,14 +866,43 @@ export function OperateCockpit({
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [setPanelState])
+  // A close does not run that `beforeunload`: on Windows wry closes the webview with WebView2's
+  // `Close`, which "is synchronous and won't trigger the beforeunload event", and on Linux the
+  // real app's close left the flag set too (2026-10-12). So the close is heard as Tauri's own
+  // `tauri://destroyed` for that window, which arrives however it went, as
+  // `useContestScreenWindow` hears its window. `panel-waterfall` is `open_panel_window`'s label
+  // for the slug (`chains::panel_label`).
+  useEffect(() => {
+    const listen = window.__TAURI__?.event?.listen
+    if (!listen) return
+    let alive = true
+    let unlisten: (() => void) | undefined
+    listen(
+      'tauri://destroyed',
+      () => {
+        if (wfStateRef.current === 'popped') setPanelState('waterfall', 'docked')
+      },
+      { target: { kind: 'WebviewWindow', label: 'panel-waterfall' } },
+    )
+      .then((un) => {
+        if (alive) unlisten = un
+        else un()
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+      unlisten?.()
+    }
+  }, [setPanelState])
   const popOutWaterfall = () => {
     setPanelState('waterfall', 'popped')
     void openPanelWindow('waterfall')
   }
   // #263: re-dock also closes the torn-off window. It used to flip the state only, so the
   // strip came back in the cockpit while the pop-out stayed up beside it — two waterfalls.
-  // The pop-out's own unmount then clears the detached flag; the storage listener above sees
-  // a waterfall that is already docked and does nothing.
+  // The window's close then reaches the listeners above (its flag where its webview fires
+  // `beforeunload`, and Tauri's destroyed event), which see a waterfall that is already docked
+  // and do nothing.
   const redockWaterfall = () => {
     setPanelState('waterfall', 'docked')
     void closePanelWindow('waterfall').catch(() => {})
@@ -984,12 +1013,37 @@ export function OperateCockpit({
     }
   }, [snap.qso?.dxcall, snap.qso?.dxgrid])
 
+  // ⭐ WHILE A CONTEST RUNS THAT WSJT-X HAS AN ACTIVITY FOR, THE TX6 ROW IS THE CONTEST'S CQ.
+  // WSJT-X's Tx6 is its activity's CQ once one is set (`genCQMsg`): `CQ FD`, `CQ TEST`. The engine
+  // names the CQ the contest's Running calls (`snap.contestCq`, present only while such a contest
+  // runs, for a standard call); the row shows it, read-only, and on this computer Tx 6 calls
+  // the contest's Running exactly as the strip's Call CQ does, so what goes on the air is what the
+  // row shows. The operator's own Tx6 text stays underneath and is back when the contest ends. The
+  // Remote page's row keeps its own CQ and `startCq`, as its Call CQ does.
+  const contestCq = control ? (snap.contestCq ?? null) : null
+  // …and where WSJT-X has no activity for the running contest, its Tx6 is the operator's own,
+  // directed or plain, as in its normal mode: the row stays editable, and on this computer Tx 6 and
+  // Call CQ hand the direction typed there to the contest's Running (`snap.contestCqTyped`).
+  const contestCqTyped = control && snap.contestCqTyped === true
+
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
   // follows qso.txNow when it matches a row, else the operator's local pick.
-  const rowTexts = stdMessageList({ ...msgs, tx5, tx6 })
+  const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
   const txNow = snap.qso?.txNow ?? null
   const liveNext = txNow ? rowTexts.indexOf(txNow) : -1
   const nextIndex = liveNext >= 0 ? liveNext : localNext
+
+  /** #254's refusal of a Tx6 text that is not a CQ in WSJT-X's grammar, naming the form that
+   *  would work when `cqSuggestionFromText` can derive one from the operator's own words. */
+  const refuseMalformedCq = () => {
+    const fix = cqSuggestionFromText(tx6, snap.mycall)
+    pushToast(
+      fix
+        ? t('operate.tx.cq.malformed.try', { fix })
+        : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
+      'error',
+    )
+  }
 
   /** Fire Tx row n (1-based).
    * Tx6 = Call CQ — parse the editable Tx6 text for a directed token and call
@@ -998,6 +1052,13 @@ export function OperateCockpit({
   const doTx = (n: number) => {
     if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
+      // In a contest: the contest's Running, as the strip's Call CQ asks for it — the station
+      // refuses it with its reason when the contest cannot start, and the reason is shown.
+      if (contestCq) {
+        setLocalNext(5)
+        void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
       const dir = cqDirFromText(tx6, snap.mycall)
       // ⭐ #254 — A MALFORMED CQ IS REFUSED, NOT REPLACED.
       //
@@ -1011,13 +1072,12 @@ export function OperateCockpit({
       // and nothing is auto-rewritten — we refuse before anything keys and name the form that
       // would work when `cqSuggestionFromText` can derive one from the operator's OWN words.
       if (dir === undefined) {
-        const fix = cqSuggestionFromText(tx6, snap.mycall)
-        pushToast(
-          fix
-            ? t('operate.tx.cq.malformed.try', { fix })
-            : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
-          'error',
-        )
+        refuseMalformedCq()
+        return
+      }
+      if (contestCqTyped) {
+        setLocalNext(5)
+        void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
         return
       }
       if (control) setLocalNext(5)
@@ -1196,6 +1256,11 @@ export function OperateCockpit({
     if (mode === 'qso-monitor') {
       setDismissedCall(recallCallRef.current)
       onClearSelection?.()
+      // This computer's S&P asks for it by its own verb; the Remote page's goes on as before.
+      if (control) {
+        void startSearchAndPounce().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        return
+      }
     }
     if (expectedQso === undefined) onSetMode(mode)
     else onSetMode(mode, expectedQso)
@@ -1319,6 +1384,7 @@ export function OperateCockpit({
               onTx5={handleTx5}
               tx6={tx6}
               onTx6={handleTx6}
+              tx6Contest={contestCq}
               nextIndex={nextIndex}
               onTx={doTx}
               onGenerate={handleGenerate}
@@ -1631,8 +1697,8 @@ export function OperateCockpit({
         </div>
 
         {/* Warn-only Field Day banned-mode chip (e.g. FT8 at WFD — this cockpit is
-            where a banned mode would actually be keyed). A PASSIVE status div in
-            the header, outside every ⊞-removable pane: it is a status line, not a
+            where a banned mode would actually be keyed). A PASSIVE status chip in
+            the header, outside every ⊞-removable pane: it is a status, not a
             control, so it carries no panel-vocabulary id and no stop-line role. */}
         <FdAdvisories fdActive={fdActive} ruleset={fdRuleset} activeMode={tier} />
 
@@ -1883,6 +1949,7 @@ export function OperateCockpit({
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
           qso={snap.qso}
+          contestRunning={snap.fieldDay?.running}
           radio={snap.radio}
           rxOnly={isRxOnly(tier)}
           beacon={isBeacon(tier)}
@@ -1903,7 +1970,26 @@ export function OperateCockpit({
           onCallCq={() => {
             // The labelled "Call CQ" is always a PLAIN run — it also clears a
             // sticky directed token so a leftover "CQ DX" can't surprise.
-            void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
+            // This computer's strip asks for it by its own verb: the contest's Running while a
+            // contest runs, which the station refuses with its reason when the contest cannot
+            // start. A control that keys must not fail silently, so the reason is shown. The
+            // Remote page's is `startCq`, as before.
+            //
+            // Where WSJT-X has no activity for the running contest, Call CQ calls the CQ typed in
+            // Tx6, as WSJT-X's CQ is its Tx6 then: the direction rides along, and a Tx6 that is no
+            // CQ is refused as Tx 6 refuses it.
+            if (control) {
+              let dir: string | null = null
+              if (contestCqTyped) {
+                const typed = cqDirFromText(tx6, snap.mycall)
+                if (typed === undefined) {
+                  refuseMalformedCq()
+                  return
+                }
+                dir = typed
+              }
+              void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+            } else void startCq(null).then((s) => onSnap?.(s)).catch(() => {})
           }}
           onResend={onResend}
           onFreetext={onFreetext}
@@ -2188,6 +2274,7 @@ export function OperateCockpit({
                       onTx5={handleTx5}
                       tx6={tx6}
                       onTx6={handleTx6}
+                      tx6Contest={contestCq}
                       nextIndex={nextIndex}
                       onTx={doTx}
                       onGenerate={handleGenerate}

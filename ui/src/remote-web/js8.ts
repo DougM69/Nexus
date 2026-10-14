@@ -9,8 +9,10 @@ const bool = (v: unknown) => typeof v === 'boolean'
 const nullableTime = (v: unknown) => v === null || integer(v)
 const speed = (v: unknown) => ['slow','normal','fast','turbo'].includes(String(v))
 const origin = (v: unknown) => ['operator','heartbeat','hbAck','autoReply','relay','cqRepeat'].includes(String(v))
-function object(v: unknown, keys: string[]): Record<string, unknown> {
-  if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length !== keys.length || !keys.every(k => Object.prototype.hasOwnProperty.call(v,k))) throw new Error('invalidJs8')
+const unarmed = (v: unknown) => ['idle','txOff','needsHb','needsAuto','needsHbAndAuto','unscheduled'].includes(String(v))
+function object(v: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !keys.every(k => Object.prototype.hasOwnProperty.call(v,k)) ||
+    Object.keys(v).some(k => !keys.includes(k) && !optional.includes(k))) throw new Error('invalidJs8')
   return v as Record<string,unknown>
 }
 function rows(v: unknown, max: number): unknown[] {
@@ -32,14 +34,23 @@ export function parseJs8Sample(raw: unknown, ageMs: number, now = Date.now()): J
   if (!integer(sample.capturedAtMs) || !finite(ageMs) || ageMs < 0 || ageMs >= APPLICATION_TIMEOUT_MS ||
     new TextEncoder().encode(JSON.stringify(raw)).length > 384*1024) throw new Error('invalidJs8')
   const s = object(sample.state,['speed','rxSpeeds','txEnabled','sending','hbOn','hbNextAtMs','hbIntervalMin','cqOn','cqNextAtMs','cqIntervalMin',
-    'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'])
+    'autoreply','relay','hbAck','armed','idleMinutes','idleLimitMin','idleTripped','activity','stations','inbox','queue','pendingReply','lastError'],['notArmed'])
   if (!speed(s.speed) || !integer(s.rxSpeeds) || s.rxSpeeds > 15 ||
     ![s.txEnabled,s.sending,s.hbOn,s.cqOn,s.autoreply,s.relay,s.hbAck,s.idleTripped].every(bool) ||
     ![s.hbNextAtMs,s.cqNextAtMs].every(nullableTime) || ![s.hbIntervalMin,s.cqIntervalMin,s.idleMinutes,s.idleLimitMin].every(integer) ||
     (s.lastError !== null && !text(s.lastError))) throw new Error('invalidJs8')
+  // `notArmed`, the station's reason a switch that is on is not armed, is OPTIONAL. An older station
+  // does not send it, and its `armed` is the switch with TX on and no idle trip. One that sends it
+  // arms a switch only with no reason against it, gives a reason only to a switch that is on, and
+  // never arms one with TX off or the idle watchdog standing. An older page refuses such a sample
+  // whole, so this page must be deployed before a station that sends it.
   const armed = object(s.armed,['autoreply','relay','hbAck','hb','cq'])
-  if (!Object.values(armed).every(bool) || Object.entries({autoreply:s.autoreply,relay:s.relay,hbAck:s.hbAck,hb:s.hbOn,cq:s.cqOn})
-    .some(([key,on]) => armed[key] !== (on === true && s.txEnabled === true && s.idleTripped === false))) throw new Error('invalidJs8')
+  const notArmed = s.notArmed === undefined ? null : object(s.notArmed,['autoreply','relay','hbAck','hb','cq'])
+  if (!Object.values(armed).every(bool) || (notArmed && !Object.values(notArmed).every(v => v === null || unarmed(v))) ||
+    Object.entries({autoreply:s.autoreply,relay:s.relay,hbAck:s.hbAck,hb:s.hbOn,cq:s.cqOn}).some(([key,on]) => notArmed
+      ? armed[key] !== (on === true && notArmed[key] === null) || (on !== true && notArmed[key] !== null) ||
+        (armed[key] === true && (s.txEnabled !== true || s.idleTripped !== false))
+      : armed[key] !== (on === true && s.txEnabled === true && s.idleTripped === false))) throw new Error('invalidJs8')
   for (const raw of rows(s.activity,200)) {
     const r = object(raw,['atMs','speed','freqHz','snrDb','dtS','from','text','directedToMe','mine','complete','lowConf'])
     if (!integer(r.atMs) || !speed(r.speed) || ![r.freqHz,r.snrDb,r.dtS].every(finite) || !text(r.from) || !text(r.text) ||

@@ -2646,7 +2646,11 @@ export function Logbook({
                     {q.call}
                   </button>
                 </span>
-                <span className="log-cell log-country" title={q.country ?? ''}>{q.country ?? '—'}</span>
+                {/* The country is the DXCC entity the call resolves to, the one every award and the
+                    statistics already count: imported contacts carry their logger's own spelling
+                    of it ("UNITED STATES"), and they read as the same country as Nexus's own. The
+                    stored text stays on the tooltip, and shows where the call resolves to none. */}
+                <span className="log-cell log-country" title={q.country ?? ''}>{q.entity ?? q.country ?? '—'}</span>
                 <span className="log-cell">{q.band}</span>
                 <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
                 <span className="log-cell">{q.mode}</span>
@@ -2696,14 +2700,17 @@ export function Logbook({
                   {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
                 </span>
                 <span className="log-cell">
-                  {q.qslRcvd && (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl) ? (
-                    // Per-source detail: which channel(s) actually confirmed.
+                  {q.qslRcvd &&
+                  (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl || q.qslRcvd.qrz) ? (
+                    // Per-source detail: which channel(s) actually confirmed. QRZ has its own
+                    // letter: a QRZ-only confirmation fell through to the yellow eQSL word below.
                     <span
                       className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
                       title={[
                         q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
                         q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
                         q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
+                        q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
@@ -2712,6 +2719,7 @@ export function Logbook({
                         q.qslRcvd.lotw ? 'L' : null,
                         q.qslRcvd.card ? 'C' : null,
                         q.qslRcvd.eqsl ? 'E' : null,
+                        q.qslRcvd.qrz ? 'Q' : null,
                       ]
                         .filter(Boolean)
                         .join('·')}

@@ -873,3 +873,65 @@ fn a_relation_priced_contest_refuses_a_callsign_the_country_file_cannot_place() 
         .expect("shipped")
         .is_ok());
 }
+
+/// ⭐ **One power story in the CQ World-Wide and WPX contests**, the ones `tempo-app`'s per-contest
+/// sweep (`engine::contest_power_tests`) cannot start without a country file. Power category is
+/// what the log declares: every one of the five writes it as CATEGORY-POWER, each sponsor's page
+/// listing *"HIGH LOW QRP"* (CQ WW and WPX since their CATEGORY lines are written from the entry's
+/// declarations). Power sent is in none of their exchanges, so it reaches neither the log nor
+/// what the station sends.
+#[test]
+fn power_category_is_declared_and_power_sent_goes_nowhere() {
+    let entry = |power: &str, sent: &str| StationData {
+        contest_qth_state: "IL".into(),
+        contest_category_operator: "SINGLE-OP".into(),
+        contest_category_power: power.into(),
+        contest_category_assisted: "NON-ASSISTED".into(),
+        contest_power: sent.into(),
+        ..station("W9XYZ", "4")
+    };
+    let written = |event: &str, power: &str, sent: &str| {
+        let s = select(event, &entry(power, sent));
+        let exchange = composing(&s);
+        let cab = FieldDayLog::new("W9XYZ", s, "20m")
+            .cabrillo(14_080)
+            .expect("a header");
+        (cab, exchange)
+    };
+    let mut got = Vec::new();
+    for event in ["cqww_cw", "cqww_ssb", "cqww_rtty", "cqwpx_cw", "cqwpx_ssb"] {
+        for power in ["QRP", "LOW", "HIGH"] {
+            let (cab, exchange) = written(event, power, "");
+            assert_eq!(
+                written(event, power, "KW"),
+                (cab.clone(), exchange),
+                "{event} {power}: Power sent reached the log or the exchange"
+            );
+            let line = cab
+                .lines()
+                .find(|l| l.starts_with("CATEGORY-POWER:"))
+                .unwrap_or("");
+            got.push(format!("{event} {power}: {line}"));
+        }
+    }
+    assert_eq!(
+        got,
+        [
+            "cqww_cw QRP: CATEGORY-POWER: QRP",
+            "cqww_cw LOW: CATEGORY-POWER: LOW",
+            "cqww_cw HIGH: CATEGORY-POWER: HIGH",
+            "cqww_ssb QRP: CATEGORY-POWER: QRP",
+            "cqww_ssb LOW: CATEGORY-POWER: LOW",
+            "cqww_ssb HIGH: CATEGORY-POWER: HIGH",
+            "cqww_rtty QRP: CATEGORY-POWER: QRP",
+            "cqww_rtty LOW: CATEGORY-POWER: LOW",
+            "cqww_rtty HIGH: CATEGORY-POWER: HIGH",
+            "cqwpx_cw QRP: CATEGORY-POWER: QRP",
+            "cqwpx_cw LOW: CATEGORY-POWER: LOW",
+            "cqwpx_cw HIGH: CATEGORY-POWER: HIGH",
+            "cqwpx_ssb QRP: CATEGORY-POWER: QRP",
+            "cqwpx_ssb LOW: CATEGORY-POWER: LOW",
+            "cqwpx_ssb HIGH: CATEGORY-POWER: HIGH",
+        ]
+    );
+}

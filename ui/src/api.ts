@@ -32,6 +32,9 @@ import type {
   LogExport,
   DetectedRig,
   FdEventBeacon,
+  ClubFirewall,
+  ClubFirewallPress,
+  FdClubLog,
   FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
@@ -92,11 +95,13 @@ declare global {
       core?: { invoke?: InvokeFn; Channel?: new <T>() => { onmessage: (message: T) => void } }
       invoke?: InvokeFn
       /** Tauri's event bridge (exposed by `withGlobalTauri`). Used by usePounce for the app's
-       * one PUSH channel — everything else here polls. */
+       * one PUSH channel — everything else here polls — and by `useContestScreenWindow`, which
+       * hears one window's close (`target` names the window). */
       event?: {
         listen?: <T>(
           event: string,
           handler: (e: { payload: T }) => void,
+          options?: { target?: string | { kind: string; label?: string } },
         ) => Promise<() => void>
       }
     }
@@ -444,7 +449,7 @@ export async function fetchCty(): Promise<CtyStatus> {
 }
 
 /** Field Day rules-data currency — the "check for rules updates" row in
- * Settings ▸ Contesting ▸ Field Day Setup. Same set-once discipline as the
+ * Settings ▸ Contesting ▸ Contest. Same set-once discipline as the
  * country file: `activeGenerated` is the data scoring THIS session (the
  * bundled seed, or a previously downloaded file), `installedGenerated` what is
  * staged on disk (empty until a download happens; newer than active ⇒
@@ -504,6 +509,22 @@ export interface FdRulesetDto {
    *  offers for `contestEntryClass`. Absent for a contest that declares none. Invariant
    *  tokens: the sponsor's names, never translated. */
   entryClasses?: string[]
+  /** ⭐ The entry declarations the picked contest's sponsor names, each absent when it names
+   *  none: its multi-operator classes (Cabrillo `CATEGORY-TRANSMITTER`), its overlays
+   *  (`CATEGORY-OVERLAY`), the `ADDRESS` headers its template carries, and whether it has a
+   *  `SOAPBOX`. Settings offers each only where it is written. Invariant tokens, never
+   *  translated. */
+  transmitterCategories?: string[]
+  overlayCategories?: string[]
+  addressHeaders?: string[]
+  soapbox?: boolean
+  /** ⭐ The bands an entry may declare (Cabrillo `CATEGORY-BAND`, CQ WW's `ALL 160M … 10M`), for
+   *  the Band category picker; absent for a contest that lists none. Invariant tokens. */
+  bandCategories?: string[]
+  /** ⭐ The Cabrillo lines the sponsor requires that a contest started from these settings would
+   *  leave out, for the Contest screen to name before Contest mode turns on. Filled by the
+   *  preview only. */
+  cabrilloMissing?: string[]
   /** ⭐ When the picked contest runs: its running-or-next window (Unix UTC), from the same
    *  rules data the session's banner reads, so the contest screen can show it before any
    *  session exists. Filled by the preview only; absent from the Remote capture. */
@@ -742,14 +763,17 @@ export interface EntryClaim {
 }
 
 /** The contest strip changed in one window while the contest logger window is open: what it now
- *  shows becomes the entry both windows show. Answers the entry's new rev. Rejects with the logger
- *  window closed. Text in memory only — nothing is logged, written or sent. */
+ *  shows becomes the entry both windows show. `contact` is the contact the strip showed as it
+ *  changed (`ContestEntryShared.contact`). Answers the entry's new rev. Rejects with the logger
+ *  window closed, and with `contestEntryLogged` when that contact has since been logged. Text in
+ *  memory only — nothing is logged, written or sent. */
 export async function contestEntryPut(
   call: string,
   fields: Record<string, string>,
   marks: unknown,
+  contact: number,
 ): Promise<number> {
-  return invoke<number>('contest_entry_put', { call, fields, marks })
+  return invoke<number>('contest_entry_put', { call, fields, marks, contact })
 }
 
 /** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
@@ -785,7 +809,12 @@ export interface RemovedContest {
 }
 
 /** Why a removal or a restore changed nothing. */
-export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain' | 'clubSync'
+export type ContestRemovalRefusal = 'empty' | 'changed' | 'notRemoved' | 'workedAgain'
+
+/** At a club, where a removal or restore goes: `linked` — this laptop is with the host now, so
+ *  every laptop drops it (or gets it back) as soon as the host has it; `away` — when the link is
+ *  back. Absent without club sync. */
+export type ContestClubRoute = 'linked' | 'away'
 
 /** Where a removed contact had already gone — places Nexus cannot take it back from. */
 export interface ContestSentTo {
@@ -802,20 +831,20 @@ export interface ContestSentTo {
 }
 
 export type ContestRemovalAnswer =
-  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo }
-  | { outcome: 'restored'; entry: RemovedContest }
+  | { outcome: 'removed'; entry: RemovedContest; sentTo: ContestSentTo; club?: ContestClubRoute }
+  | { outcome: 'restored'; entry: RemovedContest; club?: ContestClubRoute }
   | { outcome: 'refused'; refusal: ContestRemovalRefusal }
 
 /** ⭐ **Remove the newest contest contact** — when it is still the one named (`call` and
  *  `whenUnix`, as the strip showed it), else `refused: changed`. It is kept, never deleted: its
- *  serial and club seq stay spent, and `contestRestore` puts it back. Refused while club sync
- *  runs. Answers once the contest journal holds the change. Never keys or stops TX. */
+ *  serial and club seq stay spent, and `contestRestore` puts it back. At a club the club takes it
+ *  back too (`club`). Answers once the contest journal holds the change. Never keys or stops TX. */
 export async function contestRemoveLast(call: string, whenUnix: number): Promise<ContestRemovalAnswer> {
   return invoke<ContestRemovalAnswer>('contest_remove_last', { call, whenUnix })
 }
 
 /** Put a removed contact back exactly as it was — refused when the station was worked again
- *  since on that band and mode, and while club sync runs. */
+ *  since on that band and mode. At a club the club puts it back too (`club`). */
 export async function contestRestore(id: number): Promise<ContestRemovalAnswer> {
   return invoke<ContestRemovalAnswer>('contest_restore', { id })
 }
@@ -823,6 +852,66 @@ export async function contestRestore(id: number): Promise<ContestRemovalAnswer> 
 /** The removed contacts, oldest removal first. */
 export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
+}
+
+/** Why an edit changed nothing: the contact is no longer as it was shown; no call or no band;
+ *  another number of counties than a county line has; a satellite contact's band; club sync,
+ *  which cannot carry an edit to the club. */
+export type ContestEditRefusal = 'changed' | 'incomplete' | 'rows' | 'satellite' | 'club'
+
+/** What an edit came to: the contact as it was and as it is now (one row, or one per county),
+ *  and where it had already gone, which keeps what it said — or why nothing changed. */
+export type ContestEditAnswer =
+  | { outcome: 'edited'; before: FieldDayQso[]; after: FieldDayQso[]; sentTo: ContestSentTo }
+  | { outcome: 'refused'; refusal: ContestEditRefusal }
+
+/** What an edit puts on a contact: its call, what they sent (one `[slot, value]` vector per row,
+ *  as `contestLogManualRows` takes them), its band, and its mode on the air (`''` keeps it). */
+export interface ContestContactEdit {
+  call: string
+  rows: [string, string][][]
+  band: string
+  mode: string
+}
+
+/** ⭐ **Edit a contest contact in place** — when it is still the one named (`call` and
+ *  `whenUnix`, as the screen showed it), else `refused: changed`. It keeps its time, serial and
+ *  number; refused at a club (`club`). Answers once the contest journal holds the edit. Never
+ *  keys or stops TX. */
+export async function contestEdit(call: string, whenUnix: number, edit: ContestContactEdit): Promise<ContestEditAnswer> {
+  return invoke<ContestEditAnswer>('contest_edit', {
+    call,
+    whenUnix,
+    newCall: edit.call,
+    rows: edit.rows,
+    band: edit.band,
+    mode: edit.mode,
+  })
+}
+
+/** One contest's contacts that the contest journal keeps past its four days and the logbook does
+ *  not hold: what the contest screen offers to merge. `event` is the contest's rules-file id;
+ *  the times are Unix seconds. */
+export interface ContestUnmerged {
+  event: string
+  count: number
+  firstUnix: number
+  lastUnix: number
+}
+
+/** ⭐ The contest contacts no session loads any more and the logbook does not hold, by contest.
+ *  Asking also lets go of every one whose copy the logbook holds on disk, as such a contact
+ *  always aged out of the journal. */
+export async function contestUnmerged(): Promise<ContestUnmerged[]> {
+  return invoke<ContestUnmerged[]>('contest_unmerged')
+}
+
+/** ⭐ Merge one contest's contacts that the contest journal keeps past its four days into the
+ *  general logbook: the offer above. The end-of-contest merge's own rule, so a contact already
+ *  there is skipped, never duplicated. Nothing is queued for upload. */
+export async function contestMergeUnmerged(event: string): Promise<FdMergeReport> {
+  const [report] = await invoke<[FdMergeReport, AppSnapshot]>('contest_merge_unmerged', { event })
+  return report
 }
 
 /** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
@@ -962,10 +1051,33 @@ export async function fdDiscoverEvents(): Promise<FdEventBeacon[]> {
   return invoke<FdEventBeacon[]>('fd_discover_events', {})
 }
 
+/** Where Nexus's club sync rules stand in Windows Firewall on this laptop, read with no
+ *  administrator rights (`club_firewall_status`). `null` off Windows, and when the firewall
+ *  cannot be read. */
+export async function clubFirewallStatus(): Promise<ClubFirewall | null> {
+  return invoke<ClubFirewall | null>('club_firewall_status')
+}
+
+/** Allow Nexus through Windows Firewall (`'allow'`: Nexus's three club sync rules, on Private and
+ *  Public networks) or remove its rules (`'remove'`), through one Windows administrator prompt;
+ *  resolves with the firewall read back. Rejects with `onAir` while anything is transmitting,
+ *  `running` while a press is still waiting on Windows, `path` or `port` when the command cannot
+ *  be built, and `unsupported` off Windows. */
+export async function clubFirewallPress(action: 'allow' | 'remove'): Promise<ClubFirewallPress> {
+  return invoke<ClubFirewallPress>('club_firewall_press', { action })
+}
+
 /** Export the merged CLUB log from the host (deduped earliest-wins).
  * Rejects when this instance is not hosting. */
 export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string> {
   return invoke<string>('fd_club_export', { format })
+}
+
+/** The host's club log for its own screen: the newest contacts its club merged, newest first,
+ *  each with the position that logged it, and how many the club holds. `null` when this instance
+ *  is not hosting. A read; never on Remote. */
+export async function fdClubLogNewest(): Promise<FdClubLog | null> {
+  return invoke<FdClubLog | null>('fd_club_log_newest')
 }
 
 /** What the host's Give button did: the position given, or why nothing changed. */
@@ -980,6 +1092,25 @@ export type FdGiveAnswer =
  *  entry on the list now can be given by. Never on Remote. */
 export async function fdClubGivePosition(handle: number): Promise<FdGiveAnswer> {
   return invoke<FdGiveAnswer>('fd_club_give_position', { handle })
+}
+
+/** What the host's Remove or Allow back did: done, or why nothing changed (`own`: the host's own
+ *  position, which it cannot remove; `stale`: no such position on the board now, or, for Allow
+ *  back, not removed). */
+export type FdRemoveAnswer =
+  | { outcome: 'done' }
+  | { outcome: 'refused'; refusal: 'notHosting' | 'own' | 'stale' }
+
+/** ⭐ **Remove a position from the club event** — the host's own board, by the position's id. Its
+ *  link is closed and it is turned away at every JOIN until the host lets it back
+ *  (`fdClubAllowBack`); the contacts it already sent stay in the club's log. Never on Remote. */
+export async function fdClubRemovePosition(posid: string): Promise<FdRemoveAnswer> {
+  return invoke<FdRemoveAnswer>('fd_club_remove_position', { posid })
+}
+
+/** Let a removed position back in: its next try joins, and it sends what it logged meanwhile. */
+export async function fdClubAllowBack(posid: string): Promise<FdRemoveAnswer> {
+  return invoke<FdRemoveAnswer>('fd_club_allow_back', { posid })
 }
 
 /** The spectator scoreboard's bound state, for the Settings row: running?,
@@ -1044,6 +1175,21 @@ export async function redecode(): Promise<AppSnapshot> {
  * plain CQ (clears a sticky directed token). */
 export async function startCq(dir: string | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('start_cq', { dir })
+}
+
+/** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's
+ * while a contest runs (`snap.contestCq`, `snap.contestCqTyped`). `dir` is the direction of the CQ
+ * typed in Tx6, which the contest's Running calls where WSJT-X has no activity for the contest
+ * (`snap.contestCqTyped`); null for a plain CQ. Outside a contest the row, and the Remote page
+ * always, call `startCq`, which sends the CQ they show. */
+export async function startRunning(dir: string | null = null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_running', { dir })
+}
+
+/** The Operate strip's S&P on this computer (`Engine::start_search_and_pounce`). The Remote page's
+ * S&P keeps its own path. */
+export async function startSearchAndPounce(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_search_and_pounce', {})
 }
 
 /** Call CQ from Tempo (chat-first): sends one structured `CQ <call> <grid>` frame and
@@ -1235,6 +1381,9 @@ export interface ConfirmationCheck {
   /** How many records the service's download held (LoTW's confirmations, eQSL's cards, QRZ's
    *  book), as the Connections log says them. */
   records: number
+  /** LoTW only: how many of its confirmations are for a call the log holds no contact under (a
+   *  club call on the account, say). They change nothing. */
+  otherCallRecords: number
   lines: ConfirmationLine[]
   /** The contacts the service confirms that lack its confirmation: Apply adds it. */
   gainIds: string[]
@@ -2088,26 +2237,33 @@ export async function setOperatingMode(
 
 /** Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
  * exact frequency atomically — one round-trip, so the rig can't end up in the new mode at the
- * old dial and the UI never sees a half-applied state. */
+ * old dial and the UI never sees a half-applied state. `mode` is the section, and comes back as
+ * the snapshot's `workView`: 'keyboard' is PSK's, and 'js8' is Digital named for the JS8 screen
+ * (`WORK_SECTION`, features/needs.ts). */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8',
   freqMhz: number,
   band: string,
   call?: string,
-  tier?: 'FT8' | 'FT4',
+  tier?: 'FT8' | 'FT4' | 'JS8',
+  park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
   // configure rig split automatically — the N1MM behavior. `tier` is the digital
   // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
   // backend call — as two calls, the radio loop could command the tier's default
   // dial to the rig in the gap before the spot's exact frequency ("hitting a
-  // default first, then switching" — operator report, 2026-08-09).
+  // default first, then switching" — operator report, 2026-08-09). `park` is a
+  // Needed row's park, which rides the work hint (`workPark`) to the log line.
   return invoke<AppSnapshot>('work_spot', {
     mode,
     freqMhz,
     band,
     call: call ?? null,
     tier: tier ?? null,
+    // Only when there is one: the hosted page's control transport refuses a work_spot carrying
+    // any other key, and a browser's Work never carries a park.
+    ...(park ? { park } : {}),
   })
 }
 

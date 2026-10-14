@@ -49,7 +49,7 @@ Entering the CW section commands the rig via CAT before any transmit:
 - **CAT and WinKeyer back-ends** → rig mode set to `CW`.
 - **Soundcard back-end** → rig mode set to `USB` (≥10 MHz) or `LSB` (<10 MHz).
 
-The mode is re-asserted on section entry even if the frequency has not changed. You do not need a separate mode button. TX is armed automatically on CW section entry (`tx_enabled = true`), consistent with a live-key rig. The FT8 auto-sequencer never applies to CW.
+The mode is re-asserted on section entry even if the frequency has not changed. You do not need a separate mode button. TX is armed automatically on CW section entry (`tx_enabled = true`), consistent with a live-key rig, unless you stopped it: after Stop TX, Esc, TX Off or the watchdog, TX stays off, here and on every other screen, until you turn it back on yourself by sending with an F-key or typed text, or with TX On. The FT8 auto-sequencer never applies to CW.
 
 A prominent **band picker** in the cockpit header shows and selects your band. It is a large, bold control colored by the active band (matching the Conditions map's per-band spot colors), so your operating band reads at a glance. Selecting a band parks the VFO at the **start of your licensed CW segment** on that band and lists only bands your license class permits for CW. A **🔒 TX locked** chip appears when the current frequency/mode is outside your privileges.
 
@@ -125,8 +125,8 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 The contest sets and the Field Day set are laid out the way N1MM lays its keys out, one key per
 step of a contact, and they are what [Enter Sends Message](Field-Day.md#enter-sends-message-esm)
 sends from: `F1` calls CQ, `F2` sends his call and your exchange, `F3` is TU, `F4` your call,
-`F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` asks for a repeat
-and `F8` tells a dupe QSO B4. Your exchange goes once, and your call goes out on `F1`, `F3` and
+`F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` tells a dupe
+QSO B4 and `F8` asks for a repeat, the key N1MM's default message sets put AGN on. Your exchange goes once, and your call goes out on `F1`, `F3` and
 `F4`.
 
 ### The Field Day set
@@ -142,8 +142,8 @@ working K9AAA as 3A WI, `F2` sends `K9AAA 3A WI` and `F6` sends `TU 3A WI`.
 | `F4` | My Call | `{MYCALL}` |
 | `F5` | His Call | `! ` |
 | `F6` | S&P exch | `TU {EXCH}` |
-| `F7` | AGN | `AGN AGN` |
-| `F8` | B4 | `! QSO B4` |
+| `F7` | B4 | `! QSO B4` |
+| `F8` | AGN | `AGN AGN` |
 
 ### The contest set
 
@@ -153,7 +153,7 @@ and keying it in the Illinois QSO Party or CQ WW CW calls for somebody else's ev
 that contest's own exchange without the signal report — your zone in CQ WW CW, your county in a
 QSO party — so the keys that send it send `{RST}` before it. In the Illinois QSO Party from Cook
 County, working K9AAA: `F2` sends `K9AAA 5NN COOK`, `F3` sends `TU <your call>`, `F6` sends
-`TU 5NN COOK` and `F8` sends `K9AAA QSO B4`.
+`TU 5NN COOK` and `F7` sends `K9AAA QSO B4`.
 
 | Key | Label | Content |
 |---|---|---|
@@ -163,8 +163,8 @@ County, working K9AAA: `F2` sends `K9AAA 5NN COOK`, `F3` sends `TU <your call>`,
 | `F4` | My Call | `{MYCALL}` |
 | `F5` | His Call | `! ` |
 | `F6` | S&P exch | `TU {RST} {EXCH}` |
-| `F7` | AGN | `AGN AGN` |
-| `F8` | B4 | `! QSO B4` |
+| `F7` | B4 | `! QSO B4` |
+| `F8` | AGN | `AGN AGN` |
 
 ### The contest set without a report
 
@@ -180,8 +180,8 @@ and the ARRL VHF contests. A 5NN there would be a wrong exchange, so `F2` and `F
 | `F4` | My Call | `{MYCALL}` |
 | `F5` | His Call | `! ` |
 | `F6` | S&P exch | `TU {EXCH}` |
-| `F7` | AGN | `AGN AGN` |
-| `F8` | B4 | `! QSO B4` |
+| `F7` | B4 | `! QSO B4` |
+| `F8` | AGN | `AGN AGN` |
 
 **These sets changed with Enter Sends Message: `F3` is now TU.** Before, `F2` answered with his
 call and yours, `F3` sent the exchange twice with "DE <your call> … K", `F4` the TU, `F5` your
@@ -210,6 +210,15 @@ as you like and switch the active one from the CW cockpit (`ui/src/types.ts`, `c
 active profile takes precedence over every built-in set above, Field Day included. A profile also
 keeps which of its keys [Enter Sends Message](Field-Day.md#enter-sends-message-esm) sends for each
 step, mapped in Settings → Contesting ▸ Enter Sends Message.
+
+A key can also be changed where it is, in the cockpit: its **✎**, a right-click on it, or
+`Ctrl+Shift` with its F-key opens the macro editor RTTY and PSK use, and none of them sends.
+**Save** writes that one key into the ACTIVE profile (`cwProfiles[activeCwProfile]`), the list
+Settings → CW → Macros edits. A profile with no keys of its own first takes the eight the dock showed
+(the running contest's or Field Day's set during one, else the casual set), with that set's Enter
+Sends Message steps when it is one of the contest layouts, so Enter keeps sending the same keys.
+**Send once** sends the edited text through the key's own send path (the His call commit, the
+licence check, `send_cw` and every engine gate behind it) and saves nothing.
 
 **RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
 

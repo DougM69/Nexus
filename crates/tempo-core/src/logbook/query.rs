@@ -297,11 +297,15 @@ enum SortVal {
     Num(f64),
 }
 
-fn sort_val(r: &QsoRecord, k: SortKey) -> SortVal {
+/// `entity` is the row's resolved DXCC entity, asked for only when the column is the country.
+fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
     let text = |s: &str| SortVal::Text(js_upper(s).into_boxed_str());
     match k {
         SortKey::Call => text(&r.call),
-        SortKey::Country => text(r.country.as_deref().unwrap_or("")),
+        // The country the Logbook shows (`q.entity ?? q.country`): the DXCC entity, so a QRZ
+        // `Germany` and a `Fed. Rep. of Germany` sort together, and the stored text only where
+        // the call resolves to none.
+        SortKey::Country => text(entity.or(r.country.as_deref()).unwrap_or("")),
         SortKey::Band | SortKey::Freq => SortVal::Num(ui_mhz(r.freq_mhz)),
         SortKey::Mode => text(&r.mode),
         SortKey::Sent => text(r.rst_sent.as_deref().unwrap_or("")),
@@ -336,7 +340,7 @@ fn sort_val_cmp(a: &SortVal, b: &SortVal) -> Ordering {
 }
 
 /// Whether the Logbook shows `r` under `query` (`matchesLogQuery`, verbatim): not an
-/// award-confirmed contact under the chip, and the search in any of seven fields — the formatted
+/// award-confirmed contact under the chip, and the search in any of eight fields — the formatted
 /// time among them, whose trailing `Z` is why a search for "z" finds every row.
 pub fn matches(r: &QsoRecord, query: &LogQuery) -> bool {
     shown(
@@ -361,17 +365,34 @@ fn shown(r: &QsoRecord, needs_confirm_only: bool, t: &str) -> bool {
         || has(&r.band)
         || has(&r.mode)
         || has(&mode_key(&r.mode))
+        || submode(r).is_some_and(has)
         || has(&fmt_utc(r.when_unix))
+}
+
+/// A contact's SUBMODE, from its passthrough: among them the sideband of a phone contact, which
+/// the log holds as `SSB` with the sideband there ([`super::canonical`]), so "usb" and "lsb" find
+/// those contacts by it. A narrow read of the store carries it only for a search
+/// ([`super::sqlite::LogDb::each_narrow_after_with_submode`]).
+fn submode(r: &QsoRecord) -> Option<&str> {
+    r.extra
+        .iter()
+        .find(|(k, _)| k == "SUBMODE")
+        .map(|(_, v)| v.as_str())
 }
 
 /// The rows `query` shows, as their handles in display order — the order vector (`logOrder`,
 /// SPEC-2 v3 §4.3). `rows` are `(handle, row)` in LOG ORDER; a row the query does not show is
-/// left out. See [`OrderBuilder`], which this is.
-pub fn order<H, R>(rows: impl IntoIterator<Item = (H, R)>, query: &LogQuery) -> Vec<H>
+/// left out; `resolve` is a call's live DXCC entity, which the country column sorts on. See
+/// [`OrderBuilder`], which this is.
+pub fn order<H, R>(
+    rows: impl IntoIterator<Item = (H, R)>,
+    query: &LogQuery,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Vec<H>
 where
     R: Borrow<QsoRecord>,
 {
-    let mut b = OrderBuilder::new(query);
+    let mut b = OrderBuilder::new(query, resolve);
     for (h, r) in rows {
         b.push(h, r.borrow());
     }
@@ -383,31 +404,56 @@ where
 /// and never the rows. Filter, then a stable sort on the column with the time as the
 /// tie-break, the whole comparison negated for a descending order — so a full tie keeps log
 /// order either way (`logOrder`).
-pub struct OrderBuilder<H> {
+pub struct OrderBuilder<'a, H> {
     sort: SortKey,
     asc: bool,
     needs_confirm_only: bool,
     /// The search, trimmed and lower-cased once.
     t: String,
+    /// A call's live DXCC entity, resolved once per distinct call and only for the country
+    /// column, as the statistics resolve theirs ([`LogStatCounter`]).
+    resolve: &'a dyn Fn(&str) -> Option<String>,
+    entity_of: HashMap<String, Option<String>>,
     kept: Vec<(H, SortVal, u64)>,
 }
 
-impl<H> OrderBuilder<H> {
-    pub fn new(query: &LogQuery) -> Self {
+impl<'a, H> OrderBuilder<'a, H> {
+    pub fn new(query: &LogQuery, resolve: &'a dyn Fn(&str) -> Option<String>) -> Self {
         Self {
             sort: query.sort,
             asc: query.asc,
             needs_confirm_only: query.needs_confirm_only,
             t: js_lower(js_trim(&query.search)),
+            resolve,
+            entity_of: HashMap::new(),
             kept: Vec::new(),
         }
     }
 
+    /// Whether the query searches, and so reads each row's SUBMODE as well as its columns: a
+    /// narrow read of the store carries it only when asked
+    /// ([`super::sqlite::LogDb::each_narrow_after_with_submode`]).
+    pub fn searches(&self) -> bool {
+        !self.t.is_empty()
+    }
+
     /// The next row, in LOG ORDER after every row pushed before it.
     pub fn push(&mut self, h: H, r: &QsoRecord) {
-        if shown(r, self.needs_confirm_only, &self.t) {
-            self.kept.push((h, sort_val(r, self.sort), r.when_unix));
+        if !shown(r, self.needs_confirm_only, &self.t) {
+            return;
         }
+        let entity = match self.sort {
+            SortKey::Country => {
+                let resolve = self.resolve;
+                self.entity_of
+                    .entry(r.call.clone())
+                    .or_insert_with(|| resolve(&r.call))
+                    .as_deref()
+            }
+            _ => None,
+        };
+        self.kept
+            .push((h, sort_val(r, self.sort, entity), r.when_unix));
     }
 
     /// The handles of the rows shown, in display order.
@@ -899,7 +945,9 @@ impl Tallies {
     }
 }
 
-/// The US-family entities WAS counts states for (`US_ENTITIES`).
+/// The US-family entities WAS counts states for (`US_ENTITIES`): the country file's names for
+/// ADIF's DXCC entities 291, 6 and 110, the three the WAS award itself is gated on
+/// (`propagation::dxcc::is_us_state_entity`), upper-cased as they are compared.
 const US_ENTITIES: [&str; 3] = ["UNITED STATES", "ALASKA", "HAWAII"];
 
 /// The fifty WAS codes (`WAS_STATES`).
@@ -910,10 +958,12 @@ const WAS_STATES: [&str; 50] = [
     "WV", "WY",
 ];
 
-/// `wasState(q)`: a contact's state as a WAS code, only for a US-family STORED country.
-fn was_state(r: &QsoRecord) -> Option<String> {
-    let country = js_upper(js_trim(r.country.as_deref().unwrap_or("")));
-    if !US_ENTITIES.contains(&country.as_str()) {
+/// `wasState(q)`: a contact's state as a WAS code, only for a contact of a US-family entity.
+/// `named` is the name its entity is counted under: its DXCC entity, or its stored country where
+/// its call resolves to none. So a LoTW download's `UNITED STATES OF AMERICA` counts, and a
+/// foreign entity's contact stored with a US country does not.
+fn was_state(named: &str, r: &QsoRecord) -> Option<String> {
+    if !US_ENTITIES.contains(&js_upper(named).as_str()) {
         return None;
     }
     let code = js_upper(js_trim(r.state.as_deref()?));
@@ -998,7 +1048,7 @@ impl LogFold for LogStatCounter<'_> {
         }
         self.bands.add(&r.band);
         self.modes.add(&phone_mode_label(&r.mode));
-        if let Some(state) = was_state(r) {
+        if let Some(state) = was_state(named, r) {
             self.states.add(&state);
         }
     }
@@ -1085,9 +1135,14 @@ pub mod reference {
             .collect()
     }
 
-    /// The order vector of the whole log, as log positions.
-    pub fn order<R: Borrow<QsoRecord>>(log: &[R], query: &LogQuery) -> Vec<usize> {
-        super::order(log.iter().map(|r| r.borrow()).enumerate(), query)
+    /// The order vector of the whole log, as log positions; `resolve` is a call's live DXCC
+    /// entity, which the country column sorts on.
+    pub fn order<R: Borrow<QsoRecord>>(
+        log: &[R],
+        query: &LogQuery,
+        resolve: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<usize> {
+        super::order(log.iter().map(|r| r.borrow()).enumerate(), query, resolve)
     }
 
     /// A fold ([`LogFold`]) over the whole log.

@@ -4,21 +4,22 @@ Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day)
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
 contact for upload. The hunter ships enabled — the wizard turns everything on.
-**Field Day mode is the exception**: it stays off until you switch it on at the
-top of the **Contest** screen (the tent in the left bar), in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or in
-[Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
-reshapes the app for a weekend most operators are not having.
+**Contest mode is the exception**: it stays off until you switch it on at the
+top of the **Contest** screen (the tent in the left bar) or in
+[Contesting ▸ Contest](settings-reference.md#contest), under the picker, because it
+reshapes the app for a weekend most operators are not having. It is one switch for
+whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
+Field Day or any other, and it names that contest wherever it is shown.
 
 ---
 
 ## Field Day
 
-A settings switch turns the event on and the app reshapes for it: the exchange
+**Contest mode** turns the event on and the app reshapes for it: the exchange
 grammar, a live countdown that knows the real date rules, per-(call, band,
 mode-class) dupe checking, and a scoreboard.
 
-<!-- TODO: capture screenshot — Field Day mode — exchange entry, countdown, live scoreboard -->
+<!-- TODO: capture screenshot — Contest mode on Field Day — exchange entry, countdown, live scoreboard -->
 
 ### Set it up first
 
@@ -28,17 +29,20 @@ mode-class) dupe checking, and a scoreboard.
 off. The class, section and multiplier shown are one station's own entries —
 set yours from the rules for the event you are in.*
 
-In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup):
+In [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day), shown while one of
+the two Field Days is picked:
 
-1. **Event** — ARRL Field Day or Winter Field Day. This changes scoring labels
-   and export headers.
+1. **Contest** — ARRL Field Day or Winter Field Day, picked in
+   [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest) at the top of the tab.
+   This changes scoring labels and export headers.
 2. **Class / Category** and **ARRL Section** — these start **empty on purpose**,
    and Field Day refuses to start until you set yours. (An old default of "WI"
    sent the wrong exchange for everyone outside Wisconsin — now it's a one-time
    deliberate step.) ARRL FD wants a class like `1D`; WFD wants its class number
    and category letter, like `2O` (two transmitters, outdoor).
-3. **Power multiplier** — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W), or ×1 (> 100 W).
-   It multiplies your QSO points; the engine clamps it to the legal values.
+3. **Power multiplier**, ARRL Field Day only — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W),
+   or ×1 (> 100 W). It multiplies your QSO points; the engine clamps it to the legal
+   values. Winter Field Day scores by its objectives instead.
 
 ### Operate the event
 
@@ -54,6 +58,14 @@ names the event and the rules year it is scoring against; the counters and the a
 show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
+
+**The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK
+cockpits show it in the title bar of their Log pane: `ILQP · 212 pts · 48 Q · 19 mults · 41/hr`, that
+is the score, the contacts, the multipliers (the worked sections at Field Day) and your rate over
+your last ten contacts, the same numbers the Contest screen shows, and the rate falls while you log
+nothing. The Satellites log strip and the contest logger window carry it in the strip's top line
+instead, in whatever room that line has left: it is cut short rather than move anything, and
+hovering it shows the whole reading.
 
 **Super Check Partial and call history**, in every contest. As you type a call in a log
 strip, a line under the boxes lists the calls active in recent contests that contain what
@@ -83,6 +95,11 @@ it. It is kept under **Removed** on the contest screen, out of the score and eve
 and **Restore** puts it back exactly. The [Field Day manual](../manual/Field-Day.md#take-back-the-last-contact)
 has the details, including where a contact may already have gone.
 
+Logged it with a busted call or exchange, or on the wrong band? **Press Ctrl+Y** to fix your
+newest contact in place, or click **Edit** on any row of the contest screen's log. It keeps its
+time and serial, and the score, dupes and exports follow the edit. Not at a club yet: there, take
+it back and log it again. [Edit a Contact](../manual/Field-Day.md#edit-a-contact) has the details.
+
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
 scores by its objectives instead**: QSO points × (the objective multipliers + 1),
@@ -99,16 +116,54 @@ board a club watches all weekend stays a board. The checklist keeps its own cap
 and scrolls inside itself: all fifteen rows are there, in a list of their own,
 rather than 290 px of checkboxes between you and the log.
 
+### FT8 and FT4 in each contest
+
+On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
+answers, and **S&P** answers the first CQ it hears once you turn TX on, in the
+period opposite the CQ's. On the FT cockpit, **Call CQ** is the contest's
+Running and **S&P** the contest's S&P, and a double-click on a CQ, or a reply to
+one from JTAlert or GridTracker, works that station in the contest's S&P; with
+**Disable TX after sending 73** on, TX goes off after that contact. What they
+send depends on the contest, and is what WSJT-X sends in it (here K1ABC in FN42
+works W9XYZ in EN37). The last column is the special operation the WSJT-X UDP
+Status message reports, as WSJT-X reports it in that contest:
+
+| Contest | Running sends | S&P sends | The contest log keeps | UDP special operation |
+|---|---|---|---|---|
+| ARRL Field Day | `CQ FD K1ABC FN42`, `W9XYZ K1ABC R 2B EMA`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC 2B EMA`, `W9XYZ K1ABC RR73` | class and section | 3, Field Day |
+| ARRL January, June and September VHF (WSJT-X's NA VHF Contest mode) | `CQ TEST K1ABC FN42`, `W9XYZ K1ABC R FN42`, `W9XYZ K1ABC 73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC RR73` | the grid each way | 1, NA VHF |
+| Sweepstakes, CQ WW, CQ WPX, and the California, Ohio, Tennessee and Texas QSO parties (no WSJT-X contest mode) | `CQ K1ABC FN42`, `W9XYZ K1ABC -12`, `W9XYZ K1ABC RR73` | `W9XYZ K1ABC FN42`, `W9XYZ K1ABC R-12`, `W9XYZ K1ABC 73` | the call only | 0, none |
+
+Outside Field Day, Running and S&P need your grid in Settings before they
+transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
+FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
+Day's messages, as they always have, and Field Day's runner closes without the
+73. In those three contests the FT cockpit's Call CQ and double-click work
+outside the contest, as before, and the UDP special operation is 0.
+
 ### An operator and a logger on one radio
 
 Many clubs put two people on one station: the operator on the radio, and a logger on a second
 keyboard and mouse at a second monitor (MouseMux gives each of them their own). Click
 **⧉ Logger window** on the Contest screen, or in the torn-off scoreboard beside the operator box,
-and drag the window to the logger's monitor. It holds the whole Contest screen with a log line
-under it, and it opens on that monitor again next time.
+and drag the window to the logger's monitor. It opens on that monitor again next time.
 
-- **One contact, two windows.** The logger's line and your own contest log strip are the same
-  contact: whatever either of you types shows in both as it is typed, with the same dupe warning,
+- **The log line comes first, in large type.** The call and exchange boxes are across the top of
+  the window, with the dupe warning right under them, and the **Operator** box is on the log line's
+  title line, beside Sending and I moved: Ctrl+O puts the cursor there, and Enter saves it. Under
+  that are the last five contacts, newest first, and the whole Contest screen (club board, score,
+  sections, log) is below, scrolling on its own.
+- **A− and A+** at the top right make the log line and the last contacts smaller or larger, from
+  80 to 160 %, on top of your Text size setting. That computer remembers the size for the logger
+  window; until you size it there, it opens at the size of the Contest screen's own log line.
+- **The same log line tops the Contest screen** in the main window while a contest runs, with its
+  own A− and A+ and the Operator box on its title line, so the operator can type contacts there
+  too; the rest of the screen below it uses the whole width of the window. Nothing on it transmits
+  either, but in the main window Esc stops TX, as the top bar's Stop TX does, and leaves the boxes
+  as they are.
+
+- **One contact, two windows.** The logger's line and your own contest log strip (a cockpit's LOG
+  pane, or the log line at the top of the Contest screen) are the same contact: whatever either of you types shows in both as it is typed, with the same dupe warning,
   Super Check Partial line, call-history fill and Ctrl+D take-back line. Enter in either window
   logs it, once: if you both press it at the same moment, the second window is told it was
   already logged.
@@ -119,6 +174,31 @@ under it, and it opens on that monitor again next time.
 - It logs as this computer's own position, under the mode you are operating (phone, CW, RTTY or
   digital), so club sync, N3FJP and your exports see one station. A Remote viewer sees only the
   main window.
+- **A satellite pass's contacts go on the Satellites screen.** The logger window logs every contact
+  on the band the radio is on, with no satellite, so at ARRL Field Day a pass contact logged there
+  would count as an ordinary 2 m or 70 cm contact. While a satellite's transponder is picked on the
+  Satellites screen, one line under the logger window's title names the bird and says to log its
+  pass contacts there: that screen's log strip takes the band and the satellite from the pass.
+  Nothing is blocked, and a contact logged in the logger window is logged as before.
+
+### The Contest screen on another monitor
+
+**⧉ Pop out**, at the right end of the Contest screen's top line (the one with the Contest mode
+switch), opens everything below the log line in a window of its own: the Contest mode switch,
+Running / S&P, the exports and the merge, the club board, the score, the county or sections board,
+the bonuses and the log. Each works there as it does on the main screen. Drag the window to another
+monitor; it opens there again next time, fitted to the monitors you have then.
+
+- **The main window keeps the log line.** While the window is open, the Contest screen in the main
+  window shows the log line, with the Operator box on its title line (Ctrl+O still puts the cursor
+  there), and the last contacts. Where the rest was, one line says it is in its own window, with
+  **Bring it back**, which closes the window.
+- **Closing the window brings it back.** Its close button, Alt+F4 or Bring it back all put the
+  screen back under the log line, and so does restarting Nexus: the window does not reopen with it.
+- **The window's keys.** Its F-keys do nothing, so F5 cannot reload it in the middle of a contest.
+  Its Esc is not a stop: stop a transmission with Esc or Stop TX in the main window.
+- Turning Contest mode on or off in the window is the same save as on the main screen, and the main
+  window follows it.
 
 ### Export and club interop
 
@@ -134,11 +214,51 @@ The club story is native:
   N1MM-networked dashboards.
 
 Both are fire-and-forget on background threads, so a hung logging PC can never
-stall your TX slot. The WSJT-X UDP Status message sets `special_op = Field Day`,
-so JTAlert/GridTracker auto-activate their FD behavior too.
+stall your TX slot. During ARRL Field Day the WSJT-X UDP Status message reports
+`special_op = Field Day`, as WSJT-X does, so JTAlert/GridTracker auto-activate
+their FD behavior too. Winter Field Day reports none, since WSJT-X has no mode
+for it.
 
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 [N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
+
+### When the contest is over
+
+Turn Contest mode off, on the Contest screen or in Settings › Contesting with Save, and Nexus first
+asks **Contest over?** with a short checklist. Nothing on it is ticked to begin with, and nothing is
+done that you have not ticked:
+
+- **Merge N contacts into my logbook**: the Contest screen's own merge. A contact already in the
+  logbook is skipped, never added twice.
+- **Export the Cabrillo log to Downloads**: the same file the Contest screen's Export Cabrillo
+  writes.
+- **Put back what the contest changed**: each of Callsign on the air, Operator at the key, Position
+  name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
+  shown as it is now and as it was before. Tick the ones you want back.
+
+At a club it also says how many of this laptop's contacts the club's log does not have yet. They
+still go to the host once this laptop is back with it, with the mode on or off, as long as Nexus
+stays open with club sync on. So at the end of a club contest, wait until every laptop's chip reads
+**Synced** before anyone turns the mode off, and on the host export the **Club Cabrillo** before
+**Contest over?**: its button is on the Contest screen only while the mode is on. On the host,
+putting your own call and entry class back changes nothing in the club's files: Club Cabrillo and
+Club ADIF keep the call and class the club was hosted under, even with the mode turned back on to
+reach them. A contact you then log on your own call stays in that laptop's own log and is not sent:
+the club's log takes a contact only on the club's call, and the club block says how many it kept out.
+
+**Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
+mode stays on. The merge and the export are done before the mode goes off, because they need the
+contest's session; if one of them fails, nothing after it is done, the reason is shown, and the mode
+stays on. With no contacts and nothing changed, the mode goes off at once, as it always did.
+
+"Before" is how each of those settings was the first time one of them changed for this contest, or
+when you turned Contest mode on, whichever came first. A change counts for the contest picked in
+Settings › Contesting from a week before it starts until it ends; with none picked, that is ARRL
+Field Day's week, the contest Contest mode runs then. So the club call you typed into Settings on
+the Friday is offered back as your own call on the Sunday night. Nexus keeps those values until you
+have put them all back, or until the contest is over and the mode is off: turn the mode off after a
+rehearsal with a row left unticked, and **Contest over?** offers it again when you turn the mode off
+at the end. A press made through Remote cannot merge or export, as on the Contest screen.
 
 ### Run the whole club on Nexus (club sync)
 
@@ -149,8 +269,31 @@ here — nothing is listening on the network until you turn it on.*
 
 If every position runs Nexus, you don't need a third-party master log at all.
 One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
-Host a club event**; every other position presses **Find club events** (or
-types the host's address) and joins. From then on:
+Host a club event**; every other position presses **Find club events** and
+clicks the event it finds, which joins it at once and saves only the join
+address (or types the host's address into **Join event at** and saves).
+
+- **The host says where to join it.** Its Contest screen, and the club section
+  of Settings, say that it is hosting, on which port, and at which of its
+  network addresses, after **Positions join at**, each with the name of the
+  adapter it is on (Wi-Fi, Ethernet). That address is what the other laptops
+  type into **Join event at**; typed without a port, an address joins port
+  42073. The same line counts the other positions connected. When the host
+  cannot host, the line says why: another program using the port, a port that
+  would not open, or a contest club sync does not run.
+- **Every other laptop says where its join stands**, under **Join event at**
+  and on the Contest screen, with Contest mode on or off: looking for the host
+  at that address; joined, with the event, the host's call, this laptop's
+  position and its club code; turned away, in the host's own words; cannot
+  reach the host, because nothing listens there or nothing answers, with what
+  to check; or the host lost, and Nexus trying again.
+- **Find club events** listens for 5 seconds. The host announces itself once a
+  second on every network it is on, so a laptop with Wi-Fi and a cable, or with
+  the virtual adapters WSL, Hyper-V or a VPN add, is found on each of them.
+  When it hears nothing it says what to check; typing the host's address always
+  works where a Wi-Fi network keeps laptops apart.
+
+From then on:
 
 ![The club board: a synced chip, the host callsign, club totals, and one row per operating position with band, mode, operator, QSO count and rate.](../img/manual/fieldday-club-board.webp)
 
@@ -167,8 +310,20 @@ a club sync worked.*
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not
   a lock (N3FJP semantics); your own log's dupes still refuse.
+- Every laptop's **county or sections board** shows what the whole club has
+  worked, so everyone sees what the club still needs: a county, state or
+  section another position logs turns green with a ✓ on the host's board and
+  on every other laptop's within a second, and this laptop's own are marked ⌂
+  in the colour its name has in the grid below, with a legend over the board
+  and both counts ("34/102 worked · 12 on this laptop"). A laptop or host on an
+  earlier release shows only its own, as before.
 - A live **band board** shows where every position is (band, mode, operator,
-  rate), stale-marked the moment one goes quiet. It has its own **Club Board**
+  rate), stale-marked the moment one goes quiet; a position the host removes
+  reads **Removed** after its name on every laptop's board within a heartbeat
+  (5 seconds). Above it a grid puts each
+  position's name in the cell of its band and mode, coloured on the host by its
+  link (green Connected, amber Reconnecting, red Lost), so a band and mode
+  nobody is on is an empty cell. It has its own **Club Board**
   button in the left rail under Contest, and its own window — one click, on a
   second monitor or a corner of the big one, in bigger type than the dashboard
   copy because it is watched from across the tent. **Pop out board** in the club
@@ -179,12 +334,23 @@ a club sync worked.*
   answers "who's on 20?" too.
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
-  reconnect. If the host PC dies, enable hosting on any other position;
-  everyone re-joins and nothing is lost.
+  reconnect, Contest mode on or off. If the host PC dies, enable hosting on
+  any other position; everyone re-joins and nothing is lost.
 - The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
   the rules score it (earliest contact wins). A contest that wants repeats
   reported, such as the New York QSO Party, keeps them in the file, scoring
   zero.
+- **Ctrl+D works at a club.** Pressed twice (or **Remove last**), it takes your
+  newest contact back from the club too: the host keeps it, marked taken back
+  and never deleted, every position's club dupe check and the board drop it,
+  and the club Cabrillo and the club's counts leave it out. **Restore** under
+  **Removed** puts it back everywhere. A laptop away from the host when it
+  takes one back catches the club up when the link is back; its chip counts
+  the take-back until then. Each laptop takes back only contacts it logged
+  itself, the host included: a contact another position logged is taken back
+  on that laptop, or, if that laptop is gone for good, in the club Cabrillo
+  before you send it in. Every laptop in the club must run the same Nexus
+  release: an older one is turned away when it joins, and told to update.
 
 Hosting is the one time Nexus listens beyond the local computer, and only
 while the toggle is on. There is no join password — a club site LAN is
@@ -210,13 +376,24 @@ manual's Field Day page has the steps for the Illinois QSO Party.
 
 Before any club event:
 
-- **Windows asks about the firewall** the first time a PC hosts, and the first
-  time a position looks for club events. Allow Nexus on **Private** networks. If
-  Windows calls the site network Public, change it to Private, because a Public
-  network blocks all of it. The host listens on TCP port 42073 (the **Host
-  port**) and announces itself on UDP port 42074, which **Find club events**
-  listens for; the spectator scoreboard uses TCP port 7373. Nexus adds no
-  firewall rule of its own.
+- **Windows Firewall.** On each Windows laptop, press **Allow Nexus through
+  Windows Firewall** in the club section of Settings ▸ Contesting. Windows asks
+  for administrator rights once, as it does for **Repair clock**, and Nexus adds
+  three inbound rules for itself on **Private and Public** networks, so a site
+  network Windows calls Public works too: TCP on the **Host port** (42073 unless
+  you change it), UDP 42074, which the host announces itself on and **Find club
+  events** listens for, and TCP on the spectator scoreboard's port (7373 unless
+  you change it). They are named "Nexus club sync - …". The line beside the
+  button says whether they are in place; a second press, or a changed Host
+  port, replaces them, and **Remove Nexus's firewall rules** takes them out.
+  With Windows Firewall off there is nothing to allow, and club sync works as
+  it is. If Windows itself blocks Nexus, which is what a Cancel at its own
+  question leaves (and a block wins over any allow), or blocks every incoming
+  connection, the line says so and where to change it. On a laptop where you
+  have no administrator rights, allow Nexus by hand under Windows Security ▸
+  Firewall & network protection ▸ Allow an app through firewall, on Private and
+  Public networks. When a laptop cannot reach the host, check the host's
+  firewall; when its Find club events hears nothing, check its own.
 - **Set every clock first.** Nexus never changes a PC's clock. Each position
   measures its clock against the host's every 5 seconds over the club link, and
   from 2 seconds off its club line says so ("This PC's clock is 3 s behind the
@@ -295,8 +472,14 @@ activation: nothing was hunted, logged or uploaded to POTA.*
 
 The pending hunt tags **only the first matching QSO** and **expires after 4
 hours**, so a stale park reference can't contaminate an unrelated contact next
-week. Activators also appear as chips on the [Needed board](needed-dx.md) when
-they're heard on the air.
+week. To end it sooner, click **✕** on the hunt banner at the top of POTA / SOTA,
+or on the 🌲 hunt tag above the log line, which also takes the park the hunt
+filled in out of the log line. Activators also appear as chips on the [Needed board](needed-dx.md) when
+they're heard on the air. Clicking a Phone or CW activator there sets no hunt: it
+puts the call and the park in that cockpit's log line, which tags the contact
+when you log it, and **Clear** on the log line clears both. An FT8, FT4 or RTTY
+activator clicked there still sets a hunt, because the hunt is how its park
+reaches the contact.
 
 ## Honest limits
 
@@ -306,18 +489,20 @@ they're heard on the air.
   a hint from the log, and nothing is ticked for you.
 - Field Day **won't start until class and section are set** — that's a guard, not
   a bug.
+- **Only a double-click on a CQ, or a reply to one from JTAlert or GridTracker,
+  works the station in the contest.** A double-click on a station that is calling
+  you, a roster or station card click, and the Tx1 to Tx6 rows still work the
+  station outside the contest with the standard FT8 messages, and the contact goes
+  to your log, not the contest log.
 - **Club sync does not run serial-number contests or CQ World-Wide.** A club
   running Sweepstakes, CQ WPX, the California QSO Party or CQ WW logs on each
   position.
 - **A contest that is not on the list logs as one with the same exchange.** The
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
-  Field Day mode. Before you send the log, change the Cabrillo file's `CONTEST:`
-  line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
-  Nexus shows is WPX's, and the sponsor works out its own.
-- **The Satellites section's log strip doesn't join Field Day yet** — unlike the
-  CW and Phone strips it stays on the general log while a session runs. Not a
-  design choice; not wired up yet.
+  Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
+  line to `SAC-SSB` (or `SAC-CW`). The score Nexus shows is WPX's; the sponsor
+  works out its own.
 - **You can't tell the Field Day log which band a contact was on** — it records
   a band per contact, but always the one the radio is on at the moment you type
   the entry; nothing lets you name a different one. Log as you work, not
@@ -328,4 +513,4 @@ they're heard on the air.
 - [Operate — FT8/FT4 digital](operate-digital.md)
 - [Needed — DX that's on the air now](needed-dx.md)
 - [Logbook & QSL](logbook-qsl.md)
-- [Settings reference — Field Day Setup](settings-reference.md#field-day-setup)
+- [Settings reference — Contest](settings-reference.md#contest) and [Field Day](settings-reference.md#field-day)

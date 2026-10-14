@@ -412,7 +412,7 @@ describe('a click in the rail never changes the station the cockpit is working',
         return r
       })
       // The transmit verbs a Work could reach; a switch keys only when set ON (a release is a `false`).
-      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq'] as const
+      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq', 'startRunning'] as const
       const SWITCHES = ['setPtt', 'setTune', 'setTxEnabled'] as const
       for (const fn of [api.selectPeer, api.workSpot, ...VERBS.map((v) => api[v]), ...SWITCHES.map((v) => api[v])]) {
         vi.mocked(fn).mockClear()
@@ -463,7 +463,7 @@ describe('a click in the rail never changes the station the cockpit is working',
         if (!r) throw new Error('the rail’s Needed box does not list the need')
         return r
       })
-      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq'] as const
+      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq', 'startRunning'] as const
       const SWITCHES = ['setPtt', 'setTune', 'setTxEnabled'] as const
       for (const fn of [api.selectPeer, api.workSpot, ...VERBS.map((v) => api[v]), ...SWITCHES.map((v) => api[v])]) {
         vi.mocked(fn).mockClear()

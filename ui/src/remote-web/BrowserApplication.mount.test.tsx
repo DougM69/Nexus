@@ -21,10 +21,12 @@ import type { HostedConnection } from './client'
 import type { ApplicationClient } from './application-client'
 import type { OperationState } from './operation-protocol'
 import type { MonitorSource } from '../remote-monitor/session'
-import { APPLICATION_COMMANDS } from './application-protocol'
+import { APPLICATION_COMMANDS, APPLICATION_TIMEOUT_MS } from './application-protocol'
+import { STALE_DISPLAY_HOLD_MS } from './useStaleDisplay'
 import fixtures from '../remote-monitor/fixtures.v2.json'
 import settingsFixture from '../components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot } from '../types'
+import { offPlatform, onPlatform } from '../webviewPlatforms.testkit'
 
 // THE BUDGET (2026-10-04). The App this file mounts (through BrowserApplication) is real work, and it scales with
 // the CPU a test gets: the slowest test takes 0.49 s on a quiet box, 2.3 s with a fifth of a CPU and 4.1–4.7 s with
@@ -196,4 +198,50 @@ it('an unstable host prop does trip that bound, so it can fail', async () => {
   const settled = appRenders
   await elapse(WINDOW_MS)
   expect(appRenders - settled).toBeGreaterThan(BUDGET)
+})
+
+// THE RENDER THAT FIRST SEES THE READINGS LAPSE MUST COUNT, even when it changes nothing else.
+// The readings' age is the client's clock, not React state, so React learns of a lapse in whichever
+// render runs next. When that render changes no state, React keeps its hooks and drops its effects, so
+// the stale display's hold took the lapse as seen without ever starting its 2 s timer, and the
+// workspace went on showing stale readings without ever saying so. In Remote's compiled browser at v9
+// the render was a decode-history read failing while the history was already empty: the read's
+// deadline and the snapshot's fall 3 s after the same reply. Here a session notice that leaves the
+// session where it was asks for the same kind of render, at a moment the test chooses.
+it('the stale display comes when the readings lapse in a render that changes nothing else', async () => {
+  const h = connection(silentObservation())
+  let age = 0, phase = 'ready'
+  const listeners = new Set<() => void>()
+  const client = h.connection.application as unknown as { age: () => number; getPhase: () => string
+    subscribe: (listener: () => void) => () => void }
+  client.age = () => age
+  client.getPhase = () => phase
+  client.subscribe = listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+  const { container } = render(<BrowserApplication connection={h.connection} disconnect={() => {}} />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+  expect(booted(container)).toBe(true)
+  age = APPLICATION_TIMEOUT_MS
+  await act(async () => { phase = 'connecting'; listeners.forEach(f => f()); phase = 'ready'; listeners.forEach(f => f()) })
+  expect(container.querySelector('.app')?.getAttribute('data-remote-stale')).toBe(null)
+  await elapse(STALE_DISPLAY_HOLD_MS + 600)
+  expect(container.querySelector('.app')?.getAttribute('data-remote-stale')).toBe('true')
+})
+
+// The hosted page is the same App, and a browser on Windows says "Windows NT" just as the desktop app's
+// WebView2 does. Following the computer's light or dark setting by default is the desktop app's on
+// Windows only (useTheme.ts isWindowsDesktop), so the hosted page opens Dark here, on the light
+// computer this file sets up, exactly as it did before Nexus followed the computer anywhere.
+it('the hosted page opens Dark on a light computer in a browser on Windows, and stores no choice', async () => {
+  onPlatform('windowsBrowser')
+  document.documentElement.removeAttribute('data-theme')
+  try {
+    const h = connection()
+    const { container } = render(<BrowserApplication connection={h.connection} disconnect={() => {}} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(booted(container)).toBe(true)
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(localStorage.getItem('tempo-theme')).toBeNull()
+  } finally {
+    offPlatform()
+  }
 })

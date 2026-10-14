@@ -151,7 +151,9 @@ enum Rows<'a> {
 /// of megabytes Stage 2 exists to stop holding. So a pass names the columns it reads and is
 /// handed records with exactly those filled, by THE decoder ([`record_from_row`], the one
 /// [`LogDb::load_all`] uses). Every other field is left as a record with nothing in it has it:
-/// empty text, `None`, `false`, `0`. The passthrough and the contest exchange are never read.
+/// empty text, `None`, `false`, `0`. The passthrough and the contest exchange are never read,
+/// but for the one passthrough field a search looks in, the SUBMODE, when the pass asks for it
+/// ([`LogDb::each_narrow_with_submode`]).
 #[derive(Debug, Clone, Copy)]
 pub struct Narrow {
     /// The `qso` columns to read, by their names in the schema ([`QSO_COLUMNS`]). The id is
@@ -160,6 +162,22 @@ pub struct Narrow {
     pub columns: &'static [&'static str],
     /// Whether to read the upload stamps (`qso_upload`) as well.
     pub uploads: bool,
+}
+
+/// What a narrow read selects after a row's columns (and stamps) for the SUBMODE a search reads,
+/// and the join it comes through: on `qso_extra`'s own key, `(qso_id, name)`, so one lookup per
+/// row and never a scan of the passthrough.
+const SUBMODE_VALUE: &str = ", s.value";
+const SUBMODE_JOIN: &str = " LEFT JOIN qso_extra s ON s.qso_id = q.id AND s.name = 'SUBMODE'";
+
+/// Put the SUBMODE a narrow row was read with in its passthrough, as a whole row holds it (the
+/// only entry a narrow row's passthrough has, so in name order). Before the row is held in the
+/// log's one form ([`super::canonical`]), which keeps a SUBMODE the row already has, as it does
+/// for a whole row.
+fn with_submode(rec: &mut QsoRecord, submode: Option<String>) {
+    if let Some(value) = submode {
+        rec.extra.push(("SUBMODE".to_string(), value));
+    }
 }
 
 /// Which rows a narrow read visits.
@@ -410,6 +428,10 @@ const INDEXES: [&str; 9] = [
 /// the call index.
 mod query_reads;
 pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
+
+/// A store written before contacts were held in one form, read back through every decoder.
+#[cfg(test)]
+mod held_form_tests;
 
 /// Every `qso` column the store writes, **in bind order**.
 ///
@@ -1356,6 +1378,10 @@ impl LogDb {
             if rec.contest.as_deref().is_some_and(contest_is_empty) {
                 rec.contest = None;
             }
+            // A row a build before this stored in its source's spelling is read in the log's one
+            // form (`20M` as `20m`, a sideband in MODE as SSB's SUBMODE) — and left on disk as it
+            // is until a change writes it ([`super::canonical`]).
+            super::canonical::contact(&mut rec);
             out.push(rec);
         }
         Ok(out)
@@ -1461,7 +1487,21 @@ impl LogDb {
         order: Order,
         each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
     ) -> Result<()> {
-        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, each))
+        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, false, each))
+    }
+
+    /// [`Self::each_narrow`], each row with its SUBMODE as well: the one passthrough field a
+    /// search of the log looks in beside the MODE, because the log holds a phone contact as `SSB`
+    /// with its sideband there ([`super::canonical`]). Only a search asks for it, so no other
+    /// pass pays for the join.
+    pub fn each_narrow_with_submode(
+        &self,
+        narrow: Narrow,
+        scope: Scope<'_>,
+        order: Order,
+        each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, true, each))
     }
 
     /// The statement a narrow read runs, and the value its one parameter is bound to, if it has
@@ -1471,6 +1511,7 @@ impl LogDb {
         narrow: Narrow,
         scope: Scope<'_>,
         order: Order,
+        submode: bool,
     ) -> Result<(String, Option<rusqlite::types::Value>)> {
         if let Some(unknown) = narrow.columns.iter().find(|c| !QSO_COLUMNS.contains(c)) {
             return Err(Error::Sql(rusqlite::Error::InvalidColumnName(
@@ -1525,29 +1566,38 @@ impl LogDb {
             Order::Log => "",
             Order::NewestFirst => " DESC",
         };
+        let (value, submode_join) = if submode {
+            (SUBMODE_VALUE, SUBMODE_JOIN)
+        } else {
+            ("", "")
+        };
         let sql = format!(
-            "SELECT {}{stamps}, q.rowid FROM qso q{index}{join}{filter} ORDER BY q.rowid{direction}",
+            "SELECT {}{stamps}{value}, q.rowid FROM qso q{index}{join}{submode_join}{filter} \
+             ORDER BY q.rowid{direction}",
             projection.join(", ")
         );
         Ok((sql, bound))
     }
 
-    /// [`Self::each_narrow`]'s body, which it runs in one read transaction.
+    /// [`Self::each_narrow`]'s body, which it runs in one read transaction; `submode` reads each
+    /// row's SUBMODE as well ([`Self::each_narrow_with_submode`]).
     fn narrow_pass(
         &self,
         narrow: Narrow,
         scope: Scope<'_>,
         order: Order,
+        submode: bool,
         each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
     ) -> Result<()> {
-        let (sql, bound) = self.narrow_sql(narrow, scope, order)?;
+        let (sql, bound) = self.narrow_sql(narrow, scope, order, submode)?;
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = match &bound {
             Some(v) => stmt.query([v])?,
             None => stmt.query([])?,
         };
         let stamp_at = QSO_COLUMNS.len();
-        let rowid_at = stamp_at + if narrow.uploads { 4 } else { 0 };
+        let submode_at = stamp_at + if narrow.uploads { 4 } else { 0 };
+        let rowid_at = submode_at + usize::from(submode);
         // The record being assembled: a row with several stamps arrives as several joined rows,
         // one after another, all with its rowid.
         let mut current: Option<(i64, QsoRecord)> = None;
@@ -1564,6 +1614,12 @@ impl LogDb {
                 if rec.contest.as_deref().is_some_and(contest_is_empty) {
                     rec.contest = None;
                 }
+                if submode {
+                    with_submode(&mut rec, row.get(submode_at)?);
+                }
+                // And the same form: the hot index holds narrow rows and compares them with the
+                // whole ones `decode` hands a plan.
+                super::canonical::contact(&mut rec);
                 current = Some((rowid, rec));
             }
             if narrow.uploads {
@@ -3219,6 +3275,12 @@ mod tests {
             hash: 2,
             ordinal: 0,
         });
+        // The reader holds that MODE as SSB with the sideband as SUBMODE (`canonical`); the
+        // record here keeps the sideband as its mode, as a build before that held it, because
+        // only such a record shows the plain case fold, the dedup fold and the class apart.
+        assert_eq!(rec.mode, "SSB", "premise: the reader's form");
+        rec.mode = "USB".into();
+        rec.extra.retain(|(k, _)| k != "SUBMODE");
         db.insert(
             &rec,
             Resolved {
@@ -4630,29 +4692,11 @@ mod tests {
     #[test]
     fn each_narrowing_scope_is_answered_from_its_index() {
         let (db, _) = narrow_fixture(50);
-        let plan = |scope: Scope<'_>| -> String {
-            let (sql, bound) = db
-                .narrow_sql(
-                    Narrow {
-                        columns: &["call", "when_unix"],
-                        uploads: true,
-                    },
-                    scope,
-                    Order::Log,
-                )
-                .unwrap();
-            let mut stmt = db
-                .conn
-                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
-                .unwrap();
-            let params: Vec<&rusqlite::types::Value> = bound.iter().collect();
-            let details: Vec<String> = stmt
-                .query_map(params_from_iter(params), |r| r.get::<_, String>(3))
-                .unwrap()
-                .map(|d| d.unwrap())
-                .collect();
-            details.join(" | ")
+        let narrow = Narrow {
+            columns: &["call", "when_unix"],
+            uploads: true,
         };
+        let plan = |scope: Scope<'_>| plan_of(&db, narrow, scope, false);
         let since = plan(Scope::Since(1_700_000_000));
         assert!(since.contains("qso_recent"), "{since}");
         let call = plan(Scope::CallNorm("W1AW"));
@@ -4662,6 +4706,52 @@ mod tests {
             !all.contains("qso_recent") && !all.contains("qso_callhist"),
             "control: {all}"
         );
+    }
+
+    /// How SQLite plans the narrow read of `narrow` over `scope`, step by step.
+    fn plan_of(db: &LogDb, narrow: Narrow, scope: Scope<'_>, submode: bool) -> String {
+        let (sql, bound) = db.narrow_sql(narrow, scope, Order::Log, submode).unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let params: Vec<&rusqlite::types::Value> = bound.iter().collect();
+        let details: Vec<String> = stmt
+            .query_map(params_from_iter(params), |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|d| d.unwrap())
+            .collect();
+        details.join(" | ")
+    }
+
+    /// The SUBMODE a search reads comes through `qso_extra`'s own key, `(qso_id, name)`: one
+    /// lookup per row, never a scan of the passthrough, whatever the scope and with the stamps'
+    /// join or without it, and each narrowing scope still answered from its index.
+    #[test]
+    fn the_submode_a_search_reads_is_looked_up_by_its_key() {
+        let (db, _) = narrow_fixture(50);
+        for (scope, index) in [
+            (Scope::All, None),
+            (Scope::Since(1_700_000_000), Some("qso_recent")),
+            (Scope::CallNorm("W1AW"), Some("qso_callhist")),
+        ] {
+            for uploads in [false, true] {
+                let narrow = Narrow {
+                    columns: &["call", "mode"],
+                    uploads,
+                };
+                let plan = plan_of(&db, narrow, scope, true);
+                assert!(
+                    plan.contains(
+                        "SEARCH s USING INDEX sqlite_autoindex_qso_extra_1 (qso_id=? AND name=?)"
+                    ) && !plan.contains("SCAN s"),
+                    "{plan}"
+                );
+                assert!(index.is_none_or(|i| plan.contains(i)), "{plan}");
+                // The control: the read a search does not make has no join at all.
+                assert!(!plan_of(&db, narrow, scope, false).contains("qso_extra"));
+            }
+        }
     }
 
     // ── a streamed read of whole records ─────────────────────────────────────

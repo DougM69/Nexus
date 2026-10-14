@@ -167,7 +167,7 @@ export const EN = {
   "remote.loggingPermissionRequired": "Remote logging is off for this browser. Allow it in Nexus at the station: Settings → Station → Remote access.",
   "remote.loggingAcquire": "Take logging control",
   "remote.loggingRelease": "Release logging control",
-  "remote.loggingHint": "Manual entries use the station’s general logbook. Log Field Day contacts, and QSOs you want audio recorded for, in Nexus at the shack.",
+  "remote.loggingHint": "Manual entries use the station’s general logbook. Log contest contacts, and QSOs you want audio recorded for, in Nexus at the shack.",
   "remote.loggingSubmitted": "Submitted QSO · retained in this browser until checked",
   "remote.loggingStationTime": "Station time at submission; check the station log for the recorded time.",
   "remote.loggingSaving": "Saving QSO at the station…",
@@ -306,10 +306,10 @@ export const EN = {
   "remote.memoriesExpired": "This memory snapshot has expired. Refresh to read it again.",
   "remote.memoriesRefresh": "Refresh memories",
   "remote.memoriesObserver": "Observation only. Tuning, editing, file operations and net alerts remain on the station.",
-  "remote.fieldDaySnapshot": "Station Field Day captured {{seconds}} s ago.",
-  "remote.fieldDayRefresh": "Refresh Field Day",
+  "remote.fieldDaySnapshot": "Station contest captured {{seconds}} s ago.",
+  "remote.fieldDayRefresh": "Refresh contest",
   "remote.fieldDayObserver": "Observation only. Event, operator, scoring changes and exports remain on the station.",
-  "remote.fieldDayInactive": "No Field Day event is active on the station.",
+  "remote.fieldDayInactive": "No contest is running on the station.",
   "remote.fieldDayTooLarge": "This event is too large to show in the browser. View the complete event in Nexus at the shack.",
   "remote.otaSnapshot": "Station POTA/SOTA captured {{seconds}} s ago.",
   "remote.otaRefresh": "Refresh station data",
@@ -848,7 +848,7 @@ export const EN = {
   'settings.station.opState.label': 'State',
   // ⚠️ `{MYSTATE}` — CW macro token, as above.
   'settings.station.opState.hint':
-    'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).',
+    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro and the QTH an RTTY ragchew sends. A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
 
   'settings.station.licenseClass.label': 'License Class',
   // The <option> VALUES ('technician' … 'open') are persisted tokens and stay in the code.
@@ -1340,6 +1340,11 @@ export const EN = {
     other:
       '{{count}} contacts marked as uploaded were logged under another call than the one in Settings; this check leaves them alone.',
   },
+  'logbook.confirmations.otherCalls': {
+    one: '{{count}} LoTW record is for a call your log holds no contact under, such as a club call on your LoTW account; this check leaves it alone.',
+    other:
+      '{{count}} LoTW records are for calls your log holds no contact under, such as a club call on your LoTW account; this check leaves them alone.',
+  },
   'logbook.confirmations.cancel': 'Cancel',
   'logbook.confirmations.apply': {
     one: 'Change {{count}} contact',
@@ -1706,9 +1711,12 @@ export const EN = {
   'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
-  'logbook.row.qsl.eqsl': 'eQSL received (NOT DXCC/WAZ/WAS-eligible)',
+  'logbook.row.qsl.eqsl':
+    'eQSL received (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
+  'logbook.row.qsl.qrz': 'QRZ logbook confirmed (ARRL awards do not accept it)',
   'logbook.row.qsl.confirmed': 'LoTW / paper — award-eligible',
-  'logbook.row.qsl.eqslOnly': 'eQSL only — not accepted for DXCC/WAZ/WAS',
+  'logbook.row.qsl.eqslOnly':
+    'eQSL only (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
@@ -1947,11 +1955,38 @@ export const EN = {
   'logEntry.fd.needField': 'Enter their {{field}} to log.',
   'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',
   'logEntry.fd.badNumber': '{{field}} must be a number from {{min}} to {{max}}.',
+  // A QSO party's QTH box, from a call in the USA or Canada: a value on none of the contest's lists
+  // (`fdVerdict`). The codes are invariant tokens, joined as the language joins a choice.
+  'logEntry.fd.notOnList': "{{value}} is not a county, state or province on this contest's list.",
+  'logEntry.fd.didYouMean': "{{value}} is not a code on this contest's list. Did you mean {{codes}}?",
   'logEntry.fd.zone.label': 'Zone',
   'logEntry.fd.zone.title': 'Their CQ zone, 1–40',
+  // A received box says what it holds for this station's role (`receivedCaption` in
+  // `features/contestSlots.ts`): "County / State" inside a QSO party's state, "IL county" outside
+  // it. `{{state}}` is a state code (IL, NY), a token. The precedence and check are Sweepstakes'.
+  'logEntry.fd.county.label': 'County',
+  'logEntry.fd.countyOrState.label': 'County / State',
+  'logEntry.fd.countyIn.label': '{{state}} county',
+  'logEntry.fd.state.label': 'State',
+  'logEntry.fd.serial.label': 'Serial',
+  'logEntry.fd.grid.label': 'Grid',
+  'logEntry.fd.precedence.label': 'Precedence',
+  'logEntry.fd.precedence.title': 'Their precedence: Q, A, B, U, M or S',
+  'logEntry.fd.check.label': 'Check',
+  'logEntry.fd.check.title': 'Their check: the last two digits of the year they were first licensed',
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
+  // THE SCORE CHIP in every contest log strip: the Contest screen's own numbers at a glance,
+  // "ILQP · 212 pts · 48 Q · 19 mults · 41/hr". One entry per reading — a list of readings,
+  // not a sentence. `{{rate}}` is a whole number, or the scoreboard's em dash before there is one.
+  'logEntry.score.points': { one: '{{count}} pt', other: '{{count}} pts' },
+  'logEntry.score.qsos': '{{count}} Q',
+  'logEntry.score.mults': { one: '{{count}} mult', other: '{{count}} mults' },
+  'logEntry.score.sections': { one: '{{count}} section', other: '{{count}} sections' },
+  'logEntry.score.rate': '{{rate}}/hr',
+  'logEntry.score.title':
+    'The contest so far, as the Contest screen counts it: your score, contacts, multipliers (sections at Field Day) and contacts per hour over your last ten.',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
   'logEntry.scp.label': 'Super Check Partial',
   'logEntry.scp.title':
@@ -1973,6 +2008,16 @@ export const EN = {
     one: '{{call}} in {{counties}} is a dupe on this band/mode, not logged again',
     other: '{{call}} in {{counties}} are dupes on this band/mode, not logged again',
   },
+  // ⭐ THE WARNING WHILE A COUNTY LINE IS TYPED, county by county: the log writes one row per
+  // county and judges each on its own key. Every county already worked: the own-dupe sentence
+  // (or the club's), then `dupeFor` naming them ("… on 40m CW for COOK and WILL"), a trailing
+  // statement with its own leading separator so a locale words and places it on its own. Some:
+  // `someDupe` then `someNew`, two statements because each has its own count (one message cannot
+  // select a plural form for two, the `logbook.import.dupes` ruling). {{counties}} is county
+  // codes, invariant tokens, joined as the interface's language joins a list.
+  'logEntry.countyLine.dupeFor': ' for {{counties}}',
+  'logEntry.countyLine.someDupe': { one: '{{counties}} is a dupe', other: '{{counties}} are dupes' },
+  'logEntry.countyLine.someNew': { one: '; {{counties}} is new', other: '; {{counties}} are new' },
   'logEntry.countyLine.unknown': "{{value}} is not a county on the sponsor's list, so this county line cannot be logged.",
   'logEntry.remove.label': 'Remove last',
   'logEntry.remove.title': 'Remove the newest contest contact (Ctrl+D). Press twice: the first press names it, and a second within 5 seconds removes it.',
@@ -1988,14 +2033,39 @@ export const EN = {
   'logEntry.remove.logbookUploaded': 'It stays in your logbook, and {{services}} have it: Nexus cannot take it back from them.',
   'logEntry.remove.empty': 'There is no contest contact to remove.',
   'logEntry.remove.changed': 'The newest contact changed, so nothing was removed.',
-  'logEntry.remove.clubSync': "Club sync is on, so this contact is already in the club log. Nothing was removed. Edit the club's Cabrillo file before you send it in.",
+  'logEntry.remove.club': 'The club log drops it too, on every laptop, as soon as the host has it.',
+  'logEntry.remove.clubAway': 'This laptop is not with the club host right now: the club log drops it when the link is back.',
   'logEntry.remove.failed': 'Nexus could not remove the contact, so nothing was removed.',
   'logEntry.remove.remote': 'Only at the station: a press through Remote removes no contact.',
+  // Editing a logged contest contact: the contest screen's Edit and the strip's Ctrl+Y.
+  'contest.edit.label': 'Edit',
+  'contest.edit.title': 'Edit this contact: the call, what they sent, the band and the mode. It keeps its time, serial and number. In the log strip, Ctrl+Y edits the newest contact.',
+  'contest.edit.aria': 'Edit {{contact}}',
+  'contest.edit.save': 'Save',
+  'contest.edit.cancel': 'Cancel',
+  'contest.edit.editing': 'Editing {{contact}}: Enter saves, Esc leaves it as it was.',
+  'contest.edit.done': 'Edited {{was}}: now {{contact}}.',
+  'contest.edit.sentTo': 'It had already gone to {{places}}, which still have it as it was: fix it there too.',
+  'contest.edit.logbook': 'Your logbook has a copy merged before the edit, which still says {{call}}: edit it there too.',
+  'contest.edit.logbookUploaded': 'Your logbook has a copy merged before the edit, which still says {{call}}, and {{services}} have it: edit it there too.',
+  'contest.edit.needCall': 'A contact needs a call.',
+  'contest.edit.lineCount': {
+    one: 'This contact was logged for one county, and an edit keeps it one.',
+    other: 'This contact is a county line of {{count}} counties, and an edit keeps {{count}}: give them joined by /.',
+  },
+  'contest.edit.changed': 'That contact changed in the contest log since it was shown, so nothing was edited.',
+  'contest.edit.incomplete': 'A contact needs a call and a band, so nothing was edited.',
+  'contest.edit.rows': 'A county line keeps its number of counties, so nothing was edited.',
+  'contest.edit.satellite': 'A contact made through a satellite keeps the band of its pass, so nothing was edited.',
+  'contest.edit.club': 'At a club an edit cannot reach the other laptops yet, so nothing was edited. To fix your newest contact, take it back (Ctrl+D twice, or Remove on the contest screen) and log it again: the club log drops it on every laptop.',
+  'contest.edit.failed': 'Nexus could not edit the contact, so nothing was changed.',
+  'contest.edit.remote': 'Only at the station: a press through Remote edits no contact.',
+  'contest.edit.empty': 'There is no contest contact to edit.',
   'logEntry.shared.logged': '{{call}} is already in the log: Enter was pressed in the other window first.',
   'logEntry.shared.changed': 'The contact changed in the other window before it was logged. Check it and log it again.',
   'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',
   'logEntry.countyLine.tooMany': 'A county line counts at most {{max}} counties.',
-  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by /.',
+  'logEntry.countyLine.incomplete': 'Finish the county line: 2 to {{max}} counties joined by / or +.',
   'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
   'logEntry.contest.location.hint': 'Did you mean {{codes}}?',
@@ -3690,18 +3760,23 @@ export const EN = {
   'settings.alerts.scope.hf': 'HF only',
   'settings.alerts.scope.vhf': 'VHF+ (6 m and up)',
   'settings.alerts.scope.all': 'All bands',
+  // The decode alert's own switch, beside the three menus. It turns the sound and the pop-up on
+  // and off, and nothing else: the boards and the icons follow the menus whatever it says.
+  'settings.alerts.newAlerts.label': 'New DXCC and grid alerts',
+  'settings.alerts.newAlerts.hint':
+    'The sound and the pop-up when you decode a new DXCC, a new grid or a rare grid 💎 on a band its menu allows. Off silences them and changes nothing else: the Needed boards and the NEW ONE and GRID icons keep following the three menus.',
   'settings.alerts.dxcc.label': 'New DXCC',
-  'settings.alerts.dxcc.aria': 'New DXCC alert bands',
+  'settings.alerts.dxcc.aria': 'New DXCC bands',
   'settings.alerts.dxcc.hint':
-    'Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode. The band choice also decides where the NEW ONE icon is shown.',
+    'The bands where a new DXCC entity — a “new one” — counts: the Needed boards, the NEW ONE icon and its loud alert all follow this choice. Off takes NEW ONE off every board.',
   'settings.alerts.grid.label': 'New grid',
-  'settings.alerts.grid.aria': 'New grid alert bands',
+  'settings.alerts.grid.aria': 'New grid bands',
   'settings.alerts.grid.hint':
-    "Quiet toast on a grid you haven't worked. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid. The band choice also decides where the GRID icon is shown, on the roster and the decode rows.",
+    "The bands where a grid you haven't worked counts: the Needed boards, the GRID icon on the roster and the decode rows, and its quiet toast all follow this choice. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.",
   'settings.alerts.rareGrid.label': 'Rare grid 💎',
-  'settings.alerts.rareGrid.aria': 'Rare grid alert bands',
+  'settings.alerts.rareGrid.aria': 'Rare grid bands',
   'settings.alerts.rareGrid.hint':
-    'The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing HF chatter keeps the gems. Covers their GRID icon too.',
+    'The bands where a rare or water-only grid (rovers, maritime, DXpeditions) counts: the Needed boards, its GRID icon and the loud 💎 alert all follow this choice. Separate from plain grids, so silencing HF chatter keeps the gems.',
   'settings.alerts.geo.label': 'Alert only about these continents',
   'settings.alerts.geo.hint':
     'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
@@ -3944,13 +4019,38 @@ export const EN = {
   // abbreviations are date formatting and stay in `fdEvent.ts` with the rest of it.
   'fieldDay.operator.label': 'Operator',
   'fieldDay.operator.placeholder': 'operator (call/initials)',
-  'fieldDay.operator.aria': 'Field Day operator (call or initials)',
+  'fieldDay.operator.aria': 'Operator (call or initials)',
   'fieldDay.popOut.label': '⧉ Pop out',
   'fieldDay.popOut.title': 'Pop the scoreboard out to its own window (second monitor)',
   'fieldDay.logger.label': '⧉ Logger window',
   'fieldDay.logger.title': 'Open the contest logger: this screen and a log line in a window of their own, for a second person logging at another monitor and keyboard. The log line shares the contact in progress with yours, and nothing in that window transmits.',
   'fieldDay.logger.note': 'Logger window: nothing here transmits. The contest switch, Running / S&P and scoring are set on the main screen. Esc clears the log line.',
   'contestLogger.entry.aria': 'Contest log line',
+  // The logger window's bar over its log line: its name, and A− / A+ (the glyphs stay in the code),
+  // which size the log line and the last contacts together. `{{pct}}` is a whole number.
+  'contestLogger.title': 'Contest logger',
+  'contestLogger.size.label': 'Text size: {{pct}}%',
+  'contestLogger.size.smaller': 'Smaller text',
+  'contestLogger.size.larger': 'Larger text',
+  'contestLogger.recent.title': 'Last contacts',
+  // The logger window's one line under its bar while the engine holds a satellite's transponder: its
+  // log line logs every contact the ordinary way (the radio's band, no bird), so a pass's contacts go
+  // on the Satellites screen. `{{bird}}` is the satellite's own name (AO-91, ISS), never translated.
+  'contestLogger.satellite.note':
+    '{{bird}} is picked on the Satellites screen. Log its pass contacts there: this window logs them as ordinary contacts.',
+  // The same bar over the same log line at the top of the main window's Contest screen
+  // (ContestLargeEntry, App.tsx): the screen's name for it.
+  'contestScreen.entry.title': 'Log a contact',
+  // The Contest screen in a window of its own (ContestScreenWindow.tsx): its Pop out, on the banner in
+  // the main window — shown as `fieldDay.popOut.label`, and named for the screen, because the
+  // scoreboard's own Pop out further down tears off the scoreboard alone — and, while the window is
+  // open, the one line left where the screen was, with the button that closes the window.
+  'contestScreen.popOut.aria': 'Pop out the Contest screen',
+  'contestScreen.popOut.title':
+    'Open the Contest screen in its own window, to put on another monitor: the contest switch, the controls, the club board, the score, the sections, the bonuses and the log. While a contest runs, its log line and your last contacts stay here.',
+  'contestScreen.away.text': 'The rest of the Contest screen is in its own window.',
+  'contestScreen.away.back': 'Bring it back',
+  'contestScreen.away.title': 'Close that window and show it here again',
 
   'fieldDay.score.qsos': 'QSOs',
   'fieldDay.score.sections': 'Sections',
@@ -4002,6 +4102,19 @@ export const EN = {
   'fieldDay.board.count': '{{worked}}/{{total}} worked',
   'fieldDay.board.cell.worked.title': '{{code}} — {{name}} — worked',
   'fieldDay.board.cell.notWorked.title': '{{code}} — {{name}} — not worked yet',
+  // At a club the board is the club's: a cell any position worked is lit, and this laptop's own
+  // are marked apart (⌂) from another position's (✓). "This laptop" is the club grid's word for
+  // the computer the screen is on; `{{own}}` counts its cells, `{{worked}}` the club's.
+  'fieldDay.sections.countClub': '{{worked}}/{{total}} sections · {{own}} on this laptop',
+  'fieldDay.sections.cell.own.title': '{{code}} — {{name}} ({{division}}) — worked on this laptop',
+  'fieldDay.sections.cell.club.title': '{{code}} — {{name}} ({{division}}) — worked by another position',
+  'fieldDay.sections.cell.own.aria': '{{name}}, worked on this laptop',
+  'fieldDay.sections.cell.club.aria': '{{name}}, worked by another position',
+  'fieldDay.board.countClub': '{{worked}}/{{total}} worked · {{own}} on this laptop',
+  'fieldDay.board.cell.own.title': '{{code}} — {{name}} — worked on this laptop',
+  'fieldDay.board.cell.club.title': '{{code}} — {{name}} — worked by another position',
+  'fieldDay.board.legend.own': 'Worked on this laptop',
+  'fieldDay.board.legend.club': 'Worked by another position',
   // The end-of-contest merge. The label carries the count so the button says what it
   // will do BEFORE it does it, and the report says what it did — which is the only thing
   // that tells a second (idempotent, no-op) press apart from a button that did nothing.
@@ -4017,21 +4130,46 @@ export const EN = {
   'fieldDay.merge.refused': '{{count}} refused — no stable id',
   'fieldDay.merge.queued': 'queued for upload',
   'fieldDay.merge.remote': 'Only at the station: a press through Remote merges no contact into the logbook.',
-  'fieldDay.upload.label': 'Send merged contacts to my logbook',
+  // THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning Contest mode off offers.
+  // Nothing in it is ticked to begin with, and nothing is done that the operator did not tick.
+  'contestOver.title': 'Contest over?',
+  'contestOver.desc':
+    'Contest mode goes off when you press Turn off. Tick what you want done first: nothing is done that you have not ticked.',
+  'contestOver.export': 'Export the Cabrillo log to Downloads',
+  'contestOver.putBack.legend': 'Put back what the contest changed',
+  'contestOver.putBack.note':
+    'Before is how each one was the first time it changed for this contest, or when Contest mode went on.',
+  'contestOver.putBack.now': 'Now',
+  'contestOver.putBack.before': 'Before',
+  'contestOver.putBack.aria': 'Put back {{setting}}: {{now}} back to {{before}}',
+  'contestOver.value.on': 'On',
+  'contestOver.value.off': 'Off',
+  'contestOver.value.yourCall': 'your callsign',
+  'contestOver.value.none': 'none',
+  'contestOver.value.notDeclared': 'not declared',
+  'contestOver.notNow': 'Not now',
+  'contestOver.turnOff': 'Turn off',
+  'contestOver.busy': 'Working…',
+  // At a club: this laptop's contacts the club's log does not have yet, the club chip's count.
+  'contestOver.club.queued': {
+    one: '{{count}} contact from this laptop is not in the club\'s log yet. It still goes to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
+    other: '{{count}} contacts from this laptop are not in the club\'s log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
+  },
+  'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
   // Run vs search-and-pounce. Stored as plain text with a real `&` — React escapes text
   // children itself, so an entity here would render as the literal characters.
-  'fieldDay.role.aria': 'Field Day role',
+  'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.
   'fieldDay.export.busy': 'Exporting…',
   'fieldDay.export.cabrillo.label': 'Export Cabrillo',
-  'fieldDay.export.cabrillo.title': 'Export Field Day log as Cabrillo (.cbr) for ARRL submission',
+  'fieldDay.export.cabrillo.title': 'Export the {{contest}} log as Cabrillo (.cbr), for submission to the sponsor',
   'fieldDay.export.adif.label': 'Export ADIF',
-  'fieldDay.export.adif.title': 'Export Field Day log as ADIF (.adi)',
+  'fieldDay.export.adif.title': 'Export the {{contest}} log as ADIF (.adi)',
   'fieldDay.export.summary.label': 'Summary',
   'fieldDay.export.summary.title':
     'Download a one-page score summary (QSOs by band/mode, sections, power, bonuses, total)',
@@ -4104,7 +4242,8 @@ export const EN = {
   'fieldDay.removed.restore.title': 'Put this contact back in the contest log exactly as it was: the same time, serial and number.',
   'fieldDay.removed.restored': 'Restored {{call}} to the contest log.',
   'fieldDay.removed.workedAgain': '{{call}} was worked again on that band and mode after it was removed, so it was not restored.',
-  'fieldDay.removed.clubSync': 'Club sync is on, so nothing was restored.',
+  'fieldDay.removed.club': 'The club log has it back too, on every laptop, as soon as the host has it.',
+  'fieldDay.removed.clubAway': 'This laptop is not with the club host right now: the club log gets it back when the link is back.',
   'fieldDay.removed.notRemoved': 'That contact is no longer in the Removed list.',
   'fieldDay.removed.failed': 'Nexus could not restore the contact.',
   'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
@@ -4126,7 +4265,7 @@ export const EN = {
   // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
   // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
   'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
-  // The lines under the Field Day mode switch at the top of the contest screen. The switch
+  // The lines under the Contest mode switch at the top of the contest screen. The switch
   // itself reads Settings' label and accessible names (settings.fieldDay.mode.*). {{contest}}
   // and {{picked}} are contests' own names and {{modes}} on-air mode tokens, all invariant;
   // {{field}}, {{first}} and {{second}} are Settings' names for the exchange boxes.
@@ -4138,19 +4277,31 @@ export const EN = {
   'fieldDay.mode.rule.cluster': 'DX cluster assistance is not permitted.',
   'fieldDay.mode.rule.spotting': 'Spotting assistance is not permitted.',
   'fieldDay.mode.rule.spotsRfOnly': 'No spots are posted over the internet during the event.',
-  'fieldDay.mode.picked':
-    'Picked in Settings: {{picked}}. Turn Field Day mode off and on again to switch to it.',
+  // After a save of a new pick switched the running contest. `{{contest}}` and `{{previous}}` are
+  // the contests' own names, invariant.
+  'fieldDay.mode.switched':
+    'Now running {{contest}}. Saving the new pick ended {{previous}}, and its contacts stay apart from this contest\'s.',
   'fieldDay.mode.needs.one': 'The station cannot enter {{contest}} until your {{field}} is set.',
   'fieldDay.mode.needs.two':
     'The station cannot enter {{contest}} until your {{first}} and {{second}} are set.',
   'fieldDay.mode.needs.open': 'Open in Settings',
+  // The Cabrillo lines the sponsor requires and the entry has left out (`cabrilloMissing`), named
+  // before the export. {{lines}} is the list, each the Settings control that fills it and the
+  // Cabrillo line it writes, which are invariant tokens.
+  'fieldDay.cabrillo.missing':
+    'Before you export, set what {{contest}} requires in its Cabrillo file under Settings ▸ Contesting ▸ Your entry: {{lines}}.',
+  'fieldDay.cabrillo.restart':
+    'Power category and Spotting assistance are read when Contest mode turns on, so after setting them turn Contest mode off and on again. Your contacts stay in the log.',
   'fieldDay.mode.club':
-    'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+    'Club sync is on. With Contest mode off, this station stays in the club event, and contacts the club\'s log does not have yet still go to the host while Nexus is open. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.
   'fieldDay.advisory.banned':
     '{{mode}} is not permitted at {{event}} ({{year}} rules) — you can still log it, but it will not count',
+  // The same fact in two words (`NoCreditChip`): on the large log line beside its mode chip, in
+  // the Contest banner and in the FT screen's header; the sentence above is its title.
+  'fieldDay.advisory.noCredit': '{{mode}} · no credit',
   'fieldDay.advisory.cluster':
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':
@@ -4192,6 +4343,37 @@ export const EN = {
   'fieldDay.club.give.refused.remote': 'Only at the host: a press through Remote gives no position.',
   'fieldDay.club.give.failed': 'Nothing changed: Nexus could not give the position. Press it again.',
   'fieldDay.club.code': 'Club code {{code}}',
+  'fieldDay.club.link.looking': 'Looking for the host at {{addr}}…',
+  'fieldDay.club.link.joined': 'Joined {{event}}, hosted by {{call}}, as {{position}}.',
+  'fieldDay.club.link.youAre': 'This laptop is {{position}} in this event.',
+  'fieldDay.club.link.turnedAway': 'Turned away by the host at {{addr}}: {{told}}',
+  'fieldDay.club.link.unreachable': 'Cannot reach the host at {{addr}}. Trying again.',
+  'fieldDay.club.link.lost': 'Lost the host at {{addr}}. Trying again.',
+  'fieldDay.club.link.why.refused': 'Nothing is listening there: check that Nexus on that laptop has Host a club event on, and that the port is the one its screen shows.',
+  'fieldDay.club.link.why.noAnswer': 'Nothing answered: check that both laptops are on the same network, that Nexus on the host has Host a club event on, and, if the host runs Windows, that its firewall lets Nexus in: press Allow Nexus through Windows Firewall in Settings ▸ Contesting on the host.',
+  'fieldDay.club.link.badAddress': '{{addr}} is not an address to join. Type the one the host shows after “Positions join at”, such as {{example}}.',
+  'fieldDay.club.link.hosting': 'Hosting on port {{port}}. Positions join at:',
+  'fieldDay.club.link.hostingNoAddress': 'Hosting on port {{port}}.',
+  'fieldDay.club.link.connected': { one: '{{count}} other position connected.', other: '{{count}} other positions connected.' },
+  // Contacts this laptop logged on another call than the club's: the club's log takes a contact
+  // only on the call the club is on the air under, so these stay here, and the chip does not
+  // count them.
+  'fieldDay.club.link.otherCall': {
+    one: "{{count}} contact was logged on another call than the club's, so it stays in this laptop's own log and is not sent to the club.",
+    other: "{{count}} contacts were logged on another call than the club's, so they stay in this laptop's own log and are not sent to the club.",
+  },
+  // A joined laptop's link in the host board's words, with when it last heard the host
+  // (`fieldDay.club.heard.*`); Reconnecting and Lost name the address it is trying.
+  'fieldDay.club.link.heard': 'Connected to the host, heard {{ago}}.',
+  'fieldDay.club.link.reconnecting': 'Reconnecting to the host at {{addr}}: last heard {{ago}}.',
+  'fieldDay.club.link.lostHeard': 'Lost the host at {{addr}}, last heard {{ago}}. Trying again.',
+  'fieldDay.club.heard.secs': '{{secs}} s ago',
+  'fieldDay.club.heard.mins': '{{mins}} min ago',
+  'fieldDay.club.heard.hours': '{{hours}} h ago',
+  'fieldDay.club.link.opening': 'Opening port {{port}} for the club event…',
+  'fieldDay.club.link.notHosting.portInUse': 'Not hosting: another program on this laptop is using port {{port}}. Close it, or set another Host port under Field Day Club Sync in Settings ▸ Contesting, and positions join at that port.',
+  'fieldDay.club.link.notHosting.port': 'Not hosting: port {{port}} could not be opened ({{detail}}). Set another Host port under Field Day Club Sync in Settings ▸ Contesting.',
+  'fieldDay.club.link.notHosting.start': 'Not hosting: {{detail}}',
   'fieldDay.club.code.title': "This laptop's club code. Before the host gives a laptop a club position, it checks the code on its own screen against the one on that laptop's.",
   'fieldDay.club.give.confirm.aria': 'Give this laptop its position?',
   'fieldDay.club.give.confirm.head': 'Give the position to the laptop whose club code is:',
@@ -4210,6 +4392,11 @@ export const EN = {
     one: '{{count}} more, not listed here.',
     other: '{{count}} more, not listed here.',
   },
+  // A POSITION SENDING ANOTHER COUNTY THAN THE CLUB (or another state, province or section), on
+  // the host's screen alone: named as its line on the board names it, with what its newest
+  // contact sent and what the club sends. A warning: its contacts are still taken.
+  'fieldDay.club.otherLocation':
+    '{{name}} sends {{sent}}, and this club sends {{club}}. Its contacts are logged as it sent them; set that laptop to {{club}} so the next ones match.',
   'fieldDay.club.boardFull':
     "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
   'fieldDay.club.boardCut':
@@ -4223,6 +4410,21 @@ export const EN = {
     other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
   },
   'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
+  // The contest contacts the journal keeps past its four days that the logbook does not hold,
+  // offered for the merge (ContestView's FdUnmergedNote). The dates are UTC days, YYYY-MM-DD;
+  // `days` is only ever said of two contacts or more.
+  'fieldDay.unmerged.day': {
+    one: "{{count}} contact from {{contest}}, logged {{date}} (UTC), is not in your logbook. This computer's contest journal keeps it until it is.",
+    other: "{{count}} contacts from {{contest}}, logged {{date}} (UTC), are not in your logbook. This computer's contest journal keeps them until they are.",
+  },
+  'fieldDay.unmerged.days':
+    "{{count}} contacts from {{contest}}, logged {{first}} to {{last}} (UTC), are not in your logbook. This computer's contest journal keeps them until they are.",
+  'fieldDay.unmerged.merge': {
+    one: 'Merge it into my logbook',
+    other: 'Merge these {{count}} into my logbook',
+  },
+  'fieldDay.unmerged.title':
+    'Add these contacts to your general logbook as they were logged. Safe to press twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.',
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -4245,6 +4447,54 @@ export const EN = {
   'fieldDay.club.board.clock.ahead': '{{secs}} s ahead',
   'fieldDay.club.board.clock.behind': '{{secs}} s behind',
   'fieldDay.club.board.clock.unknown': 'Not measured: that position runs an older Nexus, or has not answered yet',
+  // The host's board: where each position's link stands and when the host last heard it, and
+  // the host's own Remove and Allow back (`fdevent::PositionLink`, `ClubLog::remove`).
+  'fieldDay.club.board.column.link': 'Status',
+  'fieldDay.club.board.link.title':
+    "Each position's link as this host sees it. Connected: heard in the last {{window}} s (a position sends a heartbeat every {{beat}} s). Reconnecting: not heard for more than {{window}} s. Lost: not heard for more than {{dead}} s, when the host closes its link. Removed: turned away until you press Allow back.",
+  'fieldDay.club.board.link.host': 'This laptop',
+  'fieldDay.club.board.link.connected': 'Connected',
+  'fieldDay.club.board.link.reconnecting': 'Reconnecting',
+  'fieldDay.club.board.link.lost': 'Lost',
+  'fieldDay.club.board.link.removed': 'Removed',
+  'fieldDay.club.board.heard': '(heard {{ago}})',
+  'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
+  // The host's club log on its own screen (ContestView's ClubLogList): every position's contacts
+  // as the host merged them, newest first, with the position that logged each.
+  'fieldDay.club.log.head': 'Club log',
+  'fieldDay.club.log.title':
+    "Every position's contacts as this host merged them, newest first, with the position that logged each: the club's log, which Club ADIF and Club Cabrillo are written from. A duplicate is marked as in your own log. A long contest lists its newest contacts only, so this screen never slows; every contact is in the club's files.",
+  'fieldDay.club.log.count': {
+    one: '{{count}} contact',
+    other: '{{count}} contacts',
+  },
+  'fieldDay.club.log.newest': 'the newest {{shown}} of {{total}} contacts',
+  'fieldDay.club.log.empty': 'No contacts in the club log yet.',
+  'fieldDay.club.grid.caption': 'Positions by band and mode',
+  'fieldDay.club.grid.noBand': 'No band yet:',
+  'fieldDay.club.grid.notHeard': 'Not heard for more than {{secs}} s',
+  'fieldDay.club.remove.label': 'Remove',
+  'fieldDay.club.remove.title':
+    "Disconnects this position and turns it away when it tries again, until you press Allow back. The contacts it already sent stay in the club's log, its score and the club's files.",
+  'fieldDay.club.remove.confirm.aria': 'Remove this position?',
+  'fieldDay.club.remove.confirm.head': 'Remove {{name}} from the club event?',
+  'fieldDay.club.remove.confirm.body':
+    "It is disconnected now and turned away when it tries again, until you press Allow back on its line here. The contacts it already sent stay in the club's log, its score and the club's files. Contacts it logs meanwhile stay in its own log and come in when you let it back.",
+  'fieldDay.club.remove.confirm.yes': 'Remove it',
+  'fieldDay.club.remove.confirm.no': 'Cancel',
+  'fieldDay.club.remove.done':
+    "{{name}} is removed: its link is closed, and it is turned away until you press Allow back. Its contacts stay in the club's log.",
+  'fieldDay.club.allowBack.label': 'Allow back',
+  'fieldDay.club.allowBack.title':
+    'Lets this position join again: it rejoins by itself on its next try and sends the contacts it logged while it was out.',
+  'fieldDay.club.allowBack.done':
+    '{{name}} can rejoin: it is let in on its next try, within 15 seconds, and sends the contacts it logged meanwhile.',
+  'fieldDay.club.remove.refused.stale':
+    'Nothing changed: that position is no longer on this board as it was, or the club event restarted.',
+  'fieldDay.club.remove.refused.notHosting': 'Nothing changed: this Nexus is not hosting a club event.',
+  'fieldDay.club.remove.refused.own': "Nothing changed: that is this laptop's own position, which the host cannot remove.",
+  'fieldDay.club.remove.refused.remote': 'Only at the host: a press through Remote removes no position and lets none back.',
+  'fieldDay.club.remove.failed': 'Nothing changed: Nexus could not change the position. Press it again.',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
@@ -4269,14 +4519,18 @@ export const EN = {
   // Paired with the surfaces above so the wording matches on both sides of the setting.
   // ⚠️ Invariant and staying in the panel: the class/category placeholders (1D, 2O), the
   // section placeholder (WI) and the section list itself, which is data.
-  'settings.contestCategory.legend': 'Contest Category',
+  'settings.contestCategory.legend': 'Your entry',
   'settings.contestPick.legend': 'Contest',
   'settings.contestPick.contest.label': 'Contest',
   'settings.contestPick.contest.aria': 'Which contest you are entering',
   'settings.contestPick.contest.hint':
     'Which contest you are entering. It decides the exchange, what counts as a duplicate, and how the log is scored — so the setup below belongs to the one you pick.',
+  // Shown beside the picker while a contest session runs. `{{contest}}` is the running contest's
+  // own name, invariant.
+  'settings.contestPick.contest.running':
+    'Contest mode is on for {{contest}}. Saving a different pick ends it and starts the new one at once, without calling CQ. Each contest keeps its own contacts.',
   'settings.contestPick.role.label': 'Your role',
-  'settings.contestPick.role.value': 'Running as {{role}}. Your location decides this, so moving across the line changes it.',
+  'settings.contestPick.role.value': 'Your station is {{role}}. Your location decides this, so moving across the line changes it.',
   'settings.contestPick.role.symmetric':
     'This contest works the same way for everyone, so there is no role to choose. Contests with an in-state and an out-of-state side will show yours here.',
   'settings.contestPick.category.label': 'Entry category',
@@ -4295,19 +4549,37 @@ export const EN = {
   'settings.contestPick.power.wfd': 'Winter Field Day takes QRP or LOW (its limit is 100 W PEP), and HIGH writes no CATEGORY-POWER line.',
   'settings.contestPick.email.label': 'Email for contest logs',
   'settings.contestPick.email.hint':
-    'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
+    'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (the CQ contests), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
   'settings.contestPick.entryClass.label': 'Entry class',
   'settings.contestPick.entryClass.hint': 'The class the sponsor scores your entry in, from this contest\'s own rules, written on the ENTRY-CLASS line of the Cabrillo log. In the Illinois QSO Party a club running more than one transmitter at once enters UNLIMITED, and the high and low power classes split at 100 watts PEP. To certify a QRP entry, pick QRP under Power category.',
   'settings.contestPick.club.label': 'Club',
-  'settings.contestPick.club.hint': 'Your contest club, for the CLUB line of the Cabrillo log when the contest\'s rules have one (the Illinois QSO Party). Leave it blank to leave the line out.',
+  'settings.contestPick.club.hint': 'Your contest club, for the CLUB line of the Cabrillo log when the contest\'s rules have one (the CQ contests, the Illinois QSO Party). Spell out the club\'s full name, as CQ asks. Leave it blank to leave the line out.',
   'settings.contestPick.operators.label': 'Other operators',
   'settings.contestPick.operators.hint': 'The OPERATORS line of the Cabrillo log lists everyone who was set as Operator at the key when they logged a contact. Add anyone else here, as callsigns separated by spaces or commas.',
+  'settings.contestPick.transmitter.label': 'Multi-operator class',
+  'settings.contestPick.transmitter.aria': 'Which multi-operator class you are entering',
+  'settings.contestPick.transmitter.hint': 'How many signals your multi-operator entry puts on the air at once, in the classes this contest\'s sponsor scores: ONE is one at a time (Multi-One, Multi-Single), TWO is Multi-Two, UNLIMITED is Multi-Multi, and LIMITED is the ARRL VHF contests\' Limited Multioperator. It goes on the CATEGORY-TRANSMITTER line of the Cabrillo log, with the OPERATORS line the sponsor needs from a multi-operator entry. Nexus marks every contact as transmitter 0, so add the second transmitter\'s contacts to a Multi-Two log before you send it.',
+  'settings.contestPick.overlay.label': 'Overlay',
+  'settings.contestPick.overlay.aria': 'Which overlay category you are also entering',
+  'settings.contestPick.overlay.hint': 'An extra category the sponsor scores beside your entry, for the CATEGORY-OVERLAY line, if you qualify under its rules (CQ\'s overlays are for single operators). For Rookie and Youth, CQ asks for the date you were first licensed or your birth year in the soapbox.',
+  'settings.contestPick.address.label': 'Mailing address',
+  'settings.contestPick.address.hint': 'Where the sponsor can mail a certificate or plaque, for the ADDRESS lines of the Cabrillo log: the street here, one line each, and the rest in the boxes below. A part the sponsor\'s template has no line for goes on one more ADDRESS line, the way its template writes it. Leave it blank to leave the address out. Remote never sees it.',
+  'settings.contestPick.address.city': 'Mailing city',
+  'settings.contestPick.address.state': 'Mailing state or province',
+  'settings.contestPick.address.postalCode': 'Postal code',
+  'settings.contestPick.address.country': 'Mailing country',
+  'settings.contestPick.band.label': 'Band category',
+  'settings.contestPick.band.aria': 'Which band category you are entering',
+  'settings.contestPick.band.hint':
+    'ALL for an all-band entry, or the one band a single-band entry is entered on, for the CATEGORY-BAND line of the Cabrillo log. A single-band entry still logs every contact, other bands included, and the sponsor scores only the band named here. In the CQ contests a multi-operator entry is ALL. Leave it unset to leave the line out.',
+  'settings.contestPick.soapbox.label': 'Soapbox',
+  'settings.contestPick.soapbox.hint': 'Your comments on the contest, for the SOAPBOX lines of the Cabrillo log. Each line you type is a line there, and a long one is wrapped to fit. The California QSO Party asks for its award lines here (YL, YOUTH, MOBILE, NEW CONTESTER…). Leave it blank to leave it out.',
   'settings.contestStation.legend': 'Your station data',
   'settings.contestStation.note': 'What your station sends when a contest asks for it. Fill in the ones your contest uses — a QSO party wants your county or your state, Sweepstakes wants your check. Nothing here is guessed: an exchange that goes on the air has to be one you typed.',
   'settings.contestStation.county.label': 'County',
   'settings.contestStation.county.hint': 'Your county, abbreviated the way the QSO party abbreviates it (Franklin is FRAN). Only in-state entries send this.',
   'settings.contestStation.state.label': 'State or province',
-  'settings.contestStation.state.hint': 'Your state, province or territory, two letters. This is not your ARRL section — Western New York is WNY as a section and NY as a state, and a QSO party wants the state.',
+  'settings.contestStation.state.hint': 'Where your station is for this contest: your state, province or territory, two letters. This is not your ARRL section — Western New York is WNY as a section and NY as a state, and a QSO party wants the state. It is separate from the Station tab\'s State, the one your everyday macros send, so a portable or mobile entry can put here where it is operating.',
   'settings.contestStation.check.label': 'Check',
   'settings.contestStation.check.hint': 'The last two digits of the year you were first licensed. Sweepstakes asks for it, and you send the same two digits all contest.',
   'settings.contestStation.cqZone.label': 'CQ zone',
@@ -4315,7 +4587,7 @@ export const EN = {
   'settings.contestStation.ituZone.label': 'ITU zone',
   'settings.contestStation.ituZone.hint': 'Your ITU zone, 1 to 90. IARU asks for it. Leave it at 0 if you do not know it yet.',
   'settings.contestStation.power.label': 'Power sent',
-  'settings.contestStation.power.hint': 'The power you send as part of the exchange, in the sponsor’s own words (KW, 500, 5). This is not the Field Day power multiplier below — this one goes on the air exactly as you type it.',
+  'settings.contestStation.power.hint': 'The power you send as part of this contest’s exchange, in the sponsor’s own words (KW, 500, 5). It goes on the air exactly as you type it; the power your log declares is Power category, under Your entry.',
   'settings.contestScore.incomplete': 'This score leaves out the bonus points this contest works out from your log — this build does not compute them, so what the sponsor credits you will be higher. Everything the log needs to be accepted is here; the number is not your claimed score.',
   'settings.contestCategory.unassisted.label': 'Unassisted entry',
   // Two whole accessible names — the switch does one of two different things, and neither is
@@ -4386,10 +4658,16 @@ export const EN = {
   'settings.contestKeys.phone.steps.label': 'Voice keyer steps',
   'settings.contestKeys.phone.steps.hint':
     'Record a slot for each step you want Enter to play. An empty slot plays nothing.',
+  // The side of a QSO party the operator's location puts them on (the rules data's role ids
+  // in_state / out_of_state), shown in Settings and beside the log strip's exchange. W/VE and DX,
+  // the other two sides, are the sponsors' own words and stay invariant in the code.
+  'contest.role.inState': 'in-state',
+  'contest.role.outOfState': 'out-of-state',
   'contest.esm.step.callExch': 'His call and your exchange',
   'contest.esm.step.myCall': 'Your call',
   'contest.esm.step.exch': 'Your S&P exchange',
   'contest.esm.refused.dupe': 'A dupe of your own log: Enter sends nothing and logs nothing.',
+  'contest.esm.refused.b4Sent': '{{step}} went to this call. Enter logs it as a dupe once his exchange is copied.',
   'contest.esm.refused.txOff':
     'TX is off, and Enter never turns it on. Turn TX on yourself, then press Enter.',
   'contest.esm.refused.txLocked':
@@ -4397,7 +4675,6 @@ export const EN = {
   'contest.esm.refused.clockRepair': 'A clock repair is holding transmit, so Enter sends nothing.',
   'contest.esm.refused.recording': 'The voice keyer is recording, so Enter plays nothing.',
   'contest.esm.refused.pttHeld': 'You are holding PTT, so Enter plays nothing.',
-  'contest.esm.refused.radioHasMic': 'The radio has the mic, so a recording would not go out.',
   'contest.esm.refused.unmapped':
     '{{step}}: no key is mapped, so Enter sends nothing and logs nothing at that step.',
   'contest.esm.refused.empty':
@@ -4426,24 +4703,26 @@ export const EN = {
   'contest.esm.mode.title':
     'Running or search and pounce: click to switch. The key that holds your CQ switches to running, and clicking a spot switches to S&P.',
   'contest.esm.next': 'Enter sends {{keys}}',
+  'contest.esm.logDupe': 'Enter logs the dupe and sends nothing',
   'contest.esm.logOnly.title': 'Alt+Enter logs the contact without sending anything.',
   'contest.esm.phone.speak': 'Say his call and your exchange.',
   'contest.esm.notSent': 'Nothing was sent, and nothing was logged: {{why}}',
   'contest.esm.stopped.logged': '{{step}} stopped. {{call}} is logged. Ctrl+D twice removes it.',
-  'contest.esm.stopped.loggedClubSync':
-    '{{step}} stopped. {{call}} is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
   'contest.esm.stopped.again':
     '{{step}} stopped, so it counts as not sent: the next Enter sends it again.',
   'contest.esm.switch.failed': 'Enter Sends Message was not saved, so the switch is as it was.',
 
-  'settings.fieldDay.legend': 'Field Day Setup',
-  'settings.fieldDay.mode.label': 'Field Day mode',
-  'settings.fieldDay.mode.aria.enable': 'Enable Field Day mode',
-  'settings.fieldDay.mode.aria.disable': 'Disable Field Day mode',
+  // CONTEST MODE: one switch for whichever contest is picked, named for that (it was "Field Day
+  // mode" while it already started every contest). The keys keep their `fieldDay` names, as the
+  // stored `fdActive` setting does. {{contest}} is the picked contest's own name, invariant.
+  'settings.fieldDay.legend': 'Field Day',
+  'settings.fieldDay.mode.label': 'Contest mode',
+  'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
+  'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',
   'settings.fieldDay.mode.hint':
-    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply. The same switch is at the top of the Contest screen.',
+    'For {{contest}}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
   'settings.fieldDay.needExchange':
-    "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
+    "<b>Set your Class + Section to start operating.</b> Contest mode is on, but the station won't enter {{contest}} until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are
   // the codes an operator sends — a translator leaves every one of them.
   'settings.fieldDay.class.label': 'FD Class',
@@ -4491,7 +4770,7 @@ export const EN = {
   'settings.fdRules.stale': 'Rules data is from {{year}} — check for updates before the event.',
   'settings.fdRules.empty': 'Built-in rules data active.',
   'settings.fdRules.hint':
-    'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
+    'Scoring, dates, exchanges and multipliers for every contest in the Contest list above. Checked on demand; a downloaded update applies at the next launch.',
   // ── Settings ▸ Contesting ▸ Who's who at this event ─────────────────────────────────
   // Three names, three different jobs, and until now nothing said so: the club call lived on
   // Station, the position name under a networking heading on Contesting, the operator on
@@ -4521,7 +4800,31 @@ export const EN = {
   'settings.fdClub.legend': 'Field Day Club Sync',
   'settings.fdClub.host.label': 'Host a club event',
   'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
-  'settings.fdClub.firewall.hint': 'Allow Nexus through your computer\'s firewall (on Windows, on Private networks): a club event uses TCP 42073 and UDP 42074, and the club TV scoreboard TCP 7373. Nexus adds no firewall rule of its own.',
+  'settings.fdClub.firewall.hint': 'A club event uses TCP {{host}} (the Host port), UDP {{search}} (Find club events) and TCP {{board}} (the club TV scoreboard). A firewall that is on must let Nexus in on them.',
+  // Windows only: the button that adds Nexus's own three rules through one administrator prompt,
+  // and the lines that say where they stand (`features/clubFirewall.ts`).
+  'settings.fdClub.firewall.allow': 'Allow Nexus through Windows Firewall',
+  'settings.fdClub.firewall.nothing': 'Nothing to allow',
+  'settings.fdClub.firewall.remove': 'Remove Nexus\'s firewall rules',
+  'settings.fdClub.firewall.busy': 'Waiting for Windows…',
+  'settings.fdClub.firewall.unread': 'Nexus could not read Windows Firewall on this laptop.',
+  'settings.fdClub.firewall.off': 'Windows Firewall is off on this laptop for Private and Public networks, so there is nothing to allow.',
+  'settings.fdClub.firewall.missing': 'Nexus has no club sync rule in Windows Firewall on this laptop yet.',
+  'settings.fdClub.firewall.stale': 'Nexus\'s club sync rules in Windows Firewall are out of date (made for another port, or another copy of Nexus). Press Allow Nexus through Windows Firewall again.',
+  'settings.fdClub.firewall.inPlace': 'Nexus\'s club sync rules are in Windows Firewall for Private and Public networks: TCP {{host}}, UDP {{search}} and TCP {{board}}.',
+  'settings.fdClub.firewall.blocked.private': 'Windows also blocks Nexus on Private networks with a rule of its own (what Cancel at its question leaves), and a block wins over every allow. Delete it in Windows Defender Firewall ▸ Advanced settings ▸ Inbound Rules: the Nexus rules with a block sign.',
+  'settings.fdClub.firewall.blocked.public': 'Windows also blocks Nexus on Public networks with a rule of its own (what Cancel at its question leaves), and a block wins over every allow. Delete it in Windows Defender Firewall ▸ Advanced settings ▸ Inbound Rules: the Nexus rules with a block sign.',
+  'settings.fdClub.firewall.blocked.both': 'Windows also blocks Nexus on Private and Public networks with rules of its own (what Cancel at its question leaves), and a block wins over every allow. Delete them in Windows Defender Firewall ▸ Advanced settings ▸ Inbound Rules: the Nexus rules with a block sign.',
+  'settings.fdClub.firewall.blocksAll.private': 'Windows Firewall blocks every incoming connection on Private networks, whatever is allowed. Turn that off under Windows Security ▸ Firewall & network protection ▸ Private network.',
+  'settings.fdClub.firewall.blocksAll.public': 'Windows Firewall blocks every incoming connection on Public networks, whatever is allowed. Turn that off under Windows Security ▸ Firewall & network protection ▸ Public network.',
+  'settings.fdClub.firewall.blocksAll.both': 'Windows Firewall blocks every incoming connection on Private and Public networks, whatever is allowed. Turn that off for each under Windows Security ▸ Firewall & network protection.',
+  'settings.fdClub.firewall.press.allowFailed': 'Windows did not add Nexus\'s rules: its administrator prompt was declined, or a step failed.',
+  'settings.fdClub.firewall.press.removeFailed': 'Windows did not remove Nexus\'s rules: its administrator prompt was declined, or a step failed.',
+  'settings.fdClub.firewall.press.onAir': 'Not while transmitting: Windows\' administrator prompt takes the whole screen, Stop with it. Press again when the over ends.',
+  'settings.fdClub.firewall.press.running': 'Windows is still asking about the last press.',
+  'settings.fdClub.firewall.press.path': 'Nexus cannot name its own program in a rule from the folder it runs from (a % in its name, or a character Windows\' command line would misread). Allow Nexus by hand under Windows Security ▸ Firewall & network protection ▸ Allow an app through firewall, on Private and Public networks.',
+  'settings.fdClub.firewall.press.port': 'A rule cannot name port 0: set the Host port and the scoreboard\'s port first.',
+  'settings.fdClub.firewall.press.failed': 'Nexus could not ask Windows: {{detail}}',
   'settings.fdClub.host.note': 'Positions on this network can now find and join this event. There is no join password — a club site LAN is trusted, and anyone on it could add rows to the club log, which you will see. If this PC dies, enable hosting on any other position: everyone re-joins and nothing is lost.',
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
@@ -4535,9 +4838,9 @@ export const EN = {
   'settings.fdClub.join.hostingHint': 'Hosting — this position joins its own event automatically.',
   'settings.fdClub.discover.action': 'Find club events',
   'settings.fdClub.discover.busy': 'Listening…',
-  'settings.fdClub.discover.empty': 'Nothing heard in 2 s — same network? Some Wi-Fi blocks discovery; type the host address instead.',
-  'settings.fdClub.discover.pick.label': '{{event}} — {{host}}',
-  'settings.fdClub.discover.pick.title': 'Use {{host}} as the join address',
+  'settings.fdClub.discover.empty': 'Nothing heard in {{secs}} s. Check that the host has Host a club event on, that both laptops are on the same network (some Wi-Fi keeps laptops apart), and, on Windows, that this laptop\'s firewall lets Nexus hear the host: press Allow Nexus through Windows Firewall, above. Or type the address the host shows after “Positions join at” into Join event at.',
+  'settings.fdClub.discover.pick.label': 'Join {{event}} — {{host}}',
+  'settings.fdClub.discover.pick.title': 'Join the event at {{host}} now. This saves only the join address; other changes here still need Save.',
   // ---- Connect on the TV (the read-only LAN page). The toggle IS the LAN opt-in,
   // so the copy has to name what it exposes and to whom — its threat model is not the
   // Field Day scoreboard's, which is defensible partly because a contest log is
@@ -4686,6 +4989,12 @@ export const EN = {
   'sat.iss.optOut': 'ISS auto-arm off — SSTV disarmed, dial restored',
   'sat.iss.los': 'ISS LOS — SSTV disarmed, dial restored',
   'sat.iss.armed': 'ISS overhead — tuned {{dial}} {{mode}}, SSTV armed',
+  // The same pass seen from any screen but SSTV or Satellites: nothing was touched.
+  'sat.iss.overhead': 'ISS overhead — SSTV on {{dial}} {{mode}}. Open SSTV to receive it; your radio was not retuned.',
+  // The same pass where no radio here can receive the downlink: said once a session, and nothing
+  // is tuned on any screen. The path names the switch where the Settings panel shows it.
+  'sat.iss.cannotReceive':
+    "ISS overhead — your radio can't receive {{dial}} MHz, so ISS SSTV auto-arm can't use it. You can turn the auto-arm off in Settings ▸ Digital ▸ SSTV.",
 
   // The manual element-refresh result (features/tleMessages.ts) — one composer for the
   // Update-now toast and the Settings "Last refresh" line, so the two can never drift.
@@ -5950,6 +6259,8 @@ export const EN = {
   // ⚠️ `{{port}}` is the device name exactly as the OS enumerated it (`COM5`,
   // `/dev/cu.usbserial-A`), and `/dev/cu.…`, CAT, PTT and None/VOX are the settings' own
   // vocabulary — every one of them names a thing the operator has to pick by that name.
+  // `noCatPtt` names PTT Method's own choices (VOX, Serial RTS, Serial DTR): use the words the
+  // catalog gives those options.
   'settings.radio.check.noPort': 'No serial port chosen — a rig model is set, so CAT needs a port.',
   'settings.radio.check.portMissing':
     '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
@@ -5957,6 +6268,8 @@ export const EN = {
     '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
+  'settings.radio.check.noCatPtt':
+    "Hamlib can't key this radio over CAT, so PTT on CAT won't put it in transmit. Choose VOX if your interface keys the radio on audio, or Serial RTS or DTR if it keys on a serial line.",
 
   // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
   // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
@@ -6305,6 +6618,11 @@ export const EN = {
   'settings.rigControl.ptt.rts': 'Serial RTS',
   'settings.rigControl.ptt.dtr': 'Serial DTR',
   'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  // Under PTT Method, whatever the method, on a radio Hamlib cannot key over CAT; the setup wizard
+  // shows the same sentence under its keying choice. VOX, Serial RTS and Serial DTR are the
+  // options' own names above; SignaLink is an interface.
+  'settings.rigControl.ptt.noCatPtt':
+    'Hamlib has no way to key this radio over CAT. Pick how your interface keys it: VOX if it keys on audio, like a SignaLink, or Serial RTS or Serial DTR if it keys on a serial line.',
   // #381. Front/Mic and Rear/Data name the radio's two audio inputs and are prose; CAT, PTT, VOX,
   // USB, the jack labels DATA and ACC, and SignaLink (an interface) are invariant tokens.
   'settings.rigControl.txAudio.label': 'Transmit audio source (CAT PTT)',
@@ -6886,6 +7204,13 @@ export const EN = {
     'The port answered, but the exact model is a guess ({{radio}} responded). Pick your radio so its real command set is used.',
   'setup.rig.model.confirm':
     'Confirm the exact model — fixed-rate rigs get their baud set automatically.',
+  // The keying choice on a radio Hamlib cannot key over CAT. The options are PTT Method's own
+  // (settings.rigControl.ptt.vox/rts/dtr) and so is the note under them (ptt.noCatPtt); each blurb
+  // says in one line what its option means. RTS, DTR, SignaLink and Digirig Mobile are tokens.
+  'setup.rig.keying.title': 'How does your interface key the radio?',
+  'setup.rig.keying.vox.blurb': 'It keys the radio when it hears audio, like a SignaLink.',
+  'setup.rig.keying.rts.blurb': "It keys the radio on the serial port's RTS line, like a Digirig Mobile.",
+  'setup.rig.keying.dtr.blurb': "It keys the radio on the serial port's DTR line.",
   'setup.rig.conn.serial.label': 'USB / Serial',
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
@@ -7399,7 +7724,7 @@ export const EN = {
     'Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your interface is wired the other way.',
   'settings.cw.idAfter73.label': 'CW ID after 73',
   'settings.cw.idAfter73.hint':
-    'Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X option, default off). Uses the normal CW keying path — PTT + tone — after the FT8 over, never on top of it.',
+    'Keys your callsign in CW once the final 73 has fully left the air, in Q65, FST4 and MSK144 (stock WSJT-X option, default off). As in WSJT-X, FT8 and FT4 send no CW ID, and neither do FT2, TempoFast or TempoDeep. Uses the normal CW keying path — PTT + tone — after the over, never on top of it.',
 
   // The F-key macro editor. Each key's ROLE is prose (what the key is FOR); F1's role is the
   // Q-code it sends and stays a token in the panel, exactly as the QSO macro set does.
@@ -7546,7 +7871,7 @@ export const EN = {
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
-    'Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.',
+    "Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. If your radio can't receive {{freq}} MHz, it tells you once a session and does nothing else. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.",
   'settings.sstv.transmitting.title': 'Transmitting',
   'settings.sstv.txMode.label': 'Transmit mode',
   'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
@@ -7844,22 +8169,22 @@ export const EN = {
   // written. The host/port EXAMPLES are invariant tokens in the panel.
   'settings.n3fjp.legend': 'N3FJP Integration (club master log)',
   'settings.n3fjp.note':
-    "Each FD contact lands in the club's <b>N3FJP Field Day Contest Log</b> the moment you log it — so the whole club's score updates in real time. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+    "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their exchange too; a QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
   'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
   'settings.n3fjp.host.hint':
     'IP or hostname of the master log computer. Leave blank to disable.',
   'settings.n3fjp.port.label': 'N3FJP port',
   'settings.n3fjp.port.hint': "N3FJP's API TCP port (default 1100).",
-  'settings.n3fjp.useEnter.label': 'Use ENTER for Field Day scoring',
+  'settings.n3fjp.useEnter.label': 'Use ENTER for contest scoring',
   'settings.n3fjp.useEnter.hint':
-    "Log each FD contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
+    "Log each contest contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
   'settings.n3fjp.reportBand.label': 'Report my band to N3FJP',
   'settings.n3fjp.reportBand.hint':
     "Tell N3FJP which band you're on (no CAT needed), so the club's Network Status Display band board shows this position. Off by default.",
   'settings.n3fjp.forwardAll.label': 'Forward every QSO',
   'settings.n3fjp.forwardAll.hint':
-    "Also push <b>every</b> logged QSO (not just Field Day) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the Field-Day push.",
+    "Also push <b>every</b> logged QSO (not just contest contacts) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the contest push.",
   'settings.n3fjp.test.label': 'Connection test',
   'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
   'settings.n3fjp.test.action': 'Test N3FJP',
@@ -7880,10 +8205,10 @@ export const EN = {
   // it: reword the toggle's label and this sentence moves with it.
   'settings.n1mm.addr.sending': 'Sending for every logged QSO.',
   'settings.n1mm.addr.idle':
-    'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
+    'An address alone sends only the contacts you log in Contest mode — turn on Broadcast every QSO below for everyday logging.',
   'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
   'settings.n1mm.broadcastAll.hint':
-    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+    'Send the contact packet for <b>every</b> logged QSO, not just contest contacts — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the contest broadcast, so it is safe to leave on through a contest. Off by default; with it off, packets go out <em>only</em> for the contacts you log in Contest mode.',
 
   // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
   // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
@@ -8340,8 +8665,6 @@ export const EN = {
     'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.',
   'settings.features.rerunWizard': 'Re-run setup…',
   'settings.features.core.title': 'Core — always on',
-  'settings.features.fieldDay.hint':
-    'Turn on for Field Day weekend: the Class/Section exchange appears across all modes. Off the rest of the year. Stays on across restarts until you turn it off; Save settings to apply. The same switch is at the top of the Contest screen.',
 
   // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
   // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
@@ -9389,6 +9712,8 @@ export const EN = {
   'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
   // The directed-CQ tokens are what goes on the air; they stay as written.
   'operate.tx.tx6.hint': 'Edit for a directed CQ — CQ DX / CQ NA / CQ POTA / CQ TEST',
+  'operate.tx.tx6.contest.aria': "Tx6 Call CQ (the contest's CQ)",
+  'operate.tx.tx6.contest.hint': "The contest's CQ — Tx 6 calls it as Call CQ does",
   'operate.tx.callCq.title': 'Call CQ (Alt+6)',
   'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
   // #254 — a Tx6 text that is not a CQ in WSJT-X's grammar is refused before anything keys,
@@ -9527,6 +9852,7 @@ export const EN = {
   'rtty.macro.empty.label': '(empty)',
   'rtty.macro.empty.title': '{{key}} is empty — click to write a message for it',
   'rtty.macro.edit.aria': 'Edit the {{key}} macro',
+  'rtty.macro.edit.title': 'Edit the {{key}} macro. You can also right-click the key, or press Ctrl+Shift+{{key}}.',
   'rtty.macroEditor.aria': 'Edit {{key}}',
   'rtty.macroEditor.title.label': 'Title',
   'rtty.macroEditor.message.label': 'Message',
@@ -9538,6 +9864,8 @@ export const EN = {
   'rtty.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'rtty.macroEditor.unknownToken': 'Unknown token {{token}} — RTTY can’t send braces, so it would go out as a bare word.',
   'rtty.macroEditor.save': 'Save',
+  'rtty.macroEditor.sendOnce': 'Send once',
+  'rtty.macroEditor.sendOnce.title': 'Send this message now, this once. The key stays as it is.',
   'rtty.macroEditor.cancel': 'Cancel',
   'rtty.macroEditor.resetButton': 'Reset this button',
   'rtty.macroSet.aria': 'Macro set',
@@ -9609,6 +9937,7 @@ export const EN = {
   'psk.macro.empty.label': '(empty)',
   'psk.macro.empty.title': '{{key}} is empty — click to write a message for it',
   'psk.macro.edit.aria': 'Edit the {{key}} macro',
+  'psk.macro.edit.title': 'Edit the {{key}} macro. You can also right-click the key, or press Ctrl+Shift+{{key}}.',
   'psk.macroEditor.aria': 'Edit {{key}}',
   'psk.macroEditor.title.label': 'Title',
   'psk.macroEditor.message.label': 'Message',
@@ -9620,6 +9949,8 @@ export const EN = {
   'psk.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'psk.macroEditor.unknownToken': 'Unknown token {{token}} — it would go out on the air exactly as written.',
   'psk.macroEditor.save': 'Save',
+  'psk.macroEditor.sendOnce': 'Send once',
+  'psk.macroEditor.sendOnce.title': 'Send this message now, this once. The key stays as it is.',
   'psk.macroEditor.cancel': 'Cancel',
   'psk.macroEditor.resetButton': 'Reset this button',
   'psk.macroSet.aria': 'Macro set',
@@ -9732,6 +10063,8 @@ export const EN = {
     'Repeating CQ is on, but TX is off — nothing keys. Enable TX (the header pill) to let the CQs go out.',
   'js8.dock.cqRepeat.title.armed':
     'Calling CQ every {{min}} min, on your TX offset. Stops on its own when a station answers you, or at the idle watchdog. Click to stop the schedule — a CQ already on the air finishes; Stop TX cuts it.',
+  'js8.dock.cqRepeat.notArmed.unscheduled':
+    'Repeating CQ is on, but no CQ is scheduled: the interval was 0 when the last one went. Turn it off and on to call again.',
   'js8.dock.repeat.now': 'now',
   'js8.dock.hb.title.off':
     'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
@@ -9739,6 +10072,8 @@ export const EN = {
     'Heartbeat schedule is on, but TX is off — nothing keys. Enable TX (the header pill) to let heartbeats go out.',
   'js8.dock.hb.title.armed':
     'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
+  'js8.dock.hb.notArmed.unscheduled':
+    'HB is on, and HB ACK answers only while it is, but no heartbeat of yours is scheduled: with the interval at 0 (Settings ▸ Digital ▸ JS8), HB sends one when it is turned on, and that one has gone. Turn HB off and on for another.',
 
   // ── JS8 ▸ the dock: command palette, the estimate, the second-act chips, pending, queue ──
   'js8.dock.cmd.aria': 'Directed command',
@@ -9760,16 +10095,26 @@ export const EN = {
     'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
   'js8.dock.relay.title.armed':
     'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. With Auto-reply off, it is put in the message box for you to send instead. Click to turn it off.',
+  'js8.dock.relay.notArmed.needsAuto':
+    'Relay is on, but with AUTOREPLY off a relay is put in the message box for you to send, and nothing keys by itself. Turn AUTOREPLY on to relay on the air.',
   'js8.dock.hbAck.title.off':
     'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
   'js8.dock.hbAck.title.on':
     'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
   'js8.dock.hbAck.title.armed':
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  'js8.dock.hbAck.notArmed.needsHb':
+    'Heartbeat acknowledgements are on, but they answer only while HB is on, as in JS8Call. Turning HB on also sends your own heartbeat.',
+  'js8.dock.hbAck.notArmed.needsAuto':
+    'Heartbeat acknowledgements are on, but they answer only while AUTOREPLY is on, as in JS8Call. Turn AUTOREPLY on.',
+  'js8.dock.hbAck.notArmed.needsHbAndAuto':
+    'Heartbeat acknowledgements are on, but they answer only while HB and AUTOREPLY are both on, as in JS8Call. Turning HB on also sends your own heartbeat.',
   // Appended to all three faces of the three arm chips (the reason it is its own key rather
   // than nine edits is the same as js8.panel.activity.differs).
   'js8.dock.arm.differs':
     'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
+  'js8.dock.notArmed.idle':
+    'Not armed: nothing from you for {{min}} min, so the idle watchdog holds it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings it back.',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
   'js8.toast.idleTripped':
     'JS8 idle watchdog: no operator activity for {{min}} min — HB, AUTOREPLY, RELAY, HB ACK and the repeating CQ are off. TX stays as you left it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings back AUTOREPLY, RELAY and HB ACK as Settings has them; HB and the repeating CQ stay off until you switch them on.',
@@ -10137,6 +10482,7 @@ export const EN = {
   'cw.record.stop.aria': 'Stop recording this QSO',
   'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
   'cw.record.on.title': 'Recording — click to stop recording this QSO',
+  'cw.paddleTookOver': 'Your paddle took over: Nexus stopped its message.',
   'cw.record.startFailed': 'Could not start recording',
   'cw.record.stopFailed': 'Could not stop recording',
 
@@ -10240,6 +10586,28 @@ export const EN = {
   'cw.macro.myCall.label': 'My Call',
   'cw.macro.hisCall.label': 'His Call',
   'cw.macro.spExch.label': 'S&P exch',
+  'cw.macro.empty.label': '(empty)',
+  'cw.macro.empty.title': '{{key}} is empty. Click to write a message for it.',
+  'cw.macro.edit.aria': 'Edit the {{key}} macro',
+  'cw.macro.edit.title': 'Edit the {{key}} macro. You can also right-click the key, or press Ctrl+Shift+{{key}}.',
+  'cw.macroEditor.aria': 'Edit {{key}}',
+  'cw.macroEditor.title.label': 'Title',
+  'cw.macroEditor.message.label': 'Message',
+  'cw.macroEditor.tokens.aria': 'Insert a token',
+  'cw.macroEditor.token.mycall': 'Your callsign',
+  'cw.macroEditor.token.call': 'Their callsign: the station you are working',
+  'cw.macroEditor.token.rst': 'The signal report, sent as 5NN',
+  'cw.macroEditor.token.exch': 'Your contest exchange, without the report (with the serial, where the contest has one)',
+  'cw.macroEditor.token.name': 'Your name, from Settings ▸ Station',
+  'cw.macroEditor.token.hisname': 'Their name, from the callbook lookup',
+  'cw.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
+  'cw.macroEditor.unknownToken': 'Unknown token {{token}}. The keyer skips braces, so it would go out as a bare word.',
+  'cw.macroEditor.save': 'Save',
+  'cw.macroEditor.sendOnce': 'Send once',
+  'cw.macroEditor.sendOnce.title': 'Send this message now, this once. The key stays as it is.',
+  'cw.macroEditor.cancel': 'Cancel',
+  'cw.macroEditor.resetButton': 'Reset this button',
+  'cw.macros.saveFailed': 'Could not save the CW macro',
   'cw.compose.placeholder': 'Type CW to send… (Enter)',
   'cw.hisCall.label': 'His call',
   'cw.hisCall.title': 'The station you are working. The ! in a macro sends this call. A decoded call fills it in; type over it to answer someone else, then press Enter or a macro key.',
@@ -10586,15 +10954,15 @@ export const EN = {
   'phone.rxDsp.agc.off': 'Off',
 
   // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
-  // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
+  // F-key names stay as they are, and `{{slot}}` is the number one of them carries; `{{label}}` is the
   // operator's own name for a slot and is never translated. `{{hint}}` is the Mac Fn-key note
   // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
-  'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
-  'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
-  // `{{exchange}}` is the Field Day class + section, a token; the element around it comes
+  'phone.keyer.hint': 'click a slot or press its F-key to send · Esc stops',
+  'phone.keyer.hint.mac': 'click a slot or press Fn with its F-key to send · Esc stops',
+  // `{{exchange}}` is the running contest's exchange, a token; the element around it comes
   // from the call site.
   'phone.keyer.fd.hint':
-    'Field Day: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
+    'Contest: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
   'phone.keyer.slot.play.title': 'Play F{{slot}} ({{label}})',
   // ONE sentence, not a stem plus a shared tail: recording the rig's RX audio into a slot puts
   // the WRONG AUDIO on the air the moment the slot is played, so the warning rides both
@@ -10611,8 +10979,6 @@ export const EN = {
   // NAME THE CONTROL THAT IS ON THIS SCREEN: Phone shows no Enable-Tx button, so PTT is the
   // switch when TX is off.
   'phone.keyer.txOff': 'TX is off — click PTT once to turn it back on, then play the message',
-  'phone.keyer.radioHasMic':
-    'The voice keyer can\'t play while the radio has the mic: with Flex native DAX audio on, Phone at the shack uses the radio\'s own mic, so a recorded message would not go out. Nothing was keyed.',
   'phone.keyer.playFailed': 'Could not play F{{slot}}',
   'phone.keyer.recordFailed': 'Could not start recording',
   'phone.keyer.saveFailed': 'Could not save recording',
@@ -10732,6 +11098,15 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
+  // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
+  // or something else keyed it first. Never played later; the next message the keyer accepts
+  // clears it.
+  'shell.lane.voiceDropped.message': 'VOICE MESSAGE DROPPED',
+  'shell.lane.voiceDropped.noDax':
+    'Nexus did not play the voice message at {{time}} UTC: the radio did not switch its transmit audio to DAX within 2 seconds, so nothing was keyed. The message was dropped, not held; press its key again.',
+  'shell.lane.voiceDropped.keyed':
+    'Nexus did not play the voice message at {{time}} UTC: something else was transmitting or keyed the radio first (your mic or PTT, a tune carrier, another program), so nothing was keyed. The message was dropped, not held.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.
@@ -10910,10 +11285,10 @@ export const EN = {
 
   // ── A torn-off panel window ─────────────────────────────────────────────────────────
   'detached.connecting': 'Connecting to the radio…',
-  'detached.fieldDay.inactive': 'Field Day isn’t active.',
+  'detached.fieldDay.inactive': 'No contest is running.',
   'detached.fdClub.away.head': 'Club board',
   'detached.fdClub.away.body':
-    "The club board shows here while Field Day is the section you are working in. Step back into Field Day and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
+    "The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
   'detached.fdClub.off.head': 'Club sync is off',
   'detached.fdClub.off.body': 'This station is not hosting a club event and has not joined one, so there are no other positions to show.',
   'detached.fdClub.off.route': 'Turn it on in Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event — or paste the host station’s address into Join event at to join one someone else is running.',
@@ -10977,8 +11352,9 @@ export const EN = {
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',
-  // The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's name, so only the
-  // conversational mode's word is prose.
+  // The operating-mode badge. `QSO` is a Q-code, and in Contest mode the badge names the contest
+  // running by its own short form (`NYQP`, `FIELD DAY`), so only the conversational mode's word
+  // is prose.
   'nav.mode.chat': 'CHAT',
   // One word for the gear: its tooltip, its accessible name and its visible label are the
   // same claim about the same button.
@@ -11153,11 +11529,12 @@ export const EN = {
   'theme.aria': 'Theme',
   'theme.light.label': 'Light',
   'theme.light.title': 'Light (sunlight)',
-  'theme.light.line': 'Daylight panel, dark scopes and meters',
+  'theme.light.line': 'Pale silver front, white panels, dark scopes and meters',
   'theme.dark.label': 'Dark',
   'theme.dark.title': 'Dark (shack)',
   'theme.dark.line': 'Dark panel, lit dials and meters',
-  // System: follow the computer's own light/dark setting (useTheme.ts). Dark stays the default.
+  // System: follow the computer's own light/dark setting (useTheme.ts). The default for a
+  // computer that never chose a theme in the desktop app on Windows; Dark stays the default elsewhere.
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
   'theme.system.line': 'Follows your computer, light or dark',
@@ -11172,8 +11549,6 @@ export const EN = {
   'theme.greenLcd.line': 'Black chassis, green phosphor digits',
   'theme.blueVfd.label': 'Blue VFD',
   'theme.blueVfd.line': 'Deep navy chassis, blue-white fluorescent digits',
-  'theme.silver.label': 'Silver chassis',
-  'theme.silver.line': 'Pale silver front, white panels, dark scopes and meters',
   'theme.midnight.label': 'Midnight',
   'theme.midnight.line': 'True black for OLED and dark rooms, cyan lit',
   'theme.slate.label': 'Slate',
@@ -11186,6 +11561,10 @@ export const EN = {
   'theme.nebula.line': 'Violet-tinted dark with lavender keys and digits',
   'theme.paper.label': 'Paper',
   'theme.paper.line': 'Warm cream page, white panels, ink-blue keys — low glare',
+  // The standard Light until 2026-10-13, when Light took the Silver chassis look; a plain name
+  // for the brighter of the two.
+  'theme.bright.label': 'Bright',
+  'theme.bright.line': 'The earlier Light: cool white panels, bright blue keys',
 
   // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
   // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on

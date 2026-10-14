@@ -27,6 +27,9 @@ interface Props {
    * for a directed CQ (CQ DX / CQ NA / CQ POTA / CQ TEST / …). */
   tx6: string
   onTx6: (v: string) => void
+  /** While a contest runs, the CQ its Running calls (`snap.contestCq`): the row shows it, read-only,
+   * in place of `tx6`, and Tx 6 calls the contest's Running. Absent or null: the row is `tx6`. */
+  tx6Contest?: string | null
   /** 0-based row queued as the next TX (qso.txNow match, else the local pick);
    * null = nothing queued. */
   nextIndex: number | null
@@ -74,6 +77,7 @@ export function TxPanel({
   onTx5,
   tx6,
   onTx6,
+  tx6Contest = null,
   nextIndex,
   onTx,
   onGenerate,
@@ -95,7 +99,7 @@ export function TxPanel({
     { n: 3, text: messages.tx3 },
     { n: 4, text: messages.tx4 },
     { n: 5, text: tx5 },
-    { n: 6, text: tx6 },
+    { n: 6, text: tx6Contest ?? tx6 },
   ]
   // Stock defaults first, then the operator's QSO macros (deduped).
   const tx5Options = Array.from(new Set(['73', 'RR73', ...qsoMacros]))
@@ -192,14 +196,17 @@ export function TxPanel({
                   <input
                     type="text"
                     className="txp-msg txp-free txp-cq-edit mono"
-                    value={tx6}
+                    value={tx6Contest ?? tx6}
+                    readOnly={tx6Contest != null}
                     maxLength={22}
                     spellCheck={false}
                     placeholder={t('operate.tx.tx6.placeholder')}
-                    aria-label={t('operate.tx.tx6.aria')}
+                    aria-label={tx6Contest != null ? t('operate.tx.tx6.contest.aria') : t('operate.tx.tx6.aria')}
                     onChange={(e) => onTx6(e.target.value.toUpperCase())}
                   />
-                  <div className="txp-cq-hint">{t('operate.tx.tx6.hint')}</div>
+                  <div className="txp-cq-hint">
+                    {tx6Contest != null ? t('operate.tx.tx6.contest.hint') : t('operate.tx.tx6.hint')}
+                  </div>
                 </div>
               ) : (
                 <span className="txp-msg mono">{text || '—'}</span>

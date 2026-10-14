@@ -3353,6 +3353,17 @@ struct RadioLoop {
     /// A future slot path that forgets to stamp it fails SAFE (TX Off cuts, the old
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed
+    /// through Nexus's Flex client's switch to DAX, the radio having had the mic: its over ends at
+    /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
+    /// operator's voice. Matches `tx_until_ms` only while that over is the one held.
+    flex_voice_until_ms: Option<f64>,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last handed
+    /// whole to the DAX tee of Nexus's Flex client at its key: through the switch to DAX in Phone
+    /// (`flex_voice_until_ms`), or over the DAX a digital slice already takes. The tee going takes
+    /// the rest of it, and the tee sync then ends it. Matches `tx_until_ms` only while that over is
+    /// the one held.
+    voice_tee_until_ms: Option<f64>,
     tuning_keyed: bool,
     /// The tune keyed is the radio's own carrier (Nexus's Flex client, `transmit tune`), not PTT and
     /// Nexus's tone: its release is the client's own stop. Read only while `tuning_keyed`.
@@ -3689,8 +3700,8 @@ struct RadioLoop {
     /// The radio's DAX source as last pushed to the engine (the Phone cockpit's "mic
     /// disconnected").
     flex_mic_off_pushed: Option<bool>,
-    /// Whether the radio has the mic while native audio is on, as last pushed to the engine (the
-    /// voice keyer's refusal).
+    /// Whether the radio has the mic while native audio is on, as last pushed to the engine (APRS
+    /// and SSTV refuse on it; a voice-keyer message waits for the switch to DAX).
     flex_radio_has_mic_pushed: Option<bool>,
     /// What the Flex client's radio reports beside Tune while Tune is its own carrier, as last
     /// pushed to the engine (`None` inside: Tune is Nexus's tone).
@@ -4139,6 +4150,8 @@ impl RadioLoop {
             prev_slot_was_tx: false,
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
+            flex_voice_until_ms: None,
+            voice_tee_until_ms: None,
             tuning_keyed: false,
             tune_native: false,
             tune_was_data: false,
@@ -5244,17 +5257,20 @@ impl RadioLoop {
         {
             return;
         }
-        let browser_voice = {
+        let (browser_voice, voice_keyer) = {
             let eng = engine_lock(engine);
             if !self.tx_routing_quiet(&eng, rig, now_end) {
                 return;
             }
-            eng.remote_presence_live(self.mono_now(now_end))
+            (
+                eng.remote_presence_live(self.mono_now(now_end)),
+                eng.voice_waits_for_dax().is_some(),
+            )
         };
         let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
             return;
         };
-        if let Some(done) = d.sync_tx_routing(browser_voice) {
+        if let Some(done) = d.sync_tx_routing(browser_voice, voice_keyer) {
             crate::civ::diag::note(&format!("Flex client: {done}"));
         }
     }
@@ -5388,6 +5404,42 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// The voice keyer's message for this tick, if one may go out, and whether it rides Nexus's
+    /// Flex client's switch to DAX (the radio having had the mic; operator ruling, 2026-10-12,
+    /// "Change it now"). A message waiting for that switch ([`Engine::voice_waits_for_dax`]) is
+    /// taken only once the radio reports DAX on Nexus's own stream, with the DAX tee in place and
+    /// nothing keyed; until then it is held, and the routing's quiet point asks the radio for DAX.
+    /// It is dropped, with the reason on the status lane and never played later, when anything else
+    /// keys first or holds the transmitter, or when the radio has not switched 2 seconds (the
+    /// routing's own confirm window) after the press. Only the up half waits: the message's unkey
+    /// and every stop are the loop's as for any over.
+    fn take_voice(&self, eng: &mut Engine, rig: &Rig) -> Option<(Vec<f32>, bool)> {
+        let Some(since) = eng.voice_waits_for_dax() else {
+            return eng.poll_voice().map(|message| (message, false));
+        };
+        let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+        let keyed_first = eng.tx_owner_beside_voice().is_some()
+            || self.holds_tx()
+            || self.tuning_keyed
+            || self.mic_keyed
+            || rig.keyed
+            || flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another);
+        if keyed_first {
+            eng.drop_flex_voice(tempo_app::dto::VoiceDropCause::Keyed);
+            return None;
+        }
+        if since.elapsed() >= Duration::from_millis(crate::flex::routing::CONFIRM_MS) {
+            eng.drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
+            return None;
+        }
+        let ready =
+            self.dax_tee_id.is_some() && flex.is_some_and(crate::flex::FlexDaemon::takes_voice_dax);
+        if !ready {
+            return None;
+        }
+        eng.poll_voice().map(|message| (message, true))
     }
 
     /// Whether Nexus's own Flex client believes a transmission of ours may be on the air
@@ -6322,14 +6374,15 @@ impl RadioLoop {
         // `flex_native_audio` setting: with native audio off too, while Nexus's own write still
         // has the radio on DAX (the toggle, or the receive floor above, takes the tee out at once;
         // the routing puts the mic back at its next quiet point). The Phone cockpit renders it;
-        // nothing gates on it.
+        // nothing gates on it. Not for the DAX a voice-keyer message has for its own length: the
+        // mic is the operator's again after it, and the marker would flash for every message.
         let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
         let client = flex.filter(|_| self.flex_client_audio);
         let want_tee: Option<crate::backend::TxTeeHandle> = client
             .filter(|d| d.tx_route_ready())
             .and_then(crate::flex::FlexDaemon::tx_tee);
         let mic_off = match client {
-            Some(d) => d.radio_dax() == Some(true),
+            Some(d) => d.radio_dax() == Some(true) && !d.dax_for_keyer(),
             None => flex.is_some_and(crate::flex::FlexDaemon::leaves_dax),
         };
         let want_id = want_tee
@@ -6351,6 +6404,25 @@ impl RadioLoop {
             {
                 engine_lock(engine).halt_tx_for_lost_slot_audio();
             }
+            // …and a voice-keyer message the tee carries, through the client's switch to DAX in
+            // Phone or over the DAX a digital slice already takes, which hands its whole waveform
+            // to the tee at its key in the same way: it ends as the keyer's own Stop ends it, the
+            // rest dropped and the radio unkeyed in this same tick (the voice block below), with
+            // TX On left as it was (operator rulings, 2026-10-12, "End the message and unkey" and,
+            // for a digital slice, "Yes, end it the same way"). Only while its audio is still
+            // going out, as for a slot over. Any other over on DAX is left as it was.
+            if self.dax_tee_id.is_some()
+                && self.voice_tee_until_ms.is_some_and(|t| {
+                    self.tx_until_ms == Some(t) && now < t - crate::slot::TX_TAIL_MS
+                })
+            {
+                tempo_core::applog::info(
+                    "tx",
+                    "voice-keyer message ended: its Flex native DAX audio went part way through \
+                     (unkeyed; TX On unchanged)",
+                );
+                engine_lock(engine).stop_voice();
+            }
             self.dax_tee_id = want_id;
             backend.set_tx_tee(want_tee);
             self.tx_route_gen = self.tx_route_gen.wrapping_add(1);
@@ -6360,9 +6432,10 @@ impl RadioLoop {
             engine_lock(engine).observe_flex_dax_tx(mic_off);
         }
         // …and whether the radio has the mic while native audio is on (Phone at the shack): a
-        // recorded message would leave over DAX, which the radio then ignores, so the voice keyer
-        // refuses (operator ruling, 2026-10-04). Pushed on the transition, and before the voice
-        // keyer below takes a message this tick.
+        // packet or a picture would leave over DAX, which the radio then ignores, so APRS and SSTV
+        // refuse, and a voice-keyer message waits for the switch to DAX around it (operator
+        // rulings, 2026-10-04 and 2026-10-12). It stays up through that switch. Pushed on the
+        // transition, and before the voice keyer below takes a message this tick.
         let radio_has_mic = client.is_some_and(crate::flex::FlexDaemon::radio_has_mic);
         if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
             self.flex_radio_has_mic_pushed = Some(radio_has_mic);
@@ -9402,8 +9475,20 @@ impl RadioLoop {
                     }
                 }
             }
+            // THE OPERATOR'S PADDLE TOOK OVER (Nexus's Flex client, once a tester's bench has named
+            // what the radio reports for it): the client has cleared the radio's CW buffer, and the
+            // rest of the message is dropped here, before another word is taken, never resent. Not
+            // Stop TX: nothing here stops anything, so no stop is aimed at the operator's keying.
+            let paddle = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(crate::flex::FlexDaemon::take_operator_break);
             let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
+                if paddle {
+                    eng.cw_operator_break();
+                }
                 (
                     eng.take_cw_abort(),
                     eng.cw_wpm(),
@@ -9416,6 +9501,9 @@ impl RadioLoop {
                     eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
+            if paddle {
+                self.cw_busy_until = 0.0; // the operator's next send keys as usual
+            }
             // ARM THE ZERO-BEAT MEASUREMENT at the operator's pitch while the CW section is
             // up, and disarm it everywhere else. The rx-dsp thread does the measuring (see
             // `rxdsp::measure_zero_beat`); this loop is simply the only thread that can see
@@ -10614,10 +10702,22 @@ impl RadioLoop {
                 &captured
             };
 
+            // THE OPERATOR'S MIC TOOK OVER (Nexus's Flex client, once a tester's bench has named
+            // what the radio reports for it): the client has sent our own unkey and stopped the
+            // message's DAX audio, and the message ends here as the keyer's own Stop ends it. Not
+            // Stop TX: the latch, the stop hold and every other gate stay as they were.
+            let mic_took_over = self
+                .rigctld_proc
+                .as_ref()
+                .and_then(CatDaemon::flex)
+                .is_some_and(crate::flex::FlexDaemon::take_operator_mic);
             let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine_lock(engine);
                 if eng.is_recording() {
                     eng.push_record_samples(rec_samples);
+                }
+                if mic_took_over {
+                    eng.stop_voice();
                 }
                 (
                     eng.take_voice_abort(),
@@ -10625,7 +10725,7 @@ impl RadioLoop {
                     // ([`Self::may_key`]) — `poll_voice` TAKES the message, so skipping the
                     // call is what keeps it for the rig it was recorded to go out on.
                     if self.may_key() {
-                        eng.poll_voice()
+                        self.take_voice(&mut eng, rig)
                     } else {
                         None
                     },
@@ -10638,23 +10738,56 @@ impl RadioLoop {
                 let _ = rig.ptt(false);
                 self.tx_until_ms = None;
             }
-            if let Some(buf) = samples {
+            if let Some((buf, dax)) = samples {
                 if !buf.is_empty() {
                     let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                                                   // A NAK here used to play the message into a receiving rig: it is not played
                                                   // (`key_over`), and the line says why instead of silent dead air.
-                    let key = self.key_over(rig, false);
+
+                    // A message on the Flex client's switch to DAX: its one key is marked as
+                    // carrying Nexus's audio, which the client keys only while the radio takes
+                    // DAX. Refused that way (the radio left DAX between the look and the key),
+                    // it is the keyer's drop, and its lane says so in place of the PTT advice.
+                    let (key, not_on_dax) = {
+                        let flex = dax
+                            .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
+                            .flatten();
+                        let asked = Instant::now();
+                        if let Some(d) = flex {
+                            d.set_voice_key(true);
+                        }
+                        let key = self.key_over(rig, false);
+                        if let Some(d) = flex {
+                            d.set_voice_key(false);
+                        }
+                        let not_on_dax = matches!(key, KeyUp::Refused(_))
+                            && flex
+                                .and_then(|d| d.key_refused_since(asked))
+                                .is_some_and(|(_, cause)| cause.is_some());
+                        (key, not_on_dax)
+                    };
                     if key.sends() {
                         backend.play(&buf);
                         let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        if dax {
+                            self.flex_voice_until_ms = self.tx_until_ms;
+                        }
+                        // Handed whole to the client's DAX tee (the switch's, or a digital slice's
+                        // own DAX): the tee going ends it (the tee sync above).
+                        if self.dax_tee_id.is_some() {
+                            self.voice_tee_until_ms = self.tx_until_ms;
+                        }
                     }
                     if let KeyUp::Refused(why) = &key {
                         note_refused_key("voice-keyer message not played", why);
                     }
-                    self.report_ptt(engine, key.warns());
+                    if not_on_dax {
+                        engine_lock(engine).drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
+                    }
+                    self.report_ptt(engine, key.warns() && !not_on_dax);
                 }
             }
             // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
@@ -11305,8 +11438,18 @@ impl RadioLoop {
         // unkey while the operator is holding live PTT — they own the key then, so a
         // voice/CW message tail ending must not cut a live phone over (the manual-PTT
         // applier handles unkeying when the operator actually releases).
+        //
+        // Except a voice-keyer message through Nexus's Flex client's switch to DAX: the radio
+        // takes its audio from that DAX until the mic is back, so a held PTT would hold the
+        // transmitter with no voice on it. Its over ends at its deadline, and the held PTT is
+        // asked for again, which the client keeps off the air with its reason until the mic is
+        // back ("Same rule for Phone").
         if let Some(t) = self.tx_until_ms {
             if now >= t {
+                let flex_voice = self.flex_voice_until_ms == Some(t);
+                if flex_voice && self.manual_ptt_applied {
+                    self.manual_ptt_applied = false;
+                }
                 if !self.manual_ptt_applied {
                     // ⚠️ FLUSH BEFORE THE UNKEY, OR THE DEADLINE DOES NOTHING ON VOX. Dropping
                     // CAT PTT is not what stops a VOX rig — the AUDIO is. Queued playback keeps
@@ -12196,19 +12339,52 @@ impl RadioLoop {
                         // onto the DX's frequency, not always from the grid at band-center.
                         let parsed = Msg::parse(&message);
                         if let Some(sender) = parsed.sender() {
+                            let dx_freq = Some(delta_freq as f32);
+                            // ⭐ It works the station as the operator's own double-click does
+                            // (`Engine::work_station`): a CQ, while a contest runs whose own
+                            // FT8/FT4 messages apply, goes to the contest's S&P. Entering that
+                            // from outside the contest opens its session, whose rows are read off
+                            // the Engine lock (SPEC-2 v3 C19) this tick holds: that answer is
+                            // made on a thread of its own, as the cockpit's command makes it.
+                            if eng.work_station_opens_session(sender, Some(&message)) {
+                                let engine = Arc::clone(engine);
+                                let (sender, message) = (sender.to_string(), message.clone());
+                                std::thread::spawn(move || {
+                                    let worked = tempo_app::engine::act_opening_session(
+                                        &engine,
+                                        |eng| {
+                                            eng.work_station_opens_session(&sender, Some(&message))
+                                        },
+                                        |eng| {
+                                            eng.work_station(
+                                                &sender,
+                                                None,
+                                                Some(&message),
+                                                Some(snr),
+                                                dx_freq,
+                                            )?;
+                                            eng.set_tx_enabled(true);
+                                            Ok(())
+                                        },
+                                        |_| (),
+                                    );
+                                    if let Err(reason) = worked {
+                                        crate::civ::diag::note(&format!(
+                                            "UDP Reply for {sender} refused: {reason}"
+                                        ));
+                                    }
+                                });
+                                continue;
+                            }
                             // A refusal (no derivable parity — the context was just flushed
                             // by a QSY/tier switch) must NOT fall through to the arm below:
                             // arming TX for a QSO that was never started is exactly the
                             // unattended-keying shape the refusal exists to prevent. The
                             // companion sent a message, so the reason goes to the diag log
                             // rather than vanishing.
-                            if let Err(reason) = eng.call_station_ctx(
-                                sender,
-                                None,
-                                Some(&message),
-                                Some(snr),
-                                Some(delta_freq as f32),
-                            ) {
+                            if let Err(reason) =
+                                eng.work_station(sender, None, Some(&message), Some(snr), dx_freq)
+                            {
                                 crate::civ::diag::note(&format!(
                                     "UDP Reply for {sender} refused: {reason}"
                                 ));
@@ -13082,13 +13258,16 @@ impl RadioLoop {
                     tx_watchdog: false,
                     sub_mode: "",
                     fast_mode: false,
-                    // The LIVE mode wins: field_day is Some only while the
-                    // Field Day mode is actually RUNNING, whereas special_op
+                    // The LIVE mode wins: field_day is Some only while a
+                    // contest is actually RUNNING, whereas special_op
                     // is a persistent setting an operator can forget to turn
                     // off — a stale Hound flag must not misadvertise an
-                    // active FD session (review catch). 6=FOX stays unbuilt.
-                    special_op: if snap.field_day.is_some() {
-                        3
+                    // active contest session (review catch). 6=FOX stays unbuilt.
+                    // A running contest reports the activity WSJT-X itself would
+                    // be set to for it: 3 (Field Day) in ARRL Field Day only,
+                    // 1 (NA VHF) in the ARRL VHF contests, 0 everywhere else.
+                    special_op: if let Some(fd) = &snap.field_day {
+                        tempo_core::fieldday::FtMessages::of_contest(&fd.event).special_op()
                     } else if matches!(
                         eng.settings().special_op,
                         tempo_app::settings::SpecialOp::Hound
@@ -13151,6 +13330,12 @@ impl RadioLoop {
                         // match on the event id, whose `else` branch reported every
                         // contest that was not Winter Field Day as ARRL Field Day.
                         let contest = fd_contest_name(&fd.event, fd.rules_year);
+                        // What the N3FJP push needs to fill another contest's exchange: the
+                        // contest it names the program by, and the slot each of a row's
+                        // received values belongs to (`rcvd` is in this order).
+                        let n3_contest = contest.clone();
+                        let receives: Vec<String> =
+                            fd.receives.iter().map(|f| f.key.clone()).collect();
                         let dial_mhz = cur_dial as f64 / 1e6;
                         let fallback_unix = (now / 1000.0) as u64;
                         let n1_ctx = FdN1mmCtx {
@@ -13172,6 +13357,28 @@ impl RadioLoop {
                                     fallback_unix
                                 };
                                 if !n3_host.is_empty() {
+                                    // The rest of the exchange, in the boxes N3FJP documents
+                                    // for this contest's program; nothing for Field Day or
+                                    // for a program it does not document.
+                                    let (exchange, serial_sent) =
+                                        tempo_net::n3fjp::documented_exchange(
+                                            &n3_contest,
+                                            |side, slot| {
+                                                use tempo_net::n3fjp::Side;
+                                                match side {
+                                                    Side::Sent => q
+                                                        .sent
+                                                        .iter()
+                                                        .find(|(k, _)| k == slot)
+                                                        .map(|(_, v)| v.clone()),
+                                                    Side::Rcvd => receives
+                                                        .iter()
+                                                        .position(|k| k == slot)
+                                                        .and_then(|i| q.rcvd.get(i).cloned()),
+                                                }
+                                                .unwrap_or_default()
+                                            },
+                                        );
                                     let push = tempo_net::n3fjp::N3fjpQso {
                                         call: q.call.clone(),
                                         class: q.class.clone(),
@@ -13188,6 +13395,8 @@ impl RadioLoop {
                                         rst_rcvd: None,
                                         name: None,
                                         power: None,
+                                        exchange,
+                                        serial_sent,
                                     };
                                     let res = if n3_use_enter {
                                         tempo_net::n3fjp::push_qso_enter(&n3_host, n3_port, &push)
@@ -13978,7 +14187,7 @@ fn repair_clock_with(
     // still asking about the first is refused, never queued as a second prompt.
     let _running = repair.claim().ok_or(ClockRepairRefusal::Running)?;
     // A real fault's repair, and nothing else, whatever is on offer: this is the
-    // one place Nexus asks Windows for administrator rights.
+    // one place the clock code asks Windows for administrator rights.
     let diag = repair
         .offered()
         .filter(|d| d.repair.fixes_a_fault())
@@ -15697,6 +15906,8 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 mod tests {
     mod civ_coverage;
     mod clock_repair_tests;
+    mod contest_reply;
+    mod contest_status;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
@@ -15941,6 +16152,7 @@ mod tests {
             submode: "FT8".into(),
             when_unix,
             mex: mex.into(),
+            sent: Vec::new(),
             rcvd: Vec::new(),
             // Terrestrial: 20m DIG, worked off the dial, not through a bird. Empty IS the
             // "no satellite" value -- `field_day_display` builds this field with
@@ -15954,6 +16166,8 @@ mod tests {
             // verdict it did not compute is asserting something it does not model.
             dkey: Vec::new(),
             dupe: false,
+            // FT8 at Field Day, a mode it does not ban; read nowhere this helper feeds either.
+            banned: false,
             // The forwarder's cursor reads it; the emitter tests this helper feeds do not.
             seq: 0,
         }
@@ -36875,6 +37089,113 @@ mod tests {
     }
 
     #[test]
+    fn a_held_bird_the_radio_cannot_hear_sends_it_nothing_at_aos() {
+        // THE REPORT'S STATION (2026-10-13), at the wire: one radio, an FT-710 (HF + 6 m),
+        // working FT8 on 20 m ("My 20m band changes from 20m to 20m custom"), here with SO-50
+        // held from earlier in the session. A pass then ran a Doppler correction per tick into a
+        // radio that cannot reach 70 cm: `F 436800828` three times, refused, read back, and the
+        // next correction again, the FT8 band picker reading "20m (custom)" each time the dial
+        // flicked. The same scene on a radio that DOES reach 70 cm is the control: Doppler still
+        // tunes it.
+        for (rig_hi, ranges, hears) in [
+            (
+                450_000_000u64,
+                vec![
+                    (30_000u64, 56_000_000u64),
+                    (144_000_000, 148_000_000),
+                    (430_000_000, 450_000_000),
+                ],
+                true,
+            ),
+            (56_000_000, vec![(30_000, 56_000_000)], false),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            let mut backend = MockBackend::new();
+            let (addr, log) = range_limited_rigctld(30_000, rig_hi, 14_074_000);
+            let mut rig = Rig::rigctld(&addr);
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut tick = 0.0f64;
+            let mut run = |state: &mut RadioLoop,
+                           rig: &mut Rig,
+                           backend: &mut MockBackend,
+                           n: usize,
+                           tick: &mut f64| {
+                for _ in 0..n {
+                    *tick += 400.0;
+                    state
+                        .step(
+                            &engine,
+                            backend,
+                            rig,
+                            &sinks,
+                            *tick,
+                            &mut ra,
+                            &mut rr,
+                            &mut station,
+                        )
+                        .unwrap();
+                }
+            };
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+            }
+            run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+            {
+                // The radio's coverage as its capability probe reports it (this stub answers no
+                // `\dump_state`), then the pick — through the real pick verbs.
+                let mut e = engine.lock().unwrap();
+                e.observe_rig_rx_ranges(Some(ranges));
+                e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, SO50)));
+                e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            }
+            run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+            let (freqs, modes) = (commanded_freqs(&log).len(), commanded_modes(&log).len());
+
+            // AOS: the armed track's per-tick calls (`run_sat_track`), on slot boundaries.
+            for n in 1..=4u64 {
+                {
+                    let mut e = engine.lock().unwrap();
+                    e.set_sat_pass_engaged(true);
+                    e.sat_doppler_tick(-5.0 + n as f64, 1_005_000 + n * 15_000, false);
+                }
+                run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+            }
+            let sent_f = commanded_freqs(&log)[freqs..].to_vec();
+            let sent_m = commanded_modes(&log)[modes..].to_vec();
+            let r = engine.lock().unwrap().snapshot().radio;
+            if hears {
+                assert!(
+                    sent_f.len() >= 4
+                        && sent_f
+                            .iter()
+                            .all(|hz| (436_780_000..436_810_000).contains(hz)),
+                    "control: every correction reached the radio that hears the bird: {sent_f:?}"
+                );
+                assert!(
+                    (r.dial_mhz - 436.795).abs() < 0.02,
+                    "control: the dial rides the downlink, got {}",
+                    r.dial_mhz
+                );
+            } else {
+                assert_eq!(
+                    (sent_f, sent_m),
+                    (vec![], vec![]),
+                    "no frequency or mode command may reach a radio that cannot hear the bird"
+                );
+                assert_eq!(
+                    (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+                    (14.074, "20m", "USB"),
+                    "the FT8 dial stays where the operator put it"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_tripped_cat_breaker_recovers_instead_of_latching_for_the_session() {
         // ⭐ THE WEDGE. `cat_ok = Some(false)` gates BOTH read-back paths, and the only thing that
         // used to clear it was a successful set_freq/set_mode from the retune block — which does
@@ -37788,6 +38109,505 @@ mod tests {
             "a restored contact that went out is not pushed again"
         );
     }
+
+    // ── N3FJP: each contest's exchange through the ENTER sequence ─────────────────────────────
+
+    /// A fake N3FJP on loopback. It records every byte each connection carries and answers
+    /// the ENTER action the way N3FJP documents it (`<ENTERRESPONSE>`, the records added), so
+    /// a push runs to its end exactly as it does against the program. `added` is that number:
+    /// 1 for a contact N3FJP took, 0 for one it refused, `None` for a program that holds the
+    /// connection open and never answers.
+    fn fake_n3fjp(added: Option<u32>) -> (u16, Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { return };
+                // One entry per connection, kept up to date as its bytes arrive, so a program
+                // that never answers is still seen before the push gives up on it.
+                let at = {
+                    let mut seen = record.lock().unwrap();
+                    seen.push(String::new());
+                    seen.len() - 1
+                };
+                let record = Arc::clone(&record);
+                std::thread::spawn(move || {
+                    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(6)));
+                    let (mut got, mut buf, mut answered) = (Vec::new(), [0u8; 4096], false);
+                    loop {
+                        match s.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => got.extend_from_slice(&buf[..n]),
+                        }
+                        let text = String::from_utf8_lossy(&got).into_owned();
+                        let enter = text.contains("<CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n");
+                        record.lock().unwrap()[at] = text;
+                        if let (Some(added), true, false) = (added, enter, answered) {
+                            answered = true;
+                            let reply =
+                                format!("<CMD><ENTERRESPONSE><VALUE>{added}</VALUE></CMD>\r\n");
+                            let _ = s.write_all(reply.as_bytes());
+                        }
+                    }
+                });
+            }
+        });
+        (port, seen)
+    }
+
+    /// A country file that places ONE call, the station these tests run as (`W9ABC`), so
+    /// CQ WPX and CQ WW can open a session here: both are scored by where you are relative
+    /// to the station you work, and a session refuses to open without placing you.
+    ///
+    /// ⚠️ Process-wide and once-only. It places no call any other test in this binary uses,
+    /// so every other `resolve_call` answers exactly as with no resolver installed; the one
+    /// thing it changes is that those two contests can open, which nothing else here does.
+    fn n3fjp_country_file() {
+        fn places_this_station(call: &str) -> Option<tempo_core::contest::CallLocation> {
+            (call == "W9ABC").then_some(tempo_core::contest::CallLocation {
+                entity: "United States",
+                continent: "NA",
+                cq_zone: Some(4),
+            })
+        }
+        let _ = tempo_core::contest::install_call_resolver(places_this_station);
+    }
+
+    /// Every connection `seen` has recorded once bytes have arrived and a quiet half second
+    /// has passed with no more, so a second push would still be caught; bounded at 3 s.
+    fn n3fjp_seen(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let (mut last, mut quiet) = (0, std::time::Instant::now());
+        while std::time::Instant::now() < deadline {
+            let bytes: usize = seen.lock().unwrap().iter().map(String::len).sum();
+            if bytes != last {
+                (last, quiet) = (bytes, std::time::Instant::now());
+            }
+            if bytes > 0 && quiet.elapsed() > std::time::Duration::from_millis(500) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let pushes = seen.lock().unwrap().clone();
+        eprintln!("what the fake N3FJP received: {pushes:?}");
+        pushes
+    }
+
+    /// ONE contest contact through the loop's own forwarder, with the N3FJP push on (`on`:
+    /// the host set) or off (the host blank): what the fake N3FJP received, connection by
+    /// connection. `settings` names the contest; `log` logs the contact once the loop has
+    /// seen the live session (a row already there would read as a restored one).
+    fn n3fjp_pushes(settings: Settings, on: bool, log: impl FnOnce(&mut Engine)) -> Vec<String> {
+        n3fjp_country_file();
+        let (port, seen) = fake_n3fjp(Some(1));
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            eng.apply_settings(Settings {
+                fd_active: true,
+                n3fjp_host: if on {
+                    "127.0.0.1".into()
+                } else {
+                    String::new()
+                },
+                n3fjp_port: port,
+                ..settings
+            });
+            eng.set_mode("fieldday-run").unwrap();
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut boundary = |at: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    at,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        boundary(0.0);
+        log(&mut engine.lock().unwrap());
+        boundary(16_000.0);
+        n3fjp_seen(&seen)
+    }
+
+    /// The settings one contest runs from: the contest, and the station data it reads.
+    fn n3fjp_contest(event: &str) -> Settings {
+        Settings {
+            mycall: "W9ABC".into(),
+            mygrid: "EN37".into(),
+            fd_event: event.into(),
+            fd_class: if event == "wfd" { "1H" } else { "1D" }.into(),
+            fd_section: "WI".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "COOK".into(),
+            contest_cq_zone: 4,
+            ..Settings::default()
+        }
+    }
+
+    /// The strip's received slots for one contact.
+    fn rcvd(slots: &[(&str, &str)]) -> Vec<(String, String)> {
+        slots
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// One push's ENTER sequence, from the lines between the call and the operator, which
+    /// are all that differ from contest to contest here: the rest is Field Day's own,
+    /// unchanged, at the dial and band these loop tests run on.
+    fn enter_push(mode: &str, call: &str, exchange: &[&str], serial: Option<u32>) -> String {
+        let mut s = format!(
+            "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+             <CMD><CHANGEBM><BAND>20</BAND><MODE>{mode}</MODE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+             <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>{call}</VALUE></CMD>\r\n"
+        );
+        for line in exchange {
+            s.push_str(line);
+        }
+        s.push_str(
+            "<CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n",
+        );
+        if let Some(n) = serial {
+            s.push_str(&format!(
+                "<CMD><SETSERIALNUMBER><VALUE>{n}</VALUE></CMD>\r\n"
+            ));
+        }
+        s.push_str(
+            "<CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+             <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n",
+        );
+        s
+    }
+
+    /// `<CMD><UPDATE>` of one entry control, as the push sends it.
+    fn update(control: &str, value: &str) -> String {
+        format!("<CMD><UPDATE><CONTROL>{control}</CONTROL><VALUE>{value}</VALUE></CMD>\r\n")
+    }
+
+    /// ⭐ **Field Day's push is byte for byte what it was.** Captured off the loop's own
+    /// forwarder against a fake N3FJP that records every command: the ENTER sequence (the
+    /// default) and the `ADDDIRECT` insert an operator can fall back to, whose date and time
+    /// are the contact's own and are left out of the comparison. Winter Field Day's (the same
+    /// class and section, as N3FJP documents for its program) did not move either.
+    #[test]
+    fn the_field_day_n3fjp_push_is_byte_identical() {
+        let fd = |e: &mut Engine| assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("arrlfd"), true, fd),
+            [N3FJP_FD_ENTER],
+            "ARRL Field Day, ENTER"
+        );
+        let pushes = n3fjp_pushes(
+            Settings {
+                n3fjp_use_enter: false,
+                ..n3fjp_contest("arrlfd")
+            },
+            true,
+            fd,
+        );
+        let undated: Vec<String> = pushes
+            .iter()
+            .map(|p| {
+                let (head, rest) = p.split_once("<fldDateStr>").expect("a dated insert");
+                let (_, tail) = rest.split_once("</fldTimeOnStr>").expect("a timed insert");
+                format!("{head}<fldDateStr>…</fldTimeOnStr>{tail}")
+            })
+            .collect();
+        assert_eq!(undated, [N3FJP_FD_ADDDIRECT], "ARRL Field Day, ADDDIRECT");
+        let wfd = |e: &mut Engine| assert!(e.fd_log_manual("K1ABC", "2O", "EMA", "CW").unwrap());
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("wfd"), true, wfd),
+            [N3FJP_WFD_ENTER],
+            "Winter Field Day, ENTER"
+        );
+    }
+
+    /// ⭐ **A contest whose program's controls N3FJP does not publish is left as it was.**
+    /// N3FJP's API page lists the State QSO Parties as "Varies" and does not list its
+    /// Sweepstakes or CQ WW CW/SSB programs at all, so the Illinois QSO Party and CQ WW CW
+    /// still push the call alone, byte for byte as before.
+    #[test]
+    fn a_contest_n3fjp_does_not_document_pushes_as_it_did() {
+        let party = |e: &mut Engine| {
+            let qth = rcvd(&[("RST", "579"), ("QTH", "DUPG")]);
+            assert!(e.contest_log_manual("K9ABC", &qth, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("ilqp"), true, party),
+            [N3FJP_ILQP_ENTER],
+            "Illinois QSO Party"
+        );
+        let cqww = |e: &mut Engine| {
+            let zone = rcvd(&[("RST", "579"), ("ZN", "5")]);
+            assert!(e.contest_log_manual("K1ABC", &zone, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_cw"), true, cqww),
+            [N3FJP_CQWW_CW_ENTER],
+            "CQ WW CW"
+        );
+    }
+
+    /// ⭐ **CQ WPX carries its exchange into N3FJP's CQ WPX program**, in the controls N3FJP
+    /// lists for it ("CQ WPX: RST / Serial Received"): both reports (N3FJP fills them only
+    /// when its own report box takes the focus, so an application fills them), the serial
+    /// received, and SETSERIALNUMBER with the number THIS contact sent, so N3FJP's log holds
+    /// the number that went on the air rather than its own count. The sent and received
+    /// values differ on purpose, so a report filled from the wrong side cannot pass.
+    #[test]
+    fn a_cq_wpx_contact_reaches_n3fjp_with_its_exchange() {
+        let wpx = |e: &mut Engine| {
+            let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+            assert!(e.contest_log_manual("K1ABC", &nr, "CW", None).unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYSERIALNOR", "15"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), true, wpx),
+            [enter_push("CW", "K1ABC", &exchange, Some(1))]
+        );
+    }
+
+    /// ⭐ **CQ WW RTTY carries its exchange into N3FJP's CQ WW RTTY program** ("RST / CQ Zone
+    /// / State (or Province)"). The zone sent on the air goes in after the call, where it
+    /// replaces the one N3FJP fills in from the call; a DX station sends no state, and the
+    /// state box is then left alone rather than cleared.
+    #[test]
+    fn a_cq_ww_rtty_contact_reaches_n3fjp_with_its_exchange() {
+        let w_ve = |e: &mut Engine| {
+            let qth = rcvd(&[("RST", "579"), ("ZN", "5"), ("QTH", "MA")]);
+            assert!(e
+                .contest_log_manual("K1ABC", &qth, "DIG", Some("RTTY"))
+                .unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYCQZONE", "5"),
+            update("TXTENTRYSTATE", "MA"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_rtty"), true, w_ve),
+            [enter_push("RTTY", "K1ABC", &exchange, None)],
+            "a W/VE station"
+        );
+        let dx = |e: &mut Engine| {
+            let zone = rcvd(&[("RST", "579"), ("ZN", "14")]);
+            assert!(e
+                .contest_log_manual("DL1ABC", &zone, "DIG", Some("RTTY"))
+                .unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYRSTS", "599"),
+            update("TXTENTRYRSTR", "579"),
+            update("TXTENTRYCQZONE", "14"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqww_rtty"), true, dx),
+            [enter_push("RTTY", "DL1ABC", &exchange, None)],
+            "a DX station"
+        );
+    }
+
+    /// ⭐ **An ARRL VHF contact carries its grid into N3FJP's VHF Contest Log** ("VHF: Grid /
+    /// RST (optional)"; the ARRL contests send no report, so none is filled).
+    #[test]
+    fn an_arrl_vhf_contact_reaches_n3fjp_with_its_grid() {
+        let vhf = |e: &mut Engine| {
+            let grid = rcvd(&[("GRID", "FN42")]);
+            assert!(e.contest_log_manual("K1ABC", &grid, "CW", None).unwrap());
+        };
+        let exchange = [
+            update("TXTENTRYCLASS", ""),
+            update("TXTENTRYSECTION", ""),
+            update("TXTENTRYGRID", "FN42"),
+        ];
+        let exchange: Vec<&str> = exchange.iter().map(String::as_str).collect();
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("arrlvhf_jun"), true, vhf),
+            [enter_push("CW", "K1ABC", &exchange, None)]
+        );
+    }
+
+    /// ⭐ **Nothing reaches N3FJP while the push is off** (a blank host), for a contest whose
+    /// exchange now rides the push. CONTROL: the same contact with the host set is one push.
+    #[test]
+    fn nothing_reaches_n3fjp_while_the_push_is_off() {
+        let wpx = |e: &mut Engine| {
+            let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+            assert!(e.contest_log_manual("K1ABC", &nr, "CW", None).unwrap());
+        };
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), true, wpx).len(),
+            1,
+            "CONTROL: on, one push"
+        );
+        assert_eq!(
+            n3fjp_pushes(n3fjp_contest("cqwpx_cw"), false, wpx),
+            Vec::<String>::new(),
+            "off, nothing"
+        );
+    }
+
+    /// ⭐ **An N3FJP that refuses, says nothing or is not there never holds up logging.** The
+    /// push runs on its own thread: the slot boundary that starts it returns at once, even
+    /// against a program that holds the connection for its whole 4 s timeout, and the next
+    /// contact logs and is forwarded as usual.
+    #[test]
+    fn a_refused_silent_or_absent_n3fjp_never_holds_up_logging() {
+        let absent = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        n3fjp_country_file();
+        for (what, added) in [("refused", Some(0)), ("silent", None), ("absent", Some(1))] {
+            let (mut port, seen) = fake_n3fjp(added);
+            if what == "absent" {
+                port = absent;
+            }
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut eng = engine.lock().unwrap();
+                eng.apply_settings(Settings {
+                    fd_active: true,
+                    n3fjp_host: "127.0.0.1".into(),
+                    n3fjp_port: port,
+                    ..n3fjp_contest("cqwpx_cw")
+                });
+                eng.set_mode("fieldday-run").unwrap();
+            }
+            let mut backend = MockBackend::new();
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut boundary = |at: f64, station: &mut StationSinks| {
+                let started = std::time::Instant::now();
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        at,
+                        &mut ra,
+                        &mut rr,
+                        station,
+                    )
+                    .unwrap();
+                started.elapsed()
+            };
+            boundary(0.0, &mut station);
+            for (i, (call, at)) in [("K1ABC", 16_000.0), ("W2DEF", 32_000.0)]
+                .iter()
+                .enumerate()
+            {
+                let nr = rcvd(&[("RST", "579"), ("NR", "15")]);
+                assert!(
+                    engine
+                        .lock()
+                        .unwrap()
+                        .contest_log_manual(call, &nr, "CW", None)
+                        .unwrap(),
+                    "{what}: {call} logged"
+                );
+                let took = boundary(*at, &mut station);
+                assert!(
+                    took < std::time::Duration::from_millis(2_500),
+                    "{what}: the boundary that pushed {call} returned in {took:?}"
+                );
+                assert_eq!(
+                    station.last_fd_seq,
+                    i as u64 + 1,
+                    "{what}: {call} went past the forwarder"
+                );
+            }
+            let log = engine.lock().unwrap().snapshot().field_day.unwrap().log;
+            assert_eq!(log.len(), 2, "{what}: both contacts are in the log");
+            if what != "absent" {
+                assert!(
+                    n3fjp_seen(&seen).concat().contains("K1ABC"),
+                    "CONTROL, {what}: the push did reach the program"
+                );
+            }
+        }
+    }
+
+    /// ARRL Field Day's ENTER push, captured from the forwarder before the contest
+    /// exchange work: K1ABC 2A EMA on CW, 20 m, the dial 14.074 MHz, the operator W9ABC.
+    const N3FJP_FD_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2A</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>EMA</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// The same contact by the `ADDDIRECT` fallback, its date and time elided.
+    const N3FJP_FD_ADDDIRECT: &str = "<CMD><ADDDIRECT><EXCLUDEDUPES>TRUE</EXCLUDEDUPES>\
+        <fldCall>K1ABC</fldCall><fldDateStr>…</fldTimeOnStr><fldBand>20</fldBand>\
+        <fldMode>CW</fldMode><fldFrequency>14.0740</fldFrequency><fldClass>2A</fldClass>\
+        <fldSection>EMA</fldSection><fldOperator>W9ABC</fldOperator>\
+        <fldComments>via Nexus</fldComments></CMD>\r\n<CMD><CHECKLOG></CMD>\r\n";
+    /// Winter Field Day's push, captured the same way (K1ABC 2O EMA on CW).
+    const N3FJP_WFD_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE>2O</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE>EMA</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// The Illinois QSO Party's push, captured the same way: the call alone, with Field
+    /// Day's class and section boxes cleared (K9ABC, who sent 579 DUPG).
+    const N3FJP_ILQP_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K9ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
+    /// CQ WW CW's push, captured the same way (K1ABC, who sent 579 5).
+    const N3FJP_CQWW_CW_ENTER: &str = "<CMD><IGNORERIGPOLLS><VALUE>TRUE</VALUE></CMD>\r\n\
+        <CMD><CHANGEBM><BAND>20</BAND><MODE>CW</MODE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYFREQUENCY</CONTROL><VALUE>14.0740</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCALL</CONTROL><VALUE>K1ABC</VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYCLASS</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYSECTION</CONTROL><VALUE></VALUE></CMD>\r\n\
+        <CMD><UPDATE><CONTROL>TXTENTRYOPERATOR</CONTROL><VALUE>W9ABC</VALUE></CMD>\r\n\
+        <CMD><ACTION><VALUE>ENTER</VALUE></CMD>\r\n\
+        <CMD><IGNORERIGPOLLS><VALUE>FALSE</VALUE></CMD>\r\n";
 
     // ── The FT4222 open must be RETRIED ────────────────────────────────────────────────────────
     //

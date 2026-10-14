@@ -42,7 +42,8 @@ fn nyqp() -> Engine {
     })
 }
 
-/// The Illinois QSO Party from Kane County, which refuses a duplicate contact.
+/// The Illinois QSO Party from Kane County, which logs a duplicate contact too since the
+/// operator's ruling of 2026-10-11 (marked, worth nothing): every contest does.
 fn ilqp() -> Engine {
     contest("ilqp", |s| {
         s.contest_qth_state = "IL".into();
@@ -108,7 +109,7 @@ fn there_is_a_shared_entry_only_while_the_logger_window_is_open() {
         "no logger window, no shared entry"
     );
     assert_eq!(
-        e.contest_entry_put("K1ABC", boxes(&[]), serde_json::Value::Null),
+        e.contest_entry_put("K1ABC", boxes(&[]), serde_json::Value::Null, 0),
         Err(ENTRY_CLOSED.to_string()),
         "nothing to put to while the window is closed"
     );
@@ -126,6 +127,7 @@ fn there_is_a_shared_entry_only_while_the_logger_window_is_open() {
             "K1ABC",
             boxes(&[("QTH", "BRX")]),
             serde_json::json!({ "x": 1 }),
+            0,
         )
         .unwrap();
     // Opened again while open (a click on its button focuses it): nothing is reset.
@@ -149,10 +151,10 @@ fn every_put_moves_the_rev_and_the_last_one_is_what_both_windows_show() {
     let mut e = nyqp();
     e.contest_entry_share(true);
     let r1 = e
-        .contest_entry_put("K1A", boxes(&[]), serde_json::Value::Null)
+        .contest_entry_put("K1A", boxes(&[]), serde_json::Value::Null, 0)
         .unwrap();
     let r2 = e
-        .contest_entry_put("K1AB", boxes(&[("RST", "57")]), serde_json::Value::Null)
+        .contest_entry_put("K1AB", boxes(&[("RST", "57")]), serde_json::Value::Null, 0)
         .unwrap();
     assert!(r2 > r1);
     let shown = e.snapshot().contest_entry.unwrap();
@@ -172,7 +174,7 @@ fn two_enters_at_the_same_moment_log_one_contact() {
     for n in 0..rounds {
         let call = format!("K1A{n:02}");
         let rev = engine_lock(&engine)
-            .contest_entry_put(&call, boxes(&fields), serde_json::Value::Null)
+            .contest_entry_put(&call, boxes(&fields), serde_json::Value::Null, n as u64)
             .unwrap();
         let barrier = Arc::new(Barrier::new(2));
         let presses: Vec<_> = (0..2)
@@ -207,7 +209,7 @@ fn where_the_contest_refuses_a_dupe_the_second_enter_is_told_it_was_logged() {
     e.contest_entry_share(true);
     let fields = [("RST", "599"), ("QTH", "COOK")];
     let rev = e
-        .contest_entry_put("K9ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K9ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     let seen = claim(rev, "K9ABC", &fields);
     assert_eq!(enter(&mut e, &seen, &fields, "CW"), Ok(true));
@@ -224,10 +226,10 @@ fn an_enter_on_a_contact_the_other_window_has_changed_logs_nothing() {
     e.contest_entry_share(true);
     let fields = [("RST", "59"), ("QTH", "BRX")];
     let rev = e
-        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     // The other window corrects the call before this one's Enter arrives.
-    e.contest_entry_put("K1ABD", boxes(&fields), serde_json::Value::Null)
+    e.contest_entry_put("K1ABD", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     assert_eq!(
         enter(&mut e, &claim(rev, "K1ABC", &fields), &fields, "PH"),
@@ -250,13 +252,14 @@ fn a_change_that_left_the_contact_as_shown_does_not_refuse_it() {
     e.contest_entry_share(true);
     let fields = [("RST", "59"), ("QTH", "BRX")];
     let rev = e
-        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     // The other window wrote again — a mark of its own, the same call and boxes.
     e.contest_entry_put(
         "k1abc ",
         boxes(&fields),
         serde_json::json!({ "take": null }),
+        0,
     )
     .unwrap();
     assert_eq!(
@@ -272,7 +275,7 @@ fn a_contact_logged_leaves_the_entry_for_the_next_one() {
     e.contest_entry_share(true);
     let fields = [("RST", "59"), ("QTH", "BRX")];
     let rev = e
-        .contest_entry_put("K1ABC", boxes(&fields), serde_json::json!({ "fill": 1 }))
+        .contest_entry_put("K1ABC", boxes(&fields), serde_json::json!({ "fill": 1 }), 0)
         .unwrap();
     assert_eq!(
         enter(&mut e, &claim(rev, "K1ABC", &fields), &fields, "PH"),
@@ -289,7 +292,7 @@ fn a_contact_logged_leaves_the_entry_for_the_next_one() {
     );
     // A window that has seen the log claims the next contact normally.
     let rev = e
-        .contest_entry_put("K1ABD", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K1ABD", boxes(&fields), serde_json::Value::Null, 1)
         .unwrap();
     assert_eq!(
         enter(&mut e, &claim(rev, "K1ABD", &fields), &fields, "PH"),
@@ -306,11 +309,11 @@ fn an_enter_older_than_the_last_log_is_refused_whatever_it_shows() {
     e.contest_entry_share(true);
     let fields = [("RST", "59"), ("QTH", "BRX")];
     let rev = e
-        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     let stale = claim(rev, "K1ABC", &fields);
     assert_eq!(enter(&mut e, &stale, &fields, "PH"), Ok(true));
-    e.contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null)
+    e.contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null, 1)
         .unwrap();
     assert_eq!(
         enter(&mut e, &stale, &fields, "PH"),
@@ -319,8 +322,118 @@ fn an_enter_older_than_the_last_log_is_refused_whatever_it_shows() {
     assert_eq!(calls(&e), ["K1ABC"]);
 }
 
+/// ⭐ TWO PEOPLE AT ONE MOMENT: the logger window's operator corrects the county just as the main
+/// window's Enter logs the contact. The correction was made on a contact already logged, before
+/// that window showed the log, so it is refused: the logged call never comes back to both windows
+/// (where a county and Enter would log it a second time), and the entry keeps the next contact the
+/// main window started.
 #[test]
-fn a_dupe_the_contest_refuses_leaves_the_entry_where_it_was() {
+fn a_change_made_before_the_last_log_is_refused() {
+    let mut e = ilqp();
+    e.contest_entry_share(true);
+    let fields = [("RST", "57"), ("QTH", "LAKE")];
+    let corrected = [("RST", "57"), ("QTH", "COOK")];
+    // Both windows show K9BBB from Lake County.
+    let rev = e
+        .contest_entry_put("K9BBB", boxes(&fields), serde_json::json!({ "fill": 1 }), 0)
+        .unwrap();
+    // The main window's Enter logs it, and its after-log clear starts the next contact.
+    assert_eq!(
+        enter(&mut e, &claim(rev, "K9BBB", &fields), &fields, "PH"),
+        Ok(true)
+    );
+    e.contest_entry_put(
+        "",
+        boxes(&[("QTH", "")]),
+        serde_json::json!({ "fill": 2 }),
+        1,
+    )
+    .expect("the main window's own put, after its log");
+    let next = e.snapshot().contest_entry.unwrap();
+    // The logger window's correction, made on K9BBB before it showed the log.
+    let late = e.contest_entry_put(
+        "K9BBB",
+        boxes(&corrected),
+        serde_json::json!({ "fill": 3 }),
+        0,
+    );
+    let entry = e.snapshot().contest_entry.unwrap();
+    assert_eq!(
+        (
+            entry.call.as_str(),
+            entry.fields.get("QTH").map(String::as_str)
+        ),
+        ("", Some("")),
+        "the logged call must not come back: {entry:?}"
+    );
+    assert_eq!(entry, next, "the entry is the next contact, untouched");
+    assert_eq!(
+        late,
+        Err(ENTRY_LOGGED.to_string()),
+        "refused: made on a contact already logged"
+    );
+    // What the logger window still shows is refused on Enter too: one contact, one row.
+    assert_eq!(
+        enter(&mut e, &claim(rev, "K9BBB", &corrected), &corrected, "PH"),
+        Err(ENTRY_CHANGED.to_string())
+    );
+    assert_eq!(calls(&e), ["K9BBB"]);
+}
+
+/// Only a change made before the last log is refused. One made after it lands as any change does,
+/// from either window: the main window's own typing straight after its Enter, then the logger
+/// window's once it shows the log — and the next contact logs.
+#[test]
+fn a_change_made_after_the_log_lands_from_either_window() {
+    let mut e = ilqp();
+    e.contest_entry_share(true);
+    let fields = [("RST", "57"), ("QTH", "LAKE")];
+    let rev = e
+        .contest_entry_put("K9BBB", boxes(&fields), serde_json::json!({ "fill": 1 }), 0)
+        .unwrap();
+    assert_eq!(
+        enter(&mut e, &claim(rev, "K9BBB", &fields), &fields, "PH"),
+        Ok(true)
+    );
+    assert_eq!(
+        e.snapshot().contest_entry.unwrap().contact,
+        1,
+        "the log moved the entry on to the next contact, as both windows see it"
+    );
+    let main = e
+        .contest_entry_put(
+            "K9C",
+            boxes(&[("QTH", "")]),
+            serde_json::json!({ "fill": 2 }),
+            1,
+        )
+        .expect("the main window's own typing, after its Enter");
+    assert_eq!(e.snapshot().contest_entry.unwrap().call, "K9C");
+    let next = [("RST", "59"), ("QTH", "COOK")];
+    let logger = e
+        .contest_entry_put("K9CCC", boxes(&next), serde_json::json!({ "fill": 3 }), 1)
+        .expect("the logger window's typing, once it shows the log");
+    assert!(logger > main);
+    let entry = e.snapshot().contest_entry.unwrap();
+    assert_eq!(
+        (
+            entry.call.as_str(),
+            entry.fields.get("QTH").map(String::as_str)
+        ),
+        ("K9CCC", Some("COOK"))
+    );
+    assert_eq!(
+        enter(&mut e, &claim(logger, "K9CCC", &next), &next, "PH"),
+        Ok(true)
+    );
+    assert_eq!(calls(&e), ["K9BBB", "K9CCC"]);
+}
+
+/// Enter on a dupe through the shared entry logs it, marked and worth nothing (the operator's
+/// ruling, 2026-10-11), and moves the entry on as any logged contact does. Until the ruling the
+/// Illinois party refused it and left the entry where it was.
+#[test]
+fn a_dupe_entered_from_the_shared_entry_is_logged_marked_and_moves_the_entry_on() {
     let mut e = ilqp();
     let fields = [("RST", "599"), ("QTH", "COOK")];
     // Worked before the window opened, from the strip alone.
@@ -337,17 +450,25 @@ fn a_dupe_the_contest_refuses_leaves_the_entry_where_it_was() {
         .unwrap());
     e.contest_entry_share(true);
     let rev = e
-        .contest_entry_put("K9ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K9ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     assert_eq!(
         enter(&mut e, &claim(rev, "K9ABC", &fields), &fields, "CW"),
-        Ok(false)
+        Ok(true)
     );
+    let marks: Vec<bool> = e
+        .snapshot()
+        .field_day
+        .expect("the contest runs")
+        .log
+        .iter()
+        .map(|q| q.dupe)
+        .collect();
+    assert_eq!(marks, [false, true], "logged, and marked a dupe");
     let entry = e.snapshot().contest_entry.unwrap();
-    assert_eq!(
-        (entry.rev, entry.call.as_str()),
-        (rev, "K9ABC"),
-        "a refused dupe is not a contact"
+    assert!(
+        entry.rev > rev && entry.call.is_empty(),
+        "the dupe is a contact: the entry moved on"
     );
 }
 
@@ -357,7 +478,7 @@ fn a_dupe_the_contest_refuses_leaves_the_entry_where_it_was() {
 fn with_the_window_closed_a_claim_checks_nothing() {
     let mut e = nyqp();
     e.contest_entry_share(true);
-    e.contest_entry_put("K1ABD", boxes(&[]), serde_json::Value::Null)
+    e.contest_entry_put("K1ABD", boxes(&[]), serde_json::Value::Null, 0)
         .unwrap();
     e.contest_entry_share(false);
     let fields = [("RST", "59"), ("QTH", "BRX")];
@@ -375,7 +496,7 @@ fn a_new_sharing_starts_past_every_rev_the_last_one_handed_out() {
     e.contest_entry_share(true);
     let fields = [("RST", "59"), ("QTH", "BRX")];
     let old = e
-        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     e.contest_entry_share(false);
     e.contest_entry_share(true);
@@ -408,7 +529,7 @@ fn a_put_larger_than_any_strip_writes_is_refused() {
         ),
     ] {
         assert_eq!(
-            e.contest_entry_put(call, fields, marks),
+            e.contest_entry_put(call, fields, marks, 0),
             Err(ENTRY_TOO_LARGE.to_string())
         );
     }
@@ -427,7 +548,7 @@ fn nothing_about_the_shared_entry_touches_the_transmitter() {
     e.contest_entry_share(true);
     let fields = [("RST", "59"), ("QTH", "BRX")];
     let rev = e
-        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null)
+        .contest_entry_put("K1ABC", boxes(&fields), serde_json::Value::Null, 0)
         .unwrap();
     assert_eq!(
         enter(&mut e, &claim(rev, "K1ABC", &fields), &fields, "PH"),

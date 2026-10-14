@@ -19,6 +19,7 @@ vi.mock('../api', () => ({
   exportLog: vi.fn(async () => ''),
   openPanelWindow: vi.fn(async () => {}),
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   contestRemoveLast: vi.fn(),
   contestRestore: vi.fn(),
 }))
@@ -125,6 +126,24 @@ describe('the Removed list keeps them, with Restore', () => {
     await settle()
     expect(api.contestRestore).toHaveBeenCalledWith(7)
     expect(note()).toBe('Restored K9OLD to the contest log.')
+    api.contestRemoved.mockResolvedValue([])
+  })
+
+  it('puts it back at a club too, with the host now or when the link is back', async () => {
+    api.contestRemoved.mockResolvedValue([KEPT])
+    for (const [club, words] of [
+      ['linked', 'The club log has it back too, on every laptop, as soon as the host has it.'],
+      ['away', 'This laptop is not with the club host right now: the club log gets it back when the link is back.'],
+    ] as const) {
+      api.contestRestore.mockResolvedValueOnce({ outcome: 'restored', entry: KEPT, club } as never)
+      await show(LOG)
+      await act(async () => {
+        fireEvent.click(screen.getByText('Restore'))
+      })
+      await settle()
+      expect(note()).toBe(`Restored K9OLD to the contest log. ${words}`)
+      cleanup()
+    }
     api.contestRemoved.mockResolvedValue([])
   })
 

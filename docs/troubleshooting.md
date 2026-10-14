@@ -379,7 +379,10 @@ Full setup guide: [Antenna rotator setup](rigs/rotators.md).
 
 - **The arm latch** — like WSJT-X, Nexus requires you to arm TX explicitly
   (Enable TX in the Operate cockpit) before any transmission. Digital does not
-  auto-arm on section entry; Phone and CW do.
+  auto-arm on section entry; Phone, CW, RTTY and PSK do, unless you stopped TX
+  (Stop TX, Esc, TX Off or the watchdog). Then TX stays off, whichever screens
+  you visit, until you turn it back on yourself: TX On, a CW F-key, or your
+  first PTT press in Phone.
 - **License-class lockout** — if the dial is outside your declared license
   segment, the TX button shows a lock and every TX path independently refuses to
   key. Check Settings ▸ Station (default **Open**, no lockout).
@@ -418,9 +421,17 @@ them before assuming something's broken:
 
 ## UI — themes and scaling
 
-- **Three theme choices** live in Settings ▸ Appearance ▸ Theme: **Dark**
-  (default), **Light**, and **System**, which follows your computer's light or dark
-  setting. They apply instantly, no restart.
+- **Three theme choices** live in Settings ▸ Appearance ▸ Theme: **Dark**,
+  **Light**, and **System**, which follows your computer's light or dark setting.
+  On Windows, System is the default until you pick one; on Linux, the Raspberry Pi
+  and macOS, Nexus opens Dark until you pick. They apply instantly, no restart.
+- **Nexus is dark on a computer set to light (or the other way round)?** A theme you
+  picked stays picked, earlier versions saved Dark for everyone who never picked one,
+  and on Linux, the Raspberry Pi and macOS Nexus opens Dark until you pick. Pick
+  **System** in Settings ▸ Appearance ▸ Theme. On Linux, Nexus learns
+  the setting from your desktop's colour-scheme preference (GNOME, KDE) or from a GTK
+  theme whose name ends in `-dark`; a desktop that offers neither reads as light, so
+  pick **Dark** there.
 - **UI scale** fits the interface to the window (**Auto**) or holds a fixed size
   from 65% to 175% (**Manual**). If only the words are too small, use **Text size**
   (Normal, Large, Larger) instead: it leaves the rest of the screen at its size.

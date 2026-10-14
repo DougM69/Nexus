@@ -108,6 +108,25 @@ export function unknownTokens(text: string, known: RegExp): string[] {
 /** Why a macro cannot be sent as it stands. */
 export type MacroRefusal = { missing: 'mycall' | 'call' | 'exch' } | { unknown: string }
 
+/** THE EDIT SHORTCUT, the same in every keyboard dock: Ctrl+Shift with a key's F-key opens that
+ *  key's editor, and never sends. The key it names, or null for any other press. Nothing else in
+ *  Nexus binds Ctrl+Shift with F1–F8 (the docks send on a bare F-key and leave Alt, Ctrl and Cmd
+ *  to the system, the voice keyer and the contest entries do the same, Operate's F4 and F6 are
+ *  its own), and it is none of the systems' F-key chords: Alt+F4 and Ctrl+F4 (Windows),
+ *  Shift+F10 (the context menu), Control+F1–F8 (macOS keyboard navigation), Ctrl+Alt+F1–F7 (a
+ *  Linux console). With Alt or Cmd held as well it is not this chord. */
+export function macroEditChordKey(
+  e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>,
+): MacroKey | null {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return null
+  return (MACRO_KEYS as readonly string[]).includes(e.key) ? (e.key as MacroKey) : null
+}
+
+/** The edit shortcut for `key` as `aria-keyshortcuts` names it, for the ✎ that does the same. */
+export function macroEditShortcut(key: string): string {
+  return `Control+Shift+${key}`
+}
+
 /** The words that read as a STOP — stop, halt, abort, cancel, Esc — in each language the app
  *  ships, by locale. Every installed catalog also gives its own word for a stop (below), so a new
  *  language needs no list here; these are the rest — the Esc keys, the halt and abort words, the

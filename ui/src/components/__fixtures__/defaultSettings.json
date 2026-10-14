@@ -312,6 +312,11 @@
       "slot": 6,
       "label": "Again",
       "file": ""
+    },
+    {
+      "slot": 8,
+      "label": "AGN",
+      "file": ""
     }
   ]
 }

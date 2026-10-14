@@ -316,6 +316,20 @@ describe('resolveTarget — a stale pointer must land, never dead-end', () => {
     expect(resolveTarget('Settings ▸ Rig Control')?.tab).toBe('radio')
   })
 
+  it('lands Field Day\'s section by the names it had, and "Contest mode" on the switch', () => {
+    // Field Day's section kept its id through two names. "Field Day Setup" still names what it
+    // holds, the class and section; "Contest mode" named the switch it held, which now sits
+    // under the picker, so a stale pointer by that name lands there. Both old labels' slugs are
+    // declared, so the docs guard and the manual's generator know the names are dead.
+    expect(resolveTarget('field-day-setup')).toEqual({ tab: 'contesting', section: 'field-day' })
+    expect(resolveTarget('Field Day')).toEqual({ tab: 'contesting', section: 'field-day' })
+    expect(resolveTarget('contest-mode')).toEqual({ tab: 'contesting', section: 'contest-pick' })
+    expect(resolveTarget('Settings ▸ Contesting ▸ Your entry')).toEqual({
+      tab: 'contesting',
+      section: 'contest-category',
+    })
+  })
+
   it('every alias resolves to a live tab', () => {
     const tabIds = new Set(SETTINGS_TABS.map((t) => t.id))
     const dead = Object.entries(TAB_ALIASES)
@@ -387,7 +401,7 @@ describe('searchSettings — the operator types their own words', () => {
     expect(ids('watch list notes')).toContain('alerts')
     // The built-in themes (2026-09-27) by their names, and by what an operator wants of one; bare
     // 'amber' still reaches Colours first, which owns that word.
-    for (const q of ['amber lcd', 'blue vfd', 'silver chassis', 'paper', 'oled', 'true black', 'rig looks']) {
+    for (const q of ['amber lcd', 'blue vfd', 'silver chassis', 'paper', 'bright', 'oled', 'true black', 'rig looks']) {
       expect(ids(q)[0], `"${q}" must reach the Theme section`).toBe('theme')
     }
     expect(ids('amber')[0]).toBe('colours')
@@ -432,6 +446,14 @@ describe('searchSettings — the operator types their own words', () => {
   it('ranks an exact label above a mere keyword mention', () => {
     // "CW" is the CW section's whole label and also a keyword elsewhere.
     expect(searchSettings('cw')[0].section.id).toBe('cw')
+  })
+
+  it('"contest mode" finds the switch under the picker on Contesting, and nothing in Features, where it no longer is', () => {
+    for (const q of ['contest mode', 'field day mode']) {
+      const found = searchSettings(q).map((h) => h.section.id)
+      expect(found[0], q).toBe('contest-pick')
+      expect(found, q).not.toContain('features')
+    }
   })
 
   it('says WHAT matched, so a result never looks arbitrary', () => {

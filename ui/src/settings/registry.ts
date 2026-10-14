@@ -406,7 +406,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The pop-up switch (#391), in the words of the report: "how do I turn off the popup
       // notifications in the bottom right". The search is punctuation-blind, so 'popup' covers
       // 'pop-up' too.
-      'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right'],
+      'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right',
+      // The new DXCC / grid alert's own switch, and the three band menus the Needed boards
+      // follow. Searched for by what they do: the beep, or what the board lists.
+      'beep', 'needed board'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------
@@ -492,26 +495,27 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
 
   // ---- Contesting --------------------------------------------------------------
-  // The contest itself comes FIRST on this tab: it decides the exchange, the dupe rule,
-  // the multiplier universe and the Cabrillo headers, so every section under it belongs
-  // to whichever contest is picked. `Field Day Setup` is the setup for the two Field Day
-  // events, and the families in later batches land in this picker rather than beside it.
+  // In the order an entry is set up: the contest and the switch that starts it, what the station
+  // sends, what the log declares, the aids, Field Day's own fields, then the club.
+  //
+  // The contest itself comes FIRST on this tab: it decides the exchange, the dupe rule, the
+  // multiplier universe and the Cabrillo headers, so every section under it belongs to whichever
+  // contest is picked. It also holds the Contest mode switch that starts that contest and the
+  // rules data every contest reads; both moved here from Field Day's section, which is now Field
+  // Day's alone. The families in later batches land in this picker rather than beside it.
   {
     id: 'contest-pick',
     label: 'Contest',
     tab: 'contesting',
     neededInHourOne: true,
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
-      'which contest', 'role', 'in state', 'out of state', 'category', 'entry category',
-      'cabrillo', 'category-operator', 'single-op', 'multi-op', 'checklog', 'single op',
-      'multi op', 'check log', 'operators', 'email', 'e-mail', 'cabrillo email',
-      'entry class', 'entry-class', 'unlimited', 'club', 'contest club', 'qrp-competition'],
+      'which contest', 'role', 'in state', 'out of state', 'contest mode', 'field day mode',
+      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —
   // a QSO party sends the county or the state, Sweepstakes sends the check — and
-  // above Field Day Setup, which is the setup for one pair of contests rather than
-  // for the station.
+  // above the entry, which is what the log declares rather than what the station sends.
   {
     id: 'contest-station',
     label: 'Your station data',
@@ -521,15 +525,28 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'cq zone', 'itu zone', 'zone', 'power sent', 'exchange', 'qso party',
       'sweepstakes', 'my county', 'my state', 'station data', 'what i send'],
   },
+  // What the entry's Cabrillo log declares: the category, the power, the assistance, the station
+  // type, the email, the sponsor's entry class, the club and the other operators, the band
+  // category, a multi-operator entry's class, the overlay, the mailing address and the soapbox —
+  // and the Unassisted switch, the other half of "assisted", which turns the aids below off. It was
+  // "Contest Category" while it held that switch alone; the id is a public name and stays.
   {
     id: 'contest-category',
-    label: 'Contest Category',
+    label: 'Your entry',
     tab: 'contesting',
-    keywords: ['contest', 'assisted', 'unassisted', 'category', 'entry'],
+    keywords: ['category', 'entry category', 'cabrillo', 'category-operator', 'single-op',
+      'multi-op', 'checklog', 'single op', 'multi op', 'check log', 'power category', 'qrp',
+      'low power', 'high power', 'assisted', 'unassisted', 'spotting assistance',
+      'assistance record', 'station type', 'school', 'operators', 'email', 'e-mail',
+      'cabrillo email', 'entry class', 'entry-class', 'unlimited', 'club', 'contest club',
+      'qrp-competition', 'transmitter', 'category-transmitter', 'multi-one', 'multi-two',
+      'multi-multi', 'multi-single', 'overlay', 'category-overlay', 'rookie', 'classic', 'youth',
+      'address', 'mailing address', 'soapbox', 'band category', 'category-band', 'single band',
+      'all band'],
   },
   // The contest strip's two aids: the Super Check Partial list Nexus downloads and the
-  // call-history file the operator imports. Under Contest Category because its Unassisted
-  // switch turns both off, and above Field Day Setup because both serve every contest.
+  // call-history file the operator imports. After Your entry, whose Unassisted switch turns
+  // both off. Both serve every contest.
   {
     id: 'scp-call-history',
     label: 'Super Check Partial and call history',
@@ -539,8 +556,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'exchange fill', 'partial match'],
   },
   // Enter Sends Message: a switch per cockpit (CW, RTTY, Phone), off until the operator turns it
-  // on, and the steps each cockpit's macro set sends. With the contest's own sections, above
-  // Field Day's: it works in every contest the picker runs.
+  // on, and the steps each cockpit's macro set sends. With the contest's own sections: it works
+  // in every contest the picker runs.
   {
     id: 'contest-keys',
     label: 'Enter Sends Message',
@@ -548,12 +565,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['esm', 'n1mm esm', 'enter key', 'run', 's&p', 'search and pounce', 'call once',
       'role picker', 'steps', 'next message', 'his call', 'tu'],
   },
+  // FIELD DAY'S OWN FIELDS — the class (or WFD's class and category), the ARRL section, and ARRL
+  // Field Day's power multiplier — shown only while one of the two Field Days is picked. It was
+  // "Field Day Setup", then "Contest mode" while it also held the switch and the rules data; the
+  // id stays `field-day` (a public name), and the old labels are in SECTION_ALIASES.
   {
     id: 'field-day',
-    label: 'Field Day Setup',
+    label: 'Field Day',
     tab: 'contesting',
-    keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
-      'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
+    keywords: ['arrl', 'winter field day', 'wfd', 'class', 'fd class', 'wfd category',
+      'section', 'arrl section', 'exchange', 'power multiplier', 'battery', 'natural power'],
   },
   // A club site answers "who are you?" three different ways — the call that goes on the air,
   // the tent you are sitting in, and the person at the key — and all three already existed as
@@ -580,7 +601,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // section — which is exactly the section the operator could not make sense of.
     keywords: ['club', 'sync', 'host', 'join', 'multi-op', 'multiop', 'lan',
       'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
-      'club log', 'spectator', 'tv', 'projector', 'big screen'],
+      'club log', 'spectator', 'tv', 'projector', 'big screen', 'firewall', 'windows firewall'],
   },
 
   // ---- Appearance --------------------------------------------------------------
@@ -606,6 +627,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // Field mode. #215's contrast words, and Night's (useNight.ts) for a dimmer screen after dark.
     // The ten built-in themes by name (features/skins.ts), and the words for wanting one. Never
     // bare 'amber' or 'green': Colours owns those, and an exact keyword outranks all but a label.
+    // Silver's names still lead here: its look is the Light card's now.
     id: 'theme',
     label: 'Theme',
     tab: 'appearance',
@@ -614,7 +636,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision',
       'themes', 'skin', 'skins', 'rig look', 'rig looks', 'lcd', 'vfd', 'amber lcd', 'green lcd',
       'blue vfd', 'silver', 'silver chassis', 'midnight', 'oled', 'true black', 'slate', 'lagoon',
-      'ember', 'sepia', 'nebula', 'paper', 'cream'],
+      'ember', 'sepia', 'nebula', 'paper', 'cream', 'bright'],
   },
   {
     // The colour roles (features/paletteRoles.ts): a few pre-checked presets for the accent, the
@@ -669,8 +691,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'features',
     label: 'Features',
     tab: 'appearance',
+    // Not 'contest mode': the switch is on the Contesting tab (`field-day`) and the Contest
+    // screen only, so a search for it lands there.
     keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
-      'pota', 'setup wizard', 'field day mode'],
+      'pota', 'setup wizard'],
   },
   {
     id: 'app-updates',
@@ -776,6 +800,12 @@ export const SECTION_ALIASES: Record<string, string> = {
   'logbook-qsl': 'confirmations',
   'qsl-services': 'confirmations',
   'setup-health': 'radios',
+  // Field Day's section by its old LABELS (its id never changed). "Field Day Setup" was the
+  // whole section, whose class and section are still there; "Contest mode" was the name it had
+  // while it also held the switch, which now sits under the picker. The docs guard and the
+  // manual's generator read both names as dead.
+  'field-day-setup': 'field-day',
+  'contest-mode': 'contest-pick',
 }
 
 /** Where a deep link should land: a tab, and optionally a section to scroll to. */

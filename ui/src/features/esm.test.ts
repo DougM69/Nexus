@@ -22,8 +22,8 @@ import {
 import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT, VOICE_SLOT_ROLES, esmRoles } from './esmRoles'
 import { resolveRttySet } from './rttyMacros'
 
-const RUN: EsmState = { mode: 'run', exchTo: null, myCallTo: null }
-const SP: EsmState = { mode: 'sp', exchTo: null, myCallTo: null }
+const RUN: EsmState = { mode: 'run', exchTo: null, myCallTo: null, b4To: null }
+const SP: EsmState = { mode: 'sp', exchTo: null, myCallTo: null, b4To: null }
 const strip = (
   call: string,
   exchangeComplete = false,
@@ -82,14 +82,60 @@ describe('esmStep — Run', () => {
     })
   })
 
-  it('R6: an own dupe sends nothing and logs nothing, whatever the exchange holds', () => {
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM). N1MM's ESM
+  // table: "Duplicate Call | Empty or invalid | QSO B4 (F6)" when running. Nexus sends it once,
+  // from the key the sets hold it on, and the next press logs the dupe for 0 points.
+  it('R6: an own dupe gets QSO B4, once: nothing logs, the caret stays, and ESM remembers the call it went to', () => {
     for (const complete of [false, true]) {
-      expect(esmStep(RUN, strip('K9AAA', complete, 'own'), CW)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
-      expect(esmStep({ ...RUN, exchTo: 'K9AAA' }, strip('K9AAA', complete, 'own'), CW)).toEqual({
-        kind: 'refuse',
-        refusal: { why: 'dupe' },
+      expect(esmStep(RUN, strip('K9AAA', complete, 'own'), CW)).toEqual({
+        kind: 'send',
+        role: 'b4',
+        log: false,
+        caret: 'stay',
+        next: { ...RUN, b4To: 'K9AAA' },
       })
     }
+  })
+
+  it('R7: QSO B4 gone to the call, the next press logs the dupe and sends nothing', () => {
+    expect(esmStep({ ...RUN, b4To: 'K9AAA' }, strip('K9AAA', true, 'own'), CW)).toEqual({ kind: 'log', caret: 'call' })
+  })
+
+  it('R8: QSO B4 gone and his exchange not copied: nothing is sent again, nothing logs, and the strip says why', () => {
+    expect(esmStep({ ...RUN, b4To: 'K9AAA' }, strip('K9AAA', false, 'own'), CW)).toEqual({
+      kind: 'refuse',
+      refusal: { why: 'b4Sent' },
+    })
+  })
+
+  // A QSO party keys its dupes on the county, so a dupe shows only once his county is in the box,
+  // after my exchange went out: the contact is under way, and goes on as any other (N1MM's
+  // "Duplicate Call (after sending exchange) | Valid | End QSO + Log").
+  it('R9: once my exchange has gone to the call, a dupe goes on as any contact: AGN, or TU and the log', () => {
+    const sent = { ...RUN, exchTo: 'K9AAA' }
+    expect(esmStep(sent, strip('K9AAA', false, 'own'), CW)).toEqual({ kind: 'send', role: 'again', log: false, caret: 'stay', next: sent })
+    expect(esmStep(sent, strip('K9AAA', true, 'own'), CW)).toEqual({ kind: 'send', role: 'tu', log: true, caret: 'call', next: RUN })
+  })
+
+  it('QSO B4 is per call: a corrected call that is a dupe too gets its own, and a new contact starts over', () => {
+    expect(esmStep({ ...RUN, b4To: 'K9AAA' }, strip('K9AAB', false, 'own'), CW)).toMatchObject({
+      role: 'b4',
+      next: { ...RUN, b4To: 'K9AAB' },
+    })
+    expect(esmEvent({ ...RUN, b4To: 'K9AAA' }, 'cleared')).toEqual(RUN)
+  })
+
+  it('a stopped QSO B4 counts as not sent: the next press sends it again instead of logging', () => {
+    const stopped = esmEvent({ ...RUN, b4To: 'K9AAA' }, 'stopped')
+    expect(stopped).toEqual(RUN)
+    expect(esmStep(stopped, strip('K9AAA', true, 'own'), CW)).toMatchObject({ kind: 'send', role: 'b4', log: false })
+  })
+
+  it('walks a dupe: QSO B4, then the press that logs it; nothing is sent twice', () => {
+    const first = esmStep(RUN, strip('K9AAA', true, 'own'), CW)
+    if (first.kind !== 'send') throw new Error(`refused: ${JSON.stringify(first)}`)
+    expect(first.role).toBe('b4')
+    expect(esmStep(first.next, strip('K9AAA', true, 'own'), CW)).toEqual({ kind: 'log', caret: 'call' })
   })
 
   it('walks a whole contact: CQ, his call and my exchange, AGN, TU and the log', () => {
@@ -148,9 +194,15 @@ describe('esmStep — S&P', () => {
     expect(esmStep({ ...SP, myCallTo: 'K9AAA' }, strip('K9AAA', true), ONCE)).toEqual(expected)
   })
 
-  it('S4: an own dupe sends nothing and logs nothing', () => {
+  // N1MM's table, S&P: "Duplicate Call | Empty or invalid | … | do nothing". You do not call a
+  // station you have worked, and no QSO B4 goes over his CQ.
+  it('S4: an own dupe sends nothing and logs nothing — no QSO B4 in S&P, whatever ESM remembers', () => {
     expect(esmStep(SP, strip('K9AAA', false, 'own'), CW)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
     expect(esmStep(SP, strip('K9AAA', true, 'own'), ONCE)).toEqual({ kind: 'refuse', refusal: { why: 'dupe' } })
+    expect(esmStep({ ...SP, myCallTo: 'K9AAA', b4To: 'K9AAA' }, strip('K9AAA', true, 'own'), CW)).toEqual({
+      kind: 'refuse',
+      refusal: { why: 'dupe' },
+    })
   })
 
   // Call history fills the boxes as the call is typed, so the exchange can be complete before he
@@ -317,16 +369,17 @@ describe('esmEvent — Run and S&P', () => {
   })
 
   it('switching keeps what went out to the call in the strip', () => {
-    expect(esmEvent({ ...SP, exchTo: 'K9AAA', myCallTo: 'K9AAA' }, 'cq')).toEqual({
+    expect(esmEvent({ ...SP, exchTo: 'K9AAA', myCallTo: 'K9AAA', b4To: 'K9AAA' }, 'cq')).toEqual({
       mode: 'run',
       exchTo: 'K9AAA',
       myCallTo: 'K9AAA',
+      b4To: 'K9AAA',
     })
   })
 
   it('a cleared strip is a new contact with nothing sent, in the same mode', () => {
-    expect(esmEvent({ mode: 'run', exchTo: 'K9AAA', myCallTo: 'K9AAA' }, 'cleared')).toEqual(RUN)
-    expect(esmEvent({ mode: 'sp', exchTo: 'K9AAA', myCallTo: 'K9AAA' }, 'cleared')).toEqual(SP)
+    expect(esmEvent({ mode: 'run', exchTo: 'K9AAA', myCallTo: 'K9AAA', b4To: 'K9AAA' }, 'cleared')).toEqual(RUN)
+    expect(esmEvent({ mode: 'sp', exchTo: 'K9AAA', myCallTo: 'K9AAA', b4To: 'K9AAA' }, 'cleared')).toEqual(SP)
   })
 })
 
@@ -340,7 +393,6 @@ describe('esmTxRefusal — each refusal by its reason', () => {
     keyerShown: true,
     pttHeld: false,
     recording: false,
-    radioHasMic: false,
     ...over,
   })
 
@@ -365,10 +417,9 @@ describe('esmTxRefusal — each refusal by its reason', () => {
       expect(esmTxRefusal(g)).toEqual({ why: 'clockRepair' })
   })
 
-  it('Phone: the keyer recording, PTT held, the radio holding the mic', () => {
+  it('Phone: the keyer recording, PTT held', () => {
     expect(esmTxRefusal(phone({ recording: true }))).toEqual({ why: 'recording' })
     expect(esmTxRefusal(phone({ pttHeld: true }))).toEqual({ why: 'pttHeld' })
-    expect(esmTxRefusal(phone({ radioHasMic: true }))).toEqual({ why: 'radioHasMic' })
   })
 
   it('ESM steps aside (Enter logs as with ESM off) while the keyer is hidden, the RTTY auto sequence runs, or Continuous TX is latched', () => {
@@ -438,10 +489,39 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
     })
   })
 
-  it('an own dupe is refused as a dupe, before any guard is asked', () => {
-    expect(press({ strip: strip('K9AAA', true, 'own'), guards: { ...cw, txEnabled: false } })).toEqual({
+  it('in S&P an own dupe is refused as a dupe, before any guard is asked', () => {
+    expect(press({ state: SP, strip: strip('K9AAA', true, 'own'), guards: { ...cw, txEnabled: false } })).toEqual({
       kind: 'refuse',
       refusal: { why: 'dupe' },
+    })
+  })
+
+  it('running, an own dupe sends QSO B4 from F7, past every transmit guard as any message is', () => {
+    const dupe = strip('K9AAA', false, 'own')
+    expect(press({ strip: dupe })).toEqual({
+      kind: 'send',
+      role: 'b4',
+      keys: ['F7'],
+      text: '! QSO B4',
+      log: false,
+      caret: 'stay',
+      next: { ...RUN, b4To: 'K9AAA' },
+    })
+    expect(press({ strip: dupe, guards: { ...cw, txEnabled: false } })).toEqual({ kind: 'refuse', refusal: { why: 'txOff' } })
+    expect(press({ strip: dupe, guards: { ...cw, txAllowed: false } })).toEqual({ kind: 'refuse', refusal: { why: 'txLocked' } })
+  })
+
+  it('the press that logs the dupe sends nothing, so no transmit guard holds it', () => {
+    expect(
+      press({ state: { ...RUN, b4To: 'K9AAA' }, strip: strip('K9AAA', true, 'own'), guards: { ...cw, txEnabled: false } }),
+    ).toEqual({ kind: 'log', caret: 'call' })
+  })
+
+  it('a set with no QSO B4 refuses it by name, and sends nothing to the dupe', () => {
+    const noB4 = esmRoles(null, { cq: ['F1'], callExch: ['F2'], tu: ['F3'], myCall: ['F4'], exch: ['F6'], again: ['F8'] })
+    expect(press({ roles: noB4, strip: strip('K9AAA', false, 'own') })).toEqual({
+      kind: 'refuse',
+      refusal: { why: 'unmapped', role: 'b4' },
     })
   })
 
@@ -468,6 +548,13 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       caret: 'ex0',
       next: { ...RUN, exchTo: 'K9AAA' },
     })
+    expect(press({ guards: rtty, slots, strip: strip('K9AAA', false, 'own') })).toMatchObject({
+      kind: 'send',
+      role: 'b4',
+      keys: ['F7'],
+      text: '{CALL} QSO B4 TU {MYCALL}',
+      log: false,
+    })
     expect(press({ guards: { ...rtty, autoRunning: true }, slots })).toEqual({ kind: 'inert', why: 'auto' })
     expect(press({ guards: { ...rtty, continuousTx: true }, slots })).toEqual({ kind: 'inert', why: 'continuousTx' })
   })
@@ -479,7 +566,6 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       keyerShown: true,
       pttHeld: false,
       recording: false,
-      radioHasMic: false,
     }
     const slots = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'].map((key) => ({ key, text: `${key}.wav` }))
     const ph = (over: Partial<EsmPressInput>) => press({ guards: phone, roles: VOICE_SLOT_ROLES, slots, ...over })
@@ -507,10 +593,24 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       })
     })
 
-    it('refuses while recording, while PTT is held, and while the radio has the mic', () => {
+    // The keyer has no QSO B4 slot (F1–F6 and F8; none is labelled B4): a dupe while running is
+    // refused by name until the operator maps the step to a slot they recorded.
+    it('has no QSO B4 slot: a dupe while running plays nothing until a recorded slot is mapped to it', () => {
+      expect(ph({ strip: strip('K9AAA', false, 'own') })).toEqual({ kind: 'refuse', refusal: { why: 'unmapped', role: 'b4' } })
+      expect(ph({ roles: { ...VOICE_SLOT_ROLES, b4: ['F6'] }, strip: strip('K9AAA', false, 'own') })).toEqual({
+        kind: 'send',
+        role: 'b4',
+        keys: ['F6'],
+        text: 'F6.wav',
+        log: false,
+        caret: 'stay',
+        next: { ...RUN, b4To: 'K9AAA' },
+      })
+    })
+
+    it('refuses while recording and while PTT is held', () => {
       expect(ph({ guards: { ...phone, recording: true } })).toEqual({ kind: 'refuse', refusal: { why: 'recording' } })
       expect(ph({ guards: { ...phone, pttHeld: true } })).toEqual({ kind: 'refuse', refusal: { why: 'pttHeld' } })
-      expect(ph({ guards: { ...phone, radioHasMic: true } })).toEqual({ kind: 'refuse', refusal: { why: 'radioHasMic' } })
     })
 
     it('steps aside while the keyer is hidden, before anything else is asked', () => {

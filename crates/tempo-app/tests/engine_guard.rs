@@ -929,13 +929,14 @@ fn settings_files_are_written_through_their_writer_everywhere_outside_tests() {
     );
 }
 
-/// The control on the real tree: with launch not excused, the scan finds launch's two re-saves
-/// in `run()` (the Cloudlog-key migration's and the tty-port heal's) and nothing else, so it read
-/// `lib.rs`, blanked nothing it should not have, and saw through to the calls.
+/// The control on the real tree: with launch not excused, the scan finds launch's three re-saves
+/// in `run()` (the Cloudlog-key migration's, the AGN-to-F8 migration's and the tty-port heal's)
+/// and nothing else, so it read `lib.rs`, blanked nothing it should not have, and saw through to
+/// the calls.
 #[test]
-fn the_settings_scan_sees_launchs_two_saves() {
+fn the_settings_scan_sees_launchs_three_saves() {
     let found = bare_settings_saves(&production_sources(), true);
-    assert_eq!(found.len(), 2, "{found:#?}");
+    assert_eq!(found.len(), 3, "{found:#?}");
     assert!(
         found
             .iter()
@@ -1006,7 +1007,7 @@ fn the_settings_scan_names_every_bare_save_and_nothing_else() {
 /// Engine's snapshot instead (`persist_settings` in src-tauri).
 const SYNCHRONOUS_SETTINGS_SAVES: [(&str, &str); 10] = [
     // A restore that did not reach the disk says so, and mirrors nothing to the base config.
-    ("src-tauri/src/lib.rs", "import_settings_bundle"),
+    ("src-tauri/src/lib.rs", "restore_settings_bundle"),
     // Remote's save-then-publish: a failed save changes nothing, so the result must come first.
     (
         "crates/tempo-app/src/engine/remote_settings.rs",

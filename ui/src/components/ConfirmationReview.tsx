@@ -375,6 +375,12 @@ export function ConfirmationReview({
               {t('logbook.confirmations.uploadsOutOfScope', { count: got.uploadsOutOfScope })}
             </p>
           )}
+          {/* LoTW's records for another call on the account: left alone on purpose, so said. */}
+          {got.otherCallRecords > 0 && (
+            <p className="park-review-note">
+              {t('logbook.confirmations.otherCalls', { count: got.otherCallRecords })}
+            </p>
+          )}
         </div>
       </>
     )

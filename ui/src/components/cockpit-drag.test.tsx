@@ -227,7 +227,7 @@ describe('a drag moves the record exactly as the arrows do', () => {
 
 /** The stop controls of a case, on screen. */
 const stops = (c: Case<string>) => [...stopsOnScreen(c.stopControls).values()].flat()
-const TX_CALLS = ['callStation', 'startCq', 'sendCw', 'stopCw', 'setPtt', 'playVoiceMessage', 'stopVoice', 'setTxEnabled', 'setTune', 'haltTx', 'pskSend', 'js8Send', 'js8SendCommand'] as const
+const TX_CALLS = ['callStation', 'startCq', 'startRunning', 'sendCw', 'stopCw', 'setPtt', 'playVoiceMessage', 'stopVoice', 'setTxEnabled', 'setTune', 'haltTx', 'pskSend', 'js8Send', 'js8SendCommand'] as const
 
 describe('what a drag never does', () => {
   it.each(SETTINGS.map((s) => [s.name, s] as const))(

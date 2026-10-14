@@ -1469,6 +1469,70 @@ button.nb-chip:hover {
   flex: 1 1 6em;
   min-width: 0;
 }
+/* …AND GROWS INTO A TALLER OR WIDER BOX. components/prop/rotorFit.ts measures the box (the stylesheet cannot
+   know its height without a container query) and stamps the pane with `data-fit` only when the box holds a
+   bigger rose than the compact layout above draws; every size below is the measure's, and the compact
+   layout's sizes stay the floors.
+   · CENTRED: the rose and the column beside it stand between two equal spacer columns, and the arrangement is
+     moved down to the middle of the height left above line 2 and the hint (`--rotor-top`). That height is
+     held whether or not a call is in the entry (rotorFit.ts), so STOP does not move when line 2 comes or goes.
+   · 'under': the boxes and STOP leave the rose's side for a line of their own under the rose and the
+     readings, centred, where that draws the bearing bigger (a box about as tall as it is wide: beside the
+     rose the boxes would cap it at the width they leave).
+   · The body holds its scrollbar's gutter while the pane is grown, so nothing centred moves sideways when a
+     slew's "→" line makes the box scroll. */
+.dash-boxes .pane-body:has(> .rotor-pane[data-fit]) {
+  scrollbar-gutter: stable;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-row {
+  grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
+  column-gap: 0;
+  padding-top: var(--rotor-top, 0px);
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-rose {
+  grid-column: 2;
+  min-width: var(--rotor-rose, 0px);
+  margin-right: var(--space-2);
+}
+/* Its lines thicken with it, from the widths the pane draws them at on its own 148 px rose. */
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-ring {
+  stroke-width: max(1.5px, calc(var(--rotor-rose, 0px) * 0.01));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-tick {
+  stroke-width: max(1px, calc(var(--rotor-rose, 0px) * 0.007));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-needle {
+  stroke-width: max(2.5px, calc(var(--rotor-rose, 0px) * 0.017));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-needle.target {
+  stroke-width: max(1px, calc(var(--rotor-rose, 0px) * 0.007));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-az,
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-el,
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-entry {
+  grid-column: 3;
+}
+/* The readings gather at the middle of the rose's height rather than spreading over it. */
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-az {
+  font-size: max(1.25em, var(--rotor-az, 0px));
+  align-self: end;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-el {
+  font-size: max(var(--fs-body), var(--rotor-el, 0px));
+}
+.dash-boxes .pane-body .rotor-pane[data-fit] .rotor-entry {
+  align-self: start;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit='under'] .rotor-rose {
+  grid-row: 1 / span 2;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit='under'] .rotor-el {
+  align-self: start;
+}
+.dash-boxes .pane-body .rotor-pane[data-fit='under'] .rotor-entry {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
 /* TX controls consolidated into the QSO strip (beside CQ/S&P). */
 .cq-txctl {
   margin-left: var(--space-2);
@@ -2514,11 +2578,37 @@ button.nb-chip:hover {
 }
 .amp-v {
   font-family: var(--font-mono);
-  font-size: var(--fs-body);
+  font-size: var(--fs-title);
   font-weight: 600;
   line-height: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* THE TWO BIG READINGS, power out and SWR (AmpPane `Big`): SVG text sized by its cell, the way the Clock box
+   sizes its digits, so they follow the box's width wherever it stands. Two to a line where each cell keeps
+   8em, which the stock 300 px dashboard rail gives them with its scrollbar showing; one to a line below that
+   (the rail's 200 px floor, where two would draw them smaller than the readings under them). The height cap
+   rides --text-scale, as the Clock's does, so a wide box does not draw them past what Text size asks for. */
+.amp-big-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(8em, 100%), 1fr));
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.amp-v.amp-big {
+  display: block;
+}
+.amp-big svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(40px * var(--text-scale));
+  overflow: visible;
+}
+.amp-big text {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  fill: currentColor;
 }
 /* Faults wrap rather than clip: an alarm is the one thing on this pane that must be readable
    in full, and the pane body is the scroller when the words run past the box. */
@@ -4504,7 +4594,15 @@ body.resizing-row {
   --aprs-cat-other: #94a3b8; /* desaturated neutral: we do not know what this is */
 }
 
-/* ---- LIGHT (sunlight) ---- */
+/* ---- LIGHT (sunlight) ----
+   Silver's look since 2026-10-13 (operator: "that should classify as the new light mode"): the
+   pale silver page, white panels, graphite inks and a steel-blue accent of the Silver chassis
+   theme, which System paints too on a light computer. The bright Light this palette held before
+   is the Bright theme in the gallery (THEMES, below), value for value; styles-light-is-silver
+   .test.ts holds both looks. Only the theme tokens moved: every locked and signal colour below is
+   as it was. The page is #e2e6eb rather than Silver's first #dfe3e8: the Needed board letters its
+   mode cells in the page colour, and #dfe3e8 read 4.45:1 on them by day and 4.09:1 at night
+   (styles-theme-cascade.test.ts); #e2e6eb reads 4.58:1, and 4.54:1 at night. */
 [data-theme='light'] {
   /* Same eight families, darkened and slightly desaturated: the light theme's map is a pale
      surface, so the dark-theme inks would wash out on it. Ordering of lightness between the
@@ -4518,10 +4616,10 @@ body.resizing-row {
   --aprs-cat-object: #a4457a;
   --aprs-cat-other: #5b6675;
 
-  --bg: #e5eaf0;
-  --bg-elev: #fbfcfe;
-  --bg-elev-2: #f4f6f9;
-  --panel: #fbfcfe;
+  --bg: #e2e6eb;
+  --bg-elev: #f9fafb;
+  --bg-elev-2: #f3f5f7;
+  --panel: #f9fafb;
   /* Elevation-first light theme (Refactoring UI / Material 3 / Apple HIG):
      the earlier all-white surfaces read washed-out even though the inks pass
      WCAG — the STRUCTURE was flat. Fix is structural, not more contrast: the
@@ -4533,21 +4631,20 @@ body.resizing-row {
      than a naive inversion. Component-level structure tweaks (row dividers,
      chip fills, state tint) live in the LIGHT-MODE STRUCTURE OVERRIDES section
      further down — all [data-theme='light'] scoped so dark is byte-identical. */
-  --border: #c4cedb;
-  --border-soft: #d8dfe9;
-  --text: #14202e;
-  --text-dim: #46556e;
-  --text-faint: #57647a;
-  /* #0174ab since 2026-09-27: the #0d8ecf this shipped as, darkened at the same hue (operator:
-     "Darken it slightly"). That read 3.3–3.6:1 as lettering on these panels and white read 3.6:1
-     on it; this reads 4.7:1 on --bg-elev-2 and white 5.1:1 on it. It stays brighter than the
-     light Night accent (#006fae), because Night must dim it (styles-night-contrast.test.ts). */
-  --accent: #0174ab;
+  --border: #9aa3ad;
+  --border-soft: #b9c1ca;
+  --text: #1b1f24;
+  --text-dim: #4a525c;
+  --text-faint: #5b636d;
+  /* Silver's steel blue. It reads 6.6:1 as lettering on --bg-elev-2 and white reads 7.2:1 on it;
+     the light Night accent (#325171) is darker again, because Night must dim it
+     (styles-night-contrast.test.ts). */
+  --accent: #3b5a7a;
   --accent-ink: #ffffff;
-  --bubble-mine: #0174ab;
+  --bubble-mine: #3b5a7a;
   --bubble-mine-text: #ffffff;
-  --bubble-theirs: #eef2f7;
-  --bubble-theirs-text: #14202e;
+  --bubble-theirs: #e6e9ed;
+  --bubble-theirs-text: #1b1f24;
   --status-new-entity: #a30000;
   --status-new-band: #bb8805;
   --status-new-mode: #7c44c3;
@@ -4566,12 +4663,12 @@ body.resizing-row {
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
   /* The accent itself again. While the accent was #0d8ecf the ring was one shade darker,
-     #0b83c0: #0d8ecf measured 2.999:1 against --bg (#e5eaf0) — WCAG 1.4.11 wants 3:1 for a
-     focus indicator, so the app-wide ring failed on the page background by a rounding error,
-     on every focusable control in light mode. Nothing looked broken, which is why it took a
-     direct contrast assertion (styles-contrast.test.ts) to find it. #0174ab clears 4.2:1 on
-     --bg, 4.7:1 on --bg-elev-2 (the ⊞ popover) and 5.0:1 on --bg-elev. */
-  --focus-ring: #0174ab;
+     #0b83c0: #0d8ecf measured 2.999:1 against the page then (#e5eaf0) — WCAG 1.4.11 wants 3:1
+     for a focus indicator, so the app-wide ring failed on the page background by a rounding
+     error, on every focusable control in light mode. Nothing looked broken, which is why it took
+     a direct contrast assertion (styles-contrast.test.ts) to find it. #3b5a7a clears 5.7:1 on
+     --bg, 6.6:1 on --bg-elev-2 (the ⊞ popover) and 6.9:1 on --bg-elev. */
+  --focus-ring: #3b5a7a;
   /* DXpedition identity palette, light inks — the same ten hues as dark, taken
      darker and more saturated so the solid spine reads against the off-white
      panel and the low-alpha tint does not wash out to nothing. */
@@ -4593,6 +4690,25 @@ body.resizing-row {
   --state-pending: var(--text-dim);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
   /* The light --need-* inks do NOT live here — see the palette further down. */
+}
+
+/* LIGHT'S DISPLAY WELLS take Silver's accent and readout, as a light built-in theme gives its wells
+   its own (THEMES, below): the rest of a well stays the dark instrument palette (DISPLAY WELLS).
+   HERE, BEFORE THEMES, ON PURPOSE: at equal specificity a light theme's own well rule wins by
+   source order, and so do NIGHT's and the colour roles' well rules after it. By night the second
+   rule takes over, at (0,3,0) like a theme's night well, and a colour-role pick still takes either
+   (its night block is (0,3,0) and later). */
+[data-theme='light'] .well {
+  --accent: #a9c0d8;
+  --accent-ink: #0b1a2a;
+  --focus-ring: #a9c0d8;
+  --readout: #9ccbff;
+}
+[data-theme='light'][data-night='1'] .well {
+  --accent: #879db4;
+  --accent-ink: #0b1a2a;
+  --focus-ring: #879db4;
+  --readout: #78a6d8;
 }
 
 /* ---- THEMES: the built-in themes (Settings ▸ Appearance ▸ Theme; features/skins.ts) ---------
@@ -4786,57 +4902,6 @@ body.resizing-row {
   --well-bg: #090604;
   --well-ink: #bfb4a5;
   --well-grid: #3c352c;
-}
-/* Silver chassis — brushed-silver front panel, white displays, dark LCD digits */
-[data-theme='light'][data-skin='silver'] {
-  --bg: #e2e6eb;
-  --panel: #f9fafb;
-  --bg-elev: #f9fafb;
-  --bg-elev-2: #f3f5f7;
-  --border: #9aa3ad;
-  --border-soft: #b9c1ca;
-  --text: #1b1f24;
-  --text-dim: #4a525c;
-  --text-faint: #5b636d;
-  --accent: #3b5a7a;
-  --accent-ink: #ffffff;
-  --focus-ring: #3b5a7a;
-  --bubble-mine: #3b5a7a;
-  --bubble-mine-text: #ffffff;
-  --bubble-theirs: #e6e9ed;
-  --bubble-theirs-text: #1b1f24;
-  --readout: #143d6b;
-}
-[data-skin='silver'] .well {
-  --accent: #a9c0d8;
-  --accent-ink: #0b1a2a;
-  --focus-ring: #a9c0d8;
-  --readout: #9ccbff;
-}
-[data-theme='light'][data-night='1'][data-skin='silver'] {
-  --bg: #eae4da;
-  --panel: #fcf9f1;
-  --bg-elev: #fcf9f1;
-  --bg-elev-2: #f8f4ed;
-  --border: #a39a90;
-  --border-soft: #bfb7ae;
-  --text: #201c17;
-  --text-dim: #554f48;
-  --text-faint: #5f5851;
-  --accent: #325171;
-  --accent-ink: #ffffff;
-  --focus-ring: #325171;
-  --bubble-mine: #325171;
-  --bubble-mine-text: #ffffff;
-  --bubble-theirs: #e2dfdb;
-  --bubble-theirs-text: #201c17;
-  --readout: #0c3664;
-}
-[data-night='1'][data-skin='silver'] .well {
-  --accent: #879db4;
-  --accent-ink: #0b1a2a;
-  --focus-ring: #879db4;
-  --readout: #78a6d8;
 }
 /* Midnight — true black for OLED and dark rooms, cyan lit */
 [data-theme='dark'][data-skin='midnight'],
@@ -5164,6 +5229,58 @@ body.resizing-row {
   --focus-ring: #5aa0d9;
   --readout: #5aa0d9;
 }
+/* Bright — the standard Light until 2026-10-13: cool white panels, a bright blue accent, and in its
+   wells the dark palette's own cyan */
+[data-theme='light'][data-skin='bright'] {
+  --bg: #e5eaf0;
+  --panel: #fbfcfe;
+  --bg-elev: #fbfcfe;
+  --bg-elev-2: #f4f6f9;
+  --border: #c4cedb;
+  --border-soft: #d8dfe9;
+  --text: #14202e;
+  --text-dim: #46556e;
+  --text-faint: #57647a;
+  --accent: #0174ab;
+  --accent-ink: #ffffff;
+  --focus-ring: #0174ab;
+  --bubble-mine: #0174ab;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #eef2f7;
+  --bubble-theirs-text: #14202e;
+  --readout: #0174ab;
+}
+[data-skin='bright'] .well {
+  --accent: #4cc9f0;
+  --accent-ink: #06222c;
+  --focus-ring: #4cc9f0;
+  --readout: #4cc9f0;
+}
+[data-theme='light'][data-night='1'][data-skin='bright'] {
+  --bg: #eae4da;
+  --panel: #fcf9f1;
+  --bg-elev: #fcf9f1;
+  --bg-elev-2: #f8f4ed;
+  --border: #c5bcb0;
+  --border-soft: #d6cec3;
+  --text: #26211a;
+  --text-dim: #554f48;
+  --text-faint: #5f5851;
+  --accent: #006fae;
+  --accent-ink: #ffffff;
+  --focus-ring: #006fae;
+  --bubble-mine: #006fae;
+  --bubble-mine-text: #ffffff;
+  --bubble-theirs: #efe9df;
+  --bubble-theirs-text: #26211a;
+  --readout: #006fae;
+}
+[data-night='1'][data-skin='bright'] .well {
+  --accent: #42a7c7;
+  --accent-ink: #001620;
+  --focus-ring: #42a7c7;
+  --readout: #42a7c7;
+}
 
 /* ---- FIELD MODE: HIGH-CONTRAST TOKENS (data-contrast='high') -----------
    The outdoor/POTA treatment (field report 2026-08-09: "very difficult to see
@@ -5283,19 +5400,19 @@ body.resizing-row {
   --panel: #fcf9f1;
   --bg-elev: #fcf9f1;
   --bg-elev-2: #f8f4ed;
-  --border: #c5bcb0;
-  --border-soft: #d6cec3;
-  --text: #26211a;
+  --border: #a39a90;
+  --border-soft: #bfb7ae;
+  --text: #201c17;
   --text-dim: #554f48;
   --text-faint: #5f5851;
-  --accent: #006fae;
+  --accent: #325171;
   --accent-ink: #ffffff;
-  --focus-ring: #006fae;
-  --bubble-mine: #006fae;
+  --focus-ring: #325171;
+  --bubble-mine: #325171;
   --bubble-mine-text: #ffffff;
-  --bubble-theirs: #efe9df;
-  --bubble-theirs-text: #26211a;
-  --readout: #006fae;
+  --bubble-theirs: #e2dfdb;
+  --bubble-theirs-text: #201c17;
+  --readout: #0c3664;
 }
 [data-theme='dark'][data-contrast='high'][data-night='1'],
 [data-contrast='high'][data-night='1'] .well {
@@ -5474,7 +5591,7 @@ body.resizing-row {
   --readout: #4cc9f0;
 }
 [data-theme='light'] {
-  --readout: #0174ab;
+  --readout: #143d6b;
 }
 
 /* Accent */
@@ -6081,21 +6198,50 @@ body.resizing {
    half the report and worsened the other half (the crowded header strip: class + section,
    RUN / S&P, the cockpit toggle and four export buttons).
 
-   1600px, and not `none` like Settings: unlike a form of auto-fill grids, the widest thing
-   in here is the log's fixed column set, so past ~1600 the extra room stops buying anything
-   and only lengthens the eye's travel from the score tiles to the log. Same number the two
-   other DATA surfaces use.
+   THE WHOLE WINDOW, as Settings and Repeaters (the operator, 2026-10-12, with the contest log
+   line now at the top of this screen: "everything on the bottom seems narrow in the center,
+   cant this bottom section be widened to fit more information on the screen?"). It was 1600px,
+   on the argument that past that the log's fixed columns stop buying anything. On a wide
+   window that made the screen a centred column with gutters on both sides, while the boards
+   that do use width (the sections, the club board) wrapped into rows they did not need, and
+   the operator read it as a narrow screen. The entry and the last contacts over this panel keep
+   their 1600px measure (`.contest-logger-bar` and the two beside it, below), and the prose in
+   here gets one of its own, below.
 
    md AND UP, the same scoping Settings uses below and for the same reason: md/lg/xl is
    *exactly* the set of tiers where the 1100px cap could ever bind (classifyViewport starts md
-   at 1100 effective px), so listing them leaves the 1024x768 supported floor bit-identical
-   rather than merely "probably unchanged". **lg** is the one that matters — 1920 lands there,
-   not in xl, so the xl-only shape of the rule above would have missed the reported window
-   entirely. Computed per tier in fdDashboardShell.test.tsx. */
+   at 1100 effective px), so listing them leaves xs/sm bit-identical. At md this changes nothing
+   either, by arithmetic: md ends below 1600 effective px, so the panel there was never wider
+   than the old cap, and the 1024×768 floor (md at its 85 % zoom) is as it was. **lg** is the
+   one that matters — 1920 lands there, not in xl. Computed per tier in fdDashboardShell.test.tsx. */
 [data-viewport='md'] .layout.single > .panel.fieldday,
 [data-viewport='lg'] .layout.single > .panel.fieldday,
 [data-viewport='xl'] .layout.single > .panel.fieldday {
-  max-width: 1600px;
+  max-width: none;
+}
+/* …AND WHAT THE OLD CAP WAS BOUNDING KEEPS A MEASURE OF ITS OWN (Settings' prose audit, here).
+   Only on lg/xl, the tiers where the panel can now be wider than 1600px. Two measures, handed down
+   as custom properties so the blocks this sheet does not style can read them too (ContestView.tsx
+   draws the club section's sentences and the scoreboard's operator box with inline styles):
+     · prose — the status lines under the banner, the score and club notes, the Removed list's
+       lines: 90ch, the measure Repeaters' notes got when that page went the width of the window.
+       The merge's upload hint keeps its own 72ch at every tier.
+     · a lone control — the scoreboard's operator box, where it still is (no contest running, the
+       Remote page): 520px, Settings' measure for a field with no grid track to sit in.
+   LEFT UNBOUNDED, ON PURPOSE: the control row (it wraps), the club board, the score tiles, the
+   sections board, the bonuses and the log. Each is a row of fields or a list of rows, so width
+   there is room for the fields, which is what the operator asked for. Computed per tier in
+   fdDashboardShell.test.tsx and, for the two inline-styled blocks, ContestView.measure.test.tsx. */
+[data-viewport='lg'] .layout.single > .panel.fieldday,
+[data-viewport='xl'] .layout.single > .panel.fieldday {
+  --fd-prose-measure: 90ch;
+  --fd-control-measure: 520px;
+}
+.fd-mode-line,
+.fd-score-note,
+.fd-removed-note,
+.fd-removed-hint {
+  max-width: var(--fd-prose-measure, none);
 }
 /* SETTINGS IS NOT PROSE-SHAPED, and calling it that cost it half the window.
    (Operator, 2026-08-12: "make the settings full screen. It's small and in the middle.
@@ -6376,8 +6522,15 @@ body.resizing {
   padding: 6px var(--space-1);
   border-top: 1px solid var(--border-soft);
   text-align: center;
+  /* It names the contest running ("CQ WW RTTY", or the rules-file id of one the picker does not
+     list), so a word wider than the rail breaks inside the badge rather than run past the rail's
+     edge, which clips. Every shipped name breaks only between its words (measured in Chrome at
+     each text size). */
+  overflow-wrap: anywhere;
 }
 .mode-current-dot {
+  /* The dot keeps its size beside a name that wraps: it was squeezed thinner, out of round. */
+  flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -9618,6 +9771,14 @@ input.cw-pitch::-webkit-inner-spin-button {
   background: color-mix(in srgb, var(--alert-warning) 12%, transparent);
   border-color: var(--alert-warning);
 }
+/* The INFORMATION variant: something that happened and needs nothing from you (the operator's
+   paddle took over from Nexus's CW). Same box, the information colour, so it reads as neither
+   the error nor the caution. `--alert-info` is defined in both themes. */
+.cw-keyer-warn.info {
+  color: var(--alert-info);
+  background: color-mix(in srgb, var(--alert-info) 12%, transparent);
+  border-color: var(--alert-info);
+}
 /* CW copilot — decoded-call chips + (Guided) next-step prompt + the Guided/Expert toggle. */
 .cw-copilot {
   display: flex;
@@ -9993,6 +10154,28 @@ input.cw-pitch::-webkit-inner-spin-button {
 .le-hunt-warn {
   font-weight: 400;
   color: var(--alert-warning);
+}
+/* The tag's ✕ ends the hunt, as the POTA/SOTA banner's ✕ does. It sits in the tag's own line and
+   must not make the log line taller: no padding or border, and an icon one em of the tag's own text
+   (`font: inherit`, since a button's font is the control font, not its parent's), which that text's
+   line already holds. */
+.le-hunt-clear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+}
+.le-hunt-clear:hover {
+  color: var(--text);
+}
+.le-hunt-clear svg {
+  width: 1em;
+  height: 1em;
 }
 .le-row {
   display: flex;
@@ -12107,8 +12290,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      COMPUTED, not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
   overflow-y: auto;
 }
+/* THE CONTROL ROW — the contest and what it sends, Running / S&P, the five buttons, then the merge
+   with its upload switch — is a row that WRAPS, packed from the left, and goes to a second line
+   only where the window has no room for the next block (the operator, 2026-10-12: the five buttons
+   "sit in one row instead of a stacked column").
+
+   It did not wrap (`.panel-header` does not), and the merge block asked for a whole line of its own
+   (`flex: 1 0 100%`, which cannot shrink). On one line that took 100 % of the row beside the
+   buttons, so they shrank to one word wide and stacked into a column at every window size, and the
+   block ran past the panel's right edge, where `.panel`'s clip cut off the last upload boxes (WRL
+   at 1024×768, Cloudlog as well in the logger window) with no scrollbar to reach them. Computed in
+   fdDashboardShell.test.tsx; the line it lays out on is a real browser's to say. */
 .fd-header {
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--space-2) var(--space-4);
 }
 .fd-ident {
   display: flex;
@@ -12148,30 +12345,30 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent-ink);
 }
 
-/* Export buttons in the Field Day header (moved from deleted LogView). */
+/* Export buttons in the Field Day header (moved from deleted LogView), right after Running / S&P:
+   pushed to the row's far end, across a window-wide screen they sat a long way from the contest
+   they export. */
 .fd-export {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-left: auto;
   flex-wrap: wrap;
 }
 /* WHERE THIS SESSION'S MERGED CONTACTS GO (§18.1) — the switch, its destinations, and
    the limitation it does NOT close, which renders directly beneath it and is never
    collapsed behind a disclosure. A limitation the operator cannot see is one that will
-   surprise them in the field. Tokens only, defined in both themes; the block takes the
-   full row so the hint reads as a sentence rather than as a squeezed column. */
+   surprise them in the field. Tokens only, defined in both themes. The merge and the switch
+   share a line and the hint spans under both at its own measure, so it reads as a sentence
+   rather than as a squeezed column; the block itself joins the control row's line where the
+   window has room for it, and takes the next line where it has not. */
 .fd-upload {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  flex: 1 0 100%;
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-soft);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
 }
-/* THE END-OF-CONTEST MERGE — the trigger and its report, on the row above the upload
-   switch so both sit under the same limitation hint. It wraps rather than growing: the
+/* THE END-OF-CONTEST MERGE — the trigger and its report, beside the upload switch so both
+   sit over the same limitation hint. It wraps rather than growing: the
    report is a sentence, not a column, and the block is a control strip that may never
    use surplus height. */
 .fd-merge {
@@ -12203,6 +12400,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
 }
 .fd-upload-hint {
+  grid-column: 1 / -1;
   margin: 0;
   max-width: 72ch;
   font-size: var(--fs-label);
@@ -12380,6 +12578,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* The screen's Pop out (main window only) ends the banner, at its right edge like every header's: on its
+   own auto margin, or right after the rules line, which already took the row's free space. */
+.fd-event-rules + .fd-screen-popout {
+  margin-left: 0;
+}
 /* The Field Day mode switch, first in the banner, beside the contest's name and window. The
    switch is the shared `.toggle`; this only sets its label beside it. */
 .fd-mode-switch {
@@ -12415,9 +12618,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 600;
 }
 /* Warn-only FD rule advisory (FdAdvisories.tsx) — a PASSIVE status line, never a
-   control, hosted by the FD event banner and the Operate cockpit header (outside
-   every ⊞-removable pane). --alert-warning exists in both themes. Ellipsizes in
-   a tight header; the title attribute carries the whole sentence. */
+   control, hosted by the FD event banner (a banned mode is the no-credit chip,
+   `.le-fd-nocredit`, there and in the Operate cockpit header). --alert-warning
+   exists in both themes. Ellipsizes in a tight header; the title attribute
+   carries the whole sentence. */
 .fd-advisory {
   flex: 0 1 auto;
   min-width: 0;
@@ -12736,6 +12940,40 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .fd-log-row[data-slots] {
   grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr;
 }
+/* …and the host's club log (ContestView's ClubLogList), which alone sets `data-pos`: the same
+   columns, then the position that logged each contact. A long position name ellipsizes in its own
+   track rather than widen the row. */
+.fd-log-head[data-pos],
+.fd-log-row[data-pos] {
+  grid-template-columns: 0.55fr 1.3fr 0.7fr 0.9fr 0.7fr 0.7fr minmax(0, 1.2fr);
+}
+.fd-log-head[data-slots][data-pos],
+.fd-log-row[data-slots][data-pos] {
+  grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr minmax(0, 1.2fr);
+}
+.fd-col.pos {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* …and in the club board's own window, at that window's glance size as its board is (the type the
+   logger window's last contacts use), the list as tall as half the window rather than the docked
+   strip's few rows. */
+.fd-club-log-big .fd-log-head .fd-col {
+  font-size: calc(13px * var(--text-scale));
+}
+.fd-club-log-big .fd-log-row {
+  font-size: calc(18px * var(--text-scale));
+}
+.fd-club-log-big .fd-log-row .fd-col.time {
+  font-size: calc(16px * var(--text-scale));
+}
+.fd-club-log-big .fd-mode-chip {
+  font-size: calc(13px * var(--text-scale));
+}
+.fd-club-log-big .fd-log-scroll {
+  max-height: max(190px, calc(0.5 * var(--vh-eff, 100vh)));
+}
 .fd-col.mode {
   /* Mode chip column */
 }
@@ -12777,9 +13015,84 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 2px var(--space-2);
 }
+/* A MODE THE CONTEST DOES NOT CREDIT (FdAdvisories' `NoCreditChip`): "FT8 · no credit", the whole
+   sentence on hover. On the large log line's top row right after the mode chip, it replaced a
+   full-width yellow band over the boxes that the operator found "very verbose and yellow and
+   distracting"; in the Contest banner and the Operate (FT) cockpit header, the amber line
+   (`.fd-advisory`). So it is quiet: an outline in the de-emphasised state ink, and no fill. The
+   warning amber would not do even here: it letters about 4.2:1 on the light panel, under the 4.5:1 a
+   word needs. The face is `.le-fd-mode`'s, so the chip is never taller than the row, and it never
+   breaks inside. Tokens only, both themes. */
+.le-fd-nocredit {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--state-pending);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+}
 .le-fd-hint {
   font-size: calc(11px * var(--text-scale));
   color: var(--text-faint);
+}
+/* ⭐ THE SCORE CHIP (ContestScoreChip.tsx) — a ZERO-COST SLOT in this one-line row. Its basis
+   is 0, so its shrink weight is 0 and it only ever GROWS into room nobody else wants;
+   `min-width: 0` lets it be nothing at all; the negative margin cancels the one `gap` its
+   presence adds. So every other item in the header lays out exactly as it did without it, at
+   every width and text size, and the strip's height cannot move. What does not fit is clipped
+   with an ellipsis (the whole reading is the slot's title). The face is `.le-fd-mode`'s, so the
+   chip is never the tallest thing in the row. Tokens only, both themes. */
+.le-fd-score {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: calc(-1 * var(--space-2));
+  overflow: hidden;
+}
+.le-fd-score-val {
+  min-width: 0;
+  margin-left: var(--space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+}
+/* THE SCORE CHIP IN A PANE HEAD — the same reading where a cockpit frames its contest strip in a
+   "Log" pane (CW, Phone, RTTY, PSK). There the strip sits in a column of 24–44em, and its own
+   header row has no room left at all; the pane's head beside its one-word title does. The face
+   is the title's — its size, and no vertical padding or border (the edge is an inset shadow,
+   which takes no room) — so the chip is never taller than the title and the head never grows.
+   A head too narrow for it CLIPS it: the one `minmax(0, max-content)` track gives the chip no
+   minimum width, so the actions cluster it sits in can shrink past it (measured: a plain
+   `min-width: 0` span overflowed the head instead, below 24em at Larger text). Both themes. */
+.contest-score-chip {
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content);
+  min-width: 0;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+}
+.contest-score-chip-val {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Remove last while its first press waits (the verdict line names the contact), and the
    contest screen's Remove on the newest row and Restore in its Removed list. The label never
@@ -12789,7 +13102,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--accent);
   color: var(--accent-ink);
 }
-.fd-remove {
+.fd-remove,
+.fd-edit {
   margin-left: var(--space-2);
   font-size: calc(10px * var(--text-scale));
   padding: 1px var(--space-2);
@@ -12821,6 +13135,43 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .fd-removed-at {
   color: var(--text-faint);
+}
+/* ⭐ The edit of a logged contest contact (ContestContactEdit): one wrapping row of captioned boxes,
+   Save and Cancel — in the place of the rows it edits on the contest screen, and of the entry boxes
+   in the strip, so neither grows a block of its own. Its height is its content. */
+.contest-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.contest-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.contest-edit-cap {
+  font-size: calc(10px * var(--text-scale));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  font-weight: 700;
+}
+.contest-edit-field .settings-input {
+  width: 7em;
+}
+.contest-edit-call .settings-input {
+  width: 9em;
+}
+.contest-edit-why {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--state-weak);
+  font-size: calc(11px * var(--text-scale));
 }
 /* Enlarged FD exchange form (Call / Class / Section) — big, readable, captioned
    so a logger beside the operator can read the exchange across the table at Field
@@ -12910,7 +13261,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-align: center;
   font-weight: 700;
 }
-.le-fd-sent-cap {
+.le-fd-sent-cap,
+.le-fd-operator-cap {
   font-size: var(--fs-label);
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -12918,6 +13270,34 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   user-select: none;
   white-space: nowrap;
+}
+/* THE OPERATOR BOX, on the large log line's title line (ContestView's `OperatorBox`, which only
+   `ContestLargeEntry` passes the strip): right beside the sent side, set off from what comes before
+   it as that side is, under the same caption face. A header-row box — a call's width, and no taller
+   than I moved beside it, so the title line does not grow. Neither it nor the sent side after it
+   carries an auto margin: the score chip before them takes the room, and when the line wraps it
+   packs to the right (`.contest-logger-scaled .le-fd-header`), so the two stay side by side at the
+   row's end instead of the room splitting between them or Sending starting the next line alone.
+   `.settings-input`, later in this sheet, would win the box's own padding and height on source
+   order at one class, hence two. */
+.le-fd-operator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-soft);
+}
+.le-fd-operator + .le-fd-sent {
+  margin-left: 0;
+}
+.le-fd-operator .le-fd-operator-input {
+  width: calc(11ch + 2 * var(--space-2) + 2px);
+  min-height: 0;
+  padding: var(--space-1) var(--space-2);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 /* The ROLE, beside the exchange — an invariant token, so it is monospaced and never
    wrapped mid-value. */
@@ -13013,6 +13393,147 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .le-fd-input-history {
   color: var(--accent);
   font-style: italic;
+}
+
+/* THE CLUB BOARD'S BAND × MODE GRID (ContestView.tsx `ClubBandModeGrid`): who is on which band and
+   mode, above the board's table. The contest's bands across, its mode classes down, each position's
+   name in its cell, read across a room, so the names are bigger than the table's and a state is a
+   COLOUR, a MARK and a WORD. On the host's own screen a name's edge and a tint of its face carry its
+   link (green Connected, amber Reconnecting, red Lost; this laptop's own in the accent) and the name
+   stays in ink: the state colours lettered on the page miss 4.5:1 in the light themes. On a board
+   without link words (a position's, Remote's), a name the host has not heard lately is greyed with ⚠
+   after it, as its line in the table is: greyed in the dim ink the heads use, which still reads 4.5:1,
+   and its edge and face stay as they were. Tokens only,
+   each in both themes. The colours are computed in every mode in ContestView.clubGrid.contrast.test.tsx
+   and the layout rules in ContestView.clubGrid.cascade.test.tsx.
+
+   EVERY BAND GETS THE SAME COLUMN, so an empty one reads as free at a glance: a fixed layout, each
+   band's head 6.75em wide at least and the spare width shared out (the floor holds a seven-letter
+   name on a line of its own, and Field Day's ten bands still fit a 1024 window without scrolling),
+   where the automatic layout handed it to whichever bands held names (20m four times as wide as 2m at
+   1920). A name is inline text after its mark and a space, so it wraps between its words like a
+   sentence, the whole word dropping under the mark, and breaks inside one only past its column,
+   rather than spill into the next band: as a flex row, or with no space after the mark, the line had
+   no break point but inside the word, and "Digital" and "GOTA" broke in two at 1024.
+
+   IT SCROLLS INSIDE ITSELF. A column per band does not fit every window (the New York QSO Party runs
+   seventeen), so `.club-grid` is the one sideways scroller and the page never is: as wide as the club
+   block and no wider, with the table filling it and widening only the scroller past its columns'
+   floor. The mode heads stay in view while it scrolls, on an opaque face that is the window's own
+   (the panel, or the pop-out's page). A band head never wraps.
+
+   Each name is the containing block for the word a screen reader hears (`.sr-only` is absolutely
+   positioned) and the scroller is the caption's: placed against the page instead, outside every
+   scroller, such a word once lengthened the hosted page by a whole list (`.pota-spot-state`). */
+.club-grid-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.club-grid {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.club-grid-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: calc(16px * var(--text-scale));
+}
+.club-grid-block[data-glance] .club-grid-table {
+  font-size: calc(20px * var(--text-scale));
+}
+.club-grid-band,
+.club-grid-mode {
+  padding: var(--space-1) 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-soft);
+}
+.club-grid-band {
+  width: 6.75em;
+  text-align: center;
+  border-right: 1px solid var(--border-soft);
+}
+.club-grid-mode {
+  width: 5em;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+.app.detached .club-grid-mode {
+  background: var(--bg);
+}
+.club-grid-cell {
+  height: 2.4em;
+  padding: 2px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-soft);
+  border-right: 1px solid var(--border-soft);
+}
+.club-grid-pos {
+  position: relative;
+  display: inline-block;
+  padding: 2px var(--space-1);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.club-grid-cell > .club-grid-pos {
+  display: block;
+}
+.club-grid-cell > .club-grid-pos + .club-grid-pos {
+  margin-top: var(--space-1);
+}
+.club-grid-pos.link-connected {
+  border-color: var(--status-confirmed);
+  background: color-mix(in srgb, var(--status-confirmed) 18%, transparent);
+}
+.club-grid-pos.link-reconnecting {
+  border-color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 18%, transparent);
+}
+.club-grid-pos.link-lost {
+  border-color: var(--alert-critical);
+  background: color-mix(in srgb, var(--alert-critical) 18%, transparent);
+}
+.club-grid-pos.link-self {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.club-grid-pos.stale {
+  color: var(--text-dim);
+}
+.club-grid-waiting,
+.club-grid-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: calc(13px * var(--text-scale));
+}
+.club-grid-block[data-glance] .club-grid-waiting,
+.club-grid-block[data-glance] .club-grid-legend {
+  font-size: calc(16px * var(--text-scale));
+}
+.club-grid-waiting-label {
+  color: var(--text-dim);
 }
 
 /* ===========================================================================
@@ -15457,6 +15978,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-top: none;
   border-right: 1px solid var(--border-soft);
   padding: 0 10px;
+  /* The top bar scrolls sideways, so the badge keeps its widest word whole there: breaking
+     anywhere let a crowded bar squeeze NYQP to one letter a line. */
+  overflow-wrap: normal;
 }
 [data-viewport='sm'] .layout,
 [data-viewport='xs'] .layout {
@@ -18780,12 +19304,13 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers (multi-monitor
-   tear-off). */
+/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers and the Contest screen's
+   banner (multi-monitor tear-off). */
 .connect-popout,
 .dxped-popout,
 .pota-popout,
-.cockpit-popout {
+.cockpit-popout,
+.fd-screen-popout {
   margin-left: auto;
   font-size: 0.75rem;
   font-weight: 700;
@@ -18799,7 +19324,8 @@ button.cq-skiptx1.on {
 }
 .connect-popout:hover,
 .dxped-popout:hover,
-.pota-popout:hover {
+.pota-popout:hover,
+.fd-screen-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -18872,21 +19398,245 @@ button.cq-skiptx1.on {
   min-height: 0;
   overflow-y: auto;
 }
-/* THE CONTEST LOGGER WINDOW (ContestLogger.tsx): the contest screen above, scrolling inside its
-   own panel exactly as it does docked (`.layout` grows and may shrink to nothing, and
-   `.layout.single > .panel` owns the deficit), and the log line pinned under it at its content
-   height, so the line never scrolls away and the screen takes every pixel the line leaves. The
-   line is a control strip: it cannot use surplus, so it never grows. */
+/* THE CONTEST LOGGER WINDOW (ContestLogger.tsx) — the entry FIRST, and large (the operator's
+   layout, 2026-10-11): the log line across the top of the window, the last contacts under it at the
+   same size, and the contest screen below, scrolling inside its own panel exactly as it does docked
+   (`.layout` grows, and `.layout.single > .panel` owns the deficit). The person at this window reads
+   a call and an exchange from a chair; the screen is reference.
+
+   THE VERTICAL BUDGET, in the order things give way, so nothing is ever out of reach:
+     1. the screen, down to a floor of a few lines that itself yields to a short window
+        (`min(9em, 30%)`), its panel scrolling;
+     2. then the last contacts, down to their newest row, scrolling inside their own box — newest
+        first, so the newest stays in view;
+     3. and past both, below the supported floor, the window: `.app.detached` lets its overflow
+        past it and the document scrolls, as in every pop-out.
+   The entry never shrinks and never scrolls: a control strip is exactly its content's height. */
+.contest-logger {
+  /* The app's Text size, handed down under another name for the two blocks that multiply it
+     (`--text-scale: calc(var(--text-scale) * …)` on one element is a cycle, and a cycle makes the
+     property invalid, not bigger). */
+  --logger-outer-text-scale: var(--text-scale);
+}
 .contest-logger-entry {
   flex: 0 0 auto;
   background: var(--bg-elev);
 }
-/* …and the line keeps the screen's own measure (`.layout.single > .panel.fieldday`, 1600 px from md
-   up), centred under it: across a 3440 px window the Call box measured 2837 px wide, a field for a
-   callsign. Below md the window is narrower than the cap, so the floor is untouched. */
-.contest-logger-entry > .log-entry-fd {
+.contest-logger-recent {
+  flex: 0 1 auto;
+  /* Never a sliver: room for its title, its head and the newest contact, yielding only to a
+     window too short for even that. */
+  min-height: min(8em, 25%);
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border-soft);
+}
+.contest-logger > .layout.single {
+  min-height: min(9em, 30%);
+  border-top: 1px solid var(--border-soft);
+}
+/* Each block keeps a 1600 px measure of its own, centred: across a 3440 px window the Call box
+   measured 2837 px wide, a field for a callsign. The screen below used to share the number, and
+   now uses the whole window (`.layout.single > .panel.fieldday`); the operator called the entry
+   and the last contacts "the right size", so they stay it. Below md the window is narrower than
+   the cap, so the floor is untouched. */
+.contest-logger-bar,
+.contest-logger-sat,
+.contest-logger-scaled > .log-entry-fd,
+.contest-logger-recent-body {
   max-width: 1600px;
   margin-inline: auto;
+}
+/* THE BAR — the window's name and A− / A+, at the app's own size: it is outside the block it
+   sizes, so a press never moves the button being pressed. */
+.contest-logger-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 0;
+}
+.contest-logger-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.contest-logger-size {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.contest-logger-step {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+.contest-logger-step:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.contest-logger-step:disabled {
+  opacity: 0.4;
+}
+/* THE SATELLITE LINE (the logger window's only, while the engine holds a bird): log the pass's
+   contacts on the Satellites screen. A plain line under the bar, on its measure and inset and at the
+   app's own size, as the bar is; part of the entry, so it never shrinks and never scrolls either. */
+.contest-logger-sat {
+  margin-block: 0;
+  padding: var(--space-1) var(--space-4) 0;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+/* THE SIZE. A− / A+ is a factor on the app's Text size, a Connect box's range (80–160 %), written
+   inline as `--logger-text-scale` on the two blocks it sizes. Each multiplies the inherited
+   --text-scale by it and declares the five --fs-* tokens again, because a custom property is
+   computed where it is declared (`.pane-frame[data-slot] > .pane-body` above has the long form);
+   text with no size of its own follows the block's own font size. */
+.contest-logger-scaled,
+.contest-logger-recent {
+  --text-scale: calc(var(--logger-outer-text-scale, 1) * var(--logger-text-scale, 1));
+  --fs-display: calc(clamp(22px, calc(0.024 * var(--vw-eff, 100vw)), 30px) * var(--text-scale));
+  --fs-title: calc(18px * var(--text-scale));
+  --fs-body: calc(14px * var(--text-scale));
+  --fs-label: calc(12px * var(--text-scale));
+  --fs-micro: calc(11px * var(--text-scale));
+  font-size: calc(1em * var(--logger-text-scale, 1));
+}
+/* …and at 100 % the entry is read from a chair: title-size captions over 40 px boxes (the app's
+   input is 14 px), a Log button as tall as the boxes, and the verdicts at title size with an alert
+   — the dupe warning among them — a warning bar rather than a footnote. Written at this window's
+   specificity: the strip's own 30 px box rule never reaches a box in any host, because
+   `.settings-input`, later in this sheet, wins it on source order. */
+.contest-logger-scaled > .log-entry-fd {
+  border-top: 0;
+}
+/* The header row wraps here rather than squeezing: this entry hangs from the top of its window,
+   so a second line moves nothing the fingers are on (the strip's one-line rule is for the docks,
+   which are anchored at the bottom). A wrapped line packs to the right, so what wraps keeps its
+   end of the row, and the operator box and Sending go together (`.le-fd-operator`); the score chip
+   takes the first line's room, so nothing on that line moves. */
+.contest-logger-scaled .le-fd-header {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  justify-content: flex-end;
+}
+.contest-logger-scaled .le-fd-cap {
+  font-size: var(--fs-title);
+}
+.contest-logger-scaled .le-fd-input {
+  min-height: 1.5em;
+  font-size: calc(40px * var(--text-scale));
+}
+/* The Call box never narrows past a whole callsign: ten characters of its own text, a prefix or a
+   suffix included (VE3/K9ABC, K9ABC/QRP), plus `.settings-input`'s padding and border. */
+.contest-logger-scaled .le-fd-field-call {
+  flex: 3 1 0;
+  min-width: min-content;
+}
+.contest-logger-scaled .le-fd-input-call {
+  min-width: calc(10ch + 2 * var(--space-3) + 2px);
+}
+.contest-logger-scaled .le-fd-input-code {
+  width: calc(6ch + 2 * var(--space-3) + 2px);
+}
+.contest-logger-scaled .le-fd-log-btn {
+  min-height: calc(60px * var(--text-scale));
+  padding: 0 var(--space-6);
+  font-size: calc(26px * var(--text-scale));
+}
+.contest-logger-scaled .le-fd-big .le-qrz {
+  min-height: calc(60px * var(--text-scale));
+  font-size: var(--fs-body);
+}
+.contest-logger-scaled .le-scp {
+  height: calc(28px * var(--text-scale));
+}
+.contest-logger-scaled .le-scp-call {
+  font-size: calc(20px * var(--text-scale));
+}
+.contest-logger-scaled .le-fd-verdicts .le-fd-hint {
+  margin-top: var(--space-2);
+  font-size: var(--fs-title);
+}
+.contest-logger-scaled .le-fd-verdicts [role='alert'] {
+  padding: var(--space-1) var(--space-3);
+  border-left: 4px solid var(--state-warn);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--state-warn) 16%, transparent);
+  color: var(--text);
+  font-weight: 700;
+}
+/* THE LAST CONTACTS — the screen's own table (ContestView's `ContestLogHead` / `ContestLogRow`),
+   at the entry's size. */
+.contest-logger-recent-title {
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.contest-logger-recent .fd-log-head .fd-col {
+  font-size: calc(13px * var(--text-scale));
+}
+.contest-logger-recent .fd-log-row {
+  font-size: calc(20px * var(--text-scale));
+}
+.contest-logger-recent .fd-log-row .fd-col.time {
+  font-size: calc(18px * var(--text-scale));
+}
+.contest-logger-recent .fd-mode-chip {
+  font-size: calc(14px * var(--text-scale));
+}
+/* THE CONTEST SCREEN'S ENTRY, in the main window (App.tsx): the same large log line at the top of
+   the screen while a contest runs, the last contacts under it, and the screen below, scrolling in
+   its own panel as it always has. One wrapper, there with or without the entry: alone, the screen
+   fills it exactly as it filled the shell before, so a contest starting or ending moves nothing else.
+
+   THE VERTICAL BUDGET is the logger window's (above), in the same order: the screen gives way first,
+   down to its floor (`min(9em, 30%)`, which yields to a short window); then the last contacts, down to
+   their newest row; and past both — below the supported floor, or the largest text on a short window
+   — this wrapper scrolls, as the logger window's document does. The entry never shrinks and never
+   scrolls on its own.
+
+   The app's Text size reaches the two scaled blocks under another name, as `.contest-logger` hands it
+   down in the logger window (a cycle there says why). */
+.contest-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  --logger-outer-text-scale: var(--text-scale);
+}
+.contest-screen > .contest-logger-recent + .layout.single {
+  min-height: min(9em, 30%);
+  border-top: 1px solid var(--border-soft);
+}
+/* …AND WITH THE SCREEN OUT IN A WINDOW OF ITS OWN (ContestScreenWindow.tsx), one line where it was, in the
+   same `.layout.single`: what went, and Bring it back, which closes the window. On the entry's 1600 px
+   measure, so it lines up under the bar, the boxes and the last contacts. Content height; the column
+   below it stays empty, the room the screen took now being on the other monitor. */
+.contest-screen-away {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  max-width: 1600px;
+  margin-inline: auto;
+  padding: var(--space-2) var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-size: var(--fs-body);
 }
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor
@@ -20266,7 +21016,8 @@ button.cq-skiptx1.on {
   border-radius: 999px;
 }
 /* The light theme's amber is a mid-tone: its page colour read 3.6:1 on it as lettering, and
-   3.45-3.5:1 on the Silver and Paper themes' greyer and warmer pages. Black reads 4.8:1 or better
+   3.45-3.5:1 on the greyer page Light has had since it took Silver's look and on Paper's warmer
+   one. Black reads 4.8:1 or better
    on every Amber preset, by day and at night; the dark theme keeps its dark page-coloured letters. */
 [data-theme='light'] .opening-new {
   color: #000000;
@@ -20356,6 +21107,19 @@ button.cq-skiptx1.on {
   border-radius: 999px;
   padding: 1px var(--space-2);
   white-space: nowrap;
+}
+/* The readout's NUMBER, in a field as wide as the widest it prints, so the chip and everything after
+   it hold still as its digit count changes (it shifted the whole row a digit sideways at a time, and
+   on a row just wide enough for a shorter reading a longer one wrapped it). The readout is
+   round((peak − floor) × dB per unit) with both 0..1, so at most 120 either way, and it goes
+   NEGATIVE while keyed, when the floor is frozen and the row is not: "-120" is four characters, in
+   the chip's tabular figures. Right-aligned, so the ones digit keeps its place too. A min-width, not
+   a width: figures wider than the font's "0" would push the row, never overprint the unit.
+   PhoneScope.readout.test.tsx. */
+.ph-scope-dyn-val {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
 }
 .ph-scope-gz {
   flex: 0 0 auto;
@@ -26404,8 +27168,9 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   width: auto;
 }
-/* Three faces for a second-act chip: off · on-but-not-armed (the switch is on, the session
-   TX latch is off — nothing keys) · ARMED (both acts agree). Auto-armed must never LOOK
+/* Three faces for a second-act chip: off · on-but-not-armed (the switch is on but something
+   else it needs is not: the session TX latch, a clear idle watchdog, HB or AUTOREPLY — nothing
+   keys, and its title says which) · ARMED (it can go out now). Auto-armed must never LOOK
    ack-capable — the APRS rule. */
 .js8-arm.on {
   border-color: var(--snr-marginal);
@@ -29444,6 +30209,85 @@ tr.sel .aprs-sym {
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
+}
+/* THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx), in the portaled dialog. Every put-back row
+   and its header share one fixed track template, so "Now" and "Before" line up down the list
+   whatever the values hold; a long value clips rather than push a column (its title has it all).
+   The narrow tracks are `rem`, not `em`: the header's type is smaller than a row's, and an `em`
+   track put its "Before" about 3 px off the values under it (measured in headless Chrome). */
+.contest-over {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.contest-over-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+}
+.contest-over-putback {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.contest-over-putback legend {
+  padding: 0 var(--space-1);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.contest-over-note {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text-faint);
+}
+/* At a club: how many of this laptop's contacts the club's log does not have yet. Body text, not a
+   faint note: it is what the operator waits on before packing up. */
+.contest-over-club {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+.contest-over-head,
+.contest-over-row {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 2fr) minmax(0, 1.5fr) 1.5rem minmax(0, 1.5fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+.contest-over-head {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-faint);
+}
+.contest-over-row {
+  padding: 2px 0;
+  font-size: var(--fs-body);
+}
+.contest-over-now,
+.contest-over-before {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.contest-over-now {
+  color: var(--text-dim);
+}
+.contest-over-before {
+  font-weight: 700;
+  color: var(--text);
+}
+.contest-over-arrow {
+  text-align: center;
+  color: var(--text-faint);
+}
+.contest-over-error {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--state-weak);
 }
 /* The affirmative button of a DESTRUCTIVE confirm (`danger: true`). Without this the class was
    inert — there is no `.settings-save.danger` or bare `.danger` rule — so all eleven destructive

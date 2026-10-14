@@ -1575,6 +1575,10 @@ export interface RadioStatus {
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
    *  keys or fails for another reason; absent otherwise, and from a station older than it. */
   pttRefused?: PttRefused | null
+  /** The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
+   *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
+   *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
+  voiceDropped?: VoiceDropped | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -1720,6 +1724,9 @@ export interface CwDecodeResult {
   sent: string[]
   /** A CW-keyer failure to surface (e.g. the rig rejected CAT keying), else null. */
   keyerError: string | null
+  /** The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+   *  (Nexus's Flex client): an information line until the next send. Absent from an older station. */
+  paddleTookOver?: boolean
   /** CW copilot: ranked worked-station callsign candidates from the decode (click to confirm). */
   candidates: { call: string; best: boolean }[]
   /** RST they sent us, read from the decode (e.g. "599"), else null. */
@@ -1849,15 +1856,29 @@ export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
 /** Inbox row state, lowercase on the wire. */
 export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
 
-/** Which automatic origins may key RIGHT NOW: `switch && txEnabled && !idleTripped`. Paint
+/** Which automatic origins may key RIGHT NOW: the switch on and the station's own answer that
+ * it would act (no idle trip, TX on, and what the origin needs besides its switch: HB and
+ * AUTOREPLY for HB ACK, AUTOREPLY for a relay, a schedule for HB and the repeating CQ). Paint
  * "armed" from THIS, never from the persisted switch alone. */
 export interface Js8Armed {
   autoreply: boolean
-  /** The repeating CQ — the session switch AND the TX latch AND no idle trip. */
+  /** The repeating CQ — the session switch AND the TX latch AND no idle trip AND a call scheduled. */
   cq: boolean
   relay: boolean
   hbAck: boolean
   hb: boolean
+}
+
+/** Why an automatic origin whose switch is on is not armed: the station's own reason. */
+export type Js8Unarmed = 'idle' | 'txOff' | 'needsHb' | 'needsAuto' | 'needsHbAndAuto' | 'unscheduled'
+
+/** Per origin, why it is not armed while its switch is on; null when it is armed or off. */
+export interface Js8NotArmed {
+  autoreply: Js8Unarmed | null
+  cq: Js8Unarmed | null
+  relay: Js8Unarmed | null
+  hbAck: Js8Unarmed | null
+  hb: Js8Unarmed | null
 }
 
 /** One activity-pane row: a decoded frame (or a reassembled multi-frame message). */
@@ -1955,6 +1976,9 @@ export interface Js8State {
   relay: boolean
   hbAck: boolean
   armed: Js8Armed
+  /** Why each switch that is on is not armed, named on its chip. Absent from an older station's
+   * sample on the Remote page: that station's `armed` is the switch with TX on and no idle trip. */
+  notArmed?: Js8NotArmed
   idleMinutes: number
   idleLimitMin: number
   idleTripped: boolean
@@ -2354,9 +2378,10 @@ export interface UploadStatus {
   whenUnix: number
   /**
    * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
-   * "partial" | "unclassified" | "declared" — not prose. It rides `log.adi`, which is what
-   * TQSL signs and uploads to ARRL, so it is never the service's own words; anything else is
-   * dropped on the way back into Rust. Render it through a label of your own, not verbatim.
+   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" — not prose. It
+   * rides `log.adi`, which is what TQSL signs and uploads to ARRL, so it is never the service's
+   * own words; anything else is dropped on the way back into Rust. Render it through a label of
+   * your own, not verbatim.
    */
   detail?: string | null
 }
@@ -2626,10 +2651,11 @@ export interface NeedAlert {
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */
   gridRarity?: GridRarity | null
-  /** The park or summit this row is an ACTIVATION of, when it is one. Working the row sets the
-   *  hunt target with it — the way HUNT and a map double-click do — so the contact it leads to is
-   *  logged with the reference. Absent/null on every other need: a row that names no activation
-   *  must never tag one. */
+  /** The park or summit this row is an ACTIVATION of, when it is one, so the contact working the
+   *  row leads to is logged with the reference: the Phone or CW log line the Work opens fills it
+   *  with the call, and a row that opens none sets the hunt target with it, the way HUNT and a map
+   *  double-click do. Absent/null on every other need: a row that names no activation must never
+   *  tag one. */
   park?: { program: string; reference: string } | null
   /** Where the US state this row was scored in came from, when it had one: the park or summit the
    *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
@@ -3244,6 +3270,11 @@ export interface FieldDayQso {
    *  under the ruleset's own key; a client-side guess got both the key and the semantics
    *  wrong. **Absent means false** — it is skipped on the wire for ordinary rows. */
   dupe?: boolean
+  /** ⭐ This row was worked in a mode the running contest BANS (FT8 at the Illinois QSO Party,
+   *  the WSJT modes at Winter Field Day): logged and in the files, and it counts for nothing,
+   *  so `qsoCount` leaves it out. The engine's answer from the row, never re-derived here.
+   *  **Absent means false**, as for `dupe`, and on a station older than the mark. */
+  banned?: boolean
 }
 
 /** ⭐ The running ruleset's DUPE RULE — what makes a contact count again.
@@ -3379,6 +3410,16 @@ export interface FieldDayStatus {
    *  it is also the "I moved" edit surface, and committing a live serial through `move_to`
    *  freezes the run at that number. */
   composingText?: string
+  /** The same exchange as a PHONE contact sends it: the report at two digits (`'59 MCHE'` where
+   *  `composingText` reads `'599 MCHE'`), as the engine stamps a phone row. What the phone
+   *  cockpit's Give line and a phone strip's Sending line read. Absent from an older station and
+   *  from the hosted page (which is not sent it yet): read `composingText` then. */
+  composingTextPhone?: string
+  /** ⭐ The Cabrillo header lines this contest's sponsor requires that the file exported now
+   *  would leave out (`'CATEGORY-POWER'`…), in the ruleset's order — read in Rust off the header
+   *  the export writes. Names, not prose: the Contest screen words each one. Absent when nothing
+   *  is missing, for a contest whose requirements this build does not read, and on Remote. */
+  cabrilloMissing?: string[]
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
@@ -3441,6 +3482,10 @@ export interface ContestFieldSpec {
    *  it has one. It says what a slot MEANS without the UI guessing from a slot id — the
    *  zone hint is offered on the slot tagged `CQZ`. */
   adif?: string
+  /** The rules file's own word for this slot, the on-air label that introduces it (`NAME` in
+   *  "NAME ALEX"), when it declares one. A box shows it in place of the words the strip derives
+   *  (`receivedCaption`). Absent for a positional slot, which is every slot shipped today. */
+  label?: string
 }
 
 /** One copied exchange value. */
@@ -3462,6 +3507,11 @@ export interface ContestBoard {
   scope: string
   /** The distinct values worked, sorted. */
   worked: string[]
+  /** ⭐ The distinct values the CLUB has worked, sorted — every position's contacts, this laptop's
+   *  included (the host's club log, or what the host sent a position). The board lights each and
+   *  marks this laptop's own (`worked`) apart. Absent without club sync, from a host older than the
+   *  list, and on Remote, which is sent nothing new: the board is then this laptop's own. */
+  club?: string[]
 }
 
 /** The per-session upload control: what the end-of-contest merge queues, and where.
@@ -3523,6 +3573,88 @@ export interface FdClubBoardRow {
    *  absent on a position's, for a position that has not measured one, and from a station
    *  older than the field. Shown, never applied. */
   clockMs?: number | null
+  /** Where this position's link stands, as the HOST's own screen says it
+   *  (`fdevent::PositionLink`): `host` is the host's own position. On the host's board only:
+   *  absent on a position's, and Remote's copy leaves it out. */
+  link?: 'host' | 'connected' | 'reconnecting' | 'lost' | 'removed'
+  /** Seconds since the host last heard this position on its own socket, beside `link`; absent
+   *  when this run of the host has not heard it (a position from before a restart). */
+  heardSecs?: number
+}
+
+/** This laptop's club link (`ClubLinkDto`): where its join stands and, on the host, its hosting
+ *  line. Shown in Settings' club section and on the Contest screen whatever the Field Day mode
+ *  switch says (the words are `features/clubLink.ts`). This laptop's screen only: Remote's
+ *  snapshot leaves it out. */
+export interface ClubLink {
+  role: 'host' | 'position'
+  /** The address this laptop's position joins, with the port it uses. */
+  addr: string
+  state: 'looking' | 'joined' | 'turnedAway' | 'unreachable' | 'lost'
+  /** Why the last attempt did not reach the host, in 'unreachable' and in 'lost' once one has. */
+  why?: 'badAddress' | 'refused' | 'noAnswer'
+  /** The host's own words, in 'turnedAway'. */
+  told?: string
+  /** When the link went down (unix seconds), in 'lost'; 0 otherwise. */
+  downSinceUnix: number
+  event: string
+  hostCall: string
+  /** This laptop's position, by the name the host's board shows it under. */
+  position: string
+  clubCode: string
+  hosting?: ClubHosting
+  /** A position's link to its host in the host board's words, once it has been in the event at
+   *  this address; absent before then and while turned away (the state and the host's words say
+   *  why), and on the host. */
+  status?: 'connected' | 'reconnecting' | 'lost'
+  /** Seconds since this laptop last heard its host, beside `status`. */
+  heardSecs?: number
+  /** How many of this laptop's contacts the club's log does not take because they were logged on
+   *  another call than the club's: each stays in this laptop's own log, never sent, and the club
+   *  chip does not count it. Absent when there are none. */
+  otherCall?: number
+}
+
+/** The host's line: whether the club is open, where a position joins it, and who is in. */
+export interface ClubHosting {
+  up: boolean
+  port: number
+  /** Each of this laptop's network addresses with the port, and the adapter it is on. */
+  addrs: { addr: string; adapter: string }[]
+  /** Other positions connected now (this laptop's own is left out): the host board's rows that
+   *  read Connected. */
+  connected: number
+  failed?: 'start' | 'portInUse' | 'port'
+  detail?: string
+}
+
+/** Where Nexus's club sync rules stand in Windows Firewall on this laptop
+ *  (`tempo_net::fdfirewall::Status`, `club_firewall_status`); the words are
+ *  `features/clubFirewall.ts`. */
+export interface ClubFirewall {
+  /** `off`: the firewall is off for Private and Public networks, so there is nothing to allow.
+   *  `missing`: none of Nexus's rules is there. `stale`: some are, not as a press would make them
+   *  now (another port, another copy of Nexus). `inPlace`: all three are. */
+  state: 'off' | 'missing' | 'stale' | 'inPlace'
+  /** A rule of Nexus's is there, so there is something to remove. */
+  ours: boolean
+  /** Windows' own rule blocks Nexus on that kind of network, and a block wins over every allow. */
+  blockedPrivate: boolean
+  blockedPublic: boolean
+  /** The firewall blocks every incoming connection on that kind of network. */
+  blocksAllPrivate: boolean
+  blocksAllPublic: boolean
+  /** The ports Nexus's rules are for: the Host port, Find club events', the scoreboard's. */
+  hostPort: number
+  searchPort: number
+  boardPort: number
+}
+
+/** What a press of Allow Nexus through Windows Firewall, or of its Remove, did: whether the
+ *  command ran and exited 0, and the firewall read back afterwards (`null` when unreadable). */
+export interface ClubFirewallPress {
+  ran: boolean
+  status: ClubFirewall | null
 }
 
 /** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
@@ -3575,10 +3707,50 @@ export interface FdClubStatus {
    *  log, and the newest of them (at most 16), each with the position that sent it (its name
    *  and call) and the sentence saying why. Each stays in that position's own log. */
   keptOut?: { total: number; latest: { posName: string; call: string; reason: string }[] }
+  /** The HOST's alone: each position whose newest contact sent another county (or state,
+   *  province or section) than the club sends, named as its line on the board names it (its
+   *  name, else who is at it), with what it sent and what the club sends. A warning: its
+   *  contacts are still taken. Absent when there is none, and never on Remote. */
+  otherLocation?: { posName: string; operator: string; sent: string; club: string }[]
   /** This laptop's own club code, for its club line: what the host compares with the code on
    *  its turned-away list before it gives this laptop a position. Absent with no club key, and
    *  never on Remote. */
   clubCode?: string
+}
+
+/** The host's club log, as its own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
+ *  many contacts the club holds, and the newest of them, newest first. The HOST's alone, and its
+ *  own screens': nothing of it rides the snapshot, so Remote is sent none of it. */
+export interface FdClubLog {
+  /** Every contact in the club's log, duplicates included: the count the club line says. */
+  total: number
+  /** The newest of them, at most a hundred, newest first. */
+  rows: FdClubLogRow[]
+}
+
+/** One contact of the club log: the contest log table's columns, read as `FieldDayQso`'s are,
+ *  and the position that logged it. */
+export interface FdClubLogRow {
+  call: string
+  class: string
+  section: string
+  /** One value per received slot of the club's contest, in `FieldDayStatus.receives` order;
+   *  absent for Field Day, whose two ride `class` and `section`. */
+  rcvd?: string[]
+  band: string
+  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
+  mode: string
+  submode: string
+  whenUnix: number
+  /** The position that logged it, by id: the key of its line on the host's board, never shown. */
+  posid: string
+  /** Its seq at that position: `(posid, seq)` is the row's identity in the club's log. Never shown. */
+  seq: number
+  /** …and by the name the host's board shows it under; empty for a position with none. */
+  posName: string
+  /** A later contact of a key the club already holds, by the earliest-wins dedupe the club's files
+   *  are written by. Absent means false. */
+  dupe?: boolean
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */
@@ -3617,6 +3789,18 @@ export interface KeyboardMacroProfile {
 }
 
 /** Persistent operator + radio settings. */
+/** The seven settings a contest weekend changes, as they were before it changed them (Rust
+ *  `ContestBefore`). Each field is the Settings field of the same name. */
+export interface ContestBefore {
+  mycall: string
+  fdOperator: string
+  fdPositionName: string
+  contestCategoryOperator: string
+  contestEntryClass: string
+  contestCategoryPower: string
+  unassistedMode: boolean
+}
+
 export interface Settings {
   mycall: string
   mygrid: string
@@ -4160,6 +4344,26 @@ export interface Settings {
   /** More Cabrillo `OPERATORS`, typed (calls separated by spaces or commas). The header lists
    *  the operators the contacts were stamped with (`fdOperator`), then these. */
   contestOperators?: string
+  /** Cabrillo `CATEGORY-TRANSMITTER`, a multi-operator entry's class: one of the selected
+   *  contest's own (`FdRulesetDto.transmitterCategories`), '' = undeclared. Written only for a
+   *  MULTI-OP entry, with the OPERATORS line. */
+  contestCategoryTransmitter?: string
+  /** Cabrillo `CATEGORY-OVERLAY`: one of the selected contest's own overlays
+   *  (`FdRulesetDto.overlayCategories`), '' = undeclared. */
+  contestCategoryOverlay?: string
+  /** The mailing address the Cabrillo ADDRESS lines carry, for a contest whose template names
+   *  them: the street lines, one per line, then its four parts. Withheld from Remote. */
+  contestAddress?: string
+  contestAddressCity?: string
+  contestAddressState?: string
+  contestAddressPostalcode?: string
+  contestAddressCountry?: string
+  /** Cabrillo `SOAPBOX`, as typed, for a contest whose template has one. */
+  contestSoapbox?: string
+  /** Cabrillo `CATEGORY-BAND`: `ALL`, or the one band a single-band entry is entered on, from the
+   *  selected contest's own list (`FdRulesetDto.bandCategories`), '' = undeclared. Written only
+   *  when it is one of them. A declaration, never read off the log. */
+  contestCategoryBand?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else
@@ -4219,6 +4423,10 @@ export interface Settings {
   /** Persistent 8-hex club-sync position id (generated at startup; no UI edit —
    * QSO ids are (posid, seq), so a changed id re-pushes everything as new). */
   fdPositionId?: string
+  /** ⭐ The station as it was before the contest changed it, or null when no contest has changed it
+   *  since the last one ended — what the contest-over checklist offers back. The ENGINE's
+   *  (`engine/contest_before.rs`): a Settings save never writes or clears it. */
+  contestBefore?: ContestBefore | null
   /** Serve the read-only spectator scoreboard page on the LAN (this toggle IS
    * the opt-in; real data only in the host role). Default off. */
   fdScoreboard?: boolean
@@ -4331,7 +4539,8 @@ export interface Settings {
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */
   alertCq: boolean
-  /** Alert when a station not heard before this session appears. */
+  /** The decode alert for a new DXCC, a new grid or a rare grid 💎: its sound and its pop-up
+   *  (`processDecodes`, alerts.ts). Its own switch in Settings; the boards never read it. */
   alertNew: boolean
   /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
    *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
@@ -4346,7 +4555,8 @@ export interface Settings {
    *  confirmations and the alerts out of the corner (`popsUpWhenOff` in toast.ts says what stays).
    *  Optional: a station without the field, or the Remote page, which is never sent it, is ON. */
   popupNotifications?: boolean
-  /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
+  /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
+   *  follow it, and so does the alert while `alertNew` is on. */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */
   alertGridBands: string
@@ -4673,6 +4883,9 @@ export interface AppSnapshot {
   activePeer: string | null
   qso: QsoStatus | null
   fieldDay: FieldDayStatus | null
+  /** This laptop's club link, whatever the Field Day mode switch says; absent while club sync
+   *  does not run. */
+  clubLink?: ClubLink | null
   /** The most-recent RX slot's decoded signals (drives the live decode feed). */
   recentDecodes: DecodeRow[]
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
@@ -4691,10 +4904,14 @@ export interface AppSnapshot {
   /** Bumped each time a spot is worked — App navigates to `workView`'s cockpit
    * on change (lets a pop-out window's click land the main window there). */
   workTick?: number
-  /** The last worked spot's mode: 'digital' | 'phone' | 'cw'. */
+  /** The section the last Work told `work_spot` ('digital', 'phone', 'cw', 'rtty', 'keyboard' for
+   *  PSK, 'js8'): App opens the screen it names (`workHintView`). */
   workView?: string | null
   /** The last worked spot's callsign — a pop-out window's click prefills the log Call from this. */
   workCall?: string | null
+  /** The park or summit of the last worked spot, when a Needed row named one: the log line fills it
+   *  with `workCall`. Never a hunt. Absent when there is none. */
+  workPark?: { program: string; reference: string } | null
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */
@@ -4756,6 +4973,17 @@ export interface AppSnapshot {
    *  logger window while that window is open. Absent while it is closed, from the Remote (which
    *  never receives it), and from a station older than the logger window. */
   contestEntry?: ContestEntryShared
+  /** The CQ the contest's Running calls, as it goes on the air ("CQ FD K1ABC FN42"), while a
+   *  contest runs whose own FT8/FT4 messages apply and that WSJT-X has an activity for, for a
+   *  standard call (`Engine::contest_running_cq`): the Tx6 row shows it then and calls it through
+   *  the contest's Running, as Call CQ does. Absent everywhere else, from the Remote (which never
+   *  receives it), and from an older station. */
+  contestCq?: string
+  /** A contest runs whose Running calls the CQ typed in the Tx6 row, where WSJT-X has no activity
+   *  for it (`Engine::contest_cq_typed`): the row stays the operator's, and Tx 6 and Call CQ hand
+   *  its direction to that Running. Absent everywhere else, from the Remote, and from an older
+   *  station. */
+  contestCqTyped?: boolean
 }
 
 /** The contest strip's contact in progress, shared by the main window and the contest logger
@@ -4763,6 +4991,9 @@ export interface AppSnapshot {
 export interface ContestEntryShared {
   /** Bumped by every change: a window shows the entry as of this rev. */
   rev: number
+  /** Which contact the entry holds: the number logged from it since the window opened. Every log
+   *  moves it on, and a put names the contact it was made on. */
+  contact: number
   /** The Call box, as typed. */
   call: string
   /** The received boxes by slot id, as typed. A box nobody has touched is absent. */
@@ -4842,6 +5073,17 @@ export interface PttRefused {
   at: number
   /** The transmit slice's mode, in the radio's own word (USB): data, never translated. */
   mode: string
+}
+
+/** A voice-keyer message Nexus's own Flex client dropped without keying the radio (mirror of the
+ *  Rust VoiceDropped). The words are the UI's, in features/voiceDropped.ts. */
+export interface VoiceDropped {
+  /** When it happened (unix seconds). */
+  at: number
+  /** `noDax`: the radio did not take its transmit audio from DAX within 2 seconds of the press, or
+   *  no longer took it when the message was to key. `keyed`: something else keyed the radio, or held
+   *  the transmitter, before the message could key. */
+  cause: 'noDax' | 'keyed'
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words

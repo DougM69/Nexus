@@ -16,6 +16,7 @@ import {
   CW_CONTEST_NO_REPORT_LAYOUT,
   CW_FIELD_DAY_LAYOUT,
   RTTY_SET_ROLES,
+  VOICE_KEYS,
   VOICE_SLOT_ROLES,
   cwBuiltInRoles,
   esmRoles,
@@ -47,6 +48,7 @@ describe('the contest layout on RTTY\'s contest set, as it ships', () => {
       myCall: '{MYCALL} {MYCALL}',
       exch: 'TU 599 {EXCH} {EXCH}',
       again: 'AGN? AGN?',
+      b4: '{CALL} QSO B4 TU {MYCALL}',
     })
   })
 
@@ -73,8 +75,8 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       ['F4', 'My Call', '{MYCALL}'],
       ['F5', 'His Call', '! '],
       ['F6', 'S&P exch', 'TU {RST} {EXCH}'],
-      ['F7', 'AGN', 'AGN AGN'],
-      ['F8', 'B4', '! QSO B4'],
+      ['F7', 'B4', '! QSO B4'],
+      ['F8', 'AGN', 'AGN AGN'],
     ])
   })
 
@@ -86,8 +88,8 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       ['F4', 'My Call', '{MYCALL}'],
       ['F5', 'His Call', '! '],
       ['F6', 'S&P exch', 'TU {EXCH}'],
-      ['F7', 'AGN', 'AGN AGN'],
-      ['F8', 'B4', '! QSO B4'],
+      ['F7', 'B4', '! QSO B4'],
+      ['F8', 'AGN', 'AGN AGN'],
     ])
   })
 
@@ -99,8 +101,8 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       ['F4', 'My Call', '{MYCALL}'],
       ['F5', 'His Call', '! '],
       ['F6', 'S&P exch', 'TU {EXCH}'],
-      ['F7', 'AGN', 'AGN AGN'],
-      ['F8', 'B4', '! QSO B4'],
+      ['F7', 'B4', '! QSO B4'],
+      ['F8', 'AGN', 'AGN AGN'],
     ])
   })
 
@@ -118,6 +120,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       myCall: '{MYCALL}',
       exch: 'TU {RST} {EXCH}',
       again: 'AGN AGN',
+      b4: '! QSO B4',
     })
   })
 
@@ -129,6 +132,7 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       myCall: '{MYCALL}',
       exch: 'TU {EXCH}',
       again: 'AGN AGN',
+      b4: '! QSO B4',
     })
     expect(messages(CONTEST_LAYOUT_ROLES, CW_FIELD_DAY_LAYOUT)).toEqual({
       cq: 'CQ FD DE {MYCALL} {MYCALL} K',
@@ -137,23 +141,36 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
       myCall: '{MYCALL}',
       exch: 'TU {EXCH}',
       again: 'AGN AGN',
+      b4: '! QSO B4',
     })
     for (const set of [CW_CONTEST_NO_REPORT_LAYOUT, CW_FIELD_DAY_LAYOUT]) {
       expect(set.filter((m) => m.text.includes('{RST}'))).toEqual([])
     }
   })
 
-  it('keeps the CQ and AGN the sets sent before, and moves their his-call text to F5', () => {
-    // What F1, F7 and F6 sent before the layout (the signature's "Today" column).
+  it('keeps the CQ and AGN the sets sent before, AGN on F8 and B4 on F7, and their his-call text on F5', () => {
+    // What F1, F7 and F6 sent before the layout (the signature's "Today" column). AGN and B4
+    // then traded keys (the operator, 2026-10-10): AGN on F8, as in N1MM's default message sets.
     for (const [layout, cq] of [
       [CW_CONTEST_LAYOUT, 'CQ TEST DE {MYCALL} {MYCALL} K'],
       [CW_CONTEST_NO_REPORT_LAYOUT, 'CQ TEST DE {MYCALL} {MYCALL} K'],
       [CW_FIELD_DAY_LAYOUT, 'CQ FD DE {MYCALL} {MYCALL} K'],
     ] as const) {
       expect(layout.find((m) => m.key === 'F1')?.text).toBe(cq)
-      expect(layout.find((m) => m.key === 'F7')?.text).toBe('AGN AGN')
+      expect(layout.find((m) => m.key === 'F8')?.text).toBe('AGN AGN')
+      expect(layout.find((m) => m.key === 'F7')?.text).toBe('! QSO B4')
       expect(layout.find((m) => m.key === 'F5')?.text).toBe('! ')
     }
+  })
+
+  it('sends AGN from F8, the key the sets now carry it on', () => {
+    expect(CONTEST_LAYOUT_ROLES.again).toEqual(['F8'])
+  })
+
+  it('sends QSO B4 from F7, the key all three sets hold it on, and no other step from it', () => {
+    expect(CONTEST_LAYOUT_ROLES.b4).toEqual(['F7'])
+    const others = Object.entries(CONTEST_LAYOUT_ROLES).filter(([role]) => role !== 'b4')
+    expect(others.filter(([, keys]) => keys?.includes('F7'))).toEqual([])
   })
 
   it('gets the layout\'s role table only when the set in use IS a layout set, key for key and text for text', () => {
@@ -184,17 +201,32 @@ describe('the CW contest and Field Day sets in the contest layout — SIGNED, an
 })
 
 describe('the voice-slot convention', () => {
-  const recorded = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'].map((key) => ({ key, text: `${key}.wav` }))
+  const recorded = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F8'].map((key) => ({ key, text: `${key}.wav` }))
 
-  it('F1 CQ · F2 my exchange · F3 TU · F4 my call · F5 AGN, and no slot for his call', () => {
+  it('F1 CQ · F2 my exchange · F3 TU · F4 my call · F8 AGN, and no slot for his call or for QSO B4', () => {
     expect(messages(VOICE_SLOT_ROLES, recorded)).toEqual({
       cq: 'F1.wav',
       callExch: { why: 'unmapped', role: 'callExch' },
       tu: 'F3.wav',
       myCall: 'F4.wav',
       exch: 'F2.wav',
-      again: 'F5.wav',
+      again: 'F8.wav',
+      b4: { why: 'unmapped', role: 'b4' },
     })
+  })
+
+  it('sends AGN from the key the CW and RTTY contest sets send it from', () => {
+    expect(VOICE_SLOT_ROLES.again).toEqual(['F8'])
+    expect(VOICE_SLOT_ROLES.again).toEqual(CONTEST_LAYOUT_ROLES.again)
+  })
+
+  it('leaves F5 and F6 to the operator: F5 is his call on CW, and a recording cannot say one', () => {
+    const played = Object.values(VOICE_SLOT_ROLES).flat()
+    expect(played.filter((key) => key === 'F5' || key === 'F6')).toEqual([])
+  })
+
+  it('offers the role picker the keyer’s slots: F1–F6, and F8 for AGN', () => {
+    expect(VOICE_KEYS).toEqual(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F8'])
   })
 
   it('names the slot to record when it is empty', () => {

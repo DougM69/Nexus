@@ -95,7 +95,7 @@ describe('⛔ a click in a box never changes the station the cockpit is working'
         if (!r) throw new Error('the Spots box does not list the spot')
         return r
       })
-      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq'] as const
+      const VERBS = ['sendCw', 'atuTune', 'callStation', 'startCq', 'startRunning'] as const
       const SWITCHES = ['setPtt', 'setTune', 'setTxEnabled'] as const
       for (const fn of [api.selectPeer, api.workSpot, ...VERBS.map((v) => api[v]), ...SWITCHES.map((v) => api[v])]) vi.mocked(fn).mockClear()
       await act(async () => {

@@ -46,11 +46,13 @@ describe('what call history may fill', () => {
       K9AAA: { Loc1: 'CHICAGO' }, // a city, not a county
       K9BBB: { Loc1: 'WHTSD', State: 'IL' }, // not the sponsor's spelling; IL is no QTH either
       K9CCC: { Loc1: 'COOK/DUPG' }, // a county line is a contact, not a station
+      K9EEE: { Loc1: 'COOK+DUPG' }, // …however it is joined
       K9DDD: { Loc1: 'NOWHERE', State: 'WI' },
     })
     expect(historyFill('K9AAA', ILQP, h, 'ilqp')).toEqual({})
     expect(historyFill('K9BBB', ILQP, h, 'ilqp')).toEqual({})
     expect(historyFill('K9CCC', ILQP, h, 'ilqp')).toEqual({})
+    expect(historyFill('K9EEE', ILQP, h, 'ilqp')).toEqual({})
     expect(historyFill('K9DDD', ILQP, h, 'ilqp')).toEqual({ QTH: 'WI' })
   })
 

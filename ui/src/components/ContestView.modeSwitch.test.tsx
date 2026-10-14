@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// THE FIELD DAY MODE SWITCH ON THE CONTEST SCREEN — one click on or off, beside the picked
-// contest and its window, writing the SAME `fdActive` Settings writes.
+// THE CONTEST MODE SWITCH ON THE CONTEST SCREEN — one click on or off, beside the picked
+// contest and its window, writing the SAME `fdActive` Settings writes. It is the switch for
+// whichever contest is picked, so it is named for that and names the contest it starts.
 //
 // The backend here is a live one: a read returns what it holds NOW and a save replaces it, so
 // "the same path" is checked by value — the struct saved is the backend's at save time with
@@ -11,8 +12,9 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
-import type { FieldDayStatus, Settings } from '../types'
+import type { FdClubStatus, FieldDayStatus, Settings } from '../types'
 import type { FdRulesetDto } from '../api'
+import type { ContestSwitch } from '../contestSwitch'
 import { setSettings } from '../api'
 
 let station: Record<string, unknown> = {}
@@ -21,6 +23,7 @@ let preview: FdRulesetDto | null = null
 vi.mock('../api', () => ({
   // The contest screen's Removed list, read on mount: none removed.
   contestRemoved: vi.fn(async () => []),
+  contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...station })),
   setSettings: vi.fn(async (s: Record<string, unknown>) => {
     station = { ...s }
@@ -33,6 +36,13 @@ vi.mock('../api', () => ({
   fdSetUpload: vi.fn(async () => ({})),
   saveTextToDownloads: vi.fn(async () => ''),
   openPanelWindow: vi.fn(async () => {}),
+  fdMergeToGeneral: vi.fn(async () => ({ added: 2, already: 0, refused: 0, queued: false })),
+  setUnassistedMode: vi.fn(async () => ({})),
+  // The club block's own calls, for a session at a club.
+  fdClubLogNewest: vi.fn(async () => null),
+  fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
+  fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
 }))
 
 /** 1700Z Sunday 18 October 2026 to 0100Z Monday: the Illinois QSO Party's window. */
@@ -86,6 +96,7 @@ interface Open {
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
   observed?: boolean
+  contestSwitch?: ContestSwitch | null
 }
 
 /** Open the screen with the backend holding `held`, and App's props as `o` says. */
@@ -105,6 +116,7 @@ async function openOn(held: Partial<Settings>, o: Open = {}) {
       }
       onOpenSettings={onOpenSettings}
       onSettingsSaved={onSettingsSaved}
+      contestSwitch={o.contestSwitch}
     />,
   )
   await settle()
@@ -140,7 +152,8 @@ describe('the switch writes the same setting, through the same path', () => {
   it('on: the backend’s settings at save time, with fdActive true and nothing else changed', async () => {
     const { onSettingsSaved } = await openOn(ILQP_STATION)
     expect(theSwitch().getAttribute('aria-checked')).toBe('false')
-    expect(theSwitch().getAttribute('aria-label')).toBe('Enable Field Day mode')
+    expect(theSwitch().getAttribute('aria-label')).toBe('Enable Contest mode: Illinois QSO Party')
+    expect(document.querySelector('.fd-mode-label')!.textContent).toBe('Contest mode')
     // A QSY after the screen opened: a save of the screen's own copy would send it back.
     station = { ...station, dialMhz: 7.04, band: '40m' }
     const before = { ...station }
@@ -149,7 +162,7 @@ describe('the switch writes the same setting, through the same path', () => {
     expect(vi.mocked(setSettings).mock.calls[0][0]).toEqual({ ...before, fdActive: true })
     expect(station.dialMhz).toBe(7.04)
     expect(theSwitch().getAttribute('aria-checked')).toBe('true')
-    expect(theSwitch().getAttribute('aria-label')).toBe('Disable Field Day mode')
+    expect(theSwitch().getAttribute('aria-label')).toBe('Disable Contest mode: Illinois QSO Party')
     // App is told, so the rail, Settings and the cockpits read the change at once.
     expect(onSettingsSaved).toHaveBeenCalledTimes(1)
   })
@@ -185,7 +198,7 @@ describe('the switch writes the same setting, through the same path', () => {
 })
 
 describe('it refuses to turn on, and names what is missing', () => {
-  it('ARRL Field Day with no class: no save, the class named, and a way to Field Day Setup', async () => {
+  it('ARRL Field Day with no class: no save, the class named, and a way to Settings ▸ Contest mode', async () => {
     preview = rules({ event: 'arrlfd', bannedModes: [], problem: '' })
     const { onOpenSettings } = await openOn({ fdEvent: '', fdClass: '', fdSection: 'WI' })
     await press()
@@ -301,7 +314,26 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(lines()).toContain('Not permitted: FT8, FT4. Contacts in them are logged but do not count.')
   })
 
-  it('a contest picked since it started: the switch is the way over, and no rules from the wrong one', async () => {
+  it('a saved pick switched the contest: said first, naming the contest it ended', async () => {
+    await openOn(
+      { ...ILQP_STATION, fdActive: true },
+      { fieldDay: session(), fdActive: true, contestSwitch: { from: 'arrlfd', to: 'ilqp' } },
+    )
+    expect(lines()).toEqual([
+      "Now running Illinois QSO Party. Saving the new pick ended ARRL Field Day, and its contacts stay apart from this contest's.",
+      'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+    ])
+    // CONTROL: no switch, no such line.
+    cleanup()
+    await openOn({ ...ILQP_STATION, fdActive: true }, { fieldDay: session(), fdActive: true })
+    expect(lines()).toEqual([
+      'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
+      'Not permitted: FT8, FT4. Contacts in them are logged but do not count.',
+    ])
+  })
+
+  it('a preview of another pick (a pop-out not yet caught up with a save): no rules from the wrong one, and no off-and-on', async () => {
     await openOn(
       { ...ILQP_STATION, fdEvent: 'cqww_cw', fdActive: true },
       { fieldDay: session(), fdActive: true, fdRuleset: rules({ event: 'cqww_cw', bannedModes: ['RTTY'] }) },
@@ -309,8 +341,9 @@ describe('with the mode on, the screen says which rules apply now', () => {
     expect(document.querySelector('.fd-event-name')!.textContent).toBe('Illinois QSO Party')
     expect(lines()).toEqual([
       'The Illinois QSO Party rules apply now: the log strips, this screen and the exports follow them.',
-      'Picked in Settings: CQ World-Wide DX Contest (CW). Turn Field Day mode off and on again to switch to it.',
     ])
+    // The switch names the contest it would leave: the one running, not the one picked.
+    expect(theSwitch().getAttribute('aria-label')).toBe('Disable Contest mode: Illinois QSO Party')
   })
 
   it('a club: what turning the mode off does to it, said before the click', async () => {
@@ -319,7 +352,7 @@ describe('with the mode on, the screen says which rules apply now', () => {
       { fieldDay: session(), fdActive: true },
     )
     expect(lines()).toContain(
-      'Club sync is on. With Field Day mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+      "Club sync is on. With Contest mode off, this station stays in the club event, and contacts the club's log does not have yet still go to the host while Nexus is open. Nothing in the log is lost.",
     )
     // CONTROL: no club, no such line.
     cleanup()
@@ -350,5 +383,92 @@ describe('what the switch must not do', () => {
     fireEvent.click(theSwitch())
     await settle()
     expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+  })
+})
+
+// ⭐ THE CONTEST-OVER CHECKLIST, from the Contest screen's switch. Turning the mode off with something
+// to offer opens it INSTEAD of saving: the merge and the export need the session the mode holds.
+describe('turning the mode off offers the contest-over checklist first', () => {
+  /** The end of a club weekend: the club's call on the air, and the engine's note of the station's own. */
+  const CLUB: Partial<Settings> = {
+    ...ILQP_STATION,
+    fdActive: true,
+    mycall: 'W9CLB',
+    contestBefore: {
+      mycall: 'K9ABC',
+      fdOperator: '',
+      fdPositionName: '',
+      contestCategoryOperator: '',
+      contestEntryClass: '',
+      contestCategoryPower: '',
+      unassistedMode: false,
+    },
+  }
+  const twoContacts = () =>
+    session({
+      running: true,
+      workedSections: [],
+      log: [
+        { call: 'K9A', band: '20m', mode: 'CW', whenUnix: ILQP_START + 60 },
+        { call: 'K9B', band: '20m', mode: 'CW', whenUnix: ILQP_START + 120 },
+      ] as FieldDayStatus['log'],
+    })
+
+  it('opens it and saves nothing; Not now leaves the mode on', async () => {
+    await openOn(CLUB, { fdActive: true, fieldDay: twoContacts() })
+    await press()
+    expect(screen.getByRole('dialog', { name: 'Contest over?' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: /Merge 2 contacts into my logbook/ })).toBeTruthy()
+    expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
+    await settle()
+    expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(theSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('at a club, it says how many of this laptop\'s contacts the club\'s log does not have yet', async () => {
+    // The club chip's count: the link down, two contacts the host never had.
+    const owed: FdClubStatus = {
+      syncState: 'offline',
+      queued: 2,
+      offlineSinceUnix: ILQP_END - 600,
+      hosting: false,
+      event: 'ILQP 2026',
+      hostCall: 'W9CLB',
+      score: 0,
+      qsos: 0,
+      sections: 0,
+      skewSecs: 0,
+      dupes: [],
+      board: [],
+    }
+    const joined = { ...CLUB, fdJoinAddr: '192.168.1.20:42073' }
+    await openOn(joined, { fdActive: true, fieldDay: { ...twoContacts(), club: owed } })
+    await press()
+    expect(document.querySelector('.contest-over-club')?.textContent).toBe(
+      "2 contacts from this laptop are not in the club's log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.",
+    )
+    // CONTROL: the club holds them all, and the dialog says nothing about it.
+    cleanup()
+    await openOn(joined, { fdActive: true, fieldDay: { ...twoContacts(), club: { ...owed, queued: 0, syncState: 'synced' } } })
+    await press()
+    expect(screen.getByRole('dialog', { name: 'Contest over?' })).toBeTruthy()
+    expect(document.querySelector('.contest-over-club')).toBeNull()
+  })
+
+  it('Turn off is ONE save: the mode off, with the ticked settings put back', async () => {
+    const { onSettingsSaved } = await openOn(CLUB, { fdActive: true, fieldDay: twoContacts() })
+    await press()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Callsign on the air/ }))
+    const before = { ...station }
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+    await settle()
+    expect(vi.mocked(setSettings).mock.calls.map((c) => c[0])).toEqual([
+      { ...before, mycall: 'K9ABC', fdActive: false },
+    ])
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(theSwitch().getAttribute('aria-checked')).toBe('false')
+    expect(onSettingsSaved).toHaveBeenCalledTimes(1)
   })
 })

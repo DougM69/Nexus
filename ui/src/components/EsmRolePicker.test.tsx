@@ -73,6 +73,7 @@ describe('the role picker on a set of the operator\'s own', () => {
       myCall: { why: null, text: '{MYCALL}' },
       exch: { why: 'empty', text: 'Your S&P exchange: F6 is empty, so Enter sends nothing and logs nothing at that step.' },
       again: { why: 'unmapped', text: 'AGN: no key is mapped, so Enter sends nothing and logs nothing at that step.' },
+      b4: { why: 'unmapped', text: 'QSO B4: no key is mapped, so Enter sends nothing and logs nothing at that step.' },
     })
   })
 
@@ -111,14 +112,14 @@ describe('the role picker over a built-in table', () => {
         row.querySelector('.esm-role-builtin')?.textContent,
       ]),
     )
-    expect(builtIn).toEqual({ cq: 'F1', callExch: 'F2', tu: 'F3', myCall: 'F4', exch: 'F6', again: 'F7' })
+    expect(builtIn).toEqual({ cq: 'F1', callExch: 'F2', tu: 'F3', myCall: 'F4', exch: 'F6', again: 'F8', b4: 'F7' })
     expect(rows().tu).toEqual({ why: null, text: 'TU {MYCALL} CQ' })
     expect(keySelect('tu').value).toBe('')
   })
 
   it('lets the operator\'s choice win, step by step, over the built-in key', () => {
     render(
-      <EsmRolePicker cockpit="rtty" builtIn={CONTEST_LAYOUT_ROLES} own={{ tu: ['F8'] }} slots={contest} keys={MACRO_KEYS} onChange={() => {}} />,
+      <EsmRolePicker cockpit="rtty" builtIn={CONTEST_LAYOUT_ROLES} own={{ tu: ['F7'] }} slots={contest} keys={MACRO_KEYS} onChange={() => {}} />,
     )
     expect(rows().tu).toEqual({ why: null, text: '{CALL} QSO B4 TU {MYCALL}' })
     expect(rows().cq).toEqual({ why: null, text: 'CQ TEST {MYCALL} {MYCALL} CQ' })
@@ -140,7 +141,7 @@ describe('the role picker on the voice keyer', () => {
       <EsmRolePicker cockpit="phone" builtIn={VOICE_SLOT_ROLES} own={{ again: ['F5', 'F4'] }} slots={slots} keys={VOICE_KEYS} onChange={() => {}} />,
     )
     expect(thenSelect('cq')).toBeUndefined()
-    expect([...keySelect('cq').options].map((o) => o.value)).toEqual(['', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6'])
+    expect([...keySelect('cq').options].map((o) => o.value)).toEqual(['', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F8'])
     expect(rows()).toEqual({
       cq: { why: null, text: 'CQ' },
       callExch: { why: 'unmapped', text: 'His call and your exchange: no key is mapped, so Enter sends nothing and logs nothing at that step.' },
@@ -148,6 +149,7 @@ describe('the role picker on the voice keyer', () => {
       myCall: { why: null, text: 'My call' },
       exch: { why: null, text: 'Exchange' },
       again: { why: 'oneSlot', text: 'AGN: mapped to two recordings, and the keyer plays one per press.' },
+      b4: { why: 'unmapped', text: 'QSO B4: no key is mapped, so Enter sends nothing and logs nothing at that step.' },
     })
   })
 })
@@ -158,7 +160,7 @@ describe('a set that is not the operator\'s to map', () => {
     expect(document.querySelectorAll('select')).toHaveLength(0)
     expect(document.querySelectorAll('.esm-role-sends')).toHaveLength(0)
     expect([...document.querySelectorAll('.esm-role-builtin')].map((k) => k.textContent)).toEqual([
-      'F1', 'F2', 'F3', 'F4', 'F6', 'F7',
+      'F1', 'F2', 'F3', 'F4', 'F6', 'F8', 'F7',
     ])
   })
 

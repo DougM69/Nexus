@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 /// A logger's Reply (WSJT-X UDP message type 4) to the decoded line `message`.
-fn reply_datagram(message: &str) -> Vec<u8> {
+pub(super) fn reply_datagram(message: &str) -> Vec<u8> {
     let mut w = tempo_net::qds::QdsWriter::new();
     w.put_u32(tempo_net::wsjtx::MAGIC)
         .put_u32(tempo_net::wsjtx::SCHEMA)
@@ -32,7 +32,7 @@ fn reply_datagram(message: &str) -> Vec<u8> {
 }
 
 /// A 15 s FT8 capture of `msg` at 1500 Hz, at the engine's capture scale.
-fn ft8_frame(msg: &str) -> Vec<f32> {
+pub(super) fn ft8_frame(msg: &str) -> Vec<f32> {
     use tempo_core::modes::{make_mode, ModeKind};
     let mode = make_mode(ModeKind::Ft8);
     let wave = mode.gen_wave(&mode.encode(msg), tempo_fast::SAMPLE_RATE, 1500.0);

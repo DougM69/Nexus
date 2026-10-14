@@ -15,7 +15,7 @@ Nexus left beta at 1.0.0. The habit the beta was written with does not close wit
 it: where a feature is opt-in, or a number comes from simulation rather than the
 air, these pages say so, and each page ends with what its section does **not** do.
 
-**This guide documents Nexus 1.17.0.** These pages ship inside the app, and the same files are
+**This guide documents Nexus 1.18.0.** These pages ship inside the app, and the same files are
 synced to the website and built into the PDF and EPUB at each release — so a copy matches the
 release it came out with. It cannot promise to match the build *you* are running. The website
 and the downloads track the latest release; your installed copy may be older, or newer than a
@@ -107,7 +107,7 @@ The **Now-Bar** runs across the top from every section: UTC clock, current band,
 TX/RX state, and the "is the band open / am I getting out / what do I need"
 answer, with feed-health pills that tell "connected but quiet" apart from "down."
 
-Thirteen panels tear off into their own OS window — see
+Fourteen panels tear off into their own OS window — see
 [Windows you can tear off](#windows-you-can-tear-off) below.
 
 ## The sections
@@ -159,8 +159,9 @@ Thirteen panels tear off into their own OS window — see
   polar plots, frequencies, and rotor auto-track.
 
 ### Contesting & portable
-- **[Field Day & POTA/SOTA](contesting-pota.md)** — ARRL/Winter Field Day mode
-  with Cabrillo and club interop, plus the POTA/SOTA hunter.
+- **[Field Day & POTA/SOTA](contesting-pota.md)** — Contest mode for ARRL/Winter Field
+  Day and every other contest in the picker, with Cabrillo and club interop, plus the
+  POTA/SOTA hunter.
 
 ### System
 - **[Repeaters](program.md)** — the radio-programming workbench: the repeaters
@@ -201,7 +202,7 @@ of a page.
 | See whether an upload actually went | [Settings ▸ Logging & Connectors ▸ Connections](settings-reference.md#connections) |
 | Change how "worked before" is decided | [Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
 | Get an alert when a new one appears | [Settings ▸ Spots & Alerts ▸ Pounce](settings-reference.md#pounce--new-one-alert) |
-| Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup) |
+| Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day) |
 | Change theme, contrast or Night | [Settings ▸ Appearance ▸ Theme](settings-reference.md#theme) |
 | Change UI scale, text size or density, or pick a one-tap look | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
 | Turn a whole section off | [Settings ▸ Appearance ▸ Features](settings-reference.md#features) |
@@ -237,15 +238,20 @@ them is the moment your hands are in a field. Those are called out below.
 | `F4` | Operate — **fires while typing too** | Clear the DX call. |
 | `F6` | Operate | Re-decode the last period, adding only what the first pass missed. |
 | `Alt+1`–`Alt+6` | Operate | Send that Tx slot. |
-| `F1`–`F8` | CW — **fire while typing too** | Fire that macro. |
-| `Esc` | CW — **fires while typing too** | Abort keying: clears the queue and stops the rig. |
+| `F1`–`F8` | CW — **fire while typing too** | Fire that macro (not while its macro editor is open). |
+| `Esc` | CW — **fires while typing too** | Abort keying: clears the queue and stops the rig. With the macro editor open and nothing on the air, it closes the editor and leaves TX on. |
 | `PgUp` / `PgDn` | CW — **fire while typing too** | Nudge WPM ±2, with Shift ±4. |
 | `Space` (hold) | Phone | Push-to-talk. The press is ignored in a text field; the release always unkeys, wherever focus has moved. |
-| `F1`–`F6` | Phone, while the Voice keyer pane is on screen | Play that recorded message. Ignored while a recording is in progress. |
+| `F1`–`F6`, `F8` | Phone, while the Voice keyer pane is on screen — **fire while typing too** | Play that recorded message. Ignored while a recording is in progress. `F1`–`F12` are all kept from the window there, so `F5` cannot reload the app; with Alt, Ctrl or Cmd held a key is left to the system (`Alt+F4` still closes the window). |
 | `Esc` | Phone — **fires while typing too** | Halt TX, as the header's **Stop TX** does. With the Voice keyer pane on screen and the cursor outside a text field, it stops playback as well. |
-| `Ctrl+D` | Any cockpit showing the contest log strip — **fires while typing too** | Remove your newest contest contact: the first press names it on the strip, a second within 5 seconds removes it. Held down, it is one press; with Alt, Shift or Cmd it does nothing. It never keys or stops TX. |
+| `Ctrl+D` | Any cockpit showing the contest log strip, and the Contest screen while a contest runs — **fires while typing too** | Remove your newest contest contact: the first press names it on the strip, a second within 5 seconds removes it. Held down, it is one press; with Alt, Shift or Cmd it does nothing. It never keys or stops TX. |
+| `Ctrl+Y` | Any cockpit showing the contest log strip, and the Contest screen while a contest runs — **fires while typing too** | Edit your newest contest contact, in place of the strip's boxes: Enter saves, Esc leaves it as it was. It keeps its time and serial. With Alt, Shift or Cmd it does nothing; at a club it is not offered yet. It never keys or stops TX. |
+| `Alt+W` (`⌥+W` on macOS) | Any cockpit showing the contest log strip, the Contest screen while a contest runs, and the logger window — **fires while typing too** | Wipe the log line: the call and every exchange box. Pressed again right after, with no other key between, it puts the line back. It never keys or stops TX. |
+| `Ctrl+O` | Any cockpit showing the contest log strip, the Contest screen while a contest runs, and the logger window — **fires while typing too** | Put the cursor in the operator box: the Contest screen opens with it, or in the logger window its own. The mode and the radio stay as they are. |
 | `Esc` | RTTY / PSK / JS8 | Stop TX: drops the queue, drops the continuous-TX latch and unkeys. |
+| `Ctrl+Shift+F1`–`Ctrl+Shift+F8` | RTTY / PSK / CW — **fire while typing too** | Open that macro's editor, with the cursor in its message. It never sends; the editor's **Send once** does, through the key's own checks. |
 | `Esc` | Tempo, SSTV, APRS, Satellites — **fires while typing too** | Halt TX, as **Stop TX** does (on Tempo, the top bar's). APRS and Satellites draw no Stop TX; this is their stop. |
+| `Esc` | Contest screen, while a contest runs — **fires while typing too** | Halt TX, as the top bar's **Stop TX** does. The log line keeps what it holds. (In the logger window Esc clears the log line instead, and never touches TX.) |
 | `↑` `↓` `Home` `End` | List | Move between rows. The list is one Tab stop. |
 | `Enter` / `Space` | List | Work the focused row. |
 | `Esc` | Any open dialog, menu or station card | Close it. On a screen where `Esc` halts TX, the same press halts it too. |
@@ -253,13 +259,13 @@ them is the moment your hands are in a field. Those are called out below.
 **Mac keyboards eat bare F-keys as media keys.** Hold `fn`, or turn on "Use F1,
 F2, etc. as standard function keys" in macOS keyboard settings.
 
-**Macro buttons labelled `F1`–`F4` in RTTY and PSK are click-only.** The caption
-names the slot; the key is not bound in those two cockpits. CW's `F1`–`F8` and
-Phone's voice-keyer `F1`–`F6` are bound.
+**RTTY's and PSK's macro keys are bound too.** `F1`–`F8` send that macro while the
+cockpit is on screen and its macro editor is closed, as CW's do; Phone's voice-keyer
+`F1`–`F6` and `F8` are bound as well.
 
 ## Windows you can tear off
 
-Thirteen panels open in their own OS window for a multi-monitor shack. The
+Fourteen panels open in their own OS window for a multi-monitor shack. The
 control sits on the panel's own header — **⧉ Pop out** in most places, **↗ Pop
 out** on Memories, **⧉ Pop out board** on the club band board, and a bare **⧉**
 on Operate and Satellites. Where a panel has no such control, it does not
@@ -270,7 +276,7 @@ SSTV, APRS and JS8 cockpits.
 | Panel | Control | Notes |
 |---|---|---|
 | Operate cockpit | ⧉ in the cockpit header | The full cockpit, keyboard shortcuts included. |
-| Waterfall | ⧉ on the waterfall pane head, in Operate | The only pop-out that vacates its slot in the main window; closing it re-docks the pane. There is also a manual re-dock control if it does not. |
+| Waterfall | ⧉ on the waterfall pane head, in Operate | One of two pop-outs that vacate their place in the main window (the Contest screen is the other); closing it re-docks the pane. There is also a manual re-dock control if it does not. |
 | Map | **Map** in the Operate header | Opens with the Parks layer on, independent of the Conditions map's layer picks. |
 | Conditions | ⧉ Pop out, Conditions header | The globe with its own pane grid. |
 | Needed board | ⧉ Pop out, Needed header | A header checkbox, **open at launch**, force-opens it every start. |
@@ -278,12 +284,13 @@ SSTV, APRS and JS8 cockpits.
 | Satellites | ⧉ in the Satellites header | |
 | Memories | ↗ Pop out, Memories toolbar | |
 | POTA / SOTA | POTA/SOTA header | |
-| Contest scoreboard | ⧉ Pop out, Contest screen | |
+| Contest scoreboard | ⧉ Pop out, over the Contest screen's score tiles | |
+| Contest screen | ⧉ Pop out, at the end of the Contest screen's top line | Everything below the log line. The main window keeps the log line and the last contacts; closing the window brings the rest back. Opens where it was last put. |
 | Club band board | ⧉ Pop out board on the Contest screen, and Club Board under Contest in the left bar | Opens wider and shorter, set in glance type: it is read across a tent. |
 | Band map (Phone) | ⧉ on the band-map pane head, in Phone | Docks to a screen edge as a full-height strip; size, position and dock survive a restart. |
 | Band map (CW) | ⧉ on the band-map pane head, in CW | Same. |
 
-The POTA/SOTA, Field Day and club-board buttons hide themselves inside the
+The POTA/SOTA, Field Day, Contest screen and club-board buttons hide themselves inside the
 window they already opened, so you cannot stack a second copy.
 
 How they behave:

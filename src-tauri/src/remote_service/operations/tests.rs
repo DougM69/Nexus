@@ -1713,3 +1713,41 @@ fn giving_a_club_position_is_refused_from_afar() {
         "CONTROL: a station control the page sends"
     );
 }
+
+/// ⭐ **Removing a club position, or letting one back, is refused from afar**, as Give is: both
+/// buttons are on the host's own board and neither is one of Remote's operations, whichever
+/// spelling a request tries. CONTROL: a request and a station control the page does send are read.
+#[test]
+fn removing_a_club_position_or_letting_one_back_is_refused_from_afar() {
+    for name in [
+        "fdClubRemovePosition",
+        "fd_club_remove_position",
+        "removePosition",
+        "club.removePosition",
+        "fdClubAllowBack",
+        "fd_club_allow_back",
+        "allowBack",
+        "club.allowBack",
+    ] {
+        assert!(
+            serde_json::from_value::<Request>(
+                json!({"type": name, "requestId": "r", "posid": "bbbb0002"})
+            )
+            .is_err(),
+            "a request named {name} was read"
+        );
+        assert!(
+            serde_json::from_value::<station::Action>(json!({"action": name, "posid": "bbbb0002"}))
+                .is_err(),
+            "a station control named {name} was read"
+        );
+    }
+    assert!(
+        serde_json::from_value::<Request>(json!({"type": "state", "requestId": "r"})).is_ok(),
+        "CONTROL: a request the page sends"
+    );
+    assert!(
+        serde_json::from_value::<station::Action>(json!({"action": "radio.disarm"})).is_ok(),
+        "CONTROL: a station control the page sends"
+    );
+}

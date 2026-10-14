@@ -361,10 +361,11 @@ fn a_correction_keeps_the_rows_sequence_and_its_timestamp() {
 // Field Day — the refusing ruleset corrects exactly the same way
 // ---------------------------------------------------------------------------
 
-/// Correcting is not a contest-policy question: Field Day refuses DUPLICATES, and a
-/// correction is not a duplicate. The row is corrected and the refusal is untouched.
+/// Correcting is not a contest-policy question: a correction is not a duplicate. The row is
+/// corrected, and the dupe check follows it: Field Day logs a duplicate marked (every contest
+/// does since the operator's ruling of 2026-10-11).
 #[test]
-fn field_day_corrects_a_row_and_still_refuses_a_dupe() {
+fn field_day_corrects_a_row_and_the_dupe_check_follows_it() {
     resolver();
     let mut log = FieldDayLog::new(
         "W9XYZ",
@@ -379,11 +380,11 @@ fn field_day_corrects_a_row_and_still_refuses_a_dupe() {
 
     // …and the corrected call is now the one that dupes.
     assert!(
-        !log.log_mode_at("K1ABD", "2A", "CT", "CW", 0, START + 60),
-        "Field Day still refuses, and the key followed the correction"
+        log.log_mode_at("K1ABD", "2A", "CT", "CW", 0, START + 60) && log.qsos()[1].dupe,
+        "a dupe, logged and marked: the key followed the correction"
     );
     assert!(
-        log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, START + 120),
+        log.log_mode_at("K1ABC", "2A", "CT", "CW", 0, START + 120) && !log.qsos()[2].dupe,
         "the busted call is free again — nothing in this log holds it"
     );
 }
@@ -392,30 +393,41 @@ fn field_day_corrects_a_row_and_still_refuses_a_dupe() {
 // The qid, which is how the general log names one of these rows
 // ---------------------------------------------------------------------------
 
-/// ⚠️ **A session id contains a colon of its own** (`"CQ-WW-CW:IL"`, built by BOTH
-/// session constructors), so `"<session>:<posid>:<seq>"` has four colon-separated parts
-/// and a left-to-right three-way split reads the posid as `"IL"` and the seq as
-/// `"7:42"`. It is parsed from the RIGHT, and minted and parsed by one pair of
-/// functions so the two cannot drift.
+/// ⚠️ **A session contains a colon of its own** (`"CQ-WW-CW:2026"`: the contest, and the running
+/// the row was logged in), so `"<session>:<posid>:<seq>"` has four colon-separated parts and a
+/// left-to-right three-way split reads the posid as `"2026"` and the seq as `"7:1"`. It is parsed
+/// from the RIGHT, and minted and read back in one place so the two cannot drift.
 #[test]
-fn a_qid_round_trips_through_a_session_id_that_contains_a_colon() {
-    use tempo_core::contest::merge::{qid_for, seq_from_qid};
-    let session = "CQ-WW-CW:IL";
-    let qid = qid_for(session, "7", 42);
-    assert_eq!(qid, "CQ-WW-CW:IL:7:42");
-    assert_eq!(seq_from_qid(&qid, session), Some(42));
+fn a_qid_round_trips_through_a_session_that_contains_a_colon() {
+    use tempo_core::contest::{merged_row, MergeIdentity};
+    let mut log = cqww_log();
+    assert!(work(&mut log, "20m", "JA1ABC", "25", 0));
+    let id = MergeIdentity::of(&log, "7", &log.qsos()[0]);
+    assert_eq!(id.qid(), "CQ-WW-CW:2026:7:1");
+    assert_eq!(merged_row(&log, "7", id.qid(), START), Some(seq(&log, 0)));
 }
 
-/// A qid minted by another session names a row this log does not own — refused, so a
-/// correction cannot land on the same seq in the wrong contest.
+/// A qid minted by another session or another position names a row this log does not own —
+/// refused, so a correction cannot land on the same seq in the wrong contest.
 #[test]
 fn a_qid_from_another_session_names_no_row_here() {
-    use tempo_core::contest::merge::{qid_for, seq_from_qid};
-    let qid = qid_for("CQ-WW-CW:IL", "7", 42);
-    assert_eq!(seq_from_qid(&qid, "ARRL-FIELD-DAY:WI"), None);
-    assert_eq!(seq_from_qid("nonsense", "CQ-WW-CW:IL"), None);
+    use tempo_core::contest::{merged_row, qid_for};
+    let mut log = cqww_log();
+    assert!(work(&mut log, "20m", "JA1ABC", "25", 0));
+    let qid = qid_for("ARRL-FIELD-DAY:2026", "7", 1);
+    assert_eq!(merged_row(&log, "7", &qid, START), None);
+    let qid = qid_for("CQ-WW-CW:2026", "7", 1);
+    assert_eq!(merged_row(&log, "8", &qid, START), None, "another position");
+    assert_eq!(merged_row(&log, "7", "nonsense", START), None);
     assert_eq!(
-        seq_from_qid("CQ-WW-CW:IL:7:notanumber", "CQ-WW-CW:IL"),
+        merged_row(&log, "7", "CQ-WW-CW:2026:7:notanumber", START),
         None
     );
+    assert_eq!(
+        merged_row(&log, "7", "CQ-WW-CW:2026:7:0", START),
+        None,
+        "unstamped"
+    );
+    // POSITIVE CONTROL: the row's own qid, at its own position, does name it.
+    assert_eq!(merged_row(&log, "7", &qid, START), Some(1));
 }

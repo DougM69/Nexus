@@ -46,7 +46,11 @@ Your operator identity, license privileges, and default frequency.
   seats. It is the same setting as **Operator at the key** under
   [Who's who at this event](#whos-who-at-this-event); editing either one moves
   both.
-- **State** — "Your US state/province — the CW `{MYSTATE}` macro (ragchew QTH)."
+- **State** — your US state or province for everyday contacts: the CW `{MYSTATE}`
+  macro and the QTH an RTTY ragchew sends. A contest has a box of its own,
+  **State or province** under [Your station data](#your-station-data) on the
+  Contesting tab, because a contest entry can be somewhere else: a portable or mobile
+  entry types where it is operating there, and this one stays as it is.
 - **License Class** — Technician / General / Amateur Extra (US), or **Open** for
   non-US operators. "Sets your transmit privileges + the licensed-segment band
   dropdown. Open = no limits (outside the US)." This is a software transmit guard
@@ -502,8 +506,8 @@ Baud continue across to the right.*
   invisible under Remote Desktop**. Native DAX audio works only through the
   **Flex native client (Beta)**: with SmartSDR CAT it does nothing, and the
   setting is kept for the client. On the client the digital modes transmit over
-  DAX, while Phone at the shack keeps the radio's own mic (so the voice keyer
-  can't play there). Both are Beta and **unverified on hardware**, so both are opt-in; if
+  DAX, while Phone at the shack keeps the radio's own mic, and the voice keyer
+  switches the radio to DAX for each message. Both are Beta and **unverified on hardware**, so both are opt-in; if
   the scope stays blank or decodes stop, turn them back off.
 - **CI-V bus diagnostic log** — appears once native CI-V is on. Records every
   byte to and from the radio to a file in your Downloads, for hardware-only
@@ -912,8 +916,10 @@ with the radio.
 - **Keying line** (serial keyline only) — DTR (the CW convention) or RTS. "DTR is
   standard (RTS = PTT); flip to RTS if your interface is wired the other way."
 - **CW ID after 73** — keys your callsign in CW once the final 73 has fully left
-  the air (stock WSJT-X option, default off). It uses the normal CW keying path —
-  PTT + tone — after the FT8 over, never on top of it.
+  the air, in Q65, FST4 and MSK144 (stock WSJT-X option, default off). As in
+  WSJT-X, FT8 and FT4 send no CW ID, and neither do FT2, TempoFast or TempoDeep.
+  It uses the normal CW keying path — PTT + tone — after the over, never on top
+  of it.
 
 **Macros (F-key profiles)**
 
@@ -1347,8 +1353,11 @@ it well below their SSB drive.*
   — worth doing if you keep SSTV open as a monitor on a shared rig. Stopping the
   receiver yourself is already remembered for the rest of the session.
 - **ISS SSTV auto-arm** — off by default. Tunes 145.800 FM and arms the decoder
-  when the ISS is overhead, and restores your dial at LOS. A pass arm is an
-  explicit act, so this works whether or not the switch above is on.
+  when the ISS is overhead while the SSTV or Satellites screen is open, and
+  restores your dial at LOS. On any other screen it only tells you the ISS is up,
+  and leaves your radio alone. If your radio cannot receive 145.800 MHz, it tells
+  you once per session and does nothing else. A pass arm is an explicit act, so
+  this works whether or not the switch above is on.
 
 **Transmitting**
 
@@ -1500,20 +1509,26 @@ a new one is genuinely an event.
   message with a button (an alarm's Stop, an Undo, an update's Download) still pop up.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
-- **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. "Loud alert on a
-  new DXCC entity — a 'new one'. **Does NOT alert on every decode.** The band
-  choice also decides where the NEW ONE icon is shown."
-- **New grid** — same band scopes. "Quiet toast on a grid you haven't worked.
-  Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every
-  decode is an unworked grid. The band choice also decides where the GRID icon is
-  shown, on the roster and the decode rows."
-- **Rare grid 💎** — same band scopes. "The loud 💎 alert for rare/water-only
-  grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing
-  HF chatter keeps the gems. Covers their GRID icon too."
+- **New DXCC and grid alerts** — the sound and the pop-up when you decode a new
+  DXCC, a new grid or a rare grid 💎 on a band its menu allows. On by default. Off
+  silences those alerts and changes nothing else: the three menus keep their
+  choices, and the Needed boards and the NEW ONE and GRID icons keep following them.
+- **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. The bands where a
+  new DXCC entity — a "new one" — counts: the Needed boards, the NEW ONE icon and
+  its loud alert all follow this choice. **Off takes NEW ONE off every board.**
+- **New grid** — same band choices. The bands where a grid you haven't worked
+  counts: the Needed boards, the GRID icon on the roster and the decode rows, and
+  its quiet toast. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF
+  nearly every decode is an unworked grid.
+- **Rare grid 💎** — same band choices. The bands where a rare or water-only grid
+  (rovers, maritime, DXpeditions) counts: the Needed boards, its GRID icon and the
+  loud 💎 alert. Separate from plain grids, so silencing HF chatter keeps the gems.
 
-Each band choice governs both halves of a need: whether it makes a sound and
-whether it paints an icon. Set **New grid** to VHF+ and an HF FT8 roster stops
-showing GRID chips — the icons follow the setting, not just the alerts.
+Each menu always shows the band choice the boards follow, whatever the alert
+switch says, and picking one changes only that one. Set **New grid** to VHF+ and
+an HF FT8 roster stops showing GRID chips and the Needed boards stop listing HF
+grids. The board's own **New grid** chip filters within that; it never brings
+HF grids back.
 - **Watch list** — the calls you want flagged wherever they turn up. Each entry can
   carry a note of your own, such as why it is there and when it can come off
   (`Samoa DXp 9/27-10/3`): type it when you add the entry, or later in the field
@@ -1675,9 +1690,15 @@ DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 
 ### N3FJP Integration (club master log)
 
-"Each FD contact lands in the club's **N3FJP Field Day Contest Log** the moment
-you log it — so the whole club's score updates in real time." Run N3FJP on the
-master computer and point Nexus at its IP and port.
+"Each contact you log in Contest mode reaches the club's master N3FJP log the
+moment you log it." Nexus fills in the form of the **N3FJP Field Day Contest Log**
+(call, band, mode, class and section), so at Field Day the whole club's score
+updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their
+exchange too, in the boxes N3FJP's own programs for them use (both reports and the
+serial received, with N3FJP told the serial you sent; both reports, the zone and the
+state or province; the grid). A QSO party, Sweepstakes or CQ WW CW/SSB contact
+reaches N3FJP without its exchange: N3FJP does not publish which boxes those
+programs use. Run N3FJP on the master computer and point Nexus at its IP and port.
 
 ![The N3FJP group: an empty N3FJP host box showing the placeholder "192.168.1.10 (empty = off)", N3FJP port 1100, "Use ENTER for Field Day scoring" on, and "Report my band to N3FJP" off.](../img/manual/settings-n3fjp.webp)
 
@@ -1686,14 +1707,15 @@ Test N3FJP button continue to the right.*
 
 - **N3FJP host** — IP or hostname of the master log computer. Blank = off.
 - **N3FJP port** — N3FJP's API TCP port (default 1100).
-- **Use ENTER for Field Day scoring** — on by default. Logs each FD contact with
+- **Use ENTER for contest scoring** — on by default. Logs each contest contact with
   N3FJP's ENTER sequence, "which scores the contest — the correct path." Off
-  falls back to a plain `ADDDIRECT` insert, which may not score.
+  falls back to a plain `ADDDIRECT` insert, which may not score and carries no
+  exchange beyond a class and section.
 - **Report my band to N3FJP** — "Tell N3FJP which band you're on (no CAT needed),
   so the club's Network Status Display band board shows this position." Off by
   default.
-- **Forward every QSO** — also push **every** logged QSO, not just Field Day, to
-  N3FJP ACLog. "N3FJP dedupes, so it's safe to run alongside the Field-Day push."
+- **Forward every QSO** — also push **every** logged QSO, not just contest contacts,
+  to N3FJP ACLog. "N3FJP dedupes, so it's safe to run alongside the contest push."
 - **Connection test** — **Test N3FJP** saves, then tests the TCP link. "Run this
   at the club site before the event starts."
 
@@ -1701,11 +1723,11 @@ Test N3FJP button continue to the right.*
 
 - **N1MM contact broadcast address** — host:port, UDP. "Name the port — consumers
   stack on one host, and 12060 is often already taken by another logger." Blank
-  = off. An address alone sends nothing outside a Field Day event.
+  = off. An address alone sends only the contacts you log in Contest mode.
 - **Broadcast every QSO** — send the contact packet for **every** logged QSO, not
-  just Field Day: point a map app such as GridTracker at the address and each
+  just contest contacts: point a map app such as GridTracker at the address and each
   contact plots as you log it. "One packet per QSO: this never doubles up with
-  the Field Day broadcast." Off by default; turning it on with a blank address
+  the contest broadcast." Off by default; turning it on with a blank address
   fills in `127.0.0.1:12060` visibly, rather than as a hidden default.
 
 ### LoTW users list
@@ -1785,6 +1807,10 @@ whether or not something is stored. **Set** saves one, **Forget** removes it.
 
 - **eQSL username** / **eQSL password** — your eQSL.cc login, often your
   callsign.
+- **QTH Nickname** — only for a callsign with more than one QTH profile at
+  eQSL. Enter it exactly as eQSL's My Profile page spells it, capitals
+  included. Each nickname is an eQSL account of its own, so changing it (or the
+  username) makes the next **Sync eQSL now** read that account's whole InBox.
 - **eQSL confirmations** — **Sync eQSL now** downloads confirmations into your
   log. "These count as confirmations but **not** for DXCC/WAS (ARRL doesn't
   accept eQSL) — a separate tier."
@@ -1943,46 +1969,39 @@ Always visible — capability, not configuration, gates the tabs.
 
 The first thing on this tab, because the contest decides everything under it: the
 exchange you pass, what counts as a duplicate, how the log is scored, and what goes in
-the Cabrillo headers.
+the Cabrillo headers. The switch that starts it and the rules data every contest
+reads are here with it.
 
 - **Contest** — ARRL Field Day, Winter Field Day, ARRL November Sweepstakes (CW or
   Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
-  Ohio, Tennessee and Texas QSO Parties. Field Day Setup below is the setup for the
-  two Field Day events. (This is the same setting the Event chips used to carry inside
-  Field Day Setup; it moved up one level so there is one contest picker rather than a
+  Illinois, New York, Ohio, Tennessee and Texas QSO Parties. **Contest mode**, under
+  it, is the switch that starts the contest picked here. While it is running a
+  contest, a line under the picker says which one, and saving a different pick switches at once, exactly as
+  turning Contest mode off and on does: the running contest ends, the new one starts in
+  Search-and-Pounce without calling CQ, each keeps its own contacts, and the Contest screen
+  says "Now running …". Saving anything else keeps the running contest and its log. (This is the
+  same setting the Event chips used to carry inside
+  what was then Field Day Setup; it moved up one level so there is one contest picker rather than a
   setting buried inside one contest's own section.)
 - **Your role** — read-only, and derived rather than chosen. A role is decided by where
   you are: in a QSO party the in-state and out-of-state stations send different things,
-  and crossing the line changes which one you are. Both Field Day events work the same
-  way for everyone, so there is no role to show yet.
-- **Entry category** — what your Cabrillo log declares about the station:
-  `SINGLE-OP`, `MULTI-OP` or `CHECKLOG`. It is a claim, so you make it rather than
-  Nexus guessing: pick `CHECKLOG` when you are sending the log to help the sponsor
-  check other people's rather than to be scored yourself. New sessions read this;
-  a session already running keeps the declaration it started with.
-- **Power category**, **Spotting assistance** and **Station type** — the rest of
-  what your Cabrillo log declares about the entry. Sweepstakes sends these on the
-  air as its precedence letter, and a CQ WW RTTY log carries the power category and
-  the assistance as header lines. Winter Field Day takes only `QRP` or `LOW` (its limit is
-  100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
-- **Email for contest logs** — goes on the EMAIL line of the Cabrillo log you
-  export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you
-  about your entry. The NAME line is your operator name from the
-  [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
-  not your ClubLog account email, and Remote never sees it.
-- **Entry class.** Shown only for a contest whose rules list the sponsor's own
-  entry classes: the Illinois QSO Party's eight, from its 2026 rules. It goes on
-  the ENTRY-CLASS line of the Cabrillo log. A club running more than one
-  transmitter at once in the Illinois QSO Party enters `UNLIMITED`. For a QRP
-  entry, set **Power category** to QRP too, which writes `QRP-COMPETITION: YES`.
-- **Club.** Your contest club, for the CLUB line of the Cabrillo log when the
-  contest's rules have one (the Illinois QSO Party). Leave it blank to leave the
-  line out.
-- **Other operators.** The OPERATORS line lists everyone who was set as
-  **Operator at the key** when they logged a contact. Type anyone else here, as
-  callsigns separated by spaces or commas. All three are read when you export the
-  log, so you can fill them in after the contest.
+  and crossing the line changes which one you are. It reads in words: in-state,
+  out-of-state, W/VE or DX, and the same word sits beside **Sending** on the contest log
+  strip. Both Field Day events work the same way for everyone, so there is no role to
+  show yet.
+- **Contest mode** — the switch for whichever contest is picked above, named for it:
+  "For Illinois QSO Party, the contest picked above. When it is on, the log strips in
+  every mode, the Contest screen and the exports follow its rules. Off the rest of the
+  year." It stays on across restarts until you turn it
+  off. It was called Field Day mode; the setting is the same one. The **same switch** is
+  at the top of the **Contest** screen (the tent in the left bar), which saves it at once and
+  says what is missing when the picked contest cannot start yet. Those are its only two
+  places: it is not among the [Features](#features).
+- **Check for rules updates** — the rules data behind every contest on the list:
+  scoring, dates, exchanges and multipliers. The line beside the button says which
+  rules year and data date are in use; a downloaded update applies at the next
+  launch.
 
 ### Your station data
 
@@ -1996,8 +2015,11 @@ goes on the air has to be one you typed.
   from the county name will often be the wrong one.
 - **State or province** — your state, province or territory, two letters. This is
   **not** your ARRL section. Western New York is `WNY` as a section and `NY` as a
-  state, and a QSO party wants the state; Field Day Setup below is where the
-  section lives. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
+  state, and a QSO party wants the state; [Field Day](#field-day) below is where the
+  section lives, for the two Field Day events. Nor is it the Station tab's
+  [State](#operator--radio), the QTH your everyday CW and RTTY macros send: put here
+  where your station is for this contest, which for a portable or mobile entry is
+  not home. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
   from the usual ones: `NF` (VO1) and `LB` (VO2) rather than `NL`, `NWT` rather
   than `NT`, and `PEI` rather than `PE`. Typing `NT` or `PE` is read as `NWT` or
   `PEI`; `NL` is not, because it is two call areas, so pick `NF` or `LB`. With a
@@ -2011,16 +2033,34 @@ goes on the air has to be one you typed.
 - **CQ zone** — 1 to 40, for CQ WW. Leave it at 0 if you do not know it yet.
 - **ITU zone** — 1 to 90, for IARU. Leave it at 0 if you do not know it yet.
 - **Power sent** — the power you send *as part of the exchange*, in the sponsor's
-  own words (`KW`, `500`, `5`). This is not the Field Day power multiplier below,
-  which is a scoring tier you pick from a list; this one goes on the air exactly as
-  you type it.
+  own words (`KW`, `500`, `5`), on the air exactly as you type it. Shown only for a
+  contest whose exchange carries your power, and none of the contests on the list
+  does, so you will not see it today; a value saved before is kept. The power your
+  log declares is **Power category**, under [Your entry](#your-entry).
 
 If a contest needs something your station has not filled in, Nexus refuses the
 contest's rules rather than sending a blank — you find out while setting up, not at
 1400 on contest Saturday.
 
-### Contest Category
+### Your entry
 
+What your Cabrillo log declares about the entry, and the switch that keeps the
+"unassisted" in it true.
+
+- **Entry category** — what your Cabrillo log declares about the station:
+  `SINGLE-OP`, `MULTI-OP` or `CHECKLOG`. It is a claim, so you make it rather than
+  Nexus guessing: pick `CHECKLOG` when you are sending the log to help the sponsor
+  check other people's rather than to be scored yourself. New sessions read this;
+  a session already running keeps the declaration it started with.
+- **Power category**, **Spotting assistance** and **Station type** — the rest of
+  what your Cabrillo log declares about the entry. Sweepstakes sends these on the
+  air as its precedence letter, and every CQ log (CQ WW, CQ WPX, CQ WW RTTY)
+  carries the power category and the assistance as its CATEGORY-POWER and
+  CATEGORY-ASSISTED lines. A contest reads them when Contest mode turns on, so set
+  them before it starts. Winter Field Day takes only `QRP` or `LOW` (its limit is
+  100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
+  This is the one power your log declares: **Power sent** is what an exchange carries,
+  and Field Day's power multiplier is its score.
 - **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
   PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
   **Takes effect at once**" — its own command, not Save, because an operator
@@ -2029,10 +2069,66 @@ contest's rules rather than sending a blank — you find out while setting up, n
 - **Assistance record** — the timestamped journal: a row per flip and a row each
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
+- **Email for contest logs** — goes on the EMAIL line of the Cabrillo log you
+  export for a contest whose log has one (the CQ contests), so the sponsor can reach you
+  about your entry. The NAME line is your operator name from the
+  [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
+  not your ClubLog account email, and Remote never sees it.
+- **Entry class.** Shown only for a contest whose rules list the sponsor's own
+  entry classes: the Illinois QSO Party's eight, from its 2026 rules. It goes on
+  the ENTRY-CLASS line of the Cabrillo log. A club running more than one
+  transmitter at once in the Illinois QSO Party enters `UNLIMITED`. For a QRP
+  entry, set **Power category** to QRP too, which writes `QRP-COMPETITION: YES`.
+- **Club.** Your contest club, for the CLUB line of the Cabrillo log when the
+  contest's rules have one (the CQ contests, the Illinois QSO Party). Spell out the
+  club's full name, as CQ asks. Leave it blank to leave the line out.
+- **Other operators.** The OPERATORS line lists everyone who was set as
+  **Operator at the key** when they logged a contact. Type anyone else here, as
+  callsigns separated by spaces or commas. All three are read when you export the
+  log, so you can fill them in after the contest.
+- **Band category.** Shown for a contest whose sponsor lists the bands an entry is
+  entered on: `ALL` or one of `160M`, `80M`, `40M`, `20M`, `15M` and `10M` in CQ WW
+  and CQ WPX, and the same without `160M` in CQ WW RTTY. It goes on the
+  CATEGORY-BAND line. Pick the one band of a single-band entry: you still log every
+  contact, other bands included, and the sponsor scores only that band. A
+  multi-operator entry in the CQ contests is `ALL`. Unset, CQ WW and CQ WPX write no
+  CATEGORY-BAND line, and CQ WW RTTY writes the band its log holds (`ALL` for more
+  than one), as it always did.
+- **Multi-operator class.** Shown for a `MULTI-OP` entry in a contest whose
+  sponsor scores multi-operator classes, with that sponsor's own: `ONE`, `TWO` or
+  `UNLIMITED` in the CQ contests (Multi-One or Multi-Single, Multi-Two,
+  Multi-Multi), `ONE` in Sweepstakes, `ONE`, `LIMITED` or `UNLIMITED` in the ARRL
+  VHF contests, `ONE` or `UNLIMITED` in the New York QSO Party. It goes on the
+  CATEGORY-TRANSMITTER line, with the OPERATORS line these sponsors require of a
+  multi-operator entry. Nexus marks every contact as transmitter 0, so add the
+  second transmitter's contacts to a Multi-Two log before you send it.
+- **Overlay.** Shown for a contest that scores overlay categories, with its own:
+  CQ WW's Classic, Rookie and Youth (CQ WPX adds TB-WIRES, CQ WW RTTY has Classic
+  and Rookie) and the New York QSO Party's Rookie, Youth12, Youth17 and YL. It goes
+  on the CATEGORY-OVERLAY line.
+- **Mailing address**, then its city, state or province, postal code and country.
+  Shown for a contest whose Cabrillo template has ADDRESS lines (the CQ contests,
+  Sweepstakes, the ARRL VHF contests and the New York, Illinois and Tennessee QSO
+  Parties), so the sponsor can mail a certificate or plaque. A part the template has
+  no line for goes on one more ADDRESS line, the way its own template writes it.
+  Remote never sees it.
+- **Soapbox.** Your comments, for the SOAPBOX lines of a contest whose template has
+  them (the CQ contests, the ARRL VHF contests and the Illinois and California QSO
+  Parties); a long line is wrapped to fit. The California QSO Party asks for its
+  award lines here (YL, YOUTH, MOBILE, NEW CONTESTER…).
+
+  All five are read when you export the log, and none is written until you set
+  it: a log you declare none of them for exports the file it always did.
+
+  When a CQ contest's Cabrillo file would leave out a line its sponsor requires
+  (the power, the assistance, the band, and for a multi-operator entry its class and
+  operators), the Contest screen names each one before you export, with a button to
+  this section. Nothing is ever filled in for you.
 
 ![The Contest Category group: Unassisted entry switched off, an ASSISTED badge on a line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since 23:18Z, and below it an Assistance record of eight timestamped rows.](../img/manual/settings-contest-category.webp)
 
-*Contest Category in Nexus 1.10.3. The badge states what you are entitled to
+*The Unassisted switch and its record in Nexus 1.10.3, when they were a group of
+their own called Contest Category. The badge states what you are entitled to
 claim right now; the record underneath is the evidence, kept across restarts.*
 
 ### Super Check Partial and call history
@@ -2092,34 +2188,34 @@ contact runs, step by step, and the rules ESM keeps are in the
   The next Enter asks for a repeat instead of sending your call again." Off by
   default.
 - **CW steps** — which keys of the active CW profile send each step: CQ, his
-  call and your exchange, TU, your call, your S&P exchange and AGN. A step can
+  call and your exchange, TU, your call, your S&P exchange, AGN and QSO B4 (to a
+  dupe that calls you while you run). A step can
   send two keys as one message, such as F5 then F2. The mapping is saved with
-  the profile. A profile still on the built-in sets shows their steps and has
+  the profile, and **Reset to defaults** under [CW](#cw) clears it with the
+  profile's keys. A profile still on the built-in sets shows their steps and has
   nothing to map until you **Customize** it under [CW](#cw).
 - **RTTY steps** — the same for each RTTY set, Everyday and Contest, each with
   its own mapping. The Contest set's built-in key for each step is shown beside
   your choice, and a step left on *Built in* sends it. A key you changed in the
   cockpit keeps its place, so its step sends your text.
 - **Voice keyer steps** — which recording each step plays, one slot per step.
-  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F5
-  AGN. An empty slot plays nothing.
+  The built-in slots are F1 CQ, F2 your exchange, F3 TU, F4 your call and F8
+  AGN, the key AGN is on in the CW and RTTY contest sets; F5 and F6 are yours.
+  No slot holds QSO B4 until you map one you recorded. An empty slot plays nothing.
 
 Every step row shows what Enter would send there, or why it would send nothing:
 no key mapped, or a key with nothing on it. A set with no step mapped makes ESM
 step aside, and Enter logs as it does with ESM off. On the hosted Remote page
 this section only says that ESM is set at the station.
 
-### Field Day Setup
+### Field Day
 
-- **Field Day mode** — the master switch. "Turn on for Field Day weekend: the
-  Class/Section exchange appears across all modes. Off the rest of the year." It
-  stays on across restarts until you turn it off. The **same switch** also
-  appears in [Appearance ▸ Features](#features) under Contesting, and at the top
-  of the **Contest** screen (the tent in the left bar), which saves it at once and
-  says what is missing when the picked contest cannot start yet.
-- **Event** — moved up to [Contest](#contest) at the top of this tab, where it is now
-  the contest picker. Same setting, one level up.
-- **FD Class** / **WFD Category** (the label follows the Event) — "Number of
+Shown only while ARRL Field Day or Winter Field Day is picked: their own exchange,
+and ARRL Field Day's power multiplier.
+
+- **Event** — the contest picker at the top of this tab ([Contest](#contest)); the
+  same setting the Event chips here used to carry.
+- **FD Class** / **WFD Category** (the label follows the contest) — "Number of
   transmitters + class letter: A=club/group portable, B=1–2 person portable,
   C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A."
   For WFD the box is **WFD Class and Category**: "The number of transmitters (your
@@ -2136,8 +2232,11 @@ this section only says that ESM is set at the station.
   which one you operate from — so Nexus keeps your old value, asks, and won't
   start Field Day until you've picked, rather than sending a section you never
   chose for a whole contest.*
-- **Power multiplier** — ×5 (QRP/battery, ≤5 W on natural power), ×2 (≤100 W),
-  ×1 (>100 W). "Multiplies your QSO points. Choose before the event."
+- **Power multiplier**, shown for ARRL Field Day only — ×5 (QRP/battery, ≤5 W on
+  natural power), ×2 (≤100 W), ×1 (>100 W). "Multiplies your QSO points. Choose
+  before the event." No other contest's score has one; Winter Field Day scores by
+  its objectives. It is a score, not a declaration: the power your log declares is
+  **Power category**, under [Your entry](#your-entry).
 
 Class and Section **start empty on purpose** and the station won't enter Field
 Day until both are set — a banner says so while the mode is on and they're blank.
@@ -2176,7 +2275,21 @@ Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
 port on the site LAN, and only while the toggle is on — the spectator scoreboard
 below and [Conditions on a TV](#conditions-on-a-tv) are the other two things that
 listen beyond the local computer); every other position joins it with **Find
-club events** or by typing the host's `host:port` into **Join event at**. Each
+club events**, where clicking a found event joins it at once (that saves the
+join address alone; the rest of the page still waits for Save), or by typing the
+host's address into **Join event at** and saving: the host shows it after
+**Positions join at**, and an address typed without a port joins port 42073. A
+laptop that hosts cannot join another event, and the list says so. For a contest
+club sync cannot run, a click still saves the address, and the sentence at the
+top of the section saying why also shows under the list. Under **Join
+event at**, right under what Find club events found, each laptop says where its
+join stands, and the host says where it is hosting and how many other
+positions are connected (the Contest screen says the same, with Contest mode on or off). On Windows,
+**Allow Nexus through Windows Firewall** adds Nexus's three rules for club sync
+(the Host port, Find club events' UDP 42074 and the scoreboard's port) on
+Private and Public networks through one administrator prompt; the line beside
+it says whether they are in place, and **Remove Nexus's firewall rules** takes
+them out. Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
 powers the while-typing dupe warning. **Event name** is what joining positions
@@ -2252,15 +2365,22 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 ### Theme
 
 - **Theme** — three cards, each with a line on its character: **Light**
-  (daylight panel, dark scopes and meters), **Dark** (dark panel, lit dials and
-  meters) and **System**. Light reads best outdoors in daylight.
+  (pale silver front, white panels, dark scopes and meters), **Dark** (dark panel, lit
+  dials and meters) and **System**. Light reads best outdoors in daylight.
   **System** follows your computer's own light or dark setting and changes when it
-  does; Dark is the default. Either way, the top bar's **Field** chip boosts
-  contrast and size on top of the theme you picked.
+  does, on every computer. On Windows it is the default: until you pick a theme,
+  Nexus looks the way Windows is set. On Linux, the Raspberry Pi and macOS, Nexus
+  opens Dark until you pick one. A theme you picked stays picked. Earlier versions
+  saved Dark for everyone who never picked one, so a computer that ran one of them
+  keeps Dark; pick **System** there to follow your computer. Either way, the top
+  bar's **Field** chip boosts contrast and size on top of the theme you picked.
+  **Light** has the warmer, softer look that was the Silver chassis theme. If you had
+  Silver chassis picked, you now see Light, which looks the same. The brighter Light of
+  earlier versions is the **Bright** theme below.
   Below them are ten ready-made themes, each card with a swatch of its colours. **Rig
-  looks**: Amber LCD, Green LCD, Blue VFD and Silver chassis. **Modern**: Midnight
-  (true black), Slate, Lagoon, Ember, Nebula and Paper. Silver chassis and Paper are
-  light themes and the rest are dark. Picking **Light**, **Dark** or **System** again
+  looks**: Amber LCD, Green LCD and Blue VFD. **Modern**: Midnight (true black), Slate,
+  Lagoon, Ember, Nebula, Paper and Bright. Paper and Bright are light themes and the
+  rest are dark. Picking **Light**, **Dark** or **System** again
   goes back to a standard theme. Every theme is checked for contrast like the standard
   two: the scopes and meters stay dark, and the transmit red, the ON AIR sign, alerts,
   and the signal and Needed colours are the same in every theme. **High contrast** keeps
@@ -2331,8 +2451,8 @@ same thing.
 red-green colour-blind eyes as to everyone else. **Auto** follows the theme, and
 turns Amber CRT while Night is on. On one of the ready-made themes, Auto is that
 theme's own palette: Amber CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue
-VFD, Viridis on Silver chassis, Slate and Lagoon, Cividis on Paper and Inferno on
-the rest. A palette you picked by name never changes with the theme. Remembered per
+VFD, Viridis on Slate and Lagoon, Cividis on Paper and Bright, and Inferno on the
+rest. A palette you picked by name never changes with the theme. Remembered per
 computer.
 
 ### Map & globe
@@ -2426,12 +2546,11 @@ sections cannot be turned off.*
   Conditions, Needed) shows an "always on" badge instead of a toggle: a locked
   switch beside real ones just reads as broken.
 - **Optional features**, grouped by category in this order: Operate, DX & Awards,
-  Propagation, Contesting, POTA/SOTA, Logging, System. Each row is a toggle with
+  Propagation, POTA/SOTA, Logging, System. Each row is a toggle with
   a one-line "why you'd want it". Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
-- The **Contesting** group hosts the **Field Day mode** master switch (the same
-  setting as [Contesting ▸ Field Day Setup](#field-day-setup)). Turning it on
-  with no Class or Section set jumps you to the Contesting tab to fill them in.
+- **Contest mode** is not here: it is at the top of the **Contest** screen and in
+  [Contesting ▸ Contest](#contest).
 
 ### App updates
 

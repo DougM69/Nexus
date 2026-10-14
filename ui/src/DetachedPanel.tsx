@@ -43,6 +43,9 @@ import {
   archiveConversation,
   setFrequency,
   workSpot,
+  getLicensedBandPlan,
+  getPskState,
+  pskSetMode,
   setHuntTarget,
   subscribeSnapshot,
   callStation,
@@ -88,11 +91,12 @@ import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
 import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/ContestView'
 import { ContestLogger } from './components/ContestLogger'
+import { ContestScreenWindow } from './components/ContestScreenWindow'
 import { clubSyncRefusal, clubSyncRefusalText, contestName, isFieldDay } from './fdEvent'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
-import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall, ownScreen, workTier, pskSubmode, WORK_SECTION, type OwnScreen } from './features/needs'
 import { spotNeed } from './remote-web/remote-work'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
@@ -238,12 +242,12 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // the same grid square and the same sun as the main window.
   useNight(snap?.mygrid ?? '')
   const [settings, setSettings] = useState<Settings | null>(null)
-  // The club board's window and the contest logger's: the station's preview of the picked contest,
-  // which says whether the rules it loaded carry it (`rulesCarry`) — so a refused club says why
-  // here too — and which rules the contest screen's lines and advisories read.
+  // The club board's window, the contest logger's and the contest screen's: the station's preview of
+  // the picked contest, which says whether the rules it loaded carry it (`rulesCarry`) — so a refused
+  // club says why here too — and which rules the contest screen's lines and advisories read.
   const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
   useEffect(() => {
-    if (panel !== 'fdclub' && panel !== 'contestlog') return
+    if (panel !== 'fdclub' && panel !== 'contestlog' && panel !== 'contestscreen') return
     let live = true
     getFdRuleset()
       .then((r) => live && setFdRuleset(r))
@@ -430,18 +434,36 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Full work path from the pop-out: the atomic workSpot switches the rig's MODE + exact
   // frequency (a bare QSY left CW clicks in DATA-U).
   const workNeed = async (a: NeedAlert) => {
+    // A row heard in JS8 or a PSK mode works on that mode's own screen (`ownScreen`) while it is
+    // switched on, at the row's own frequency or that screen's channel for the band, as from the
+    // docked board: the main window follows this Work's hint there.
+    const modes = readEnabledModes()
+    const screen = ownScreen(a)
+    let own: OwnScreen | null = null
+    if (screen && modes[screen]) {
+      const plan = await withErrorToast(
+        () => getLicensedBandPlan(screen),
+        t('shell.work.failed.cat', { call: a.call }),
+      )
+      if (!plan) return
+      own = { view: screen, plan }
+    }
     // `target`, not `t` — `t` is the translator in this file (App.tsx's own idiom).
-    const target = workTarget(a, bandPlan)
+    const target = workTarget(a, bandPlan, own)
     if (!target) {
       qsyBand(a.band, a.freqMhz ?? undefined)
       return
     }
-    // A park/summit row names its activation: tag the hunt first, exactly as the docked
-    // board and `onWorkSpot` above do, so the contact this leads to carries the park.
+    // A park/summit row names its activation, and the contact this leads to carries the park,
+    // as from the docked board (handleWorkNeeded spells out the rule). A row that opens the
+    // main window's Phone or CW log line hands its park there with the call, through the work
+    // hint (`workSpot`'s park → the snapshot's `workPark`), and sets NO hunt. Any other row
+    // still tags the hunt first: it is the only way that row's park reaches the contact.
     // AFTER the bail-out above and AWAITED — handleWorkNeeded spells out why, and here
     // the bail-out is the harder no-op of the two: `workTarget` is null only when the
     // band has no plan channel, and `qsyBand` then silently moves nothing at all.
-    if (a.park) {
+    const fillsLogLine = (target.view === 'cw' && modes.cw) || (target.view === 'phone' && modes.phone)
+    if (a.park && !fillsLogLine) {
       const park = a.park
       await withErrorToast(
         () => setHuntTarget(a.call, park.program, park.reference),
@@ -452,19 +474,35 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // If the target cockpit is disabled, the MAIN window's nav-hint effect refuses
     // to follow (same gate as handleWorkNeeded) — so a workSpot would silently
     // switch the rig into a hidden mode with no UI. Just QSY to the spot instead.
-    const modes = readEnabledModes()
     if ((target.view === 'cw' && !modes.cw) || (target.view === 'phone' && !modes.phone)) {
       qsyBand(a.band, a.freqMhz ?? undefined)
       return
     }
-    const opMode = target.view === 'operate' ? 'digital' : target.view
-    // A digital spot's FT8/FT4 protocol rides the same atomic call (the engine
-    // no-ops on a same-tier request) — the pop-out used to not switch the tier at
+    // The section the Work tells `work_spot`, which comes back as the main window's hint
+    // (WORK_SECTION): PSK's is 'keyboard', JS8's is 'js8'.
+    const section = WORK_SECTION[target.view]
+    // A digital spot's FT8/FT4 protocol (its own mode, `workTier`) rides the same atomic call
+    // (the engine no-ops on a same-tier request) — the pop-out used to not switch the tier at
     // all, leaving an FT4 click decoding FT8, and doing it as a second call would
-    // recreate the main window's default-dial-first double retune.
-    const m = a.mode?.toUpperCase()
-    const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
-    apply(workSpot(opMode, target.freqMhz, target.band, target.call, spotTier))
+    // recreate the main window's default-dial-first double retune. JS8's screen rides it as
+    // the JS8 tier.
+    const spotTier = target.view === 'js8' ? 'JS8' : target.view === 'operate' ? (workTier(a) ?? undefined) : undefined
+    const work =
+      a.park && fillsLogLine
+        ? workSpot(section, target.freqMhz, target.band, target.call, spotTier, a.park)
+        : workSpot(section, target.freqMhz, target.band, target.call, spotTier)
+    apply(work)
+    // The PSK screen opens on the row's own sub-mode where it has it (`pskSubmode`), its Rev
+    // setting kept: after the Work, so one the station refused changes nothing.
+    const slug = target.view === 'psk' ? pskSubmode(a) : null
+    if (slug) {
+      void work.then(async () => {
+        const psk = await withErrorToast(() => getPskState(), t('psk.mode.failed'))
+        if (psk && psk.mode !== slug) {
+          await withErrorToast(() => pskSetMode(slug, psk.reverse === true), t('psk.mode.failed'))
+        }
+      }, () => {})
+    }
   }
   // The POTA/SOTA board has already called setHuntTarget itself (and handed us the fresh
   // snapshot via onSnap); this half is the QSY + rig-mode switch — the same atomic workSpot
@@ -513,8 +551,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     () => visibleNeeds(needAlerts, readEnabledModes(), needScopes),
     [needAlerts, needScopes],
   )
-  // The Spots board's needs (Hide worked's rescue), as App hands its Spots board: band scopes
-  // honoured, mode-feature neutral (`boardNeeds`). For the dashboard window's Spots box.
+  // The BOARD's needs, as App hands its Needed and Spots boards: band scopes honoured, mode-feature
+  // neutral (`boardNeeds`). For this window's Needed board and box, and the dashboard window's Spots box
+  // (Hide worked's rescue).
   const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   // The SHARED chain, same as App.tsx — the hand-rolled loop this replaces was
   // the pre-fix last-tag-wins map (backend orders alerts priority-DESCENDING,
@@ -596,8 +635,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // THIS WINDOW'S NEEDED BOARD, one object for the Needed window below and the dashboard window's
   // Needed box, as App shares its own: a box can never be wired differently from its board.
   const neededBoard = {
-    // Full un-gated list — the board's own mode toggles decide what shows.
-    alerts: needAlerts,
+    // Un-gated by MODE FEATURE — the board's own mode toggles decide what shows — but scoped by band,
+    // as App's is: handed the raw list, this window listed every HF grid the New grid scope keeps off
+    // the docked board.
+    alerts: boardAlerts,
     bandPlan,
     selectedCall: selected,
     myGrid: snap?.mygrid ?? '',
@@ -774,9 +815,19 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   if (panel === 'sats') {
     return (
       <DetachedShell>
-        <SatellitesView snap={snap} />
+        <SatellitesView snap={snap} onSnap={setSnap} />
       </DetachedShell>
     )
+  }
+
+  /** The operator box's save, in the torn-off scoreboard and in the logger window's entry. */
+  const saveFdOperator = (call: string) => {
+    if (!settings) return
+    const op = call.trim().toUpperCase()
+    setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
+    // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
+    // definition and the heavyweight path would end it (#54).
+    apply(setFdOperator(op)) // persist + mirror the returned snapshot
   }
 
   if (panel === 'fieldday') {
@@ -788,14 +839,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             fieldDay={fd}
             settings={settings}
             detached
-            onSaveOperator={(call) => {
-              if (!settings) return
-              const op = call.trim().toUpperCase()
-              setSettings({ ...settings, fdOperator: op }) // optimistic local mirror (useState)
-              // Narrow write, not the whole-struct save: a seat swap is mid-QSO by
-              // definition and the heavyweight path would end it (#54).
-              apply(setFdOperator(op)) // persist + mirror the returned snapshot
-            }}
+            onSaveOperator={saveFdOperator}
           />
         ) : (
           <div className="app loading">
@@ -818,7 +862,37 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     return (
       <DetachedShell className="contest-logger">
         {snap ? (
-          <ContestLogger snap={snap} fdActive={settings?.fdActive ?? false} fdRuleset={fdRuleset} />
+          <ContestLogger
+            snap={snap}
+            fdActive={settings?.fdActive ?? false}
+            fdRuleset={fdRuleset}
+            operator={settings ? (settings.fdOperator ?? '') : null}
+            onSaveOperator={saveFdOperator}
+          />
+        ) : (
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        )}
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'contestscreen') {
+    // THE CONTEST SCREEN WINDOW: the main window's Contest screen below its log line, popped out to a
+    // monitor of its own. The main window keeps the log line and takes the rest back when this window
+    // closes — see ContestScreenWindow.tsx. After its contest switch saves, this window reads its own
+    // settings again rather than wait for the poll; the snapshot follows on its own 300 ms.
+    return (
+      <DetachedShell>
+        {snap ? (
+          <ContestScreenWindow
+            snap={snap}
+            fdActive={settings?.fdActive ?? false}
+            fdRuleset={fdRuleset}
+            onSnap={setSnap}
+            onSettingsSaved={() => void getSettings().then(setSettings).catch(() => {})}
+          />
         ) : (
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
@@ -871,6 +945,14 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             detached
             fieldDay={isFieldDay(snap.fieldDay?.event)}
             keepsDupes={snap.fieldDay?.dupeRule?.logDupes === true}
+            bands={snap.fieldDay?.bands}
+            dupeRule={snap.fieldDay?.dupeRule}
+            ownPosid={settings?.fdPositionId}
+            clubLog={{
+              receives: snap.fieldDay?.receives ?? [],
+              role: snap.fieldDay?.role,
+              isWfd: snap.fieldDay?.event === 'wfd',
+            }}
           />
         ) : clubRefusal ? (
           // Switched on for a contest club sync cannot run, so the engine refuses it:

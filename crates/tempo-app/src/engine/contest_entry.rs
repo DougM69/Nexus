@@ -22,6 +22,13 @@
 //! was shown ([`ENTRY_CHANGED`]), and logs nothing. With the window closed a claim checks
 //! nothing, so closing it can never stop the main window logging.
 //!
+//! ⭐ **A LOGGED CONTACT NEVER COMES BACK.** Every log moves the entry on to the next contact
+//! ([`ContestEntryDto::contact`] counts them), and a window's put names the contact it was made
+//! on. A put made on a contact already logged is refused ([`ENTRY_LOGGED`]): typed in one window
+//! at the moment the other's Enter logged it, before it showed the log, it would hand the logged
+//! call back to both windows, where a county and Enter log it a second time. A put made after the
+//! log, from either window, lands as before.
+//!
 //! **Nothing here keys, unkeys or stops a transmission.** It holds text, and the logging it
 //! guards is the strip's own.
 
@@ -32,7 +39,8 @@ use serde::{Deserialize, Serialize};
 use super::Engine;
 
 /// The refusal a claim gets when the contact it names was logged since it was shown — from the
-/// other window, as a rule. The strip says so and logs nothing.
+/// other window, as a rule. The strip says so and logs nothing. A put made on a contact already
+/// logged gets it too, and nothing is stored.
 pub const ENTRY_LOGGED: &str = "contestEntryLogged";
 /// The refusal a claim gets when the entry changed since the window that claims it last showed
 /// it: the other window typed over it. The strip says so and logs nothing.
@@ -59,6 +67,9 @@ const MARKS_MAX: usize = 8 * 1024;
 pub struct ContestEntryDto {
     /// Bumped by every change — a put, a log. A window shows the entry as of this rev.
     pub rev: u64,
+    /// Which contact the entry holds: the number logged from it since the window opened. Every
+    /// log moves it on, and a window's put names the contact it was made on.
+    pub contact: u64,
     /// The Call box, as typed.
     pub call: String,
     /// The received boxes, by slot id, as typed. A box nobody has touched is absent, which is
@@ -133,11 +144,12 @@ impl SharedEntry {
         }
     }
 
-    /// The contact `claim` names is in the log: the entry moves on. The call and the marks go;
-    /// the boxes stay, as they stay in a strip after a contact (the windows put the next
+    /// The contact `claim` names is in the log: the entry moves on to the next. The call and the
+    /// marks go; the boxes stay, as they stay in a strip after a contact (the windows put the next
     /// contact's carried-over exchange).
     fn consume(&mut self, claim: &EntryClaim) {
         self.entry.rev += 1;
+        self.entry.contact += 1;
         self.entry.call.clear();
         self.entry.marks = serde_json::Value::Null;
         self.logged = Some((Shown::of(&claim.call, &claim.fields), self.entry.rev));
@@ -171,17 +183,21 @@ impl Engine {
     }
 
     /// A window's strip changed: what it now shows becomes the entry, and the answer is the
-    /// entry's new rev. The last writer wins — two people typing into one contact at one moment
-    /// is the one case that has no better answer, and a log is checked again on its own
-    /// ([`Self::contest_log_entry`]).
+    /// entry's new rev. `contact` is the contact the strip showed as it changed
+    /// ([`ContestEntryDto::contact`]). On the contact the entry holds the last writer wins — two
+    /// people typing into one contact at one moment is the one case that has no better answer, and
+    /// a log is checked again on its own ([`Self::contest_log_entry`]).
     ///
-    /// Refused ([`ENTRY_CLOSED`]) with the logger window closed, and ([`ENTRY_TOO_LARGE`]) for an
-    /// entry larger than any strip writes.
+    /// Refused ([`ENTRY_CLOSED`]) with the logger window closed, ([`ENTRY_TOO_LARGE`]) for an
+    /// entry larger than any strip writes, and ([`ENTRY_LOGGED`]) when made on a contact already
+    /// logged: its window had not yet shown the log, and taking it would bring the logged call
+    /// back.
     pub fn contest_entry_put(
         &mut self,
         call: &str,
         fields: BTreeMap<String, String>,
         marks: serde_json::Value,
+        contact: u64,
     ) -> Result<u64, String> {
         let Some(shared) = self.contest_entry.as_mut() else {
             return Err(ENTRY_CLOSED.into());
@@ -194,6 +210,9 @@ impl Engine {
             || serde_json::to_vec(&marks).map_or(true, |m| m.len() > MARKS_MAX);
         if too_large {
             return Err(ENTRY_TOO_LARGE.into());
+        }
+        if contact < shared.entry.contact {
+            return Err(ENTRY_LOGGED.into());
         }
         let entry = &mut shared.entry;
         entry.rev += 1;

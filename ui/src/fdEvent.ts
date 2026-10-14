@@ -41,8 +41,11 @@ export const FD_EVENT_NAMES: Record<FdKind, string> = {
  * ruleset a downloaded rules file dropped — so an id here that the data does not carry
  * costs the operator that contest and nothing else. Adding a contest is a rules-file
  * row plus a line here; nothing else in the UI knows a contest by name.
+ *
+ * `badge` is the mode badge's own form where the short one has a word too wide for the rail
+ * (`contestBadgeName`).
  */
-export const CONTESTS: { id: string; name: string; short: string }[] = [
+export const CONTESTS: { id: string; name: string; short: string; badge?: string }[] = [
   { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd, short: 'Field Day' },
   { id: 'wfd', name: FD_EVENT_NAMES.wfd, short: 'WFD' },
   // ⚠️ Sweepstakes is TWO contests, not one with two modes: ARRL runs the CW weekend
@@ -56,9 +59,9 @@ export const CONTESTS: { id: string; name: string; short: string }[] = [
   // (VHF-Rules.pdf v1.2 §5.1 vs §5.2), each running has its own ADIF id and Cabrillo
   // token, and each is on its own weekend in its own month. ARRL's own current names,
   // as they appear on the contest calendar.
-  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF' },
-  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF' },
-  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF' },
+  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF', badge: 'Jan VHF' },
+  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF', badge: 'Jun VHF' },
+  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF', badge: 'Sep VHF' },
   // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
   // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
   // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY
@@ -94,9 +97,51 @@ export function contestShortName(id: string | undefined): string {
   return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
 }
 
-/** Is this one of the two events Field Day Setup (class + section) describes? */
+/** The name the rail's mode badge shows: the short form, but `badge` where that has a word too wide
+ *  for the rail's 88 px ("September", and "January" at the larger text sizes, measured in Chrome). */
+export function contestBadgeName(id: string | undefined): string {
+  return CONTESTS.find((c) => c.id === id)?.badge ?? contestShortName(id)
+}
+
+/** Is this one of the two Field Day events, whose class + section Settings ▸ Contesting ▸ Field Day
+ *  asks for? */
 export const isFieldDay = (id: string | undefined): boolean =>
   !id || id === 'arrlfd' || id === 'wfd'
+
+/**
+ * ⭐ **The contests whose exchange SENDS the station's power**, by rules-file id — the only ones
+ * Settings ▸ Contesting ▸ Your station data shows **Power sent** for. None of the shipped ones does
+ * (the contests that send power, ARRL International DX among them, are not on the picker), so the
+ * box is shown for none of them; a value already stored is kept and is still saved.
+ *
+ * ⚠️ A MIRROR, like `CLUB_SYNC_REFUSED` below: `fd_rules.rs` reads this list back and compares it
+ * with every seeded ruleset whose sent exchange reads `contest_power`, both ways, so a contest that
+ * starts sending power is a red test rather than a box nobody can find.
+ */
+export const CONTESTS_SENDING_POWER: readonly string[] = []
+
+/** The contest's part of an export's file name — `ilqp-log-<date>.cbr`, `arrlfd-summary-<date>.txt`:
+ *  its rules-file id, blank meaning ARRL Field Day as it does everywhere else. Every exported file
+ *  was named `fd-…` whatever the contest. An id a downloaded rules file added may carry characters
+ *  no file name can (a `/` turns the name into a path, and Downloads keeps only its last part), so
+ *  each run of them becomes one `-`; every shipped id passes through unchanged. */
+export function contestFileStem(id: string | undefined): string {
+  return (id?.trim() || 'arrlfd').replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
+/** ⭐ The side of a contest the operator's location puts them on, in words — never the rules
+ *  data's role id, which Settings and the log strip printed ("Running as in_state", "Sending
+ *  in_state 599 COOK"). In-state and out-of-state are words, and translated; `W/VE` and `DX` are
+ *  the sponsors' own names for those sides ("W/VE stations", "DX stations") and invariant tokens,
+ *  like the contest names above. A role id this build has no words for is shown as itself, a
+ *  token rather than a guess, as `contestName` does for a contest it does not list. */
+export function contestRoleWords(role: string): string {
+  if (role === 'in_state') return t('contest.role.inState')
+  if (role === 'out_of_state') return t('contest.role.outOfState')
+  if (role === 'w_ve') return 'W/VE'
+  if (role === 'dx') return 'DX'
+  return role
+}
 
 /** Why club sync cannot run a contest — the three reasons the engine refuses one for. */
 export type ClubSyncRefusal = 'serial' | 'transmitter' | 'unknown'

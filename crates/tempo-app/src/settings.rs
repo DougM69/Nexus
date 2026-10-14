@@ -685,6 +685,16 @@ impl Settings {
     pub fn sat_main_sub_rig(&self) -> bool {
         MAIN_SUB_SAT_RIGS.contains(&self.active_rig_facts().0)
     }
+
+    /// The `qso_qslsince` the next LoTW download asks from: the stored high-water when a download
+    /// of every call on the account made it, else none, a full pull (`lotw_cursor_every_call`).
+    pub fn lotw_sync_cursor(&self) -> &str {
+        if self.lotw_cursor_every_call {
+            self.lotw_last_qsl.trim()
+        } else {
+            ""
+        }
+    }
 }
 
 /// The operator's amateur license class — drives the transmit-privilege lockout + the
@@ -754,6 +764,38 @@ pub enum PounceThreshold {
 /// a blank key.
 fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
+}
+
+/// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
+/// the note the contest-over checklist offers back when Contest mode goes off: the station
+/// callsign a club set, the operator at the key, the position, the entry category (MULTI-OP),
+/// the entry class, the power category and Unassisted. Each field is the [`Settings`] field of
+/// the same name. Who takes the note, when, and when it is let go: `engine/contest_before.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ContestBefore {
+    pub mycall: String,
+    pub fd_operator: String,
+    pub fd_position_name: String,
+    pub contest_category_operator: String,
+    pub contest_entry_class: String,
+    pub contest_category_power: String,
+    pub unassisted_mode: bool,
+}
+
+impl ContestBefore {
+    /// The seven, as `s` holds them now.
+    pub fn of(s: &Settings) -> Self {
+        Self {
+            mycall: s.mycall.clone(),
+            fd_operator: s.fd_operator.clone(),
+            fd_position_name: s.fd_position_name.clone(),
+            contest_category_operator: s.contest_category_operator.clone(),
+            contest_entry_class: s.contest_entry_class.clone(),
+            contest_category_power: s.contest_category_power.clone(),
+            unassisted_mode: s.unassisted_mode,
+        }
+    }
 }
 
 /// Everything the operator configures: identity, band/frequency, Field Day
@@ -1028,6 +1070,50 @@ pub struct Settings {
     /// stamped on each contact as it is logged), then these. Read at EXPORT.
     #[serde(default)]
     pub contest_operators: String,
+    /// Cabrillo `CATEGORY-TRANSMITTER` — a multi-operator entry's class, one of the values the
+    /// selected contest's rules declare (`ONE`, `TWO`, `UNLIMITED`…); empty is undeclared. Read
+    /// at EXPORT, and written only for a MULTI-OP entry and only when it is one of that contest's
+    /// own, with the OPERATORS line such an entry needs.
+    #[serde(default)]
+    pub contest_category_transmitter: String,
+    /// Cabrillo `CATEGORY-OVERLAY` — one of the selected contest's overlays (`ROOKIE`…); empty is
+    /// undeclared. Read at EXPORT, and written only when it is one of that contest's own.
+    #[serde(default)]
+    pub contest_category_overlay: String,
+    /// The mailing address a contest's Cabrillo `ADDRESS` lines carry, for a contest whose
+    /// template names them: the street lines, one per line. The city, state or province, postal
+    /// code and country are the four fields below it. Read at EXPORT, and never sent to Remote
+    /// (it is on no exposed list).
+    #[serde(default)]
+    pub contest_address: String,
+    /// The mailing address's city (`ADDRESS-CITY`).
+    #[serde(default)]
+    pub contest_address_city: String,
+    /// The mailing address's state or province (`ADDRESS-STATE-PROVINCE`) — where the mail goes,
+    /// which need not be [`Self::contest_qth_state`], where the station operates.
+    #[serde(default)]
+    pub contest_address_state: String,
+    /// The mailing address's postal code (`ADDRESS-POSTALCODE`).
+    #[serde(default)]
+    pub contest_address_postalcode: String,
+    /// The mailing address's country (`ADDRESS-COUNTRY`).
+    #[serde(default)]
+    pub contest_address_country: String,
+    /// Cabrillo `SOAPBOX` — the entrant's comments, as typed, for a contest whose template
+    /// carries them. Read at EXPORT.
+    #[serde(default)]
+    pub contest_soapbox: String,
+    /// Cabrillo `CATEGORY-BAND` — `ALL`, or the one band a single-band entry is entered on, one of
+    /// the selected contest's own bands (CQ WW's `ALL 160M 80M 40M 20M 15M 10M`); empty is
+    /// undeclared, which writes no line. Read at EXPORT, and written only when it is one of that
+    /// contest's bands, so a band picked for another contest claims nothing.
+    ///
+    /// ⚠️ A DECLARATION, never read off the log: a single-band entrant must log every contact,
+    /// other bands included (CQ: *"Single band entrants are required to include all contacts made
+    /// during the contest period, even if made on other bands"*), so the log cannot say which band
+    /// the entry is.
+    #[serde(default)]
+    pub contest_category_band: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -1209,6 +1295,12 @@ pub struct Settings {
     /// instances sharing a settings dir from clobbering each other's backup.
     #[serde(default)]
     pub fd_position_id: String,
+    /// ⭐ The station as it was before the contest changed it ([`ContestBefore`]), or `None` when
+    /// no contest has changed it since the last one ended. **The engine's alone**: a Settings save
+    /// never writes or clears it (a payload's copy is a snapshot from whenever its surface
+    /// loaded); a restore takes the backup's. Persisted, so a restart mid-weekend keeps it.
+    #[serde(default)]
+    pub contest_before: Option<ContestBefore>,
     /// Serve the read-only spectator scoreboard — a self-contained web page of
     /// the club score for a TV/projector on the site LAN. **This toggle IS the
     /// LAN opt-in**: while on, `tempo_app::fd_scoreboard`'s GET/HEAD-only
@@ -2256,7 +2348,8 @@ pub struct Settings {
     pub band_edge_tones: bool,
     /// WSJT-X "CW ID after 73": key MYCALL in CW once the final 73/RR73 over
     /// has finished transmitting (stock default off). Keys through the normal
-    /// CW path (PTT + tone), not appended inside the FT8 waveform.
+    /// CW path (PTT + tone), not appended inside the over's waveform. Never in
+    /// FT8, FT4, FT2, FT1 or DX1: WSJT-X sends none in FT8/FT4.
     #[serde(default)]
     pub cw_id_after_73: bool,
     /// WSJT-X: "Clear DX call and grid after logging" (stock default off).
@@ -2368,7 +2461,10 @@ pub struct Settings {
     /// restored only while still on 145.800 FM). ISS SSTV is an event-only
     /// downlink, so it fires on every pass; the arm/restore loop lives in the
     /// frontend (issAutoArm.ts, mirroring the sat alarm) since SSTV RX only runs
-    /// while the app is open.
+    /// while the app is open. It takes the radio only while the SSTV or
+    /// Satellites screen is the one in use: on any other screen the pass is
+    /// announced and the radio is left to that screen. Where no radio here can
+    /// receive 145.800 it tunes nothing on any screen, and says so once a session.
     pub iss_sstv_auto_arm: bool,
 
     // --- SSTV (Settings ▸ Digital ▸ SSTV) ---
@@ -2626,7 +2722,17 @@ pub struct Settings {
     /// Incremental-sync high-water mark: the `APP_LoTW_LASTQSL` timestamp from the
     /// last successful download, passed back as `qso_qslsince`. Empty = full pull.
     /// Reset to empty when `lotw_username` changes (the cursor is query-bound).
+    /// Read through [`Settings::lotw_sync_cursor`].
     pub lotw_last_qsl: String,
+    /// `lotw_last_qsl` was made by a download that asked for every call on the account. LoTW
+    /// lets a high-water stand as `qso_qslsince` only "if the identical query is subsequently
+    /// made", and the download used to ask for the Settings call alone (`qso_owncall`): such a
+    /// cursor would skip, for good, every confirmation of another call on the account that LoTW
+    /// matched before it. So a cursor without this mark is not used, and the first download after
+    /// the update is a full one ([`Settings::lotw_sync_cursor`]). An older file has no key, so
+    /// `false`.
+    #[serde(default)]
+    pub lotw_cursor_every_call: bool,
     /// LoTW **upload** Station Location name (the `-l` arg passed to TQSL). Non-
     /// secret; TQSL owns the certificate. Empty = upload not configured.
     pub lotw_station_location: String,
@@ -2670,7 +2776,8 @@ pub struct Settings {
     pub eqsl_username: String,
     /// eQSL incremental-sync cursor: a `YYYYMMDDHHMM` timestamp (this sync's start,
     /// rolled back by a safety margin) sent as `RcvdSince`. Empty = full pull.
-    /// Reset to empty when `eqsl_username` changes (the cursor is account-bound).
+    /// Reset to empty when `eqsl_username` or `eqsl_qth_nickname` changes (the cursor is
+    /// account-bound, and each QTH Nickname is an eQSL account of its own).
     pub eqsl_last_sync: String,
     /// QRZ.com account username for callsign lookup. The password lives in the OS
     /// keychain (set via `set_qrz_password`), never here; the session key is cached
@@ -2718,17 +2825,17 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
-    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
-    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
-    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
-    /// confirmation source — an upload here never earns DXCC/WAS credit.
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
     /// it (field report, 2026-09-01). Empty for the single-profile majority, whose
-    /// requests are byte-identical to before.
+    /// requests carry no nickname at all.
     #[serde(default)]
     pub eqsl_qth_nickname: String,
+    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
+    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
+    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
+    /// confirmation source — an upload here never earns DXCC/WAS credit.
     pub hrdlog_upload: bool,
     /// Auto-push each logged QSO to World Radio League (`POST /v1/contacts`).
     /// Flipped on by saving a WRL API key, off by clearing it — the credential IS
@@ -2873,8 +2980,6 @@ pub struct VoiceMessage {
     pub file: String,
 }
 
-/// The default six labelled (but empty) voice-keyer slots — a casual phone set (no
-/// contest exchange). The operator records or imports the audio per slot.
 /// WSJT-X "Special operating activity" (the DXpedition modes we support).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -3128,6 +3233,10 @@ fn default_announce_verbosity() -> String {
     "needed".to_string()
 }
 
+/// The default voice-keyer slots, labelled but empty: a casual phone set (no contest exchange)
+/// on F1–F6, and F8 AGN, the slot Enter Sends Message plays for AGN in a contest, from the key
+/// AGN is on in the CW and RTTY contest sets. There is no F7. The operator records or imports the
+/// audio per slot. A settings file from before F8 gains it at launch ([`Settings::move_agn_to_f8`]).
 pub fn default_voice_messages() -> Vec<VoiceMessage> {
     [
         (1, "CQ"),
@@ -3136,6 +3245,7 @@ pub fn default_voice_messages() -> Vec<VoiceMessage> {
         (4, "QRZ?"),
         (5, "73"),
         (6, "Again"),
+        (8, "AGN"),
     ]
     .iter()
     .map(|(slot, label)| VoiceMessage {
@@ -4649,6 +4759,15 @@ impl Default for Settings {
             contest_club: String::new(),
             contest_entry_class: String::new(),
             contest_operators: String::new(),
+            contest_category_transmitter: String::new(),
+            contest_category_overlay: String::new(),
+            contest_address: String::new(),
+            contest_address_city: String::new(),
+            contest_address_state: String::new(),
+            contest_address_postalcode: String::new(),
+            contest_address_country: String::new(),
+            contest_soapbox: String::new(),
+            contest_category_band: String::new(),
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.
@@ -4686,6 +4805,7 @@ impl Default for Settings {
             fd_join_addr: String::new(),
             fd_position_name: String::new(),
             fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
+            contest_before: None,          // no contest has changed anything yet
             fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
             fd_scoreboard_port: default_fd_scoreboard_port(),
             connect_web: false, // same rule: exposing the station on the LAN is opt-in
@@ -4947,6 +5067,7 @@ impl Default for Settings {
             sound_decode_tick: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
+            lotw_cursor_every_call: false,
             lotw_station_location: String::new(),
             lotw_use_adif_location: false,
             tqsl_path: String::new(),
@@ -5713,6 +5834,147 @@ impl Settings {
             }
         }
         repaired
+    }
+
+    /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW, RTTY and PSK contest
+    /// keys, as in N1MM's default message sets. In the CW, RTTY and PSK contest sets it traded keys
+    /// with B4, now on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW
+    /// F5 sends his call, and a recording cannot say a callsign. The voice keyer gains an F8 slot
+    /// for it.
+    ///
+    /// A settings file from before has no F8 in the voice keyer, which is how this knows it has not
+    /// run: the keyer gains F8, empty and labelled AGN, and once the file has an F8 this does
+    /// nothing. What moves, moves with its message, so each key the operator set up sends what it
+    /// sent before:
+    ///
+    /// * RTTY's and PSK's contest sets: the keys the operator changed there trade F7 and F8 with
+    ///   the built-ins, and so does RTTY's step map for its set (PSK has no ESM). Everyday does not
+    ///   move, in either mode.
+    /// * CW: the step map of a profile on the built-in sets trades F7 and F8 with them (a Reset
+    ///   keeps the map a profile had, and the cockpit reads it over the built-in sets). A profile
+    ///   with macros of its own is its own layout, and does not move.
+    /// * Phone: F5 keeps whatever it holds, and F8 starts with a copy of it when Enter Sends
+    ///   Message played F5 for AGN: the operator used it in Phone (its switch is on, or they mapped
+    ///   its steps), AGN came from the built-in steps rather than a key they picked, and no step
+    ///   they mapped plays F5. Whether F5 holds that AGN or the casual set's 73, its label cannot
+    ///   say (no build ever let the operator rename a slot, so F5 reads "73" whatever it holds), so
+    ///   F5 is never cleared or rebound (operator, 2026-10-11): F5 plays what it played, ESM's AGN
+    ///   plays the same audio from F8, and the operator records a real AGN in F8 when they like.
+    ///
+    /// ⛔ NEVER LOSES OR OVERWRITES A RECORDING. The audio is COPIED to `slot8.wav` beside F5's
+    /// file, which stays bound to F5 as it was. The copy is a file of its own because the recorder
+    /// writes slot N to `slot<N>.wav`: F8 bound to `slot5.wav` would change with the next F5
+    /// recording, and a new F8 recording writes `slot8.wav`, never F5's file. A `slot8.wav`
+    /// already there is never written over; one holding the same bytes is this migration's own
+    /// copy from a launch whose save did not land, and F8 takes it. When no copy can be made, F8
+    /// starts empty.
+    ///
+    /// Returns whether the settings changed, so the caller saves them.
+    pub fn move_agn_to_f8(&mut self) -> bool {
+        if self.voice_messages.iter().any(|m| m.slot == 8) {
+            return false;
+        }
+        let f8 = self.agn_recording_copied_to_f8().unwrap_or_default();
+        self.voice_messages.push(VoiceMessage {
+            slot: 8,
+            label: "AGN".to_string(),
+            file: f8,
+        });
+        for profile in &mut self.macros.cw_profiles {
+            if profile.macros.is_empty() {
+                profile.esm_roles.iter_mut().for_each(Self::trade_f7_f8);
+            }
+        }
+        for set in self
+            .macros
+            .rtty_profiles
+            .iter_mut()
+            .chain(&mut self.macros.psk_profiles)
+        {
+            if set.name == "contest" {
+                Self::trade_f7_f8_entries(&mut set.macros);
+            }
+        }
+        if let Some(roles) = self
+            .macros
+            .rtty_esm_roles
+            .as_mut()
+            .and_then(|sets| sets.get_mut("contest"))
+        {
+            Self::trade_f7_f8(roles);
+        }
+        true
+    }
+
+    /// F5's recording copied to `slot8.wav` beside it when Enter Sends Message played F5 for AGN
+    /// ([`Self::move_agn_to_f8`]): the copy's path, or None and nothing written over.
+    fn agn_recording_copied_to_f8(&self) -> Option<String> {
+        let f5 = self.voice_messages.iter().find(|m| m.slot == 5)?;
+        let own = self.voice_esm_roles.clone();
+        if !(self.contest_esm_phone || own.is_some()) {
+            return None;
+        }
+        let own = own.unwrap_or_default();
+        // A key the operator picked for AGN, or a step of theirs on F5: the slot is theirs. An
+        // empty key list is no key, as Enter Sends Message reads it.
+        if own.get("again").is_some_and(|keys| !keys.is_empty())
+            || own.values().flatten().any(|key| key == "F5")
+        {
+            return None;
+        }
+        // An F5 with no recording binds no file, and an empty path does not read.
+        let from = Path::new(&f5.file);
+        let to = from.with_file_name("slot8.wav");
+        let audio = std::fs::read(from).ok()?;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&to)
+        {
+            Ok(mut file) => {
+                std::io::Write::write_all(&mut file, &audio).ok()?;
+                file.sync_all().ok()?;
+            }
+            // Never written over. The same bytes are this migration's own copy from a launch
+            // whose save did not land.
+            Err(_) => {
+                if std::fs::read(&to).ok()? != audio {
+                    return None;
+                }
+            }
+        }
+        Some(to.to_string_lossy().into_owned())
+    }
+
+    /// F7 for F8 and F8 for F7 in each step of a step map ([`Self::move_agn_to_f8`]).
+    fn trade_f7_f8(roles: &mut EsmRoleMap) {
+        for key in roles.values_mut().flatten() {
+            *key = Self::traded(key);
+        }
+    }
+
+    /// The same for a set's saved keys, which stay in F-key order.
+    fn trade_f7_f8_entries(entries: &mut [KeyboardMacro]) {
+        for entry in entries.iter_mut() {
+            entry.key = Self::traded(&entry.key);
+        }
+        let f7 = entries.iter().position(|e| e.key == "F7");
+        let f8 = entries.iter().position(|e| e.key == "F8");
+        if let (Some(f7), Some(f8)) = (f7, f8) {
+            if f7 > f8 {
+                entries.swap(f7, f8);
+            }
+        }
+    }
+
+    /// `key` with F7 and F8 traded; any other key as it is.
+    fn traded(key: &str) -> String {
+        match key {
+            "F7" => "F8",
+            "F8" => "F7",
+            other => other,
+        }
+        .to_string()
     }
 
     /// Load settings from `path`. A missing file (first run) returns defaults. A
@@ -8783,6 +9045,83 @@ mod tests {
         assert!(
             json.contains("\"catRtsState\":\"low\""),
             "control: neighbouring keys serialise"
+        );
+    }
+
+    /// The contest entry's Cabrillo declarations, on the exact wire keys `ui/src/types.ts` writes
+    /// (`contestAddressPostalcode`, not `contestAddressPostalCode`, is the one the container's
+    /// `camelCase` rule makes), each empty by default: nothing is declared until the operator
+    /// declares it.
+    #[test]
+    fn the_cabrillo_declarations_use_the_exact_wire_keys_the_ui_writes() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "contestCategoryTransmitter",
+            "contestCategoryOverlay",
+            "contestAddress",
+            "contestAddressCity",
+            "contestAddressState",
+            "contestAddressPostalcode",
+            "contestAddressCountry",
+            "contestSoapbox",
+        ] {
+            assert!(json.contains(&format!("\"{key}\":\"\"")), "{key}");
+        }
+        // CONTROL: the camel-cased spelling a hand-written TS key would reach for is absent.
+        assert!(!json.contains("contestAddressPostalCode"));
+        // …and a stored file without them loads them empty, as every file before them is.
+        let old: Settings = serde_json::from_str("{\"mycall\":\"K1ABC\"}").unwrap();
+        assert_eq!(
+            (
+                old.contest_category_transmitter.as_str(),
+                old.contest_soapbox.as_str()
+            ),
+            ("", "")
+        );
+    }
+
+    /// ⭐ **The band category round-trips through a stored settings file**: its exact wire key,
+    /// empty by default and in a file written before it existed (nothing declared), and a stored
+    /// band that comes back from a load and a save as it went in, through the real file path. The
+    /// TS mirror is read out of `types.ts` itself.
+    #[test]
+    fn the_band_category_round_trips_through_a_stored_settings_file() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"contestCategoryBand\":\"\""), "{json}");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"K1ABC"}"#).unwrap();
+        assert_eq!(
+            (old.mycall.as_str(), old.contest_category_band.as_str()),
+            ("K1ABC", ""),
+            "a file from before the field declares nothing"
+        );
+        let dir = scratch_dir("contest_category_band");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            br#"{"mycall":"W9XYZ","fdEvent":"cqww_ssb","contestCategoryBand":"20M"}"#,
+        )
+        .unwrap();
+        let stored = Settings::load(&path);
+        assert_eq!(
+            (
+                stored.mycall.as_str(),
+                stored.contest_category_band.as_str()
+            ),
+            ("W9XYZ", "20M"),
+            "the stored band loads"
+        );
+        stored.save(&path).unwrap();
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back["contestCategoryBand"], "20M", "a save writes it back");
+        assert_eq!(Settings::load(&path).contest_category_band, "20M");
+        let _ = std::fs::remove_dir_all(&dir);
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("contestCategoryBand?: string"),
+            "ui/src/types.ts types the key"
         );
     }
 
@@ -13191,6 +13530,499 @@ mod tests {
             serde_json::from_str(r#"{"id":0,"name":"FT-710","rigModel":1049}"#)
                 .expect("an older per-radio block still parses");
         assert!(profile.yaesu_fix_starts.is_empty());
+    }
+}
+
+/// AGN TO F8 ([`Settings::move_agn_to_f8`]), on real files and by value: the voice keyer's slots,
+/// the CW and RTTY steps and the RTTY keys the operator changed, as the settings file holds them
+/// after a save and a load, and the bytes on disk. The recordings and the operator's own texts are
+/// data, so each test says where each one ends up, and that none is lost or written over.
+#[cfg(test)]
+mod agn_f8_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// A station as a build before F8 left it, in a scratch folder of its own: six voice slots,
+    /// F1–F5 recorded in `voice/` (each file holding its own slot's bytes), F6 empty, and Phone's
+    /// Enter Sends Message as given. Saved and loaded back, so each test starts from the file.
+    fn old_station(label: &str, esm_phone: bool, own: Option<EsmRoleMap>) -> (PathBuf, Settings) {
+        let dir = std::env::temp_dir().join(format!("tempo_agn_f8_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("voice")).unwrap();
+        let voice_messages = [
+            (1, "CQ"),
+            (2, "My Call"),
+            (3, "Report"),
+            (4, "QRZ?"),
+            (5, "73"),
+            (6, "Again"),
+        ]
+        .into_iter()
+        .map(|(slot, label)| {
+            let mut file = String::new();
+            if slot <= 5 {
+                std::fs::write(wav(&dir, slot), audio(slot)).unwrap();
+                file = wav(&dir, slot);
+            }
+            VoiceMessage {
+                slot,
+                label: label.into(),
+                file,
+            }
+        })
+        .collect();
+        let s = Settings {
+            voice_messages,
+            contest_esm_phone: esm_phone,
+            voice_esm_roles: own,
+            ..Settings::default()
+        };
+        let path = dir.join("settings.json");
+        s.save(&path).unwrap();
+        (dir, Settings::load(&path))
+    }
+
+    /// `s` saved in `dir` and loaded back: what the next launch reads.
+    fn round_trip(dir: &Path, s: &Settings) -> Settings {
+        let path = dir.join("settings.json");
+        s.save(&path).unwrap();
+        Settings::load(&path)
+    }
+
+    /// What slot `n` holds on disk: a stand-in for its audio, different for every slot.
+    fn audio(n: u8) -> Vec<u8> {
+        format!("RIFF recording made for slot {n}").into_bytes()
+    }
+
+    /// The file the recorder writes for slot `n`.
+    fn wav(dir: &Path, n: u8) -> String {
+        dir.join("voice")
+            .join(format!("slot{n}.wav"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn read(file: &str) -> Vec<u8> {
+        std::fs::read(file).unwrap()
+    }
+
+    /// What slot `n` plays: the bytes of the file it is bound to, or None.
+    fn plays(s: &Settings, n: u8) -> Option<Vec<u8>> {
+        let m = s.voice_messages.iter().find(|m| m.slot == n)?;
+        std::fs::read(&m.file).ok()
+    }
+
+    /// What the recorder does for slot `n` (`stop_voice_recording` in src-tauri): the new take
+    /// written to `voice/slot<n>.wav` through a file renamed over it, and the slot bound to it.
+    fn record(dir: &Path, s: &mut Settings, n: u8, take: &[u8]) {
+        let file = wav(dir, n);
+        let partial = format!("{file}.partial");
+        std::fs::write(&partial, take).unwrap();
+        std::fs::rename(&partial, &file).unwrap();
+        s.voice_messages
+            .iter_mut()
+            .find(|m| m.slot == n)
+            .unwrap()
+            .file = file;
+    }
+
+    /// The slots as (slot, label, file), for a comparison by value.
+    fn slots(s: &Settings) -> Vec<(u8, String, String)> {
+        s.voice_messages
+            .iter()
+            .map(|m| (m.slot, m.label.clone(), m.file.clone()))
+            .collect()
+    }
+
+    /// The old station's slots with F8 added: F5's and F8's files are the two that can differ.
+    fn after(dir: &Path, f5: String, f8: String) -> Vec<(u8, String, String)> {
+        vec![
+            (1, "CQ".into(), wav(dir, 1)),
+            (2, "My Call".into(), wav(dir, 2)),
+            (3, "Report".into(), wav(dir, 3)),
+            (4, "QRZ?".into(), wav(dir, 4)),
+            (5, "73".into(), f5),
+            (6, "Again".into(), String::new()),
+            (8, "AGN".into(), f8),
+        ]
+    }
+
+    fn roles(pairs: &[(&str, &[&str])]) -> EsmRoleMap {
+        pairs
+            .iter()
+            .map(|(step, keys)| {
+                (
+                    step.to_string(),
+                    keys.iter().map(|k| k.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn key(key: &str, label: &str, text: &str) -> KeyboardMacro {
+        KeyboardMacro {
+            key: key.into(),
+            label: label.into(),
+            text: text.into(),
+        }
+    }
+
+    fn cw(key: &str, label: &str, text: &str) -> CwMacroDef {
+        CwMacroDef {
+            key: key.into(),
+            label: label.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn a_new_install_has_agn_on_f8_and_nothing_to_move() {
+        let want: Vec<(u8, String, String)> = [
+            (1, "CQ"),
+            (2, "My Call"),
+            (3, "Report"),
+            (4, "QRZ?"),
+            (5, "73"),
+            (6, "Again"),
+            (8, "AGN"),
+        ]
+        .into_iter()
+        .map(|(n, label)| (n, label.to_string(), String::new()))
+        .collect();
+        let mut s = Settings::default();
+        assert_eq!(slots(&s), want);
+        assert!(!s.move_agn_to_f8(), "a new install has F8: nothing to do");
+        assert_eq!(slots(&s), want);
+    }
+
+    /// The case the Phone copy exists for: Phone's ESM on, AGN on the built-in F5. F5's label
+    /// cannot say whether it holds that AGN or the casual set's 73, so F5 keeps it, and F8 starts
+    /// with a copy in a file of its own: F5 plays what it played, and so does ESM's AGN.
+    #[test]
+    fn with_phone_esm_on_f5_keeps_its_recording_and_f8_starts_with_a_copy() {
+        let (dir, mut s) = old_station("moves", true, None);
+        assert!(s.move_agn_to_f8());
+        let want = after(&dir, wav(&dir, 5), wav(&dir, 8));
+        assert_eq!(slots(&s), want);
+        assert_eq!(
+            read(&wav(&dir, 8)),
+            audio(5),
+            "F8 holds a copy of what F5 held"
+        );
+        assert_eq!(read(&wav(&dir, 5)), audio(5), "F5's file is left as it was");
+        for n in 1..=4 {
+            assert_eq!(read(&wav(&dir, n)), audio(n), "F{n} is untouched");
+        }
+        let mut back = round_trip(&dir, &s);
+        assert_eq!(slots(&back), want, "the file keeps the copy");
+        assert!(!back.move_agn_to_f8(), "once: the file has an F8 now");
+        assert_eq!(slots(&back), want);
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// F8's copy is a file of its own: recording a real AGN in F8 leaves F5 playing what it did.
+    #[test]
+    fn recording_f8_again_leaves_f5_as_it_was() {
+        let (dir, mut s) = old_station("record_f8", true, None);
+        assert!(s.move_agn_to_f8());
+        record(&dir, &mut s, 8, b"a real AGN, recorded in F8");
+        assert_eq!(plays(&s, 8), Some(b"a real AGN, recorded in F8".to_vec()));
+        assert_eq!(plays(&s, 5), Some(audio(5)), "F5 plays what it played");
+    }
+
+    /// And the other way: a new recording in F5 leaves F8's copy as it was.
+    #[test]
+    fn recording_f5_again_leaves_f8s_copy_as_it_was() {
+        let (dir, mut s) = old_station("record_f5", true, None);
+        assert!(s.move_agn_to_f8());
+        record(&dir, &mut s, 5, b"a new 73, recorded in F5");
+        assert_eq!(plays(&s, 5), Some(b"a new 73, recorded in F5".to_vec()));
+        assert_eq!(plays(&s, 8), Some(audio(5)), "F8 plays the copy");
+    }
+
+    /// Phone's ESM never used: F5 is the casual set's 73, and it stays the operator's.
+    #[test]
+    fn a_casual_f5_stays_in_f5() {
+        let (dir, mut s) = old_station("casual", false, None);
+        assert!(s.move_agn_to_f8(), "F8 is added all the same");
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists(), "no copy is made");
+    }
+
+    /// Steps the operator mapped show Phone's ESM was used, its switch off since.
+    #[test]
+    fn mapped_steps_show_phone_esm_was_used_with_its_switch_off() {
+        let (dir, mut s) = old_station("mapped", false, Some(roles(&[("exch", &["F6"])])));
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+        assert_eq!(s.voice_esm_roles, Some(roles(&[("exch", &["F6"])])));
+    }
+
+    /// AGN on a key the operator picked, F5 itself or another, is their choice: nothing moves,
+    /// their map is as they left it, and ESM's AGN plays what it played before.
+    #[test]
+    fn agn_on_a_key_the_operator_picked_stays_on_that_key() {
+        for (label, own) in [
+            ("picked_f5", roles(&[("again", &["F5"])])),
+            ("picked_f6", roles(&[("again", &["F6"])])),
+        ] {
+            let (dir, mut s) = old_station(label, true, Some(own.clone()));
+            assert!(s.move_agn_to_f8());
+            assert_eq!(
+                slots(&s),
+                after(&dir, wav(&dir, 5), String::new()),
+                "{label}"
+            );
+            assert_eq!(s.voice_esm_roles, Some(own), "{label}");
+            assert!(!Path::new(&wav(&dir, 8)).exists(), "{label}");
+        }
+    }
+
+    /// ESM reads a step with an empty key list as unmapped (`esmRoles` in the UI), so AGN was
+    /// the built-in F5.
+    #[test]
+    fn an_empty_key_list_for_agn_was_the_built_in_f5() {
+        let (dir, mut s) = old_station("again_empty", true, Some(roles(&[("again", &[])])));
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// A step the operator mapped to F5 plays its recording too: the slot is theirs.
+    #[test]
+    fn f5_that_another_mapped_step_plays_stays_theirs() {
+        let (dir, mut s) = old_station("f5_shared", true, Some(roles(&[("tu", &["F5"])])));
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists());
+    }
+
+    #[test]
+    fn a_slot8_file_already_there_is_never_written_over() {
+        let (dir, mut s) = old_station("slot8_other", true, None);
+        std::fs::write(wav(&dir, 8), b"a slot8.wav this did not write").unwrap();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), String::new()));
+        assert_eq!(read(&wav(&dir, 8)), b"a slot8.wav this did not write");
+        assert_eq!(read(&wav(&dir, 5)), audio(5));
+    }
+
+    /// The copy from a launch whose save did not land: same bytes, so F8 takes it.
+    #[test]
+    fn its_own_earlier_copy_is_taken() {
+        let (dir, mut s) = old_station("slot8_ours", true, None);
+        std::fs::write(wav(&dir, 8), audio(5)).unwrap();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, wav(&dir, 5), wav(&dir, 8)));
+        assert_eq!(read(&wav(&dir, 8)), audio(5));
+    }
+
+    /// F5 not recorded: its old file on disk is bound to nothing, and is not copied.
+    #[test]
+    fn an_empty_f5_has_nothing_to_move() {
+        let (dir, mut s) = old_station("f5_empty", true, None);
+        s.voice_messages[4].file.clear();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, String::new(), String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists());
+    }
+
+    /// F5 bound to a file that is not on this disk: nothing to copy, and F5 keeps its binding.
+    #[test]
+    fn a_missing_f5_file_moves_nothing() {
+        let (dir, mut s) = old_station("f5_missing", true, None);
+        let gone = dir
+            .join("voice")
+            .join("not-here.wav")
+            .to_string_lossy()
+            .into_owned();
+        s.voice_messages[4].file = gone.clone();
+        assert!(s.move_agn_to_f8());
+        assert_eq!(slots(&s), after(&dir, gone, String::new()));
+        assert!(!Path::new(&wav(&dir, 8)).exists());
+    }
+
+    /// RTTY's and PSK's contest sets: the keys the operator changed there trade F7 and F8 with the
+    /// built-ins, in F-key order, and so does RTTY's step map (PSK has no ESM), so each text of
+    /// theirs stays on its message and Enter sends what it sent before. Everyday's keys and map do
+    /// not move, in either mode.
+    #[test]
+    fn rtty_and_psk_contest_keys_the_operator_changed_stay_on_their_messages() {
+        let (dir, mut s) = old_station("rtty", false, None);
+        s.macros.rtty_profiles = vec![
+            KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![
+                    key("F2", "Run exch", "{CALL} 599 05 05"),
+                    key("F7", "AGN", "AGN? AGN? K"),
+                    key("F8", "B4", "{CALL} B4 TU"),
+                ],
+            },
+            KeyboardMacroProfile {
+                name: "everyday".into(),
+                macros: vec![key("F7", "QRL", "QRL? DE {MYCALL}")],
+            },
+        ];
+        s.macros.rtty_esm_roles = Some(std::collections::BTreeMap::from([
+            (
+                "contest".to_string(),
+                roles(&[("again", &["F7"]), ("tu", &["F3"])]),
+            ),
+            ("everyday".to_string(), roles(&[("again", &["F7"])])),
+        ]));
+        s.macros.psk_profiles = vec![
+            KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![
+                    key("F7", "AGN", "agn? agn? k"),
+                    key("F8", "B4", "{CALL} b4"),
+                ],
+            },
+            KeyboardMacroProfile {
+                name: "everyday".into(),
+                macros: vec![key("F8", "QRZ", "qrz?")],
+            },
+        ];
+        let mut s = round_trip(&dir, &s);
+        assert!(s.move_agn_to_f8());
+        let s = round_trip(&dir, &s);
+        assert_eq!(
+            s.macros.rtty_profiles,
+            vec![
+                KeyboardMacroProfile {
+                    name: "contest".into(),
+                    macros: vec![
+                        key("F2", "Run exch", "{CALL} 599 05 05"),
+                        key("F7", "B4", "{CALL} B4 TU"),
+                        key("F8", "AGN", "AGN? AGN? K"),
+                    ],
+                },
+                KeyboardMacroProfile {
+                    name: "everyday".into(),
+                    macros: vec![key("F7", "QRL", "QRL? DE {MYCALL}")],
+                },
+            ]
+        );
+        assert_eq!(
+            s.macros.rtty_esm_roles,
+            Some(std::collections::BTreeMap::from([
+                (
+                    "contest".to_string(),
+                    roles(&[("again", &["F8"]), ("tu", &["F3"])])
+                ),
+                ("everyday".to_string(), roles(&[("again", &["F7"])])),
+            ]))
+        );
+        assert_eq!(
+            s.macros.psk_profiles,
+            vec![
+                KeyboardMacroProfile {
+                    name: "contest".into(),
+                    macros: vec![
+                        key("F7", "B4", "{CALL} b4"),
+                        key("F8", "AGN", "agn? agn? k")
+                    ],
+                },
+                KeyboardMacroProfile {
+                    name: "everyday".into(),
+                    macros: vec![key("F8", "QRZ", "qrz?")],
+                },
+            ]
+        );
+    }
+
+    /// One key changed on its own takes the other key, so it stays on its message.
+    #[test]
+    fn a_lone_rtty_contest_key_takes_the_other_key() {
+        for (label, from, to) in [("lone_f7", "F7", "F8"), ("lone_f8", "F8", "F7")] {
+            let (dir, mut s) = old_station(label, false, None);
+            s.macros.rtty_profiles = vec![KeyboardMacroProfile {
+                name: "contest".into(),
+                macros: vec![key("F3", "TU", "TU {MYCALL}"), key(from, "Mine", "MY TEXT")],
+            }];
+            let mut s = round_trip(&dir, &s);
+            assert!(s.move_agn_to_f8());
+            assert_eq!(
+                s.macros.rtty_profiles[0].macros,
+                vec![key("F3", "TU", "TU {MYCALL}"), key(to, "Mine", "MY TEXT")],
+                "{label}"
+            );
+        }
+    }
+
+    /// CW: a profile on the built-in sets reads their keys, and a Reset keeps the step map it had,
+    /// so its map trades F7 and F8 with the sets. A profile with macros of its own is its own
+    /// layout: its keys and its map stay exactly as they are.
+    #[test]
+    fn a_cw_step_map_over_the_built_in_sets_stays_on_its_messages() {
+        let (dir, mut s) = old_station("cw", false, None);
+        let mine = CwMacroProfile {
+            name: "Mine".into(),
+            macros: vec![cw("F7", "AGN", "AGN AGN"), cw("F8", "?", "? ")],
+            esm_roles: Some(roles(&[("again", &["F7"]), ("exch", &["F8"])])),
+        };
+        s.macros.cw_profiles = vec![
+            CwMacroProfile {
+                name: "Reset".into(),
+                macros: Vec::new(),
+                esm_roles: Some(roles(&[
+                    ("again", &["F7"]),
+                    ("callExch", &["F5", "F2"]),
+                    ("exch", &["F8"]),
+                ])),
+            },
+            mine.clone(),
+            CwMacroProfile {
+                name: "Built-in".into(),
+                macros: Vec::new(),
+                esm_roles: None,
+            },
+        ];
+        let mut s = round_trip(&dir, &s);
+        assert!(s.move_agn_to_f8());
+        let s = round_trip(&dir, &s);
+        assert_eq!(
+            s.macros.cw_profiles[0].esm_roles,
+            Some(roles(&[
+                ("again", &["F8"]),
+                ("callExch", &["F5", "F2"]),
+                ("exch", &["F7"]),
+            ]))
+        );
+        assert_eq!(
+            s.macros.cw_profiles[1], mine,
+            "a set of the operator's own does not move"
+        );
+        assert_eq!(s.macros.cw_profiles[2].esm_roles, None);
+    }
+
+    /// A file with an F8 has been moved already (or is new): nothing anywhere moves again.
+    #[test]
+    fn a_file_that_has_an_f8_is_left_alone() {
+        let (dir, mut s) = old_station("has_f8", true, None);
+        s.voice_messages.push(VoiceMessage {
+            slot: 8,
+            label: "Mine".into(),
+            file: String::new(),
+        });
+        s.macros.rtty_profiles = vec![KeyboardMacroProfile {
+            name: "contest".into(),
+            macros: vec![key("F7", "AGN", "AGN? AGN? K")],
+        }];
+        s.macros.rtty_esm_roles = Some(std::collections::BTreeMap::from([(
+            "contest".to_string(),
+            roles(&[("again", &["F8"])]),
+        )]));
+        s.macros.cw_profiles = vec![CwMacroProfile {
+            name: "Reset".into(),
+            macros: Vec::new(),
+            esm_roles: Some(roles(&[("again", &["F8"])])),
+        }];
+        let before = s.clone();
+        assert!(!s.move_agn_to_f8());
+        assert_eq!(s, before);
+        assert!(!Path::new(&wav(&dir, 8)).exists());
     }
 }
 

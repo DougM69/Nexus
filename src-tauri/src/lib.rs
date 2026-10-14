@@ -37,6 +37,9 @@ mod alert;
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
 mod bench_road_switch;
+/// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
+/// window, set on each webview as Tauri makes it.
+mod browser_keys;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -8625,6 +8628,30 @@ struct FdRulesetDto {
     /// key it does not know, so a capture must stay the shape every published page accepts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     entry_classes: Vec<String>,
+    /// ⭐ **The entry declarations the picked contest's sponsor names**, for Settings to offer
+    /// only where they are written: its multi-operator classes (Cabrillo `CATEGORY-TRANSMITTER`,
+    /// CQ WW's `ONE`/`TWO`/`UNLIMITED`), its overlays, the `ADDRESS` headers its template carries
+    /// and whether it has a `SOAPBOX`. Filled by the PREVIEW only and absent when empty, for the
+    /// reason `entry_classes` is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    transmitter_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    overlay_categories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    address_headers: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    soapbox: bool,
+    /// ⭐ **The bands an entry in the picked contest may declare** (Cabrillo `CATEGORY-BAND`, CQ WW's
+    /// `ALL 160M 80M 40M 20M 15M 10M`), for the Band category picker, shown only where the sponsor
+    /// lists them. Filled by the PREVIEW only and absent when empty, for `entry_classes`' reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    band_categories: Vec<String>,
+    /// ⭐ **The Cabrillo lines the sponsor requires that a contest started from these Settings would
+    /// leave out** (`CATEGORY-POWER`…), for the Contest screen to name before Contest mode turns
+    /// on — the running session's own list is `FieldDayStatus::cabrillo_missing`. Filled by the
+    /// PREVIEW only and absent when empty, for `entry_classes`' reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cabrillo_missing: Vec<String>,
     /// ⭐ **When the picked contest runs** — its running-or-next window (Unix UTC), from the
     /// rules data by the same `next_or_running` the session's own banner reads. The contest
     /// screen shows it beside the Field Day mode switch before any session exists: with the
@@ -8662,6 +8689,12 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         problem: String::new(),
         location_warning: None,
         entry_classes: Vec::new(),
+        transmitter_categories: Vec::new(),
+        overlay_categories: Vec::new(),
+        address_headers: Vec::new(),
+        soapbox: false,
+        band_categories: Vec::new(),
+        cabrillo_missing: Vec::new(),
         event_start_unix: None,
         event_end_unix: None,
     }
@@ -8690,6 +8723,13 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
     ) {
         // The sponsor's entry classes, for the ENTRY-CLASS picker beside the category axes.
         dto.entry_classes = rs.entry_classes.iter().map(|c| c.to_string()).collect();
+        // …and the declarations its template names, each offered only where it is written.
+        let owned = |list: &[&str]| list.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+        dto.transmitter_categories = owned(rs.cabrillo_transmitter_categories);
+        dto.overlay_categories = owned(rs.cabrillo_overlay_categories);
+        dto.address_headers = owned(rs.cabrillo_address_headers);
+        dto.soapbox = rs.cabrillo_soapbox;
+        dto.band_categories = owned(rs.cabrillo_band_categories);
         // When it runs, by the computation the session's banner reads — so the contest screen
         // says the same thing before the session exists as during it.
         let window = rs.next_or_running(now_unix().max(0) as u64);
@@ -8703,6 +8743,12 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
                     .location_warning
                     .as_ref()
                     .map(tempo_app::dto::LocationWarningDto::from);
+                // …and what its Cabrillo file would leave out, named before the session starts.
+                dto.cabrillo_missing = eng
+                    .cabrillo_missing_at_start(s)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
             }
             Err(e) => dto.problem = e,
         }
@@ -11205,7 +11251,10 @@ fn hold_sat_row(
         .filter(|&hz| hz != 0 && hz != uplink)
         .collect();
     let mut eng = engine_lock(state);
-    eng.set_sat_transponder(Some((
+    // A bird no radio here can receive is refused before anything is held, and the reason is
+    // the pick's answer: a hold that can drive nothing would still take the dial from FT8, FT4
+    // and the TX gate (`Engine::hold_sat_transponder`). Everything below describes a hold made.
+    eng.hold_sat_transponder((
         label,
         index,
         tempo_core::doppler::Transponder {
@@ -11214,7 +11263,7 @@ fn hold_sat_row(
             invert: tp.invert,
             half_width_hz: half,
         },
-    )));
+    ))?;
     // AFTER the pick, which clears the list — see `Engine::set_sat_alt_uplinks`.
     eng.set_sat_alt_uplinks(alt_uplinks);
     // ⭐ AND WHAT KIND OF BIRD THIS IS, on the same terms and for the same reason: the
@@ -13329,8 +13378,10 @@ fn apply_and_persist(
 /// assistance mirror and its journal, the QTH the spot ranking reads.
 ///
 /// A save that turns the Field Day master on while Field Day is not running re-enters it, opening
-/// a contest session: the session's rows are read from the logbook first, off the lock, and the
-/// session is opened with its dupe sweep in the same hold of the lock as the save (SPEC-2 v3 C19).
+/// a contest session, and so does a save that moves the contest pick off the contest running, which
+/// ends that session first ([`tempo_app::engine::Engine::save_opens_session`]): the session's rows
+/// are read from the logbook first, off the lock, and the session is opened with its dupe sweep in
+/// the same hold of the lock as the save (SPEC-2 v3 C19).
 /// Every other save reads nothing. When the logbook is too busy to read them, the save is refused
 /// whole ([`tempo_app::engine::SESSION_BUSY`]): nothing applied, persisted or published, and the
 /// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
@@ -13342,10 +13393,9 @@ fn save_and_publish(
     authoritative_roster: bool,
 ) -> Result<AppSnapshot, String> {
     let published = settings.clone();
-    let opens_session = settings.fd_active;
     let snap = tempo_app::engine::with_session_rows(
         engine,
-        |eng| opens_session && eng.mode_opens_session("fieldday-sp"),
+        |eng| eng.save_opens_session(&published),
         |eng, rows| {
             // A form save that would put a daemon of Nexus's, or its CAT broker, on a NET rigctl
             // radio's Network Address is refused whole, before anything below touches the engine
@@ -13362,9 +13412,7 @@ fn save_and_publish(
                 settings.lotw_last_qsl.clear();
             }
             // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-                settings.eqsl_last_sync.clear();
-            }
+            keep_eqsl_cursor_for_its_account(eng.settings(), &mut settings);
             // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
             let cur = eng.settings();
             if cur.clublog_email != settings.clublog_email
@@ -13525,6 +13573,125 @@ mod contest_session_tests {
             "and Field Day was not entered"
         );
         drop(eng);
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SAVE THAT SWITCHES THE CONTEST READS THE NEW SESSION'S ROWS BEFORE ANYTHING ELSE, as the
+    /// turn-on does. The station runs Field Day; another program holds the logbook. A save that
+    /// moves the pick to the Illinois QSO Party is refused for the busy logbook — the party's
+    /// session would open without its dupe sweep — and Field Day runs on, the pick where it was.
+    /// The form also carries a port clash, refused inside the save, so the two refusals tell a
+    /// save that read first from one that did not, and neither persists anything. The CONTROL:
+    /// the same form with the pick left alone reads nothing and meets the clash.
+    #[test]
+    fn a_save_that_switches_the_contest_reads_its_rows_before_anything_else() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("save-switch", 3);
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            tempo_app::settings::RadioProfile {
+                id: 0,
+                name: "IC-9700".into(),
+                rig_model: 2,
+                rig_conn: "network".into(),
+                rig_addr: "127.0.0.1:4533".into(),
+                rigctld_port: 4534,
+                ..Default::default()
+            },
+            tempo_app::settings::RadioProfile {
+                id: 1,
+                name: "FTDX10".into(),
+                rig_model: 1042,
+                serial_port: "COM3".into(),
+                rigctld_port: 4535,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 1;
+        station.cat_broker = true;
+        station.cat_broker_port = 4532;
+        station.sync_flat_from_active();
+        station.fd_active = true;
+        station.fd_class = "1D".into();
+        station.fd_section = "EMA".into();
+        station.contest_qth_state = "IL".into();
+        station.contest_qth_county = "COOK".into();
+        engine_lock(&engine).apply_restored_settings(station);
+        let running = |e: &SharedEngine| engine_lock(e).fd_position_contest();
+        assert_eq!(running(&engine), "arrlfd", "premise: Field Day runs");
+        let hold = held_up(&engine, &dir);
+        let held = engine_lock(&engine).settings().clone();
+        let mut form = held.clone();
+        form.rigctld_port = 4533;
+        let clash = Err(
+            "TCP port 4533 is IC-9700's Network Address (127.0.0.1:4533), and FTDX10's rigctld \
+             TCP Port is 4533 too: IC-9700 and FTDX10 could each read and command the other's \
+             radio. Give FTDX10 a different rigctld TCP Port (Settings ▸ Radio ▸ Advanced)."
+                .to_string(),
+        );
+        assert_eq!(
+            save_and_publish(&engine, form.clone(), false).map(|_| ()),
+            clash,
+            "CONTROL: the pick left alone, the save reads nothing and meets the clash"
+        );
+        form.fd_event = "ilqp".into();
+        assert_eq!(
+            save_and_publish(&engine, form, false).map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "the pick moved, the save reads the party's rows first and is refused for the logbook"
+        );
+        assert_eq!(
+            (
+                running(&engine),
+                engine_lock(&engine).settings().fd_event.clone()
+            ),
+            ("arrlfd".to_string(), held.fd_event),
+            "Field Day runs on, the pick where it was"
+        );
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE REFUSED FOR A BUSY LOGBOOK PUTS NOTHING BACK, as a save refused for one changes
+    /// nothing. A backup that turns Contest mode on opens a contest session, so the restore reads
+    /// the session's rows first, as the save that turns it on does; with the logbook held by
+    /// another program it is refused in the save's own words, and nothing in the backup lands:
+    /// not its settings, not Contest mode, not the UI state it carries.
+    #[test]
+    fn a_restore_refused_for_a_busy_logbook_puts_nothing_back() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-refused", 3);
+        let hold = held_up(&engine, &dir);
+        let held = engine_lock(&engine).settings().clone();
+        let mut bundle = held.clone();
+        bundle.fd_active = true;
+        bundle.fd_class = "1D".into();
+        bundle.fd_section = "EMA".into();
+        bundle.mycall = "W9REST".into();
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": bundle,
+            "uiState": { "nexus.restore.refused": "1" },
+        })
+        .to_string();
+        let mut ui_saved = None;
+        let restored = restore_settings_bundle(&engine, text, |ui| {
+            ui_saved = Some(ui);
+            true
+        });
+        assert_eq!(
+            restored.map(|_| ()),
+            Err(tempo_app::engine::SESSION_BUSY.to_string()),
+            "refused for the logbook, in the save's words"
+        );
+        let eng = engine_lock(&engine);
+        assert_eq!(*eng.settings(), held, "nothing applied");
+        assert!(
+            eng.mode_opens_session("fieldday-sp"),
+            "and Contest mode was not entered"
+        );
+        drop(eng);
+        assert_eq!(ui_saved, None, "nor the UI state the backup carries");
         drop(hold);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -13953,6 +14120,16 @@ fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
 ) -> Result<AppSnapshot, String> {
+    restore_settings_bundle(&state, text, ui_state_save)
+}
+
+/// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
+/// ([`ui_state_save`]) once the restore goes through.
+fn restore_settings_bundle(
+    engine: &SharedEngine,
+    text: String,
+    save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
+) -> Result<AppSnapshot, String> {
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
@@ -13969,19 +14146,21 @@ fn import_settings_bundle(
         None => return Err("That backup is missing its format version.".to_string()),
     }
     let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
-    // UI state is best-effort: a bundle whose settings are good but whose ui-state is not should
-    // still restore the radios. The half that failed is named rather than swallowed.
-    if let Some(ui) = v.get("uiState").cloned() {
-        if let Ok(map) = serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui) {
-            ui_state_save(map);
-        }
-    }
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
-    // which is right for a form and wrong for a restore.
-    {
-        let mut eng = engine_lock(&state);
-        eng.apply_restored_settings(settings);
+    // which is right for a form and wrong for a restore. A bundle that opens a contest session
+    // opens it as a Save does, its rows read first, and a logbook too busy to read them refuses
+    // the restore whole: nothing below runs, the UI state included.
+    tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+        // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
+        // should still restore the radios. The half that failed is named rather than swallowed.
+        if let Some(ui) = v.get("uiState").cloned() {
+            if let Ok(map) =
+                serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui)
+            {
+                save_ui(map);
+            }
+        }
         // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
         // next launch while looking like it had worked. Synchronous, under the lock as it always
         // was: a restore that did not reach the disk says so and mirrors nothing to the base
@@ -13995,8 +14174,9 @@ fn import_settings_bundle(
         // ...and into the base config, or the launch picker keeps offering the OLD roster.
         persist_roster_to_base(&eng.settings().radios);
         persist_routing_to_base(eng.settings());
-    }
-    let snap = { engine_lock(&state).snapshot() };
+        Ok(())
+    })??;
+    let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
 }
 
@@ -16067,6 +16247,9 @@ struct CwDecodeResult {
     sent: Vec<String>,
     /// A CW-keyer failure to surface (e.g. the rig rejected CAT `send_morse`), else null.
     keyer_error: Option<String>,
+    /// The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+    /// (Nexus's Flex client): an information line, not a warning, until the next send.
+    paddle_took_over: bool,
     /// Ranked worked-station callsign candidates from the decode (click to confirm).
     candidates: Vec<CwCandidateDto>,
     /// The RST they sent us, read from the decode (e.g. "599"), else null.
@@ -16116,6 +16299,7 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
         wpm: d.wpm,
         sent,
         keyer_error: eng.cw_keyer_error(),
+        paddle_took_over: eng.cw_paddle_took_over(),
         candidates: assist
             .candidates
             .into_iter()
@@ -17345,7 +17529,9 @@ fn b64_encode(data: &[u8]) -> String {
 /// Enable/disable normal slot transmit ("Monitor"). `false` lowers the latch:
 /// nothing new keys and queued frames drop, but an over already in flight
 /// completes (WSJT-X Enable-Tx; `halt_tx` is the immediate stop). `true`
-/// re-enables it and clears a tripped watchdog.
+/// re-enables it and clears a tripped watchdog. `false` is the operator's own
+/// stop, so it holds: entering a cockpit after it leaves TX off until TX is
+/// turned back on (`Engine::set_tx_enabled_by_operator`).
 ///
 /// `(async)` per the RTTY hang sweep: a sync command takes the engine mutex on
 /// the Windows message-pump thread, so a CAT stall inside the radio loop's tick
@@ -17364,7 +17550,7 @@ fn set_tx_enabled(
     if enabled {
         command_dispatch::still_bound(&eng, afar.as_ref())?;
     }
-    eng.set_tx_enabled(enabled);
+    eng.set_tx_enabled_by_operator(enabled);
     // TX On refused because a clock repair holds transmit: say so, rather than leave a button
     // that did nothing (`Engine::hold_tx_for_clock_repair`).
     if enabled && !eng.tx_enabled() && eng.clock_repair_holds_tx() {
@@ -17939,6 +18125,93 @@ async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
     }
 }
 
+/// This executable's path as text, for a firewall rule to name: `None` when it is not Unicode,
+/// which no rule could name faithfully.
+fn this_exe() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .into_os_string()
+        .into_string()
+        .ok()
+}
+
+/// What the club section of Settings ▸ Contesting says about Windows Firewall: whether it is on,
+/// and where Nexus's club sync rules stand for the Host and scoreboard ports as set
+/// (`tempo_net::fdfirewall::status`). Read with no administrator rights, on the blocking pool
+/// (the rules take about a tenth of a second). `None` off Windows, and when the firewall cannot
+/// be read. Nexus Remote has no road to it: it is this laptop's own firewall.
+#[tauri::command]
+async fn club_firewall_status(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_net::fdfirewall::Status>, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = this_exe()?;
+        tempo_app::club_firewall::status(&engine, &exe, tempo_net::fdfirewall::read)
+    })
+    .await
+    .map_err(|e| format!("firewall read failed: {e}"))
+}
+
+/// The operator pressed **Allow Nexus through Windows Firewall** (`action` "allow") or its
+/// Remove ("remove") in the club section: one Windows administrator prompt, through the
+/// elevation Repair clock uses, then the firewall read back (`PressOutcome`). Refused with
+/// `onAir` while anything is transmitting, `running` while a press is still waiting on Windows,
+/// `path` or `port` when the command cannot be built, and `unsupported` off Windows. The prompt
+/// waits for an answer, so this runs on the blocking pool. Nexus Remote has no road to it: the
+/// prompt would wait on a screen nobody may be sitting at (`remote_service::application::Command`
+/// has no variant).
+#[tauri::command]
+async fn club_firewall_press(
+    state: State<'_, SharedEngine>,
+    action: String,
+) -> Result<tempo_app::club_firewall::PressOutcome, String> {
+    use tempo_app::club_firewall::{press, status, FirewallAction, PressOutcome, FIREWALL_PRESS};
+    let action = match action.as_str() {
+        "allow" => FirewallAction::Allow,
+        "remove" => FirewallAction::Remove,
+        other => return Err(format!("unknown firewall action {other:?}")),
+    };
+    if !cfg!(windows) {
+        return Err("unsupported".to_string());
+    }
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let exe = this_exe().ok_or_else(|| "path".to_string())?;
+        let ran = press(
+            &engine,
+            &FIREWALL_PRESS,
+            action,
+            &exe,
+            tempo_core::process::run_elevated,
+        )
+        .map_err(|why| why.code().to_string())?;
+        conn_log(
+            "FD sync",
+            if ran { "info" } else { "error" },
+            format!(
+                "Windows Firewall: {} Nexus's club sync rules {}",
+                if action == FirewallAction::Allow {
+                    "adding"
+                } else {
+                    "removing"
+                },
+                if ran {
+                    "done"
+                } else {
+                    "not done (the administrator prompt was declined, or a step failed)"
+                }
+            ),
+        );
+        Ok(PressOutcome {
+            ran,
+            status: status(&engine, &exe, tempo_net::fdfirewall::read),
+        })
+    })
+    .await
+    .map_err(|e| format!("firewall press failed: {e}"))?
+}
+
 /// Curated Hamlib rig models `(model_number, name)` for the Settings dropdown.
 #[tauri::command]
 fn get_rig_models() -> Vec<(u32, String)> {
@@ -18290,7 +18563,7 @@ fn set_operating_mode(
 /// the new mode at the old dial, and the UI never sees a half-applied state. Persists,
 /// returns the snapshot. `afar`: as [`set_operating_mode`]'s.
 #[tauri::command(async)]
-#[allow(clippy::too_many_arguments)] // one per argument the screen gives, and the lane's
+#[allow(clippy::too_many_arguments)] // one per wire argument after the two managed states, and the lane's
 fn work_spot(
     state: State<'_, SharedEngine>,
     spots: State<'_, SharedSpots>,
@@ -18299,6 +18572,7 @@ fn work_spot(
     band: String,
     call: Option<String>,
     tier: Option<String>,
+    park: Option<tempo_app::dto::WorkPark>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     // A digital spot names its protocol (FT8/FT4). The tier switch must happen under the
@@ -18326,6 +18600,7 @@ fn work_spot(
     let mut eng = engine_lock(&state);
     eng.work_spot_tiered_with_arming(tier, &mode, freq_mhz, &band, split_up_khz, afar.is_none());
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
+    eng.note_work_park(park); // …and a Needed row's park, which that log line fills with the call
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist worked spot: {e}")
     });
@@ -19084,6 +19359,47 @@ fn start_cq(
     Ok(eng.snapshot())
 }
 
+/// The Operate strip's Call CQ ([`tempo_app::engine::Engine::start_running_with_cq`]), and the Tx6
+/// row's while a contest runs. `dir` is the direction of the CQ typed in the Tx6 row, which the
+/// contest's Running calls where WSJT-X has no activity for the contest; `None` for a plain CQ,
+/// and from a caller that sends none. Outside a contest the row keeps `start_cq`, which sends the
+/// CQ it shows.
+#[tauri::command(async)]
+fn start_running(
+    state: State<'_, SharedEngine>,
+    dir: Option<String>,
+) -> Result<AppSnapshot, String> {
+    start_running_on(&state, dir)
+}
+
+/// [`start_running`]'s body, over a plain handle. Call CQ can enter the contest's Running from
+/// another mode, so it opens the session as the `set_mode` command does, with its rows.
+fn start_running_on(engine: &SharedEngine, dir: Option<String>) -> Result<AppSnapshot, String> {
+    tempo_app::engine::act_opening_session(
+        engine,
+        |eng| eng.start_running_opens_session(),
+        |eng| eng.start_running_with_cq(dir.as_deref()),
+        |eng| eng.snapshot(),
+    )
+}
+
+/// The Operate strip's S&P ([`tempo_app::engine::Engine::start_search_and_pounce`]).
+#[tauri::command(async)]
+fn start_search_and_pounce(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    start_search_and_pounce_on(&state)
+}
+
+/// [`start_search_and_pounce`]'s body, over a plain handle, opening a contest session as the
+/// `set_mode` command does, with its rows.
+fn start_search_and_pounce_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
+    tempo_app::engine::act_opening_session(
+        engine,
+        |eng| eng.start_search_and_pounce_opens_session(),
+        |eng| eng.start_search_and_pounce(),
+        |eng| eng.snapshot(),
+    )
+}
+
 /// Call CQ from Tempo (chat-first): emit ONE structured `CQ <mycall> <mygrid>` frame
 /// and arm TX, staying in Chat mode. Errors if the callsign/grid aren't set (so a CQ
 /// never goes out malformed). `dir` = an optional directed-CQ token (None = plain CQ).
@@ -19352,6 +19668,12 @@ fn set_psk_macros(
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
 
+/// The contest screen window's panel slug: the main window's Contest screen below its log line
+/// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
+/// popped out to a monitor of its own. The main window keeps the log line and the last contacts
+/// while it is open, and takes the rest back when it closes (`tauri://destroyed`, in the UI).
+pub(crate) const CONTEST_SCREEN_SLUG: &str = "contestscreen";
+
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
 /// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
 /// Activity + roster) needs more room than the narrower insight panels; the band map is
@@ -19384,6 +19706,9 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // (class/section, Running/S&P, four exports) on one line, tall enough for the scoreboard
         // and the log line without scrolling at a 1080p desk.
         "contestlog" => (1100.0, 860.0),
+        // The contest screen window: the logger window's screen without its log line, so the
+        // same width for the header strip, and the height the screen had under the line.
+        "contestscreen" => (1100.0, 860.0),
         // The club band board is set in glance type (it is watched across the tent, not
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
@@ -19408,6 +19733,8 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         "fdclub" => (560.0, 400.0),
         // The log line's boxes and its Log button in a row, and a look at the screen above it.
         "contestlog" => (640.0, 480.0),
+        // The contest switch and the controls row, which wraps, and a look at the board under them.
+        "contestscreen" => (640.0, 480.0),
         // The picture scales to fit, so the viewer drags smaller than most pop-outs —
         // but not below what its details strip and its three buttons need in a row.
         "sstvviewer" => (420.0, 320.0),
@@ -19466,6 +19793,7 @@ async fn open_panel_window(
         "fieldday" => "Nexus — Contest".to_string(),
         "fdclub" => "Nexus — Club band board".to_string(),
         "contestlog" => "Nexus — Contest logger".to_string(),
+        "contestscreen" => "Nexus — Contest screen".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
@@ -19676,38 +20004,46 @@ fn call_station_on(
         let places = ota_park_places(ota_cache, parks, &program, &reference);
         (program, reference, places)
     });
-    let mut eng = engine_lock(engine);
-    command_dispatch::still_bound(&eng, afar)?;
-    // Working a station keys a standard structured message (your grid in Tx1) — refuse
-    // without a valid callsign + grid so we never emit a grid-less directed call. The
-    // mode plugin decides which tiers are gated (Capabilities::structured_identity).
-    eng.structured_tx_ready(true)?;
     let g = grid.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let msg = message.as_deref().map(str::trim).filter(|s| !s.is_empty());
     // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
     // double-click). Ignore non-positive values (no usable frequency).
     let dx_freq = freq.filter(|f| *f > 0.0);
-    eng.call_station_ctx(call, g, msg, snr, dx_freq)?;
-    // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls it
-    // does not act on, and a pend armed for one would wait four hours to stamp the park on some
-    // later contact. Ambiguous or absent: the pending hunt is left exactly as it was, so a park
-    // the operator picked on the POTA/SOTA board survives. And the tag never costs the call: a
-    // reference `set_hunt_target` will not accept leaves this contact untagged, as an
-    // ambiguous one does.
-    if let Some((program, reference, places)) = park {
-        let started = eng
-            .qso_dxcall()
-            .is_some_and(|c| tempo_core::message::same_call(c, call));
-        if started {
-            if let Err(e) = eng.set_hunt_target(call, &program, &reference, places) {
-                tempo_core::applog::warn(
-                    "hunt",
-                    &format!("{call}: {program} {reference} not tagged: {e}"),
-                );
+    // A double-click on a CQ can enter a running contest from another mode, so the call opens
+    // the contest's session as the `set_mode` command does, with its rows.
+    tempo_app::engine::act_opening_session(
+        engine,
+        |eng| eng.work_station_opens_session(call, msg),
+        |eng| {
+            command_dispatch::still_bound(eng, afar)?;
+            // Working a station keys a standard structured message (your grid in Tx1) — refuse
+            // without a valid callsign + grid so we never emit a grid-less directed call. The
+            // mode plugin decides which tiers are gated (Capabilities::structured_identity).
+            eng.structured_tx_ready(true)?;
+            eng.work_station(call, g, msg, snr, dx_freq)?;
+            // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls
+            // it does not act on, and a pend armed for one would wait four hours to stamp the park
+            // on some later contact. Ambiguous or absent: the pending hunt is left exactly as it
+            // was, so a park the operator picked on the POTA/SOTA board survives. And the tag never
+            // costs the call: a reference `set_hunt_target` will not accept leaves this contact
+            // untagged, as an ambiguous one does.
+            if let Some((program, reference, places)) = park {
+                let started = eng
+                    .qso_dxcall()
+                    .is_some_and(|c| tempo_core::message::same_call(c, call));
+                if started {
+                    if let Err(e) = eng.set_hunt_target(call, &program, &reference, places) {
+                        tempo_core::applog::warn(
+                            "hunt",
+                            &format!("{call}: {program} {reference} not tagged: {e}"),
+                        );
+                    }
+                }
             }
-        }
-    }
-    Ok(eng.snapshot())
+            Ok(())
+        },
+        |eng| eng.snapshot(),
+    )
 }
 
 /// Toggle Skip Tx1 (WSJT-X parity). Session-only — the engine flag resets to off each
@@ -21164,13 +21500,14 @@ async fn apply_park_states(
 // check at a time holds what it downloaded, from the check until Apply, Cancel, a new check or
 // the window that ran it closing.
 
-/// What a check asks LoTW with: the account, and the call both downloads are for. Never printed or
-/// logged: it holds the password, as the request URLs built from it do.
+/// What a check asks LoTW with: the account, and the call in Settings. Both downloads ask for every
+/// call on the account. Never printed or logged: it holds the password, as the request URLs built
+/// from it do.
 struct LotwAccess {
     username: String,
     password: String,
-    /// The Settings call (`qso_owncall`), which is also the check's scope; `None` asks LoTW for
-    /// every call on the account, and judges every contact.
+    /// The Settings call: the check's scope, and the call a contact or row naming no call of its
+    /// own is taken to be under; `None` judges every contact.
     owncall: Option<String>,
 }
 
@@ -21329,11 +21666,11 @@ fn whole_qrz_book(answer: &str) -> Result<String, String> {
 }
 
 /// Logbook ▸ Check confirmations, LoTW: its whole confirmation history and its whole own-QSO
-/// list, each asked for once in the form a full re-download asks (`qso_qslsince=1900-01-01`, and
-/// `qso_qsorxsince=1900-01-01` with no start date) and fetched by `fetch`, then checked against
-/// the log read with the Engine lock released ([`tempo_app::station::check_lotw_confirmations`]).
-/// It moves no sync cursor and writes nothing. The confirmation download, which Apply merges, and
-/// the check.
+/// list, of every call on the account, each asked for once in the form a full re-download asks
+/// (`qso_qslsince=1900-01-01`, and `qso_qsorxsince=1900-01-01` with no start date) and fetched by
+/// `fetch`, then checked against the log read with the Engine lock released
+/// ([`tempo_app::station::check_lotw_confirmations`]). It moves no sync cursor and writes nothing.
+/// The confirmation download, which Apply merges, and the check.
 fn lotw_check_on(
     engine: &SharedEngine,
     access: &LotwAccess,
@@ -21342,7 +21679,6 @@ fn lotw_check_on(
     let query = tempo_core::lotw::LotwQuery {
         username: access.username.clone(),
         password: access.password.clone(),
-        owncall: access.owncall.clone(),
         qsl_since: None,
     };
     let report = whole_lotw_download(fetch(&tempo_core::lotw::build_report_url(&query))?)?;
@@ -21696,6 +22032,10 @@ struct ConfirmationCheckDto {
     /// book. Said in the Connections log, where a bench can hold it against the service's own
     /// count.
     records: usize,
+    /// LoTW only: how many of its confirmations are for a call the log holds no contact under (a
+    /// club call on the account, say). They change nothing. Said in the dialog, and in the
+    /// Connections log with `records`.
+    other_call_records: usize,
     /// Newest first; a contact's confirmation line before its upload line.
     lines: Vec<ConfirmationLineDto>,
     /// The contacts the service confirms that lack its confirmation: Apply adds it.
@@ -21728,6 +22068,7 @@ impl ConfirmationCheckDto {
             session,
             service: check_mark_name(tempo_core::reconcile::check::Mark::Confirmation(channel)),
             records,
+            other_call_records: found.other_call_records,
             lines,
             gain_ids: found.gains.iter().map(|id| id.to_string()).collect(),
             unreached: check.flags.unreached,
@@ -21911,8 +22252,13 @@ async fn confirmation_check(
     conn_logged(
         check_connector(channel),
         |c: &ConfirmationCheckDto| {
+            let other_calls = match c.other_call_records {
+                0 => String::new(),
+                n => format!(" ({n} for a call this log holds no contact under, left alone)"),
+            };
             format!(
-                "check confirmations: {} records, {} listed, {} would gain a confirmation",
+                "check confirmations: {} records{other_calls}, {} listed, {} would gain a \
+                 confirmation",
                 c.records,
                 c.lines.len(),
                 c.gain_ids.len()
@@ -24524,6 +24870,36 @@ fn clear_cloudlog_key() -> Result<(), String> {
 /// the resulting re-pull overlap.
 const EQSL_RCVD_MARGIN_SECS: i64 = 86_400;
 
+/// The eQSL account Settings name: its username and its QTH Nickname, as every request sends
+/// them (trimmed). Each nickname is an account of its own at eQSL, with its own InBox and its own
+/// dates, so the InBox cursor belongs to the pair, not to the username alone.
+fn eqsl_account(s: &Settings) -> (&str, &str) {
+    (s.eqsl_username.trim(), s.eqsl_qth_nickname.trim())
+}
+
+/// A save's eQSL InBox cursor ([`save_and_publish`]): kept while the save names the account the
+/// cursor was made for, and emptied when it names another, so the next sync reads that account's
+/// whole InBox. A config profile loads through the same save.
+fn keep_eqsl_cursor_for_its_account(held: &Settings, form: &mut Settings) {
+    if eqsl_account(held) != eqsl_account(form) {
+        form.eqsl_last_sync.clear();
+    }
+}
+
+/// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
+/// (a cut-off one must not skip the cards it never received), and only while Settings still name
+/// the account it read. The fetch runs without the engine lock, and a save meanwhile that names
+/// another account has emptied the cursor for it ([`keep_eqsl_cursor_for_its_account`]).
+fn eqsl_cursor_may_advance(
+    s: &Settings,
+    body: &str,
+    used_username: &str,
+    used_nickname: &str,
+) -> bool {
+    tempo_core::eqsl::is_complete_eqsl_body(body)
+        && eqsl_account(s) == (used_username.trim(), used_nickname.trim())
+}
+
 /// Download new LoTW confirmations and reconcile them into the log.
 ///
 /// Reads the LoTW username + incremental cursor from settings and the password
@@ -24547,7 +24923,9 @@ fn is_complete_lotw_body(body: &str) -> bool {
 /// body is complete, and only while the username and the cursor are still the ones it used. The
 /// fetch runs without the engine lock, for minutes on a full pull, and in that time a username
 /// change or Download everything again ([`reset_lotw_cursor`]) can empty the cursor, and this
-/// download's high-water would put back the incremental cursor that the reset removed.
+/// download's high-water would put back the incremental cursor that the reset removed. The cursor
+/// is the one the download asks from (`Settings::lotw_sync_cursor`): none for one an older build
+/// left, whose full download then moves it.
 fn lotw_cursor_may_advance(
     s: &Settings,
     body: &str,
@@ -24556,7 +24934,7 @@ fn lotw_cursor_may_advance(
 ) -> bool {
     is_complete_lotw_body(body)
         && s.lotw_username.trim() == used_username.trim()
-        && s.lotw_last_qsl.trim() == used_since.trim()
+        && s.lotw_sync_cursor() == used_since.trim()
 }
 
 /// Settings ▸ Confirmations ▸ LoTW ▸ Download everything again: empty the sync cursor, so the
@@ -24607,14 +24985,15 @@ async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSync
 
 fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, String> {
     // Read username + cursor (non-secret) under a brief lock; the network fetch
-    // below must NOT hold the engine lock (a full pull can run for minutes).
-    let (username, owncall, since) = {
+    // below must NOT hold the engine lock (a full pull can run for minutes). Both pulls ask for
+    // every call on the account, and the cursor is one a download of every call made
+    // (`Settings::lotw_sync_cursor`), so the first download after the update is a full one.
+    let (username, since) = {
         let eng = engine_lock(state);
         let s = eng.settings();
         (
             s.lotw_username.trim().to_string(),
-            s.mycall.trim().to_string(),
-            s.lotw_last_qsl.trim().to_string(),
+            s.lotw_sync_cursor().to_string(),
         )
     };
     if username.is_empty() {
@@ -24625,7 +25004,6 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
     let used_username = username.clone(); // for the post-fetch cursor-binding guard
     let used_since = since.clone(); // and the cursor it started from (`lotw_cursor_may_advance`)
-    let owncall = Some(owncall).filter(|c| !c.is_empty());
 
     // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
     // The password stays in scope for the second (own-echo) pull below; never log it.
@@ -24633,7 +25011,6 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         let query = tempo_core::lotw::LotwQuery {
             username: username.clone(),
             password: password.clone(),
-            owncall: owncall.clone(),
             qsl_since: Some(since).filter(|c| !c.is_empty()),
         };
         let url = tempo_core::lotw::build_report_url(&query);
@@ -24722,7 +25099,6 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             let query = tempo_core::lotw::LotwQuery {
                 username,
                 password,
-                owncall,
                 qsl_since: None,
             };
             let url = tempo_core::lotw::build_own_report_url(&query, Some(&start));
@@ -25146,6 +25522,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
     let used_username = username.clone();
+    let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
@@ -25186,8 +25563,8 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path (eQSL lands confirmed-not-award by
     // construction). Advance the cursor ONLY if (a) the body is structurally
     // complete — a truncated download must not skip unreceived records — AND (b) the
-    // username is unchanged since this sync started (an in-flight change already
-    // reset the cursor for the new account).
+    // account is unchanged since this sync started (an in-flight change already
+    // reset the cursor for the new account): `eqsl_cursor_may_advance`.
     //
     // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
     // cursor is advanced once it is made.
@@ -25196,9 +25573,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let summary: LotwSyncResult = summary?.into();
     {
         let mut eng = engine_lock(state);
-        if tempo_core::eqsl::is_complete_eqsl_body(&body)
-            && eng.settings().eqsl_username.trim() == used_username.trim()
-        {
+        if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
             let updated = eng.set_eqsl_cursor(next_cursor);
             persist_settings(updated, |e| {
                 eprintln!("tempo: failed to persist eQSL cursor: {e}")
@@ -27090,7 +27465,8 @@ async fn eqsl_push_qso(
     let res =
         tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
             .await
-            .map_err(|e| format!("upload task failed: {e}"))?;
+            .map_err(|e| format!("upload task failed: {e}"))?
+            .map(|(report, _)| report);
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -27102,7 +27478,7 @@ fn eqsl_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
     wait: bool,
-) -> Result<UploadReportDto, String> {
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -27163,26 +27539,45 @@ fn eqsl_push_qso_impl(
             &password,
             &adif,
             (!qth_nickname.is_empty()).then_some(qth_nickname.as_str()),
+            env!("CARGO_PKG_VERSION"),
         );
         propagation::live::eqsl::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
     }; // `body` (holds the password) dropped here
 
-    match tempo_core::eqsl::classify_upload(&resp) {
+    eqsl_answered(named.as_deref(), &rec, &resp, engine, wait)
+}
+
+/// What eQSL's answer to one upload does ([`tempo_core::eqsl::classify_upload`]): the outcome
+/// stamped on the contact, with the class of a refusal, and the report for the caller beside that
+/// class. It reads eQSL's answer alone; the request, and the password in it, are gone by then.
+fn eqsl_answered(
+    named: Option<&str>,
+    rec: &tempo_core::logbook::QsoRecord,
+    answer: &str,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
+    match tempo_core::eqsl::classify_upload(answer) {
         // Transient (system down) → leave unstamped for a clean retry.
-        None => Ok(UploadReportDto {
-            dispatched: 1,
-            outcome: "retry".into(),
-            detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-        }),
-        Some(outcome) => {
+        None => Ok((
+            UploadReportDto {
+                dispatched: 1,
+                outcome: "retry".into(),
+                detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+            },
+            None,
+        )),
+        Some((outcome, detail)) => {
             // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
-            let subject = stamp_subject(named.as_deref(), &rec);
+            let subject = stamp_subject(named, rec);
+            // ⛔ The CLASS of the refusal, off eQSL's markers — never eQSL's page, which is not
+            // kept anywhere. See `UploadDetail`: this field is exported in the signed LoTW batch.
             let status = tempo_core::logbook::UploadStatus {
                 outcome,
                 when_unix: now_unix(),
-                detail: None,
+                detail,
             };
             let stamp = || {
                 tempo_app::logwrite::stamp_push(
@@ -27203,14 +27598,46 @@ fn eqsl_push_qso_impl(
                     .wait(tempo_app::logstore::DURABLE_WAIT)
                     .map_err(durability_failed)?;
             }
-            Ok(UploadReportDto {
-                dispatched: 1,
-                outcome: outcome.code().to_string(),
-                detail: None,
-                skipped_edited: 0,
-                skipped_deleted: 0,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: 1,
+                    outcome: outcome.code().to_string(),
+                    detail: detail.map(|d| d.sentence().to_string()),
+                    skipped_edited: 0,
+                    skipped_deleted: 0,
+                },
+                detail,
+            ))
         }
+    }
+}
+
+/// The eQSL part of a contact's one upload toast ("W9XYZ → QRZ ✓ · eQSL ✗ …"), from the push's
+/// report and the class it stamped ([`eqsl_answered`]).
+fn eqsl_toast_part(
+    r: &UploadReportDto,
+    class: Option<tempo_core::logbook::UploadDetail>,
+) -> String {
+    use tempo_core::logbook::UploadDetail as D;
+    match (r.outcome.as_str(), class) {
+        ("accepted", _) => "eQSL ✓".to_string(),
+        ("duplicate", _) => "eQSL dup".to_string(),
+        ("authfail", _) => "eQSL ✗ login invalid — check Settings".to_string(),
+        ("retry", _) => "eQSL ✗ unavailable".to_string(),
+        // The two refusals of the account rather than the contact: each says where its fix is.
+        (_, Some(D::AccountDates)) => {
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)".to_string()
+        }
+        (_, Some(D::QthNickname)) => {
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)".to_string()
+        }
+        _ => format!(
+            "eQSL ✗ rejected{}",
+            r.detail
+                .as_deref()
+                .map(|d| format!(": {d}"))
+                .unwrap_or_default()
+        ),
     }
 }
 
@@ -27280,6 +27707,10 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
         name: dto.name.clone(),
         // f64 Display trims a whole-watt value to "100", not "100.0".
         power: dto.tx_power.map(|w| w.to_string()),
+        // A contest's exchange rides the ENTER sequence; this is an ADDDIRECT insert of an
+        // ordinary QSO into ACLog, which carries none.
+        exchange: Vec::new(),
+        serial_sent: None,
     };
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }
@@ -27827,7 +28258,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     }
     if eqsl_on && owed & legs::EQSL != 0 {
         let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
-            Ok(r) => {
+            Ok((r, refusal)) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
                     "eQSL",
@@ -27835,26 +28266,17 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     format!("auto-push QSO with {call} — {}", r.outcome),
                 );
                 if !ok {
-                    let class = match r.outcome.as_str() {
-                        "authfail" => "Credentials",
-                        "retry" => "ServerError",
+                    use tempo_core::logbook::UploadDetail as D;
+                    let class = match (r.outcome.as_str(), refusal) {
+                        ("authfail", _) => "Credentials",
+                        ("retry", _) => "ServerError",
+                        (_, Some(D::AccountDates)) => "AccountDates",
+                        (_, Some(D::QthNickname)) => "QthNickname",
                         _ => "Refused",
                     };
                     diag_upload_failure("eQSL", class, None, &dto);
                 }
-                let part = match r.outcome.as_str() {
-                    "accepted" => "eQSL ✓".to_string(),
-                    "duplicate" => "eQSL dup".to_string(),
-                    "authfail" => "eQSL ✗ login invalid — check Settings".to_string(),
-                    "retry" => "eQSL ✗ unavailable".to_string(),
-                    _ => format!(
-                        "eQSL ✗ rejected{}",
-                        r.detail
-                            .as_deref()
-                            .map(|d| format!(": {d}"))
-                            .unwrap_or_default()
-                    ),
-                };
+                let part = eqsl_toast_part(&r, refusal);
                 // "retry" = eQSL temporarily unavailable → retry; authfail/reject = don't.
                 (part, ok, r.outcome.as_str() == "retry")
             }
@@ -28767,16 +29189,18 @@ fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
 
 /// ⭐ **The contest strip changed in one window** while the contest logger window is open: what
 /// it now shows becomes the entry both windows show ([`Engine::contest_entry_put`]). The answer
-/// is the entry's new rev. Refused with the logger window closed, and for an entry larger than
-/// any strip writes. Text in memory only: nothing is logged, written to disk or sent.
+/// is the entry's new rev. `contact` is the contact the strip showed as it changed. Refused with
+/// the logger window closed, for an entry larger than any strip writes, and when made on a
+/// contact already logged. Text in memory only: nothing is logged, written to disk or sent.
 #[tauri::command(async)]
 fn contest_entry_put(
     state: State<'_, SharedEngine>,
     call: String,
     fields: std::collections::BTreeMap<String, String>,
     marks: serde_json::Value,
+    contact: u64,
 ) -> Result<u64, String> {
-    engine_lock(&state).contest_entry_put(&call, fields, marks)
+    engine_lock(&state).contest_entry_put(&call, fields, marks, contact)
 }
 
 /// A contest contact the operator removed, as the contest screen lists it: its rows as the log
@@ -28822,9 +29246,15 @@ enum ContestRemovalDto {
     Removed {
         entry: RemovedContestDto,
         sent_to: ContestSentToDto,
+        /// At a club: `"linked"` when this laptop is with the host now, `"away"` when it goes up
+        /// once the link is back. Absent without club sync.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
     },
     Restored {
         entry: RemovedContestDto,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
     },
     Refused {
         refusal: &'static str,
@@ -28835,9 +29265,9 @@ enum ContestRemovalDto {
 /// and the contest screen's Remove on the newest row — when it is still the contact named.
 ///
 /// Kept, never deleted ([`tempo_app::engine::contest_removal`]): the contest journal keeps it
-/// marked, its serial and club seq stay spent, and [`contest_restore`] puts it back. Refused
-/// while club sync runs. The answer names where it had already gone, which nothing here takes
-/// it back from. Answers once the contest journal holds the change; the logbook's copies are
+/// marked, its serial and club seq stay spent, and [`contest_restore`] puts it back. At a club the
+/// club takes it back too (`club`). The answer names where it had already gone, which nothing
+/// here takes it back from. Answers once the contest journal holds the change; the logbook's copies are
 /// read with the engine lock released, on the blocking pool, as [`journaled_command`] waits.
 ///
 /// ⛔ Not one of Remote's operations: removal is refused from afar.
@@ -28865,6 +29295,7 @@ async fn contest_remove_last(
                     logbook: removed.logbook.is_some(),
                     uploaded: removed.logbook.clone().unwrap_or_default(),
                 },
+                club: club_route(removed.removal.club),
             }
         }
         Err(refusal) => ContestRemovalDto::Refused {
@@ -28874,8 +29305,8 @@ async fn contest_remove_last(
 }
 
 /// Put a removed contest contact back exactly as it was, by the id the Removed list gave it —
-/// refused when the station was worked again since on that band and mode, and while club sync
-/// runs. Answers once the contest journal holds the change.
+/// refused when the station was worked again since on that band and mode. At a club the club
+/// puts it back too (`club`). Answers once the contest journal holds the change.
 #[tauri::command]
 async fn contest_restore(
     state: State<'_, SharedEngine>,
@@ -28890,11 +29321,157 @@ async fn contest_restore(
     Ok(match answer {
         Ok(restored) => ContestRemovalDto::Restored {
             entry: RemovedContestDto::from(&restored),
+            club: club_route(restored.club),
         },
         Err(refusal) => ContestRemovalDto::Refused {
             refusal: refusal.code(),
         },
     })
+}
+
+/// What an edit came to: the contact as it was and as it is now, and where it had already gone,
+/// which the edit does not reach — or why nothing changed.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestEditDto {
+    #[serde(rename_all = "camelCase")]
+    Edited {
+        before: Vec<tempo_app::dto::FieldDayQso>,
+        after: Vec<tempo_app::dto::FieldDayQso>,
+        sent_to: ContestSentToDto,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Edit a contest contact in place** — the contest screen's Edit and the strip's Ctrl+Y — when
+/// it is still the contact named (`call`, `when_unix`): its call, what they sent (one field
+/// vector per row, as [`contest_log_manual_rows`] takes them), its band and its mode.
+///
+/// It keeps its time, serial and seq ([`tempo_app::engine::contest_edit`]); refused while club
+/// sync runs, which cannot carry an edit to the club. The answer names where it had already
+/// gone, which nothing here changes. Answers once the contest journal holds the edit; a merged
+/// copy is read with the engine lock released, on the blocking pool.
+///
+/// ⛔ Not one of Remote's operations: an edit is refused from afar, as a removal is.
+#[tauri::command]
+async fn contest_edit(
+    state: State<'_, SharedEngine>,
+    call: String,
+    when_unix: u64,
+    new_call: String,
+    rows: Vec<Vec<(String, String)>>,
+    band: String,
+    mode: String,
+) -> Result<ContestEditDto, String> {
+    let engine = Arc::clone(&state);
+    let edit = tempo_core::fieldday::ContactEdit {
+        call: new_call,
+        rows,
+        band,
+        mode,
+    };
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_edit::edit(&engine, &call, when_unix, &edit)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(match answer {
+        Ok(edited) => {
+            let sent = &edited.edit.sent;
+            ContestEditDto::Edited {
+                before: edited.edit.before.clone(),
+                after: edited.edit.after.clone(),
+                sent_to: ContestSentToDto {
+                    n3fjp: sent.n3fjp.clone(),
+                    n1mm: sent.n1mm.clone(),
+                    wsjtx: sent.wsjtx,
+                    logbook: edited.logbook.is_some(),
+                    uploaded: edited.logbook.clone().unwrap_or_default(),
+                },
+            }
+        }
+        Err(refusal) => ContestEditDto::Refused {
+            refusal: refusal.code(),
+        },
+    })
+}
+
+/// A removal's or restore's way to the club, as the screen words it.
+fn club_route(linked: Option<bool>) -> Option<&'static str> {
+    linked.map(|now| if now { "linked" } else { "away" })
+}
+
+#[cfg(test)]
+mod contest_club_route_tests {
+    use super::*;
+
+    /// The answer the screen words a club take-back from: `linked` with the host now, `away`
+    /// when the link is back, and no `club` key at all without club sync.
+    #[test]
+    fn a_removal_answer_says_how_it_reaches_the_club() {
+        let entry = || RemovedContestDto {
+            id: 2,
+            removed_unix: 1_792_000_000,
+            rows: Vec::new(),
+        };
+        let restored = |linked| {
+            serde_json::to_value(ContestRemovalDto::Restored {
+                entry: entry(),
+                club: club_route(linked),
+            })
+            .unwrap()
+        };
+        assert_eq!(restored(Some(true))["club"], "linked");
+        assert_eq!(restored(Some(false))["club"], "away");
+        assert!(
+            restored(None).get("club").is_none(),
+            "no club sync, no club"
+        );
+        let removed = serde_json::to_value(ContestRemovalDto::Removed {
+            entry: entry(),
+            sent_to: ContestSentToDto {
+                n3fjp: None,
+                n1mm: None,
+                wsjtx: false,
+                logbook: false,
+                uploaded: Vec::new(),
+            },
+            club: club_route(Some(false)),
+        })
+        .unwrap();
+        assert_eq!(removed["club"], "away");
+        assert_eq!(removed["outcome"], "removed");
+    }
+
+    /// An edit's answer as the screen reads it: `outcome`, both sides of the contact, and
+    /// `sentTo` in the removal's shape; a refusal by its code alone.
+    #[test]
+    fn an_edit_answer_is_the_shape_the_screen_reads() {
+        let edited = serde_json::to_value(ContestEditDto::Edited {
+            before: Vec::new(),
+            after: Vec::new(),
+            sent_to: ContestSentToDto {
+                n3fjp: Some("192.168.1.20".into()),
+                n1mm: None,
+                wsjtx: true,
+                logbook: true,
+                uploaded: vec!["qrz"],
+            },
+        })
+        .unwrap();
+        assert_eq!(edited["outcome"], "edited");
+        assert!(edited["before"].is_array() && edited["after"].is_array());
+        assert_eq!(edited["sentTo"]["n3fjp"], "192.168.1.20");
+        assert!(edited["sentTo"].get("n1mm").is_none());
+        assert_eq!(edited["sentTo"]["uploaded"][0], "qrz");
+        let refused = serde_json::to_value(ContestEditDto::Refused { refusal: "club" }).unwrap();
+        assert_eq!(
+            refused,
+            serde_json::json!({ "outcome": "refused", "refusal": "club" })
+        );
+    }
 }
 
 /// The contest screen's Removed list: the removed contacts, oldest removal first.
@@ -28964,6 +29541,71 @@ async fn fd_merge_to_general(
     .await
 }
 
+/// One contest's contacts that the contest journal keeps past its four days and the logbook does
+/// not hold: what the contest screen offers to merge.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContestUnmergedDto {
+    /// The contest's rules-file event id, which the screen names it by.
+    event: String,
+    count: usize,
+    /// When the first and the last of them were logged, Unix seconds.
+    first_unix: u64,
+    last_unix: u64,
+}
+
+/// ⭐ The contest contacts no session loads any more and the logbook does not hold, by contest —
+/// what the contest screen offers to merge. Asking lets go of every one whose copy the logbook
+/// holds on disk, as such a contact always aged out of the journal. The logbook is read with the
+/// engine lock released, on the blocking pool.
+#[tauri::command]
+async fn contest_unmerged(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<ContestUnmergedDto>, String> {
+    let engine = Arc::clone(&state);
+    let offer =
+        tokio::task::spawn_blocking(move || tempo_app::engine::contest_unmerged::unmerged(&engine))
+            .await
+            .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(offer
+        .into_iter()
+        .map(|u| ContestUnmergedDto {
+            event: u.event.to_string(),
+            count: u.count,
+            first_unix: u.first_unix,
+            last_unix: u.last_unix,
+        })
+        .collect())
+}
+
+/// ⭐ Merge the contacts of contest `event` that the contest journal keeps past its four days and
+/// the logbook does not hold into the general logbook — the contest screen's offer. Safe to press
+/// twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.
+#[tauri::command]
+async fn contest_merge_unmerged(
+    state: State<'_, SharedEngine>,
+    event: String,
+) -> Result<(FdMergeReportDto, AppSnapshot), String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let (report, durability) =
+            tempo_app::engine::contest_unmerged::merge_unmerged(&engine, &event);
+        let answer = report.map(|report| {
+            (
+                FdMergeReportDto {
+                    added: report.added(),
+                    already: report.already,
+                    refused: report.refused,
+                    queued: false,
+                },
+                engine_lock(&engine).snapshot(),
+            )
+        });
+        (answer, durability)
+    })
+    .await
+}
+
 /// Set this session's upload destination (§18.1) — per session, default OFF.
 #[tauri::command(async)]
 fn fd_set_upload(
@@ -29008,12 +29650,12 @@ struct FdEventBeacon {
     host: String,
 }
 
-/// Listen ~2 s for club-sync host beacons — the "Find club events" button.
-/// Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast;
-/// the manual host:port field always remains).
+/// Listen for club-sync host beacons ([`tempo_net::fdsync::DISCOVER_SECS`]) — the "Find club
+/// events" button. Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast, or
+/// this laptop's firewall drops it; the manual host:port field always remains).
 #[tauri::command(async)]
 fn fd_discover_events() -> Result<Vec<FdEventBeacon>, String> {
-    tempo_net::fdsync::discover(2)
+    tempo_net::fdsync::discover(tempo_net::fdsync::DISCOVER_SECS)
         .map(|found| {
             found
                 .into_iter()
@@ -29035,6 +29677,16 @@ fn fd_discover_events() -> Result<Vec<FdEventBeacon>, String> {
 fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
     let eng = engine_lock(&state);
     eng.fd_club_export(format == "cabrillo")
+}
+
+/// The host's club log for its own Contest screen and club board: the newest contacts its club
+/// merged, newest first, each with the position that logged it and whether it is a duplicate, and
+/// how many the club holds ([`tempo_app::engine::Engine::fd_club_log_newest`]). `None` when this
+/// instance is not hosting. A read: it changes nothing, and no Remote query or operation reaches
+/// it.
+#[tauri::command(async)]
+fn fd_club_log_newest(state: State<'_, SharedEngine>) -> Option<tempo_app::dto::FdClubLogDto> {
+    engine_lock(&state).fd_club_log_newest()
 }
 
 /// What the host's Give button did: the position given, or why nothing changed.
@@ -29061,6 +29713,45 @@ fn fd_club_give_position(state: State<'_, SharedEngine>, handle: u64) -> FdGiveD
             refusal: refusal.code(),
         },
     }
+}
+
+/// What the host's Remove or Allow back did: done, or why nothing changed.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum FdRemoveDto {
+    Done,
+    Refused { refusal: &'static str },
+}
+
+impl From<Result<(), tempo_app::fdevent::RemoveRefusal>> for FdRemoveDto {
+    fn from(done: Result<(), tempo_app::fdevent::RemoveRefusal>) -> Self {
+        match done {
+            Ok(()) => FdRemoveDto::Done,
+            Err(refusal) => FdRemoveDto::Refused {
+                refusal: refusal.code(),
+            },
+        }
+    }
+}
+
+/// ⭐ **Remove a position from the club event** — the Remove button on the host's own club board,
+/// by the position's id ([`tempo_app::engine::Engine::fd_club_remove_position`]): its link is
+/// closed and every JOIN under it turned away until Allow back; its contacts stay in the club's
+/// log as they were. Refused when this Nexus is not hosting, for its own position, and for a
+/// position the club does not know.
+///
+/// ⛔ Not one of Remote's operations: a club change is refused from afar, and the button refuses a
+/// press that comes through a stream. Nothing here transmits or touches the radio.
+#[tauri::command(async)]
+fn fd_club_remove_position(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
+    engine_lock(&state).fd_club_remove_position(&posid).into()
+}
+
+/// Let a removed position back in ([`tempo_app::engine::Engine::fd_club_allow_back`]): its next
+/// try joins, and it sends what it logged meanwhile. The host's own board only, as Remove is.
+#[tauri::command(async)]
+fn fd_club_allow_back(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
+    engine_lock(&state).fd_club_allow_back(&posid).into()
 }
 
 /// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
@@ -31843,20 +32534,35 @@ fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-/// A callsign's QRZ.com profile URL. The call is sanitized to callsign characters
-/// so a crafted string can never smuggle a different URL through; a portable suffix
-/// ("PJ4/K1ABC") keeps only its base call, which is what QRZ's db pages key on.
-/// `None` when nothing callsign-shaped survives.
+/// A callsign's QRZ.com profile URL. QRZ has one page per callsign, so only the callsign
+/// is kept: an APRS SSID ("PI1UTR-10"; a callsign never contains a `-`) and a D-STAR
+/// module letter after a space ("PI1UTR B") name one of the station's transmitters and
+/// are dropped, and a portable form ("PJ4/K1ABC", "K1ABC/P") keeps only its base call,
+/// which is what QRZ's db pages key on. The call is sanitized to callsign characters
+/// so a crafted string can never smuggle a different URL through. `None` when nothing
+/// callsign-shaped survives.
+///
+/// The hosted Remote page and the DXpedition link build the same URL in the browser
+/// (`ui/src/qrzUrl.ts`); `ui/src/__fixtures__/qrz-urls.json` holds both to one table.
 fn qrz_url(call: &str) -> Option<String> {
+    let station = call
+        .trim_start()
+        .split(|c: char| c.is_whitespace() || c == '-')
+        .next()
+        .unwrap_or("");
     // Longest slash-separated token = the base call (portable prefixes/suffixes are
-    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P).
-    let base = call
+    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P), the last of equal
+    // ones. Each is sanitized BEFORE it is measured: the browser's copy counts UTF-16
+    // units, not bytes, so measuring the raw text could pick a different token there.
+    let base = station
         .split('/')
-        .max_by_key(|t| t.len())
-        .unwrap_or("")
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect::<String>()
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .max_by_key(String::len)
+        .unwrap_or_default()
         .to_ascii_uppercase();
     (!base.is_empty()).then(|| format!("https://www.qrz.com/db/{base}"))
 }
@@ -32652,6 +33358,19 @@ pub fn run() {
                 "tempo: Cloudlog key migration deferred — the OS keychain is unavailable, so the \
                  key was left in settings.json rather than destroyed. It will retry next launch."
             );
+        }
+    }
+
+    // One-time migration: AGN moved to F8 in the Phone, CW and RTTY contest keys
+    // (`Settings::move_agn_to_f8`). A file from before gains the voice keyer's F8, an AGN
+    // recording in F5 is copied to F8's own file (never losing or writing over a recording), and
+    // the RTTY contest keys and the step maps that read F7 or F8 stay on their messages. Saved at
+    // once; a save that does not land is finished at the next launch, which takes its own copy.
+    if settings.move_agn_to_f8() {
+        // Launch, before the Engine and any settings writer exist: a bare save, exempt from
+        // the writer's Engine-lock precondition (`tempo_app::settings::writer`).
+        if let Err(e) = settings.save(&settings_path()) {
+            eprintln!("tempo: couldn't re-save settings after moving AGN to F8: {e}");
         }
     }
 
@@ -34055,13 +34774,21 @@ fn start_on_the_logbook(
                         // A club the engine will not host is not a port problem: it says
                         // its own reason, and nothing about the port.
                         let bound = started
-                            .map_err(|e| format!("couldn't host the club event: {e}."))
+                            .map_err(|e| {
+                                (
+                                    tempo_app::fdevent::HostFailure::Start(e.to_string()),
+                                    format!("couldn't host the club event: {e}."),
+                                )
+                            })
                             .and_then(|()| {
                                 std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
-                                    format!(
-                                        "couldn't host on port {port}: {e} — change the Host \
-                                         port in Settings ▸ Contesting or stop the program \
-                                         using it."
+                                    (
+                                        tempo_app::fdevent::HostFailure::of_bind(&e),
+                                        format!(
+                                            "couldn't host on port {port}: {e} — change the \
+                                             Host port in Settings ▸ Contesting or stop the \
+                                             program using it."
+                                        ),
                                     )
                                 })
                             });
@@ -34077,27 +34804,34 @@ fn start_on_the_logbook(
                                 });
                                 // The discovery beacon, once a second while
                                 // hosting (best-effort: AP-isolated Wi-Fi eats
-                                // broadcast, which is why manual entry stays).
+                                // broadcast, which is why manual entry stays), to
+                                // 255.255.255.255 and to each subnet this laptop is
+                                // on: the first leaves by one adapter only. The same
+                                // address list is the host's line on screen.
                                 let sd = shutdown.clone();
                                 let beacon_engine = mgr_engine.clone();
                                 std::thread::spawn(move || {
                                     let sock = tempo_net::fdsync::beacon_socket();
                                     while !sd.load(Ordering::Relaxed) {
+                                        let lan = tempo_net::fdsync::lan_addrs();
+                                        let targets = tempo_net::fdsync::beacon_targets(&lan);
+                                        let (event, call) = {
+                                            let mut e = engine_lock(&beacon_engine);
+                                            e.fd_note_host_lan(lan);
+                                            (
+                                                e.fd_event_label().unwrap_or_default(),
+                                                e.fd_club_call(),
+                                            )
+                                        };
                                         if let Ok(sock) = &sock {
-                                            let (event, call) = {
-                                                let e = engine_lock(&beacon_engine);
-                                                (
-                                                    e.fd_event_label().unwrap_or_default(),
-                                                    e.settings().mycall.clone(),
-                                                )
-                                            };
                                             tempo_net::fdsync::send_beacon(
-                                                sock, &event, &call, port,
+                                                sock, &event, &call, port, &targets,
                                             );
                                         }
                                         std::thread::sleep(std::time::Duration::from_secs(1));
                                     }
                                 });
+                                engine_lock(&mgr_engine).fd_host_result(None);
                                 hosting = Some((port, contest, shutdown));
                                 bind_failed = None;
                                 conn_log(
@@ -34109,8 +34843,13 @@ fn start_on_the_logbook(
                                     ),
                                 );
                             }
-                            Err(e) => {
-                                engine_lock(&mgr_engine).fd_host_stop();
+                            Err((failure, e)) => {
+                                {
+                                    let mut eng = engine_lock(&mgr_engine);
+                                    eng.fd_host_stop();
+                                    // The host's own line says why, not the log alone.
+                                    eng.fd_host_result(Some(failure));
+                                }
                                 if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
                                     conn_log("FD sync", "error", format!("{e} Retrying quietly."));
                                 }
@@ -34125,6 +34864,10 @@ fn start_on_the_logbook(
                     if let Some((_, _, shutdown)) = client.take() {
                         shutdown.store(true, Ordering::Relaxed);
                         let mut e = engine_lock(&mgr_engine);
+                        // The stopped pump reports its own link down up to a quarter of a
+                        // second from now, perhaps after the next pump is in: nothing it says
+                        // reaches the mirror from here (`Engine::fd_link_take_over`).
+                        e.fd_link_take_over();
                         e.fd_mirror_mut().on_link(false, now_unix() as u64);
                     }
                     if let Some((addr, contest)) = want_addr {
@@ -34134,7 +34877,7 @@ fn start_on_the_logbook(
                         if ready {
                             let shutdown = Arc::new(AtomicBool::new(false));
                             let backend: Arc<dyn tempo_net::fdsync::PositionSync> = Arc::new(
-                                tempo_app::fdbridge::EnginePositionSync(mgr_engine.clone()),
+                                tempo_app::fdbridge::EnginePositionSync::new(mgr_engine.clone()),
                             );
                             let (a2, sd) = (addr.clone(), shutdown.clone());
                             std::thread::spawn(move || {
@@ -34954,6 +35697,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dismiss_tx_alarm,
         test_cat,
         repair_clock,
+        club_firewall_status,
+        club_firewall_press,
         set_tx_even,
         set_tx_cycle_auto,
         set_beacon,
@@ -34962,6 +35707,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         override_next_tx,
         redecode,
         start_cq,
+        start_running,
+        start_search_and_pounce,
         call_cq,
         set_chat_cq,
         resume_chat_cq,
@@ -34979,12 +35726,18 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         contest_remove_last,
         contest_restore,
         contest_removed,
+        contest_edit,
         fd_merge_to_general,
+        contest_unmerged,
+        contest_merge_unmerged,
         fd_set_upload,
         contest_i_moved,
         fd_discover_events,
         fd_club_export,
+        fd_club_log_newest,
         fd_club_give_position,
+        fd_club_remove_position,
+        fd_club_allow_back,
         fd_scoreboard_status,
         n3fjp_test_connection,
         set_hold_tx_freq,
@@ -35188,6 +35941,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         // The data-folder picker (#289). Driven from Rust only (`pick_data_folder`); no
         // capability entry, so the webview cannot open a dialog of its own.
         .plugin(tauri_plugin_dialog::init())
+        // WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P, Ctrl+F…) off in every window:
+        // set on each webview as Tauri makes it, the configured windows included.
+        .plugin(browser_keys::init())
         .manage(d.engine)
         .manage(remote_publisher)
         .manage(d.spectrum_feed)
@@ -36520,6 +37276,72 @@ mod tests {
         assert_eq!(il.exchange, vec!["599", "4", "IL"]);
     }
 
+    /// ⭐ **Before Contest mode turns on, the Contest screen is told what a CQ entry's Cabrillo file
+    /// would leave out** — by the session constructor the mode entry uses, so a declaration that
+    /// session reads as it starts (power, assistance) is made in time. A multi-operator station
+    /// that has picked its class and has an operator at the key is missing nothing, since every
+    /// contact will name that operator; with no class, the OPERATORS line that comes with one is
+    /// missing too. Field Day names nothing, and the Remote capture never carries the key.
+    #[test]
+    fn the_preview_names_the_cabrillo_lines_a_cq_entry_would_leave_out() {
+        let _ = tempo_core::contest::install_call_resolver(super::contest_place_call);
+        let preview = |edit: &dyn Fn(&mut tempo_app::settings::Settings)| {
+            let mut s = tempo_app::settings::Settings {
+                mycall: "W9XYZ".into(),
+                fd_event: "cqww_ssb".into(),
+                contest_cq_zone: 4,
+                contest_qth_state: "IL".into(),
+                ..Default::default()
+            };
+            edit(&mut s);
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let declared = |s: &mut tempo_app::settings::Settings| {
+            s.contest_category_power = "LOW".into();
+            s.contest_category_assisted = "ASSISTED".into();
+            s.contest_category_band = "40M".into();
+        };
+        let blank = preview(&|_| {});
+        assert_eq!(blank.problem, "", "the session builds");
+        assert_eq!(
+            blank.cabrillo_missing,
+            ["CATEGORY-ASSISTED", "CATEGORY-BAND", "CATEGORY-POWER"]
+        );
+        let json = serde_json::to_value(&blank).unwrap();
+        assert_eq!(json["cabrilloMissing"][2], "CATEGORY-POWER", "{json}");
+        assert_eq!(
+            preview(&|s| declared(s)).cabrillo_missing,
+            Vec::<String>::new()
+        );
+        let multi = |at_key: &'static str, class: &'static str| {
+            preview(&move |s| {
+                declared(s);
+                s.contest_category_operator = "MULTI-OP".into();
+                s.fd_operator = at_key.into();
+                s.contest_category_transmitter = class.into();
+            })
+            .cabrillo_missing
+        };
+        assert_eq!(multi("K1ABC", "TWO"), Vec::<String>::new());
+        assert_eq!(
+            multi("", "TWO"),
+            ["OPERATORS"],
+            "nobody at the key, none typed"
+        );
+        assert_eq!(
+            multi("K1ABC", ""),
+            ["CATEGORY-TRANSMITTER", "OPERATORS"],
+            "no class, so no OPERATORS line either"
+        );
+        // CONTROL: Field Day names nothing; the Remote capture sends no such key.
+        let fd = serde_json::to_value(preview(&|s| s.fd_event = "arrlfd".into())).unwrap();
+        assert!(fd.get("cabrilloMissing").is_none(), "{fd}");
+        assert!(serde_json::to_value(super::fd_ruleset_dto("cqww_ssb"))
+            .unwrap()
+            .get("cabrilloMissing")
+            .is_none());
+    }
+
     #[cfg(feature = "radio")]
     #[test]
     fn local_amp_gesture_revokes_remote_permission_without_changing_tx() {
@@ -37048,10 +37870,11 @@ mod tests {
         );
     }
 
-    /// ⭐ Removing the newest contest contact reaches the app only if its three commands are
-    /// REGISTERED, and the two that change the contest log answer only once its journal holds
-    /// the change (the tempo-app functions that wait for it). And none of them is one of Remote's
-    /// operations: removal is refused from afar, so the Remote dispatcher must never name them.
+    /// ⭐ Removing the newest contest contact, and editing one, reach the app only if their
+    /// commands are REGISTERED, and the three that change the contest log answer only once its
+    /// journal holds the change (the tempo-app functions that wait for it). And none of them is
+    /// one of Remote's operations: removal and edit are refused from afar, so the Remote
+    /// dispatcher must never name them.
     #[test]
     fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
         let src = include_str!("lib.rs");
@@ -37066,6 +37889,7 @@ mod tests {
             ("contest_remove_last", Some("contest_removal::remove_last(")),
             ("contest_restore", Some("contest_removal::restore(")),
             ("contest_removed", None),
+            ("contest_edit", Some("contest_edit::edit(")),
         ] {
             assert!(
                 list.lines().any(|l| l.trim() == format!("{command},")),
@@ -37090,9 +37914,69 @@ mod tests {
             remote.contains("LogOp::Delete"),
             "the control: Remote's own delete is there"
         );
-        for name in ["contest_removal", "contest_remove_last", "contest_restore"] {
+        for name in [
+            "contest_removal",
+            "contest_remove_last",
+            "contest_restore",
+            "contest_edit",
+        ] {
             assert!(!remote.contains(name), "Remote must not reach {name}");
         }
+    }
+
+    /// ⭐ The contest screen's offer of the journal's contacts the logbook does not hold reaches
+    /// the app only if its two commands are REGISTERED; the merge answers once the logbook holds
+    /// what it wrote (`durable_command`), as the end-of-contest merge does; and neither is one of
+    /// Remote's operations, so a merge into the logbook is never made from afar.
+    #[test]
+    fn the_unmerged_contest_commands_are_registered_durable_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for (command, through) in [
+            ("contest_unmerged", "contest_unmerged::unmerged("),
+            (
+                "contest_merge_unmerged",
+                "contest_unmerged::merge_unmerged(",
+            ),
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{command},")),
+                "{command} is not registered — the contest screen would fail at runtime"
+            );
+            let body = src
+                .split_once(&format!("\nasync fn {command}("))
+                .expect("the command exists")
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            assert!(
+                body.contains(through),
+                "{command} must go through {through}"
+            );
+            if command == "contest_merge_unmerged" {
+                assert!(
+                    body.contains("durable_command("),
+                    "{command} waits for the logbook"
+                );
+            }
+        }
+        // POSITIVE CONTROL: Remote's change table carries the Logbook's delete.
+        let remote = include_str!("remote_service/operations/logging.rs");
+        assert!(
+            remote.contains("LogOp::Delete"),
+            "the control: Remote's own delete is there"
+        );
+        assert!(
+            !remote.contains("contest_unmerged"),
+            "Remote must not reach the contest journal's merge"
+        );
     }
 
     /// ⭐ The host's Give button reaches the engine only if its command is REGISTERED and goes
@@ -37137,6 +38021,104 @@ mod tests {
         assert!(
             !remote.contains("give_position"),
             "Remote must not reach the Give button's command"
+        );
+    }
+
+    /// ⭐ The host's Remove and Allow back reach the engine only if both commands are REGISTERED
+    /// and each goes through its own engine call, and no Remote dispatcher names either: a club
+    /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
+    /// calls they make.
+    #[test]
+    fn the_remove_and_allow_back_commands_are_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for (command, call) in [
+            (
+                "fd_club_remove_position",
+                ".fd_club_remove_position(&posid)",
+            ),
+            ("fd_club_allow_back", ".fd_club_allow_back(&posid)"),
+        ] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{command},")),
+                "{command} is not registered — its button would fail at runtime"
+            );
+            let body = src
+                .split_once(&format!("\nfn {command}("))
+                .unwrap_or_else(|| panic!("{command} exists"))
+                .1
+                .split_once("\n}\n")
+                .expect("the end of the command")
+                .0;
+            assert!(body.contains(call), "{body}");
+        }
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+            include_str!("remote_service/operations/logging.rs"),
+            include_str!("remote_service/operations/settings.rs"),
+            include_str!("remote_service/query.rs"),
+            include_str!("remote_service/query/field_day.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("remove_position") && !remote.contains("allow_back"),
+            "Remote must not reach the Remove or Allow back command"
+        );
+    }
+
+    /// ⭐ The host's club log list reaches the engine only if its command is REGISTERED and reads
+    /// the engine's own list, and no Remote dispatcher names it: the list is the host's own
+    /// screens', never the Remote page's. POSITIVE CONTROL: the dispatchers read here do name the
+    /// engine calls they make.
+    #[test]
+    fn the_club_log_command_is_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "fd_club_log_newest,"),
+            "fd_club_log_newest is not registered — the club log list would fail at runtime"
+        );
+        let body = src
+            .split_once("\nfn fd_club_log_newest(")
+            .expect("the command exists")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(body.contains(".fd_club_log_newest()"), "{body}");
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+            include_str!("remote_service/operations/logging.rs"),
+            include_str!("remote_service/operations/settings.rs"),
+            include_str!("remote_service/query.rs"),
+            include_str!("remote_service/query/field_day.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("club_log"),
+            "Remote must not reach the host's club log"
         );
     }
 
@@ -37508,6 +38490,63 @@ mod tests {
             .entry_classes
             .is_empty()
         );
+    }
+
+    /// ⭐ **Settings is offered the entry declarations the picked contest's sponsor names**, by
+    /// value — CQ WPX's multi-operator classes, its four overlays, all five address headers and
+    /// its soapbox — and Field Day none of them; the Remote capture carries none either, its
+    /// hosted page refusing a key it does not know.
+    #[test]
+    fn the_preview_offers_the_declarations_the_sponsor_names() {
+        let preview = |event: &str| {
+            let s = tempo_app::settings::Settings {
+                fd_event: event.into(),
+                ..Default::default()
+            };
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let wpx = preview("cqwpx_cw");
+        assert_eq!(wpx.transmitter_categories, ["ONE", "TWO", "UNLIMITED"]);
+        assert_eq!(
+            wpx.overlay_categories,
+            ["CLASSIC", "ROOKIE", "TB-WIRES", "YOUTH"]
+        );
+        assert_eq!(
+            wpx.address_headers,
+            tempo_core::contest::CABRILLO_ADDRESS_HEADERS
+        );
+        assert!(wpx.soapbox);
+        assert_eq!(
+            wpx.band_categories,
+            ["ALL", "160M", "80M", "40M", "20M", "15M", "10M"]
+        );
+        assert_eq!(
+            preview("cqww_rtty").band_categories,
+            ["ALL", "80M", "40M", "20M", "15M", "10M"],
+            "CQ WW RTTY runs on five bands"
+        );
+        let json = serde_json::to_value(&wpx).unwrap();
+        assert_eq!(json["transmitterCategories"][1], "TWO", "{json}");
+        assert_eq!(json["soapbox"], true, "{json}");
+        assert_eq!(json["bandCategories"][0], "ALL", "{json}");
+        // CONTROL: Field Day's preview names none and sends none of the keys.
+        let fd = serde_json::to_value(preview("arrlfd")).unwrap();
+        for key in [
+            "transmitterCategories",
+            "overlayCategories",
+            "addressHeaders",
+            "soapbox",
+            "bandCategories",
+        ] {
+            assert!(fd.get(key).is_none(), "{key}: {fd}");
+            assert!(
+                serde_json::to_value(super::fd_ruleset_dto("cqwpx_cw"))
+                    .unwrap()
+                    .get(key)
+                    .is_none(),
+                "the Remote capture never carries {key}"
+            );
+        }
     }
 
     /// ⭐ **The contest screen can say when the picked contest runs before any session
@@ -41331,6 +42370,40 @@ mod tests {
         }
     }
 
+    /// ⭐ A BIRD NO RADIO HERE CAN RECEIVE IS NOT HELD. The station's only radio is an FT-710 (HF
+    /// and 6 m, its coverage probed) working FT8 on 20 m, and AO-91 goes through the real pick:
+    /// its downlink is on 2 m. The pick answers why and holds nothing, so the Satellites screen
+    /// and the logger window read no hold (`satellite_held`, the read behind
+    /// `get_sat_transponder`), and the radio stays where the operator left it.
+    #[test]
+    fn the_pick_holds_nothing_for_a_bird_the_only_radio_cannot_receive() {
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[{"norad_cat_id":43017,"description":"Mode U/V FM Voice (no CTCSS any longer)","alive":true,"type":"Transceiver","invert":false,"uplink_low":435250000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145960000,"downlink_high":null,"mode":"FM"}]"#,
+        );
+        assert_eq!(rows.len(), 1, "scene: AO-91 parsed");
+        let shared = sat_pick_station("digital");
+        {
+            let mut e = engine_lock(&shared);
+            e.set_frequency(14.074, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+        }
+        let picked = super::hold_sat_row(&shared, "AO-91", &[&rows[0]], 0);
+        let e = engine_lock(&shared);
+        let r = e.snapshot().radio;
+        assert_eq!(
+            (
+                picked,
+                super::satellite_held(&e).map(|h| h.name),
+                (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+            ),
+            (
+                Err("This radio doesn't cover 145.9600 MHz — nothing is held.".to_string()),
+                None,
+                (14.074, "20m", "USB"),
+            )
+        );
+    }
+
     /// …and nothing else moves. The FM birds stay FM through the same pick (SO-50 and PO-101
     /// keep their tones), KOSEN-1 keeps (a)'s CW uplink, RS-44 keeps its inverting pair, and
     /// QO-100's CW-only segment — never tagged FM — is worked exactly as before. Phone.
@@ -42264,6 +43337,49 @@ mod tests {
         let eng = sat_station();
         let local = run_simulated_pass_as(&eng, None, cfg, None);
         assert!(!local.is_empty(), "a local arm flies whatever Remote did");
+    }
+
+    /// ⭐ THE 2026-10-13 REPORT'S STATION THROUGH THE SHIPPED LOOP: one radio, an FT-710 (HF +
+    /// 6 m, its coverage probed), working FT8 on 20 m and holding SO-50, a bird it cannot hear,
+    /// when a real pass comes up. The loop flies the whole pass and never steers that radio: the FT8
+    /// dial stays on 14.074, and every badge says no Doppler leg is driven, so the LOS report
+    /// claims no dial handback. The pass itself is still reported — the badges go `tracking`,
+    /// which is what raises the AOS alert (`satPassAlert.ts`).
+    #[test]
+    fn a_real_pass_never_steers_a_radio_that_cannot_hear_the_bird() {
+        let eng: SharedEngine = {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+            e.set_sat_transponder(Some((
+                "SO-50|FM repeater".into(),
+                0,
+                tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+            )));
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        };
+        let badges = run_simulated_pass(&eng, None, tempo_core::rotator::RotatorConfig::default());
+        assert!(
+            badges.iter().any(|b| b.state == "tracking"),
+            "the pass must still be reported: {} badges",
+            badges.len()
+        );
+        let claimed: Vec<_> = badges
+            .iter()
+            .filter(|b| b.doppler_downlink || b.doppler_uplink || b.mode != "pass-only")
+            .map(|b| (b.mode.clone(), b.doppler_downlink, b.doppler_uplink))
+            .collect();
+        // ONE assertion over both facts, so a red names the dial AND the badge by value.
+        let r = engine_lock(&eng).snapshot().radio;
+        assert_eq!(
+            (
+                (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+                claimed.first()
+            ),
+            ((14.074, "20m", "USB"), None),
+            "the FT8 dial must never move, and no badge may claim Doppler on this radio"
+        );
     }
 
     /// A written snapshot round-trips through its own serde (camelCase keys on
@@ -43821,6 +44937,28 @@ mod tests {
         assert_eq!(dxped_page_url("///", Some("nonsense")), None);
     }
 
+    /// Every QRZ button opens one page per station: `qrz_url` against each row of the table
+    /// the browser's copy (the hosted Remote page's QRZ button, the DXpedition link) is held
+    /// to as well, by `ui/src/qrzUrl.shared.test.ts`. Every wrong row is listed, by value.
+    #[test]
+    fn qrz_url_is_the_shared_tables() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../ui/src/__fixtures__/qrz-urls.json"))
+                .expect("qrz-urls.json parses");
+        let cases = table["cases"].as_array().expect("cases is a list");
+        assert!(!cases.is_empty());
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|row| {
+                let call = row["call"].as_str().expect("every row has a call");
+                let want = row.get("url").expect("every row has a url").as_str();
+                let got = super::qrz_url(call);
+                (got.as_deref() != want).then(|| format!("{call:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     // ---- LoTW download → award credit, end to end -------------------------
     //
     // `tempo_core` proves the flag survives the parse and the merge; this proves
@@ -43992,9 +45130,7 @@ mod tests {
         let next = tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
             username: "nt9e".into(),
             password: "x".into(),
-            owncall: None,
-            qsl_since: Some(e.settings().lotw_last_qsl.trim().to_string())
-                .filter(|c| !c.is_empty()),
+            qsl_since: Some(e.settings().lotw_sync_cursor().to_string()).filter(|c| !c.is_empty()),
         });
         assert!(
             next.contains("&qso_qslsince=1900-01-01"),
@@ -44012,9 +45148,14 @@ mod tests {
         let mut s = tempo_app::settings::Settings {
             lotw_username: "nt9e".into(),
             lotw_last_qsl: "2026-08-04 21:12:44".into(),
+            lotw_cursor_every_call: true,
             ..Default::default()
         };
-        let used = s.lotw_last_qsl.clone();
+        let used = s.lotw_sync_cursor().to_string();
+        assert_eq!(
+            used, "2026-08-04 21:12:44",
+            "premise: an incremental download"
+        );
         assert!(
             super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
             "control: nothing moved during the fetch, so its high-water is the new cursor"
@@ -44026,6 +45167,110 @@ mod tests {
         );
         // A full pull already running fetched everything the reset asks for: it may advance.
         assert!(super::lotw_cursor_may_advance(&s, &body, "nt9e", ""));
+    }
+
+    /// ★ The first download after the update asks for every call on the account from 1900, not
+    /// from the cursor an older build left (a download of the Settings call alone made it, and
+    /// LoTW lets a cursor stand only for the identical query), and its high-water then becomes the
+    /// cursor. Were the older cursor still compared, that full download could never move it, and
+    /// every download after would be a full one again.
+    #[test]
+    fn the_first_full_download_after_the_update_moves_the_cursor() {
+        let body = lotw_download();
+        let older: tempo_app::settings::Settings =
+            serde_json::from_str(r#"{"lotwUsername":"nt9e","lotwLastQsl":"2026-08-04 21:12:44"}"#)
+                .unwrap();
+        let since = older.lotw_sync_cursor().to_string();
+        assert_eq!(since, "", "a full download");
+        assert!(super::lotw_cursor_may_advance(
+            &older, &body, "nt9e", &since
+        ));
+    }
+
+    /// ★ A changed QTH Nickname makes the next eQSL sync read that account's whole InBox. Each
+    /// nickname is an account of its own at eQSL, with its own InBox, and the cursor was emptied
+    /// only when the username changed: after a switch the next sync asked the new account only
+    /// for cards since the old one's last sync, and its earlier cards never arrived. A config
+    /// profile carrying another nickname loads through this same save.
+    #[test]
+    fn a_changed_qth_nickname_makes_the_next_eqsl_sync_read_the_whole_inbox() {
+        let held = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            eqsl_last_sync: "202610010000".into(),
+            ..Default::default()
+        };
+        // What `download_eqsl_report_impl` asks eQSL for, from the settings a save leaves.
+        let next_sync = |s: &tempo_app::settings::Settings| {
+            tempo_core::eqsl::build_inbox_url(&tempo_core::eqsl::EqslQuery {
+                username: s.eqsl_username.trim().to_string(),
+                password: "not-a-password".into(),
+                rcvd_since: Some(s.eqsl_last_sync.trim().to_string()).filter(|c| !c.is_empty()),
+                qth_nickname: Some(s.eqsl_qth_nickname.trim().to_string())
+                    .filter(|n| !n.is_empty()),
+            })
+        };
+        let saved = |edit: &dyn Fn(&mut tempo_app::settings::Settings)| {
+            let mut form = held.clone();
+            edit(&mut form);
+            super::keep_eqsl_cursor_for_its_account(&held, &mut form);
+            next_sync(&form)
+        };
+        let portable = saved(&|f| f.eqsl_qth_nickname = "Portable".into());
+        assert!(
+            portable.ends_with("&QTHNickname=Portable&RcvdSince=190001010000"),
+            "{portable}"
+        );
+        // Controls: a changed username does the same, as it always has. A save that names the
+        // same account keeps the cursor, the nickname's surrounding spaces included, since no
+        // request ever sends them.
+        let other_login = saved(&|f| f.eqsl_username = "k2def-other".into());
+        assert!(
+            other_login.ends_with("&RcvdSince=190001010000"),
+            "{other_login}"
+        );
+        for kept in [
+            saved(&|f| f.eqsl_upload = !f.eqsl_upload),
+            saved(&|f| f.eqsl_qth_nickname = " Home ".into()),
+        ] {
+            assert!(
+                kept.ends_with("&QTHNickname=Home&RcvdSince=202610010000"),
+                "{kept}"
+            );
+        }
+    }
+
+    /// The nickname can change while an eQSL sync runs: the fetch holds no engine lock. The
+    /// sync's cursor belongs to the account it read, so it must not land on the account the save
+    /// switched to, or that account's first sync asks only for cards since the other's.
+    #[test]
+    fn an_eqsl_sync_already_running_keeps_its_cursor_off_another_account() {
+        let inbox = "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n\
+                     <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261001<TIME_ON:6>180000<EOR>\n";
+        let mut s = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            ..Default::default()
+        };
+        assert!(
+            super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "control: nothing moved during the fetch"
+        );
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, &inbox[..inbox.len() - 7], "k2def-test", "Home"),
+            "control: a cut-off download never moves it"
+        );
+        s.eqsl_qth_nickname = "Portable".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync of Home finishing after the switch to Portable"
+        );
+        s.eqsl_qth_nickname = "Home".into();
+        s.eqsl_username = "k2def-other".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync finishing after the username changed, as before"
+        );
     }
 
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."
@@ -44779,6 +46024,87 @@ mod tests {
         )
     }
 
+    /// ★ An eQSL refusal reaches the contact with its reason, and its toast names the fix. The
+    /// push classified eQSL's answer and stamped the outcome alone, so the Connections row and
+    /// Awards ▸ Confirmations had no reason to give for any eQSL bounce, and a contact outside the
+    /// dates of the operator's eQSL account read as a bad login. Only eQSL's answer is handed in
+    /// here: the request, and the password it carries, never reach this half of the push.
+    #[test]
+    fn an_eqsl_refusal_is_stamped_with_its_reason() {
+        use tempo_core::logbook::{UploadDetail as D, UploadOutcome as U};
+        let log = tempo_core::logbook::parse_adif(
+            &[
+                check_row("W1AW", "20m", "FT8", "180000", ""),
+                check_row("K1ABC", "20m", "FT8", "181500", ""),
+                check_row("N0SUP", "20m", "FT8", "183000", ""),
+            ]
+            .concat(),
+        );
+        let (dir, engine) = store_holding("eqsl-refusal-reason", &log);
+        let answered = |call: &str, answer: &str| {
+            let held = engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .expect("logged");
+            let named = held.id.map(|id| id.to_string());
+            crate::eqsl_answered(named.as_deref(), &held, answer, &engine, true).expect("answered")
+        };
+        let (dates, class) = answered(
+            "W1AW",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n\
+             Result: 0 out of 1 records added",
+        );
+        assert_eq!(
+            (dates.outcome.as_str(), dates.detail.as_deref(), class),
+            (
+                "rejected",
+                Some(D::AccountDates.sentence()),
+                Some(D::AccountDates)
+            ),
+            "what Awards ▸ Confirmations' Push to eQSL shows"
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&dates, class),
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)"
+        );
+        let (nickname, class) = answered(
+            "K1ABC",
+            "Error: NO MATCH ON APP_EQSL_QTH_NICKNAME<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&nickname, class),
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)"
+        );
+        // Control: a bad login is still the login.
+        let (login, class) = answered(
+            "N0SUP",
+            "Error: No match on eQSL_User/eQSL_Pswd<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&login, class),
+            "eQSL ✗ login invalid — check Settings"
+        );
+        let stamp = |call: &str| {
+            engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.upload.eqsl)
+                .map(|s| (s.outcome, s.detail))
+        };
+        assert_eq!(
+            [stamp("W1AW"), stamp("K1ABC"), stamp("N0SUP")],
+            [
+                Some((U::Rejected, Some(D::AccountDates))),
+                Some((U::Rejected, Some(D::QthNickname))),
+                Some((U::AuthFail, Some(D::Credentials))),
+            ],
+            "each contact carries its own reason, for the Connections row and Awards"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The QRZ Logbook key the tests check with. It is no one's: the fake below answers.
     fn test_qrz() -> crate::QrzAccess {
         crate::QrzAccess {
@@ -45138,7 +46464,7 @@ mod tests {
 
     /// ★ The check uploads nothing and moves no cursor, for each service. Each is asked once for
     /// the whole of what it holds: LoTW twice, in the form a full re-download asks (the whole
-    /// confirmation history for the Settings call, and the whole own-QSO list with no start
+    /// confirmation history of every call on the account, and the whole own-QSO list with no start
     /// date); eQSL for its InBox from 1900, said outright, for the QTH Nickname set; QRZ with one
     /// bare FETCH of the whole book. Apply asks nothing (it is handed no transport). Nothing is
     /// queued to a connector, and no sync cursor moves: not LoTW's, eQSL's or QRZ's.
@@ -45231,21 +46557,61 @@ mod tests {
             "&qso_qsl=yes",
             "&qso_qsldetail=yes",
             "&qso_withown=yes",
-            "&qso_owncall=K2DEF",
             "&qso_qslsince=1900-01-01",
         ] {
             assert!(asked[0].contains(part), "the confirmations: {part}");
         }
-        for part in [
-            "&qso_qsl=no",
-            "&qso_owncall=K2DEF",
-            "&qso_qsorxsince=1900-01-01",
-        ] {
+        for part in ["&qso_qsl=no", "&qso_qsorxsince=1900-01-01"] {
             assert!(asked[1].contains(part), "the own-QSO list: {part}");
         }
         assert!(
             !asked[1].contains("qso_startdate"),
             "the whole own-QSO list, from no start date"
+        );
+        for url in asked.iter() {
+            assert!(
+                !url.contains("qso_owncall"),
+                "every call on the account, not the one in Settings alone"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LoTW's check counts its confirmations for a call the log holds no contact under, a club call
+    /// on the same account, which gain no contact; the Settings call's gains the contact naming no
+    /// call of its own.
+    #[test]
+    fn the_lotw_check_counts_the_confirmations_of_a_call_the_log_does_not_hold() {
+        let (dir, engine) = store_holding(
+            "check-other-call",
+            &tempo_core::logbook::parse_adif(&check_row("W1AW", "20m", "FT8", "120000", "")),
+        );
+        let lotw = FakeLotw {
+            report: lotw_answer(&[
+                check_row(
+                    "W1AW",
+                    "20m",
+                    "FT8",
+                    "120000",
+                    "<STATION_CALLSIGN:6>W1CLUB<QSL_RCVD:1>Y",
+                ),
+                check_row(
+                    "W1AW",
+                    "20m",
+                    "FT8",
+                    "120000",
+                    "<STATION_CALLSIGN:5>K2DEF<QSL_RCVD:1>Y",
+                ),
+            ]),
+            own: lotw_answer(&[]),
+            asked: Default::default(),
+        };
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let dto = lotw_checked(&checks, session, &engine, &lotw).expect("the check reads");
+        assert_eq!(
+            (dto.records, dto.other_call_records, dto.gain_ids.len()),
+            (2, 1, 1)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -47567,5 +48933,125 @@ mod tests {
             }
         }
         assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+}
+
+/// The cockpit's gestures that enter a running contest from another mode (Call CQ, a double-click
+/// on a CQ) open its session as the `set_mode` command does: with the log's rows, so the session's
+/// sweep is there for its first snapshot (SPEC-2 v3 C19). Opened without them, the session's B4
+/// left out what was worked outside the contest since it began, and a debug build stopped at the
+/// first snapshot.
+#[cfg(test)]
+mod contest_entry_command_tests {
+    use super::*;
+
+    /// A store-backed station in ARRL Field Day, Contest mode on, back out of the contest in FT8
+    /// QSO mode. The contest's journal holds a contact from an hour ago, so the session reaches
+    /// back to it; K9NEW, worked half an hour ago outside the contest, is in the station log.
+    /// W9XYZ is calling CQ FD, and K9NEW is calling CQ.
+    fn back_in_ft8_qso_mode(tag: &str) -> (PathBuf, SharedEngine) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        let now = now_unix() as u64;
+        let rec = |call: &str, when: u64| {
+            let mut log = tempo_core::logbook::Logbook::new();
+            log.import_adif(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>120000<EOR>",
+                call.len()
+            ));
+            let mut r = tempo_core::logbook::QsoRecord::clone(&log.records()[0]);
+            r.id = None;
+            r.when_unix = when;
+            r
+        };
+        let row = tempo_core::logbook::adif_record(&rec("K1JNL", now - 3_600));
+        let at = row.rfind("<EOR>").expect("a record ends");
+        let journal = format!(
+            "{}{}<CLASS:2>2A<ARRL_SECT:3>EMA{}",
+            tempo_core::logbook::adif_header(),
+            &row[..at],
+            &row[at..]
+        );
+        std::fs::write(dir.join("fd.adi"), journal).expect("the journal");
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_fd_log_path(dir.join("fd.adi"));
+            eng.log_qso(rec("K9NEW", now - 1_800));
+            eng.flush_log_store(std::time::Duration::from_secs(30))
+                .expect("the log is written");
+            let mut s = eng.settings().clone();
+            s.fd_class = "1D".into();
+            s.fd_section = "WI".into();
+            s.fd_active = true;
+            eng.apply_settings(s);
+            eng.set_tier(tempo_app::dto::Tier::Ft8);
+            eng.set_mode("qso-monitor")
+                .expect("out of the contest, in FT8 QSO mode");
+            eng.hear_for_test("CQ FD W9XYZ EN37", -12, 2);
+            eng.hear_for_test("CQ K9NEW EN38", -10, 2);
+        }
+        (dir, engine)
+    }
+
+    /// What the snapshot says about K9NEW, worked outside the contest since its session began.
+    fn k9new_worked(snap: &AppSnapshot) -> bool {
+        snap.stations
+            .iter()
+            .find(|s| s.call == "K9NEW")
+            .expect("K9NEW is heard")
+            .worked
+    }
+
+    /// ★ A double-click on W9XYZ's CQ FD re-enters the contest's S&P with the session's sweep:
+    /// K9NEW reads worked this session.
+    #[test]
+    fn a_double_click_on_a_cq_enters_the_contest_with_its_rows() {
+        let (dir, engine) = back_in_ft8_qso_mode("contest-entry-click");
+        let ota: SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let snap = crate::call_station_on(
+            &engine,
+            &ota,
+            &crate::SharedParks::default(),
+            "W9XYZ",
+            None,
+            Some("CQ FD W9XYZ EN37".into()),
+            Some(-12),
+            None,
+            None,
+        )
+        .expect("the double-click is taken");
+        let fd = snap.field_day.as_ref().expect("in the contest");
+        assert!(
+            !fd.running && fd.dxcall.as_deref() == Some("W9XYZ"),
+            "the contest's S&P, working W9XYZ"
+        );
+        assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ Call CQ re-enters the contest's Running with the session's sweep: K9NEW reads worked
+    /// this session.
+    #[test]
+    fn call_cq_enters_the_contest_with_its_rows() {
+        let (dir, engine) = back_in_ft8_qso_mode("contest-entry-cq");
+        let snap = crate::start_running_on(&engine, None).expect("the run starts");
+        let fd = snap.field_day.as_ref().expect("in the contest");
+        assert!(fd.running, "the contest's Running");
+        assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ The strip's S&P re-enters the contest's S&P with the session's sweep: K9NEW reads worked
+    /// this session.
+    #[test]
+    fn the_strips_sp_enters_the_contest_with_its_rows() {
+        let (dir, engine) = back_in_ft8_qso_mode("contest-entry-sp");
+        let snap = crate::start_search_and_pounce_on(&engine).expect("S&P is taken");
+        assert_eq!(
+            snap.field_day.as_ref().map(|fd| fd.running),
+            Some(false),
+            "the contest's S&P"
+        );
+        assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

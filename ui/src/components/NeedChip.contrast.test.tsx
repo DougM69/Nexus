@@ -806,19 +806,20 @@ describe('a need chip reads in every theme, wherever it sits', () => {
   }, 120_000)
 
   it('FIRES: the chip as it shipped is caught in the light theme on every host, at the ratios Chrome measured', () => {
-    const shipped = unreadable(SHIPPED, natural, ['light'])
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    const shipped = unreadable(SHIPPED, natural, ['light skin=bright'])
     const hosts = new Set(shipped.map((m) => HOSTS.find(([h]) => m.startsWith(h))?.[0]))
     expect([...hosts].sort()).toEqual(HOSTS.map(([h]) => h).sort())
     // The resolver must agree with what Chrome painted, or it is not measuring the same thing (Chrome, the real app
     // in the standard light theme: the same hex pairs; a ratio a unit apart where the page's mix rounds).
     const has = (re: RegExp) => shipped.some((m) => re.test(m))
-    expect(has(/^Operate Band Activity \.decode-row\.directed \.need-dxped "DXPED" light: #38bdf8 on #d3ccde = 1\.37:1$/), 'DXPED calling me').toBe(true)
-    expect(has(/^Operate Band Activity \.decode-row\.need-watch \.need-watch "WATCH" light: #3f6212 on #acbb9a = 3\.48:1$/), 'WATCH').toBe(true)
-    expect(has(/^the Needed view \.np-row\.need-pota \.need-pota "(NEW PARK|POTA)" light: #16a34a on #b3d9c8 = 2\.15:1$/), 'NEW PARK and POTA').toBe(true)
-    expect(has(/^the Needed view \.np-row\.need-entity \.need-dxped "DXPED" light: #38bdf8 on #bfe0f2 = 1\.55:1$/), 'DXPED on the board').toBe(true)
-    expect(has(/^Operate Call Roster \.or-row\.need-pota \.need-pota "PARK" light: #16a34a on #c4e7d3 = 2\.4[67]:1$/), 'PARK on the roster').toBe(true)
-    expect(has(/^Tempo Stations rail \.station-card\.worked\.needed\.need-confirm \.need-confirm "LoTW" light: #8491a3 on #d7dbe2 = 2\.3[01]:1$/), 'LoTW, dimmed').toBe(true)
-    expect(has(/^the Satellites view \.sat-earn \.need-grid "GRID ×5" light: #047857 on #c0dcd6 = 3\.7[78]:1$/), 'GRID on the Next-up strip').toBe(true)
+    expect(has(/^Operate Band Activity \.decode-row\.directed \.need-dxped "DXPED" light skin=bright: #38bdf8 on #d3ccde = 1\.37:1$/), 'DXPED calling me').toBe(true)
+    expect(has(/^Operate Band Activity \.decode-row\.need-watch \.need-watch "WATCH" light skin=bright: #3f6212 on #acbb9a = 3\.48:1$/), 'WATCH').toBe(true)
+    expect(has(/^the Needed view \.np-row\.need-pota \.need-pota "(NEW PARK|POTA)" light skin=bright: #16a34a on #b3d9c8 = 2\.15:1$/), 'NEW PARK and POTA').toBe(true)
+    expect(has(/^the Needed view \.np-row\.need-entity \.need-dxped "DXPED" light skin=bright: #38bdf8 on #bfe0f2 = 1\.55:1$/), 'DXPED on the board').toBe(true)
+    expect(has(/^Operate Call Roster \.or-row\.need-pota \.need-pota "PARK" light skin=bright: #16a34a on #c4e7d3 = 2\.4[67]:1$/), 'PARK on the roster').toBe(true)
+    expect(has(/^Tempo Stations rail \.station-card\.worked\.needed\.need-confirm \.need-confirm "LoTW" light skin=bright: #8491a3 on #d7dbe2 = 2\.3[01]:1$/), 'LoTW, dimmed').toBe(true)
+    expect(has(/^the Satellites view \.sat-earn \.need-grid "GRID ×5" light skin=bright: #047857 on #c0dcd6 = 3\.7[78]:1$/), 'GRID on the Next-up strip').toBe(true)
   }, 120_000)
 
   it('FIRES: the chip as it shipped is caught in the dark theme too, at the ratios Chrome measured', () => {

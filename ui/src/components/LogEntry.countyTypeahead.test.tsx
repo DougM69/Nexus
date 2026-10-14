@@ -11,9 +11,10 @@
 // Rendered with the props `PhoneCockpit` passes and a `fieldDay` of the shape the DTO
 // really produces, the shape `LogEntry.contestStrip.test.tsx` established. jsdom lays
 // nothing out; not one assertion here is about geometry.
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
+import { subscribeToasts } from '../toast'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 vi.mock('../api', () => ({
@@ -91,7 +92,7 @@ const box = (caption: string): HTMLInputElement => {
   if (!cap) throw new Error(`no received box captioned ${caption}`)
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
-const qthBox = () => box('QTH')
+const qthBox = () => box('County / State')
 const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
 const hits = () => [...document.querySelectorAll('.le-fd-suggest .le-fd-hit-code')].map((n) => n.textContent)
 
@@ -152,6 +153,20 @@ describe('the exchange type-ahead', () => {
     expect(api.contestLogManual.mock.calls[0][1]).toEqual([
       ['RST', '599'],
       ['QTH', 'KANK'],
+    ])
+  })
+
+  it('LOGS Prince Edward Island, named in full, as the province: PEI', async () => {
+    // The list holds PE and PEI, both Prince Edward Island — one province, so the name is not
+    // ambiguous.
+    renderStrip()
+    fireEvent.change(callBox(), { target: { value: 'VY2AB' } })
+    fireEvent.change(qthBox(), { target: { value: 'Prince Edward Island' } })
+    fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    await vi.waitFor(() => expect(api.contestLogManual).toHaveBeenCalled())
+    expect(api.contestLogManual.mock.calls[0][1]).toEqual([
+      ['RST', '599'],
+      ['QTH', 'PEI'],
     ])
   })
 
@@ -261,5 +276,286 @@ describe('the while-typing DUPE badge', () => {
     } as unknown as FieldDayStatus)
     fireEvent.change(callBox(), { target: { value: 'K9NR' } })
     expect(dupeShown()).toBe(false)
+  })
+})
+
+// ⭐ "I MOVED" READS A COUNTY THE WAY THE QTH BOX DOES. A mobile knows the county it has just
+// driven into by its NAME; the box sent exactly what was typed, so `DuPage` was refused as "not
+// one of this contest's counties" while `DUPG` went through. Each box is now read by the QTH
+// box's own function, and the engine still decides what is a county.
+describe('"I moved" reads a county the way the QTH box does', () => {
+  /** Open "I moved", type into its QTH box and press Save. */
+  const moveTo = async (typed: string) => {
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const qth = [...document.querySelectorAll('.le-fd-sent input')].find(
+      (i) => i.getAttribute('aria-label') === 'QTH',
+    )!
+    fireEvent.change(qth, { target: { value: typed } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+  }
+
+  it.each([
+    ['a name', 'MONROE', 'MNRO'],
+    ['a code', 'DUPG', 'DUPG'],
+    ['a mixed-case name', 'DuPage', 'DUPG'],
+    ['a name with its punctuation and spacing', 'st. clair', 'SCLA'],
+  ])('%s: %s goes to the engine as %s', async (_what, typed, code) => {
+    renderStrip()
+    await moveTo(typed)
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', code]])
+  })
+
+  it("reads New York's own list in the New York QSO Party", async () => {
+    renderStrip({
+      ...ilqp(),
+      event: 'nyqp',
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'QTH', kind: 'oneOf', required: true, domains: ['ny_counties', 'ny_mults', 'dx_literal'] },
+      ],
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw: 'ALB', domain: 'ny_counties' },
+      ],
+    } as unknown as FieldDayStatus)
+    await moveTo('Monroe')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'MON']])
+  })
+
+  /** A QSO party as the engine serialises it for a `role` station sending `raw`, from the list
+   *  `domain` names (none for a value typed free, as a DX station's is). */
+  const party = (st: 'il' | 'ny', role: string, raw: string, domain?: string): FieldDayStatus =>
+    ({
+      ...ilqp(),
+      event: `${st}qp`,
+      role,
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        {
+          key: 'QTH',
+          kind: 'oneOf',
+          required: true,
+          domains: st === 'il' ? ['il_counties', 'il_mults'] : ['ny_counties', 'ny_mults', 'dx_literal'],
+        },
+      ],
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw, ...(domain ? { domain } : {}) },
+      ],
+    }) as unknown as FieldDayStatus
+
+  // Five counties share their name with a state or province on the same contest's list. The
+  // QTH box cannot tell which was meant; I moved can, from the list the station sends from.
+  it.each([
+    ['il', 'COOK', 'il_counties', 'Washington', 'WASH'],
+    ['ny', 'ALB', 'ny_counties', 'Delaware', 'DEL'],
+    ['ny', 'ALB', 'ny_counties', 'Ontario', 'ONT'],
+    ['ny', 'ALB', 'ny_counties', 'Washington', 'WAS'],
+    ['ny', 'ALB', 'ny_counties', 'Wyoming', 'WYO'],
+  ])('%sqp in-state, sending %s (%s): %s is the county %s', async (st, sent, list, typed, code) => {
+    renderStrip(party(st as 'il' | 'ny', 'in_state', sent, list))
+    await moveTo(typed)
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', code]])
+  })
+
+  it('outside the state, the same name is the state the station sends', async () => {
+    renderStrip(party('il', 'w_ve', 'IN', 'il_mults'))
+    await moveTo('Washington')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'WA']])
+  })
+
+  it('a value sent from no list (a DX station types its own) is read as the QTH box reads it', async () => {
+    renderStrip(party('il', 'dx', 'GERMANY'))
+    await moveTo('DuPage')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'DUPG']])
+  })
+
+  it("leaves the QTH box's own reading alone: a name two lists hold stays as typed there", () => {
+    renderStrip()
+    fireEvent.change(qthBox(), { target: { value: 'Washington' } })
+    fireEvent.keyDown(qthBox(), { key: ' ', code: 'Space' })
+    expect(qthBox().value.toUpperCase()).toBe('WASHINGTON')
+  })
+
+  it('a name that is no county goes as typed, and the engine refuses it in its own words', async () => {
+    const refusal = '"NARNIA" is not one of this contest\'s counties.'
+    api.contestIMoved.mockRejectedValueOnce(refusal)
+    let shown: string[] = []
+    const off = subscribeToasts((ts) => {
+      shown = ts.map((x) => x.message)
+    })
+    renderStrip()
+    await moveTo('Narnia')
+    off()
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'NARNIA']])
+    expect(shown).toContain(`Could not change what you send: ${refusal}`)
+  })
+
+  it('naming the county already being sent moves nothing', async () => {
+    renderStrip({
+      ...ilqp(),
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw: 'SCLA', domain: 'il_counties' },
+      ],
+    } as unknown as FieldDayStatus)
+    await moveTo('St. Clair')
+    expect(api.contestIMoved).not.toHaveBeenCalled()
+  })
+
+  it('a slot with no received box keeps what was typed, as before', async () => {
+    renderStrip({ ...ilqp(), receives: [{ key: 'RST', kind: 'rst', required: true }] } as unknown as FieldDayStatus)
+    await moveTo(' DuPage ')
+    expect(api.contestIMoved).toHaveBeenCalledWith([['QTH', 'DUPAGE']])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ⭐ A VALUE ON NO LIST, FROM A STATION IN THE USA OR CANADA.
+//
+// Such a station sends a county, a state or a province, and each is on the contest's lists. Only a
+// station elsewhere sends what no list holds, its country, which is what the box's free-text arm is
+// for. So from a call the country file places in the USA (Alaska and Hawaii are states on these
+// lists) or in Canada, a value on no list is a typo (COKO), a half-typed code (DUP) or a name two
+// lists share (Washington). It used to log as typed and score no county for either station. The
+// verdict line now names it, offers the codes a name or a prefix matches, and Log stays off until
+// the value is real.
+// ---------------------------------------------------------------------------
+
+/** What the country file says of each call typed below (`resolveEntity`), in cty.dat's names. */
+const COUNTRY: Record<string, string> = {
+  K9NR: 'United States',
+  VE3ABC: 'Canada',
+  KL7XX: 'Alaska',
+  DL1ABC: 'Fed. Rep. of Germany',
+}
+
+describe('a value on no list, from a station in the USA or Canada', () => {
+  beforeEach(() => {
+    api.resolveEntity.mockImplementation((call: string) => Promise.resolve(COUNTRY[call] ?? null))
+  })
+  afterEach(() => {
+    api.resolveEntity.mockImplementation(() => Promise.resolve(null))
+  })
+
+  const verdicts = () => [...document.querySelectorAll('.le-fd-verdicts .le-fd-hint')].map((n) => n.textContent)
+  const logButton = () => document.querySelector('.le-fd-log-btn') as HTMLButtonElement
+  /** Type the call, let the country file answer for it, then type the QTH. */
+  const typeContact = async (call: string, qth: string) => {
+    fireEvent.change(callBox(), { target: { value: call } })
+    await act(async () => {})
+    fireEvent.change(qthBox(), { target: { value: qth } })
+  }
+  /** Press Enter in the QTH box; what the single-contact command was handed, every call. */
+  const pressEnter = async () => {
+    await act(async () => {
+      fireEvent.keyDown(qthBox(), { key: 'Enter' })
+    })
+    return api.contestLogManual.mock.calls.map((c) => c[1])
+  }
+
+  it.each([
+    ['K9NR', 'the USA'],
+    ['VE3ABC', 'Canada'],
+    ['KL7XX', 'Alaska, a state on both lists'],
+  ])('%s (%s) sending COKO: the line names it, Log stays off, and Enter logs nothing', async (call) => {
+    renderStrip()
+    await typeContact(call, 'COKO')
+    expect(verdicts()).toEqual(["COKO is not a county, state or province on this contest's list."])
+    expect(logButton().disabled).toBe(true)
+    expect(await pressEnter()).toEqual([])
+  })
+
+  it.each([
+    // A name two lists share: the county, then the state.
+    ['K9NR', 'Washington', 'WASHINGTON', 'WASH or WA'],
+    // A prefix: the codes that begin with it, then St. Clair by its name.
+    ['K9NR', 'ST', 'ST', 'STAR, STEP, or SCLA'],
+    // A code typed in part.
+    ['K9NR', 'DUP', 'DUP', 'DUPG'],
+    // A province's name typed in part.
+    ['VE3ABC', 'Ont', 'ONT', 'ON'],
+  ])('%s sending %s, shown as %s: the line offers %s', async (call, typed, shown, codes) => {
+    renderStrip()
+    await typeContact(call, typed)
+    expect(verdicts()).toEqual([`${shown} is not a code on this contest's list. Did you mean ${codes}?`])
+    expect(logButton().disabled).toBe(true)
+    expect(await pressEnter()).toEqual([])
+  })
+
+  it.each(['IL', 'SAINT CLAIR', 'WHITESIDE CO'])(
+    'K9NR sending %s: named, and nothing offered, since it begins no code and no name',
+    async (typed) => {
+      renderStrip()
+      await typeContact('K9NR', typed)
+      expect(verdicts()).toEqual([`${typed} is not a county, state or province on this contest's list.`])
+      expect(await pressEnter()).toEqual([])
+    },
+  )
+
+  it.each([
+    ['K9NR', 'WASH', 'WASH'],
+    ['K9NR', 'Kankakee', 'KANK'],
+    ['K9NR', 'wa', 'WA'],
+    ['VE3ABC', 'ON', 'ON'],
+  ])('%s sending %s logs %s: a code or a name on the list is real', async (call, typed, code) => {
+    renderStrip()
+    await typeContact(call, typed)
+    expect(verdicts()).toEqual([])
+    expect(logButton().disabled).toBe(false)
+    expect(await pressEnter()).toEqual([[['RST', '599'], ['QTH', code]]])
+  })
+
+  it('a DX call still sends its country, which no list holds; the same text from a US call does not log', async () => {
+    renderStrip()
+    await typeContact('DL1ABC', 'Germany')
+    expect(verdicts()).toEqual([])
+    expect(logButton().disabled).toBe(false)
+    expect(await pressEnter()).toEqual([[['RST', '599'], ['QTH', 'GERMANY']]])
+    cleanup()
+    api.contestLogManual.mockClear()
+    // CONTROL: the same box and the same text, from a call in the USA.
+    renderStrip()
+    await typeContact('K9NR', 'Germany')
+    expect(verdicts()).toEqual(["GERMANY is not a county, state or province on this contest's list."])
+    expect(await pressEnter()).toEqual([])
+  })
+
+  it('a call the country file cannot place is never refused on a guess: the box takes it as it always did', async () => {
+    renderStrip()
+    await typeContact('ZZ9ZZZ', 'COKO')
+    expect(api.resolveEntity).toHaveBeenCalledWith('ZZ9ZZZ')
+    expect(verdicts()).toEqual([])
+    expect(await pressEnter()).toEqual([[['RST', '599'], ['QTH', 'COKO']]])
+  })
+
+  it('a county line keeps its own verdict', async () => {
+    renderStrip()
+    await typeContact('K9NR', 'COOK/XYZ')
+    expect(verdicts()).toEqual(["XYZ is not a county on the sponsor's list, so this county line cannot be logged."])
+    expect(logButton().disabled).toBe(true)
+  })
+
+  it('judges no box drawing on a list this build does not hold, as New York’s DX', async () => {
+    renderStrip({
+      ...ilqp(),
+      event: 'nyqp',
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'QTH', kind: 'oneOf', required: true, domains: ['ny_counties', 'ny_mults', 'dx_literal'] },
+      ],
+    } as unknown as FieldDayStatus)
+    await typeContact('K9NR', 'XYZ')
+    expect(verdicts()).toEqual([])
+    expect(await pressEnter()).toEqual([[['RST', '599'], ['QTH', 'XYZ']]])
+    cleanup()
+    api.contestLogManual.mockClear()
+    // CONTROL: the Illinois box, whose two lists are both held here, refuses the same value.
+    renderStrip()
+    await typeContact('K9NR', 'XYZ')
+    expect(verdicts()).toEqual(["XYZ is not a county, state or province on this contest's list."])
+    expect(await pressEnter()).toEqual([])
   })
 })

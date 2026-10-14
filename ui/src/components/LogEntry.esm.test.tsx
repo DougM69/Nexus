@@ -150,6 +150,10 @@ const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')]
 const qthBox = () => boxes()[1]
 const line = () => document.querySelector('.le-fd-esm-line')?.textContent ?? null
+/** The verdict slot's lines other than ESM's own. */
+const verdicts = () =>
+  [...document.querySelectorAll('.le-fd-verdicts .le-fd-hint:not(.le-fd-esm-line)')].map((n) => n.textContent)
+const DUPE_K9AAA = "Dupe: K9AAA is already in this position's log on 20m CW"
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 /** Enter in a box, as the browser delivers it, and everything it starts. */
 const enter = async (el: HTMLInputElement, init: Partial<KeyboardEventInit> = {}) => {
@@ -279,6 +283,148 @@ describe('Enter Sends Message — one press, one message', () => {
     expect(line()).toBe('A dupe of your own log: Enter sends nothing and logs nothing.')
   })
 
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM — log it, mark it,
+  // score it zero, and with ESM send QSO B4). The first Enter sends the B4 key once; the next logs the
+  // dupe through the one log path, sending nothing. The dupe warning stays on the strip throughout.
+  it('running, a dupe gets QSO B4 once, and the next Enter logs it as a dupe, sending nothing', async () => {
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} />)
+    await run()
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    expect(verdicts(), 'the dupe warning shows while typing').toEqual([DUPE_K9AAA])
+    await enter(qthBox())
+    expect(harness.sent.map((m) => [m.role, m.keys, m.text, m.call])).toEqual([['b4', ['F7'], '! QSO B4', 'K9AAA']])
+    expect(logged(), 'QSO B4 logs nothing').toEqual([])
+    expect(callBox().value).toBe('K9AAA')
+    expect(verdicts(), 'and the dupe warning is still there').toEqual([DUPE_K9AAA])
+    await enter(qthBox())
+    expect(harness.sent, 'nothing is sent twice').toHaveLength(1)
+    expect(logged(), 'the next Enter logs the dupe, once').toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
+    expect(callBox().value, 'and the strip has cleared for the next one').toBe('')
+  })
+
+  it('held down, the Enter that logs the dupe logs it once', async () => {
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} />)
+    await run()
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    await enter(qthBox())
+    await enter(qthBox())
+    await enter(qthBox(), { repeat: true })
+    expect(harness.sent.map((m) => m.role)).toEqual(['b4'])
+    expect(logged()).toHaveLength(1)
+  })
+
+  it('a second Enter while the dupe is still being logged logs nothing more', async () => {
+    let done: (v: unknown) => void = () => {}
+    api.contestLogManual.mockImplementationOnce(() => new Promise((resolve) => (done = resolve)))
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} />)
+    await run()
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    await enter(qthBox()) // QSO B4
+    await enter(qthBox()) // the log, still in flight…
+    await enter(qthBox()) // …so this press is held off
+    expect(api.contestLogManual).toHaveBeenCalledTimes(1)
+    await act(async () => done({}))
+    expect(logged()).toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
+  })
+
+  it('with his exchange not copied, the Enter after QSO B4 sends nothing and logs nothing, and says how to log it', async () => {
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} />)
+    await run()
+    type(callBox(), 'K9AAA')
+    await enter(callBox())
+    expect(harness.sent.map((m) => m.role)).toEqual(['b4'])
+    await enter(callBox())
+    expect(harness.sent.map((m) => m.role), 'QSO B4 goes once').toEqual(['b4'])
+    expect(logged()).toEqual([])
+    expect(line()).toBe('QSO B4 went to this call. Enter logs it as a dupe once his exchange is copied.')
+  })
+
+  it('in S&P a dupe still gets nothing: no QSO B4 over his CQ, and nothing logs', async () => {
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    await enter(qthBox())
+    await enter(qthBox())
+    expect(harness.sent).toEqual([])
+    expect(logged()).toEqual([])
+    expect(line()).toBe('A dupe of your own log: Enter sends nothing and logs nothing.')
+  })
+
+  it('a stopped QSO B4 counts as not sent: the next Enter sends it again rather than logging', async () => {
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} />)
+    await run()
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    await enter(qthBox())
+    await act(async () => harness.host!.noteStop())
+    expect(line()).toBe('QSO B4 stopped, so it counts as not sent: the next Enter sends it again.')
+    await enter(qthBox())
+    expect(harness.sent.map((m) => m.role)).toEqual(['b4', 'b4'])
+    expect(logged()).toEqual([])
+  })
+
+  it('without ESM a dupe logs at Enter as it always has, and nothing is sent', async () => {
+    render(<Strip fieldDay={party([row('K9AAA', 'COOK', T0)])} on={false} />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    await enter(qthBox())
+    expect(harness.sent).toEqual([])
+    expect(logged()).toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
+  })
+
+  // ⭐ A COUNTY LINE IS A DUPE ONLY WHEN EVERY COUNTY IS ONE. The strip judges the line county by
+  // county, as the log writes it (one row per county, each on its own key, under ILQP's rule), so a
+  // line whose every county was worked gets what one worked county gets, and a line with a new
+  // county is a contact that scores: my exchange, and every county logs as it is.
+  it('treats a county line as a dupe only when every county is one', async () => {
+    const worked = (...counties: string[]) =>
+      party(
+        counties.map((c) => ({ ...row('K9AAA', c, T0), dkey: ['K9AAA', '20M', 'CW', c, 'KANE'] })),
+        {
+          receives: [
+            { key: 'RST', kind: 'rst', required: true },
+            { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+          ],
+          dupeModeGroups: [['CW', 'DIG']],
+          dupeRule: {
+            byCall: true,
+            byBand: true,
+            byModeClass: true,
+            byFields: ['QTH'],
+            bySentFields: ['QTH'],
+            modeClassGroups: [['CW', 'DIG']],
+          },
+        } as unknown as Partial<FieldDayStatus>,
+      )
+    const rows = () => api.contestLogManualRows.mock.calls.map((c) => [c[0], c[1]])
+    render(<Strip fieldDay={worked('COOK', 'WILL')} />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK/WILL')
+    await enter(qthBox())
+    expect(harness.sent).toEqual([])
+    expect(rows()).toEqual([])
+    expect(line()).toBe('A dupe of your own log: Enter sends nothing and logs nothing.')
+    cleanup()
+
+    render(<Strip fieldDay={worked('COOK')} />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK/WILL')
+    await enter(qthBox())
+    expect(harness.sent.map((m) => [m.role, m.text, m.call])).toEqual([['exch', 'TU {RST} {EXCH}', 'K9AAA']])
+    expect(rows()).toEqual([
+      [
+        'K9AAA',
+        [
+          [['RST', '599'], ['QTH', 'COOK']],
+          [['RST', '599'], ['QTH', 'WILL']],
+        ],
+      ],
+    ])
+  })
+
   it('refuses a step the set does not map by name (decision 4), and Alt+Enter still logs', async () => {
     harness.roles = { cq: ['F1'], callExch: ['F2'], myCall: ['F4'], again: ['F7'] } // no TU, no S&P exchange
     render(<Strip fieldDay={party()} />)
@@ -353,16 +499,14 @@ describe('Enter Sends Message — what counts as a stop', () => {
     expect(line()).toBe(null)
   })
 
-  it('says why it cannot be taken back while club sync is on', async () => {
+  it('says Ctrl+D takes it back at a club too', async () => {
     const club = { club: { hosting: false } } as unknown as Partial<FieldDayStatus>
     render(<Strip fieldDay={party([], club)} />)
     type(callBox(), 'K9AAA')
     type(qthBox(), 'COOK')
     await enter(qthBox()) // S&P exchange: logged
     await act(async () => harness.host!.noteStop())
-    expect(line()).toBe(
-      'Your S&P exchange stopped. K9AAA is logged, and club sync is on, so it cannot be removed: the club log already has it. Edit the club’s Cabrillo file before you send it in.',
-    )
+    expect(line()).toBe('Your S&P exchange stopped. K9AAA is logged. Ctrl+D twice removes it.')
   })
 
   it('a stop after the message’s over has ended changes no note', async () => {
@@ -609,5 +753,34 @@ describe('Enter Sends Message — off, and from afar, Enter is what it always wa
     for (const el of moved) expect(el.closest('.le-fd-big'), 'inside the strip').not.toBeNull()
     for (const args of focus.mock.calls) expect(args[0]).toEqual({ preventScroll: true })
     focus.mockRestore()
+  })
+})
+
+// ⭐ A QTH ON NO LIST, FROM A CALL IN THE USA OR CANADA, IS NOT A COPIED EXCHANGE. The strip will not
+// log it (`fdFieldOk`, and LogEntry.countyTypeahead's tests), so ESM reads it as not copied: the press
+// that would send my exchange and log the contact sends my call, and nothing logs.
+describe('Enter Sends Message and a QTH on no list', () => {
+  it('in S&P, COKO from a US call sends my call and logs nothing; the real county sends my exchange and logs', async () => {
+    api.resolveEntity.mockImplementation(() => Promise.resolve('United States'))
+    try {
+      const receives = [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+      ]
+      render(<Strip fieldDay={party([], { receives })} />)
+      type(callBox(), 'K9AAA')
+      await act(async () => {})
+      type(qthBox(), 'COKO')
+      await enter(qthBox())
+      expect(harness.sent.map((m) => m.role)).toEqual(['myCall'])
+      expect(logged()).toEqual([])
+      // CONTROL: the same press once the county is real.
+      type(qthBox(), 'COOK')
+      await enter(qthBox())
+      expect(harness.sent.map((m) => m.role)).toEqual(['myCall', 'exch'])
+      expect(logged()).toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
+    } finally {
+      api.resolveEntity.mockImplementation(() => Promise.resolve(null))
+    }
   })
 })

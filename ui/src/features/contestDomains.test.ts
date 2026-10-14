@@ -3,6 +3,8 @@ import {
   contestDomain,
   domainSuggestions,
   inDomain,
+  multCode,
+  multTotal,
   resolveDomainValue,
 } from './contestDomains'
 
@@ -30,6 +32,39 @@ describe('the ILQP domains reach the UI at all', () => {
     // …and Illinois itself is not one of the states a station can send.
     expect(inDomain('il_mults', 'IL')).toBe(false)
     expect(inDomain('il_mults', 'WI')).toBe(true)
+  })
+})
+
+describe('one province, two spellings', () => {
+  // The sponsor's records table spells Newfoundland NF and Prince Edward Island PEI; the list
+  // carries Canada Post's NL and PE beside them, and a province counts once.
+  it('counts NL and PE as the sponsor\'s NF and PEI on the ILQP list, and nowhere else', () => {
+    const il = contestDomain('il_mults')
+    expect(['pe', ' PEI ', 'NL', 'NF', 'LAB', 'ON'].map((c) => multCode(il, c))).toEqual([
+      'PEI',
+      'PEI',
+      'NF',
+      'NF',
+      'LAB',
+      'ON',
+    ])
+    expect(multTotal(il!)).toBe(64)
+    // CONTROL: New York's list names each province once, so nothing there folds.
+    const ny = contestDomain('ny_mults')
+    expect(['PE', 'NL'].map((c) => multCode(ny, c))).toEqual(['PE', 'NL'])
+    expect(multTotal(ny!)).toBe(62)
+  })
+
+  it('reads Prince Edward Island, named in full, as the province it is', () => {
+    expect(resolveDomainValue(QTH, 'Prince Edward Island')).toBe('PEI')
+    expect(resolveDomainValue(QTH, 'prince edward island ')).toBe('PEI')
+    // A code typed is that code, as the station sent it.
+    expect(resolveDomainValue(QTH, 'PE')).toBe('PE')
+    // Each Newfoundland spelling has a name of its own.
+    expect(resolveDomainValue(QTH, 'Newfoundland')).toBe('NF')
+    expect(resolveDomainValue(QTH, 'Newfoundland and Labrador')).toBe('NL')
+    // CONTROL: a name two different places share still resolves to nothing.
+    expect(resolveDomainValue(QTH, 'Washington')).toBeUndefined()
   })
 })
 
@@ -80,6 +115,15 @@ describe('what the type-ahead offers', () => {
     expect(domainSuggestions(COUNTIES, 'MA', 3).length).toBe(3)
     // POSITIVE CONTROL: without the cap there really are more than six.
     expect(domainSuggestions(COUNTIES, 'MA', 99).length).toBeGreaterThan(6)
+  })
+
+  it('leaves out a name that only contains the text when asked to, as the verdict line does', () => {
+    // The two letters above: the codes and names that begin CO, and none of Han-co-ck, Ma-co-n…
+    expect(domainSuggestions(COUNTIES, 'CO', 6, false).map((v) => v.code)).toEqual(['COLE', 'COOK'])
+    // IL begins no code and no name, so nothing is offered for it; inside a name it is Hamilton,
+    // Vermilion, Will and Williamson, none of which a station sending IL meant.
+    expect(domainSuggestions(QTH, 'IL', 6, false)).toEqual([])
+    expect(domainSuggestions(QTH, 'IL').map((v) => v.code)).toEqual(['HAML', 'VERM', 'WILL', 'WMSN'])
   })
 })
 

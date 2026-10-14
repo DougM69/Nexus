@@ -18,15 +18,13 @@ Each row is one QSO. The columns you'll use most:
 - **Call, band, mode, date/time, RST** — the contact itself.
 - **Entity / DXCC** — resolved from cty.dat, first-class in the table.
 - **QSL** — *which source* confirmed the contact. It shows one of four things:
-  - **L**, **C**, **E** — LoTW, a paper card, eQSL, joined by `·` when more
-    than one channel confirmed. Hover for the eligibility tooltip.
+  - **L**, **C**, **E**, **Q** — LoTW, a paper card, eQSL, your QRZ logbook,
+    joined by `·` when more than one channel confirmed. Hover for the
+    eligibility tooltip.
   - **✓** — award-confirmed, on an older record that predates the per-channel
     split and so cannot say which channel.
-  - the word **eQSL** in yellow — confirmed, but by nothing that earns award
-    credit. ⚠️ **A QRZ-logbook match also lands here and is labelled eQSL**,
-    which is a mislabel: if the Confirmations card in [Stats](stats.md) shows
-    eQSL at zero while your logbook is full of yellow eQSL marks, those marks
-    are QRZ matches.
+  - the word **eQSL** in yellow — confirmed, but not by LoTW or a card, on a
+    record that does not say which service confirmed it.
   - **—** — not confirmed.
 
   **eQSL is clearly labelled non-award**: it counts as a confirmation but not
@@ -43,7 +41,7 @@ each contact, plus the name, QTH, state, power and operator the compact table
 leaves out. The wider table scrolls sideways. It stays off until you turn it on,
 and Nexus remembers your choice on this computer.
 
-<!-- TODO: capture screenshot — the QSL column tooltip explaining L / C / E eligibility -->
+<!-- TODO: capture screenshot — the QSL column tooltip explaining L / C / E / Q eligibility -->
 
 ## Core workflows
 
@@ -230,7 +228,7 @@ times, so "my log is missing a QSO" has a place to start. The QRZ Logbook row
 also carries a **Test** button, which does a real round trip and reports what
 came back.
 
-Per contact, the QSL column tells you what came *back* (L / C / E), and the
+Per contact, the QSL column tells you what came *back* (L / C / E / Q), and the
 per-row push buttons are the retry. A **duplicate** answer from any of these
 services is the benign "already there", not a failure.
 

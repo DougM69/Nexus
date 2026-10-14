@@ -238,7 +238,7 @@ when you did not stop it, a band change or a handoff is the usual reason.
 on one log.
 
 **Before you start:** the class, section and exchange for your entry, set in
-[Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup);
+[Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day);
 and, for more than one position, a host on the LAN in
 [Settings ▸ Contesting ▸ Field Day Club Sync](settings-reference.md#field-day-club-sync).
 

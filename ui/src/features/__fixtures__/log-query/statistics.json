@@ -4917,11 +4917,49 @@
      "dateUnix": null
     },
     "ota": null
+   },
+   {
+    "id": "st140",
+    "call": "K2LOTW",
+    "grid": "FN31pr",
+    "country": "UNITED STATES OF AMERICA",
+    "entity": "United States",
+    "state": "ſc",
+    "band": "",
+    "freqMhz": 14.074,
+    "mode": "",
+    "rstSent": "-10",
+    "rstRcvd": "-12",
+    "name": "Hiram",
+    "qth": null,
+    "comment": "first",
+    "notes": null,
+    "whenUnix": 1715350800,
+    "timeKnown": true,
+    "confirmed": false,
+    "awardConfirmed": false,
+    "qslRcvd": {
+     "card": false,
+     "lotw": false,
+     "eqsl": false
+    },
+    "qslSent": {
+     "sent": false,
+     "via": null,
+     "dateUnix": null
+    },
+    "ota": null,
+    "upload": {
+     "lotw": {
+      "outcome": "accepted",
+      "whenUnix": 1715385600
+     }
+    }
    }
   ],
   "counts": {
-   "total": 140,
-   "uniqueCalls": 37,
+   "total": 141,
+   "uniqueCalls": 38,
    "confirmed": 76,
    "awardConfirmed": 44,
    "dxccEntities": 14,
@@ -5000,7 +5038,7 @@
     },
     {
      "label": "2024",
-     "count": 18
+     "count": 19
     },
     {
      "label": "2020",
@@ -5021,24 +5059,24 @@
    ],
    "byState": [
     {
+     "label": "CT",
+     "count": 2
+    },
+    {
      "label": "WI",
-     "count": 16
+     "count": 4
     },
     {
      "label": "WA",
-     "count": 8
-    },
-    {
-     "label": "SC",
-     "count": 8
+     "count": 3
     },
     {
      "label": "CA",
-     "count": 8
+     "count": 2
     },
     {
-     "label": "CT",
-     "count": 8
+     "label": "SC",
+     "count": 1
     }
    ],
    "entities": [
@@ -5084,7 +5122,7 @@
     },
     {
      "label": "United States",
-     "count": 16
+     "count": 17
     },
     {
      "label": "Japan",
@@ -5114,7 +5152,7 @@
     0,
     9,
     9,
-    0,
+    1,
     0,
     0,
     0,

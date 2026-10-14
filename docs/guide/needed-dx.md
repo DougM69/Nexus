@@ -111,7 +111,9 @@ it's telling you the truth about a marginal path.
 
 1. Click any row. Nexus **QSYs band + mode + exact frequency atomically**, opens
    the matching cockpit, and — for CW/Phone rows — prefills the callsign in the
-   log strip.
+   log strip. A POTA or SOTA row prefills the park too, without setting a hunt,
+   so **Clear** on the log strip leaves nothing behind (see
+   [Hunt an activator](contesting-pota.md#hunt-an-activator)).
 2. If the DX is running split, Nexus reads it: it **parses pileup split offsets
    from cluster comments** (`UP 2`, `DN 1.5`, `QSX 7.205`) and pre-sets rig split
    so your transmit lands where the DX is listening.
@@ -132,7 +134,11 @@ Filters persist across restarts. **Filter** opens one row of chips in three grou
 - **Need type** — All, Watch list, ATNO, New band, New mode, New zone, New grid, New state,
   Needs confirm, then the programme chips DXped, POTA and SOTA. **Watch list** keeps exactly the
   stations on your watch list ([Settings ▸ Spots & Alerts](settings-reference.md#spots--alerts))
-  that are on the air, and follows an edit of the list straight away.
+  that are on the air, and follows an edit of the list straight away. **ATNO** and **New grid**
+  filter within the bands chosen under [Settings ▸ Spots & Alerts ▸ Alerts](settings-reference.md#alerts)
+  (New DXCC, New grid, Rare grid 💎): with New grid and Rare grid 💎 at VHF+, the defaults, no HF
+  grid is listed however the chips are set. The alert switch beside those menus turns the sound and the pop-up
+  on and off and changes nothing on the board.
 - **Band** — 160 m through 2 m, multi-select. Selected means *show only these*.
 - **Mode class** — Digital, CW, Phone.
 

@@ -102,9 +102,9 @@ impl DxpeditionPlan {
 
 /// The operator's needs — implemented by [`LogNeeds`] (from the ADIF log) or by
 /// [`NeedsSet`] (manual/demo). `mode` is the mode the station is heard in, as its source names
-/// it: an exact mode ("FT8", "USB"), or a class label where that is all the source knows
-/// ("Digital", "Phone" — see [`exact_mode`]). A work-now card asks once per mode its operation
-/// announced ([`announced_need`]).
+/// it: an exact mode ("FT8", "USB"), a class label where that is all the source knows
+/// ("Digital", "Phone"), or a name no contact is logged in ("WSPR" — see [`exact_mode`]). A
+/// work-now card asks once per mode its operation announced ([`announced_need`]).
 pub trait OperatorNeeds {
     fn need(&self, entity: &str, band: Band, mode: &str) -> NeedKind;
 }
@@ -148,7 +148,8 @@ pub struct LogNeeds {
     /// modes with the same fold.
     worked_mode: HashSet<(String, String)>,
     /// `(entity, mode class)`, any band — what the "new mode" need falls back to for a station
-    /// heard in a class alone (a cluster spot placed by its frequency, see [`exact_mode`]).
+    /// heard in a class alone (a cluster spot placed by its frequency) or in a mode no contact is
+    /// logged in (a WSPR beacon), see [`exact_mode`].
     worked_class: HashSet<(String, ModeClass)>,
     confirmed_band: HashSet<(String, Band)>,
     /// CQ zones worked, PER BAND (for WAZ "new zone" need-aware spotting) —
@@ -368,7 +369,8 @@ impl OperatorNeeds for LogNeeds {
     fn need(&self, entity: &str, band: Band, mode: &str) -> NeedKind {
         // The heard mode goes through the SAME fold the log's modes did, so working the station
         // in the mode it is heard in is exactly what clears the need. A station heard in a
-        // class alone is new only when no mode of that class was ever worked.
+        // class alone, or in a mode no contact is logged in, is new only when no mode of that
+        // class was ever worked.
         let mode_worked = match exact_mode(mode) {
             Some(key) => self.worked_mode.contains(&(entity.to_string(), key)),
             None => self

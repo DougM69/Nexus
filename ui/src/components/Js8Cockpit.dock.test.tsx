@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import * as api from '../api'
-import type { AppSnapshot, Js8State } from '../types'
+import type { AppSnapshot, Js8NotArmed, Js8State } from '../types'
+import { t } from '../i18n'
 
 // THE BUDGET (2026-10-09). The slowest case here, "never writes over what the operator typed, and says the…", takes
 // 0.64 s and 0.63 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -32,6 +33,7 @@ const base = (): Js8State => ({
   relay: true,
   hbAck: false,
   armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false },
+  notArmed: { autoreply: 'txOff', relay: 'txOff', hbAck: null, hb: null, cq: null },
   idleMinutes: 12,
   idleLimitMin: 60,
   idleTripped: false,
@@ -189,11 +191,76 @@ describe('the second-act chips never look armed without the session TX latch', (
     expect(chip.classList.contains('on')).toBe(true)
     expect(chip.classList.contains('armed')).toBe(false)
     cleanup()
-    state.current = { ...base(), txEnabled: true, armed: { autoreply: true, relay: true, hbAck: false, hb: false, cq: false } }
+    state.current = {
+      ...base(),
+      txEnabled: true,
+      armed: { autoreply: true, relay: true, hbAck: false, hb: false, cq: false },
+      notArmed: { autoreply: null, relay: null, hbAck: null, hb: null, cq: null },
+    }
     await renderCockpit()
     expect(q('.js8-autoreply').classList.contains('armed')).toBe(true)
     expect(q('.js8-relay').classList.contains('armed')).toBe(true)
     expect(q('.js8-hback').classList.contains('on')).toBe(false)
+  })
+
+  // The engine's `notArmed` is the station's own reason a switch that is on cannot act; each chip
+  // says it in its own words, and TX off keeps the sentence that chip always had.
+  it('a chip that is on but not armed says why, in the reason the station gave', async () => {
+    const none: Js8NotArmed = { autoreply: null, relay: null, hbAck: null, hb: null, cq: null }
+    const differs = ` ${t('js8.dock.arm.differs')}`
+    const title = (sel: string) => q(sel).getAttribute('title')
+    state.current = {
+      ...base(),
+      txEnabled: true,
+      hbAck: true,
+      armed: { autoreply: true, relay: false, hbAck: false, hb: false, cq: false },
+      notArmed: { autoreply: null, relay: 'needsAuto', hbAck: 'needsHb', hb: null, cq: null },
+    }
+    await renderCockpit()
+    const hback = q('.js8-hback')
+    expect([hback.classList.contains('on'), hback.classList.contains('armed')]).toEqual([true, false])
+    expect(title('.js8-hback')).toBe(t('js8.dock.hbAck.notArmed.needsHb') + differs)
+    expect(title('.js8-relay')).toBe(t('js8.dock.relay.notArmed.needsAuto') + differs)
+    expect(title('.js8-autoreply')).toBe(t('js8.dock.autoreply.title.armed') + differs)
+    cleanup()
+    state.current = { ...base(), txEnabled: true, hbAck: true, notArmed: { ...none, hbAck: 'needsHbAndAuto' } }
+    await renderCockpit()
+    expect(title('.js8-hback')).toBe(t('js8.dock.hbAck.notArmed.needsHbAndAuto') + differs)
+    cleanup()
+    state.current = { ...base(), txEnabled: true, hbAck: true, notArmed: { ...none, hbAck: 'needsAuto' } }
+    await renderCockpit()
+    expect(title('.js8-hback')).toBe(t('js8.dock.hbAck.notArmed.needsAuto') + differs)
+    cleanup()
+    state.current = {
+      ...base(),
+      txEnabled: true,
+      idleTripped: true,
+      hbAck: true,
+      notArmed: { autoreply: 'idle', relay: 'idle', hbAck: 'idle', hb: null, cq: null },
+    }
+    await renderCockpit()
+    for (const sel of ['.js8-autoreply', '.js8-relay', '.js8-hback']) {
+      expect(title(sel), sel).toBe(t('js8.dock.notArmed.idle', { min: 60 }) + differs)
+    }
+    cleanup()
+    state.current = { ...base(), hbOn: true, hbIntervalMin: 0, notArmed: { ...none, autoreply: 'txOff', relay: 'txOff', hb: 'txOff' } }
+    await renderCockpit()
+    expect(title('.js8-autoreply')).toBe(t('js8.dock.autoreply.title.on') + differs)
+    expect(title('.js8-hb')).toBe(t('js8.dock.hb.title.on'))
+    cleanup()
+    state.current = { ...base(), txEnabled: true, hbOn: true, hbIntervalMin: 0, notArmed: { ...none, hb: 'unscheduled' } }
+    await renderCockpit()
+    expect(title('.js8-hb')).toBe(t('js8.dock.hb.notArmed.unscheduled'))
+    cleanup()
+    state.current = {
+      ...base(),
+      txEnabled: true,
+      cqIntervalMin: 5,
+      cqOn: true,
+      notArmed: { ...none, cq: 'unscheduled' },
+    }
+    await renderCockpit()
+    expect(title('.js8-cq-repeat')).toBe(t('js8.dock.cqRepeat.notArmed.unscheduled'))
   })
 
   it('clicking a chip asks the engine to flip THAT switch', async () => {
