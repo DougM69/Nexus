@@ -15307,7 +15307,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-rustls 0.23.45 — Apache-2.0 OR ISC OR MIT (MIT elected)
+rustls 0.23.46 — Apache-2.0 OR ISC OR MIT (MIT elected)
 https://github.com/rustls/rustls
 
 LICENSE-MIT
