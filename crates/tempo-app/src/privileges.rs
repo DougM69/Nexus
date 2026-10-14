@@ -4,7 +4,8 @@
 //!
 //! Verified 2026-06-09 against the ARRL frequency-allocations table + 47 CFR §97.301/§97.305
 //! (incl. the 60 m subband effective 2026-02-13). Conventions:
-//! - CW (A1A) is allowed across the class's whole authorized span on a band.
+//! - CW (A1A) is allowed across the class's whole authorized span on a band (on a 60 m
+//!   channel, only at its centre).
 //! - DATA/RTTY (FT8/FT4 etc.) is allowed only in the no-phone lower segments on HF, but
 //!   band-wide above 50 MHz (and on 30 m, all-data).
 //! - PHONE/image is allowed only in the phone segments.
@@ -80,22 +81,51 @@ const REGION1: &[Seg] = &[
 ];
 
 // 60 m (General/Extra): the 5.3515–5.3665 subband, all-mode, + 4 channels, per 47 CFR
-// 97.303(h)(3). Each channel is its centre ±1.4 kHz (the 2.8 kHz the rule allows) for CW and
-// data, which the gate judges at the emitted tone. Phone is judged as [carrier, carrier +
+// 97.303(h)(3). Each channel is its centre ±1.4 kHz (the 2.8 kHz the rule allows) for data,
+// which the gate judges at the emitted tone. Phone is judged as [carrier, carrier +
 // 2.8 kHz], and the rule sets its carrier 1.5 kHz below the centre, so its row runs from that
 // carrier to the channel's top: the rule's carrier keys, and no passband leaves the channel.
+// CW is the rule's "the carrier frequency is set to the center frequency", so its row is the
+// centre ± [`SIXTY_CW_TOL_MHZ`]. Phone on 60 m is upper sideband only ([`lsb_phone_allowed`]).
 // 60 m is channelized — excluded from the band dropdown but enforced by the lockout.
 const SIXTY: &[Seg] = &[
     s(5.3515, 5.3665, true, true, true),
-    s(5.3306, 5.3334, true, true, false),  // ch 5.3320
+    s(5.3306, 5.3334, false, true, false), // ch 5.3320 data
     s(5.3305, 5.3334, false, false, true), // ch 5.3320 phone, carrier 5.3305
-    s(5.3466, 5.3494, true, true, false),  // ch 5.3480
+    sixty_cw(5.3320),                      // ch 5.3320 CW, at the centre
+    s(5.3466, 5.3494, false, true, false), // ch 5.3480 data
     s(5.3465, 5.3494, false, false, true), // ch 5.3480 phone, carrier 5.3465
-    s(5.3716, 5.3744, true, true, false),  // ch 5.3730
+    sixty_cw(5.3480),                      // ch 5.3480 CW, at the centre
+    s(5.3716, 5.3744, false, true, false), // ch 5.3730 data
     s(5.3715, 5.3744, false, false, true), // ch 5.3730 phone, carrier 5.3715
-    s(5.4036, 5.4064, true, true, false),  // ch 5.4050
+    sixty_cw(5.3730),                      // ch 5.3730 CW, at the centre
+    s(5.4036, 5.4064, false, true, false), // ch 5.4050 data
     s(5.4035, 5.4064, false, false, true), // ch 5.4050 phone, carrier 5.4035
+    sixty_cw(5.4050),                      // ch 5.4050 CW, at the centre
 ];
+
+/// How far a CW carrier may sit from a 60 m channel's centre and still key: 5 Hz either side
+/// for a whole-hertz frequency. A dial that moves in 10 Hz steps always has a step within 5 Hz
+/// of the centre, wherever it started, and nothing narrower guarantees that. The edges sit half
+/// a hertz further out, so no whole-hertz frequency lands on one, where float rounding would
+/// decide it.
+///
+/// The gate judges the rig's own keyer at the dial, so it keys from 5 Hz below the centre to
+/// 5 Hz above it. The soundcard keyer's tone sits one pitch from its dial, and the gate judges
+/// that dial as CW too, so the soundcard keyer cannot key on a channel at all: no tolerance
+/// narrower than its pitch (300–1200 Hz) holds both. Both keyers key in the segment as before.
+const SIXTY_CW_TOL_MHZ: f64 = 0.000_005_5;
+
+/// A 60 m channel's CW row: its centre ± [`SIXTY_CW_TOL_MHZ`], CW only.
+const fn sixty_cw(centre: f64) -> Seg {
+    s(
+        centre - SIXTY_CW_TOL_MHZ,
+        centre + SIXTY_CW_TOL_MHZ,
+        true,
+        false,
+        false,
+    )
+}
 
 fn technician() -> Vec<Seg> {
     // Technician HF is CW-ONLY on 80/40/15 m — the legacy Novice CW sub-bands. RTTY/data is
@@ -223,11 +253,11 @@ pub fn tx_allowed(class: LicenseClass, emission_mhz: f64, mode: OperatingMode) -
 /// ascending and merged where they touch or overlap — the licence-class band edges the scope
 /// draws. `None` for `Open`, which [`tx_allowed`] allows everywhere, so it has no edge to draw.
 ///
-/// DISPLAY ONLY, AND THE GATE'S OWN DATA. Nothing reads this to decide a transmission:
-/// [`tx_allowed`] stays the gate, and the test
-/// `allowed_spans_agree_with_tx_allowed_for_every_class_and_mode` holds the two to one answer at
-/// every segment edge and across every band, so the overlay cannot show a privilege the gate
-/// refuses or hide one it grants. Like the gate, it judges an EMISSION frequency, not a dial.
+/// THE GATE'S OWN DATA. [`tx_allowed`] judges one frequency against the rows, and
+/// [`tx_span_allowed`] judges a signal with a width against these ranges; the test
+/// `allowed_spans_agree_with_tx_allowed_for_every_class_and_mode` holds them and the rows to one
+/// answer at every segment edge and across every band, so the overlay cannot show a privilege the
+/// gate refuses or hide one it grants. Like the gate, it judges an EMISSION frequency, not a dial.
 pub fn allowed_spans(class: LicenseClass, mode: OperatingMode) -> Option<Vec<(f64, f64)>> {
     if matches!(class, LicenseClass::Open) {
         return None;
@@ -248,6 +278,33 @@ pub fn allowed_spans(class: LicenseClass, mode: OperatingMode) -> Option<Vec<(f6
         }
     }
     Some(out)
+}
+
+/// May `class` transmit `mode` over the whole span from `lo_mhz` to `hi_mhz` — a signal with a
+/// width (a phone passband, an RTTY mark/space pair) where [`tx_allowed`] judges one frequency?
+/// Both ends must lie in ONE of the [`allowed_spans`] ranges, the class's rows for `mode` merged
+/// where they touch or overlap. Two legal ends do not make the middle legal: a USB passband from
+/// the top of the 5348.0 kHz channel ends inside the 5351.5–5366.5 kHz segment, and its middle
+/// crosses the 2.1 kHz between them, which is not the class's. A signal across the boundary
+/// between two touching rows lies in one range and is judged as it was. `Open` always may.
+pub fn tx_span_allowed(class: LicenseClass, lo_mhz: f64, hi_mhz: f64, mode: OperatingMode) -> bool {
+    let Some(spans) = allowed_spans(class, mode) else {
+        return true;
+    };
+    let inside = |f: f64, (lo, hi): (f64, f64)| f >= lo && f < hi;
+    spans
+        .iter()
+        .any(|&span| inside(lo_mhz, span) && inside(hi_mhz, span))
+}
+
+/// May `class` transmit a LOWER-sideband phone signal, its passband below the carrier at
+/// `carrier_mhz`? Not on 60 m, for any US class: phone there is upper sideband only, on the four
+/// channels and in the 5351.5–5366.5 kHz segment alike (operator ruling, 2026-10-14). The rule
+/// names no sideband, but it sets a channel's phone carrier 1.5 kHz below the centre, which only
+/// an upper-sideband passband puts on the channel. `Open` is trusted, as [`tx_allowed`] trusts it.
+pub fn lsb_phone_allowed(class: LicenseClass, carrier_mhz: f64) -> bool {
+    matches!(class, LicenseClass::Open)
+        || crate::bandplan::band_for_dial(carrier_mhz) != Some("60m")
 }
 
 /// The lowest frequency (MHz) at which `class` may use `mode` on `band` — where a band
@@ -650,9 +707,10 @@ mod tests {
     }
 
     /// 47 CFR 97.303(h)(3): on a 60 m channel the phone carrier is set 1.5 kHz below the centre,
-    /// so phone keys from that carrier to the channel's top, while CW and data keep the channel.
+    /// so phone keys from that carrier to the channel's top, while data keeps the channel and CW
+    /// its centre.
     #[test]
-    fn sixty_meter_phone_keys_from_the_rules_carrier_and_cw_and_data_keep_the_channel() {
+    fn sixty_meter_phone_keys_from_the_rules_carrier_and_data_keeps_the_channel() {
         // (carrier, centre, the channel's top) in MHz, as literals so no sum rounds across an edge.
         for (carrier, centre, top) in [
             (5.3305, 5.3320, 5.3334),
@@ -693,5 +751,110 @@ mod tests {
                 "Technician at {carrier}"
             );
         }
+    }
+
+    /// 47 CFR 97.303(h)(3): "For CW emissions (emission designator 150HA1A), the carrier frequency
+    /// is set to the center frequency." So CW keys within 5 Hz of a channel's centre and nowhere
+    /// else on the channel, while data keeps the whole channel and CW keeps the whole segment.
+    #[test]
+    fn sixty_meter_cw_keys_at_a_channel_centre_and_nowhere_else_on_the_channel() {
+        // Whole hertz, the way a dial reads back.
+        let mhz = |hz: i64| hz as f64 / 1e6;
+        for centre in [5_332_000, 5_348_000, 5_373_000, 5_405_000] {
+            for class in [General, Extra] {
+                for hz in [centre, centre - 5, centre + 5] {
+                    assert!(tx_allowed(class, mhz(hz), Cw), "{class:?} CW at {hz} Hz");
+                }
+                for hz in [
+                    centre - 6,
+                    centre + 6,
+                    centre - 500,
+                    centre + 500,
+                    centre - 1_300,
+                ] {
+                    assert!(!tx_allowed(class, mhz(hz), Cw), "{class:?} CW at {hz} Hz");
+                    assert!(
+                        tx_allowed(class, mhz(hz), Digital),
+                        "{class:?} data at {hz} Hz"
+                    );
+                }
+            }
+            assert!(
+                !tx_allowed(Technician, mhz(centre), Cw),
+                "Technician at {centre} Hz"
+            );
+        }
+        for hz in [5_351_500, 5_360_000, 5_366_499] {
+            assert!(
+                tx_allowed(General, mhz(hz), Cw),
+                "CW in the segment at {hz} Hz"
+            );
+        }
+    }
+
+    /// A signal is judged against ONE contiguous range. Its two ends can each be legal while its
+    /// middle is not: a USB passband from the top of the 5348.0 kHz channel ends inside the
+    /// segment, across the 2.1 kHz between them. Touching rows are one range.
+    #[test]
+    fn a_signal_must_lie_in_one_contiguous_range() {
+        for class in [General, Extra] {
+            for carrier in [5.3487, 5.3490, 5.3493] {
+                let top = carrier + SSB_BW_MHZ;
+                assert!(
+                    tx_allowed(class, carrier, Phone) && tx_allowed(class, top, Phone),
+                    "{class:?} {carrier}: both ends are legal on their own"
+                );
+                assert!(
+                    !tx_span_allowed(class, carrier, top, Phone),
+                    "{class:?} {carrier}: the passband crosses the gap"
+                );
+            }
+            // Inside one channel, inside the segment: allowed.
+            assert!(tx_span_allowed(class, 5.3465, 5.3493, Phone));
+            assert!(tx_span_allowed(class, 5.3600, 5.3600 + SSB_BW_MHZ, Phone));
+            // An RTTY pair across the same gap.
+            assert!(!tx_span_allowed(class, 5.3491, 5.3516, Rtty));
+            assert!(tx_span_allowed(class, 5.3575, 5.3600, Rtty));
+        }
+        // 80 m: Extra's CW/data row ends at 3.600 and its phone row, which also carries CW,
+        // starts there. One range, so a span across the boundary is allowed, as both ends are.
+        assert!(tx_span_allowed(Extra, 3.5995, 3.6005, Cw));
+        assert!(tx_span_allowed(Extra, 14.1495, 14.1505, Cw));
+        // ...and a span reaching past a range's top is not, whatever its bottom.
+        assert!(!tx_span_allowed(General, 14.3480, 14.3508, Phone));
+        assert!(!tx_span_allowed(Technician, 5.3600, 5.3628, Phone));
+        // The order of the two ends does not matter, and a point is judged as `tx_allowed` judges it.
+        assert!(!tx_span_allowed(General, 5.3515, 5.3487, Phone));
+        for f in [5.3305, 5.3334, 5.3400, 14.2249, 14.225, 14.3499, 14.350] {
+            assert_eq!(
+                tx_span_allowed(General, f, f, Phone),
+                tx_allowed(General, f, Phone),
+                "{f}"
+            );
+        }
+        assert!(tx_span_allowed(Open, 5.3487, 5.3515, Phone));
+    }
+
+    /// 60 m phone is upper sideband only, on the channels and in the segment, for every US class.
+    /// Every other band keeps its lower sideband, and `Open` is trusted.
+    #[test]
+    fn lsb_phone_is_refused_anywhere_on_60_m() {
+        for class in [Technician, General, Extra] {
+            for carrier in [
+                5.3305, 5.3333, 5.3493, 5.3543, 5.3600, 5.3636, 5.3743, 5.4063,
+            ] {
+                assert!(
+                    !lsb_phone_allowed(class, carrier),
+                    "{class:?} LSB at {carrier}"
+                );
+            }
+            for carrier in [1.850, 3.900, 7.200, 14.300] {
+                assert!(
+                    lsb_phone_allowed(class, carrier),
+                    "{class:?} LSB at {carrier}"
+                );
+            }
+        }
+        assert!(lsb_phone_allowed(Open, 5.3600));
     }
 }

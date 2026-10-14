@@ -8128,14 +8128,17 @@ impl Engine {
     /// per keying backend (keep in step with [`Self::tx_allowed`]'s Rtty arm): AFSK rides
     /// LSB, so the mark/space audio pair (2125 / 2125+shift Hz) lands BELOW the dial;
     /// true FSK keys the rig's RTTY mode where the dial reads the mark RF and space sits
-    /// `shift` below. Both edges of the span must be privileged.
+    /// `shift` below. The whole span must lie in one privileged range
+    /// ([`crate::privileges::tx_span_allowed`]).
     fn rtty_emission_ok(&self, dial: f64) -> bool {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
         let shift = self.settings.rtty_shift_hz as f64 / 1_000_000.0;
-        let allow = |f: f64| crate::privileges::tx_allowed(class, f, OperatingMode::Rtty);
+        let span = |lo: f64, hi: f64| {
+            crate::privileges::tx_span_allowed(class, lo, hi, OperatingMode::Rtty)
+        };
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
-            allow(dial - shift) && allow(dial)
+            span(dial - shift, dial)
         } else {
             // ⚠️ THE LIVE MARK, NOT `RTTY_AFSK_MARK_HZ`. The constant was right until 1.9.0 made
             // the transmitter follow the netted centre; after that the emitted mark is
@@ -8164,13 +8167,10 @@ impl Engine {
             // not reported its mode, or reports one this does not recognise, is refused unless
             // the emission is legal on EITHER side — never approved on a guess.
             match self.rtty_afsk_usb_side() {
-                Some(true) => allow(dial + mark) && allow(dial + mark + shift),
-                Some(false) => allow(dial - mark - shift) && allow(dial - mark),
+                Some(true) => span(dial + mark, dial + mark + shift),
+                Some(false) => span(dial - mark - shift, dial - mark),
                 None => {
-                    allow(dial - mark - shift)
-                        && allow(dial - mark)
-                        && allow(dial + mark)
-                        && allow(dial + mark + shift)
+                    span(dial - mark - shift, dial - mark) && span(dial + mark, dial + mark + shift)
                 }
             }
         }
@@ -22952,9 +22952,12 @@ contact yourself."
     ///
     /// The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks by, so a
     /// picker can never choose a dial this gate then refuses — and it is the voice audio one
-    /// sideband carries. The WHOLE emission must sit in a privileged phone segment, so a dial
-    /// within a passband of an edge cannot bleed out of it:
+    /// sideband carries. The WHOLE emission must sit in ONE contiguous privileged phone range
+    /// ([`crate::privileges::tx_span_allowed`]), so a dial within a passband of an edge cannot
+    /// bleed out of it, and a passband cannot cross a gap between two ranges:
     /// * USB / LSB, and the PKTUSB / PKTLSB an SSTV image rides: one passband above / below.
+    ///   A passband below the carrier is refused on 60 m for every US class
+    ///   ([`crate::privileges::lsb_phone_allowed`]).
     /// * AM: the carrier plus BOTH sidebands of the same audio, one passband either side.
     /// * FM: ⚠️ NO WIDTH MODEL. An FM signal's width is set by its deviation, which Nexus does
     ///   not know (`repeater_tune` records the same decision), so only the carrier is judged.
@@ -22964,8 +22967,6 @@ contact yourself."
     fn phone_emission_allowed(&self, carrier: f64, word: &str) -> bool {
         use crate::privileges::SSB_BW_MHZ as SSB_BW;
         let class = self.settings.license_class;
-        let allow =
-            |f: f64| crate::privileges::tx_allowed(class, f, crate::settings::OperatingMode::Phone);
         let (above, below) = match word.trim().to_ascii_uppercase().as_str() {
             "USB" | "PKTUSB" => (true, false),
             "LSB" | "PKTLSB" => (false, true),
@@ -22973,7 +22974,10 @@ contact yourself."
             // AM, and any word this model does not know.
             _ => (true, true),
         };
-        allow(carrier) && (!above || allow(carrier + SSB_BW)) && (!below || allow(carrier - SSB_BW))
+        let lo = if below { carrier - SSB_BW } else { carrier };
+        let hi = if above { carrier + SSB_BW } else { carrier };
+        crate::privileges::tx_span_allowed(class, lo, hi, crate::settings::OperatingMode::Phone)
+            && (above || !below || crate::privileges::lsb_phone_allowed(class, carrier))
     }
 
     /// May the operator's class key a DIGITAL emission from the transmit dial `dial`, with the
@@ -23030,8 +23034,8 @@ contact yourself."
     /// `mark + shift` from the dial on the side the WORD names — where
     /// [`Self::rtty_emission_ok`] judges the side the rig REPORTS, or failing that the dial's own
     /// word, and on a satellite pass neither is the uplink's: an inverting bird commands it on
-    /// the other side (`uplink_mode_for` mirrors PKTLSB ↔ PKTUSB). Both edges of the span must
-    /// be privileged, as there.
+    /// the other side (`uplink_mode_for` mirrors PKTLSB ↔ PKTUSB). The whole span must lie in
+    /// one privileged range, as there.
     ///
     /// True FSK keys the rig's own RTTY mode, whose span `rtty_emission_ok` already judges from
     /// the dial, and `uplink_mode_for` never mirrors it; with a word that names no side it adds
@@ -23042,16 +23046,17 @@ contact yourself."
         }
         let shift = self.settings.rtty_shift_hz as f64 / 1_000_000.0;
         let mark = self.rtty_tx_mark_hz() / 1_000_000.0;
-        let allow = |f: f64| {
-            crate::privileges::tx_allowed(
+        let span = |lo: f64, hi: f64| {
+            crate::privileges::tx_span_allowed(
                 self.settings.license_class,
-                f,
+                lo,
+                hi,
                 crate::settings::OperatingMode::Rtty,
             )
         };
         match Self::side_is_lsb(word) {
-            Some(false) => allow(dial + mark) && allow(dial + mark + shift),
-            Some(true) => allow(dial - mark - shift) && allow(dial - mark),
+            Some(false) => span(dial + mark, dial + mark + shift),
+            Some(true) => span(dial - mark - shift, dial - mark),
             None => true,
         }
     }

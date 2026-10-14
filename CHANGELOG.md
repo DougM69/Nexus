@@ -137,9 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phone carrier 1.5 kHz below the channel centre (5330.5, 5346.5, 5371.5 and 5403.5 kHz), but the
   transmit lock only accepted a carrier at least 1.4 kHz below it, so it showed TX LOCKED on the
   very frequency the rule names. Phone now keys on that carrier, in USB, and is still refused
-  anywhere the voice would leave the 2.8 kHz channel. CW, data, the 5351.5 to 5366.5 kHz segment,
-  Technician and non-US operators are unchanged. NEEDS-BENCH: a radio on a 60 m channel carrier
-  into a dummy load, checking that Nexus lets it key.
+  anywhere the voice would leave the 2.8 kHz channel. The lock is also stricter on 60 m in three
+  places. LSB is refused everywhere on the band, the channels and the 5351.5 to 5366.5 kHz segment
+  alike. A signal can no longer reach across the 2.1 kHz gap between the 5348.0 kHz channel and the
+  segment. CW keys only within 5 Hz of a channel centre, where the rule puts the CW carrier, so
+  the soundcard CW keyer, whose tone sits a pitch away from its dial, keys only in the segment.
+  Data, Technician and non-US operators are unchanged. NEEDS-BENCH: a radio on 60 m into a dummy
+  load, checking that Nexus keys USB on a channel carrier and CW on a channel centre, and shows
+  TX LOCKED for LSB and for CW off the centre.
 
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good
