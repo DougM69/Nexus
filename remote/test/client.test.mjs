@@ -15,7 +15,7 @@ let app
 before(async () => { app = await runtime({ bindings: { AUTH0_NATIVE_CLIENT_ID: NATIVE } }) })
 after(async () => { await app?.mf.dispose() })
 
-const DAY = 86400000
+const DAY = 86400000, UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 const LIFETIME = { 'x-nexus-device-lifetime': '1' }, KINDS = { 'x-nexus-device-kind': '1' }, KEYS = { 'x-nexus-device-key': '1' }
 const PIPE = { 'x-nexus-pipe-version': '1' }
 const type = name => value => value?.type === name
@@ -247,20 +247,21 @@ test('a computer waits for approval at the shack, is found again by its key, and
   // One that asks is listed both, each with its kind and platform.
   const kinds = await listed(KINDS)
   assert.deepEqual(kinds.find(d => d.id === c.deviceId), { id: c.deviceId, name: 'Travel laptop', approved: 0, expiresAt: pending.expires_at,
-    kind: 'computer', platform: 'macos' })
+    kind: 'computer', platform: 'macos', untilRemoved: 0 })
   assert.deepEqual(kinds.filter(d => d.id !== c.deviceId).map(d => [d.kind, d.platform]), [['browser', null]])
   assert.deepEqual(Object.keys((await listed({ ...KINDS, ...LIFETIME, ...KEYS })).find(d => d.id === c.deviceId)).sort(),
-    ['approved', 'expiresAt', 'generation', 'id', 'kind', 'name', 'platform', 'publicKey', 'renewsUntil'])
-  // Approved at the shack: the computer is told so, with the end use can never move.
+    ['approved', 'expiresAt', 'generation', 'id', 'kind', 'name', 'platform', 'publicKey', 'renewsUntil', 'untilRemoved'])
+  // Approved at the shack: the computer is told so; its approval lasts until removed.
   await pair.native.post(`${path}/native/approve-device`, { deviceId: c.deviceId }, 200, LIFETIME)
   const approved = await deviceRow(c.deviceId)
   const { value: told } = await signed(c, `${path}/client/device`, { name: 'Travel laptop', kind: 'computer', platform: 'macos', publicKey: c.key.publicKey })
-  assert.deepEqual(told, { deviceId: c.deviceId, approved: true, expiresAt: approved.expires_at, renewsUntil: approved.approved_at + 90 * DAY })
-  assert.ok(approved.expires_at > Date.now() + 29 * DAY, 'thirty days')
+  assert.deepEqual(told, { deviceId: c.deviceId, approved: true, expiresAt: approved.expires_at, renewsUntil: null })
+  assert.equal(approved.expires_at, UNTIL_REMOVED, 'until removed')
+  assert.equal((await listed(KINDS)).find(d => d.id === c.deviceId).untilRemoved, 1)
   // A phone registers as one.
   const phone = await computer(pair, { approve: false, kind: 'phone', platform: 'ios', name: 'Pocket' })
   assert.deepEqual((await listed(KINDS)).find(d => d.id === phone.deviceId), { id: phone.deviceId, name: 'Pocket', approved: 0,
-    expiresAt: (await deviceRow(phone.deviceId)).expires_at, kind: 'phone', platform: 'ios' })
+    expiresAt: (await deviceRow(phone.deviceId)).expires_at, kind: 'phone', platform: 'ios', untilRemoved: 0 })
   // Kinds and platforms that do not go together, or do not exist, are refused, and nothing is made.
   const before = (await app.db.prepare('SELECT COUNT(*) AS n FROM devices WHERE station_id=?').bind(pair.stationId).first()).n
   const key = await deviceKey(), probe = { stationId: pair.stationId, native: c.native, key }
@@ -380,7 +381,7 @@ test('the pipe opens only once the station has opened its end, then passes binar
   const client = await opening
   assert.equal(client.status, 101)
   assert.equal(await pipesOf(c.stationId), 1)
-  assert.ok((await deviceRow(c.deviceId)).expires_at > Date.now() + 29 * DAY, 'opening the station is use: thirty days on')
+  assert.equal((await deviceRow(c.deviceId)).expires_at, UNTIL_REMOVED, 'opening the station moves no approval: until removed')
   // Each message, as sent, in order, either way, and nothing else on either end.
   const out = [record(1, 2, 3), record(4), Buffer.alloc(16384, 7), record(5, 6)]
   for (const message of out) client.peer.ws.send(message)
@@ -526,18 +527,13 @@ test('a pipe lasts its lease: it ends with its approval or its entitlement unles
   await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() + 4000, c.pair.browser.accountId).run()
   const ends = await piped(c)
   await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() + 3600000, c.pair.browser.accountId).run()
-  // Use renews the approval too: thirty days on from this renewal.
+  // An approval given under the thirty/ninety-day rule lasts until removed from its next use.
   await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, c.deviceId).run()
   const { value } = await signed(c, `stations/${c.stationId}/client/renew`)
   assert.deepEqual(Object.keys(value).sort(), ['ok', 'serverNow'])
-  assert.ok((await deviceRow(c.deviceId)).expires_at > Date.now() + 29 * DAY, 'renewal is use')
-  // And never past ninety days from the shack's approval, as for a browser.
-  const approvedAt = Date.now() - 89 * DAY
-  await app.db.prepare('UPDATE devices SET approved_at=?, expires_at=? WHERE id=?').bind(approvedAt, Date.now() + 3600000, c.deviceId).run()
+  assert.equal((await deviceRow(c.deviceId)).expires_at, UNTIL_REMOVED, 'kept by use')
   await signed(c, `stations/${c.stationId}/client/renew`)
-  assert.equal((await deviceRow(c.deviceId)).expires_at, approvedAt + 90 * DAY, 'renewed only up to the cap')
-  await signed(c, `stations/${c.stationId}/client/renew`)
-  assert.equal((await deviceRow(c.deviceId)).expires_at, approvedAt + 90 * DAY, 'and never past it')
+  assert.equal((await deviceRow(c.deviceId)).expires_at, UNTIL_REMOVED, 'and use moves it no further')
   await delay(5500)
   ends.client.ws.send(record(4, 2))
   assert.deepEqual(await ends.end.take(binary), record(4, 2), 'renewed, it outlived the entitlement it opened under')

@@ -6,9 +6,11 @@ export type RemoteStationStatus = {
    *  `key` is the SHA-256 of the browser's listed device key (A5), lowercase hex, when it has one.
    *  `kind`: a browser, or Nexus itself on another computer or a phone (the native client), whose
    *  approval pins its key and grants nothing on the relay's lanes; absent from an older station, where
-   *  every device is a browser. `platform`: a native device's, none for a browser. */
+   *  every device is a browser. `platform`: a native device's, none for a browser. `untilRemoved`: 1 for an
+   *  approval that lasts until it is removed here (every approval since 2026-10-10); absent from an older
+   *  station or service. */
   devices: { id: string; name: string; approved: number; expiresAt: number; generation?: number | null; renewsUntil?: number | null
-    key?: string | null; kind?: DeviceKind; platform?: DevicePlatform | null }[]
+    key?: string | null; kind?: DeviceKind; platform?: DevicePlatform | null; untilRemoved?: number }[]
   loggingPermissions?: string[]
   stationPermissions?: string[]
   transmitPermissions?: string[]

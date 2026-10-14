@@ -175,19 +175,22 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     }
     await granted('after the approval')
     assert.equal((await probe.send({ type: 'ftEvidence' })).txEnabled, false)
-    // Browser approval lifetime (operator decision 2026-09-14): opening the station from that browser
-    // renews its approval. The service moves the expiry but never the generation, so the restart below
+    // An approval lasts until removed (operator decision 2026-10-10). One given under the old thirty-day
+    // rule is kept on use: the service moves the expiry but never the generation, so the restart below
     // still restores control, logging and transmit, with the latch off.
+    const UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
     const deviceRow = () => app.db.prepare('SELECT generation,approved_at,expires_at FROM devices WHERE id=?').bind(device.deviceId).first()
     const approval = await deviceRow()
     assert.ok(approval.approved_at, 'this Nexus asked for the approval lifetime')
+    assert.equal(approval.expires_at, UNTIL_REMOVED, 'until removed')
     await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + 86400000, device.deviceId).run()
     await browser.post(`stations/${stationId}/ticket`)
     const renewed = await deviceRow()
-    assert.ok(renewed.expires_at > Date.now() + 29 * 86400000, 'renewed on use')
+    assert.equal(renewed.expires_at, UNTIL_REMOVED, 'kept on use')
     assert.equal(renewed.generation, approval.generation)
     const listed = await probe.send({ type: 'refresh' })
-    assert.equal(listed.status.devices.find(d => d.id === device.deviceId)?.expiresAt, renewed.expires_at, 'the shack sees the renewed expiry')
+    const shown = listed.status.devices.find(d => d.id === device.deviceId)
+    assert.deepEqual([shown?.expiresAt, shown?.untilRemoved], [UNTIL_REMOVED, 1], 'the shack sees it until removed')
     await delay(300)
     await probe.send({ type: 'restart' })
     await granted('after a restart')

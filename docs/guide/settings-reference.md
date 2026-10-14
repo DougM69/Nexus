@@ -139,20 +139,22 @@ station stops within five seconds if its connection drops, and within seven if i
 freezes. In Phone, the browser can talk on the rig with its own microphone, at a **Mic level**
 that browser remembers; see [Talk from Remote](phone.md#talk-from-remote).
 
-**How long a browser stays approved.** An approval lasts 30 days, and each time that browser
-opens the station it moves on to 30 days from then, up to 90 days after you approved it here.
-Loading the page without opening the station does not count. Under each approved browser, Nexus
-shows the date it is approved until and the latest it can reach; the browser shows the same. In
-the last 7 days before that latest date, both warn you, and **Approve again** here starts a new
-approval. A new approval gives station controls and logging again, and FT8/FT4 transmit only if
-its box is ticked. Browsers approved by an earlier Nexus keep a fixed 30 days until approved again.
+**How long a browser stays approved.** Until you remove it. An approval never runs out, whether
+the browser is used or not: only **Revoke browser approval** (or **Remove**) here, the browser
+forgetting itself, or **Revoke station access** ends it. Nexus shows each one as approved until
+you remove it, and so does the browser. Approvals given under the earlier rule (30 days from last
+use, 90 at most) become ones that last until removed the next time the station connects or the
+browser is used; one that had already run out stays ended, and you approve that browser again.
 
 While it holds station control, a browser can press **Listen** to hear the station's receive
 audio; **Volume** beside it sets how loud, and that browser remembers it. **Revoke browser
 approval** removes one browser.
 **Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
 gives each still-approved browser back what it had, with the TX switch off. **End remote
-control and clear permissions** and **Revoke browser approval** clear permissions for good.
+control** does the same for everyone at once: it turns Remote off (it stays off after a restart),
+disconnects every browser and every computer, and turns off Remote over this network; nobody
+is approved again afterwards, and turning Remote on gives each approved device back what it
+had. **Revoke browser approval** clears permissions for good.
 **Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
@@ -214,7 +216,7 @@ streaming browser: one controller at a time, and every transmission stops if its
 The station's network key and its paired computers are kept in this computer's password store,
 apart from the Remote pairing, so **Revoke station access** leaves them alone. **Reset network
 identity** (under **Network identity**) makes a new key and removes every paired computer; pair
-them again afterwards. **End remote control and clear permissions** turns this off too. Turning
+them again afterwards. **End remote control** turns this off too. Turning
 it on or off, pairing, removing and resetting work only at the station itself, never through a
 stream.
 

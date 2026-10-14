@@ -79,19 +79,40 @@ impl Approved {
     /// Who may from now on: each approved computer's name and approval's end by its pinned key. A
     /// change is told to every session at once; the same set again tells nothing. A lock a panic
     /// poisoned still takes the change and tells it, so a removal is never lost: [`Approved::paired`]
-    /// then takes nobody, and every session asked again ends.
-    pub(crate) fn set(&self, keys: BTreeMap<[u8; 32], (String, u64)>) {
+    /// then takes nobody, and every session asked again ends. Returns the names no longer on it, whose
+    /// station control the caller revokes.
+    pub(crate) fn set(&self, keys: BTreeMap<[u8; 32], (String, u64)>) -> Vec<String> {
         let mut held = self
             .keys
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *held == keys {
-            return;
+            return Vec::new();
         }
+        let dropped = held
+            .values()
+            .filter(|(name, _)| !keys.values().any(|(kept, _)| kept == name))
+            .map(|(name, _)| name.clone())
+            .collect();
         *held = keys;
         drop(held);
         self.revisions.fetch_add(1, Ordering::SeqCst);
         self.revision.send_modify(|r| *r = r.wrapping_add(1));
+        dropped
+    }
+
+    /// The names that may now, their approval not yet ended: who holds station control while hosted
+    /// Remote is on. Nobody while the lock is poisoned. Takes this lock alone, as the operations
+    /// authority asks it under its own.
+    pub(crate) fn names(&self) -> Vec<String> {
+        let Ok(keys) = self.keys.lock() else {
+            return Vec::new();
+        };
+        let now = super::now_ms();
+        keys.values()
+            .filter(|(_, until)| now < *until)
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// The device holding the key with this pin, if it may now: approved, and its approval not yet

@@ -396,18 +396,27 @@ export function deviceCookie(request: Request, stationId: string): string | null
   const value = parts[0].slice(name.length)
   return /^[0-9a-f]{64}$/.test(value) ? value : null
 }
-export function cookie(stationId: string, value: string, maxAge = 2592000): string {
+/** The browser credential's lifetime in its cookie, in seconds: the longest a browser keeps one (Chrome
+ *  caps Max-Age at 400 days). An approval no longer ends by itself (`UNTIL_REMOVED`), so the credential is
+ *  re-issued with this whenever its browser is admitted, and only a browser left unused that long loses it. */
+export const COOKIE_MAX_AGE_S = 400 * 86400
+export function cookie(stationId: string, value: string, maxAge = COOKIE_MAX_AGE_S): string {
   return `${cookieName(stationId)}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`
 }
-/** Browser approval lifetime (operator decision 2026-09-14). An approval lasts thirty days from the
- *  last time that browser was admitted to its station, and never more than ninety days from the moment
- *  the shack approved it. Only approving again at the shack starts a new ninety days. */
-export const APPROVAL_MS = 30 * 24 * 60 * 60 * 1000
-export const APPROVAL_LIMIT_MS = 90 * 24 * 60 * 60 * 1000
+/** How long an approval lasts (operator decision 2026-10-10, replacing the 2026-09-14 rule of thirty days
+ *  from last use and ninety at most): until it is removed. It never lapses, used or not; only Remove at
+ *  the shack, the device forgetting itself, or revoking the station ends it.
+ *
+ *  An approved device's `expires_at` is this, the last millisecond of the year 9999. Every Nexus already
+ *  holds a device to `expiresAt > now` and nothing else (1.17 and 1.18 filter and restore by it, and show
+ *  it as a date: "9999-12-31"), so to all of them it is an approval that does not end; it fits a safe
+ *  integer, an i64 and a u64. A Nexus that asks for kinds is also told so by name (`untilRemoved`), and so
+ *  is the browser's own page. */
+export const UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 /** Sent by a Nexus that binds its remembered grants to the approval GENERATION. Only that Nexus is
- *  shown the generation and the renewal limit, and only approvals it gives record an approval time
- *  and so ever renew: 1.12.0 binds restored grants to the expiry (a renewal would silently drop them)
- *  and parses the device list with deny_unknown_fields (an added field fails every refresh). */
+ *  shown the generation, and only approvals it gives record an approval time: 1.12.0 binds restored
+ *  grants to the expiry (moving it would silently drop them) and parses the device list with
+ *  deny_unknown_fields (an added field fails every refresh). */
 export function lifetime(request: Request): boolean {
   return request.headers.get('x-nexus-device-lifetime') === '1'
 }
@@ -422,9 +431,20 @@ export function deviceKeys(request: Request): boolean {
 export function deviceKinds(request: Request): boolean {
   return request.headers.get('x-nexus-device-kind') === '1'
 }
-/** The end that use cannot move, or null for an approval that never renews. */
-export function renewsUntil(row: Pick<DeviceRow, 'approved' | 'approved_at'>): number | null {
-  return row.approved === 1 && row.approved_at !== null ? row.approved_at + APPROVAL_LIMIT_MS : null
+/** Does this approval last until it is removed? */
+export function untilRemoved(row: Pick<DeviceRow, 'approved' | 'expires_at'>): boolean {
+  return row.approved === 1 && row.expires_at >= UNTIL_REMOVED
+}
+/** Each approval of this station that still stands, given by a Nexus that binds its grants to the
+ *  generation (`approved_at` recorded), made one that lasts until removed: the approvals given under the
+ *  thirty/ninety-day rule. The generation is not moved, so every grant bound to it stands, and nothing
+ *  ended is revived. An approval given by an older Nexus (no approval time) keeps its fixed end, because
+ *  that Nexus binds its restored grants to the expiry. Asked for whenever the station connects or lists
+ *  its devices, and as a device is used. */
+export async function keepApprovals(env: RemoteEnv, stationId: string, now: number, deviceId?: string): Promise<void> {
+  await env.DB.prepare(`UPDATE devices SET expires_at=? WHERE station_id=? AND approved=1 AND approved_at IS NOT NULL
+    AND expires_at>? AND expires_at<?${deviceId === undefined ? '' : ' AND id=?'}`)
+    .bind(...[UNTIL_REMOVED, stationId, now, UNTIL_REMOVED, ...(deviceId === undefined ? [] : [deviceId])]).run()
 }
 export type DeviceRow = { id: string; name: string; generation: number; approved: number; approved_at: number | null; expires_at: number
   public_key: string | null }

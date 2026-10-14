@@ -148,7 +148,8 @@ export function RemoteStation() {
             <span className="remote-native-browser-name">{device.name}</span>
             {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
             <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.asks')
-              : unpinned ? t('remote.browserKeyNotPinned') : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+              : unpinned ? t('remote.browserKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
+              : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
             <span className="remote-actions">
               {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
                 onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
@@ -169,7 +170,8 @@ export function RemoteStation() {
               {device.platform && <span>{t('remote.native.computerPlatform', { platform: PLATFORM_NAMES[device.platform] })}</span>}
               {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
               <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.computerAsks')
-                : unpinned ? t('remote.native.computerKeyNotPinned') : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+                : unpinned ? t('remote.native.computerKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
+                : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
               <span className="remote-actions">
                 {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
                   onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: false, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
@@ -199,7 +201,7 @@ export function RemoteStation() {
           // A5: approved, with a key the service lists, and that key not the one pinned here (approved
           // before keys, or the browser came back with a new one): it cannot stream until approved again.
           const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
-          const ending = device.approved === 1 && (device.renewsUntil ?? device.expiresAt) - Date.now() <= APPROVAL_WARNING_MS
+          const ending = device.approved === 1 && device.untilRemoved !== 1 && (device.renewsUntil ?? device.expiresAt) - Date.now() <= APPROVAL_WARNING_MS
           return <div key={device.id}>
           {/* The browser's key beside its name: the page shows the same one, for the operator to compare. */}
           <p>{device.name} <code>{device.id.slice(-6)}</code>{key && <> <span>{t('remote.browserKey', { key: shortFingerprint(key) })}</span></>}</p>
@@ -213,7 +215,7 @@ export function RemoteStation() {
                 <button type="button" className="remote-button" disabled={busy}
                   onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key, kind: device.kind ?? 'browser' })}>{t('remote.approveBrowser')}</button>
               </>}
-          {device.approved === 1 && <p>{device.renewsUntil
+          {device.approved === 1 && <p>{device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved') : device.renewsUntil
             ? t('remote.browserRenewsUntil', { until: utcDate(device.expiresAt), limit: utcDate(device.renewsUntil) })
             : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</p>}
           {/* The last week before the end that use cannot move, or a key not pinned here. Approving again

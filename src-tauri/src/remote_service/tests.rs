@@ -12,6 +12,9 @@ use tempo_app::{dto::AmpStatusDto, engine::Engine, settings::Settings};
 /// Remote over this network beside the hosted mode: a paired computer's grant through hosted
 /// decisions.
 mod lan_grants;
+/// One rule for every device: a tunnel computer's station control, and End remote control holding
+/// for everyone until Remote is turned on again.
+mod tunnel_grants;
 
 #[derive(Clone, Default)]
 struct MemoryVault {
@@ -1973,6 +1976,7 @@ async fn fake_cloud() -> FakeCloud {
                             let device = device.as_object_mut().unwrap();
                             device.remove("kind");
                             device.remove("platform");
+                            device.remove("untilRemoved");
                         }
                     }
                     ("200 OK", listed.to_string())
@@ -2379,10 +2383,12 @@ async fn an_approval_given_while_remote_is_off_applies_at_turn_on() {
 }
 
 /// Operator decision 2026-09-14: Turn off Remote PAUSES. Turning it back on restores what each
-/// still-approved browser had (transmit only where granted). Revoking a browser, and End remote
-/// control (take over), still clear. The TX-enable latch is off at every step, and nothing keys.
+/// still-approved browser had (transmit only where granted). Since 2026-10-10 End remote control
+/// (take over) pauses the same way: it drops everyone and holds until Remote is turned on again, and
+/// no browser is approved again after it. Revoking a browser still clears. The TX-enable latch is
+/// off at every step, and nothing keys.
 #[tokio::test(flavor = "multi_thread")]
-async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears() {
+async fn turn_off_and_ending_remote_control_pause_but_revoking_a_browser_clears() {
     for case in [
         "positive control: turn off, turn on",
         "turn off, revoke the browser, turn on",
@@ -2424,7 +2430,7 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
         }
         service.action(Action::Enable {}).await.unwrap();
 
-        let status = if case.starts_with("positive") {
+        let status = if !case.contains("revoke the browser") {
             eventually(&service, "the paused grants came back", |s| {
                 s.station_permissions == [BROWSER]
                     && s.logging_permissions == [BROWSER]
@@ -2583,6 +2589,10 @@ async fn transmit_grant_survives_a_restart_only_if_ticked_on_a_still_approved_br
     }
 }
 
+/// A revoked switch is remembered across a restart. End remote control (take over) is remembered as
+/// Remote off: after a restart it stays off, and turning it on gives the browser back everything its
+/// approval had, transmit included (the operator's decision of 2026-10-10: no device is approved
+/// again after it).
 #[tokio::test(flavor = "multi_thread")]
 async fn revoking_transmit_or_control_or_taking_over_is_remembered_across_a_restart() {
     for case in ["revoke transmit", "revoke station control", "take over"] {
@@ -2620,13 +2630,36 @@ async fn revoking_transmit_or_control_or_taking_over_is_remembered_across_a_rest
         drop(service);
 
         let service = launch(&cloud, &vault, &engine);
+        if case == "take over" {
+            eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+            settle().await;
+            let held = service.status().unwrap();
+            assert!(!on(&held), "{case}: Remote came back on by itself");
+            assert!(
+                held.station_permissions.is_empty(),
+                "{case}: a grant came back by itself"
+            );
+            assert!(transmitter_idle(&engine), "{case}");
+            service.action(Action::Enable {}).await.unwrap();
+            eventually(
+                &service,
+                "the approval's grants came back at Turn on",
+                |s| {
+                    s.station_permissions == [BROWSER]
+                        && s.logging_permissions == [BROWSER]
+                        && s.transmit_permissions == [BROWSER]
+                },
+            )
+            .await;
+            assert!(transmitter_idle(&engine), "{case}: the latch is still off");
+            continue;
+        }
         eventually(&service, "Remote back on", on).await;
         settle().await;
         let status = service.action(Action::Refresh {}).await.unwrap();
         let (control, logging): (&[&str], &[&str]) = match case {
             "revoke transmit" => (&[BROWSER], &[BROWSER]),
-            "revoke station control" => (&[], &[BROWSER]),
-            _ => (&[], &[]),
+            _ => (&[], &[BROWSER]),
         };
         assert_eq!(status.station_permissions, control, "{case}");
         assert_eq!(status.logging_permissions, logging, "{case}");
@@ -2960,6 +2993,7 @@ async fn local_transmit_grant_requires_approved_enabled_station_control_and_clea
         key: None,
         kind: Kind::Browser,
         platform: None,
+        until_removed: 0,
     });
     assert!(matches!(
         service.action(grant()).await,
@@ -3463,8 +3497,10 @@ async fn a_devices_kind_and_platform_are_held_to_the_services_values() {
 
 /// ★ Approving a computer pins the key the shack showed beside it, as a browser's is (A5), for the
 /// tunnel's TLS to check, and grants nothing on the relay's lanes: no logging, no station control
-/// and no transmit, even with transmit asked for, and none of the switches can give it one. The pin
-/// outlives a restart, still granting nothing; revoking the computer removes it.
+/// and no transmit under its id, even with transmit asked for, and none of the switches can give it
+/// one. What it holds is station control under the shack's own name for its key while Remote is on
+/// (the operator's decision of 2026-10-10), as a LAN computer does. The pin outlives a restart, still
+/// granting nothing more; revoking the computer removes it.
 #[tokio::test(flavor = "multi_thread")]
 async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lanes() {
     let cloud = fake_cloud().await;
@@ -3504,9 +3540,10 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
             status.transmit_permissions.clone(),
         )
     };
+    let named = lan::tunnel_device_id(&key.pin());
     assert_eq!(
         granted(&status),
-        (vec![], vec![], vec![]),
+        (vec![], vec![named.clone()], vec![]),
         "nothing on the relay's lanes"
     );
     assert!(
@@ -3537,7 +3574,7 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
     }
     assert_eq!(
         granted(&service.status().unwrap()),
-        (vec![], vec![], vec![])
+        (vec![], vec![named.clone()], vec![])
     );
     settle().await;
     assert_eq!(
@@ -3563,7 +3600,7 @@ async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lane
         [COMPUTER],
         "shown pinned after the restart"
     );
-    assert_eq!(granted(&listed), (vec![], vec![], vec![]));
+    assert_eq!(granted(&listed), (vec![], vec![named.clone()], vec![]));
     service
         .action(Action::Device {
             device_id: COMPUTER.into(),
@@ -3798,8 +3835,9 @@ async fn the_press_carries_the_kind_shown_and_the_shack_acts_on_no_other() {
 
 /// ★ The service's ids never meet the names the shack gives its computers: a browser the service
 /// lists under the name an approved computer is taken as through the room is refused with the list,
-/// so approving it can never hand that computer station control there. CONTROL: before, the
-/// computer through the room holds nothing.
+/// so approving it can never hand that computer the browser's grants there (logging, transmit).
+/// Premise: the computer holds station control of its own, as every approved computer does while
+/// Remote is on (the operator's decision of 2026-10-10), and nothing else.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_browser_listed_under_a_computers_name_through_the_room_is_refused() {
     let cloud = fake_cloud().await;
@@ -3813,8 +3851,15 @@ async fn a_browser_listed_under_a_computers_name_through_the_room_is_refused() {
     let taken = approved.paired(&key.pin()).expect("premise: taken");
     assert_eq!(
         lan_acquire(&service, &engine, &taken),
-        "localPermissionRequired",
-        "control: it holds nothing"
+        "controlling",
+        "premise: its own station control"
+    );
+    let held = |status: &Status| {
+        status.logging_permissions.contains(&taken) || status.transmit_permissions.contains(&taken)
+    };
+    assert!(
+        !held(&service.status().unwrap()),
+        "control: it holds no browser's grant"
     );
     let browser = DeviceKey::new();
     let mut listed: serde_json::Value =
@@ -3836,10 +3881,9 @@ async fn a_browser_listed_under_a_computers_name_through_the_room_is_refused() {
             kind: Some(Kind::Browser),
         })
         .await;
-    assert_eq!(
-        lan_acquire(&service, &engine, &taken),
-        "localPermissionRequired",
-        "the computer through the room took the control granted the browser named after it"
+    assert!(
+        !held(&service.status().unwrap()),
+        "the computer through the room took the grants given the browser named after it"
     );
     assert!(
         matches!(refreshed, Err("invalidResponse")),
@@ -3915,12 +3959,42 @@ async fn a_computer_through_the_room_never_holds_a_browsers_grants_under_its_id(
     let taken = approved
         .paired(&computer.pin())
         .expect("premise: the tunnel takes the computer approved here");
+    assert_ne!(taken, BROWSER, "named by the service's id");
+    // Since 2026-10-10 a computer approved here holds station control of its own while Remote is on
+    // (as a LAN computer does), under its own name. It holds none of the browser's grants: not its
+    // transmit, and its control is its own, untouched when the browser's is revoked.
+    let status = service.status().unwrap();
+    assert!(
+        !status.transmit_permissions.contains(&taken)
+            && !status.logging_permissions.contains(&taken),
+        "the computer through the room took the browser's grants: {}",
+        serde_json::to_string(&status).unwrap()
+    );
+    service
+        .action(Action::StationPermission {
+            device_id: BROWSER.into(),
+            allow: false,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !service
+            .status()
+            .unwrap()
+            .station_permissions
+            .contains(&BROWSER.to_string()),
+        "control: the browser's own station control is revoked"
+    );
     assert_eq!(
         lan_acquire(&service, &engine, &taken),
-        "localPermissionRequired",
-        "the computer through the room took the browser's control"
+        "controlling",
+        "the computer's control was the browser's, and went with it"
     );
-    assert_ne!(taken, BROWSER, "named by the service's id");
+    let status = service.status().unwrap();
+    assert!(
+        !status.transmit_permissions.contains(&taken),
+        "the browser's transmit"
+    );
 }
 
 /// ★ A browser's approval admits nothing through the room: a browser approved here with its key

@@ -302,6 +302,31 @@ it('shows how long this browser stays approved, and warns in its last seven days
   }
 })
 
+// An approval lasts until removed (operator decision 2026-10-10): the page says so, shows no date for the
+// end no clock reaches, and warns of nothing. CONTROL: the same device from a service before that rule
+// still shows its date.
+it('says this browser is approved until it is removed at the shack, with no date and no warning', async () => {
+  const forever = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
+  for (const untilRemoved of [true, false]) {
+    const session = account()
+    session.stations.push({ id: crypto.randomUUID(), name: 'Shack', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1,
+      expires_at: untilRemoved ? forever : session.serverNow + 3 * 86400000, renewsUntil: null, untilRemoved } })
+    client(session)
+    render(<RemoteApp />)
+    await screen.findByRole('button', { name: 'Listen' })
+    const text = document.body.textContent ?? ''
+    if (untilRemoved) {
+      expect(text).toContain('This browser is approved until you remove it in Nexus at the shack.')
+      expect(text).not.toContain('9999')
+      expect(text).not.toContain('approval ends')
+    } else {
+      expect(text, 'control').toContain('This browser is approved until')
+      expect(text, 'control').toContain('approval ends')
+    }
+    cleanup(); vi.restoreAllMocks()
+  }
+})
+
 // A first-time operator should not have to find a sign-up link on somebody else's login form.
 it('offers creating an account as its own route, not a link to hunt for on the login form', async () => {
   const service = client(null)

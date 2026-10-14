@@ -417,6 +417,9 @@ pub struct Authority {
     /// The LAN road's paired computers, who hold station control while LAN is on (see
     /// `hold_lan_devices`). Unset in a build of the service without a LAN road.
     lan_devices: std::sync::OnceLock<LanDevices>,
+    /// The computers approved for the room's tunnel, who hold station control while hosted Remote
+    /// is on (see `hold_tunnel_devices`). Unset in a build of the service without the tunnel.
+    tunnel_devices: std::sync::OnceLock<LanDevices>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
     /// Tests post self-spots here, one poster per target. A test build has no path to pota.app or
@@ -567,6 +570,18 @@ impl Authority {
     pub fn hold_lan_devices(&self, devices: LanDevices) {
         let _ = self.lan_devices.set(devices);
     }
+    /// The computers approved here for the room's tunnel hold station control as the LAN's paired
+    /// computers do (operator decision 2026-10-10, one rule for every device): `reconcile` reads
+    /// `devices` each time and gives each name it lists its grant back, so Turn Remote on, or a
+    /// revoke of someone else, leaves them theirs. It only ever gives: a computer removed or no
+    /// longer approved is first dropped from `devices` and then revoked (`permit_station`), and the
+    /// revoke stands; with hosted Remote off `devices` lists nobody, so the clear that turning it off
+    /// makes (`invalidate`) stands too. Names are the shack's own (`lan::tunnel_device_id`), never a
+    /// service id. Set once, by the service at its start; `devices` takes only locks of its own,
+    /// since it runs under Core.
+    pub fn hold_tunnel_devices(&self, devices: LanDevices) {
+        let _ = self.tunnel_devices.set(devices);
+    }
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
@@ -683,6 +698,12 @@ impl Authority {
         // The LAN road's paired computers keep station control while LAN is on (see
         // `hold_lan_devices`). Before the queued revocations below, so a revoke wins.
         if let Some(devices) = self.lan_devices.get() {
+            c.control_grants
+                .extend(devices().into_iter().filter(|d| identifier(d)));
+        }
+        // The tunnel's approved computers the same way, while hosted Remote is on (see
+        // `hold_tunnel_devices`).
+        if let Some(devices) = self.tunnel_devices.get() {
             c.control_grants
                 .extend(devices().into_iter().filter(|d| identifier(d)));
         }

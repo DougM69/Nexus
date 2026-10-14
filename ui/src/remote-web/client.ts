@@ -24,12 +24,13 @@ export type AccountSession = {
   /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
-  /** `expires_at` is when this browser's approval ends unless it is used again; `renewsUntil` is the end
-   *  that use cannot move, or null for an approval that never renews. */
+  /** `expires_at` is when this browser's approval ends; `untilRemoved` is true for an approval that lasts
+   *  until it is removed at the shack (every approval since 2026-10-10), whose `expires_at` is no date to
+   *  show. `renewsUntil` is the end that use cannot move under the older rule, or null. */
   /** `stationKey` is the station's own signing key (S3-M1, SPKI hex) as its pairing record at the
    *  service holds it, or null for a station that has not sent one: its answers are refused. */
   stations: { id: string; name: string; stationKey?: string | null; device: { id: string; name: string; approved: number
-    generation?: number; expires_at?: number; renewsUntil?: number | null
+    generation?: number; expires_at?: number; renewsUntil?: number | null; untilRemoved?: boolean
     /** A5: the device key the service holds for this browser (SPKI hex), or null. */
     publicKey?: string | null } | null }[]
   /** A code this account has claimed that the shack has not approved yet, or null. Durable on the

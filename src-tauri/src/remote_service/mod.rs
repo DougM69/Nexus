@@ -100,6 +100,12 @@ struct Device {
     /// browser.
     #[serde(default)]
     platform: Option<Platform>,
+    /// 1 for an approval that lasts until it is removed (the operator's decision of 2026-10-10: every
+    /// approval since), whose `expires_at` is then an end no clock reaches. Listed only to a Nexus that
+    /// asks for kinds; 0 from a service before that rule, whose approvals keep their listed end. Shown,
+    /// never decided on: every list is still held to `expires_at`.
+    #[serde(default)]
+    until_removed: u8,
 }
 /// A device's kind, held to the service's own values: a browser, or Nexus itself on another
 /// computer or a phone (the native client). Approving a native device grants nothing on the
@@ -349,7 +355,7 @@ enum Persist {
     /// disconnected and every live permission cleared, but the remembered grants stay, so Turn on
     /// or a restart restores them for browsers still approved at the same approval.
     Paused,
-    /// A local decision cleared every browser permission (take over, revoke a browser).
+    /// A local decision cleared every browser permission (revoking a browser).
     ClearGrants,
     /// One browser's grants changed. `approval` is the approval the change was made against: a grant
     /// is only ever created against a known approval, and a grant against a different approval (not
@@ -574,9 +580,16 @@ struct Control {
     /// What the room's tunnel serves its computers with: the LAN road's authority, feeds and
     /// command lane. `None` in a build of the service without the LAN road.
     tunnel: Option<lan::TunnelDeps>,
+    /// Hosted Remote is on: `enabled`, mirrored where the operations authority can read it under its
+    /// own lock, for the tunnel's computers' station control (`Authority::hold_tunnel_devices`).
+    /// Cleared before every stop's invalidation, set only by [`Control::start`].
+    hosted: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Control {
     fn stop(&mut self) {
+        // Before the invalidation, so the clear it makes is never undone by the tunnel's holder.
+        self.hosted
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         self.operations.invalidate();
         self.enabled = false;
         if let Ok(mut bank) = self.memories.lock() {
@@ -586,6 +599,13 @@ impl Control {
         if let Some(cancel) = self.cancel.take() {
             let _ = cancel.send(true);
         }
+    }
+    /// Turn hosted Remote on: a fresh authority (every permission in memory cleared), then on. The
+    /// tunnel's approved computers hold station control again from here.
+    fn start(&mut self) {
+        self.stop();
+        self.enabled = true;
+        self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
     }
     /// Hand a decision to the vault writer. Never called from `stop`: `stop` also runs when Nexus
     /// exits, and an exit must not be remembered as the operator turning Remote off.
@@ -632,7 +652,10 @@ impl Control {
                 Some((pin, (lan::tunnel_device_id(&pin), native.until)))
             })
             .collect();
-        self.approved.set(keys);
+        // A computer no longer on it loses station control at once, after it is off the holder.
+        for name in self.approved.set(keys) {
+            let _ = self.operations.permit_station(&name, false);
+        }
     }
 }
 /// A computer (or phone) the service lists as approved: the pin approving it as listed makes, the
@@ -863,6 +886,19 @@ impl Service {
             vault_writer,
             ..Default::default()
         }));
+        // The tunnel's approved computers hold station control while hosted Remote is on, as the
+        // LAN's paired computers do while LAN is on: read from the tunnel's roster and the mirror of
+        // "on", each behind a lock of its own (never Control's, which is held while Core is taken).
+        if let Ok(control) = control.lock() {
+            let (approved, hosted) = (control.approved.clone(), control.hosted.clone());
+            control.operations.hold_tunnel_devices(Box::new(move || {
+                if hosted.load(std::sync::atomic::Ordering::SeqCst) {
+                    approved.names()
+                } else {
+                    Vec::new()
+                }
+            }));
+        }
         let (commands, receiver) = mpsc::channel(1);
         let task_status = status.clone();
         let task_control = control.clone();
@@ -1018,13 +1054,20 @@ impl Service {
                 return self.status();
             }
             Action::TakeOverLogging {} => {
+                // "End remote control" (the operator's decision of 2026-10-10, one rule for every
+                // device): it drops everyone and holds until Remote is turned on again. Hosted Remote
+                // goes off as Turn off takes it, here and now, never behind the command queue: every
+                // permission in memory cleared, the station's socket closed and with it every browser
+                // and every tunnel session, and off remembered across a restart. What each approval
+                // gave is remembered (`Paused`, not cleared), so turning Remote on again gives every
+                // approved device back what it had, with no approval again.
                 let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
-                control.operations.invalidate();
-                control.remember(Persist::ClearGrants);
+                control.stop();
+                control.remember(Persist::Paused);
                 let lan = control.lan.clone();
                 drop(control);
-                // "End remote control" ends Remote over this network too: its port closes and every
-                // LAN session ends, and the shack says why until it is turned on again.
+                // It ends Remote over this network too: its port closes and every LAN session ends,
+                // and the shack says why until it is turned on again.
                 if let Some(lan) = lan {
                     lan.end_at_shack();
                 }
@@ -1113,8 +1156,7 @@ impl Service {
             // actions remain immediate even when the command queue is full.
             let permit = self.commands.try_reserve().map_err(|_| "remoteBusy")?;
             if matches!(action, Action::Enable {}) {
-                control.stop();
-                control.enabled = true;
+                control.start();
                 // Turning on starts a fresh authority: every permission in memory is cleared. The
                 // grants remembered for still-approved browsers come back once the service lists
                 // them (see `Controller::apply_restore`). "On" itself is remembered by the
@@ -1249,8 +1291,7 @@ impl Controller {
             control.key_refused = false;
             control.remember(Persist::Bound(binding, remembered, pins.map(Box::new)));
             if enabled {
-                control.stop();
-                control.enabled = true;
+                control.start();
                 Some(control.generation)
             } else {
                 None
@@ -1784,8 +1825,7 @@ impl Controller {
                 // and wins.
                 let turned_on = self.control.lock().ok().and_then(|mut control| {
                     (control.generation == generation).then(|| {
-                        control.stop();
-                        control.enabled = true;
+                        control.start();
                         control.generation
                     })
                 });

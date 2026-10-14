@@ -62,7 +62,7 @@ it('keeps logging approval local, per browser, and provides immediate local take
  }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
  render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow remote logging'}))
  await screen.findByRole('button',{name:'Revoke logging permission'})
- fireEvent.click(screen.getByRole('button',{name:'End remote logging and clear permissions'}))
+ fireEvent.click(screen.getByRole('button',{name:'End remote logging: everyone off until Remote is turned on again'}))
  await screen.findByRole('button',{name:'Allow remote logging'})
  expect(actions).toEqual([{type:'loggingPermission',deviceId,allow:true},{type:'takeOverLogging'}])
 })
@@ -81,7 +81,7 @@ it('keeps station control permission separate from logging and clears both on ta
  render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow station controls'}))
  await screen.findByRole('button',{name:'Revoke station controls'})
  expect(screen.getByRole('button',{name:'Allow remote logging'})).toBeTruthy()
- fireEvent.click(screen.getByRole('button',{name:'End remote control and clear permissions'}))
+ fireEvent.click(screen.getByRole('button',{name:'End remote control: everyone off until Remote is turned on again'}))
  await screen.findByRole('button',{name:'Allow station controls'})
  expect(actions).toEqual([{type:'stationPermission',deviceId,allow:true},{type:'takeOverLogging'}])
 })
@@ -233,6 +233,35 @@ it('in every language the FT8/FT4 permission names the Remote page, and the swit
       expect(say(key), `${loc} ${key}`).toContain(STREAMED[loc])
     expect(say('remote.controlLocalHint'), `${loc} still says a transmission needs its own permission`).not.toContain(OLD_LIMIT[loc])
   }
+})
+
+// An approval lasts until removed (operator decision 2026-10-10): a browser and a computer the service
+// lists so show it, with no date and no warning to approve again. CONTROL: a browser listed with an end
+// in three days, from a service before that rule, still warns.
+it('shows an approval that lasts until removed as such, with no date and no warning', async () => {
+  const day = 86400000, now = Date.now(), forever = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
+  const kept = crypto.randomUUID(), dated = crypto.randomUUID(), computer = crypto.randomUUID()
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
+    devices: [
+      { id: kept, name: 'Laptop', approved: 1, expiresAt: forever, generation: 2, renewsUntil: null, untilRemoved: 1 },
+      { id: dated, name: 'Phone', approved: 1, expiresAt: now + 3 * day, generation: 2, renewsUntil: null },
+      { id: computer, name: 'Den PC', approved: 1, expiresAt: forever, generation: 2, untilRemoved: 1, kind: 'computer', platform: 'windows' },
+    ] }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  expect((await card(kept)).textContent).toContain('Approved until you remove it.')
+  expect((await card(kept)).textContent).not.toContain('9999')
+  expect((await card(kept)).textContent).not.toContain('approval ends')
+  expect(within(await card(kept)).queryByRole('button', { name: 'Approve again' })).toBeNull()
+  expect((await card(dated)).textContent, 'control').toContain('This approval ends')
+  expect(document.body.textContent).not.toContain('9999')
+  expect(document.body.textContent?.match(/Approved until you remove it\./g)?.length).toBeGreaterThanOrEqual(3)
 })
 
 // Browser approval lifetime (operator decision 2026-09-14): each approved browser shows when its

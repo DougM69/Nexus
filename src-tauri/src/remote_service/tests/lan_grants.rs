@@ -9,7 +9,7 @@ use crate::remote_service::lan::tests::{only, LanStore, Scratch};
 const LAN_STATION: &str = "60000000-0000-4000-8000-0000000000aa";
 
 /// A credential store holding this station's LAN key and one computer paired with it.
-fn lan_store() -> LanStore {
+pub(super) fn lan_store() -> LanStore {
     let (_, station) = station_key::Signer::generate().unwrap();
     let (computer, _) = station_key::Signer::generate().unwrap();
     let spki = tempo_stream::protocol::hex_bytes(computer.public_key()).unwrap();
@@ -22,7 +22,7 @@ fn lan_store() -> LanStore {
 
 /// The hosted service with its LAN road attached as `Service::new` attaches it, on `store` and a
 /// switch of the test's own, with no network to listen on.
-fn with_lan(
+pub(super) fn with_lan(
     service: Service,
     engine: &crate::SharedEngine,
     store: &LanStore,
@@ -46,7 +46,7 @@ fn with_lan(
     )
 }
 
-fn fresh_id() -> String {
+pub(super) fn fresh_id() -> String {
     let hex = transport::random_secret().unwrap();
     format!(
         "{}-{}-{}-{}-{}",

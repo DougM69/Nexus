@@ -91,7 +91,7 @@ socket's message shapes are unchanged for every other.
 - Two enabled stations per account; eight non-expired browser enrollments per
   station; four simultaneous observers per station.
 - Pairing codes and pending browser approvals expire after ten minutes. Approved
-  browser cookies last thirty days. One-use WebSocket tickets expire after fifteen
+  browser approvals last until removed; their cookies last 400 days and are re-issued on each use. One-use WebSocket tickets expire after fifteen
   seconds. Credentials and tickets are stored as SHA-256 digests.
 - The stream's relay credentials (`turn`, Cloudflare TURN) last a day at most, the longest a
   stream can run, and never past the account's entitlement. A browser may ask for twelve a

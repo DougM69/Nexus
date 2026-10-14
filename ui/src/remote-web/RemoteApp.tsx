@@ -375,12 +375,13 @@ export function RemoteApp() {
             {stationActions(() => open(station.id, false, station.name), () => open(station.id, false, null, station.name), keyChanged(station.id))}
             {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })}</p>}
             {stationKeys[station.id] && !keyChanged(station.id) && <p>{t('remote.thisStationKey', { key: shortFingerprint(stationKeys[station.id].print) })}</p>}
-            {/* How long this browser stays approved, off the service's clock. The warning is for the
-                end that using it cannot move: before that, opening the station keeps it approved. */}
-            {station.device.expires_at !== undefined && <p>{station.device.renewsUntil
+            {/* How long this browser stays approved, off the service's clock: until removed at the shack, or
+                (from a service before that rule) a date. The warning is for an end that is near. */}
+            {station.device.untilRemoved ? <p>{t('remote.thisBrowserApprovedUntilRemoved')}</p>
+              : station.device.expires_at !== undefined && <p>{station.device.renewsUntil
               ? t('remote.thisBrowserRenewsUntil', { until: utcDate(station.device.expires_at), limit: utcDate(station.device.renewsUntil) })
               : t('remote.thisBrowserApprovedUntil', { until: utcDate(station.device.expires_at) })}</p>}
-            {station.device.expires_at !== undefined && (station.device.renewsUntil ?? station.device.expires_at) - session.serverNow <= APPROVAL_WARNING_MS &&
+            {!station.device.untilRemoved && station.device.expires_at !== undefined && (station.device.renewsUntil ?? station.device.expires_at) - session.serverNow <= APPROVAL_WARNING_MS &&
               <p className="rm-warning">{t('remote.thisBrowserApprovalEnding', { until: utcDate(station.device.renewsUntil ?? station.device.expires_at) })}</p>}
             {/* The old watch/control workspace and the observer, hidden unless the flag is on. */}
             {workspaceShown() && <div className="remote-actions">
