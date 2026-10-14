@@ -32423,6 +32423,26 @@ fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The native title bar's theme, from the operator's theme pick: `"light"`, `"dark"`, or
+/// `None` for System, the computer's own setting. Windows only: there the title bar
+/// otherwise follows the computer whatever the operator picked. On Linux tao's "follow the
+/// computer" forces GTK light whatever the desktop says, which would break System on a dark
+/// desktop, and macOS draws the title bar from the system appearance itself, so off Windows
+/// this does nothing (and the UI never asks).
+#[tauri::command]
+fn set_title_bar_theme(app: tauri::AppHandle, theme: Option<String>) -> Result<(), String> {
+    let theme = match theme.as_deref() {
+        None => None,
+        Some("light") => Some(tauri::Theme::Light),
+        Some("dark") => Some(tauri::Theme::Dark),
+        Some(other) => return Err(format!("no title bar theme {other:?}")),
+    };
+    if cfg!(windows) {
+        app.set_theme(theme);
+    }
+    Ok(())
+}
+
 /// Which page a DXpedition calendar entry opens: the operation's own site when the
 /// calendar source published a usable one, else the callsign's QRZ page (roughly
 /// two thirds of announcements carry no site, and QRZ is where an expedition's
@@ -35371,6 +35391,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             pick_data_folder,
             reveal_all_txt,
             open_qrz_page,
+            set_title_bar_theme,
             open_dxped_page,
             open_external_url,
             os_notify,

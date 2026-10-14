@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On Windows the title bar follows your theme pick.** Pick Light or Dark in Settings ▸
+  Appearance ▸ Theme and the window's title bar turns light or dark with it; System, the Windows
+  default, follows the computer's own setting as before. Linux, the Raspberry Pi and macOS are
+  unchanged. Not yet checked on a Windows machine.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as

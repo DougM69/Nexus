@@ -241,3 +241,48 @@ describe('useTheme: System follows the computer', () => {
     }
   })
 })
+
+describe('useTheme: the native title bar', () => {
+  /** Tauri's bridge with a recording invoke; the calls that set the title bar's theme. */
+  function bridgeCalls() {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    if (window.__TAURI_INTERNALS__) (window.__TAURI_INTERNALS__ as { invoke?: unknown }).invoke = invoke
+    return () => invoke.mock.calls.filter(([cmd]) => cmd === 'set_title_bar_theme').map(([, args]) => args)
+  }
+
+  it('on Windows follows the pick: Light, Dark, and the computer for System and for nothing stored', () => {
+    onPlatform('windows')
+    osPrefers('light')
+    const calls = bridgeCalls()
+    const { result } = renderHook(() => useTheme())
+    expect(calls(), 'nothing stored is System').toEqual([{ theme: null }])
+    act(() => result.current[1]('dark'))
+    act(() => result.current[1]('light'))
+    act(() => result.current[1]('system'))
+    expect(calls()).toEqual([{ theme: null }, { theme: 'dark' }, { theme: 'light' }, { theme: null }])
+  })
+
+  it('on Windows a stored pick sets the bar at launch', () => {
+    onPlatform('windows')
+    osPrefers('light')
+    localStorage.setItem('tempo-theme', 'dark')
+    const calls = bridgeCalls()
+    renderHook(() => useTheme())
+    expect(calls()).toEqual([{ theme: 'dark' }])
+  })
+
+  it('never on Linux, the Raspberry Pi or macOS, at launch or on a pick', () => {
+    // tao's "follow the computer" on Linux forces GTK light whatever the desktop says, which would
+    // break System on a dark desktop; macOS follows the computer by itself.
+    for (const platform of ['linux', 'pi', 'mac'] as const) {
+      onPlatform(platform)
+      osPrefers('light')
+      const calls = bridgeCalls()
+      const { result, unmount } = renderHook(() => useTheme())
+      for (const pick of ['dark', 'light', 'system'] as const) act(() => result.current[1](pick))
+      expect(calls(), platform).toEqual([])
+      unmount()
+      localStorage.clear()
+    }
+  })
+})
