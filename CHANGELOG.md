@@ -126,6 +126,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The log entry keeps what you typed when you switch pages.** A call typed into the Phone or CW
+  cockpit's log entry, with its reports, name, QTH, comment, notes and park, was gone when you
+  came back from another page such as Conditions, and had to be typed again. Each cockpit now
+  keeps its own contact until you log it or clear it, and the Satellites section's log entry does
+  the same. In CW the call is back in His Call too, so the F-keys send the call on screen. The
+  band, frequency and mode are still read from the radio when you log. Nothing is kept across a
+  restart, in a contest's entry, or while "Log a contact from another radio" is open. The RTTY,
+  PSK and JS8 cockpits already kept their entries.
 - **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
   command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the

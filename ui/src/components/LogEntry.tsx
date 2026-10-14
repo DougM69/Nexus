@@ -36,6 +36,7 @@ import {
   withLastCountyPart,
 } from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
+import { readLogDraft, writeLogDraft } from '../features/logDraft'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
 import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
@@ -430,6 +431,16 @@ interface Props {
    * the report, the exchange, Log) does not pass through it, and its Enter is its own.
    */
   operatorBox?: React.ReactNode
+  /**
+   * WHOSE CONTACT THIS IS, for the draft that outlives the strip (`features/logDraft`): a host
+   * that unmounts this strip when the operator goes to another page names its cockpit here, and
+   * the strip comes back with the contact the operator left in it. Phone, CW and Satellites pass
+   * it: App's view switch draws them, so a page switch unmounts them. Absent, nothing is kept: the
+   * RTTY, PSK and JS8 strips never unmount (their hosts keep them), the Remote page keeps its own
+   * forms mounted, and the Contest screen's entry is a contest strip, which keeps none anyway
+   * (the draft effect says why).
+   */
+  draft?: string
 }
 
 /**
@@ -468,6 +479,7 @@ export function LogEntry({
   scoreChip = true,
   noCreditChip,
   operatorBox,
+  draft,
 }: Props) {
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
@@ -495,31 +507,34 @@ export function LogEntry({
   // and not a settled no. The FD layout renders neither field.
   const asksForGrid = exchange === 'satellite' && !fdActive
 
-  const [logCall, setLogCall] = useState('')
+  // The contact this strip's cockpit left when the operator last went to another page (`draft`),
+  // read once as the strip mounts, and never into a contest strip: the draft effect says why.
+  const [kept] = useState(() => (draft && !fdActive ? readLogDraft(draft) : undefined))
+  const [logCall, setLogCall] = useState(kept?.call ?? '')
   // The two reports as set for THIS contact (typed, or the CW decoder's read of theirs), or null for
   // a box nobody has touched, which shows the report of the mode the strip logs under NOW, as a
   // contest strip's report box does (`fdValue`). One strip lives across a mode change (the Satellites
   // strip follows the station's), and a report held from mount kept an FM pass's 59 on a CW contact.
-  const [logRstSent, setLogRstSent] = useState<string | null>(null)
-  const [logRstRcvd, setLogRstRcvd] = useState<string | null>(null)
+  const [logRstSent, setLogRstSent] = useState<string | null>(kept?.rstSent ?? null)
+  const [logRstRcvd, setLogRstRcvd] = useState<string | null>(kept?.rstRcvd ?? null)
   const rstSentShown = logRstSent ?? defaultRst
   const rstRcvdShown = logRstRcvd ?? defaultRst
-  const [logName, setLogName] = useState('')
-  const [logQth, setLogQth] = useState('')
-  const [logComment, setLogComment] = useState('')
-  const [logNotes, setLogNotes] = useState('')
+  const [logName, setLogName] = useState(kept?.name ?? '')
+  const [logQth, setLogQth] = useState(kept?.qth ?? '')
+  const [logComment, setLogComment] = useState(kept?.comment ?? '')
+  const [logNotes, setLogNotes] = useState(kept?.notes ?? '')
   // Autofill stash (written to the record, not separately edited): grid/state/country.
-  const [logGrid, setLogGrid] = useState('')
-  const [logState, setLogState] = useState('')
-  const [logCountry, setLogCountry] = useState('')
+  const [logGrid, setLogGrid] = useState(kept?.grid ?? '')
+  const [logState, setLogState] = useState(kept?.state ?? '')
+  const [logCountry, setLogCountry] = useState(kept?.country ?? '')
   // The STATE box as it stands, and where its value came from: the operator (who also owns the
   // untouched empty box), a callbook lookup, or the park or summit in the park box. Every write
   // goes through `setStateBox`, so both are current before React renders, as `parkBoxRef` is for
   // the park box. The station reads the source when the contact is logged: a callbook's state is
   // the licensee's ADDRESS, so a park's own state outranks it, and the operator's outranks both.
-  const stateBoxRef = useRef('')
-  const stateSourceRef = useRef<StateSource>('operator')
-  const [stateSource, setStateSource] = useState<StateSource>('operator')
+  const stateBoxRef = useRef(kept?.state ?? '')
+  const stateSourceRef = useRef<StateSource>(kept?.stateSource ?? 'operator')
+  const [stateSource, setStateSource] = useState<StateSource>(kept?.stateSource ?? 'operator')
   const setStateBox = (value: string, source: StateSource) => {
     stateBoxRef.current = value
     stateSourceRef.current = source
@@ -529,19 +544,19 @@ export function LogEntry({
   // The callbook's own state for this call, kept apart from the box: the recall card pairs a state
   // with the callbook's town ("Columbus, OH"), and once the park has placed the box its state is
   // not where that town is.
-  const [callbookState, setCallbookState] = useState('')
+  const [callbookState, setCallbookState] = useState(kept?.callbookState ?? '')
   // Callbook profile photo (display-only, not written to the log). Cleared when the call changes.
-  const [logImage, setLogImage] = useState<string | null>(null)
+  const [logImage, setLogImage] = useState<string | null>(kept?.image ?? null)
   // POTA/SOTA park of the station worked (ota.their_*). Prefilled from a hunted spot; editable.
-  const [logParkProgram, setLogParkProgram] = useState('POTA')
-  const [logParkRef, setLogParkRef] = useState('')
+  const [logParkProgram, setLogParkProgram] = useState(kept?.parkProgram ?? 'POTA')
+  const [logParkRef, setLogParkRef] = useState(kept?.parkRef ?? '')
   // WHOSE park the box holds, and whether a hunt put it there. A prefill is bound to the hunted
   // activator (`hunt: true`); a park the operator typed or picked is bound to the call in the box
   // (`hunt: false`, and `call: ''` when there was no call yet), and follows that call while the
   // operator types it, so a park typed before any call belongs to the first call TYPED after it
   // (#383). Written wherever a park goes INTO the box and read only while one is there, so a clear
   // leaves it alone. See the prefill below for why the value alone cannot say.
-  const parkForRef = useRef({ call: '', hunt: false })
+  const parkForRef = useRef(kept?.parkFor ?? { call: '', hunt: false })
   // THE PARK A NEEDED CLICK HANDED OVER (`pendingWork.park`). The Needed board fills the strip with
   // the station's call and the park it is activating, and sets no hunt: nothing waits in the
   // engine, so nothing shows at the top of the POTA/SOTA view and the strip's Clear really clears
@@ -549,7 +564,9 @@ export function LogEntry({
   // prefill below, so it fills, and leaves with its station, exactly as a hunted park does, and a
   // hunt pending for the same station at another park does not replace it. It is spent the way a
   // hunt is, by the contact it is logged with (`reset`).
-  const [workPark, setWorkPark] = useState<{ call: string; program: string; reference: string } | null>(null)
+  const [workPark, setWorkPark] = useState<{ call: string; program: string; reference: string } | null>(
+    kept?.workPark ?? null,
+  )
   // The park box as it stands, for the park prefill: the LAST value written to it. Every write
   // goes through `setPark`, so this always has it, even before React renders it. The call-change
   // effect runs just before the prefill and can empty the box in the same commit, while the
@@ -558,14 +575,16 @@ export function LogEntry({
   // from it put the box back to what that render saw. After a hunted log, the spent hunt's refill
   // was such a write; the hunt's end rendered first, the prefill judged an empty box, and the
   // refill then landed with nothing left to take it out (#383, N26).
-  const parkBoxRef = useRef('')
+  const parkBoxRef = useRef(kept?.parkRef ?? '')
   const setPark = (value: string) => {
     parkBoxRef.current = value
     setLogParkRef(value)
   }
   // Local park-directory suggestions (POTA only) as the operator types the reference.
   const [parkHits, setParkHits] = useState<Park[]>([])
-  const [parkPicked, setParkPicked] = useState(false)
+  // A park the draft put back counts as picked, as a hunt's prefill does: the strip comes back as it
+  // was left, not with a suggestion list open under the box.
+  const [parkPicked, setParkPicked] = useState(!!kept?.parkRef)
   // Auto-loaded details for a complete park reference (name/location/grid), local-first then live.
   const [parkDetail, setParkDetail] = useState<Park | null>(null)
   const [parkDetailLive, setParkDetailLive] = useState(false)
@@ -1025,13 +1044,16 @@ export function LogEntry({
    * "this call is final" — a clicked spot, or a CONFIRMED decoder call. An unconfirmed best guess
    * is deliberately excluded: the decoder walks K9 → K9A → K9ABC, and looking each one up would
    * spend the operator's QRZ quota on calls that were never worked.
+   *
+   * A call a draft put back (`kept`) starts settled: the draft effect keeps no call but the
+   * operator's, so a callbook answer it never got is still asked for.
    */
-  const settledCallRef = useRef(false)
+  const settledCallRef = useRef(kept != null)
 
   // The call whose identity (name/QTH/grid/state/country) the enrichment fields currently hold.
   // Clear them when the call changes to a DIFFERENT one, so a previous callsign's data never
   // bleeds onto another call's recall card — and so onCallBlur re-looks-up the new call.
-  const enrichedForRef = useRef('')
+  const enrichedForRef = useRef(kept?.enrichedFor ?? '')
   // The call for which an Enter-triggered QRZ lookup was already ATTEMPTED (success OR miss/no
   // callbook), so a second Enter logs instead of re-looping the lookup on an unresolvable call.
   const triedLookupRef = useRef('')
@@ -1587,6 +1609,53 @@ export function LogEntry({
     if (b) setOvBand(b)
   }
 
+  // ⭐ THE DRAFT, KEPT AS THE STRIP CHANGES (`draft`, `features/logDraft`). After every render the
+  // cockpit's draft is the contact as this strip shows it, so the cockpit can leave the screen at any
+  // moment with nothing left to save, and whatever empties the strip — a log, Clear, or a rule of the
+  // strip's own — empties the draft with it. The radio's band, frequency and mode are not in it:
+  // they are read as the contact is logged, as they always were.
+  //
+  // Only the OPERATOR'S contact is kept: a call typed, clicked to work or confirmed
+  // (`humanCallEditRef`, `settledCallRef`). A decoder's unconfirmed guess is the decoder's, and it
+  // offers one again when the cockpit is back, as on any mount. And none is kept
+  //  · in a contest strip — its contact is the session's: the engine binds a serial number to the
+  //    call, the logger window shares the entry, and Enter Sends Message would send to a call that
+  //    came back without being typed;
+  //  · with the other-radio override open — that contact is right only with the band, frequency,
+  //    mode and time typed for it, and a draft carries none of them;
+  //  · while the contact is being logged (`committing`), so a strip that goes before its log lands
+  //    never comes back with the logged contact in it for a second Enter to log again.
+  const committing = useRef(false)
+  useEffect(() => {
+    if (!draft) return
+    const operators = logCall.trim() !== '' && (humanCallEditRef.current || settledCallRef.current)
+    writeLogDraft(
+      draft,
+      operators && !fdActive && !overrideOpen && !committing.current
+        ? {
+            call: logCall,
+            rstSent: logRstSent,
+            rstRcvd: logRstRcvd,
+            name: logName,
+            qth: logQth,
+            comment: logComment,
+            notes: logNotes,
+            grid: logGrid,
+            state: stateBoxRef.current,
+            stateSource: stateSourceRef.current,
+            callbookState,
+            country: logCountry,
+            image: logImage,
+            parkProgram: logParkProgram,
+            parkRef: parkBoxRef.current,
+            parkFor: parkForRef.current,
+            workPark,
+            enrichedFor: enrichedForRef.current,
+          }
+        : null,
+    )
+  })
+
   const reset = () => {
     // Before the call goes: a contact abandoned here gives its call-history values back. A
     // logged one has already said it keeps them (`endFill(true)` beside its `reset()`).
@@ -1948,7 +2017,12 @@ export function LogEntry({
       catch { /* The adapter keeps a visible outcome and the draft. */ }
       return
     }
+    // The draft lets go of the contact as its log starts (see the draft effect); one that fails is
+    // still on screen, and kept again from the next render on.
+    committing.current = true
+    if (draft) writeLogDraft(draft, null)
     const r = await withErrorToast(() => logQso(rec, stateSourceRef.current), t('logEntry.logFailed'))
+    committing.current = false
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()

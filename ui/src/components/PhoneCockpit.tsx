@@ -2489,6 +2489,8 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
         active={active}
         fdMode="PH"
         esm={esm.host}
+        // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
+        draft="phone"
       /> : <RemoteRecallEntry snap={snap} mode={commandedMode === 'FM' ? 'FM' : 'SSB'} onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )

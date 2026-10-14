@@ -1882,6 +1882,9 @@ export function CwCockpit({
         active={active}
         fdMode="CW"
         esm={esm.host}
+        // App unmounts this cockpit on a page switch; the contact in its strip waits for it. A call
+        // it puts back reaches His Call through `onCallChange`, as a typed one does.
+        draft="cw"
       /> : <RemoteRecallEntry snap={snap} mode="CW" onOpenLog={onOpenLogbook} pendingWork={pendingWork} onConsumeWork={onConsumeWork} />}
     </CockpitPaneFrame>
   )
