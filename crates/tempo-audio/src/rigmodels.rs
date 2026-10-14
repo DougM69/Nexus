@@ -341,6 +341,32 @@ pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
     !matches!(model / 1000, ICOM_BACKEND | KENWOOD_BACKEND)
 }
 
+/// The `U TUNER <n>` value that STARTS this radio's tune-up: [`crate::rig::ATU_START_TUNE`]
+/// for every model but the Yaesu FT-710, whose start is 3.
+///
+/// Yaesu's FT-710 CAT manual (Japanese edition, page 8, `AC` ANTENNA TUNER CONTROL), P3 with
+/// the internal or external tuner selected (P2 = 0): `0` tuner OFF, `1` tuner ON, `2`
+/// (unused), `3` tuning start. So the 2 that starts the other Yaesus' tune-up is a command the
+/// FT-710 does not use: an FT-710 took `U TUNER 2`, Hamlib answered `RPRT 0`, nothing tuned.
+///
+/// Hamlib 4.7.1 knows it, in `rigs/yaesu/newcat.c`:
+///  * `newcat_vfo_op`, `RIG_OP_TUNE` (`newcat.c:7494`): `is_ft710` sends `AC003`, every other
+///    rig `AC002` — the only model its tune-start special-cases;
+///  * `newcat_set_func`, `RIG_FUNC_TUNER` (`newcat.c:6325`), which is what `U TUNER` reaches:
+///    `"AC00%d"` with the status passed straight through, so the value chosen here is the
+///    digit the radio receives.
+pub fn hamlib_atu_start_tune_value(model: u32) -> u8 {
+    /// `RIG_MODEL_FT710`, `RIG_MAKE_MODEL(RIG_YAESU, 49)` in `include/hamlib/riglist.h`.
+    const FT710: u32 = 1049;
+    /// The FT-710's `AC` P3 "tuning start".
+    const FT710_START_TUNE: u8 = 3;
+    if model == FT710 {
+        FT710_START_TUNE
+    } else {
+        crate::rig::ATU_START_TUNE
+    }
+}
+
 /// Does Hamlib WRITE this radio's power to answer a READ of it (`get_level RFPOWER`)? (#381)
 ///
 /// ⚠️ A READ THAT WRITES. `rigs/kenwood/kenwood.c`, `kenwood_get_level`: the `RIG_LEVEL_RFPOWER`

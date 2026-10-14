@@ -185,6 +185,10 @@ pub fn func_line(func: &str, value: u8) -> String {
 /// model, the engine's ATU gate refuses the press, and the cockpit disables the button with a
 /// reason. The native Icom (CI-V) path is where those rigs get a real tune-up.
 ///
+/// ⚠️ AND NOT ON THE FT-710, whose `AC` P3 2 is unused and whose tuning start is 3 (Yaesu's
+/// FT-710 CAT manual, page 8): the radio loop sends
+/// [`crate::rigmodels::hamlib_atu_start_tune_value`], which is this value for every other model.
+///
 /// ⚠️ NEEDS BENCH (no rig on this machine). What is verified here is the BYTES: that Nexus
 /// sends `U TUNER 2` and that Hamlib carries the 2 to the backend unclamped. What is NOT
 /// verified is the FTDX10 actually starting a tune-up cycle in response to `AC002`, and
