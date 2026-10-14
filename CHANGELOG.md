@@ -412,6 +412,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the screen's score counts them all. The guide's note on logging the Scandinavian Activity Contest
   as CQ WPX again says to delete the claimed score before sending the log.
 
+### Security
+
+- **The TLS library behind Nexus's downloads is on its security release.** Nexus uses rustls for
+  HTTPS (propagation data, maps and the other downloads); 0.23.46 fixes the four issues published
+  on 14 October 2026 (RUSTSEC-2026-0346, 0347, 0348 and 0349). Nothing to do on your side.
+
 ## [1.18.0] — 2026-10-12
 
 ### Added
