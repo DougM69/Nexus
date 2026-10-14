@@ -126,6 +126,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An FT over is never keyed with no transmit audio.** Nexus opened the sound card's transmit
+  output inside the first FT8 or FT4 over of a session, after it had keyed the radio, so that over
+  went out late by however long the open took. If the output would not open (another program
+  holding the device, or the device unplugged), every over after that keyed the radio with no
+  audio for the rest of the session, and nothing on screen said why. The output now opens when you
+  turn TX on in the digital section (TX On, Call CQ, a double-click), so the first over no longer
+  waits for it. If it will not open, the radio is not keyed, TX turns off, and the status line says
+  so in the sound card's own words; once the device is free, turn TX on again and the next over
+  keys normally. A station that only listens still opens no transmit output at all, and Phone, CW
+  and the keyboard modes open theirs as before. This covers FT8, FT4, JS8 and the other timed-slot
+  modes. NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, and one with the
+  output device held by another program.
 - **The ATU button now starts the FT-710's tuner.** On a Yaesu FT-710 the ATU button sent the
   command that starts a tune-up on other Yaesu radios, which the FT-710 does not use: the radio
   accepted it and nothing tuned, and in the digital modes Nexus still turned transmit off for the

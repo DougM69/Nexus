@@ -7247,6 +7247,25 @@ impl RadioLoop {
                 }
             }
 
+            // OPEN THE TRANSMIT AUDIO WHEN SLOT TX IS ARMED, NOT AT THE FIRST OVER. The sound
+            // card's output used to be opened by the first FT over's `play`, after its key: that
+            // over started late by the open, and an output that would not open was latched with
+            // nothing on screen, so every over after it keyed the radio with no audio. Armed now
+            // means opened now (`AudioBackend::prepare_tx`, a check once it is open), and an output
+            // that will not open halts TX with the sound card's reason before any over is planned;
+            // the slot key asks again as the backstop (`slot::key_slot_transmitter`). A station
+            // that only listens arms nothing and opens nothing (#139), and Phone and the keyboard
+            // modes keep their opens at their own keys. Not on a switch the handoff has not seen,
+            // whose backend is the radio being left (the rebuild above waits for it too).
+            if !self.handoff_deferred && !self.switch_unhanded {
+                let armed = engine_lock(engine).slot_tx_armed();
+                if armed {
+                    if let Err(why) = backend.prepare_tx() {
+                        engine_lock(engine).halt_tx_for_tx_audio(&why);
+                    }
+                }
+            }
+
             // Headphone monitor (DARK, off by default): reconfigure it IN PLACE on a
             // monitor-setting change — or re-apply it to a freshly rebuilt backend,
             // whose monitor starts off. This never rebuilds the capture/TX streams, so

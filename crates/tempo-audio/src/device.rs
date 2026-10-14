@@ -1148,12 +1148,14 @@ struct TxOutput {
     ring: Arc<SpscRing>,
     /// The resolved device + config, held from `open` until the stream is built. The config is
     /// probed at OPEN time deliberately: an unusable output device must still be an error the
-    /// operator sees when he saves the setting, not a surprise at his first transmission.
+    /// operator sees when he saves the setting, not a surprise at his first transmission. Kept
+    /// after an open that failed, so arming slot TX again can try it again
+    /// ([`AudioBackend::prepare_tx`]).
     deferred: Option<Box<DeferredOut>>,
-    /// The live output stream, once something has actually been transmitted.
+    /// The live output stream, once slot TX was armed or something was transmitted.
     stream: Option<Stream>,
     /// A deferred open that failed. The error is already on its way to the operator through
-    /// `stream_err`; this stops the next buffer trying again.
+    /// `stream_err`; this stops the next buffer trying again. Only arming slot TX tries again.
     failed: bool,
 }
 
@@ -1186,19 +1188,49 @@ pub(crate) fn should_open_tx_stream(state: TxStream, tee_installed: bool) -> boo
     state == TxStream::Deferred && !tee_installed
 }
 
+/// What arming slot TX asks of [`TxOutput`] ([`AudioBackend::prepare_tx`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TxArm {
+    /// An over already has its route: the live stream, or the installed tee.
+    Ready,
+    /// Open the stream now: never opened yet, or an open that failed, tried again.
+    Open,
+    /// No sound card is open to carry an over: it was released for a reopen that has not
+    /// succeeded yet.
+    NoRoute,
+}
+
+/// THE ARM-TIME OPEN: when slot TX is armed the output opens then, not inside the first over
+/// after its key, and an open that failed is tried again (one try per arm, since a failure halts
+/// TX). Not behind a tee, which carries the over instead ([`should_open_tx_stream`]), and never for
+/// a station that only listens, which arms nothing (#139).
+pub(crate) fn tx_arm_action(state: TxStream, tee_installed: bool) -> TxArm {
+    if tee_installed {
+        return TxArm::Ready;
+    }
+    match state {
+        TxStream::Live => TxArm::Ready,
+        TxStream::Deferred | TxStream::Failed => TxArm::Open,
+        TxStream::Absent => TxArm::NoRoute,
+    }
+}
+
 impl TxOutput {
     fn state(&self) -> TxStream {
         if self.stream.is_some() {
             TxStream::Live
+        } else if self.deferred.is_none() {
+            TxStream::Absent
         } else if self.failed {
             TxStream::Failed
-        } else if self.deferred.is_some() {
-            TxStream::Deferred
         } else {
-            TxStream::Absent
+            TxStream::Deferred
         }
     }
 }
+
+/// Why a slot over has no transmit audio route when no sound card is open at all.
+const NO_TX_ROUTE: &str = "no sound card is open for transmit audio";
 
 /// A named mono capture stream + its ring. Downmixes the device to mono at its native
 /// rate into a lock-guarded ring; [`CaptureStream::drain`] drains + resamples to 12 kHz.
@@ -1711,37 +1743,53 @@ impl CpalBackend {
     ///
     /// ⚠️ WHAT IT DOES COST is the open itself, once per session, on the radio loop. For a PHONE
     /// over `set_monitor_tx_mute` gets there first (see its call site: the loop drives it from
-    /// `manual_ptt`), so the cost lands in the PTT settling window. Every other mode — an FT slot,
-    /// CW, RTTY — reaches audio without a keying edge the backend can see, so its FIRST over of a
-    /// session starts later by however long cpal takes to build and start the stream. Nothing is
-    /// lost and nothing after the first over is affected, but it is a real shift on the one over
-    /// that pays it, and it has not been measured on hardware.
+    /// `manual_ptt`), so the cost lands in the PTT settling window. An FT slot's open happens when
+    /// slot TX is armed ([`AudioBackend::prepare_tx`]), ahead of its first over. CW, RTTY and the
+    /// other keyboard modes reach audio without a keying edge the backend can see, so their FIRST
+    /// over of a session starts later by however long cpal takes to build and start the stream.
+    /// Nothing is lost and nothing after the first over is affected, but it is a real shift on the
+    /// one over that pays it, and it has not been measured on hardware.
     fn ensure_tx_stream(&mut self) {
-        if !should_open_tx_stream(self.tx_out.state(), self.tx_tee.is_some()) {
-            return;
+        if should_open_tx_stream(self.tx_out.state(), self.tx_tee.is_some()) {
+            let _ = self.open_tx_stream();
         }
-        let Some(d) = self.tx_out.deferred.take() else {
-            return;
+    }
+
+    /// Build and start the output stream from the device `open` resolved. A failure is logged
+    /// and reported through `stream_err`, marks the route failed so `play` does not try again per
+    /// buffer, and KEEPS the device: arming slot TX again tries it again
+    /// ([`AudioBackend::prepare_tx`]), so a device another program has let go of, or one plugged
+    /// back in, opens then. `Err` carries the sound card's own words, for the operator.
+    fn open_tx_stream(&mut self) -> Result<(), String> {
+        let Some(d) = self.tx_out.deferred.as_deref() else {
+            return Err(NO_TX_ROUTE.to_string());
         };
         // Same non-reentrant native device-graph state as every other cpal entry point.
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         match build_tx_stream(
-            &d,
+            d,
             &self.tx_out.ring,
             &self.tx_level,
             err_recorder(&self.stream_err, "playback"),
         ) {
-            Ok(stream) => self.tx_out.stream = Some(stream),
+            Ok(stream) => {
+                self.tx_out.stream = Some(stream);
+                self.tx_out.deferred = None;
+                self.tx_out.failed = false;
+                Ok(())
+            }
             Err(e) => {
                 self.tx_out.failed = true;
                 tempo_core::applog::error(
                     "audio",
                     &format!("TX output stream failed to open: {e}"),
                 );
+                let why = format!("playback stream: {e}");
                 let mut held = self.stream_err.lock().unwrap_or_else(|p| p.into_inner());
                 if held.is_none() {
-                    *held = Some(format!("playback stream: {e}"));
+                    *held = Some(why.clone());
                 }
+                Err(why)
             }
         }
     }
@@ -2060,6 +2108,17 @@ impl AudioBackend for CpalBackend {
         self.capture_rs.process(&dev)
     }
 
+    /// ARMING SLOT TX OPENS THE CARD, ahead of the first over (see [`tx_arm_action`]); the slot
+    /// key asks again and keys nothing on an `Err`. A failure stays failed for `play`, which
+    /// never retries per buffer: only the next arm tries again.
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        match tx_arm_action(self.tx_out.state(), self.tx_tee.is_some()) {
+            TxArm::Ready => Ok(()),
+            TxArm::Open => self.open_tx_stream(),
+            TxArm::NoRoute => Err(NO_TX_ROUTE.to_string()),
+        }
+    }
+
     fn play(&mut self, samples: &[f32]) {
         // FIRST TRANSMIT OPENS THE CARD (#139). The backstop for `set_monitor_tx_mute`'s earlier
         // open at key-down: a route that reaches audio without a keying edge still gets a stream.
@@ -2345,8 +2404,8 @@ mod tx_level_tests {
 #[cfg(test)]
 mod tx_route_tests {
     use super::{
-        queue_to_card, should_open_tx_stream, CaptureResampler, CpalBackend, SpscRing, TxStream,
-        MODEM_RATE,
+        queue_to_card, should_open_tx_stream, tx_arm_action, CaptureResampler, CpalBackend,
+        SpscRing, TxArm, TxOutput, TxStream, MODEM_RATE,
     };
     use crate::backend::{TxTee, TxTeeHandle};
     use std::collections::VecDeque;
@@ -2675,6 +2734,48 @@ mod tx_route_tests {
         // the sound card, so opening a playback stream there re-creates the idle stream this fix
         // exists to avoid, on a path that will never use it.
         assert!(!should_open_tx_stream(TxStream::Deferred, true));
+    }
+
+    /// ⭐ ARMING SLOT TX OPENS THE OUTPUT, AND TRIES A FAILED ONE AGAIN. The first FT over used to
+    /// open it after its key, and a failure was latched for the session, so every later over keyed
+    /// the radio with no audio. Arming opens it before any over (and a station that only listens
+    /// arms nothing); a failed open is tried again on the next arm, though never by `play` per
+    /// buffer (the test above); a route that cannot exist is said so rather than opened.
+    #[test]
+    fn arming_slot_tx_opens_the_output_and_tries_a_failed_one_again() {
+        assert_eq!(tx_arm_action(TxStream::Deferred, false), TxArm::Open);
+        assert_eq!(
+            tx_arm_action(TxStream::Failed, false),
+            TxArm::Open,
+            "a device that failed once is tried again on the next arm (back, or let go of)"
+        );
+        assert_eq!(tx_arm_action(TxStream::Live, false), TxArm::Ready);
+        assert_eq!(
+            tx_arm_action(TxStream::Absent, false),
+            TxArm::NoRoute,
+            "no sound card open: nothing would carry the over"
+        );
+        for state in [
+            TxStream::Deferred,
+            TxStream::Live,
+            TxStream::Failed,
+            TxStream::Absent,
+        ] {
+            assert_eq!(
+                tx_arm_action(state, true),
+                TxArm::Ready,
+                "{state:?}: the Flex native DAX tee carries the over, and no playback stream opens"
+            );
+        }
+        // A released backend is Absent, failed or not: it holds no device left to try.
+        let released = |failed| TxOutput {
+            ring: Arc::new(tx_ring()),
+            deferred: None,
+            stream: None,
+            failed,
+        };
+        assert_eq!(released(false).state(), TxStream::Absent);
+        assert_eq!(released(true).state(), TxStream::Absent);
     }
 
     /// ⚠️ THE LAZY OPEN MUST NOT LOSE AUDIO. The tune carrier pre-queues a ~250 ms lead before the

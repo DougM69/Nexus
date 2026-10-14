@@ -174,8 +174,15 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
 /// Now the caller plays nothing, and [`Engine::halt_tx_for_refused_key`] presses Stop TX, whose
 /// slot abort the loop's next tick turns into the unkey and the flush, and says why. `held`: the
 /// loop already holds the transmitter (an over's PTT hold, or the operator's PTT), so this key is
-/// not a new one. A key the radio accepts is untouched: nothing new runs before it, or between its
-/// answer and the audio.
+/// not a new one. A key the radio accepts is untouched: nothing new runs between its answer and the
+/// audio.
+///
+/// ⛔ AN OVER WITH NO WAY TO ITS AUDIO NEVER KEYS AT ALL. The sound card's output was opened by the
+/// over's own `play`, after the key, so an output that would not open put a dead carrier on the air
+/// for the whole over, and for every over after it. The radio loop now opens it when slot TX is
+/// armed ([`AudioBackend::prepare_tx`]); here, before any PTT command, it is asked once more (a
+/// check, once it is open) and an `Err` keys nothing: [`Engine::halt_tx_for_tx_audio`] halts TX and
+/// keeps the sound card's reason on screen.
 pub(crate) fn key_slot_transmitter(
     eng: &mut Engine,
     rig: &mut Rig,
@@ -187,6 +194,10 @@ pub(crate) fn key_slot_transmitter(
             let _ = rig.ptt(false);
         }
         backend.flush_output();
+        return false;
+    }
+    if let Err(why) = backend.prepare_tx() {
+        eng.halt_tx_for_tx_audio(&why);
         return false;
     }
     let key = rig.ptt(true);
@@ -1562,6 +1573,67 @@ mod tests {
         assert!(eng.tx_enabled(), "a key refused while held turned TX off");
         assert!(!eng.take_slot_tx_abort());
         assert_eq!(eng.snapshot().radio.slot_key_refused, None);
+    }
+
+    #[test]
+    fn a_slot_over_whose_audio_output_will_not_open_never_keys_and_halts_tx() {
+        // ⭐ NEVER KEY THE RADIO WITH NO AUDIO. The sound card's output used to be opened by the
+        // over's own `play`, after the key, so an output that would not open put a dead carrier on
+        // the air for the whole over, and every over after it. The radio loop now opens it when
+        // TX is armed; this is the backstop at the key itself, for every slot keying site: no PTT
+        // command on the wire, nothing played, TX halted, and the reason on the refused key's line.
+        const NO_OUTPUT: &str = "playback stream: Device or resource busy";
+        for tier in [tempo_app::dto::Tier::Ft8, tempo_app::dto::Tier::Ft4] {
+            let what = format!("{tier:?}");
+            let mut eng = Engine::new("W9XYZ", "EN37", 0);
+            eng.set_tier(tier);
+            eng.set_tx_enabled(true);
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            backend.tx_open_error = Some(NO_OUTPUT.to_string());
+            let act = key_one_over(&mut eng, &mut rig, &mut backend);
+            let sent = log.lock().unwrap().clone();
+            assert!(
+                sent.is_empty(),
+                "{what}: a command went on the wire: {sent:?}"
+            );
+            assert!(!rig.keyed, "{what}: PTT asserted");
+            assert!(backend.played.is_empty(), "{what}: the over was played");
+            assert!(
+                !act.tx_this_slot && act.tx_until_ms.is_none(),
+                "{what}: the over was taken as sent"
+            );
+            assert!(!eng.tx_enabled(), "{what}: TX is still on");
+            assert!(
+                eng.take_slot_tx_abort(),
+                "{what}: the loop was not told to stop, as Stop TX tells it"
+            );
+            let refused = eng
+                .snapshot()
+                .radio
+                .slot_key_refused
+                .unwrap_or_else(|| panic!("{what}: nothing says why TX stopped"));
+            assert!(
+                refused.tx_audio_failed,
+                "{what}: told as a radio refusal: {refused:?}"
+            );
+            assert_eq!(refused.why, NO_OUTPUT, "{what}: in the sound card's words");
+        }
+
+        // The control, in the same scene: the same over on an output that opens keys and plays.
+        let mut eng = armed_engine();
+        let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let act = key_one_over(&mut eng, &mut rig, &mut backend);
+        assert_eq!(*log.lock().unwrap(), ["T 1"], "control: the key");
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty(),
+            "control: no over"
+        );
+        assert!(eng.tx_enabled(), "control: TX went off");
+        assert_eq!(eng.snapshot().radio.slot_key_refused, None, "control");
     }
 
     /// A backend that notes when it was first handed audio.

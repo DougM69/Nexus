@@ -5055,6 +5055,10 @@ export interface SlotKeyRefused {
   /** Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
    *  its transmit audio from: the lane then says that in its own words. Absent otherwise. */
   flexAudio?: FlexAudioRefusal | null
+  /** Set when Nexus kept the key off the air itself because the sound card's transmit audio output
+   *  would not open (`why` is then the sound card's own error): the lane says that in its own
+   *  words. Absent otherwise. */
+  txAudioFailed?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust

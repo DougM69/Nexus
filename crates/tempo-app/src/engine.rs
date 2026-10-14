@@ -2877,7 +2877,9 @@ pub struct Engine {
     /// Whether the transmit watchdog has tripped (auto-halted TX).
     tx_watchdog: bool,
     /// The slot over whose key the radio did not accept, which halted TX
-    /// ([`Engine::halt_tx_for_refused_key`]). Kept until the operator turns TX on again.
+    /// ([`Engine::halt_tx_for_refused_key`]), or that Nexus would not key because the transmit
+    /// audio output would not open ([`Engine::halt_tx_for_tx_audio`]). Kept until the operator
+    /// turns TX on again.
     slot_key_refused: Option<crate::dto::SlotKeyRefused>,
     /// The slot over whose unkey the radio did not accept, which halted TX
     /// ([`Engine::halt_tx_for_failed_unkey`]). Kept until the operator turns TX on again.
@@ -16735,6 +16737,40 @@ Pick the one you operate from on the Contesting tab in Settings.",
             at: now_unix_secs(),
             why: why.to_string(),
             flex_audio: None,
+            tx_audio_failed: false,
+        });
+    }
+
+    /// Halt TX because the sound card's transmit audio output would not open for slot TX (FT8,
+    /// FT4, JS8 and the other timed-slot modes): nothing is keyed, since a radio keyed with no
+    /// audio puts a dead carrier on the air for the whole over, and every over after it while the
+    /// output stays shut. The reason (`why`, the sound card's own error) stays on the refused key's
+    /// line until the operator turns TX on again ([`Self::set_tx_enabled`]); that arm opens the
+    /// output again, so a device that is back keys normally and one that is not says so again.
+    ///
+    /// The radio loop finds this when TX is armed, before any over is planned, and the slot key
+    /// checks again as a backstop. It is the refused key's halt ([`Self::halt_tx_for_refused_key`])
+    /// for the same reason: an over that cannot go out is dropped, never held to key later at a
+    /// time the operator did not choose. One event, one line in the log, and no stop for a voice
+    /// memory, as there.
+    pub fn halt_tx_for_tx_audio(&mut self, why: &str) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} not keyed: the transmit audio output would not open ({why}); transmit halted",
+                self.tier().label()
+            ),
+        );
+        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+            at: now_unix_secs(),
+            why: why.to_string(),
+            flex_audio: None,
+            tx_audio_failed: true,
         });
     }
 
@@ -17151,6 +17187,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Whether normal slot TX is currently enabled.
     pub fn tx_enabled(&self) -> bool {
         self.tx_enabled
+    }
+
+    /// Whether the slot sequencer (FT8, FT4, JS8 and the other timed-slot modes) is armed to key:
+    /// TX on, in the Digital section, on a tier that transmits. The gates [`Self::plan_tx`] opens
+    /// with that hold for the whole arm, not just for one over (the dial, the licence and the clock
+    /// are judged per over there). The radio loop opens the sound card's transmit audio when this
+    /// turns true, so the first over does not pay for the open and an output that will not open is
+    /// found before anything keys. False in Phone, CW and the keyboard sections, whose section
+    /// entry arms TX for the operator's own keying: those open the output at their own key, and a
+    /// station that only listens opens none (#139).
+    pub fn slot_tx_armed(&self) -> bool {
+        self.tx_enabled
+            && self.settings.operating_mode == crate::settings::OperatingMode::Digital
+            && !self.tier_is_rx_only(self.app.tier())
     }
 
     /// Take + reset the one-shot slot-TX abort (Stop TX / halt / a watchdog trip / a
@@ -36683,6 +36733,76 @@ mod tests {
             radio["slotKeyRefused"]["flexAudio"],
             serde_json::json!({ "mode": "DIGU", "cause": "notYetDax" })
         );
+    }
+
+    /// The sound card's transmit audio would not open: nothing is keyed, TX halts as a refused key
+    /// halts it, and the line says so in the sound card's own words, as its own cause, until TX is
+    /// on again. A radio's own refusal says nothing about transmit audio, on the wire either.
+    #[test]
+    fn transmit_audio_that_will_not_open_halts_tx_and_says_why_until_tx_is_on_again() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ"); // arms the responder sequencer (running)
+        assert!(e.slot_tx_armed(), "premise: the QSO armed slot TX");
+        let radio = |e: &Engine| serde_json::to_value(e.snapshot()).unwrap()["radio"].clone();
+        let why = "playback stream: Device or resource busy";
+        e.halt_tx_for_tx_audio(why);
+        assert!(!e.tx_enabled() && !e.slot_tx_armed(), "TX is still on");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the loop is told to stop, as Stop TX tells it"
+        );
+        assert!(
+            e.poll_tx(0).is_empty() && e.poll_tx(2).is_empty(),
+            "and it stays stopped: the sequencer does not re-arm"
+        );
+        let refused = e
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .expect("the reason is kept for the operator");
+        assert_eq!(
+            (
+                refused.why.as_str(),
+                refused.tx_audio_failed,
+                refused.flex_audio
+            ),
+            (why, true, None)
+        );
+        assert_eq!(radio(&e)["slotKeyRefused"]["txAudioFailed"], true);
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "turning TX on again clears it"
+        );
+
+        e.halt_tx_for_refused_key("rigctld PTT error: \"RPRT -1\\n\"");
+        assert!(!e.snapshot().radio.slot_key_refused.unwrap().tx_audio_failed);
+        assert_eq!(
+            radio(&e)["slotKeyRefused"].get("txAudioFailed"),
+            None,
+            "absent for a radio's refusal, so its snapshot is byte-identical to before"
+        );
+    }
+
+    /// Slot TX is armed only where the slot sequencer can key: TX on, in the Digital section.
+    /// Phone's and CW's section entry arms TX for the operator's own keying, and that is not it.
+    #[test]
+    fn slot_tx_is_armed_only_with_tx_on_in_the_digital_section() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert!(!e.slot_tx_armed(), "TX is off at launch");
+        e.set_tx_enabled(true);
+        assert!(e.slot_tx_armed(), "TX on in Digital");
+        for section in ["phone", "cw"] {
+            e.set_operating_mode(section, false);
+            e.set_tx_enabled(true);
+            assert!(!e.slot_tx_armed(), "{section} keys the slot sequencer");
+        }
+        e.set_operating_mode("digital", false);
+        e.set_tx_enabled(true);
+        assert!(e.slot_tx_armed(), "back in Digital with TX on");
+        e.set_tx_enabled(false);
+        assert!(!e.slot_tx_armed(), "TX off");
     }
 
     #[test]
