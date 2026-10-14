@@ -110,7 +110,7 @@ your license privileges, and the screen says so.
 ## Compatibility
 
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and Turbo.
-Not implemented: the "JS8 60" / Ultra speed (compiled out of JS8Call itself), and the
+Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0), and the
 APRS-IS and @JS8NET internet gateways. The full protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see
 NOTICE.

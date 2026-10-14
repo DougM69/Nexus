@@ -8,11 +8,10 @@
 //! chat arm or the FT sequencers. Keeping it here keeps every JS8Call-behaviour concern out
 //! of engine.rs and keeps `Tier::is_chat()` untouched (the Tempo wire is on-air incompatible).
 //!
-//! RECEIVE-ONLY IN THIS BUILD (B5): every transmit verb below refuses and says so in
-//! `last_error`; `Js8Mode` declares `tx: false`; and `js8_apply_station_config` forces the
-//! station's autoreply/relay/HB-ack OFF so it can never build an outbox it has no way to
-//! drain. The operator-gated TX batch replaces the stubs and removes the override; the RX
-//! path (`js8_ingest` → `Reassembler` → `Station` → activity/heard/inbox) does not change.
+//! The station transmits: `js8_send` and `js8_send_command` queue frames through the station,
+//! and `js8_apply_station_config` hands the station the operator's Settings as they are
+//! (autoreply, relay and HB-ack included), forcing nothing off. The RX path (`js8_ingest` →
+//! `Reassembler` → `Station` → activity/heard/inbox) is unchanged by the transmit side.
 //!
 //! ⚠️ Inside this file `js8` would name THIS module; the crate is spelled `::js8::…`.
 //! The actions match every path funnels through is `js8_handle_actions`.

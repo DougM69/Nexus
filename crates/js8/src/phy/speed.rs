@@ -3,7 +3,8 @@
 //! Transcribed FACTS from JS8Call commons.h:36-54 (NSPS / period / start delay),
 //! JS8Submode.cpp:55-125 (derived framesNeeded / txDuration, Costas selection, rxThreshold,
 //! rxSNRThreshold) and JS8.cpp:211-367 (JZ, NDOWNSPS). Ultra ("JS8 60", submode I) is
-//! compiled out upstream (`JS8_ENABLE_JS8I 0`) and deliberately absent here.
+//! not implemented here. It was compiled out upstream until JS8Call 3.0 (`JS8_ENABLE_JS8I 0`
+//! in 2.3); 3.0 enables it.
 //!
 //! WHY a `const fn` table rather than a struct of constants: `ModeKind::Js8 { speed }` carries
 //! this enum directly (interfaces.md §0 — no mirror enum in `modes`), settings store
