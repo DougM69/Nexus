@@ -3171,6 +3171,20 @@ export interface GeoLogStats {
   byZone: ZoneTally[]
 }
 
+/** The Statistics view's timeline windows (`get_log_timeline`), each ending with the current UTC
+ * hour, day or month: 24 hourly, 30 daily or 12 monthly buckets. */
+export type TimelineRange = 'pastDay' | 'past30Days' | 'pastYear'
+
+/** Contacts per mode over a timeline window (`get_log_timeline`, counted where the log is). */
+export interface LogTimeline {
+  /** Each bucket's first instant (Unix seconds, UTC), oldest first, then the window's end — one
+   * more edge than buckets. A bucket holds the contacts from its first instant up to the next. */
+  edges: number[]
+  /** Each mode's contacts per bucket, labelled as the "By mode" card labels it, in first-seen
+   * order; a mode with no contact in the window is not here. */
+  modes: { label: string; counts: number[] }[]
+}
+
 /** Result of importing an external ADIF logbook (deduped merge). */
 export interface ImportStats {
   added: number

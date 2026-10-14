@@ -28,13 +28,14 @@ vi.mock('../api', () => ({
   getSettings: vi.fn(),
   askLog: vi.fn(),
   getLogStats: vi.fn(),
+  getLogTimeline: vi.fn(),
 }))
 vi.mock('../features/shareCard', () => ({ shareCard: vi.fn() }))
 
 import { AwardsView } from './AwardsView'
 import { JourneyView } from './JourneyView'
 import { StatsView } from './StatsView'
-import { askLog, getAwards, getConfirmationDiagnostics, getJourney, getLogStats, getSettings } from '../api'
+import { askLog, getAwards, getConfirmationDiagnostics, getJourney, getLogStats, getLogTimeline, getSettings } from '../api'
 
 /** The engine's refusal, as the desktop's IPC rejects with it: a bare string. */
 const REFUSED = `${NOT_ANSWERED}: a logbook change is still on its way (0 of 1 saved)`
@@ -55,6 +56,8 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   vi.mocked(getConfirmationDiagnostics).mockResolvedValue(null as never)
   vi.mocked(getSettings).mockResolvedValue({ mycall: 'KD9TAW' } as never)
+  // The Statistics view's timeline card asks too; an empty window, not under test here.
+  vi.mocked(getLogTimeline).mockResolvedValue({ edges: [0, 86_400], modes: [] })
 })
 afterEach(() => {
   cleanup()

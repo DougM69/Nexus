@@ -1067,6 +1067,139 @@ impl LogFold for LogStatCounter<'_> {
     }
 }
 
+// ── the timeline: contacts per mode over the past day, 30 days or year ─────────────────────────
+
+/// The Statistics view's timeline windows, in UTC as the log is. Each ends with the current hour,
+/// day or month, and each bucket holds the contacts logged at or after its first instant and
+/// before the next bucket's:
+///
+/// - `PastDay`: 24 hourly buckets, the last the current UTC hour;
+/// - `Past30Days`: 30 daily buckets, the last today (UTC);
+/// - `PastYear`: 12 monthly buckets, the last the current UTC month.
+///
+/// So the window runs from the first bucket's first instant to the end of the current hour, day
+/// or month, and a contact stamped after that (a clock running ahead) is in none of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineRange {
+    PastDay,
+    Past30Days,
+    PastYear,
+}
+
+impl TimelineRange {
+    /// The window's bucket edges at `now` (Unix seconds): each bucket's first instant, oldest
+    /// first, and then the instant the window ends — one more edge than there are buckets.
+    pub fn edges(self, now: u64) -> Vec<u64> {
+        const HOUR: u64 = 3_600;
+        const DAY: u64 = 86_400;
+        match self {
+            TimelineRange::PastDay => {
+                let first = (now - now % HOUR).saturating_sub(23 * HOUR);
+                (0..=24).map(|i| first + i * HOUR).collect()
+            }
+            TimelineRange::Past30Days => {
+                let first = (now - now % DAY).saturating_sub(29 * DAY);
+                (0..=30).map(|i| first + i * DAY).collect()
+            }
+            TimelineRange::PastYear => {
+                let (year, month, ..) = super::datetime_utc(now);
+                // Months counted from year 0: the current one, and the eleven before it.
+                let current = i64::from(year) * 12 + i64::from(month) - 1;
+                (current - 11..=current + 1)
+                    .map(|m| {
+                        let (y, m) = (m.div_euclid(12), m.rem_euclid(12) + 1);
+                        super::unix_from_ymdhms(y as i32, m as u32, 1, 0, 0, 0)
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
+/// The timeline's answer (`LogTimeline`): the window's bucket edges ([`TimelineRange::edges`]),
+/// and each mode's contacts per bucket. A mode is labelled as the "By mode" card labels it
+/// ([`phone_mode_label`]: the sidebands fold into SSB, and nothing else folds), the modes are in
+/// first-seen order, and a mode with no contact in the window is not there. Which modes get a
+/// line of their own is the window's choice, as ordering the statistics is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogTimeline {
+    pub edges: Vec<u64>,
+    pub modes: Vec<TimelineMode>,
+}
+
+/// One mode's contacts in each bucket of the window, oldest bucket first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineMode {
+    pub label: String,
+    pub counts: Vec<usize>,
+}
+
+/// The timeline, a row at a time: each contact inside the window counted in its bucket under its
+/// mode. It decides the window itself on every row it is handed, so it answers the same over the
+/// whole log as over the store's rows since [`Self::since`] (SPEC-2 v3 P2: SQL narrows, Rust
+/// decides).
+pub struct TimelineCounter {
+    edges: Vec<u64>,
+    at: HashMap<String, usize>,
+    modes: Vec<TimelineMode>,
+}
+
+impl TimelineCounter {
+    pub fn new(range: TimelineRange, now: u64) -> Self {
+        Self {
+            edges: range.edges(now),
+            at: HashMap::new(),
+            modes: Vec::new(),
+        }
+    }
+
+    /// The window's first instant: no contact logged before it is counted.
+    pub fn since(&self) -> u64 {
+        self.edges[0]
+    }
+}
+
+impl LogFold for TimelineCounter {
+    type Answer = LogTimeline;
+
+    fn add(&mut self, r: &QsoRecord) {
+        let end = self.edges[self.edges.len() - 1];
+        if r.when_unix < self.edges[0] || r.when_unix >= end {
+            return;
+        }
+        // The last bucket that starts at or before the contact.
+        let bucket = self.edges.partition_point(|&e| e <= r.when_unix) - 1;
+        // A blank mode is on no line, as it is on no bar of the "By mode" card.
+        let label = phone_mode_label(&r.mode);
+        if label.is_empty() {
+            return;
+        }
+        let buckets = self.edges.len() - 1;
+        let at = match self.at.get(&label) {
+            Some(&at) => at,
+            None => {
+                self.at.insert(label.clone(), self.modes.len());
+                self.modes.push(TimelineMode {
+                    label,
+                    counts: vec![0; buckets],
+                });
+                self.modes.len() - 1
+            }
+        };
+        self.modes[at].counts[bucket] += 1;
+    }
+
+    fn finish(self) -> LogTimeline {
+        LogTimeline {
+            edges: self.edges,
+            modes: self.modes,
+        }
+    }
+}
+
 /// The oracle: every question answered from a whole log in log order, exactly as
 /// `logAnswers.ts`'s `answerFrom` computes it — no index, no cache, no store. The engine's own
 /// paths are held to it; it is held to the goldens.

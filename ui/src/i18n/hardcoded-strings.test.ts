@@ -186,6 +186,7 @@ const MIGRATED = [
   'components/JourneyView.tsx',
   'components/NeededPanel.tsx',
   'components/StatsView.tsx',
+  'components/StatsTimeline.tsx',
   'features/needVisuals.ts',
   'statusMeta.ts',
   'useJourneyUnlocks.ts',

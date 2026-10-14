@@ -14,6 +14,8 @@ import type {
   AudioDevices,
   AwardSummary,
   GeoLogStats,
+  LogTimeline,
+  TimelineRange,
   BandChannel,
   PrivilegeSpans,
   CatTestResult,
@@ -1596,6 +1598,11 @@ export async function getAwards(): Promise<AwardSummary> {
 /** Geographic log stats — continent / CQ-zone / DX-vs-domestic (cty.dat-resolved per call). */
 export async function getLogStats(): Promise<GeoLogStats> {
   return invoke<GeoLogStats>('get_log_stats')
+}
+
+/** The Statistics view's timeline: contacts per mode over the past day, 30 days or year (UTC). */
+export async function getLogTimeline(range: TimelineRange): Promise<LogTimeline> {
+  return invoke<LogTimeline>('get_log_timeline', { range })
 }
 
 /** The Journey snapshot — the in-app, beginner-first achievement layer (firsts,

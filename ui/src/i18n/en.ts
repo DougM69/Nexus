@@ -2546,6 +2546,22 @@ export const EN = {
   'stats.dxSplit.head': 'DX vs domestic',
   'stats.dxSplit.domestic': 'Domestic',
   'stats.unplaced': '{{unplaced}} of {{total}} QSOs couldn’t be placed by callsign',
+  // The Timeline card (components/StatsTimeline.tsx). Its lines are named by mode (data) and its
+  // buckets by UTC time and date as the log writes them (data): "Other" is its one line name.
+  'stats.timeline.head': 'Timeline (UTC)',
+  'stats.timeline.range.aria': 'Timeline range',
+  'stats.timeline.range.pastDay': 'Past day',
+  'stats.timeline.range.past30Days': 'Past 30 days',
+  'stats.timeline.range.pastYear': 'Past year',
+  'stats.timeline.other': 'Other',
+  'stats.timeline.empty': 'No QSOs logged in this range.',
+  // `{{range}}` is one of the three range names above.
+  'stats.timeline.chart': 'QSOs per mode, {{range}}. The arrow keys step through the points.',
+  'stats.timeline.hint': 'Point at the chart, or focus it and use the arrow keys, to read each point.',
+  'stats.timeline.table': 'QSOs per mode, {{range}}',
+  'stats.timeline.col.pastDay': 'Hour (UTC)',
+  'stats.timeline.col.past30Days': 'Day (UTC)',
+  'stats.timeline.col.pastYear': 'Month (UTC)',
 
   // ── The map, the globes and the propagation panes ───────────────────────────────────
   // ⚠️ THE UNITS RULE IS THE WHOLE STORY ON THESE SURFACES, because almost everything they
