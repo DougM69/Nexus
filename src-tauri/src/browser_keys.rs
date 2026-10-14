@@ -458,7 +458,10 @@ mod tests {
             .iter_mut()
             .find(|s| s.path.ends_with("client_mode.rs"))
             .expect("the census reads client_mode.rs");
-        assert!(client.text.contains(&call), "client mode's builder registers the switch");
+        assert!(
+            client.text.contains(&call),
+            "client mode's builder registers the switch"
+        );
         client.text = client.text.replace(&call, "unregistered(");
         let windows = census(&sources);
         assert!(
