@@ -1381,8 +1381,20 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    }
   }else assert.equal(Object.hasOwn(state,'controls'),false)
   const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
-  assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-  await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value?.outcome,'applied')
+  // End remote control (operator decision 2026-10-10) drops everyone and holds until Remote is turned on
+  // again: the browser's socket is closed by the station going offline, and nothing reaches the log.
+  assert.equal((await probe.send({type:'takeOverLogging'})).ok,true)
+  for(let i=0;i<100&&!socket.closed;i++)await delay(100)
+  assert.equal(socket.closed,true,'End remote control left the browser connected');assert.equal(socket.closeReason,'stationOffline')
+  for(let i=0;i<50&&(await roomStatus(room)).online;i++)await delay(100)
+  assert.equal((await roomStatus(room)).online,false,'End remote control left the station online');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+  leaving(socket)
+  // Turned on again, the approved browser has what its approval gave, with no approval again.
+  await probe.send({type:'enable'});for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
+  let restored=null;for(let i=0;i<100&&!restored;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId))restored=status;else await delay(100)}
+  assert.ok(restored,'the browser\'s logging did not come back at Turn on')
+  const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
+  assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value?.outcome,'applied')
   leaving(socket);socket=null
   // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
   // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote
