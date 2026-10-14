@@ -49709,6 +49709,62 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// ★ A CONTEST CONTACT THE JOURNAL COULD NOT WRITE IS ON THE CONTEST STATUS, until a good
+    /// write. The write is made to fail by a folder where its temporary file goes (a disk that
+    /// will not take it). The logging command answers as it always did; the status carries the
+    /// failure, on the wire as the UI reads it, and the next good write clears it.
+    #[test]
+    fn a_contest_journal_write_that_fails_is_on_the_contest_status_until_a_good_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-fd-unsaved-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("fieldday.adi");
+        let tmp = dir.join("fieldday.adi.tmp");
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_fd_log_path(journal.clone());
+        e.set_mode("fieldday-run").unwrap();
+        let unsaved = |e: &Engine| e.field_day_status().expect("a contest is on").unsaved;
+        assert_eq!(unsaved(&e), None, "nothing written, nothing failed");
+
+        std::fs::create_dir(&tmp).unwrap();
+        let logged = e.fd_log_manual("K1ABC", "2A", "EMA", "CW");
+        e.journal_mark().wait();
+        assert_eq!(logged, Ok(true), "the logging command answers as it did");
+        assert!(!journal.exists(), "control: the write really failed");
+        let status = e.field_day_status().unwrap();
+        assert_eq!(
+            status.unsaved,
+            Some(crate::dto::FdUnsavedDto {
+                failed_writes: 1,
+                last_saved_unix: None,
+            }),
+            "the failed write is on the status"
+        );
+        let wire = serde_json::to_value(&status).unwrap();
+        assert_eq!(wire["unsaved"]["failedWrites"], 1, "as the UI reads it");
+
+        std::fs::remove_dir(&tmp).unwrap();
+        let logged = e.fd_log_manual("K2DEF", "1D", "WI", "CW");
+        e.journal_mark().wait();
+        assert_eq!(logged, Ok(true));
+        assert_eq!(unsaved(&e), None, "a good write clears it");
+        let on_disk = std::fs::read_to_string(&journal).unwrap();
+        assert!(
+            on_disk.contains("K1ABC") && on_disk.contains("K2DEF"),
+            "control: the good write carries the contact the failed one lost"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A Field Day engine journaling to `dir`, and a FIFO at `tmp` — the temporary file of a
     /// journal write. Opening a FIFO for writing blocks until something opens it for reading:
     /// that is a disk that will not take the write, in the one syscall every journal write

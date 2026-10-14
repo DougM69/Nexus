@@ -126,6 +126,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A contest log that cannot be saved to disk now says so.** When the contest journal could not
+  be written (a full disk, or a file held by another program), the contacts since the last good
+  save were in memory only and nothing on screen said so; a power cut would have lost them. The
+  Contest screen and the contest log strip now show a red line saying contacts are not being
+  saved, since when, and to export a Cabrillo file now. It goes away as soon as a save works
+  again, and that save carries every contact the failed ones missed.
+
 - **One band is one band, whatever its letter case.** Contacts imported from another logger kept
   that logger's spelling of the band, so a log with `20M` from an import and `20m` from Nexus
   showed 20 m twice in the statistics' By band, listed both on the QSO globe, and the globe's 20 m

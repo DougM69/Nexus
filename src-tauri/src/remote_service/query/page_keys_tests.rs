@@ -673,8 +673,8 @@ fn a_confirmation_report_carries_only_the_keys_the_page_takes() {
 fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
     use tempo_app::dto::{
         DupeRuleDto, FdBoardFullDto, FdClubBoardRow, FdClubDto, FdClubKeptOutDto,
-        FdClubOtherLocationDto, FdClubRefusedDto, FdKeptOutDto, FieldDayQso, FieldDayStatus,
-        LocationWarningDto,
+        FdClubOtherLocationDto, FdClubRefusedDto, FdKeptOutDto, FdUnsavedDto, FieldDayQso,
+        FieldDayStatus, LocationWarningDto,
     };
     let status = |what: &str, status: &Value| {
         takes_optional(
@@ -1060,6 +1060,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             other_contest: 1,
             other_running: 3,
         }),
+        // The journal writes that failed: the station's own screen's, left out too.
+        unsaved: Some(FdUnsavedDto {
+            failed_writes: 2,
+            last_saved_unix: Some(1_782_509_000),
+        }),
     };
     let native = serde_json::to_value(&written).unwrap();
     assert!(
@@ -1070,10 +1075,11 @@ fn a_field_day_capture_carries_only_the_keys_the_page_takes() {
             && native["club"]["board"][0]["heardSecs"] == 12
             && native["club"]["otherLocation"][0]["sent"] == "KANE"
             && native["composingTextPhone"] == "1D EMA"
-            && native["cabrilloMissing"][0] == "CATEGORY-POWER",
+            && native["cabrilloMissing"][0] == "CATEGORY-POWER"
+            && native["unsaved"]["failedWrites"] == 2,
         "CONTROL: the station's own snapshot carries the Give button's handle, the club codes, \
          the host board's link words, the positions sending another county, the phone form of \
-         the exchange and the Cabrillo lines the export would leave out"
+         the exchange, the Cabrillo lines the export would leave out and the failed journal writes"
     );
     // What the capture sends: the station's status with what only its own screen acts on left
     // out, by the capture's own function.

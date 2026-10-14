@@ -215,6 +215,16 @@ impl Engine {
                     other_running: running as u32,
                 }),
             },
+            // The journal's writes that failed since its last good one: the operator is told.
+            unsaved: self
+                .station
+                .fd_log_path
+                .as_ref()
+                .and_then(|p| self.station.journals.trouble(p))
+                .map(|t| crate::dto::FdUnsavedDto {
+                    failed_writes: t.failed,
+                    last_saved_unix: t.last_good_unix,
+                }),
         })
     }
 
