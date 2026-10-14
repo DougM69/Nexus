@@ -721,6 +721,120 @@ fn rows() -> Vec<Row> {
             emission_mhz: 5.3516,
             phone_seg: None,
         },
+        // Every 60 m emission is held to 2.8 kHz, one sideband of voice, and AM and FM both send
+        // the voice on each side of the carrier, so neither keys on 60 m for a US class, in the
+        // segment or on a channel's carrier. USB keys beside them, and AM and FM keep every other
+        // band.
+        Row {
+            name: "IC-7300 phone 5.3600 AM picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 AM picked, inside the 60 m segment, Extra",
+            build: || {
+                let mut e = station(3073, "extra", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 FM picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 FM picked, inside the 60 m segment, Extra",
+            build: || {
+                let mut e = station(3073, "extra", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3305 FM picked, on the 5332.0 kHz channel's carrier, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3305, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: false,
+            emission_mhz: 5.3305,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 USB picked, inside the 60 m segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("USB"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 AM picked, inside the 60 m segment, Open class",
+            build: || {
+                let mut e = station(3073, "open", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 5.3600 FM picked, inside the 60 m segment, Open class",
+            build: || {
+                let mut e = station(3073, "open", "phone", 5.3600, "60m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 5.3600,
+            phone_seg: None,
+        },
+        Row {
+            name: "IC-7300 phone 7.2500 AM picked, inside the 40 m phone segment, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 7.2500, "40m", "LSB");
+                e.request_sideband_override(Some("AM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 7.2500,
+            phone_seg: Some((7.175, 7.300)),
+        },
+        Row {
+            name: "IC-7300 phone 29.6000 FM picked, the 10 m FM calling frequency, General",
+            build: || {
+                let mut e = station(3073, "general", "phone", 29.6000, "10m", "USB");
+                e.request_sideband_override(Some("FM"));
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 29.6000,
+            phone_seg: Some((28.300, 29.700)),
+        },
         Row {
             name: "IC-7300 RTTY FSK 5.3516 with a 2500 Hz shift, its space across the gap in the 5348.0 kHz channel, General",
             build: || {

@@ -22961,9 +22961,12 @@ contact yourself."
     /// * AM: the carrier plus BOTH sidebands of the same audio, one passband either side.
     /// * FM: ⚠️ NO WIDTH MODEL. An FM signal's width is set by its deviation, which Nexus does
     ///   not know (`repeater_tune` records the same decision), so only the carrier is judged.
-    ///   Every caller also judges the convention's passband, so an FM pick is judged exactly as
-    ///   it was before this model knew the pick at all — never less.
+    ///   Every caller also judges the convention's passband, so off 60 m an FM pick is judged
+    ///   exactly as it was before this model knew the pick at all — never less.
     /// * any other word: both sides. A mode this model does not know must never unlock anything.
+    ///
+    /// AM, FM and any other word that is not ONE sideband are refused on 60 m for every US class:
+    /// the rule holds every emission there to 2.8 kHz ([`crate::privileges::wide_phone_allowed`]).
     fn phone_emission_allowed(&self, carrier: f64, word: &str) -> bool {
         use crate::privileges::SSB_BW_MHZ as SSB_BW;
         let class = self.settings.license_class;
@@ -22978,6 +22981,7 @@ contact yourself."
         let hi = if above { carrier + SSB_BW } else { carrier };
         crate::privileges::tx_span_allowed(class, lo, hi, crate::settings::OperatingMode::Phone)
             && (above || !below || crate::privileges::lsb_phone_allowed(class, carrier))
+            && (above != below || crate::privileges::wide_phone_allowed(class, carrier))
     }
 
     /// May the operator's class key a DIGITAL emission from the transmit dial `dial`, with the
@@ -64713,6 +64717,36 @@ mod phone_pick_licence_tests {
                 "{pick}: the sweep must reach dials the convention refuses: {refused}"
             );
         }
+    }
+
+    /// 60 m holds every emission to 2.8 kHz, one sideband of voice, so a mode word that is not
+    /// one sideband is refused there for every US class: AM and the AM-like words a rig can
+    /// report, FM, the PKTFM an SSTV image rides under an FM pick, on a channel's carrier and in
+    /// the segment alike. USB keeps 60 m, and every one of those words keeps 40 m.
+    #[test]
+    fn a_word_that_is_not_one_sideband_is_refused_on_60m() {
+        let mut wrong = Vec::new();
+        for class in ["general", "extra"] {
+            let sixty = phone_at(class, "60m", 5.3600, None);
+            let forty = phone_at(class, "40m", 7.2500, None);
+            for word in ["AM", "SAM", "DSB", "PKTAM", "FM", "PKTFM", "WFM"] {
+                for (e, carrier, want) in [
+                    (&sixty, 5.3305, false),
+                    (&sixty, 5.3600, false),
+                    (&forty, 7.2500, true),
+                ] {
+                    if e.phone_emission_allowed(carrier, word) != want {
+                        wrong.push(format!("{class} {word} at {carrier:.4}: allowed={}", !want));
+                    }
+                }
+            }
+            for word in ["USB", "PKTUSB"] {
+                if !sixty.phone_emission_allowed(5.3600, word) {
+                    wrong.push(format!("{class} {word} at 5.3600: allowed=false"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// The split + XIT branch judges TWO carriers — whether a rig adds XIT on top of split is

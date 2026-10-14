@@ -86,7 +86,8 @@ const REGION1: &[Seg] = &[
 // 2.8 kHz], and the rule sets its carrier 1.5 kHz below the centre, so its row runs from that
 // carrier to the channel's top: the rule's carrier keys, and no passband leaves the channel.
 // CW is the rule's "the carrier frequency is set to the center frequency", so its row is the
-// centre ± [`SIXTY_CW_TOL_MHZ`]. Phone on 60 m is upper sideband only ([`lsb_phone_allowed`]).
+// centre ± [`SIXTY_CW_TOL_MHZ`]. Phone on 60 m is upper sideband only ([`lsb_phone_allowed`]),
+// never AM or FM ([`wide_phone_allowed`]).
 // 60 m is channelized — excluded from the band dropdown but enforced by the lockout.
 const SIXTY: &[Seg] = &[
     s(5.3515, 5.3665, true, true, true),
@@ -303,6 +304,19 @@ pub fn tx_span_allowed(class: LicenseClass, lo_mhz: f64, hi_mhz: f64, mode: Oper
 /// names no sideband, but it sets a channel's phone carrier 1.5 kHz below the centre, which only
 /// an upper-sideband passband puts on the channel. `Open` is trusted, as [`tx_allowed`] trusts it.
 pub fn lsb_phone_allowed(class: LicenseClass, carrier_mhz: f64) -> bool {
+    matches!(class, LicenseClass::Open)
+        || crate::bandplan::band_for_dial(carrier_mhz) != Some("60m")
+}
+
+/// May `class` transmit a phone signal that is not ONE sideband, with its carrier at
+/// `carrier_mhz`: AM, FM, or a mode word the phone model does not know? Not on 60 m, for any US
+/// class, on the four channels and in the 5351.5–5366.5 kHz segment alike (operator ruling,
+/// 2026-10-14). "For all 60 m spectrum, Amateur operators shall ensure that their emissions do not
+/// occupy more than 2.8 kHz" (47 CFR 97.303(h)(3)), one sideband of voice. AM sends the voice on
+/// both sides of its carrier, FM does too whatever its deviation, and a word the model does not
+/// know is never trusted to fit. Every other band keeps them, and `Open` is trusted, as
+/// [`tx_allowed`] trusts it.
+pub fn wide_phone_allowed(class: LicenseClass, carrier_mhz: f64) -> bool {
     matches!(class, LicenseClass::Open)
         || crate::bandplan::band_for_dial(carrier_mhz) != Some("60m")
 }
@@ -856,5 +870,32 @@ mod tests {
             }
         }
         assert!(lsb_phone_allowed(Open, 5.3600));
+    }
+
+    /// 47 CFR 97.303(h)(3): "For all 60 m spectrum, Amateur operators shall ensure that their
+    /// emissions do not occupy more than 2.8 kHz." AM and FM send the voice on both sides of the
+    /// carrier, so neither keys anywhere on 60 m for a US class. Every other band keeps them, FM's
+    /// own bands included, and `Open` is trusted.
+    #[test]
+    fn am_and_fm_phone_are_refused_anywhere_on_60_m() {
+        for class in [Technician, General, Extra] {
+            for carrier in [
+                5.3305, 5.3333, 5.3465, 5.3515, 5.3600, 5.3664, 5.3715, 5.4035, 5.4063,
+            ] {
+                assert!(
+                    !wide_phone_allowed(class, carrier),
+                    "{class:?} AM/FM at {carrier}"
+                );
+            }
+            for carrier in [
+                1.885, 3.885, 7.290, 14.286, 29.600, 52.525, 146.520, 446.000,
+            ] {
+                assert!(
+                    wide_phone_allowed(class, carrier),
+                    "{class:?} AM/FM at {carrier}"
+                );
+            }
+        }
+        assert!(wide_phone_allowed(Open, 5.3600));
     }
 }
