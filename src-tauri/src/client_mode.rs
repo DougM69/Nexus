@@ -1726,6 +1726,8 @@ pub(crate) fn run(station: String) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        // WebView2's browser keys off in every window here too, as in the station's own app.
+        .plugin(crate::browser_keys::init())
         .manage(Arc::clone(&client))
         .manage(crate::BetaUpdateState::default())
         .manage(crate::street_map::StreetMapState::default())

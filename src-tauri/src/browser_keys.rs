@@ -222,7 +222,9 @@ mod tests {
             }
         }
         apps.dedup();
-        assert_eq!(apps.len(), 1, "the app is built in exactly one function");
+        // Two apps are built: the station's own (`build_app`) and client mode's (`client_mode::run`).
+        // The switch counts only when it is registered in every one of them.
+        assert_eq!(apps.len(), 2, "the app is built in exactly two functions");
         let mut hooks = Vec::new();
         for source in sources {
             let functions = functions(&source.text);
@@ -237,7 +239,7 @@ mod tests {
         }
         let every_webview = hooks
             .into_iter()
-            .find(|hook| apps[0].contains(hook.as_str()));
+            .find(|hook| apps.iter().all(|app| app.contains(hook.as_str())));
         Switch {
             setters,
             every_webview,
@@ -441,5 +443,29 @@ mod tests {
                 "the census finds the keys on in {window}…): {windows:#?}"
             );
         }
+    }
+
+    /// ⛔ AND IN CLIENT MODE'S APP. The same census, with the switch taken out of client mode's
+    /// builder alone, finds the keys on in the main window: a computer driving a station makes its
+    /// windows through that builder, so the switch must be registered there too.
+    #[test]
+    fn without_the_switch_in_client_modes_builder_the_census_finds_the_keys_on() {
+        let mut sources = sources();
+        let call = switch(&sources)
+            .every_webview
+            .expect("every app's builder registers the switch");
+        let client = sources
+            .iter_mut()
+            .find(|s| s.path.ends_with("client_mode.rs"))
+            .expect("the census reads client_mode.rs");
+        assert!(client.text.contains(&call), "client mode's builder registers the switch");
+        client.text = client.text.replace(&call, "unregistered(");
+        let windows = census(&sources);
+        assert!(
+            windows
+                .iter()
+                .any(|w| w.what.starts_with("main (") && !w.keys_off),
+            "the census finds the keys on in main (…): {windows:#?}"
+        );
     }
 }
