@@ -241,7 +241,7 @@ At startup Nexus reads compound calls (slashed calls such as `W1AW/7`) from your
 
 - **Fox role** (running a DXpedition as the Fox) is not implemented; Hound only.
 - **SuperFox** is not decoded in this version — the QPC table license bars vendoring the decoder outside WSJT-X. The interface names a SuperFox operation before you call it, in the Operate header and on the DXpeditions board.
-- **Contest modes** (NA VHF, RTTY Roundup, WW Digi) and frequency calibration are not implemented. WSPR, Q65, MSK144, FST4, FST4W and JT65 all transmit and receive — they are set up under [Settings ▸ Digital](../guide/settings-reference.md#digital), not here.
+- **WSJT-X's RTTY Roundup and WW Digi contest modes** and frequency calibration are not implemented; in ARRL Field Day and the ARRL VHF contests FT8 and FT4 send its Field Day and NA VHF Contest messages ([FT8 and FT4 in each contest](../guide/contesting-pota.md#ft8-and-ft4-in-each-contest)). WSPR, Q65, MSK144, FST4, FST4W and JT65 all transmit and receive — they are set up under [Settings ▸ Digital](../guide/settings-reference.md#digital), not here.
 - **F6 / Decode** is native-source only; silently a no-op in Companion mode.
 - **Early decode pass** runs only for FT8 and FT4 in native source mode. TempoFast, TempoDeep, and Companion source decode at the period boundary only.
 - **Waterfall** is a compact horizontal strip (a spectrum glance tool), not a tall scrolling WSJT-X-style column.

@@ -32,7 +32,7 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 |---|---|
 | [Needed and Hunting](Needed-and-Hunting.md) | Evidence-backed need board, ATNO/zone/band/mode/confirm rankings, one-click rig QSY |
 | [POTA and SOTA](POTA-SOTA.md) | Live activator spots, NEW PARK / BAND OPEN badges, one-click hunt with park/summit ADIF tag |
-| [Field Day](Field-Day.md) | ARRL FD and Winter FD event mode, per-mode scoring, Cabrillo 3.0 export, N3FJP real-time push, N1MM+ broadcast |
+| [Field Day](Field-Day.md) | ARRL FD and Winter FD event mode, per-mode scoring, Cabrillo 3.0 export, N3FJP real-time push, N1MM+ broadcast; the same workspace runs every other contest on the picker |
 
 ### Log and data
 

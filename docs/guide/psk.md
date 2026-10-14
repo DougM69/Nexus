@@ -5,8 +5,10 @@ The PSK cockpit is a keyboard station for the classic narrow-band phase-shift mo
 decoder with per-character confidence, a waterfall you click to net onto a signal, four F-key
 macros and a type-and-send bar, a continuous-TX latch that lets you type straight into a
 transmission the way a teleprinter operator does, and a log strip for the contact when it is
-done. **PSK31 transmits here** — this is not a monitor. It is a ragchew station, not a
-contest station: no serials and no dupe check outside Field Day.
+done. **PSK31 transmits here** — this is not a monitor. It is a ragchew station, not a full
+contest station, though in any contest you pick on
+[Settings ▸ Contesting](settings-reference.md#contest) the log strip takes that contest's
+exchange and flags dupes.
 
 PSK ships enabled — the wizard turns everything on; there is no mode picker to miss it
 in. No goal profile enables it, though, so if you pick one in

@@ -257,8 +257,10 @@ both programs are on one PC; across the shack it is the other machine's address.
 ## Honest limits
 
 - **Fox role is not implemented** — you can hound a DXpedition, not run one.
-- **No contest modes** in the digital cockpit beyond Field Day (no NA VHF,
-  RTTY RU, WW Digi).
+- **No RTTY Roundup or WW Digi contest messages.** FT8 and FT4 send WSJT-X's
+  contest messages in ARRL Field Day and in the ARRL VHF contests (its NA VHF
+  Contest mode): see
+  [FT8 and FT4 in each contest](contesting-pota.md#ft8-and-ft4-in-each-contest).
 
 ### What each tier can do in 1.10.3
 

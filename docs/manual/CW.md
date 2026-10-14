@@ -331,7 +331,6 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 - **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
   the band at once; the WPM readout is estimated by the classic decoder underneath.
 - **Macros not user-editable:** the 8 slots and their text are compiled in; no UI for custom macro text in this version.
-- **No contest exchange:** RST is hardcoded to 599, no serial-number field exists. This cockpit is casual/ragchew only.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.
 - **Soundcard PTT tail:** 250 ms, fixed; not configurable.
 - **Desktop-only:** Tauri v2; no web or mobile build.

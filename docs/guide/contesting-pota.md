@@ -56,7 +56,8 @@ checking** — one laptop covers the whole operation.
 *A Field Day **test event** in Nexus 1.10.3 — a fixture, not a submitted entry. The banner
 names the event and the rules year it is scoring against; the counters and the arithmetic line
 show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
-board marks what has been worked out of 83. The per-contact exchange — class and section — is
+board marks what has been worked out of the 83 sections this 1.10.3 build carried (the board
+lists all 85 ARRL/RAC sections from 1.12.0 on). The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
 **The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK

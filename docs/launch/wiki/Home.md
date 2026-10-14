@@ -14,8 +14,9 @@ chaser. Windows, macOS (Apple Silicon), Linux and Raspberry Pi. GPL-3.0, built i
 > test, field-verified end to end on a Yaesu FTDX10 and FT-991A and on native-CI-V
 > Icom. APRS is on the air with its internet feed and receive-only iGate confirmed
 > against a live connection. It does **not** claim nothing is left, and what is
-> left stays printed rather than buried: the FlexRadio native panadapter is opt-in
-> and not yet confirmed on hardware here, and TempoFast and TempoDeep have closed
+> left stays printed rather than buried: the FlexRadio native client and panadapter
+> and the Icom network connection are opt-in Betas, not yet confirmed on hardware
+> here, and TempoFast and TempoDeep have closed
 > real links on the air — including a completed two-station QSO on 6 m — with
 > their sensitivity figures still bench numbers. The Windows installer is
 > unsigned, so verify the published SHA-256.

@@ -124,8 +124,9 @@ serial — and Flex is discoverable on the LAN with one-click DAX audio pairing.
 status:
 
 - **FlexRadio:** there are two paths. Hamlib network CAT is the default and is the
-  verified one, on a FLEX-6400M. The **native SmartSDR path** — the SmartSDR panadapter,
-  DAX RX and TX audio and the rig's native meters over VITA-49 — ships, and it keeps
+  verified one, on a FLEX-6400M. The **native SmartSDR path** — the Flex native client
+  (Nexus's own SmartSDR client), the SmartSDR panadapter, DAX RX and TX audio through
+  that client, and the rig's native meters over VITA-49 — ships, and it keeps
   working under Remote Desktop where the DAX sound devices are invisible. It is
   **opt-in, off by default, and not yet confirmed on hardware here**; turn it back off
   if decodes stop.
