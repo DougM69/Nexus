@@ -764,6 +764,9 @@ const MAY_REACH: &[&str] = &[
     // A test build's road switch: this computer's own roads to the shack, blocked one at a time.
     // It opens and starts nothing.
     "crate::bench_road_switch",
+    // WebView2's browser keys off in each window as Tauri makes it: one setting of the webview's
+    // own, and nothing else.
+    "crate::browser_keys::init",
     "crate::remote_service::vault::PairedStation",
     "crate::remote_service::vault::SystemVault",
     "crate::ui_state_read",
