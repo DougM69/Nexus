@@ -2867,3 +2867,89 @@ test('S3-M1: a station\'s key is recorded once: the same key is kept, another is
   await pair.browser.post(path, { publicKey: other }, 403)
   assert.equal(await listed(), first)
 })
+
+// The approvals given under the thirty/ninety-day rule become until removed at once, by a migration run
+// at deploy (operator decision 2026-10-14). It only extends a standing approval of a station that still
+// has access; it drops, deletes, revives and re-generates nothing, and a second run changes nothing.
+test('the until-removed migration extends only standing approvals, revives nothing, and runs twice to the same rows', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const browser = async (name, approve = true) => {
+    const holder = app.client(pair.browser.jwt)
+    const { value, response } = await holder.post(`${path}/device`, { name })
+    holder.setCookie(response.headers.get('set-cookie'))
+    if (approve) await pair.native.post(`${path}/native/approve-device`, { deviceId: value.deviceId }, 200, LIFETIME)
+    return { holder, id: value.deviceId }
+  }
+  const set = (id, approvedAt, expiresAt) =>
+    app.db.prepare('UPDATE devices SET approved_at=?, expires_at=? WHERE id=?').bind(approvedAt, expiresAt, id).run()
+  const row = id => app.db.prepare('SELECT id,station_id,generation,approved,approved_at,expires_at FROM devices WHERE id=?').bind(id).first()
+  const now = Date.now()
+  // ACTIVE: approved under the old rule, ten days ago, ending tomorrow.
+  const active = await browser('Old-rule browser')
+  await set(active.id, now - 10 * DAY, now + DAY)
+  // EXPIRED: approved under the old rule, and already ended.
+  const expired = await browser('Lapsed browser')
+  await set(expired.id, now - 40 * DAY, now - 60000)
+  // REMOVED at the shack, and WAITING for approval.
+  const removed = await browser('Removed browser')
+  await pair.native.post(`${path}/native/revoke-device`, { deviceId: removed.id }, 200, LIFETIME)
+  const waiting = await browser('Waiting browser', false)
+  // (Given an approval time, so only its being unapproved keeps it out.)
+  await set(waiting.id, now - DAY, (await row(waiting.id)).expires_at)
+  // A 1.12-era approval: no approval time, a fixed end.
+  const legacy = await browser('Older Nexus browser')
+  await set(legacy.id, null, now + DAY)
+  // REVOKED: a standing old-rule approval on a station whose access was revoked.
+  const gone = await app.paired(), gonePath = `stations/${gone.stationId}`
+  const goneId = await app.approved(gone)
+  await set(goneId, now - 10 * DAY, now + DAY)
+  await gone.native.post(`${gonePath}/native/revoke`, {})
+
+  const all = async () => (await app.db.prepare('SELECT * FROM devices ORDER BY id').all()).results
+  const fixtures = [active.id, expired.id, removed.id, waiting.id, legacy.id, goneId]
+  const before = Object.fromEntries(await Promise.all(fixtures.map(async id => [id, await row(id)])))
+  const count = (await all()).length
+  const migrate = async () => {
+    const sql = (await readFile(new URL('../migrations/0011_until_removed.sql', import.meta.url), 'utf8'))
+      .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
+    for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await app.db.prepare(statement).run()
+  }
+  await migrate()
+  const once = await all()
+  assert.equal(once.length, count, 'no row dropped or added')
+  assert.deepEqual(await row(active.id), { ...before[active.id], expires_at: UNTIL_REMOVED }, 'only the end moves')
+  assert.ok(before[goneId].expires_at < UNTIL_REMOVED && before[goneId].approved === 1, 'premise: a standing approval')
+  for (const id of [expired.id, removed.id, waiting.id, legacy.id, goneId]) assert.deepEqual(await row(id), before[id], id)
+  await migrate()
+  assert.deepEqual(await all(), once, 'a second run changes nothing')
+
+  // At the next ticket: the standing approval opens; the removed, the lapsed, the never-approved and the
+  // revoked station's are still refused, and another account holding the approved browser's cookie too.
+  await active.holder.post(`${path}/ticket`)
+  assert.equal((await removed.holder.post(`${path}/ticket`, {}, 403)).value.error, 'deviceNotApproved')
+  await expired.holder.post(`${path}/ticket`, {}, 403)
+  await waiting.holder.post(`${path}/ticket`, {}, 403)
+  await gone.browser.post(`${gonePath}/ticket`, {}, 404)
+  const stranger = await app.owner()
+  stranger.setCookie(active.holder.headers().cookie)
+  await stranger.post(`${path}/ticket`, {}, 404)
+})
+
+// A 1.17/1.18 desktop (lifetime and key headers, no kinds) cannot be told "until removed": its Settings
+// prints every approval as `Approved until <date> UTC.`, from `new Date(expiresAt).toISOString()
+// .slice(0, 10)`, and warns when `(renewsUntil ?? expiresAt)` is within seven days. The least misleading
+// value it renders is the one it is sent: 9999-12-31, no renewal, so no warning and no "Approve again".
+// A year past 9999 prints garbled ("+010000-01"), and past the Date range its screen throws.
+test('a 1.17/1.18 desktop is listed an until-removed approval in exactly the shape and value it renders as 9999-12-31', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const deviceId = await app.approved(pair)
+  await pair.native.post(`${path}/native/approve-device`, { deviceId }, 200, LIFETIME)
+  const { value } = await pair.native.post(`${path}/native/devices`, {}, 200, { ...LIFETIME, ...DEVICE_KEY })
+  const listed = value.devices.find(d => d.id === deviceId)
+  // Its parser denies unknown fields: exactly these keys.
+  assert.deepEqual(Object.keys(listed).sort(), ['approved', 'expiresAt', 'generation', 'id', 'name', 'publicKey', 'renewsUntil'])
+  assert.deepEqual({ expiresAt: listed.expiresAt, renewsUntil: listed.renewsUntil }, { expiresAt: UNTIL_REMOVED, renewsUntil: null })
+  assert.ok(Number.isSafeInteger(listed.expiresAt), 'a u64 it parses')
+  assert.equal(new Date(listed.expiresAt).toISOString().slice(0, 10), '9999-12-31')
+  assert.ok((listed.renewsUntil ?? listed.expiresAt) - Date.now() > 7 * DAY, 'no warning')
+})
