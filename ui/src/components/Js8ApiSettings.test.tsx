@@ -3,6 +3,7 @@
 // Settings ▸ Digital ▸ JS8 ▸ JS8Call API: both switches off and JS8Call's ports when the settings
 // predate them, each switch and port saved through the form's own setters, a port outside 1–65535
 // never saved, and the four keys carried by a saved profile like the WSJT-X UDP API they sit beside.
+// Each side's "Accept requests" switch the same way: off as JS8Call ships it, saved, carried.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { Js8ApiSettings, parsePort } from './Js8ApiSettings'
@@ -71,6 +72,28 @@ describe('JS8Call API settings', () => {
       null,
       null,
     ])
+  })
+
+  it("has each side's Accept requests switch, off as JS8Call ships it, saved and carried", () => {
+    const { onSwitch } = setup()
+    const tcp = screen.getByRole('switch', { name: EN['settings.js8.api.tcpAccept.label'] })
+    const udp = screen.getByRole('switch', { name: EN['settings.js8.api.udpAccept.label'] })
+    expect([tcp.getAttribute('aria-checked'), udp.getAttribute('aria-checked')]).toEqual(['false', 'false'])
+    expect(screen.getAllByText(EN['settings.js8.api.accept.hint'])).toHaveLength(2)
+    fireEvent.click(tcp)
+    fireEvent.click(udp)
+    expect(onSwitch.mock.calls).toEqual([
+      ['js8ApiTcpAccept', true],
+      ['js8ApiUdpAccept', true],
+    ])
+    cleanup()
+    setup({ js8ApiTcpAccept: true })
+    expect(
+      screen.getByRole('switch', { name: EN['settings.js8.api.tcpAccept.label'] }).getAttribute('aria-checked'),
+    ).toBe('true')
+    const current = form({ js8ApiTcpAccept: false, js8ApiUdpAccept: false })
+    const merged = mergeProfile(current, { js8ApiTcpAccept: true, js8ApiUdpAccept: true } as Settings)
+    expect([merged.js8ApiTcpAccept, merged.js8ApiUdpAccept]).toEqual([true, true])
   })
 
   // A feed other programs listen to, as the WSJT-X UDP API is: it travels with a saved profile.

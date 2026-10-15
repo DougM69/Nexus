@@ -1,11 +1,18 @@
 //! JS8Call's API for programs on the station's own computer is the operator's to turn on at the
-//! station, and only there. Its four settings never reach a Remote browser (the hosted page and
+//! station, and only there. Its six settings never reach a Remote browser (the hosted page and
 //! the LAN page read the same document through these lanes), and a browser change that names one
 //! is refused before anything is consumed. Nothing a browser can send reaches the API's sockets:
 //! they listen on 127.0.0.1 alone (`src-tauri/src/js8_api.rs`).
 use super::*;
 
-const KEYS: [&str; 4] = ["js8ApiTcp", "js8ApiTcpPort", "js8ApiUdp", "js8ApiUdpPort"];
+const KEYS: [&str; 6] = [
+    "js8ApiTcp",
+    "js8ApiTcpPort",
+    "js8ApiUdp",
+    "js8ApiUdpPort",
+    "js8ApiTcpAccept",
+    "js8ApiUdpAccept",
+];
 
 fn store(f: &Fixture) {
     f.engine
@@ -67,6 +74,8 @@ fn the_api_settings_never_reach_a_browser() {
         s.js8_api_tcp_port = 2443;
         s.js8_api_udp = true;
         s.js8_api_udp_port = 2243;
+        s.js8_api_tcp_accept = true;
+        s.js8_api_udp_accept = true;
         e.apply_settings(s);
     }
     let native = settings(&f);
@@ -102,7 +111,10 @@ fn a_browser_cannot_turn_the_api_on_or_move_it() {
         json!({"js8ApiTcpPort":2443}),
         json!({"js8ApiUdp":true}),
         json!({"js8ApiUdpPort":2243}),
+        json!({"js8ApiTcpAccept":true}),
+        json!({"js8ApiUdpAccept":true}),
         json!({"contestCheck":"73","js8ApiTcp":true}),
+        json!({"contestCheck":"73","js8ApiUdpAccept":true}),
     ] {
         assert_eq!(
             run(&f, &change(&f, values.clone())),

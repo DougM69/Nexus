@@ -4,7 +4,9 @@
 //! A CHILD module of `engine` (declared with `#[path]` there, as `js8.rs` is), so it reads the JS8
 //! station's state without widening any visibility.
 //!
-//! WHAT IS ANSWERED. The reads `RX.GET_*`, `STATION.GET_*` and `INBOX.GET_MESSAGES`, from a
+//! WHAT IS ANSWERED. The reads `RX.GET_*`, `STATION.GET_*` and `INBOX.GET_MESSAGES`, and the
+//! six other requests JS8Call answers that only read (`RIG.GET_FREQ`, `RIG.GET_PTT`,
+//! `MODE.GET_SPEED`, `TX.GET_TEXT`, `TX.GET_QUEUE_DEPTH`, `STATION.VERSION`), from a
 //! [`Js8ApiSnapshot`]: a COPY the listeners take under the Engine lock once a tick. A request
 //! never takes the lock and has nothing it could change — [`answer`] borrows the snapshot and
 //! returns a line. And the messages JS8Call sends on its own: `RX.ACTIVITY` (every decoded frame),
@@ -12,14 +14,16 @@
 //! spotting is on), `TX.FRAME` (the tones of every frame keyed), `RIG.PTT`, `RIG.FREQ` (a band
 //! change), `STATION.STATUS`, `STATION.CLOSING`, and the UDP side's `PING` and `CLOSE`.
 //!
-//! WHAT IS REFUSED: every other type. `TX.*`, `RIG.*`, `MODE.*`, `STATION.SET_*`,
-//! `STATION.SEND_HB`, `INBOX.STORE_MESSAGE`, `RX.SET_*`, `WINDOW.RAISE`, and a type nobody has
-//! heard of are dropped with no answer, which is what JS8Call does with a request it does not
-//! accept: with "Accept requests" off (its default), `tcpNetworkMessage`/`udpNetworkMessage`
-//! return before `networkMessage` (mainwindow.cpp:6717-6739), and an unknown type falls through
-//! it unanswered (networkMessage.cpp:915). [`classify`] is an ALLOW-list, so a type JS8Call adds
-//! later stays refused until someone decides it only reads. `RX.GET_FILTER` stays refused too:
-//! Nexus has no JS8 band-pass filter to report. Malformed JSON is dropped.
+//! WHAT IS REFUSED: every other type. `TX.SEND_MESSAGE`, `TX.SET_TEXT`, `RIG.SET_*`,
+//! `RIG.TX_HALT`, `MODE.SET_SPEED`, `STATION.SET_*`, `STATION.SEND_HB`, `INBOX.STORE_MESSAGE`,
+//! `RX.SET_*`, `WINDOW.RAISE`, and a type nobody has heard of are dropped with no answer, which is
+//! what JS8Call does with a request it does not accept: with "Accept requests" off (its default),
+//! `tcpNetworkMessage`/`udpNetworkMessage` return before `networkMessage`
+//! (mainwindow.cpp:6717-6739), and an unknown type falls through it unanswered
+//! (networkMessage.cpp:915). [`classify`] is an ALLOW-list, so a type JS8Call adds later stays
+//! refused until someone decides it only reads. `RX.GET_FILTER` stays refused too: Nexus has no
+//! JS8 band-pass filter to report yet. A TCP line that is no request is told why in JS8Call's
+//! `API.ERROR` ([`read_tcp_line`]); a datagram that is none is dropped, as in JS8Call.
 //!
 //! THE WIRE. A message is `{"params":{…},"type":"…","value":"…"}` in Qt's compact JSON: keys
 //! sorted (a `QJsonObject` is a sorted map, and every object here is built through [`object`]),
@@ -35,6 +39,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use ::js8::proto::alphabet::sixbit_to_string;
 use ::js8::proto::callsign::split_portable;
 use ::js8::proto::reassembly::{render_directed, Message, RxFrame};
 use ::js8::proto::station::InboxState;
@@ -75,6 +80,8 @@ const PANE_LINES: usize = 64;
 const PANE_CHARS: usize = 1024;
 /// Inbox messages whose dial, speed and drift this run saw arrive.
 const INBOX_META_CAP: usize = 256;
+/// `TX.TEXT` answers the last 1024 characters of the text going out (networkMessage.cpp:727).
+const TX_TEXT_CHARS: usize = 1024;
 
 // ---------------------------------------------------------------------------------------------
 // Speeds as JS8Call numbers them
@@ -219,8 +226,21 @@ impl Request {
         if bytes.len() > MAX_REQUEST_BYTES {
             return None;
         }
-        let Value::Object(mut o) = serde_json::from_slice::<Value>(bytes).ok()? else {
-            return None;
+        Request::read(bytes).ok()
+    }
+
+    /// The request in `bytes`, or why there is none in the words of JS8Call's `API.ERROR`
+    /// (`Message::fromJson`, Message.cpp:119-135, thrown as a `std::system_error` whose words are
+    /// "<what>: <category message>", MessageError.cpp:20-23). JSON that does not parse is
+    /// "<the parser's words>: json parsing error", in serde's words where JS8Call's are Qt's. Qt's
+    /// parser takes only an object or an array as a document, so any other value is its "illegal
+    /// value"; an array parses and is "json not an object". Never panics, whatever the bytes.
+    pub fn read(bytes: &[u8]) -> Result<Request, String> {
+        let mut o = match serde_json::from_slice::<Value>(bytes) {
+            Ok(Value::Object(o)) => o,
+            Ok(Value::Array(_)) => return Err("json not an object".to_string()),
+            Ok(_) => return Err("illegal value: json parsing error".to_string()),
+            Err(e) => return Err(format!("{e}: json parsing error")),
         };
         let text = |v: Option<Value>| match v {
             Some(Value::String(s)) => s,
@@ -232,7 +252,7 @@ impl Request {
             Some(Value::Object(p)) => p,
             _ => serde_json::Map::new(),
         };
-        Some(Request {
+        Ok(Request {
             kind,
             value,
             params,
@@ -266,10 +286,17 @@ pub enum Read {
     Os,
     Config,
     Inbox,
+    Freq,
+    Ptt,
+    Speed,
+    TxText,
+    QueueDepth,
+    Version,
 }
 
 /// THE ALLOW-LIST: a request this API answers, or `None` for one it refuses — anything that
 /// would transmit, tune, change the rig or a setting, or write, and any type not named here.
+/// The reads outside the `GET` families are named one by one, never by family.
 pub fn classify(kind: &str) -> Option<Read> {
     Some(match kind {
         "RX.GET_CALL_ACTIVITY" => Read::CallActivity,
@@ -285,6 +312,12 @@ pub fn classify(kind: &str) -> Option<Read> {
         "STATION.GET_OS" => Read::Os,
         "STATION.GET_CONFIG" => Read::Config,
         "INBOX.GET_MESSAGES" => Read::Inbox,
+        "RIG.GET_FREQ" => Read::Freq,
+        "RIG.GET_PTT" => Read::Ptt,
+        "MODE.GET_SPEED" => Read::Speed,
+        "TX.GET_TEXT" => Read::TxText,
+        "TX.GET_QUEUE_DEPTH" => Read::QueueDepth,
+        "STATION.VERSION" => Read::Version,
         _ => return None,
     })
 }
@@ -449,6 +482,61 @@ pub fn answer(req: &Request, via: Via, snap: &Js8ApiSnapshot, now_ms: u64) -> Op
                 )]),
             )
         }
+        // The dial and the offset (networkMessage.cpp:96-135). JS8Call also sends its WSJT-X
+        // status here when its WSJT-X protocol is on; Nexus's WSJT-X feed is its own.
+        Read::Freq => wire(
+            "RIG.FREQ",
+            "",
+            with_id(vec![
+                ("DIAL".into(), Value::from(snap.dial_hz)),
+                (
+                    "FREQ".into(),
+                    Value::from(snap.dial_hz as i64 + snap.offset_hz),
+                ),
+                ("OFFSET".into(), Value::from(snap.offset_hz)),
+            ]),
+        ),
+        // The key, and the frame going out while it is down (networkMessage.cpp:51-60).
+        Read::Ptt => wire(
+            "RIG.PTT_STATUS",
+            "",
+            with_id(vec![
+                (
+                    "MESSAGE".into(),
+                    Value::from(if snap.transmitting {
+                        snap.on_air.as_str()
+                    } else {
+                        ""
+                    }),
+                ),
+                ("PTT".into(), Value::from(snap.transmitting)),
+            ]),
+        ),
+        Read::Speed => wire(
+            "MODE.SPEED",
+            "",
+            with_id(vec![("SPEED".into(), Value::from(snap.speed))]),
+        ),
+        Read::TxText => wire("TX.TEXT", &snap.tx_text, only_id()),
+        // JS8Call counts its message queue, and a key that is down over an empty one as 1
+        // (networkMessage.cpp:759-767).
+        Read::QueueDepth => {
+            let depth = if snap.transmitting && snap.waiting == 0 {
+                1
+            } else {
+                snap.waiting
+            };
+            wire(
+                "TX.QUEUE_DEPTH",
+                "",
+                with_id(vec![("DEPTH".into(), Value::from(depth))]),
+            )
+        }
+        Read::Version => wire(
+            "STATION.VERSION",
+            "",
+            with_id(vec![("VERSION".into(), Value::from(snap.version.as_str()))]),
+        ),
     };
     Some(Outgoing { line, id })
 }
@@ -828,11 +916,51 @@ pub fn close(now_ms: u64) -> Outgoing {
 
 /// What a TCP connection past the limit is told before it is closed (MessageServer.cpp:130-136).
 pub fn connections_full(now_ms: u64) -> Outgoing {
+    api_error("Connections Full", now_ms)
+}
+
+/// `API.ERROR`, which JS8Call's TCP server tells one program: `why`, under a fresh id that is a
+/// string, as `Message`'s two-argument constructor makes it (Message.cpp:70-73).
+pub fn api_error(why: &str, now_ms: u64) -> Outgoing {
     let id = fresh_id(now_ms);
     let params = object([("_ID", Value::from(id.to_string()))]);
     Outgoing {
-        line: wire("API.ERROR", "Connections Full", params),
+        line: wire("API.ERROR", why, params),
         id,
+    }
+}
+
+/// One line a TCP program sent, as JS8Call's server takes it (`Client::readyRead`,
+/// MessageServer.cpp:199-214): trimmed, a blank one passed over, and one that is no request
+/// answered `API.ERROR` to that program alone. The server answers it before the request reaches
+/// the Accept switch (mainwindow.cpp:6729-6739), so it is answered with the switch off too.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TcpLine {
+    /// Nothing on it but whitespace: passed over, unanswered.
+    Blank,
+    /// A request, for the side's Accept switch and then [`answer`].
+    Request(Request),
+    /// No request: the `API.ERROR` that program is told.
+    Error(Outgoing),
+}
+
+/// `line` (its newline taken off) as JS8Call's TCP server reads it. The listener keeps lines
+/// past [`MAX_REQUEST_BYTES`] from here: it closes that connection instead.
+pub fn read_tcp_line(line: &[u8], now_ms: u64) -> TcpLine {
+    // `QByteArray::trimmed`: ASCII whitespace, `\v` and `\f` among it, off both ends.
+    let space = |c: &u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+    let start = line.iter().position(|c| !space(c)).unwrap_or(line.len());
+    let end = line
+        .iter()
+        .rposition(|c| !space(c))
+        .map_or(start, |i| i + 1);
+    let line = &line[start..end];
+    if line.is_empty() {
+        return TcpLine::Blank;
+    }
+    match Request::read(line) {
+        Ok(r) => TcpLine::Request(r),
+        Err(why) => TcpLine::Error(api_error(&why, now_ms)),
     }
 }
 
@@ -966,6 +1094,15 @@ pub struct Js8ApiSnapshot {
     pub text: String,
     pub inbox: Vec<InboxRow>,
     pub config: ConfigRow,
+    /// The JS8 frame on the air in JS8Call's twelve characters (`RIG.PTT_STATUS`'s `MESSAGE`):
+    /// empty while no JS8 frame is keyed.
+    pub on_air: String,
+    /// The text going out (`TX.TEXT`): the message JS8Call's compose box would hold.
+    pub tx_text: String,
+    /// The messages waiting behind the one in the compose box (`TX.QUEUE_DEPTH`).
+    pub waiting: i64,
+    /// The program's version (`STATION.VERSION`): the listeners fill it in.
+    pub version: String,
 }
 
 /// One tick's worth for the listeners: the ports to serve, what happened, and the state.
@@ -975,6 +1112,10 @@ pub struct Js8ApiPoll {
     pub tcp_port: Option<u16>,
     /// `Some(port)` while UDP is on: where the datagrams go.
     pub udp_port: Option<u16>,
+    /// Requests a TCP program sends are answered ("Accept TCP requests").
+    pub tcp_accept: bool,
+    /// Requests a UDP program sends are answered ("Accept UDP requests").
+    pub udp_accept: bool,
     pub events: Vec<Js8ApiEvent>,
     pub snapshot: Js8ApiSnapshot,
 }
@@ -1003,6 +1144,9 @@ pub struct Js8ApiTap {
     last_frame: Option<(f32, bool)>,
     /// The inbox messages this run saw arrive, and what it saw of each.
     inbox_meta: VecDeque<(InboxKey, InboxMeta)>,
+    /// The JS8 frame keyed last: its twelve characters, whether it ended its message, and the
+    /// time its period is over, which no over outlasts.
+    on_air: Option<(String, bool, u64)>,
 }
 
 impl Js8ApiTap {
@@ -1259,6 +1403,14 @@ impl Engine {
             }
         }
         self.js8_api.tx_open = !tf.last;
+        // JS8Call names the frame it keys in its twelve characters (`m_currentMessage`,
+        // mainwindow.cpp:2602-2617).
+        let period_ms = u64::from(speed.period_s()) * 1000;
+        self.js8_api.on_air = Some((
+            sixbit_to_string(&tf.word.payload72().chars12()),
+            tf.last,
+            now_ms + period_ms,
+        ));
         if self.js8_api_on() {
             let tones = ::js8::phy::encode_word(&tf.word, speed).to_vec();
             self.js8_api.push(Js8ApiEvent::TxFrame { tones });
@@ -1280,6 +1432,8 @@ impl Engine {
         Some(Js8ApiPoll {
             tcp_port,
             udp_port,
+            tcp_accept: s.js8_api_tcp_accept,
+            udp_accept: s.js8_api_udp_accept,
             events,
             snapshot,
         })
@@ -1370,6 +1524,26 @@ impl Engine {
         } else {
             s.js8_rx_speeds
         };
+        let transmitting = self.app.transmitting();
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        // The JS8 frame keyed last, while the key is down within its period: whatever else is on
+        // the air is no JS8 frame.
+        let on_air = self
+            .js8_api
+            .on_air
+            .as_ref()
+            .filter(|(_, _, until)| transmitting && now_ms < *until);
+        // JS8Call's compose box holds a message from its first frame until its last is sent
+        // (`stopTx`, mainwindow.cpp:2893-2899), and its queue holds what waits behind it. The
+        // outbox here lets a message go when its last frame is handed out: while that frame is
+        // on the air the box still holds it, and the outbox's first message waits behind it.
+        let st = &self.js8_station;
+        let (going, boxed) = match on_air {
+            Some((_, last, _)) => (st.last_tx_display().unwrap_or(""), !*last),
+            None => (st.going_out().unwrap_or(""), st.outbox_len() > 0),
+        };
+        let waiting = (st.queued_len() + st.outbox_len()).saturating_sub(usize::from(boxed));
+        let going_chars = going.chars().count();
         Js8ApiSnapshot {
             callsign: s.mycall.trim().to_ascii_uppercase(),
             grid: s.mygrid.trim().to_string(),
@@ -1384,7 +1558,7 @@ impl Engine {
             offset_hz: self.tx_offset_hz() as i64,
             speed: submode(speed),
             selected: String::new(),
-            transmitting: self.app.transmitting(),
+            transmitting,
             band: s.band.clone(),
             calls,
             callsign_aging_min: s.js8_callsign_aging_min,
@@ -1405,6 +1579,13 @@ impl Engine {
                 groups: s.js8_groups.clone(),
                 tx_enabled: self.tx_enabled(),
             },
+            on_air: on_air.map(|(text, _, _)| text.clone()).unwrap_or_default(),
+            tx_text: going
+                .chars()
+                .skip(going_chars.saturating_sub(TX_TEXT_CHARS))
+                .collect(),
+            waiting: waiting as i64,
+            version: String::new(),
         }
     }
 }
@@ -1481,6 +1662,12 @@ mod tests {
         "STATION.GET_OS",
         "STATION.GET_CONFIG",
         "INBOX.GET_MESSAGES",
+        "RIG.GET_FREQ",
+        "RIG.GET_PTT",
+        "MODE.GET_SPEED",
+        "TX.GET_TEXT",
+        "TX.GET_QUEUE_DEPTH",
+        "STATION.VERSION",
     ];
 
     const NOW: u64 = 1_769_740_328_005;
@@ -1578,9 +1765,10 @@ mod tests {
 
     // ---- what is answered, what is refused ----
 
-    /// The allow-list is exactly the reads: of every type JS8Call 3.0.3 knows, the thirteen
-    /// `RX.GET_*`/`STATION.GET_*`/`INBOX.GET_MESSAGES` reads are answered (bar `RX.GET_FILTER`,
-    /// which Nexus has no filter for) and all the rest are refused.
+    /// The allow-list is exactly the reads: of every type JS8Call 3.0.3 knows, the
+    /// `RX.GET_*`/`STATION.GET_*`/`INBOX.GET_MESSAGES` reads and the six others that only read
+    /// (`RIG.GET_FREQ`, `RIG.GET_PTT`, `MODE.GET_SPEED`, `TX.GET_TEXT`, `TX.GET_QUEUE_DEPTH`,
+    /// `STATION.VERSION`) are answered, bar `RX.GET_FILTER`, and all the rest are refused.
     #[test]
     fn only_the_reads_are_answered() {
         let answered: BTreeSet<String> = JS8CALL_TYPES
@@ -1666,8 +1854,6 @@ mod tests {
         refused_family(&[
             r#"{"params":{},"type":"TX.SEND_MESSAGE","value":"W1AW SNR?"}"#,
             r#"{"params":{},"type":"TX.SET_TEXT","value":"CQ CQ"}"#,
-            r#"{"params":{},"type":"TX.GET_TEXT","value":""}"#,
-            r#"{"params":{},"type":"TX.GET_QUEUE_DEPTH","value":""}"#,
         ]);
     }
 
@@ -1677,17 +1863,12 @@ mod tests {
             r#"{"params":{"DIAL":14078000,"OFFSET":800},"type":"RIG.SET_FREQ","value":""}"#,
             r#"{"params":{},"type":"RIG.SET_TUNE","value":"true"}"#,
             r#"{"params":{},"type":"RIG.TX_HALT","value":""}"#,
-            r#"{"params":{},"type":"RIG.GET_FREQ","value":""}"#,
-            r#"{"params":{},"type":"RIG.GET_PTT","value":""}"#,
         ]);
     }
 
     #[test]
     fn a_mode_request_does_nothing() {
-        refused_family(&[
-            r#"{"params":{"SPEED":2},"type":"MODE.SET_SPEED","value":""}"#,
-            r#"{"params":{},"type":"MODE.GET_SPEED","value":""}"#,
-        ]);
+        refused_family(&[r#"{"params":{"SPEED":2},"type":"MODE.SET_SPEED","value":""}"#]);
     }
 
     #[test]
@@ -1732,10 +1913,208 @@ mod tests {
         refused_family(&[
             r#"{"params":{},"type":"WINDOW.RAISE","value":""}"#,
             r#"{"params":{},"type":"PING","value":""}"#,
-            r#"{"params":{},"type":"STATION.VERSION","value":""}"#,
             r#"{"params":{},"type":"MAIN.TX","value":""}"#,
             r#"{"type":"TX.SEND_MESSAGE"}"#,
         ]);
+    }
+
+    // ---- the reads outside the GET families ----
+
+    /// One read's whole answer line, asked under id 7 over TCP, from a fresh snapshot of `e`
+    /// carrying the program's version as the listeners fill it in.
+    fn line_for(e: &Engine, kind: &str) -> String {
+        let mut snap = e.js8_api_snapshot();
+        snap.version = "1.19.0".into();
+        let r = req(&format!(
+            r#"{{"params":{{"_ID":7}},"type":"{kind}","value":""}}"#
+        ));
+        answer(&r, Via::Tcp, &snap, NOW).expect("answered").line
+    }
+
+    /// The reads JS8Call 3.0.3 answers outside the `GET` families, byte for byte as its
+    /// `networkMessage` builds them: `RIG.FREQ` (networkMessage.cpp:96-135), `RIG.PTT_STATUS`
+    /// (:51-60), `MODE.SPEED` (:778-785), `TX.TEXT` (:725-732), `TX.QUEUE_DEPTH` (:759-767) and
+    /// `STATION.VERSION` (:255-264).
+    #[test]
+    fn the_harmless_reads_are_answered_as_js8call_answers_them() {
+        let mut e = engine();
+        assert_eq!(
+            line_for(&e, "RIG.GET_FREQ"),
+            r#"{"params":{"DIAL":14078000,"FREQ":14079500,"OFFSET":1500,"_ID":7},"type":"RIG.FREQ","value":""}"#
+        );
+        assert_eq!(
+            line_for(&e, "RIG.GET_PTT"),
+            r#"{"params":{"MESSAGE":"","PTT":false,"_ID":7},"type":"RIG.PTT_STATUS","value":""}"#
+        );
+        assert_eq!(
+            line_for(&e, "MODE.GET_SPEED"),
+            r#"{"params":{"SPEED":0,"_ID":7},"type":"MODE.SPEED","value":""}"#
+        );
+        assert_eq!(
+            line_for(&e, "TX.GET_TEXT"),
+            r#"{"params":{"_ID":7},"type":"TX.TEXT","value":""}"#
+        );
+        assert_eq!(
+            line_for(&e, "TX.GET_QUEUE_DEPTH"),
+            r#"{"params":{"DEPTH":0,"_ID":7},"type":"TX.QUEUE_DEPTH","value":""}"#
+        );
+        assert_eq!(
+            line_for(&e, "STATION.VERSION"),
+            r#"{"params":{"VERSION":"1.19.0","_ID":7},"type":"STATION.VERSION","value":""}"#
+        );
+        // Each Nexus speed as JS8Call numbers it: Slow 4, Normal 0, Fast 1, Turbo 2.
+        for (idx, n) in [(0u8, 4), (1, 0), (2, 1), (3, 2)] {
+            e.js8_set_speed(idx).expect("a speed Nexus has");
+            assert_eq!(
+                line_for(&e, "MODE.GET_SPEED"),
+                format!(r#"{{"params":{{"SPEED":{n},"_ID":7}},"type":"MODE.SPEED","value":""}}"#)
+            );
+        }
+        // A new dial and offset are read as they are.
+        e.set_frequency(7.078, "40m", "USB");
+        e.set_tx_offset(1750.0);
+        assert_eq!(
+            line_for(&e, "RIG.GET_FREQ"),
+            r#"{"params":{"DIAL":7078000,"FREQ":7079750,"OFFSET":1750,"_ID":7},"type":"RIG.FREQ","value":""}"#
+        );
+    }
+
+    /// While a JS8 frame is keyed, `RIG.PTT_STATUS` names it in JS8Call's twelve characters,
+    /// `TX.TEXT` carries its message until the message's last frame is sent, and
+    /// `TX.QUEUE_DEPTH` counts what waits behind that message, reading 1 when the key is down
+    /// and nothing waits. Something other than JS8 on the air is no frame.
+    #[test]
+    fn the_transmitter_and_what_goes_out_read_as_js8call_reads_them() {
+        let ask = |e: &Engine, kind: &str| json(&line_for(e, kind));
+        let reads = |e: &Engine| {
+            (
+                ask(e, "RIG.GET_PTT")["params"].clone(),
+                ask(e, "TX.GET_TEXT")["value"].clone(),
+                ask(e, "TX.GET_QUEUE_DEPTH")["params"]["DEPTH"].clone(),
+            )
+        };
+        let ptt =
+            |message: &str, on: bool| serde_json::json!({"MESSAGE": message, "PTT": on, "_ID": 7});
+        // An FT over (the slot flag alone): the key down, no JS8 frame, nothing going out, and
+        // JS8Call's 1 for a key down with an empty queue.
+        let mut e = engine();
+        e.app.set_transmitting(true);
+        assert_eq!(reads(&e), (ptt("", true), Value::from(""), Value::from(1)));
+
+        let mut e = engine();
+        e.set_tx_enabled(true);
+        e.js8_send(Some("W1AW".into()), "HELLO THERE FROM NEXUS".into())
+            .expect("queued");
+        let first = e.js8_state().queue[0].display.clone();
+        // Queued, the key up: the message waits in the box with nothing behind it.
+        assert_eq!(
+            reads(&e),
+            (ptt("", false), Value::from(first.as_str()), Value::from(0))
+        );
+        e.js8_send(None, "SECOND".into()).expect("queued");
+        e.js8_send(None, "THIRD".into()).expect("queued");
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let mut slot = tempo_core::timing::now_unix_ms() as u64 / period_ms;
+        let mut frames = 0;
+        loop {
+            slot += 1;
+            let plan = e
+                .plan_tx(slot)
+                .expect("the first message keys frame by frame");
+            let super::super::TxWaveform::Js8 { word, .. } = &plan.waveform else {
+                panic!("a JS8 plan carries the typed waveform");
+            };
+            let twelve = sixbit_to_string(&word.payload72().chars12());
+            let last = word.i3().last;
+            frames += 1;
+            // Keyed: the frame named, its message in the box, the other two behind it.
+            assert_eq!(
+                reads(&e),
+                (
+                    ptt(&twelve, true),
+                    Value::from(first.as_str()),
+                    Value::from(2)
+                ),
+                "frame {frames}"
+            );
+            e.app.set_transmitting(false);
+            if last {
+                break;
+            }
+            // Between two frames: the key up, the message still in the box.
+            assert_eq!(
+                reads(&e),
+                (ptt("", false), Value::from(first.as_str()), Value::from(2)),
+                "after frame {frames}"
+            );
+        }
+        assert!(frames > 1, "a multi-frame message");
+        assert_eq!(twelve_chars(&e.js8_api.on_air), 12);
+        // Sent: the second message is in the box and the third waits behind it.
+        let second = e.js8_state().queue[0].display.clone();
+        assert_ne!(second, first);
+        assert_eq!(
+            reads(&e),
+            (ptt("", false), Value::from(second.as_str()), Value::from(1))
+        );
+    }
+
+    fn twelve_chars(on_air: &Option<(String, bool, u64)>) -> usize {
+        on_air.as_ref().map_or(0, |(t, _, _)| {
+            t.chars()
+                .filter(|c| ::js8::proto::alphabet::SIXBIT.contains(&(*c as u8)))
+                .count()
+        })
+    }
+
+    /// Answering them changes nothing: each goes the whole way a socket's would, with the
+    /// parameters a write would carry, and Settings, the JS8 state, the latch, the dial and the
+    /// queue are as they were, and nothing keys in the next minute.
+    #[test]
+    fn the_harmless_reads_change_nothing() {
+        let mut e = engine();
+        e.set_tx_enabled(true);
+        e.js8_ingest(
+            &[row(
+                &hb("W1AW", "FN31"),
+                whole(),
+                Js8Speed::Normal,
+                1200.0,
+                -7,
+            )],
+            0,
+        );
+        let _ = e.js8_api_poll();
+        let before = state(&mut e);
+        for kind in [
+            "RIG.GET_FREQ",
+            "RIG.GET_PTT",
+            "MODE.GET_SPEED",
+            "TX.GET_TEXT",
+            "TX.GET_QUEUE_DEPTH",
+            "STATION.VERSION",
+        ] {
+            let r = req(&format!(
+                r#"{{"params":{{"_ID":7,"DIAL":7078000,"OFFSET":800,"SPEED":2,"TEXT":"HI"}},"type":"{kind}","value":"W1AW SNR?"}}"#
+            ));
+            for via in [Via::Tcp, Via::Udp] {
+                let snap = e.js8_api_snapshot();
+                assert!(answer(&r, via, &snap, NOW).is_some(), "{kind} via {via:?}");
+            }
+        }
+        assert_eq!(state(&mut e), before, "a read changed something");
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let t0 = tempo_core::timing::now_unix_ms() as u64;
+        let mut last = t0 / period_ms;
+        for k in 0..=60 {
+            let t = t0 + k * 1000;
+            e.js8_tick(t);
+            let slot = t / period_ms;
+            if slot != last {
+                last = slot;
+                assert!(e.plan_tx(slot).is_none(), "a read keyed a frame");
+            }
+        }
     }
 
     /// Malformed or hostile input is dropped and never panics: a deterministic fuzz loop over
@@ -1830,6 +2209,104 @@ mod tests {
         big.extend(br#""},"type":"RX.GET_TEXT","value":""}"#);
         assert_eq!(Request::parse(&big), None);
         assert!(Request::parse(&big[big.len() - 40..]).is_none());
+    }
+
+    // ---- a line that is no request; the Accept switches ----
+
+    /// A TCP line that is no request is told why in JS8Call's `API.ERROR` (MessageServer.cpp:
+    /// 207-213; the words are `std::system_error`'s, "<what>: <category message>", from
+    /// Message.cpp:119-135 and MessageError.cpp:20-23), under a fresh string id: JSON that does
+    /// not parse is "<the parser's words>: json parsing error" (serde's words here where
+    /// JS8Call's are Qt's: docs/API.md:76 shows "unterminated object"), a value Qt's parser
+    /// takes no document from (anything but an object or an array) is "illegal value: json
+    /// parsing error", and an array is "json not an object". A blank line is passed over, and a
+    /// line is read once trimmed as Qt trims one (`\v` and `\f` included).
+    #[test]
+    fn a_line_that_is_no_request_is_told_why_as_js8call_tells_it() {
+        let fresh = (NOW as i64 - EPOCH_MS).to_string();
+        let error = |line: &[u8]| match read_tcp_line(line, NOW) {
+            TcpLine::Error(out) => out.line,
+            other => panic!("{:?} drew {other:?}", String::from_utf8_lossy(line)),
+        };
+        assert_eq!(
+            error(br#"{"params":{"_ID":9"#),
+            format!(
+                r#"{{"params":{{"_ID":"{fresh}"}},"type":"API.ERROR","value":"EOF while parsing an object at line 1 column 18: json parsing error"}}"#
+            )
+        );
+        assert_eq!(
+            error(b"[1,2]"),
+            format!(
+                r#"{{"params":{{"_ID":"{fresh}"}},"type":"API.ERROR","value":"json not an object"}}"#
+            )
+        );
+        for scalar in ["42", "\"RX.GET_TEXT\"", "true", "null"] {
+            assert_eq!(
+                json(&error(scalar.as_bytes()))["value"],
+                "illegal value: json parsing error",
+                "{scalar}"
+            );
+        }
+        assert_eq!(
+            json(&error(br#"{"type":"RX.GET_TEXT"} x"#))["value"],
+            "trailing characters at line 1 column 24: json parsing error"
+        );
+        assert_eq!(
+            json(&error(&[0xff, b'{']))["value"],
+            "expected value at line 1 column 1: json parsing error"
+        );
+        for blank in [&b""[..], b"   ", b"\r", b"\t\x0b\x0c "] {
+            assert_eq!(read_tcp_line(blank, NOW), TcpLine::Blank, "{blank:?}");
+        }
+        assert_eq!(
+            read_tcp_line(b"\x0b {\"type\":\"RX.GET_TEXT\"}\x0c\r", NOW),
+            TcpLine::Request(req(r#"{"type":"RX.GET_TEXT"}"#))
+        );
+        // "Connections Full" is the same message.
+        assert_eq!(connections_full(NOW), api_error("Connections Full", NOW));
+    }
+
+    /// "Accept TCP requests" and "Accept UDP requests" ship OFF, as JS8Call ships them
+    /// (Configuration.cpp:2448-2451); a settings file from before them loads so; each
+    /// round-trips under its own wire name; and the listeners' tick carries each as it is.
+    #[test]
+    fn the_accept_switches_ship_off_and_reach_the_listeners() {
+        use crate::settings::Settings;
+        let s = Settings::default();
+        assert_eq!((s.js8_api_tcp_accept, s.js8_api_udp_accept), (false, false));
+        let mut v = serde_json::to_value(&s).unwrap();
+        let o = v.as_object_mut().unwrap();
+        for k in ["js8ApiTcpAccept", "js8ApiUdpAccept"] {
+            assert_eq!(
+                o.remove(k),
+                Some(Value::Bool(false)),
+                "{k} is the wire name"
+            );
+        }
+        let old: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            (old.js8_api_tcp_accept, old.js8_api_udp_accept),
+            (false, false)
+        );
+        for (tcp, udp) in [(true, false), (false, true), (true, true), (false, false)] {
+            let on = Settings {
+                js8_api_tcp: true,
+                js8_api_udp: true,
+                js8_api_tcp_accept: tcp,
+                js8_api_udp_accept: udp,
+                ..Settings::default()
+            };
+            let back: Settings =
+                serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+            assert_eq!(
+                (back.js8_api_tcp_accept, back.js8_api_udp_accept),
+                (tcp, udp)
+            );
+            let poll = Engine::with_settings(on)
+                .js8_api_poll()
+                .expect("the API is on");
+            assert_eq!((poll.tcp_accept, poll.udp_accept), (tcp, udp));
+        }
     }
 
     /// JS8Call reads a request leniently (`Message::fromJson`): a `type`, `value` or `params` of

@@ -13,6 +13,11 @@
 //!   what a request can do is bounded by `answer`'s signature — it borrows a copy and returns a
 //!   line. Everything that is not a read is dropped unanswered, as JS8Call drops a request it does
 //!   not accept.
+//! - REQUESTS ONLY WHEN ACCEPTED. Each side has JS8Call's "Accept requests" switch, off by
+//!   default ([`Hub::accepts`]): off, the side still sends what the station says, and a request
+//!   on it goes no further, as in JS8Call (mainwindow.cpp:6717-6739). A TCP line that is no
+//!   request is told why (`API.ERROR`) whatever the switch says, as JS8Call's server tells it
+//!   before the switch; a datagram that is no request is told nothing, as in JS8Call.
 //! - BOUNDED. One TCP connection (JS8Call's own limit; the next is told "Connections Full" and
 //!   closed), a request line or datagram past `MAX_REQUEST_BYTES` is not read (a TCP line past it
 //!   closes the connection), each client's outgoing queue is bounded and a client that stops reading
@@ -33,8 +38,8 @@ use std::time::{Duration, Instant};
 
 use tempo_app::engine::engine_lock;
 use tempo_app::engine::js8_api::{
-    self, answer, Js8ApiSnapshot, Outgoing, Request, StateWatch, Via, MAX_REQUEST_BYTES,
-    MAX_TCP_CONNECTIONS, PING_INTERVAL_MS,
+    self, answer, read_tcp_line, Js8ApiSnapshot, Outgoing, Request, StateWatch, TcpLine, Via,
+    MAX_REQUEST_BYTES, MAX_TCP_CONNECTIONS, PING_INTERVAL_MS,
 };
 
 use crate::SharedEngine;
@@ -103,15 +108,32 @@ struct Udp {
     last: Option<String>,
 }
 
-/// What the servers share: the clients, the UDP side, and the snapshot reads are answered from.
+/// What the servers share: the clients, the UDP side, the snapshot reads are answered from, and
+/// each side's "Accept requests" switch.
 #[derive(Default)]
 pub(crate) struct Hub {
     clients: Mutex<Vec<Client>>,
     udp: Mutex<Option<Udp>>,
     snapshot: Mutex<Arc<Js8ApiSnapshot>>,
+    tcp_accept: AtomicBool,
+    udp_accept: AtomicBool,
 }
 
 impl Hub {
+    /// Whether a request on `via` goes on to be answered: that side's "Accept requests" switch,
+    /// as the manager last read it.
+    fn accepts(&self, via: Via) -> bool {
+        match via {
+            Via::Tcp => self.tcp_accept.load(Ordering::Relaxed),
+            Via::Udp => self.udp_accept.load(Ordering::Relaxed),
+        }
+    }
+
+    fn set_accept(&self, tcp: bool, udp: bool) {
+        self.tcp_accept.store(tcp, Ordering::Relaxed);
+        self.udp_accept.store(udp, Ordering::Relaxed);
+    }
+
     fn snapshot(&self) -> Arc<Js8ApiSnapshot> {
         self.snapshot
             .lock()
@@ -253,9 +275,10 @@ impl Hub {
     }
 }
 
-/// A TCP client's requests, one per line, until it closes or sends a line past the cap. Each
-/// read is answered to this client from the hub's snapshot (and, as JS8Call answers every request
-/// on every side that is on, as a datagram while UDP is on); everything else goes unanswered.
+/// A TCP client's requests, one per line, until it closes or sends a line past the cap. A line
+/// that is no request is told why, to this client. While "Accept TCP requests" is on, each read
+/// is answered to this client from the hub's snapshot (and, as JS8Call answers every request on
+/// every side that is on, as a datagram while UDP is on); everything else goes unanswered.
 fn read_requests(mut stream: TcpStream, hub: &Hub, tx: &SyncSender<Arc<str>>) {
     let mut pending: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -270,9 +293,19 @@ fn read_requests(mut stream: TcpStream, hub: &Hub, tx: &SyncSender<Arc<str>>) {
                 return;
             }
             let line: Vec<u8> = pending.drain(..=end).collect();
-            let Some(req) = Request::parse(&line[..end]) else {
-                continue;
+            let req = match read_tcp_line(&line[..end], now_ms()) {
+                TcpLine::Blank => continue,
+                TcpLine::Error(why) => {
+                    if tx.try_send(format!("{}\n", why.line).into()).is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                TcpLine::Request(req) => req,
             };
+            if !hub.accepts(Via::Tcp) {
+                continue;
+            }
             if let Some(out) = answer(&req, Via::Tcp, &hub.snapshot(), now_ms()) {
                 if tx.try_send(format!("{}\n", out.line).into()).is_err() {
                     return;
@@ -303,15 +336,17 @@ fn serve_tcp(listener: TcpListener, hub: Arc<Hub>, stop: Arc<AtomicBool>) {
     }
 }
 
-/// The UDP side's requests, until `stop`. Answered as datagrams (and over TCP when the request's
-/// id makes it so), as JS8Call answers them.
+/// The UDP side's requests, until `stop`. While "Accept UDP requests" is on, answered as datagrams
+/// (and over TCP when the request's id makes it so), as JS8Call answers them; a datagram that is
+/// no request is answered nothing, as JS8Call's UDP side reports it to nobody
+/// (MessageClient.cpp:63-69).
 fn serve_udp(socket: UdpSocket, hub: Arc<Hub>, stop: Arc<AtomicBool>) {
     let _ = socket.set_read_timeout(Some(Duration::from_millis(200)));
     let mut buf = vec![0u8; MAX_REQUEST_BYTES + 1];
     while !stop.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, from)) => {
-                if n > MAX_REQUEST_BYTES || !from.ip().is_loopback() {
+                if n > MAX_REQUEST_BYTES || !from.ip().is_loopback() || !hub.accepts(Via::Udp) {
                     continue;
                 }
                 if let Some(out) = Request::parse(&buf[..n])
@@ -376,16 +411,19 @@ impl Manager {
     /// False while both sides are off.
     fn tick(&mut self, engine: &SharedEngine) -> bool {
         let poll = engine_lock(engine).js8_api_poll();
-        let Some(poll) = poll else {
+        let Some(mut poll) = poll else {
             self.stop_all();
             return false;
         };
+        // `STATION.VERSION` names the program, as the UDP side's PING does.
+        poll.snapshot.version = self.version.to_string();
         let now = now_ms();
         let (before, after) = self.watch.step(&poll.snapshot, now);
         // Published before a side starts and before anything is announced, so the first request
         // a new connection makes, and one a program makes on hearing an event, both read the
         // state the station is in.
         self.hub.set_snapshot(poll.snapshot);
+        self.hub.set_accept(poll.tcp_accept, poll.udp_accept);
         self.apply_tcp(poll.tcp_port.filter(|p| *p != 0));
         self.apply_udp(poll.udp_port.filter(|p| *p != 0));
         for out in &before {
@@ -501,6 +539,7 @@ impl Manager {
         self.apply_udp(None);
         self.watch = StateWatch::default();
         self.hub.set_snapshot(Js8ApiSnapshot::default());
+        self.hub.set_accept(false, false);
     }
 }
 
@@ -553,6 +592,8 @@ mod tests {
         (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
     }
 
+    /// A JS8 station whose API side given a port is on and accepts requests; the tests of the
+    /// Accept switches turn one off.
     fn engine_with(tcp: Option<u16>, udp: Option<u16>) -> SharedEngine {
         let mut s = Settings {
             mycall: "KD9TAW".into(),
@@ -562,10 +603,12 @@ mod tests {
         if let Some(port) = tcp {
             s.js8_api_tcp = true;
             s.js8_api_tcp_port = port;
+            s.js8_api_tcp_accept = true;
         }
         if let Some(port) = udp {
             s.js8_api_udp = true;
             s.js8_api_udp_port = port;
+            s.js8_api_udp_accept = true;
         }
         let mut e = Engine::with_settings(s);
         e.js8_enter();
@@ -726,8 +769,9 @@ mod tests {
         m.stop_all();
     }
 
-    /// A request line past the cap closes that connection and nothing else; malformed lines are
-    /// dropped, the connection kept: a fuzz loop over the socket, then a read still answered.
+    /// A request line past the cap closes that connection and nothing else; a line that is no
+    /// request is told why (`API.ERROR`), the connection kept: a fuzz loop over the socket, then a
+    /// read still answered.
     #[test]
     fn oversize_and_malformed_requests_are_dropped() {
         let port = free_port();
@@ -756,9 +800,33 @@ mod tests {
             junk.extend(line.iter().filter(|b| **b != b'\n'));
             junk.push(b'\n');
         }
-        p.out.write_all(&junk).unwrap();
-        let before = p.sentinel(7);
-        assert!(before.is_empty(), "junk drew an answer: {before:?}");
+        // One API.ERROR for each line that is no request (a blank one is passed over, a refused
+        // request draws nothing); the 667 half-objects are all such lines.
+        let told = junk
+            .split(|b| *b == b'\n')
+            .filter(|l| matches!(read_tcp_line(l, 0), TcpLine::Error(_)))
+            .count();
+        assert!(told >= 667, "{told}");
+        // Written from another thread while this one reads, as a program would: one that wrote
+        // all of this and read nothing back would fill its own queue and be dropped.
+        junk.extend_from_slice(br#"{"params":{"_ID":7},"type":"STATION.GET_CALLSIGN","value":""}"#);
+        junk.push(b'\n');
+        let mut out = p.out.try_clone().unwrap();
+        let writer = std::thread::spawn(move || out.write_all(&junk).unwrap());
+        let mut before = p.until_answer(7);
+        writer.join().unwrap();
+        assert_eq!(before.pop().unwrap()["value"], "KD9TAW");
+        assert_eq!(
+            before.len(),
+            told,
+            "one answer for each line that is no request"
+        );
+        for l in &before {
+            assert!(
+                l["type"] == "API.ERROR" && l["params"]["_ID"].is_string(),
+                "junk drew {l}"
+            );
+        }
         // Past the cap without a newline: that connection is closed.
         let big = vec![b'A'; MAX_REQUEST_BYTES + 2];
         let _ = p.out.write_all(&big);
@@ -793,11 +861,9 @@ mod tests {
         let refused = [
             r#""type":"TX.SEND_MESSAGE","value":"W1AW SNR?""#,
             r#""type":"TX.SET_TEXT","value":"CQ""#,
-            r#""type":"TX.GET_TEXT","value":"""#,
             r#""type":"RIG.SET_FREQ","value":"""#,
             r#""type":"RIG.SET_TUNE","value":"true""#,
             r#""type":"RIG.TX_HALT","value":"""#,
-            r#""type":"RIG.GET_FREQ","value":"""#,
             r#""type":"MODE.SET_SPEED","value":"""#,
             r#""type":"STATION.SET_GRID","value":"FN31""#,
             r#""type":"STATION.SET_STATUS","value":"AWAY""#,
@@ -822,6 +888,41 @@ mod tests {
             before,
             "a refused request changed the station"
         );
+        m.stop_all();
+    }
+
+    /// The reads outside the `GET` families are answered over the socket too, and
+    /// `STATION.VERSION` names the version the manager runs, as the PING does.
+    #[test]
+    fn the_harmless_reads_are_answered_over_the_socket() {
+        let port = free_port();
+        let engine = engine_with(Some(port), None);
+        let mut m = Manager::new(Arc::new(Hub::default()), "9.9.9");
+        m.tick(&engine);
+        let mut p = Program::connect(port);
+        p.sentinel(1);
+        for (i, (ask, reply)) in [
+            ("RIG.GET_FREQ", "RIG.FREQ"),
+            ("RIG.GET_PTT", "RIG.PTT_STATUS"),
+            ("MODE.GET_SPEED", "MODE.SPEED"),
+            ("TX.GET_TEXT", "TX.TEXT"),
+            ("TX.GET_QUEUE_DEPTH", "TX.QUEUE_DEPTH"),
+            ("STATION.VERSION", "STATION.VERSION"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = 10 + i as i64;
+            p.say(&format!(
+                r#"{{"params":{{"_ID":{id}}},"type":"{ask}","value":""}}"#
+            ));
+            let seen = p.until_answer(id);
+            assert_eq!(seen.len(), 1, "{seen:?}");
+            assert_eq!(seen[0]["type"], reply);
+            if ask == "STATION.VERSION" {
+                assert_eq!(seen[0]["params"]["VERSION"], "9.9.9");
+            }
+        }
         m.stop_all();
     }
 
@@ -917,6 +1018,98 @@ mod tests {
         ask(br#"{"type":"STATION.GET_GRID"}"#);
         let (d, _) = datagram(&tool).unwrap();
         assert!(d["params"]["_ID"].is_string(), "{d}");
+        m.stop_all();
+    }
+
+    /// "Accept TCP requests" off, JS8Call's default: a connected program hears what the station
+    /// sends, and its requests go no further, as JS8Call's do (mainwindow.cpp:6729-6739), so a
+    /// read draws nothing. A line that is no request is still told why, as JS8Call's server tells
+    /// it before the switch, and is the marker here: TCP keeps order, so an answer to a read
+    /// would have come before it. Turned on, a read is answered at once.
+    #[test]
+    fn with_tcp_requests_not_accepted_the_station_only_speaks() {
+        let port = free_port();
+        let engine = engine_with(Some(port), None);
+        set(&engine, |s| s.js8_api_tcp_accept = false);
+        let mut m = Manager::new(Arc::new(Hub::default()), "test");
+        m.tick(&engine);
+        let mut p = Program::connect(port);
+        p.say(r#"{"params":{"_ID":1},"type":"STATION.GET_CALLSIGN","value":""}"#);
+        p.say(r#"{"params":{"_ID":2},"type":"RIG.GET_FREQ","value":""}"#);
+        p.say(r#"{"params":{"_ID":3},"type":"INBOX.GET_MESSAGES","value":""}"#);
+        p.say("{not json");
+        let first = p.line().expect("told why");
+        assert_eq!(first["type"], "API.ERROR", "a read was answered: {first}");
+        assert!(first["value"]
+            .as_str()
+            .unwrap()
+            .ends_with(": json parsing error"));
+        engine_lock(&engine).js8_api_hear_heartbeat("W1AW", "FN31", 1200.0, -7);
+        m.tick(&engine);
+        let heard: Vec<Value> = (0..3).map(|_| p.line().expect("what was heard")).collect();
+        let kinds: Vec<&str> = heard.iter().map(|l| l["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["RX.ACTIVITY", "RX.DIRECTED", "RX.SPOT"]);
+        set(&engine, |s| s.js8_api_tcp_accept = true);
+        m.tick(&engine);
+        assert!(p.sentinel(4).is_empty());
+        m.stop_all();
+    }
+
+    /// "Accept UDP requests" off: the station's datagrams still go out, a TCP program's answers
+    /// among them (the switch is on requests, not on what is sent), and a request from the UDP
+    /// program draws nothing (mainwindow.cpp:6717-6727); turned on, it is answered. A datagram
+    /// that is no request draws nothing either way: JS8Call's UDP side reports it to nobody.
+    #[test]
+    fn with_udp_requests_not_accepted_the_station_only_speaks() {
+        let port = free_port();
+        let tool = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        tool.set_read_timeout(Some(WAIT)).unwrap();
+        let engine = engine_with(Some(port), Some(tool.local_addr().unwrap().port()));
+        set(&engine, |s| s.js8_api_udp_accept = false);
+        let mut m = Manager::new(Arc::new(Hub::default()), "test");
+        m.tick(&engine);
+        let mut kinds = Vec::new();
+        let mut station = None;
+        while kinds.len() < 3 {
+            let (d, from) = datagram(&tool).expect("the first datagrams");
+            station = Some(from);
+            kinds.push(d["type"].as_str().unwrap().to_string());
+        }
+        kinds.sort();
+        assert_eq!(kinds, ["PING", "RIG.FREQ", "STATION.STATUS"]);
+        let station = station.unwrap();
+        let ask = |text: &[u8]| tool.send_to(text, station).unwrap();
+        ask(br#"{"params":{"_ID":5},"type":"STATION.GET_CALLSIGN","value":""}"#);
+        ask(br#"{"params":{"_ID":6},"type":"RIG.GET_FREQ","value":""}"#);
+        ask(b"{not json");
+        tool.set_read_timeout(Some(Duration::from_millis(800)))
+            .unwrap();
+        assert!(datagram(&tool).is_none(), "a datagram was answered");
+        tool.set_read_timeout(Some(WAIT)).unwrap();
+        // A TCP program's read is answered there and goes out as a datagram too.
+        let mut p = Program::connect(port);
+        p.sentinel(8);
+        let (d, _) = datagram(&tool).expect("the TCP answer as a datagram");
+        assert_eq!(
+            (&d["type"], &d["params"]["_ID"]),
+            (&Value::from("STATION.CALLSIGN"), &Value::from(8))
+        );
+        engine_lock(&engine).js8_api_hear_heartbeat("W1AW", "FN31", 1200.0, -7);
+        m.tick(&engine);
+        let mut heard = Vec::new();
+        while heard.len() < 3 {
+            let (d, _) = datagram(&tool).expect("what was heard");
+            heard.push(d["type"].as_str().unwrap().to_string());
+        }
+        assert_eq!(heard, ["RX.ACTIVITY", "RX.DIRECTED", "RX.SPOT"]);
+        set(&engine, |s| s.js8_api_udp_accept = true);
+        m.tick(&engine);
+        ask(br#"{"params":{"_ID":9},"type":"STATION.GET_CALLSIGN","value":""}"#);
+        let (d, _) = datagram(&tool).expect("answered once accepted");
+        assert_eq!(
+            (&d["type"], &d["params"]["_ID"]),
+            (&Value::from("STATION.CALLSIGN"), &Value::from(9))
+        );
         m.stop_all();
     }
 

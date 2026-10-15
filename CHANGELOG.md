@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Programs written for JS8Call can read from Nexus.** Turn on JS8Call's API in Settings ▸
   Digital ▸ JS8 (TCP on 2442, UDP on 2242, both off until you do, as in JS8Call), and a logger, map
-  or message tool made for JS8Call gets what Nexus hears, the stations heard, the band activity, the
-  inbox and the station details, in JS8Call's own messages. It is read-only: such a program cannot
+  or message tool made for JS8Call gets what Nexus hears, in JS8Call's own messages. Turn on
+  **Accept TCP requests** or **Accept UDP requests** as well (also off, as in JS8Call) and it can
+  ask for the stations heard, the band activity, the inbox, the station details, the dial, the
+  speed, whether you are transmitting and what is going out. It is read-only: such a program cannot
   send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
   Remote page cannot turn it on.
 

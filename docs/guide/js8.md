@@ -116,13 +116,18 @@ JS8Call's ports: 2442 for TCP, 2242 for UDP.
 
 - **What a program gets:** what Nexus hears, as it hears it (every frame, and every directed
   message, heartbeats and CQs included), each station spotted while PSK Reporter spotting is on,
-  when the transmitter keys and the tones of each frame it sends, a band change, and on request
-  the callsign, grid, INFO and STATUS, the stations heard, the band activity, the free offsets,
-  the switches and the inbox. The messages are JS8Call's own, so a program reads them as it reads
-  JS8Call's.
+  when the transmitter keys and the tones of each frame it sends, and a band change. The messages
+  are JS8Call's own, so a program reads them as it reads JS8Call's.
+- **What a program can ask for**, once you turn on **Accept TCP requests** or **Accept UDP
+  requests** for its side (both off until you do, as in JS8Call): the callsign, grid, INFO and
+  STATUS, the stations heard, the band activity, the free offsets, the switches, the inbox, the
+  dial and offset, the speed, whether the transmitter is keyed, the message going out, how many
+  messages wait behind it, and the Nexus version. While that side's Accept is off, a program's
+  requests get no answer, as in JS8Call.
 - **Read-only.** A program cannot send a message, tune, change the frequency, the speed or a
   setting, or store a message through Nexus. Those requests get no answer, as JS8Call answers
-  none it does not accept.
+  none it does not accept. A TCP line that is not a JSON request is answered `API.ERROR` with the
+  reason, as JS8Call answers it.
 - **This computer only.** Both listen on 127.0.0.1 whatever the port, so a program on another
   computer cannot reach them. These two settings are changed only here, at the station: the
   Remote page cannot see or change them.
@@ -130,7 +135,8 @@ JS8Call's ports: 2442 for TCP, 2242 for UDP.
 
 Not yet: sending through the API, and the band-pass filter (a program asking for it gets no
 answer). No station is ever "selected" for a program, and an inbox message filed before Nexus
-started reads dial 0.
+started reads dial 0. The message going out is the one Nexus shows in its queue; what you are
+still typing stays in the cockpit and is not sent to a program.
 
 ## Compatibility
 

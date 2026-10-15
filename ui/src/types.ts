@@ -4032,6 +4032,11 @@ export interface Settings {
   js8ApiUdp?: boolean
   /** The port on 127.0.0.1 they go to (JS8Call's 2242). */
   js8ApiUdpPort?: number
+  /** Answer requests a TCP program sends ("Accept TCP requests"). Off by default, as in JS8Call:
+   * the program hears what the station sends and is answered nothing. */
+  js8ApiTcpAccept?: boolean
+  /** Answer requests a UDP program sends ("Accept UDP requests"). Off by default, as in JS8Call. */
+  js8ApiUdpAccept?: boolean
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

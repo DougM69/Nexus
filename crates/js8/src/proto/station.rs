@@ -1993,6 +1993,24 @@ impl Station {
     }
 }
 
+/// What JS8Call's API reads of the sending side (`tempo-app`'s `engine/js8_api.rs`). Reads only.
+impl Station {
+    /// The message going out, or next to go, as the queue shows it.
+    pub fn going_out(&self) -> Option<&str> {
+        self.outbox.front().map(|o| o.display.as_str())
+    }
+
+    /// Messages composed and waiting to key, the one going out first.
+    pub fn outbox_len(&self) -> usize {
+        self.outbox.len()
+    }
+
+    /// Replies made and waiting for the compose box: JS8Call's `m_txMessageQueue`.
+    pub fn queued_len(&self) -> usize {
+        self.queued.len()
+    }
+}
+
 /// JS8Call's `<MYIDLE>` for an idle count: `since()` of the last activity (mainwindow.cpp:
 /// 121-130), upper-cased, with "NOW" read as "0M" (:7018-7019). The count is whole minutes, so
 /// `since()`'s seconds branch never applies.

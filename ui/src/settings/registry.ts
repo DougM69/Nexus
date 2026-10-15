@@ -356,7 +356,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
       'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
       'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
-      'js8call api', 'api', 'tcp', 'udp', '2442', '2242'],
+      'js8call api', 'api', 'tcp', 'udp', '2442', '2242', 'accept requests'],
   },
   {
     id: 'sstv',

@@ -1346,13 +1346,16 @@ nothing until you enable TX in the cockpit, every session.
 
 For programs written for JS8Call (loggers, maps, message tools) on this computer; the
 [JS8 chapter](js8.md#programs-written-for-js8call) says what they get. Read-only: they cannot
-send, tune or change a setting. Both listen on 127.0.0.1 only, and neither setting can be seen
-or changed from the Remote page.
+send, tune or change a setting. Both listen on 127.0.0.1 only, and none of these settings can be
+seen or changed from the Remote page.
 
 - **TCP API** — off by default, as in JS8Call. Programs connect to 127.0.0.1 on **TCP port**
   (JS8Call's 2442), one at a time.
 - **UDP API** — off by default, as in JS8Call. Nexus sends to a program listening on 127.0.0.1
   at **UDP port** (JS8Call's 2242) and answers it there.
+- **Accept TCP requests** / **Accept UDP requests** — off by default, as in JS8Call. Off, a
+  program on that side gets what Nexus hears and sends, and its requests get no answer. On, Nexus
+  answers its requests to read; a request to send, tune or change a setting is never answered.
 
 ### SSTV
 
