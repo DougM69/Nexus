@@ -126,8 +126,11 @@ describe('closed station operating requests', () => {
       expect(actionCapability(stationAction(choice))).toBe('decoderSettings')
       for (const extra of ['settings', 'command', 'txEnabled', 'radioId']) expect(() => stationAction({ ...choice, [extra]: true })).toThrow()
     }
-    for (const speed of [-1, 1, 4, 2.5, '3', null, NaN, Infinity]) expect(() => stationAction({ ...choices[0], speed })).toThrow()
-    for (const expectedSpeed of [-1, 3, 4, '1', null]) expect(() => stationAction({ ...choices[0], expectedSpeed })).toThrow()
+    for (const speed of [-1, 1, 5, 2.5, '3', null, NaN, Infinity]) expect(() => stationAction({ ...choices[0], speed })).toThrow()
+    for (const expectedSpeed of [-1, 3, 5, '1', null]) expect(() => stationAction({ ...choices[0], expectedSpeed })).toThrow()
+    // JS8 60, index 4, is a speed both ways: to it, and from it.
+    expect(stationAction({ ...choices[0], speed: 4 })).toMatchObject({ speed: 4 })
+    expect(stationAction({ ...choices[0], expectedSpeed: 4 })).toMatchObject({ expectedSpeed: 4 })
     for (const periodSecs of [0, 14, 15, 60, '5', null, NaN]) expect(() => stationAction({ ...choices[1], periodSecs })).toThrow()
     for (const expectedPeriodSecs of [0, 5, 14, '15', null]) expect(() => stationAction({ ...choices[1], expectedPeriodSecs })).toThrow()
   })

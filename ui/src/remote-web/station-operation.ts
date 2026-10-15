@@ -504,8 +504,9 @@ export function stationAction(raw: unknown): StationAction {
       if (!oneOf(a.expectedVfo, ['A', 'B']) || !oneOf(a.vfo, ['A', 'B']) || a.expectedVfo === a.vfo) invalid()
       break
     case 'decoder.js8Speed':
+      // An index into JS8's speeds, 0 Slow … 4 JS8 60 (`Speed::ALL`).
       object(a, ['action', 'expectedSpeed', 'speed'])
-      if (!integer(a.expectedSpeed) || !integer(a.speed) || a.expectedSpeed < 0 || a.expectedSpeed > 3 || a.speed < 0 || a.speed > 3 || a.expectedSpeed === a.speed) invalid()
+      if (!integer(a.expectedSpeed) || !integer(a.speed) || a.expectedSpeed < 0 || a.expectedSpeed > 4 || a.speed < 0 || a.speed > 4 || a.expectedSpeed === a.speed) invalid()
       break
     case 'decoder.msk144Period':
       object(a, ['action', 'expectedPeriodSecs', 'periodSecs'])

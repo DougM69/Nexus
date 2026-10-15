@@ -83,7 +83,8 @@ it.each(['JS8', 'MSK144'] as const)('%s uses the existing cockpit widget, one ex
   h.gesture(); await tick()
   expect(h.writes()).toHaveLength(1)
   const request = h.writes()[0].request
-  expect(request.action).toEqual(kind === 'JS8' ? { action: 'decoder.js8Speed', expectedSpeed: 1, speed: 3 }
+  // The last chip is JS8 60, index 4.
+  expect(request.action).toEqual(kind === 'JS8' ? { action: 'decoder.js8Speed', expectedSpeed: 1, speed: 4 }
     : { action: 'decoder.msk144Period', expectedPeriodSecs: 15, periodSecs: 5 })
   expect(request.context).toEqual(h.state.controls.context)
   // Lit while it confirms (operator ruling 2026-09-16, batch 1): the second gesture sends nothing,
@@ -94,7 +95,7 @@ it.each(['JS8', 'MSK144'] as const)('%s uses the existing cockpit widget, one ex
   await tick()
   if (kind === 'JS8') {
     expect(h.widget().getAttribute('aria-pressed')).toBe('false')
-    reading.current = { ...reading.current!, speed: 'turbo' }; await tick(500)
+    reading.current = { ...reading.current!, speed: 'ultra' }; await tick(500)
     expect(h.widget().getAttribute('aria-pressed')).toBe('true')
   } else {
     expect((h.widget() as HTMLSelectElement).value).toBe('15')
@@ -156,7 +157,7 @@ it.each(['JS8', 'MSK144'] as const)('%s persistence refusal leaves the displayed
 it.each(['JS8', 'MSK144'] as const)('%s keeps the local cockpit on the existing native command', async kind => {
   const h = fixture(kind); h.rerender(h.view(h.snap, h.frame, true, true)); await tick()
   h.gesture(); await tick()
-  expect(kind === 'JS8' ? js8SetSpeed : setMsk144Period).toHaveBeenCalledWith(kind === 'JS8' ? 3 : 5)
+  expect(kind === 'JS8' ? js8SetSpeed : setMsk144Period).toHaveBeenCalledWith(kind === 'JS8' ? 4 : 5)
   expect(h.writes()).toHaveLength(0)
 })
 
