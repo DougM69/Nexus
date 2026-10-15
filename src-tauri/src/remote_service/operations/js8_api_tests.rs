@@ -5,13 +5,15 @@
 //! they listen on 127.0.0.1 alone (`src-tauri/src/js8_api.rs`).
 use super::*;
 
+// The Accept switches first: each starts with an older key's name, which the document check
+// below would otherwise find first in a leak of either.
 const KEYS: [&str; 6] = [
+    "js8ApiTcpAccept",
+    "js8ApiUdpAccept",
     "js8ApiTcp",
     "js8ApiTcpPort",
     "js8ApiUdp",
     "js8ApiUdpPort",
-    "js8ApiTcpAccept",
-    "js8ApiUdpAccept",
 ];
 
 fn store(f: &Fixture) {
