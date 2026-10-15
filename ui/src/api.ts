@@ -3441,7 +3441,7 @@ export async function js8CallCq(idx: number): Promise<Js8State> {
   return invoke<Js8State>('js8_call_cq', { idx })
 }
 
-/** The SECOND act of the two-act rule: autoreply | relay | hback (persisted) or hb
+/** The SECOND act of the two-act rule: autoreply | relay | hback | hbnet (persisted) or hb
  * (session-only). Turning a switch on never keys by itself — the session TX latch is the
  * first act, re-checked at plan time on every slot. */
 export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
@@ -3482,6 +3482,19 @@ export async function js8InboxMark(id: number, state: Js8InboxState): Promise<Js
 /** Delete an inbox row. Journaled. */
 export async function js8InboxDelete(id: number): Promise<Js8State> {
   return invoke<Js8State>('js8_inbox_delete', { id })
+}
+
+/** "Send heartbeat now" (JS8Call's HB button menu): one heartbeat in the next period, the repeat
+ * left as it is. Refused with heartbeat networking off or at a speed with no heartbeats; keys only
+ * with TX on. */
+export async function js8HeartbeatNow(): Promise<Js8State> {
+  return invoke<Js8State>('js8_heartbeat_now')
+}
+
+/** The call in the To box (null when empty): JS8Call's selected call, which the QSO pause reads.
+ * Keys nothing. */
+export async function js8SelectCall(call: string | null): Promise<void> {
+  return invoke<void>('js8_select_call', { call })
 }
 
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX

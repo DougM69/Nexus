@@ -16959,6 +16959,26 @@ async fn js8_composer(
     with_engine(&state, move |mut eng| eng.js8_composer(composing, taken)).await
 }
 
+/// "Send Heartbeat Now", from the HB button's menu: one heartbeat in the next period, the repeat
+/// left as it is. Refused where JS8Call has no HB button (heartbeat networking off, a speed with
+/// no heartbeats). Keys only through the JS8 TX route, so only with TX on.
+#[tauri::command(async)]
+fn js8_heartbeat_now(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_heartbeat_now()?;
+    Ok(eng.js8_state())
+}
+
+/// The call in the native cockpit's To box (null when empty): JS8Call's selected call, which the
+/// QSO pause reads. Keys nothing.
+#[tauri::command]
+async fn js8_select_call(
+    state: State<'_, SharedEngine>,
+    call: Option<String>,
+) -> Result<(), String> {
+    with_engine(&state, move |mut eng| eng.js8_select_call(call)).await
+}
+
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
 #[tauri::command(async)]
 fn js8_drop_queue(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
@@ -35499,6 +35519,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_drop_queue,
             js8_inbox_mark,
             js8_inbox_delete,
+            js8_heartbeat_now,
+            js8_select_call,
             psk_clear,
             psk_afc_reset,
             psk_net,

@@ -1851,8 +1851,9 @@ export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
 /** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
  * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
 export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
-/** The second act of the two-act rule: three persisted switches + the session-only HB. */
-export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
+/** The second act of the two-act rule: three persisted switches + the session-only HB, and the
+ * persisted heartbeat networking (`hbnet`), which keys nothing by itself. */
+export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb' | 'hbnet'
 /** Inbox row state, lowercase on the wire. */
 export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
 
@@ -1989,6 +1990,31 @@ export interface Js8State {
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */
   lastError: string | null
+  /** Heartbeat networking, the QSO pause and what holds an HB ACK back. The desktop's own: the
+   * Remote page's sample does not carry it, and its cockpit shows the HB controls as before. */
+  presence?: Js8Presence
+}
+
+/** Why a heartbeat heard now would draw no acknowledgement although HB ACK is armed. */
+export type Js8HbAckSuppressed = 'speed' | 'arriving' | 'qsoPause'
+
+/** The desktop cockpit's view of heartbeat networking and presence (JS8Call 3.0.3). */
+export interface Js8Presence {
+  /** JS8Call's "Enable Heartbeat Networking": the HB button shows only with it on. */
+  hbNetworking: boolean
+  /** The TX speed sends heartbeats (Slow, Normal, Fast): false at Turbo, where JS8Call hides HB. */
+  hbSpeed: boolean
+  /** The QSO pause holds the HB repeat until the To box is cleared. */
+  hbPaused: boolean
+  /** Why an armed HB ACK would not answer a heartbeat heard now; null when it would. */
+  hbAckSuppressed: Js8HbAckSuppressed | null
+  /** Stations the 55-minute rule has stopped acknowledging, oldest first. */
+  hbAckRateBlocked: string[]
+  /** The QSO pause setting: turning the HB repeat on then clears the To box, as JS8Call clears
+   * its selected call. */
+  qsoPause: boolean
+  /** "Do not participate in the @ALLCALL group": @ALLCALL leaves the To box's list. */
+  avoidAllcall: boolean
 }
 
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
@@ -4023,6 +4049,20 @@ export interface Settings {
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call's "Enable Heartbeat Networking" (default off): the HB button shows only with it on,
+   * and no heartbeat or heartbeat acknowledgement goes out without it. */
+  js8HbNetworking: boolean
+  /** JS8Call's "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz - 1000Hz)"
+   * (default off): heartbeats and their acknowledgements key on the TX offset. */
+  js8HbAnywhere: boolean
+  /** JS8Call's QSO pause (default ON): while the To box holds a call the HB repeat pauses, no
+   * heartbeat is acknowledged and the repeating CQ stops. */
+  js8HbQsoPause: boolean
+  /** JS8Call 3.0's "Suppress ACK to stations that send heartbeats at less than 55 minute
+   * intervals" (default off). */
+  js8HbAckRateLimit: boolean
+  /** JS8Call's "Do not participate in the @ALLCALL group" (default off). */
+  js8AvoidAllcall: boolean
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

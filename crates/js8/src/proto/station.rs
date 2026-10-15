@@ -27,10 +27,19 @@
 //!   interval after the next transmit cycle (:6311) and `next_frame` releases it at the boundary
 //!   of that period; the end of every message and directed traffic to me re-base it the same
 //!   way (:3706). Replies and ACKs never QSY (`FreqHint::Dial`); the HB-ACK is the exception.
-//! - HB-ACK (default off): only with HB + autoreply + `hb_ack`, an empty outbox and no QSO pause,
-//!   answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`, on a free heartbeat spot picked
-//!   as the heartbeat's is but with no own-offset rule (`sendHeartbeatAck`, :6299). An incoming
-//!   `HEARTBEAT SNR` is never answered (no ack-of-an-ack loop).
+//! - HB-ACK (default off): only with heartbeat networking + autoreply + `hb_ack`, no message still
+//!   arriving, no QSO pause, the caller on no deny list and not stopped by the 55-minute rule
+//!   (`hb_rate_limit`), answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`, on a free
+//!   heartbeat spot picked as the heartbeat's is but with no own-offset rule (`sendHeartbeatAck`,
+//!   :6299). An incoming `HEARTBEAT SNR` is never answered (no ack-of-an-ack loop).
+//! - Heartbeat networking (JS8Call 3.0.3's Mode menu, default off) and the speed: heartbeats and
+//!   HB-ACKs go out only with networking on, at Slow, Normal and Fast ([`heartbeat_speed`], an
+//!   allow-list); elsewhere the HB repeat stops and what of either waits is dropped. With
+//!   `hb_anywhere` both key on the operator's own offset instead of a free 500–1000 Hz spot.
+//! - QSO pause (default on): the call in the cockpit's To box is JS8Call's selected call
+//!   ([`Station::select_call`]); selecting one pauses the HB repeat until it is cleared, stops the
+//!   repeating CQ, and holds every HB-ACK back. With `avoid_allcall` nothing addressed to
+//!   @ALLCALL but a heartbeat or a CQ is acted on.
 //! - Autoreply: only to my own call and joined groups, never to a query addressed to `@ALLCALL`
 //!   (JS8Call's `!isAllCall`, mainwindow.cpp:8834-8869), and only the autoreply subset
 //!   (`Command::is_autoreply`, = upstream `autoreply_cmds {0,2,3,4,6,9,10,11,12,13,14,16,30}`);
@@ -104,6 +113,29 @@ const MAX_HEARD: usize = 500;
 // traffic for hours), and the refusal is surfaced as a Toast, never silent.
 const MAX_OUTBOX: usize = 32;
 const MAX_PENDING: usize = 32;
+
+/// JS8Call 3.0's heartbeat-acknowledgement window (`BLOCK_WINDOW_SECS = 55 * 60`,
+/// processHeartbeatRateLimit.cpp:14): with `hb_rate_limit` on, a station heard heartbeating again
+/// less than this long after the heartbeat it was last acknowledged for is acknowledged no more.
+pub const HB_RATE_WINDOW_MS: u64 = 55 * 60 * 1000;
+/// The rule's two lists grow from air-sourced calls, so each is capped as `heard` is, dropping its
+/// oldest entry. A timestamp past the window carries nothing and is pruned on its own.
+const MAX_HB_RATE: usize = MAX_HEARD;
+
+/// The speeds JS8Call sends heartbeats and heartbeat acknowledgements at: Slow, Normal and Fast
+/// (`canCurrentModeSendHeartbeat`, mainwindow.cpp:4113-4117; 2.3: mainwindow.cpp:5975-5980). Named
+/// one by one, so a speed added later sends none until it is listed here. Elsewhere JS8Call hides
+/// its HB button and stops the repeat (`prepareHeartbeatMode`, :4124-4130) and answers no
+/// heartbeat (processCommandActivity.cpp:636).
+pub fn heartbeat_speed(speed: Speed) -> bool {
+    matches!(speed, Speed::Slow | Speed::Normal | Speed::Fast)
+}
+
+/// Is `origin` a heartbeat or a heartbeat acknowledgement, the two that go out only where
+/// [`heartbeat_speed`] and heartbeat networking allow?
+pub fn heartbeat_origin(origin: Origin) -> bool {
+    matches!(origin, Origin::Heartbeat | Origin::HbAck)
+}
 
 /// How long JS8Call's confirmation box waits before it answers No by itself. Every automatic
 /// reply opens one with a 90-second timeout (`confirmThenEnqueueMessage(90, …)`,
@@ -241,6 +273,26 @@ pub struct StationConfig {
     /// default empty, Configuration.cpp:1849): a heartbeat from one draws no HB-ACK
     /// (mainwindow.cpp:9073-9077).
     pub hb_ack_deny: Vec<String>,
+    // ---- heartbeat networking and presence, as JS8Call 3.0.3 has them ----
+    /// "Enable Heartbeat Networking" (the Mode menu's `actionModeJS8HB`, `SubModeHB`, default off,
+    /// 3.0.3 mainwindow.cpp:524-525): no heartbeat and no HB ACK without it, and its HB button is
+    /// hidden (`prepareHeartbeatMode`, :4124-4130; processCommandActivity.cpp:637).
+    pub hb_networking: bool,
+    /// "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz - 1000Hz)"
+    /// (`BeaconAnywhere`, default off, Configuration.cpp:2291): a heartbeat or HB ACK keys on the
+    /// operator's own offset instead of a free spot in 500–1000 Hz (`sendHB`, `sendHeartbeatAck`,
+    /// mainwindow.cpp:4442-4447, :4471-4472).
+    pub hb_anywhere: bool,
+    /// "Pause heartbeat transmissions while in a QSO (i.e., callsign is selected)"
+    /// (`HeartbeatQSOPause`, default ON, Configuration.cpp:2292): see [`Station::select_call`].
+    pub hb_qso_pause: bool,
+    /// "Suppress ACK to stations that send heartbeats at less than 55 minute intervals"
+    /// (`HBRateLimit`, default off, Configuration.cpp:2134): see [`HB_RATE_WINDOW_MS`].
+    pub hb_rate_limit: bool,
+    /// "Do not participate in the @ALLCALL group" (`AvoidAllcall`, default off,
+    /// Configuration.cpp:2407): nothing addressed to @ALLCALL is acted on but a heartbeat or a
+    /// CQ (processCommandActivity.cpp:181-185).
+    pub avoid_allcall: bool,
 }
 
 impl Default for StationConfig {
@@ -264,6 +316,11 @@ impl Default for StationConfig {
             autoreply_allow: Vec::new(),
             autoreply_deny: Vec::new(),
             hb_ack_deny: Vec::new(),
+            hb_networking: false,
+            hb_anywhere: false,
+            hb_qso_pause: true,
+            hb_rate_limit: false,
+            avoid_allcall: false,
         }
     }
 }
@@ -336,6 +393,11 @@ pub enum StationAction {
         freq_hz: f32,
     },
     IdleTripped,
+    /// The 55-minute rule stopped acknowledging `from` (`hb_rate_limit`): the list it keeps
+    /// changed, and is journaled.
+    HbAckRateLimited {
+        from: String,
+    },
 }
 
 /// A UI view of a queued message (structural mirror of an outbox item).
@@ -365,7 +427,8 @@ pub enum Unarmed {
     Idle,
     /// The engine's TX latch is down: nothing keys.
     TxOff,
-    /// An HB ACK answers a heartbeat only while HB is on (mainwindow.cpp:9061).
+    /// An HB ACK answers a heartbeat only while heartbeat networking is on (`actionModeJS8HB`,
+    /// processCommandActivity.cpp:637; 2.3: mainwindow.cpp:9061), whatever the HB repeat does.
     NeedsHb,
     /// An HB ACK answers only with AUTO on (:9061), and a relay keys only with AUTO on: with AUTO
     /// off it is put in the compose box (`processTxQueue`, :9674-9685).
@@ -375,6 +438,22 @@ pub enum Unarmed {
     /// The heartbeat or the repeating CQ has nothing scheduled: an on-demand one (interval 0) has
     /// gone, and the next waits for its switch to be turned on again.
     Unscheduled,
+}
+
+/// Why a heartbeat heard now would draw no acknowledgement although HB ACK is armed: the first of
+/// JS8Call's own checks that holds it back (processCommandActivity.cpp:634-651), what its HB
+/// button and mode text show by dropping "ACK" (`presentlyWantHBReplies`, mainwindow.cpp:5612-5619).
+/// The 55-minute rule holds back single stations, not every acknowledgement: those are
+/// [`Station::hb_rate_blocked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HbAckSuppressed {
+    /// The transmit speed sends no heartbeats ([`heartbeat_speed`]).
+    Speed,
+    /// A message is still arriving (`!m_messageBuffer.isEmpty()`, :640-644).
+    Arriving,
+    /// A call is selected and the QSO pause is on (:647-651).
+    QsoPause,
 }
 
 /// Each automatic origin as [`Station::readiness`] answers for it: `None` when the station would
@@ -396,6 +475,11 @@ pub struct StationSnapshot {
     pub heard: Vec<Heard>,
     pub allcall_replied: Vec<(String, u64)>,
     pub next_inbox_id: u32,
+    /// The stations the 55-minute rule stopped acknowledging, kept across launches as JS8Call
+    /// keeps them in its HB blacklist (Configuration.cpp:1226-1231). Left out while empty, so a
+    /// journal that never used the rule is written as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hb_rate_blocked: Vec<String>,
 }
 
 /// One composed message waiting in the outbox; `next_frame` dispenses its frames one per period.
@@ -467,6 +551,18 @@ pub struct Station {
     last_activity_ms: u64,
     idle_tripped: bool,
     last_tx_display: Option<String>,
+    /// JS8Call's selected call (`callsignSelected`, mainwindow.cpp:5895), which in Nexus is the
+    /// call in the cockpit's To box: the QSO pause reads it (`select_call`).
+    selected: Option<String>,
+    /// The QSO pause stopped the HB repeat when a call was selected, and turns it back on when the
+    /// selection clears (`m_hbPaused`, mainwindow.cpp:5962-5992).
+    hb_paused: bool,
+    /// JS8Call 3.0's HB ACK rate limit (`HBBlockingDB`, processHeartbeatRateLimit.cpp): when each
+    /// station, by its call as heard, was last acknowledged…
+    hb_acked_at: HashMap<String, u64>,
+    /// …and the stations the rule has stopped acknowledging, oldest first (JS8Call adds each to
+    /// its HB blacklist, Configuration.cpp:1226-1231).
+    hb_rate_blocked: Vec<String>,
 }
 
 impl Station {
@@ -493,11 +589,47 @@ impl Station {
             last_activity_ms: 0,
             idle_tripped: false,
             last_tx_display: None,
+            selected: None,
+            hb_paused: false,
+            hb_acked_at: HashMap::new(),
+            hb_rate_blocked: Vec::new(),
         }
     }
 
+    /// The operator's Settings, as the engine hands them over. Heartbeat networking turned off,
+    /// or a speed JS8Call sends no heartbeats at, stops heartbeats as JS8Call's
+    /// `prepareHeartbeatMode(false)` stops them (mainwindow.cpp:4124-4130): see
+    /// `stop_heartbeats`. The 55-minute rule turned off forgets what it learned, so turning it off
+    /// is how its stations are acknowledged again.
     pub fn set_config(&mut self, cfg: StationConfig) {
+        if self.cfg.hb_rate_limit && !cfg.hb_rate_limit {
+            self.hb_acked_at.clear();
+            self.hb_rate_blocked.clear();
+        }
         self.cfg = cfg;
+        if !self.hb_allowed() {
+            self.stop_heartbeats();
+        }
+    }
+
+    /// Heartbeats and their acknowledgements may go out at all: heartbeat networking on, at a
+    /// speed JS8Call heartbeats at (`prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
+    /// actionModeJS8HB->isChecked())`, mainwindow.cpp:4185-4186).
+    pub fn hb_allowed(&self) -> bool {
+        self.cfg.hb_networking && heartbeat_speed(self.cfg.speed)
+    }
+
+    /// Where heartbeats may not go out: the HB repeat stops and is not resumed by the QSO pause,
+    /// and a heartbeat or acknowledgement still waiting, asking or queued is dropped. JS8Call
+    /// cancels its loop and unchecks the button there (mainwindow.cpp:4127-4130); what it had
+    /// already queued would still key, and here it never does.
+    fn stop_heartbeats(&mut self) {
+        self.hb_on = false;
+        self.hb_next_ms = None;
+        self.hb_paused = false;
+        self.outbox.retain(|o| !heartbeat_origin(o.origin));
+        self.pending.retain(|p| !heartbeat_origin(p.origin));
+        self.queued.retain(|q| !heartbeat_origin(q.origin));
     }
 
     pub fn config(&self) -> &StationConfig {
@@ -597,6 +729,12 @@ impl Station {
         }
         if m.cq.is_some() {
             return actions; // a CQ is displayed; the operator answers it, not the autoreply engine
+        }
+        // "Do not participate in the @ALLCALL group": nothing else addressed to @ALLCALL is acted
+        // on, a QUERY MSGS on it included (processCommandActivity.cpp:181-185, which spares only
+        // a heartbeat and a CQ, both handled above).
+        if self.cfg.avoid_allcall && m.to_text.eq_ignore_ascii_case("@ALLCALL") {
+            return actions;
         }
 
         // Directed command autoreply / relay / store-and-forward. JS8Call acts on no command that
@@ -782,11 +920,16 @@ impl Station {
     }
 
     fn maybe_hb_ack(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
-        // HB + autoreply + hb_ack (mainwindow.cpp:9059), and no message still arriving: "do not
-        // process HB activity if buffer is not empty, this prevents broken incoming MSG's"
-        // (`!m_messageBuffer.isEmpty()`, the RECEIVE buffers, :9062-9066), nor a station the
-        // heartbeat deny list names (:9073-9077).
-        if !(self.hb_on && self.cfg.autoreply && self.cfg.hb_ack) || self.rx_open {
+        // Heartbeat networking at a speed that heartbeats + autoreply + hb_ack
+        // (processCommandActivity.cpp:634-638; 2.3: mainwindow.cpp:9059), and no message still
+        // arriving: "do not process HB activity if buffer is not empty, this prevents broken
+        // incoming MSG's" (`!m_messageBuffer.isEmpty()`, the RECEIVE buffers, :9062-9066), nor
+        // while a call is selected with the QSO pause on (processCommandActivity.cpp:647-651), nor
+        // a station the heartbeat deny list names (:9073-9077).
+        if !(self.hb_allowed() && self.cfg.autoreply && self.cfg.hb_ack) || self.rx_open {
+            return;
+        }
+        if self.cfg.hb_qso_pause && self.selected.is_some() {
             return;
         }
         if on_list(&self.cfg.hb_ack_deny, &m.from) {
@@ -798,14 +941,79 @@ impl Station {
         if self.is_me(&to) {
             return;
         }
+        // JS8Call 3.0's 55-minute rule, the last check before it answers
+        // (processCommandActivity.cpp:708-717).
+        if self.cfg.hb_rate_limit && self.hb_rate_held_off(&to, now_ms, actions) {
+            return;
+        }
         let mut text = format!("{to} HEARTBEAT SNR {}", format_snr(m.snr_db));
         if let Some(id) = self.stored_for(&to) {
             text.push_str(&format!(" MSG ID {id}"));
         }
         // On a free heartbeat spot, as JS8Call's `sendHeartbeatAck` picks it
         // (`findFreeFreqOffset(500, 1000, 50)`, mainwindow.cpp:6299); `next_frame` picks it.
-        let spot = FreqHint::HbSubband(0.0);
+        let spot = self.hb_spot();
         self.schedule_reply(Origin::HbAck, &to, &text, spot, now_ms, actions);
+    }
+
+    /// Where a heartbeat or its acknowledgement keys: a free spot in 500–1000 Hz, which
+    /// `next_frame` picks, or with "Allow heartbeat transmissions outside of heartbeat
+    /// sub-channel" on, the operator's own offset (JS8Call's `-1`, which `processTxQueue` reads as
+    /// `freq()`: `sendHB`, `sendHeartbeatAck`, mainwindow.cpp:4442-4447, :4471-4472, :6614-6616).
+    fn hb_spot(&self) -> FreqHint {
+        if self.cfg.hb_anywhere {
+            FreqHint::Dial
+        } else {
+            FreqHint::HbSubband(0.0)
+        }
+    }
+
+    /// JS8Call 3.0's 55-minute rule (`processHeartbeatRateLimit`, processHeartbeatRateLimit.cpp:
+    /// 8-38). A station it stopped acknowledging stays stopped, by its call as heard or its base
+    /// call, as JS8Call's HB blacklist keeps it (processCommandActivity.cpp:713-715). Otherwise a
+    /// station acknowledged less than [`HB_RATE_WINDOW_MS`] ago is stopped now, for good, and its
+    /// time forgotten (:26-33); any other has its time kept, and is acknowledged (:36-37).
+    fn hb_rate_held_off(
+        &mut self,
+        who: &str,
+        now_ms: u64,
+        actions: &mut Vec<StationAction>,
+    ) -> bool {
+        if on_list(&self.hb_rate_blocked, who) {
+            return true;
+        }
+        match self.hb_acked_at.get(who) {
+            Some(&last) if now_ms.saturating_sub(last) < HB_RATE_WINDOW_MS => {
+                self.hb_acked_at.remove(who);
+                self.hb_rate_blocked.push(who.to_string());
+                if self.hb_rate_blocked.len() > MAX_HB_RATE {
+                    self.hb_rate_blocked.remove(0);
+                }
+                actions.push(StationAction::HbAckRateLimited {
+                    from: who.to_string(),
+                });
+                true
+            }
+            _ => {
+                self.hb_acked_at.insert(who.to_string(), now_ms);
+                // A time past the window holds nothing back, so the map limits itself; the cap
+                // is for a flood inside one window.
+                self.hb_acked_at
+                    .retain(|_, &mut t| now_ms.saturating_sub(t) < HB_RATE_WINDOW_MS);
+                while self.hb_acked_at.len() > MAX_HB_RATE {
+                    let Some(oldest) = self
+                        .hb_acked_at
+                        .iter()
+                        .min_by_key(|(_, &t)| t)
+                        .map(|(k, _)| k.clone())
+                    else {
+                        break;
+                    };
+                    self.hb_acked_at.remove(&oldest);
+                }
+                false
+            }
+        }
     }
 
     fn autoreply(
@@ -1411,6 +1619,7 @@ impl Station {
         self.cfg.relay = false;
         self.hb_on = false;
         self.hb_next_ms = None;
+        self.hb_paused = false;
         self.stop_cq_repeat();
         self.outbox.clear();
         self.pending.clear();
@@ -1658,6 +1867,10 @@ impl Station {
     }
 
     fn enqueue_heartbeat(&mut self, _now_ms: u64) -> Result<(), ComposeError> {
+        // Never where heartbeats may not go out, whoever asks (`hb_allowed`).
+        if !self.hb_allowed() {
+            return Ok(());
+        }
         // The 4-character square, as JS8Call sends it (`my_grid().left(4)`, mainwindow.cpp:6258):
         // the heartbeat frame carries no more, and a longer locator spills into a data frame
         // that keys on the next period.
@@ -1675,14 +1888,23 @@ impl Station {
             display: format!("{}: @HB {line}", self.base()),
             frames: seq,
             cursor: 0,
-            freq_hint: FreqHint::HbSubband(0.0),
+            freq_hint: self.hb_spot(),
         };
         self.push_outbox(out);
         Ok(())
     }
 
+    /// The HB repeat on or off. It never goes on where heartbeats may not go out (`hb_allowed`:
+    /// JS8Call has no HB button there), and either way a pause the QSO pause holds is over. On,
+    /// with the QSO pause on, it clears the selected call, as JS8Call's HB button does
+    /// (`clearCallsignSelected`, mainwindow.cpp:4487-4490).
     pub fn set_hb(&mut self, on: bool, now_ms: u64) {
+        let on = on && self.hb_allowed();
         self.hb_on = on;
+        self.hb_paused = false;
+        if on && self.cfg.hb_qso_pause {
+            self.selected = None;
+        }
         if on {
             // On demand (interval 0): the next period. Periodic: one interval after the NEXT
             // transmit cycle, so the button counts down before the first one
@@ -1725,6 +1947,59 @@ impl Station {
 
     pub fn cq_next_ms(&self) -> Option<u64> {
         self.cq_next_ms
+    }
+
+    /// The call in the cockpit's To box, JS8Call's selected call (`callsignSelectedChanged`,
+    /// mainwindow.cpp:5958-6000); empty text is none. With the QSO pause on, selecting one stops
+    /// the HB repeat, to turn it back on when the selection clears (`m_hbPaused`), and stops the
+    /// repeating CQ for good; while one is selected no heartbeat is acknowledged (`maybe_hb_ack`).
+    /// Clearing it turns a paused repeat back on (`set_hb`), its first heartbeat one interval
+    /// after the next cycle, as JS8Call's loop starts (TxLoop.cpp:193-209). A repeat at interval 0
+    /// is a single heartbeat JS8Call never pauses.
+    pub fn select_call(&mut self, call: Option<&str>, now_ms: u64) {
+        let call = call
+            .map(|c| clamp_str(c.trim(), MAX_CALL_LEN).to_ascii_uppercase())
+            .filter(|c| !c.is_empty());
+        if call == self.selected {
+            return;
+        }
+        self.selected = call;
+        if self.selected.is_some() {
+            if self.cfg.hb_qso_pause {
+                if self.hb_on && self.cfg.hb_interval_min > 0 {
+                    self.hb_on = false;
+                    self.hb_next_ms = None;
+                    self.hb_paused = true;
+                }
+                self.stop_cq_repeat();
+            }
+        } else if self.hb_paused {
+            self.set_hb(true, now_ms);
+        }
+    }
+
+    /// The QSO pause is holding the HB repeat off until the To box is cleared.
+    pub fn hb_paused(&self) -> bool {
+        self.hb_paused
+    }
+
+    /// The stations the 55-minute rule has stopped acknowledging, oldest first.
+    pub fn hb_rate_blocked(&self) -> &[String] {
+        &self.hb_rate_blocked
+    }
+
+    /// Why a heartbeat heard now would draw no acknowledgement, the HB ACK switches being on: the
+    /// first of `maybe_hb_ack`'s own checks that holds it back, in its order.
+    pub fn hb_ack_suppressed(&self) -> Option<HbAckSuppressed> {
+        if !heartbeat_speed(self.cfg.speed) {
+            Some(HbAckSuppressed::Speed)
+        } else if self.rx_open {
+            Some(HbAckSuppressed::Arriving)
+        } else if self.cfg.hb_qso_pause && self.selected.is_some() {
+            Some(HbAckSuppressed::QsoPause)
+        } else {
+            None
+        }
     }
 
     /// JS8Call's `resetCQTimer(stop = true)` (mainwindow.cpp:3711): traffic addressed to us
@@ -1805,6 +2080,7 @@ impl Station {
         self.composer = None;
         self.hb_on = false;
         self.hb_next_ms = None;
+        self.hb_paused = false;
         self.stop_cq_repeat();
     }
 
@@ -1947,7 +2223,7 @@ impl Station {
         Readiness {
             autoreply: None,
             relay: (!auto).then_some(Unarmed::NeedsAuto),
-            hb_ack: match (self.hb_on, auto) {
+            hb_ack: match (self.cfg.hb_networking, auto) {
                 (true, true) => None,
                 (false, true) => Some(Unarmed::NeedsHb),
                 (true, false) => Some(Unarmed::NeedsAuto),
@@ -1982,6 +2258,7 @@ impl Station {
                 .map(|(k, v)| (k.clone(), *v))
                 .collect(),
             next_inbox_id: self.next_inbox_id,
+            hb_rate_blocked: self.hb_rate_blocked.clone(),
         }
     }
 
@@ -1990,6 +2267,14 @@ impl Station {
         self.heard = s.heard;
         self.allcall_replied = s.allcall_replied.into_iter().collect();
         self.next_inbox_id = s.next_inbox_id.max(1);
+        // A journal is read as data: the newest calls the cap holds.
+        let mut blocked = s.hb_rate_blocked;
+        let over = blocked.len().saturating_sub(MAX_HB_RATE);
+        blocked.drain(..over);
+        blocked
+            .iter_mut()
+            .for_each(|c| *c = clamp_str(c, MAX_CALL_LEN));
+        self.hb_rate_blocked = blocked;
     }
 }
 
@@ -2153,13 +2438,15 @@ mod tests {
     use crate::proto::reassembly::Checksum;
 
     /// A station whose replies go by themselves (the confirmation off), so a test sees each reply
-    /// on the air; `asking_cfg` is JS8Call's default, where each one asks first.
+    /// on the air; `asking_cfg` is JS8Call's default, where each one asks first. Heartbeat
+    /// networking is on, as every heartbeat test needs it (`hb_networking`, off by default).
     fn cfg() -> StationConfig {
         StationConfig {
             mycall: "KD9TAW".into(),
             grid: "EN52".into(),
             speed: Speed::Normal,
             autoreply_confirmation: false,
+            hb_networking: true,
             ..Default::default()
         }
     }
@@ -2297,22 +2584,27 @@ mod tests {
     }
 
     /// What `readiness` says of HB ACK is what a heard heartbeat draws, HB ACK on and TX on, for
-    /// each of HB and AUTO on or off: the ACK on the air with both, nothing otherwise, and each
-    /// time the reason names what is missing. Our own heartbeat is periodic and not yet due, so
-    /// anything drained is the ACK.
+    /// heartbeat networking, the HB repeat and AUTO on or off: the ACK on the air with networking
+    /// and AUTO, nothing otherwise, and each time the reason names what is missing. Our own
+    /// heartbeat is periodic and not yet due, so anything drained is the ACK.
     #[test]
     fn readiness_says_what_a_heard_heartbeat_draws() {
+        // The "HB" an acknowledgement needs is heartbeat networking (`actionModeJS8HB`,
+        // processCommandActivity.cpp:637), not the HB repeat: networking on with the repeat off
+        // still answers, as JS8Call does. Networking off, the repeat cannot be on.
         let ack = Some((Origin::HbAck, "KD9TAW: W1AW HEARTBEAT SNR -05".to_string()));
-        for (hb_on, autoreply, want) in [
-            (true, true, (None, ack)),
-            (false, true, (Some(Unarmed::NeedsHb), None)),
-            (true, false, (Some(Unarmed::NeedsAuto), None)),
-            (false, false, (Some(Unarmed::NeedsHbAndAuto), None)),
+        for (networking, hb_on, autoreply, want) in [
+            (true, true, true, (None, ack.clone())),
+            (true, false, true, (None, ack)),
+            (false, false, true, (Some(Unarmed::NeedsHb), None)),
+            (true, true, false, (Some(Unarmed::NeedsAuto), None)),
+            (false, false, false, (Some(Unarmed::NeedsHbAndAuto), None)),
         ] {
             let mut s = Station::new(StationConfig {
                 hb_ack: true,
                 autoreply,
                 hb_interval_min: 5,
+                hb_networking: networking,
                 ..cfg()
             });
             s.set_hb(hb_on, 0);
@@ -2322,7 +2614,8 @@ mod tests {
             assert_eq!(
                 (ready, keyed),
                 want,
-                "HB {hb_on}, AUTO {autoreply}: what readiness says is what keys"
+                "networking {networking}, HB {hb_on}, AUTO {autoreply}: what readiness says is \
+                 what keys"
             );
         }
     }
@@ -5905,5 +6198,569 @@ mod tests {
             7 * 60_000,
         );
         assert_eq!(s.inbox().len(), 1, "the trip cleared: filed");
+    }
+
+    // ===== heartbeat networking and presence, as JS8Call 3.0.3 has them =====
+
+    /// What one station keys: its origin, its speed and its display.
+    type Keyed = Vec<(Origin, Speed, String)>;
+
+    fn keyed(f: Option<TxFrame>) -> Keyed {
+        f.into_iter()
+            .map(|f| (f.origin, f.speed, f.display))
+            .collect()
+    }
+
+    /// JS8Call sends heartbeats and their acknowledgements at Slow, Normal and Fast and nowhere
+    /// else (`canCurrentModeSendHeartbeat`, mainwindow.cpp:4113-4117; processCommandActivity.cpp:
+    /// 636). At Turbo the HB repeat cannot be turned on, "send heartbeat now" queues nothing, and a
+    /// heard heartbeat is neither answered nor asked about. By value, at each speed.
+    #[test]
+    fn heartbeats_and_their_acknowledgements_key_only_at_slow_normal_and_fast() {
+        assert_eq!(
+            Speed::ALL
+                .into_iter()
+                .filter(|&s| heartbeat_speed(s))
+                .collect::<Vec<_>>(),
+            vec![Speed::Slow, Speed::Normal, Speed::Fast],
+            "the allow-list, by name"
+        );
+        for speed in Speed::ALL {
+            let at = || StationConfig {
+                speed,
+                hb_ack: true,
+                ..cfg()
+            };
+            // The HB repeat at interval 0: one heartbeat, in the next period.
+            let mut s = Station::new(at());
+            s.set_hb(true, 0);
+            assert_eq!(
+                (s.hb_on(), s.hb_next_ms().is_some()),
+                (heartbeat_speed(speed), heartbeat_speed(speed)),
+                "{speed:?}: the HB repeat goes on where heartbeats go out, and only there"
+            );
+            let repeat = keyed(drain(&mut s, 0));
+            // "Send heartbeat now".
+            let mut s = Station::new(at());
+            s.heartbeat_now(0).expect("composes");
+            let now = keyed(drain(&mut s, 0));
+            // A heard heartbeat, answered by itself (the HB repeat off)…
+            let mut s = Station::new(at());
+            s.on_event(&heartbeat("W1AW", -5), 1000);
+            let ack = keyed(drain(&mut s, 15_000));
+            // …or, as JS8Call ships, asking first.
+            let mut s = Station::new(StationConfig {
+                autoreply_confirmation: true,
+                ..at()
+            });
+            s.on_event(&heartbeat("W1AW", -5), 1000);
+            let asked = s.pending_reply().map(|p| p.display);
+            let (hb_want, ack_want, asked_want) = if heartbeat_speed(speed) {
+                (
+                    vec![(
+                        Origin::Heartbeat,
+                        speed,
+                        "KD9TAW: @HB HEARTBEAT EN52".to_string(),
+                    )],
+                    vec![(
+                        Origin::HbAck,
+                        speed,
+                        "KD9TAW: W1AW HEARTBEAT SNR -05".to_string(),
+                    )],
+                    Some("KD9TAW: W1AW HEARTBEAT SNR -05".to_string()),
+                )
+            } else {
+                (Keyed::new(), Keyed::new(), None)
+            };
+            assert_eq!(
+                (repeat, now, ack, asked),
+                (hb_want.clone(), hb_want, ack_want, asked_want),
+                "{speed:?}: the repeat's heartbeat, the one sent now, the acknowledgement, the \
+                 question"
+            );
+        }
+    }
+
+    /// Switching to Turbo, or heartbeat networking off, stops the HB repeat and drops a heartbeat
+    /// or acknowledgement still waiting, asking or queued: nothing of either keys afterwards.
+    /// JS8Call cancels its loop there (`prepareHeartbeatMode(false)`, mainwindow.cpp:4124-4130).
+    #[test]
+    fn turbo_or_networking_off_stops_the_heartbeat_and_drops_what_waits() {
+        let base = || StationConfig {
+            hb_ack: true,
+            hb_interval_min: 5,
+            ..cfg()
+        };
+        for (what, change) in [
+            (
+                "Turbo",
+                StationConfig {
+                    speed: Speed::Turbo,
+                    ..base()
+                },
+            ),
+            (
+                "networking off",
+                StationConfig {
+                    hb_networking: false,
+                    ..base()
+                },
+            ),
+        ] {
+            let mut s = Station::new(base());
+            s.set_hb(true, 0);
+            s.on_event(&heartbeat("W1AW", -5), 1000);
+            s.process_tx_queue();
+            let mut asking = Station::new(StationConfig {
+                autoreply_confirmation: true,
+                ..base()
+            });
+            asking.on_event(&heartbeat("W1AW", -5), 1000);
+            assert!(
+                s.queue().len() == 1 && s.hb_next_ms().is_some() && asking.pending_len() == 1,
+                "{what}: control: an acknowledgement waits, one asks, and the repeat is scheduled"
+            );
+            s.set_config(change.clone());
+            asking.set_config(change);
+            let keyed: Vec<String> = (0..150u64)
+                .filter_map(|k| drain(&mut s, 2_000 + k * 6_000))
+                .map(|f| f.display)
+                .collect();
+            assert_eq!(
+                (
+                    s.hb_on(),
+                    s.hb_next_ms(),
+                    keyed,
+                    asking.pending_reply().is_some()
+                ),
+                (false, None, Vec::<String>::new(), false),
+                "{what}: the repeat stopped, nothing keys in the next 15 minutes, nothing asks"
+            );
+        }
+    }
+
+    /// Heartbeat networking off (JS8Call's default): no heartbeat by the repeat or sent now, and a
+    /// heard heartbeat is neither answered nor asked about, whatever HB ACK and AUTO say.
+    #[test]
+    fn with_heartbeat_networking_off_no_heartbeat_and_no_acknowledgement_go_out() {
+        let off = StationConfig {
+            hb_networking: false,
+            hb_ack: true,
+            ..cfg()
+        };
+        let mut s = Station::new(off.clone());
+        s.set_hb(true, 0);
+        assert!(
+            !s.hb_on() && s.hb_next_ms().is_none(),
+            "the repeat cannot be turned on"
+        );
+        s.heartbeat_now(0).expect("composes");
+        s.on_event(&heartbeat("W1AW", -5), 1000);
+        let keyed: Vec<String> = (0..4u64)
+            .filter_map(|k| drain(&mut s, k * 15_000))
+            .map(|f| f.display)
+            .collect();
+        assert_eq!(keyed, Vec::<String>::new(), "nothing keys");
+        let mut asking = Station::new(StationConfig {
+            autoreply_confirmation: true,
+            ..off
+        });
+        asking.on_event(&heartbeat("W1AW", -5), 1000);
+        assert_eq!(asking.pending_reply(), None, "nor is one asked about");
+    }
+
+    /// "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz - 1000Hz)": on, a
+    /// heartbeat and an acknowledgement key on the operator's own offset (JS8Call's `-1`, which
+    /// `processTxQueue` reads as `freq()`, mainwindow.cpp:4442-4447, :4472, :6614-6616); off, on a
+    /// free spot in 500-1000 Hz (500 here: the draw is slot 0 and nothing is busy).
+    #[test]
+    fn with_hb_anywhere_a_heartbeat_and_its_acknowledgement_key_on_the_operators_offset() {
+        for (anywhere, want) in [(false, FreqHint::HbSubband(500.0)), (true, FreqHint::Dial)] {
+            let c = StationConfig {
+                hb_anywhere: anywhere,
+                hb_ack: true,
+                ..cfg()
+            };
+            let mut s = Station::new(c.clone());
+            s.heartbeat_now(0).expect("composes");
+            let hb = drain(&mut s, 0).map(|f| (f.origin, f.freq_hint));
+            let mut s = Station::new(c);
+            s.on_event(&heartbeat("W1AW", -5), 1000);
+            let ack = drain(&mut s, 15_000).map(|f| (f.origin, f.freq_hint));
+            assert_eq!(
+                (hb, ack),
+                (Some((Origin::Heartbeat, want)), Some((Origin::HbAck, want))),
+                "HB anywhere {anywhere}"
+            );
+        }
+    }
+
+    /// The periods (from `from` to `to`, 15 s apart) in which the station keyed something.
+    fn keyed_at(s: &mut Station, from: u64, to: u64) -> Vec<u64> {
+        (from / 15_000..to / 15_000)
+            .map(|k| k * 15_000)
+            .filter(|&t| drain(s, t).is_some())
+            .collect()
+    }
+
+    /// The QSO pause (JS8Call's default): selecting a call stops the HB repeat, and clearing it
+    /// turns the repeat back on, the first heartbeat one interval after the next cycle
+    /// (`callsignSelectedChanged`, mainwindow.cpp:5958-5992; `on_hbMacroButton_toggled`, :4483-4497).
+    /// With the pause off, the repeat goes on regardless.
+    #[test]
+    fn the_qso_pause_holds_the_hb_repeat_while_a_call_is_selected_and_restarts_it_after() {
+        let mut s = Station::new(StationConfig {
+            hb_interval_min: 5,
+            ..cfg()
+        });
+        s.set_hb(true, 0);
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(316_000),
+            "control: due one interval after the next cycle"
+        );
+        s.select_call(Some(" w1aw "), 100_000);
+        assert_eq!(
+            (s.hb_on(), s.hb_paused(), s.hb_next_ms()),
+            (false, true, None),
+            "W1AW selected: the repeat is paused"
+        );
+        assert_eq!(
+            keyed_at(&mut s, 105_000, 1_005_000),
+            Vec::<u64>::new(),
+            "no heartbeat while W1AW is selected (it was due in the period at 315 s)"
+        );
+        s.select_call(None, 1_000_000);
+        assert_eq!(
+            (s.hb_on(), s.hb_paused(), s.hb_next_ms()),
+            (true, false, Some(1_306_000)),
+            "cleared: the repeat is back, due one interval after the next cycle"
+        );
+        assert_eq!(
+            keyed_at(&mut s, 1_005_000, 1_600_000),
+            vec![1_305_000],
+            "and the first heartbeat goes in the period that holds it, not before"
+        );
+        let mut s = Station::new(StationConfig {
+            hb_interval_min: 5,
+            hb_qso_pause: false,
+            ..cfg()
+        });
+        s.set_hb(true, 0);
+        s.select_call(Some("W1AW"), 100_000);
+        assert_eq!(
+            keyed_at(&mut s, 105_000, 400_000),
+            vec![315_000],
+            "the QSO pause off: the heartbeat goes while W1AW is selected"
+        );
+        let mut s = Station::new(cfg());
+        s.select_call(Some("W1AW"), 0);
+        s.select_call(None, 1_000);
+        assert!(
+            !s.hb_on() && s.hb_next_ms().is_none(),
+            "a repeat that was off stays off when the selection clears"
+        );
+    }
+
+    /// A heartbeat the QSO pause holds is not turned back on after Stop TX, the idle watchdog, or
+    /// heartbeat networking turned off: clearing the To box then leaves the repeat off.
+    #[test]
+    fn a_heartbeat_the_qso_pause_holds_is_not_restarted_after_a_stop() {
+        type Stop = fn(&mut Station);
+        let stops: [(&str, Stop); 3] = [
+            ("Stop TX", |s| s.halt()),
+            ("the idle watchdog", |s| {
+                s.mark_active(1);
+                s.tick(6 * 60_000);
+            }),
+            ("networking off", |s| {
+                s.set_config(StationConfig {
+                    hb_networking: false,
+                    ..s.config().clone()
+                })
+            }),
+        ];
+        for (what, stop) in stops {
+            let mut s = Station::new(StationConfig {
+                hb_interval_min: 5,
+                idle_watchdog_min: 5,
+                ..cfg()
+            });
+            s.set_hb(true, 0);
+            s.select_call(Some("W1AW"), 1_000);
+            assert!(s.hb_paused(), "{what}: control: paused");
+            stop(&mut s);
+            // Networking back on (a no-op after the other two), so only the stop can hold it.
+            s.set_config(StationConfig {
+                hb_networking: true,
+                ..s.config().clone()
+            });
+            s.select_call(None, 400_000);
+            assert_eq!(
+                (
+                    s.hb_on(),
+                    s.hb_paused(),
+                    keyed_at(&mut s, 405_000, 1_500_000)
+                ),
+                (false, false, Vec::<u64>::new()),
+                "{what}: the repeat stays off once the To box is cleared"
+            );
+        }
+    }
+
+    /// The QSO pause (JS8Call's default): no heartbeat is acknowledged, nor asked about, while a
+    /// call is selected (processCommandActivity.cpp:647-651); once it is cleared, one is. With the
+    /// pause off the acknowledgement goes regardless.
+    #[test]
+    fn no_heartbeat_is_acknowledged_while_a_call_is_selected_with_the_qso_pause_on() {
+        let ack = Some("KD9TAW: K1ABC HEARTBEAT SNR -05".to_string());
+        for (pause, while_selected) in [(true, None), (false, ack.clone())] {
+            let mut s = Station::new(StationConfig {
+                hb_ack: true,
+                hb_qso_pause: pause,
+                ..cfg()
+            });
+            s.select_call(Some("W1AW"), 0);
+            s.on_event(&heartbeat("K1ABC", -5), 1000);
+            let selected = drain(&mut s, 15_000).map(|f| f.display);
+            s.select_call(Some(""), 20_000);
+            s.on_event(&heartbeat("K1ABC", -5), 21_000);
+            let cleared = drain(&mut s, 30_000).map(|f| f.display);
+            assert_eq!(
+                (selected, cleared),
+                (while_selected, ack.clone()),
+                "QSO pause {pause}: while W1AW is selected, then once the To box is empty"
+            );
+        }
+        let mut s = Station::new(StationConfig {
+            hb_ack: true,
+            autoreply_confirmation: true,
+            ..cfg()
+        });
+        s.select_call(Some("W1AW"), 0);
+        s.on_event(&heartbeat("K1ABC", -5), 1000);
+        assert_eq!(s.pending_reply(), None, "nothing is asked about either");
+    }
+
+    /// The QSO pause: selecting a call stops the repeating CQ for good, as JS8Call unchecks its
+    /// CQ button and never turns it back on (mainwindow.cpp:5993-6000). With the pause off the
+    /// CQ repeat goes on.
+    #[test]
+    fn selecting_a_call_stops_the_cq_repeat_with_the_qso_pause_on() {
+        for (pause, want) in [(true, vec![]), (false, vec![300_000])] {
+            let mut s = Station::new(StationConfig {
+                cq_interval_min: 5,
+                hb_qso_pause: pause,
+                ..cfg()
+            });
+            s.set_cq(true, 0, 0);
+            s.select_call(Some("W1AW"), 1_000);
+            s.select_call(None, 2_000);
+            let cqs: Vec<u64> = (1..=25u64)
+                .map(|k| k * 15_000)
+                .filter(|&t| {
+                    s.tick(t);
+                    drain(&mut s, t).is_some()
+                })
+                .collect();
+            assert_eq!(
+                (s.cq_on(), cqs),
+                (!pause, want),
+                "QSO pause {pause}: the CQ repeat after W1AW was selected and cleared"
+            );
+        }
+    }
+
+    /// Turning the HB repeat on with the QSO pause on clears the selected call, as JS8Call's HB
+    /// button does (`clearCallsignSelected`, mainwindow.cpp:4487-4490), so the acknowledgements it
+    /// held back go out again.
+    #[test]
+    fn turning_the_hb_repeat_on_clears_the_selected_call() {
+        let mut s = Station::new(StationConfig {
+            hb_ack: true,
+            hb_interval_min: 30,
+            ..cfg()
+        });
+        s.select_call(Some("W1AW"), 0);
+        assert_eq!(
+            s.hb_ack_suppressed(),
+            Some(HbAckSuppressed::QsoPause),
+            "control: held back while W1AW is selected"
+        );
+        s.set_hb(true, 1_000);
+        s.on_event(&heartbeat("K1ABC", -5), 2_000);
+        assert_eq!(
+            (
+                s.hb_ack_suppressed(),
+                drain(&mut s, 15_000).map(|f| f.display)
+            ),
+            (None, Some("KD9TAW: K1ABC HEARTBEAT SNR -05".to_string())),
+            "the selection is cleared and the heartbeat is acknowledged"
+        );
+    }
+
+    /// What holds an acknowledgement back now, in JS8Call's order: the speed, a message still
+    /// arriving, then the QSO pause. Each one is also what the station does.
+    #[test]
+    fn hb_ack_suppressed_names_what_holds_an_acknowledgement_back_now() {
+        let mut s = Station::new(StationConfig {
+            hb_ack: true,
+            ..cfg()
+        });
+        assert_eq!(s.hb_ack_suppressed(), None, "nothing holds it back");
+        s.note_rx_buffers(true, ["@ALLCALL"]);
+        assert_eq!(
+            s.hb_ack_suppressed(),
+            Some(HbAckSuppressed::Arriving),
+            "a message is still arriving"
+        );
+        s.select_call(Some("W1AW"), 0);
+        assert_eq!(
+            s.hb_ack_suppressed(),
+            Some(HbAckSuppressed::Arriving),
+            "the arriving message is named before the QSO pause"
+        );
+        s.note_rx_buffers(false, std::iter::empty::<&str>());
+        assert_eq!(
+            s.hb_ack_suppressed(),
+            Some(HbAckSuppressed::QsoPause),
+            "a call is selected"
+        );
+        s.set_config(StationConfig {
+            hb_ack: true,
+            speed: Speed::Turbo,
+            ..cfg()
+        });
+        assert_eq!(
+            s.hb_ack_suppressed(),
+            Some(HbAckSuppressed::Speed),
+            "the speed is named first"
+        );
+        s.set_config(StationConfig {
+            hb_ack: true,
+            hb_qso_pause: false,
+            ..cfg()
+        });
+        assert_eq!(
+            s.hb_ack_suppressed(),
+            None,
+            "the QSO pause off: a selected call holds nothing back"
+        );
+    }
+
+    /// JS8Call 3.0's rule (processHeartbeatRateLimit.cpp:8-38), on: a station's first heartbeat
+    /// is acknowledged and its time kept; heard again less than 55 minutes later it is
+    /// acknowledged no more, ever, as JS8Call puts it in its HB blacklist (by its call as heard,
+    /// which also covers it with a suffix). 55 minutes or more later it is acknowledged again.
+    /// Off, every heartbeat is acknowledged. Kept across launches; turning the rule off forgets it.
+    #[test]
+    fn the_55_minute_rule_stops_acknowledging_a_station_heard_again_inside_the_window() {
+        const MIN: u64 = 60_000;
+        let ack = |c: &str| Some(format!("KD9TAW: {c} HEARTBEAT SNR -05"));
+        let heard = |s: &mut Station, call: &str, t: u64| {
+            let actions = s.on_event(&heartbeat(call, -5), t);
+            (drain(s, t + 14_000).map(|f| f.display), actions)
+        };
+        let on = || StationConfig {
+            hb_ack: true,
+            hb_rate_limit: true,
+            ..cfg()
+        };
+        let mut s = Station::new(on());
+        assert_eq!(heard(&mut s, "W1AW", 0).0, ack("W1AW"), "W1AW's first");
+        assert_eq!(heard(&mut s, "K1ABC", MIN).0, ack("K1ABC"), "K1ABC's first");
+        let (keyed, actions) = heard(&mut s, "W1AW", 30 * MIN);
+        assert_eq!(
+            (keyed, s.hb_rate_blocked().to_vec()),
+            (None, vec!["W1AW".to_string()]),
+            "W1AW again 30 minutes later: not acknowledged, and no more"
+        );
+        assert!(
+            actions.contains(&StationAction::HbAckRateLimited {
+                from: "W1AW".into()
+            }),
+            "the change is reported, to be journaled: {actions:?}"
+        );
+        assert_eq!(
+            heard(&mut s, "K1ABC", MIN + 55 * MIN).0,
+            ack("K1ABC"),
+            "K1ABC again exactly 55 minutes later: acknowledged"
+        );
+        assert_eq!(
+            (
+                heard(&mut s, "W1AW", 120 * MIN).0,
+                heard(&mut s, "W1AW/P", 121 * MIN).0
+            ),
+            (None, None),
+            "W1AW two hours on, and as W1AW/P: still not"
+        );
+        // Kept across a launch.
+        let mut back = Station::new(on());
+        back.restore(s.snapshot(122 * MIN), 122 * MIN);
+        assert_eq!(
+            (
+                back.hb_rate_blocked().to_vec(),
+                heard(&mut back, "W1AW", 200 * MIN).0
+            ),
+            (vec!["W1AW".to_string()], None),
+            "restored from the journal"
+        );
+        // Off: forgotten, and every heartbeat is acknowledged.
+        s.set_config(StationConfig {
+            hb_rate_limit: false,
+            ..on()
+        });
+        assert_eq!(
+            (
+                s.hb_rate_blocked().len(),
+                heard(&mut s, "W1AW", 130 * MIN).0,
+                heard(&mut s, "W1AW", 131 * MIN).0
+            ),
+            (0, ack("W1AW"), ack("W1AW")),
+            "the rule off: W1AW a minute apart, acknowledged both times"
+        );
+        s.set_config(on());
+        assert_eq!(
+            heard(&mut s, "W1AW", 140 * MIN).0,
+            ack("W1AW"),
+            "on again: W1AW starts afresh"
+        );
+    }
+
+    /// "Do not participate in the @ALLCALL group" (processCommandActivity.cpp:181-185): a QUERY
+    /// MSGS on @ALLCALL goes unanswered even with a message waiting for the asker. The same query
+    /// addressed to me is answered, and a heartbeat is still acknowledged.
+    #[test]
+    fn not_taking_part_in_allcall_leaves_an_allcall_query_unanswered() {
+        for avoid in [false, true] {
+            let mut s = Station::new(StationConfig {
+                avoid_allcall: avoid,
+                hb_ack: true,
+                ..cfg()
+            });
+            store_for(&mut s, "K1ABC", 1_000);
+            let yes = format!("KD9TAW: K1ABC YES MSG ID {}", s.inbox()[0].id);
+            let allcall = allcall_query_msgs(&mut s, "K1ABC", 100_000);
+            s.on_event(
+                &directed("K1ABC", "KD9TAW", Some(Command::QueryMsgs), None, "", -5),
+                200_000,
+            );
+            let direct: Vec<String> = (0..6u64)
+                .filter_map(|k| drain(&mut s, 202_000 + k * 15_000))
+                .filter(|f| f.first)
+                .map(|f| f.display)
+                .collect();
+            s.on_event(&heartbeat("W1AW", -5), 400_000);
+            let hb = drain(&mut s, 415_000).map(|f| f.display);
+            assert_eq!(
+                (allcall, direct, hb),
+                (
+                    if avoid { vec![] } else { vec![yes.clone()] },
+                    vec![yes],
+                    Some("KD9TAW: W1AW HEARTBEAT SNR -05".to_string())
+                ),
+                "not taking part in @ALLCALL {avoid}"
+            );
+        }
     }
 }

@@ -526,12 +526,40 @@ pub struct Js8Armed {
     pub cq: bool,
 }
 
+/// Why an armed HB ACK would not answer a heartbeat heard now (`"speed" | "arriving" |
+/// "qsoPause"`), the station's own reason.
+pub use js8::proto::station::HbAckSuppressed as Js8HbAckSuppressed;
 /// Per origin, why it is not armed while its switch is on: `None` when it is armed or off.
 /// The same five camelCase keys as [`Js8Armed`].
 pub use js8::proto::station::Readiness as Js8NotArmed;
 /// Why an automatic origin whose switch is on is not armed, the station's own reason
 /// (`"idle" | "txOff" | "needsHb" | "needsAuto" | "needsHbAndAuto" | "unscheduled"`).
 pub use js8::proto::station::Unarmed as Js8Unarmed;
+
+/// Heartbeat networking, the QSO pause and what holds an HB ACK back, as JS8Call 3.0.3 has them:
+/// the desktop cockpit's. NOT on the Remote page's sample (`bounded_js8_state` leaves it out):
+/// that page's parser refuses a key it does not list, so it is sent there only once a page that
+/// lists it is deployed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Presence {
+    /// JS8Call's "Enable Heartbeat Networking": the HB button shows only with it on.
+    pub hb_networking: bool,
+    /// The TX speed sends heartbeats ([`js8::proto::station::heartbeat_speed`]).
+    pub hb_speed: bool,
+    /// The QSO pause holds the HB repeat until the To box is cleared.
+    pub hb_paused: bool,
+    /// Why an armed HB ACK would not answer a heartbeat heard now; `None` when it would, or when
+    /// the switch is off or not armed (its chip says why then).
+    pub hb_ack_suppressed: Option<Js8HbAckSuppressed>,
+    /// The stations the 55-minute rule has stopped acknowledging, oldest first.
+    pub hb_ack_rate_blocked: Vec<String>,
+    /// The QSO pause setting, which the cockpit reads to clear its To box when the HB repeat goes
+    /// on (JS8Call clears its selected call).
+    pub qso_pause: bool,
+    /// "Do not participate in the @ALLCALL group".
+    pub avoid_allcall: bool,
+}
 
 /// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -626,6 +654,10 @@ pub struct Js8State {
     /// The last refused verb's reason (a send that would not compose, a forbidden
     /// destination), cleared by the next successful verb.
     pub last_error: Option<String>,
+    /// The desktop's view of heartbeat networking and presence; `None`, and left out of the
+    /// JSON, on the Remote page's sample ([`Js8Presence`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<Js8Presence>,
 }
 
 /// A single chat message (inbound or outbound) within a conversation.
@@ -4986,6 +5018,7 @@ mod tests {
             }],
             pending_reply: None,
             last_error: None,
+            presence: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         for k in [

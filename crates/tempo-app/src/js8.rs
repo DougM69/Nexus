@@ -20,14 +20,14 @@ use std::path::PathBuf;
 
 use ::js8::proto::callsign::{split_portable, CallRef};
 use ::js8::proto::reassembly::RxFrame;
-use ::js8::proto::station::{FreqHint, InboxState, StationSnapshot};
+use ::js8::proto::station::{heartbeat_speed, FreqHint, InboxState, StationSnapshot};
 use ::js8::{Frame, MessageEvent, Origin, RawDecode, StationAction, StationConfig, Word87};
 use modes::Js8Speed;
 
 use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
-    Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8NotArmed, Js8PendingReply, Js8QueueRow,
-    Js8State, Js8Unarmed, SourceKind, Tier,
+    Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8NotArmed, Js8PendingReply, Js8Presence,
+    Js8QueueRow, Js8State, Js8Unarmed, SourceKind, Tier,
 };
 use crate::settings::Settings;
 
@@ -55,10 +55,17 @@ const JS8_REPLY_GONE: &str = "That automatic reply is no longer waiting: it was 
 /// …and when transmit going off drops a message the operator queued: RTTY's and PSK's words.
 const JS8_QUEUE_REFUSED_TX_OFF: &str = "JS8 stopped: transmit was turned off, so what was still \
      queued was dropped, not held for later. Send it again when you are ready.";
+/// …and a heartbeat asked for where JS8Call has no HB button: heartbeat networking off…
+const JS8_HB_NEEDS_NETWORKING: &str =
+    "No heartbeat: heartbeat networking (HB NET) is off. Turn it on first, as in JS8Call.";
+/// …or a speed JS8Call sends no heartbeats at.
+const JS8_HB_SPEED: &str = "No heartbeat at this speed: JS8Call sends heartbeats only at Slow, \
+     Normal and Fast.";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
-/// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
-/// (`autoreply | relay | hback | hb`).
+/// persisted switches, `Hb` is the session-only heartbeat schedule. `HbNet` is JS8Call's
+/// "Enable Heartbeat Networking", persisted, which keys nothing by itself: without it there is no
+/// HB button and no HB ACK. Lowercase on the wire (`autoreply | relay | hback | hb | hbnet`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Js8Switch {
@@ -66,6 +73,7 @@ pub enum Js8Switch {
     Relay,
     HbAck,
     Hb,
+    HbNet,
 }
 
 /// A callsign list from Settings as the station reads it: trimmed, upper-cased, the empties gone
@@ -129,6 +137,11 @@ impl Engine {
             autoreply_allow: js8_call_list(&s.js8_autoreply_allow),
             autoreply_deny: js8_call_list(&s.js8_autoreply_deny),
             hb_ack_deny: js8_call_list(&s.js8_hb_ack_deny),
+            hb_networking: s.js8_hb_networking,
+            hb_anywhere: s.js8_hb_anywhere,
+            hb_qso_pause: s.js8_hb_qso_pause,
+            hb_rate_limit: s.js8_hb_ack_rate_limit,
+            avoid_allcall: s.js8_avoid_allcall,
         }
     }
 
@@ -157,6 +170,9 @@ impl Engine {
         let cfg = Self::js8_station_config(&self.settings);
         if self.js8_station.config() != &cfg {
             self.js8_station.set_config(cfg);
+            // Heartbeat networking off or a speed with no heartbeats stops the HB repeat in the
+            // station; the dock reads it from here.
+            self.js8_hb_on = self.js8_station.hb_on();
         }
     }
 
@@ -223,7 +239,10 @@ impl Engine {
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
-        Some(self.js8_state())
+        // The page's parser refuses a key it does not list, and none lists `presence` yet.
+        let mut state = self.js8_state();
+        state.presence = None;
+        Some(state)
     }
 
     /// The cockpit poll. Every field is engine truth at poll time; `armed` is, per origin, the
@@ -295,6 +314,20 @@ impl Engine {
                 fires_at_ms: p.fires_at_ms,
             }),
             last_error: self.js8_last_error.clone(),
+            presence: Some(Js8Presence {
+                hb_networking: s.js8_hb_networking,
+                hb_speed: heartbeat_speed(self.js8_tx_speed()),
+                hb_paused: self.js8_station.hb_paused(),
+                // Said only of an HB ACK that is armed: one that is not says why on its chip.
+                hb_ack_suppressed: if s.js8_hb_ack && not_armed.hb_ack.is_none() {
+                    self.js8_station.hb_ack_suppressed()
+                } else {
+                    None
+                },
+                hb_ack_rate_blocked: self.js8_station.hb_rate_blocked().to_vec(),
+                qso_pause: s.js8_hb_qso_pause,
+                avoid_allcall: s.js8_avoid_allcall,
+            }),
         }
     }
 
@@ -522,12 +555,14 @@ impl Engine {
         }
     }
 
-    /// My base call, @ALLCALL, or a group I have joined (JS8Call's addressed-to-me rule).
+    /// My base call, @ALLCALL, or a group I have joined (JS8Call's addressed-to-me rule). Not
+    /// @ALLCALL while I take no part in it, as JS8Call then shows none of it as mine
+    /// (processCommandActivity.cpp:181-185).
     fn js8_addressed_to_me(&self, to: &CallRef) -> bool {
         let (my_base, _) = split_portable(self.settings.mycall.trim());
         match to {
             CallRef::Base(c) => c.eq_ignore_ascii_case(my_base),
-            CallRef::AllCall => true,
+            CallRef::AllCall => !self.settings.js8_avoid_allcall,
             CallRef::Group(_) => {
                 let g = to.render();
                 self.js8_station
@@ -575,6 +610,18 @@ impl Engine {
                     // cockpit toasts on the rising edge of `idle_tripped` (B7.9).
                     self.js8_hb_on = false;
                     self.js8_station.halt();
+                }
+                // The 55-minute rule's list changed: journaled, as JS8Call writes its HB
+                // blacklist at once (Configuration.cpp:1226-1231).
+                StationAction::HbAckRateLimited { from } => {
+                    tempo_core::applog::info(
+                        "js8",
+                        &format!(
+                            "{from} heartbeats more often than every 55 minutes: no more \
+                             heartbeat acknowledgements to it"
+                        ),
+                    );
+                    self.js8_persist();
                 }
                 // Queued/ReplyPending/HeardChanged carry no engine-side effect: the queue,
                 // pending countdown and heard list are read straight from the station at
@@ -850,17 +897,24 @@ impl Engine {
     }
 
     /// The SECOND operator act (the first is the session TX latch). Autoreply / Relay /
-    /// HB-ack persist to Settings (the Tauri command saves them); Hb is session-only and
-    /// never persisted (G3). Turning a switch ON keys nothing by itself — `plan_js8_tx`
+    /// HB-ack and heartbeat networking persist to Settings (the Tauri command saves them); Hb is
+    /// session-only and never persisted (G3), and is refused where JS8Call has no HB button. Turning a switch ON keys nothing by itself — `plan_js8_tx`
     /// still needs `tx_enabled` — but it is an operator verb: on or off, it restarts the idle
     /// count and ends an idle trip, and on, it restarts the wall-clock watchdog.
     pub fn js8_arm(&mut self, which: Js8Switch, on: bool) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         self.js8_restart_idle_clock(now_ms);
+        // The HB repeat never goes on where JS8Call has no HB button.
+        if which == Js8Switch::Hb && on {
+            if let Some(why) = self.js8_hb_refusal() {
+                return Err(why.to_string());
+            }
+        }
         match which {
             Js8Switch::Autoreply => self.settings.js8_autoreply = on,
             Js8Switch::Relay => self.settings.js8_relay = on,
             Js8Switch::HbAck => self.settings.js8_hb_ack = on,
+            Js8Switch::HbNet => self.settings.js8_hb_networking = on,
             Js8Switch::Hb => {}
         }
         let cfg = Self::js8_station_config(&self.settings);
@@ -868,13 +922,56 @@ impl Engine {
         if which == Js8Switch::Hb {
             // `Station::set_hb(true)` schedules the first heartbeat for the next period
             // (JS8Call: nextTransmitCycle + interval; interval 0 = "on demand" = once).
-            self.js8_hb_on = on;
             self.js8_station.set_hb(on, now_ms);
         }
+        // Read back: heartbeat networking off stops the HB repeat in the station.
+        self.js8_hb_on = self.js8_station.hb_on();
         if on {
             self.reset_tx_watchdog();
         }
         Ok(())
+    }
+
+    /// Why no heartbeat may go out now, as JS8Call has no HB button then: heartbeat networking
+    /// off, or a speed it sends none at (`prepareHeartbeatMode`, mainwindow.cpp:4124-4130).
+    fn js8_hb_refusal(&self) -> Option<&'static str> {
+        if !self.settings.js8_hb_networking {
+            Some(JS8_HB_NEEDS_NETWORKING)
+        } else if !heartbeat_speed(self.js8_tx_speed()) {
+            Some(JS8_HB_SPEED)
+        } else {
+            None
+        }
+    }
+
+    /// "Send Heartbeat Now", from the HB button's menu (`sendHB`, mainwindow.cpp:4321-4323): one
+    /// heartbeat, keyed in the next period whether or not the HB repeat is on, which it leaves as
+    /// it is. An operator verb, refused where JS8Call has no HB button and without a callsign and
+    /// locator, as every send is.
+    pub fn js8_heartbeat_now(&mut self) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_restart_idle_clock(now_ms);
+        let r = match self.js8_hb_refusal() {
+            Some(why) => Err(why.to_string()),
+            None => self.js8_identity_set(),
+        }
+        .and_then(|()| {
+            self.js8_station
+                .heartbeat_now(now_ms)
+                .map_err(Self::js8_compose_error)
+        });
+        self.js8_after_verb(&r);
+        r
+    }
+
+    /// The call in the cockpit's To box, JS8Call's selected call, for the QSO pause
+    /// (`Station::select_call`). Not an operator act: the box also changes by itself (a reply the
+    /// station puts in the compose box clears it). Keys nothing; clearing it may turn a paused HB
+    /// repeat back on, whose first heartbeat is one interval away.
+    pub fn js8_select_call(&mut self, call: Option<String>) {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_station.select_call(call.as_deref(), now_ms);
+        self.js8_hb_on = self.js8_station.hb_on();
     }
 
     /// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant, ignored when disarming).
@@ -1119,8 +1216,16 @@ impl Engine {
             // toggle is on — that toggle IS the second act. Neither is persisted (G3), and
             // the schedule behind both is cancelled by Stop TX, the idle watchdog, a tier
             // change and a mode change, so there is no state here to re-read.
-            Origin::Operator | Origin::Heartbeat | Origin::CqRepeat => true,
-            Origin::HbAck => self.settings().js8_hb_ack,
+            Origin::Operator | Origin::CqRepeat => true,
+            // …and a heartbeat or its acknowledgement keys only where JS8Call sends them:
+            // heartbeat networking on, at Slow, Normal or Fast. The station drops both when
+            // either changes; this holds should one reach the planner anyway.
+            Origin::Heartbeat => self.settings().js8_hb_networking && heartbeat_speed(speed),
+            Origin::HbAck => {
+                self.settings().js8_hb_ack
+                    && self.settings().js8_hb_networking
+                    && heartbeat_speed(speed)
+            }
             Origin::AutoReply => self.settings().js8_autoreply,
             Origin::Relay => self.settings().js8_relay,
         };
@@ -1155,10 +1260,10 @@ impl Engine {
         // f0: the operator's TX offset, or the station's HB sub-band pick — an AUDIO
         // offset only. JS8Call's `sendHeartbeat` (mainwindow.cpp:6279) keeps an operator at
         // or below 1000 Hz on their own offset; `sendHeartbeatAck` (:6299) has no such rule,
-        // so an HB-ACK always takes the pick. Its `heartbeat_anywhere` has no Nexus
-        // setting, and upstream it defaults off, which is this. A pick outside 500–1000 Hz
-        // cannot come from a correct station; fall back to the operator's offset rather
-        // than trust it.
+        // so an HB-ACK always takes the pick. With `heartbeat_anywhere` on (Settings, off by
+        // default as upstream) the station hands both out on `FreqHint::Dial`, the operator's
+        // offset. A pick outside 500–1000 Hz cannot come from a correct station; fall back to
+        // the operator's offset rather than trust it.
         let own_offset = self.tx_offset_hz() <= 1000.0;
         let f0 = match tf.freq_hint {
             FreqHint::Dial => self.tx_offset_hz(),
@@ -1214,9 +1319,16 @@ mod tests {
             let before = serde_json::to_value(e.js8_state()).unwrap();
             assert!(!before["activity"].as_array().unwrap().is_empty());
             assert!(!before["queue"].as_array().unwrap().is_empty());
+            // The desktop's `presence` is the one key the Remote's sample leaves out (the page's
+            // parser does not list it yet); everything else is the native state, unchanged.
+            let mut native = before.clone();
+            assert!(
+                native.as_object_mut().unwrap().remove("presence").is_some(),
+                "control: the desktop's state carries presence"
+            );
             assert_eq!(
                 serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),
-                before
+                native
             );
             assert_eq!(serde_json::to_value(e.js8_state()).unwrap(), before);
             assert!(!e.snapshot().radio.tx_enabled);
@@ -1771,6 +1883,8 @@ mod tests {
         let mut e = Engine::new("KD9TAW", grid, 0);
         e.settings.js8_hb_interval_min = hb_min;
         e.settings.js8_autoreply_confirmation = false;
+        // Heartbeat networking on: JS8Call sends no heartbeat and no HB ACK without it.
+        e.settings.js8_hb_networking = true;
         e.js8_apply_station_config();
         e.js8_enter();
         e.set_frequency(14.078, "20m", "USB");
@@ -1912,17 +2026,18 @@ mod tests {
 
     /// The free-offset test is JS8Call's `isFreqOffsetFree(f, 50)` (:5566): nothing heard within
     /// 50 Hz in the last 30 s. The 50 is `findFreeFreqOffset(500, 1000, 50)`'s literal argument
-    /// at every speed, not the signal's bandwidth, so at Turbo (160 Hz wide) a station heard at
-    /// 700 Hz keeps the heartbeat off 700 and not off its neighbours.
+    /// at every speed, not the signal's bandwidth, so at Fast (80 Hz wide; JS8Call sends no
+    /// heartbeat at Turbo) a station heard at 700 Hz keeps the heartbeat off 700 and not off its
+    /// neighbours 650 and 750, which a bandwidth rule would take too.
     #[test]
     fn a_heard_station_keeps_the_js8_heartbeat_off_fifty_hertz_around_it_at_every_speed() {
         let mut offsets = std::collections::BTreeSet::new();
         for seed in 1..=40u32 {
             let mut e = hb_engine("EN52", 0, 1500.0);
-            e.js8_set_speed(3).expect("Turbo");
-            let slot = now_unix_secs() / 6 + 1;
+            e.js8_set_speed(2).expect("Fast");
+            let slot = now_unix_secs() / 10 + 1;
             e.js8_ingest(
-                &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Turbo, 700.0)],
+                &[row(&hb("W1AW", "FN31"), whole(), Js8Speed::Fast, 700.0)],
                 slot - 1,
             );
             e.js8_arm(Js8Switch::Hb, true).expect("HB on");
@@ -1941,6 +2056,10 @@ mod tests {
         assert!(
             offsets.iter().any(|f| (550..=850).contains(f) && *f != 700),
             "only 50 Hz either side of 700 is busy, so its neighbours are used: {offsets:?}"
+        );
+        assert!(
+            offsets.contains(&650) || offsets.contains(&750),
+            "650 and 750 are 50 Hz off, free, though inside Fast's 80 Hz: {offsets:?}"
         );
     }
 
@@ -2028,14 +2147,18 @@ mod tests {
         );
     }
 
-    /// TX on, AUTOREPLY and HB ACK on, HB off: JS8Call answers a heartbeat only in its heartbeat
-    /// mode with AUTO and the acknowledgements on (mainwindow.cpp:9061), and so does the station
+    /// TX on, AUTOREPLY and HB ACK on, heartbeat networking off: JS8Call answers a heartbeat only
+    /// in its heartbeat networking mode with AUTO and the acknowledgements on
+    /// (processCommandActivity.cpp:634-638; 2.3: mainwindow.cpp:9061), and so does the station
     /// (`maybe_hb_ack`), so a heard heartbeat draws nothing. The HB ACK chip must not read armed
-    /// then, and it names HB as what it needs. With HB on it reads armed, and the heartbeat is
-    /// answered on the air.
+    /// then, and it names networking as what it needs. With networking on it reads armed, and
+    /// the heartbeat is answered on the air, the HB repeat still off: the repeat is not what an
+    /// acknowledgement needs.
     #[test]
-    fn hb_ack_without_hb_is_not_armed_and_says_hb_is_what_it_needs() {
+    fn hb_ack_without_heartbeat_networking_is_not_armed_and_says_what_it_needs() {
         let mut e = hb_engine("EN52", 30, 1500.0); // our own heartbeat would be 30 min away
+        e.js8_arm(Js8Switch::HbNet, false)
+            .expect("heartbeat networking off");
         e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
         let heard = |e: &mut Engine| {
             e.js8_ingest(
@@ -2051,7 +2174,8 @@ mod tests {
         assert_eq!(
             (st.armed.hb_ack, st.not_armed.hb_ack),
             (false, Some(Js8Unarmed::NeedsHb)),
-            "HB ACK is not armed while HB is off, and says HB is what it needs"
+            "HB ACK is not armed while heartbeat networking is off, and says that is what it \
+             needs"
         );
         heard(&mut e);
         let overs = run_js8_loop(&mut e, 60);
@@ -2060,12 +2184,13 @@ mod tests {
             "…and a heard heartbeat draws nothing: {overs:?}"
         );
 
-        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_arm(Js8Switch::HbNet, true)
+            .expect("heartbeat networking on");
         let st = e.js8_state();
         assert_eq!(
-            (st.armed.hb_ack, st.not_armed.hb_ack),
-            (true, None),
-            "control: with HB on, HB ACK is armed"
+            (st.armed.hb_ack, st.not_armed.hb_ack, st.hb_on),
+            (true, None, false),
+            "control: with heartbeat networking on, HB ACK is armed, the HB repeat still off"
         );
         heard(&mut e);
         let overs = run_js8_loop(&mut e, 60);
@@ -2912,10 +3037,12 @@ mod tests {
     }
 
     /// A switch that is off reads off, with no reason, whatever the station would need for it:
-    /// HB ACK off with HB off is not "HB ACK needs HB".
+    /// HB ACK off with heartbeat networking off is not "HB ACK needs HB".
     #[test]
     fn a_switch_that_is_off_carries_no_reason() {
-        let e = hb_engine("EN52", 30, 1500.0);
+        let mut e = hb_engine("EN52", 30, 1500.0);
+        e.js8_arm(Js8Switch::HbNet, false)
+            .expect("heartbeat networking off");
         let st = e.js8_state();
         assert!(!st.hb_ack && !st.hb_on, "precondition: HB ACK and HB off");
         assert_eq!(
@@ -3050,11 +3177,11 @@ mod tests {
     /// notice names (a send, a switch, a speed, Read or Delete in the Inbox) ends it. Measured on
     /// the station, which is what keys, and on the dock, which must agree, switch by switch and on
     /// whether each would act now: AUTOREPLY, RELAY and HB ACK come back as Settings has them, HB
-    /// and the repeating CQ stay off until their own switch, so HB ACK is back on but not armed,
-    /// needing HB. In every catalog the notice opens with the switches the trip turned off, and in
-    /// both strings the last clause names exactly the ones still off and the clause before it
-    /// exactly the ones back. The words said "any send or switch re-arms them", the
-    /// heartbeat included, and "off until you send something".
+    /// and the repeating CQ stay off until their own switch, and HB ACK, needing heartbeat
+    /// networking rather than the HB repeat, is armed again. In every catalog the notice opens
+    /// with the switches the trip turned off, and in both strings the last clause names exactly
+    /// the ones still off and the clause before it exactly the ones back. The words said "any
+    /// send or switch re-arms them", the heartbeat included, and "off until you send something".
     #[test]
     fn the_idle_notice_and_the_dock_line_say_what_the_next_act_gives_back() {
         type Act = fn(&mut Engine);
@@ -3169,9 +3296,10 @@ mod tests {
             }
             let st = e.js8_state();
             assert_eq!(
-                (st.hb_ack, st.armed.hb_ack, st.not_armed.hb_ack),
-                (true, false, Some(Js8Unarmed::NeedsHb)),
-                "{name}: HB ACK is back on, and needs HB, still off, to answer"
+                (st.hb_ack, st.armed.hb_ack, st.not_armed.hb_ack, st.hb_on),
+                (true, true, None, false),
+                "{name}: HB ACK is back on and armed, heartbeat networking still on, though the \
+                 HB repeat is still off: the repeat is not what it needs"
             );
             let now = (turned_off, set(&after, true), set(&after, false));
             match &measured {
@@ -4177,5 +4305,366 @@ mod tests {
         assert_eq!(c.autoreply_allow, ["W1AW", "K1ABC"]);
         assert_eq!(c.autoreply_deny, ["N0XYZ"]);
         assert_eq!(c.hb_ack_deny, ["KD2UWR"]);
+    }
+
+    // ===== heartbeat networking and presence, as JS8Call 3.0.3 has them =====
+
+    /// `call`'s heartbeat, heard now at 1200 Hz (Normal).
+    fn heard_hb(e: &mut Engine, call: &str) {
+        e.js8_ingest(
+            &[row(&hb(call, "FN31"), whole(), Js8Speed::Normal, 1200.0)],
+            now_unix_secs() / 15,
+        );
+    }
+
+    /// What the station has keyed, as the activity pane books it.
+    fn booked(e: &Engine) -> Vec<String> {
+        e.js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect()
+    }
+
+    /// The five switches reach the station as Settings has them.
+    #[test]
+    fn the_js8_heartbeat_and_presence_switches_reach_the_station() {
+        let s = Settings {
+            js8_hb_networking: true,
+            js8_hb_anywhere: true,
+            js8_hb_qso_pause: false,
+            js8_hb_ack_rate_limit: true,
+            js8_avoid_allcall: true,
+            ..Settings::default()
+        };
+        let c = Engine::js8_station_config(&s);
+        assert_eq!(
+            (
+                c.hb_networking,
+                c.hb_anywhere,
+                c.hb_qso_pause,
+                c.hb_rate_limit,
+                c.avoid_allcall
+            ),
+            (true, true, false, true, true)
+        );
+    }
+
+    /// "Send Heartbeat Now" (JS8Call's HB button menu, `sendHB`, mainwindow.cpp:4321-4323): one
+    /// heartbeat over in the next period, for an operator at 1500 Hz on a free 500-1000 Hz spot,
+    /// booked where it keyed. The HB repeat stays as it was: off.
+    #[test]
+    fn a_js8_heartbeat_sent_now_keys_once_in_the_next_period() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_heartbeat_now().expect("sent now");
+        let overs = run_js8_loop(&mut e, 60);
+        let [(_, f0)] = overs[..] else {
+            panic!("one heartbeat over, got {overs:?}");
+        };
+        assert!(
+            (500.0..=950.0).contains(&f0) && f0 % 50.0 == 0.0,
+            "on a free heartbeat spot: {f0}"
+        );
+        let st = e.js8_state();
+        let mine: Vec<(String, f32)> = st
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| (r.text.clone(), r.freq_hz))
+            .collect();
+        assert_eq!(
+            (mine, st.hb_on),
+            (vec![("KD9TAW: @HB HEARTBEAT EN52".to_string(), f0)], false),
+            "booked where it keyed, and the repeat is still off"
+        );
+    }
+
+    /// A heartbeat, sent now or by the repeat, is refused where JS8Call has no HB button:
+    /// heartbeat networking off, or a speed it sends none at. Nothing keys, and the operator reads
+    /// why.
+    #[test]
+    fn a_js8_heartbeat_is_refused_without_networking_or_at_turbo() {
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_arm(Js8Switch::HbNet, false).expect("networking off");
+        assert_eq!(
+            (e.js8_heartbeat_now(), e.js8_arm(Js8Switch::Hb, true)),
+            (
+                Err(JS8_HB_NEEDS_NETWORKING.to_string()),
+                Err(JS8_HB_NEEDS_NETWORKING.to_string())
+            ),
+            "networking off"
+        );
+        assert_eq!(
+            (run_js8_loop(&mut e, 60), e.js8_state().hb_on),
+            (Vec::new(), false),
+            "networking off: nothing keys"
+        );
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_set_speed(3).expect("Turbo");
+        assert_eq!(
+            (e.js8_heartbeat_now(), e.js8_arm(Js8Switch::Hb, true)),
+            (Err(JS8_HB_SPEED.to_string()), Err(JS8_HB_SPEED.to_string())),
+            "Turbo"
+        );
+        assert_eq!(
+            (run_js8_loop(&mut e, 60), e.js8_state().hb_on),
+            (Vec::new(), false),
+            "Turbo: nothing keys"
+        );
+    }
+
+    /// At Turbo neither a heartbeat nor an HB ACK keys: switching to it stops a running HB repeat
+    /// and drops an HB ACK waiting to key, and a heartbeat heard there is not answered. No over at
+    /// all in two minutes. Back at Normal the same heartbeat is answered (the control).
+    #[test]
+    fn at_turbo_no_js8_heartbeat_or_hb_ack_keys() {
+        let mut e = hb_engine("EN52", 1, 1500.0);
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        heard_hb(&mut e, "W1AW");
+        assert!(
+            !e.js8_state().queue.is_empty() && e.js8_state().hb_on,
+            "control: an HB ACK waits and the repeat is on"
+        );
+        e.js8_set_speed(3).expect("Turbo");
+        let st = e.js8_state();
+        assert_eq!(
+            (st.hb_on, st.queue.len()),
+            (false, 0),
+            "Turbo: the repeat stopped and the HB ACK was dropped"
+        );
+        heard_hb(&mut e, "K1ABC");
+        assert_eq!(
+            (run_js8_loop(&mut e, 120), booked(&e)),
+            (Vec::new(), Vec::<String>::new()),
+            "nothing keys at Turbo"
+        );
+        e.js8_set_speed(1).expect("Normal");
+        heard_hb(&mut e, "K1ABC");
+        let overs = run_js8_loop(&mut e, 60);
+        assert_eq!(
+            booked(&e),
+            ["KD9TAW: K1ABC HEARTBEAT SNR -07"],
+            "control: at Normal the heartbeat is answered: {overs:?}"
+        );
+    }
+
+    /// The planner's own hold: a heartbeat or HB ACK keys only with heartbeat networking on and at
+    /// a speed that heartbeats, as Settings has them at plan time. A station not yet told (its
+    /// config stale) is what it holds; with Settings unchanged both key (the control).
+    #[test]
+    fn the_planner_withholds_a_heartbeat_or_hb_ack_settings_no_longer_allow() {
+        type Stale = fn(&mut Engine);
+        let rows: [(&str, Stale, usize); 3] = [
+            ("unchanged", |_| {}, 2),
+            ("Turbo", |e| e.settings.js8_speed = 3, 0),
+            (
+                "networking off",
+                |e| e.settings.js8_hb_networking = false,
+                0,
+            ),
+        ];
+        for (what, stale, keys) in rows {
+            let mut e = hb_engine("EN52", 30, 1500.0);
+            e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+            e.js8_heartbeat_now().expect("sent now");
+            heard_hb(&mut e, "W1AW");
+            stale(&mut e);
+            assert!(
+                e.js8_station.hb_allowed(),
+                "{what}: control: the station still holds its old config"
+            );
+            let overs = run_js8_loop(&mut e, 60);
+            assert_eq!(
+                (overs.len(), booked(&e).len()),
+                (keys, keys),
+                "{what}: what keys and is booked: {overs:?}"
+            );
+        }
+    }
+
+    /// "Allow heartbeat transmissions outside of heartbeat sub-channel": on, a heartbeat and an HB
+    /// ACK key on the operator's 1500 Hz; off, each on a free spot in 500-1000 Hz.
+    #[test]
+    fn with_hb_anywhere_a_js8_heartbeat_and_hb_ack_key_on_the_tx_offset() {
+        for anywhere in [false, true] {
+            let mut e = hb_engine("EN52", 30, 1500.0);
+            e.settings.js8_hb_anywhere = anywhere;
+            e.js8_apply_station_config();
+            e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+            e.js8_heartbeat_now().expect("sent now");
+            heard_hb(&mut e, "W1AW");
+            let f0s: Vec<f32> = run_js8_loop(&mut e, 60).iter().map(|o| o.1).collect();
+            if anywhere {
+                assert_eq!(f0s, [1500.0, 1500.0], "anywhere: both on the TX offset");
+            } else {
+                assert!(
+                    f0s.len() == 2 && f0s.iter().all(|f| (500.0..=950.0).contains(f)),
+                    "not anywhere: both on free heartbeat spots: {f0s:?}"
+                );
+            }
+        }
+    }
+
+    /// The To box is JS8Call's selected call for the QSO pause (on by default): while it holds a
+    /// call the HB repeat is paused and no heartbeat is answered; cleared, the repeat is back and
+    /// one is. Turning the repeat on with a call there clears the station's selection, as
+    /// JS8Call's HB button does.
+    #[test]
+    fn the_js8_to_box_is_the_selected_call_for_the_qso_pause() {
+        use crate::dto::Js8HbAckSuppressed;
+        let mut e = hb_engine("EN52", 5, 1500.0);
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_select_call(Some(" w1aw ".into()));
+        let st = e.js8_state();
+        let p = st.presence.clone().expect("the desktop's presence");
+        assert_eq!(
+            (st.hb_on, p.hb_paused, p.hb_ack_suppressed),
+            (false, true, Some(Js8HbAckSuppressed::QsoPause)),
+            "W1AW in the To box: the repeat paused, an HB ACK held back"
+        );
+        heard_hb(&mut e, "K1ABC");
+        assert_eq!(
+            (run_js8_loop(&mut e, 60), booked(&e)),
+            (Vec::new(), Vec::<String>::new()),
+            "nothing keys while W1AW is selected"
+        );
+        e.js8_select_call(None);
+        let st = e.js8_state();
+        assert_eq!(
+            (st.hb_on, st.presence.map(|p| p.hb_paused)),
+            (true, Some(false)),
+            "the To box cleared: the repeat is back"
+        );
+        heard_hb(&mut e, "K1ABC");
+        run_js8_loop(&mut e, 60);
+        assert_eq!(
+            booked(&e),
+            ["KD9TAW: K1ABC HEARTBEAT SNR -07"],
+            "and the heartbeat is answered"
+        );
+        e.js8_select_call(Some("W1AW".into()));
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        assert_eq!(
+            e.js8_state().presence.map(|p| p.hb_ack_suppressed),
+            Some(None),
+            "turning the repeat on cleared the selected call"
+        );
+    }
+
+    /// The desktop's cockpit reads presence; the Remote page's sample carries no such key, as that
+    /// page's parser refuses a key it does not list. At Turbo an armed HB ACK says the speed
+    /// holds it back.
+    #[test]
+    fn js8_presence_reaches_the_desktop_and_not_the_remote_sample() {
+        use crate::dto::Js8HbAckSuppressed;
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_avoid_allcall = true;
+        e.js8_apply_station_config();
+        assert_eq!(
+            e.js8_state().presence,
+            Some(Js8Presence {
+                hb_networking: true,
+                hb_speed: true,
+                hb_paused: false,
+                hb_ack_suppressed: None,
+                hb_ack_rate_blocked: Vec::new(),
+                qso_pause: true,
+                avoid_allcall: true,
+            })
+        );
+        let sample = e.bounded_js8_state().expect("bounded");
+        let json = serde_json::to_value(&sample).expect("serialises");
+        assert!(
+            sample.presence.is_none() && json.get("presence").is_none(),
+            "the Remote's sample carries no presence"
+        );
+        e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+        e.js8_set_speed(3).expect("Turbo");
+        assert_eq!(
+            e.js8_state()
+                .presence
+                .map(|p| (p.hb_speed, p.hb_ack_suppressed)),
+            Some((false, Some(Js8HbAckSuppressed::Speed))),
+            "Turbo: no heartbeats, and the armed HB ACK says why"
+        );
+    }
+
+    /// Not taking part in @ALLCALL, an @ALLCALL query is not marked as addressed to me in the
+    /// activity pane; taking part (the default), it is.
+    #[test]
+    fn allcall_traffic_is_not_shown_as_mine_while_i_take_no_part_in_it() {
+        for avoid in [false, true] {
+            let mut e = hb_engine("EN52", 0, 1500.0);
+            e.settings.js8_avoid_allcall = avoid;
+            e.js8_apply_station_config();
+            let q = Frame::Directed {
+                from: CallRef::Base("W1AW".to_string()),
+                to: CallRef::AllCall,
+                cmd: Command::QueryMsgs,
+                num: None,
+                portable_from: false,
+                portable_to: false,
+            };
+            e.js8_ingest(&[row(&q, whole(), Js8Speed::Normal, 1200.0)], 0);
+            let r = e.js8_state().activity.last().cloned().expect("the row");
+            assert_eq!(
+                r.directed_to_me, !avoid,
+                "not taking part in @ALLCALL {avoid}"
+            );
+        }
+    }
+
+    /// The 55-minute rule's list is journaled the moment it changes, and a journal that holds it
+    /// keeps the station from answering: W1AW, heard twice within the window, draws one HB ACK;
+    /// the journal then holds it, and a fresh engine loading it answers K1ABC but not W1AW.
+    #[test]
+    fn the_55_minute_rule_list_is_kept_in_the_js8_journal() {
+        let dir = std::env::temp_dir().join(format!("nexus-js8-hbrate-{}", std::process::id()));
+        let path = dir.join("js8_station.json");
+        let _ = std::fs::remove_file(&path);
+        let with_rule = |e: &mut Engine| {
+            e.settings.js8_hb_ack_rate_limit = true;
+            e.js8_apply_station_config();
+            e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
+        };
+        let mut e = hb_engine("EN52", 30, 1500.0);
+        e.set_js8_journal_path(path.clone());
+        with_rule(&mut e);
+        heard_hb(&mut e, "W1AW");
+        heard_hb(&mut e, "W1AW");
+        run_js8_loop(&mut e, 60);
+        assert_eq!(
+            (
+                booked(&e),
+                e.js8_state().presence.map(|p| p.hb_ack_rate_blocked)
+            ),
+            (
+                vec!["KD9TAW: W1AW HEARTBEAT SNR -07".to_string()],
+                Some(vec!["W1AW".to_string()])
+            ),
+            "one HB ACK, then W1AW is on the rule's list"
+        );
+        e.station.journals.settle();
+        let text = std::fs::read_to_string(&path).expect("journaled");
+        assert!(
+            text.contains(r#""hbRateBlocked":["W1AW"]"#),
+            "the journal holds the list: {text}"
+        );
+        let mut fresh = hb_engine("EN52", 30, 1500.0);
+        with_rule(&mut fresh);
+        fresh.js8_load_journal(&text);
+        heard_hb(&mut fresh, "W1AW");
+        heard_hb(&mut fresh, "K1ABC");
+        run_js8_loop(&mut fresh, 60);
+        assert_eq!(
+            booked(&fresh),
+            ["KD9TAW: K1ABC HEARTBEAT SNR -07"],
+            "after the launch: K1ABC answered, W1AW not"
+        );
+        drop((e, fresh)); // their journal writes land before the folder goes
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
