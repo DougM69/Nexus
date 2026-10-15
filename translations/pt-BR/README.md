@@ -115,7 +115,7 @@ you like.
 | **2** | 314 | First run — the setup wizard and the Getting Started guide. The first thing a new operator meets. |
 | **3** | 1050 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
 | **4** | 473 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
-| **5** | 3014 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
+| **5** | 3031 | The other cockpits and features: Phone, CW, Tempo, RTTY, PSK, SSTV, APRS, JS8, satellites, the map, awards, memories. |
 | **6** | 1497 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 
 **Tier 1 on its own is a real release.** 741 rows, about 31,000 characters — roughly 9% of the

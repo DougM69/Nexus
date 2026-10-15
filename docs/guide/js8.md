@@ -45,9 +45,21 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 - **Stations** — everyone heard, with grid, SNR, offset, speed, age, and chips for a
   recent heartbeat, a recent CQ, and any messages you hold for them. Click a callsign to
   address it; the five quick buttons send **SNR? · GRID? · INFO? · HEARING? · QUERY MSGS**
-  to that station, which answers by itself if its auto-reply is on.
+  to that station, which answers by itself if its auto-reply is on. **Store…** at the end of a
+  row leaves a message at your station for that station, as JS8Call's Store Message does: it
+  waits in the Inbox, from your call, and goes out only when the station asks for it (QUERY
+  MSGS, then QUERY MSG n). Storing it sends nothing.
 - **Inbox** — messages addressed to you, and **MSG TO:** messages you are holding for
-  someone else until they collect them (store and forward). Mark read, delete.
+  someone else until they collect them (store and forward). Mark read, delete. A message held
+  for one station stays until you delete it, as in JS8Call. One left for a group
+  (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends
+  QUERY MSGS to the group, and handed to each of them once. The inbox keeps at most 100 messages
+  (and 64 KB) of yours and as many held for others; when it is full, a message already handed
+  over goes first, then the oldest, and a note at the top of the Inbox says which message went
+  and why until you press **Clear notes**. A held message is handed over in one transmission,
+  which holds at most 19 frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo; one that needs
+  more is not offered or handed over until you change to a speed it fits, and its row says so and
+  names that speed.
 - **Log** — the log strip, prefilled from the station you last addressed. A JS8 QSO logs
   as `MFSK` / `JS8` in ADIF.
 - **Boxes** — up to six panes of [Conditions](connect.md) among these, from ⊞ Panels ▸
@@ -91,9 +103,12 @@ so every frame identifies you.
 Everything automatic is gated twice. The first act is the **TX On** latch in the header —
 never remembered across launches. The second is the switch for that kind of transmission:
 **AUTOREPLY** (answers SNR?, GRID?, INFO?, STATUS?, HEARING?, QUERY MSGS addressed to you,
+QUERY CALL — "YES -12 (5M)", the SNR and how long ago you last heard the station asked about,
+on @ALLCALL too but once per station in 15 minutes — and AGN? with your last transmission again,
 and acknowledges with an ACK a MSG to you or to a group you joined, or a MSG TO: you hold for
 another station, as JS8Call does; with it off, the answer, the ACK or a relay is put in the
-message box for you to send instead, and nothing keys by itself),
+message box for you to send instead, and nothing keys by itself; QUERY CALL and QUERY MSGS are
+not answered at all with it off, as in JS8Call),
 **RELAY** (passes on messages routed through your callsign and holds MSG TO: traffic),
 **HB ACK** (answers heartbeats with your report, but only while **HB NET** and **AUTOREPLY** are
 on as well, as in JS8Call) — those three persist in Settings, at
@@ -101,6 +116,9 @@ JS8Call's defaults (on, on, off) — and **HB**, the heartbeat schedule, which i
 session-only. A chip lights only when what it switches can go out now. One that is on but
 cannot says why when you point at it (TX is off, the idle watchdog holds it, or it needs
 another switch), and nothing keys.
+Replies about held messages read as JS8Call 3.0's: `YES MSG ID 4 +2` says two more wait after
+message 4, a delivery ends `NEXT MSG ID 5` when another waits, and a heartbeat acknowledgement
+carries `MSG ID 4 +2)`, as JS8Call 3.0.3 sends it.
 
 **Heartbeats, as JS8Call 3.0 has them.** **HB NET** is JS8Call's *Enable Heartbeat
 Networking*: off by default and remembered, it sends nothing by itself, and without it there
@@ -108,7 +126,10 @@ is no **HB** button and no heartbeat acknowledgement. **HB** starts the repeat (
 the interval; the first heartbeat goes one interval after you switch it on), or at interval 0
 sends one heartbeat. Its menu has **Send heartbeat now** and, with an interval set, **Start**
 or **Stop heartbeat timer**. Heartbeats and acknowledgements go out at Slow, Normal and Fast
-only: at JS8 40 and JS8 60 **HB** disappears, **HB NET** is greyed out, and a running repeat stops. With the
+only: at JS8 40 and JS8 60 **HB** disappears, **HB NET** is greyed out, and a running repeat stops. As in
+JS8Call, a heartbeat counts as @ALLCALL traffic: a station's heartbeat is acknowledged at most once
+in 15 minutes, and a station just acknowledged, or just answered on @ALLCALL, gets neither again
+for 15 minutes; the log says when a heartbeat goes unacknowledged for this. With the
 **QSO pause** (on by default), a call in the **To** box pauses the heartbeat repeat until you
 clear the box, holds back every acknowledgement, and stops a repeating CQ; switching **HB** on
 clears the **To** box. When **HB ACK** is on but held back for one of these reasons (the speed,

@@ -637,6 +637,12 @@ const MIGRATED = [
   // transmission: HB off cancels a schedule, and "Send heartbeat now" is a sender.
   'components/Js8Heartbeat.tsx',
   'components/Js8HeartbeatSettings.tsx',
+  // JS8's "Store message…" box and the Inbox's notes of what a cap removed — migrated from birth.
+  'components/Js8StoreMessage.tsx',
+  'components/Js8InboxDropped.tsx',
+  // …and the note on a held message's Inbox row that it is too long to hand over at this speed —
+  // migrated from birth; the speed's name is the mode's token.
+  'components/Js8InboxTooLong.tsx',
 ]
 
 /**

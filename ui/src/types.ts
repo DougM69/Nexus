@@ -1932,6 +1932,27 @@ export interface Js8InboxEntry {
   snrDb: number
 }
 
+/** Which cap took a message out of the inbox: the count (100 a half) or the bytes (64 KB). */
+export type Js8DropReason = 'count' | 'bytes'
+
+/** A message a cap took out of the inbox: when, why, and the row itself (its `state` says whose
+ * mail it was). Kept until the operator clears the notes. */
+export interface Js8InboxDrop {
+  atMs: number
+  why: Js8DropReason
+  entry: Js8InboxEntry
+}
+
+/** A held message too long to hand over at the current speed, which the station does not offer:
+ * its hand-over needs `frames`, one transmission at this speed holds `max`, and it goes at
+ * `fitsAt` (null: at no speed). */
+export interface Js8InboxTooLong {
+  id: number
+  frames: number
+  max: number
+  fitsAt: Js8Speed | null
+}
+
 /** One outbox row (empty in the receive-only build). */
 export interface Js8QueueRow {
   origin: Js8Origin
@@ -1996,6 +2017,11 @@ export interface Js8State {
   activity: Js8ActivityRow[]
   stations: Js8Heard[]
   inbox: Js8InboxEntry[]
+  /** What a cap took out of the inbox, oldest first, at most ten. Absent while there are none. */
+  inboxDropped?: Js8InboxDrop[]
+  /** Held messages too long to hand over at the current speed. Absent while there are none, and
+   * from the Remote page's sample. */
+  inboxTooLong?: Js8InboxTooLong[]
   queue: Js8QueueRow[]
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */
