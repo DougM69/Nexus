@@ -449,6 +449,16 @@ pub struct Heard {
     pub last_hb: bool,
     pub last_cq: bool,
     pub stored_msgs: u8,
+    /// JS8Call's `ackTimestamp`, its call list's ★ "Hearing Your Station": when this station last
+    /// sent something addressed to my call or its base call (`toMe`, processCommandActivity.cpp:59-65),
+    /// kept until a later one, as `logCallActivity` keeps it (mainwindow.cpp:2302-2304). Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ack_ms: Option<u64>,
+    /// JS8Call's `cqTimestamp`, its call list's ☎ "Calling CQ" for five minutes
+    /// (displayCallActivity.cpp:203-205): when this station last called CQ (processCommandActivity.cpp:746),
+    /// kept until a later one. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cq_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -929,6 +939,8 @@ impl Station {
         // The messages held for the station as it was heard, found as its queries find them.
         let who = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let stored = self.inbox.iter().filter(|e| held_for(e, &who)).count() as u8;
+        let ack_ms = self.is_to_me(&m.to_text).then_some(m.last_ms);
+        let cq_ms = m.cq.is_some().then_some(m.last_ms);
         if let Some(h) = self.heard.iter_mut().find(|h| h.call == call) {
             h.snr_db = m.snr_db;
             h.freq_hz = m.freq_hz;
@@ -940,6 +952,8 @@ impl Station {
                 h.grid = grid;
             }
             h.stored_msgs = stored;
+            h.ack_ms = ack_ms.or(h.ack_ms);
+            h.cq_ms = cq_ms.or(h.cq_ms);
         } else {
             self.heard.push(Heard {
                 call,
@@ -951,6 +965,8 @@ impl Station {
                 last_hb: m.is_heartbeat() && m.cq.is_none(),
                 last_cq: m.cq.is_some(),
                 stored_msgs: stored,
+                ack_ms,
+                cq_ms,
             });
             self.prune_heard();
         }
@@ -7484,6 +7500,99 @@ mod tests {
                 "not taking part in @ALLCALL {avoid}"
             );
         }
+    }
+
+    /// JS8Call's call list marks (displayCallActivity.cpp:200-245): ★ "Hearing Your Station" from the
+    /// `ackTimestamp` a message addressed to my call or its base call sets (processCommandActivity.cpp:
+    /// 59-65), ☎ "Calling CQ" from the `cqTimestamp` a CQ sets (:746). Each is kept until a later one
+    /// (mainwindow.cpp:2302-2307); traffic to someone else and a heartbeat set neither. Both ride the
+    /// station journal, and a journal from before them loads with neither.
+    #[test]
+    fn a_message_to_me_marks_its_sender_hearing_me_and_a_cq_marks_when_it_called() {
+        fn at(ev: MessageEvent, ms: u64) -> MessageEvent {
+            match ev {
+                MessageEvent::Message(m) => MessageEvent::Message(Message { last_ms: ms, ..m }),
+                other => other,
+            }
+        }
+        fn cq(from: &str, ms: u64) -> MessageEvent {
+            match heartbeat(from, -8) {
+                MessageEvent::Message(m) => MessageEvent::Message(Message {
+                    to: CallRef::parse("@ALLCALL"),
+                    to_text: "@ALLCALL".into(),
+                    cq: Some(0),
+                    last_ms: ms,
+                    ..m
+                }),
+                other => other,
+            }
+        }
+        fn marks(s: &Station, call: &str) -> Option<(Option<u64>, Option<u64>)> {
+            s.heard()
+                .iter()
+                .find(|h| h.call == call)
+                .map(|h| (h.ack_ms, h.cq_ms))
+        }
+        let mut s = Station::new(cfg());
+        let snr_to = |to: &str| directed("W1AW", to, Some(Command::SnrQuery), None, "", -5);
+        s.on_event(&at(snr_to("K1ABC"), 1_000), 1_000);
+        s.on_event(&at(heartbeat("N0GRD", -9), 2_000), 2_000);
+        assert_eq!(
+            marks(&s, "W1AW"),
+            Some((None, None)),
+            "to someone else: no ★"
+        );
+        assert_eq!(
+            marks(&s, "N0GRD"),
+            Some((None, None)),
+            "a heartbeat: neither"
+        );
+        s.on_event(&at(snr_to("KD9TAW"), 3_000), 3_000);
+        assert_eq!(marks(&s, "W1AW"), Some((Some(3_000), None)), "to me: ★");
+        s.on_event(&at(cq("W1AW", 4_000), 4_000), 4_000);
+        assert_eq!(
+            marks(&s, "W1AW"),
+            Some((Some(3_000), Some(4_000))),
+            "a CQ: ☎, and the ★ stays"
+        );
+        s.on_event(&at(snr_to("K1ABC"), 5_000), 5_000);
+        assert_eq!(
+            marks(&s, "W1AW"),
+            Some((Some(3_000), Some(4_000))),
+            "later traffic to someone else keeps both"
+        );
+        s.on_event(&at(snr_to("KD9TAW"), 6_000), 6_000);
+        assert_eq!(
+            marks(&s, "W1AW"),
+            Some((Some(6_000), Some(4_000))),
+            "a later one moves ★"
+        );
+
+        // My base call, from a portable call of mine, is to me too (`toMe`'s second half).
+        let mut p = Station::new(StationConfig {
+            mycall: "KD9TAW/P".into(),
+            ..cfg()
+        });
+        p.on_event(&at(snr_to("KD9TAW"), 7_000), 7_000);
+        assert_eq!(marks(&p, "W1AW"), Some((Some(7_000), None)));
+
+        // The journal: both written, and an entry from before them reads as neither.
+        let json = serde_json::to_value(&s.heard()[0]).expect("serialises");
+        assert_eq!(
+            (json["ackMs"].as_u64(), json["cqMs"].as_u64()),
+            (Some(6_000), Some(4_000))
+        );
+        let old: Heard = serde_json::from_value(serde_json::json!({
+            "call": "W1AW", "grid": null, "snrDb": -5, "freqHz": 1500.0, "speed": "normal",
+            "lastMs": 1, "lastHb": false, "lastCq": false, "storedMsgs": 0
+        }))
+        .expect("a journal from before the marks loads");
+        assert_eq!((old.ack_ms, old.cq_ms), (None, None));
+        let none = serde_json::to_value(&old).expect("serialises");
+        assert!(
+            none.get("ackMs").is_none() && none.get("cqMs").is_none(),
+            "no mark, no key"
+        );
     }
 }
 

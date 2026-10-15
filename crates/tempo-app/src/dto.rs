@@ -587,6 +587,21 @@ pub struct Js8ActivityRow {
     pub complete: bool,
     /// Decode quality below JS8Call's 0.17 low-confidence threshold.
     pub low_conf: bool,
+    /// Where the row stands in its message, which the cockpit's RX pane and Band activity join
+    /// frames by (JS8Call's `displayTextForFreq`, mainwindow.cpp:3106-3170). The desktop's alone:
+    /// the Remote page's parser refuses a key it does not list, so `bounded_js8_state` leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flags: Option<Js8RowFlags>,
+}
+
+/// JS8Call's i3 First and Last bits of the frame a row is (`JS8CallFirst`/`JS8CallLast`), or the
+/// reassembled line of a multi-frame message (`assembled`, never a frame of its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8RowFlags {
+    pub first: bool,
+    pub last: bool,
+    pub assembled: bool,
 }
 
 /// One outbox row (empty in the receive-only build).
@@ -5039,6 +5054,7 @@ mod tests {
                 mine: false,
                 complete: true,
                 low_conf: false,
+                flags: None,
             }],
             stations: Vec::new(),
             inbox: Vec::new(),

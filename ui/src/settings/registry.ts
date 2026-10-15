@@ -360,7 +360,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
       'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
       'outside 500', 'do not participate',
-      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending'],
+      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending',
+      'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
+      'js8 sounds', 'notifications'],
   },
   {
     id: 'sstv',

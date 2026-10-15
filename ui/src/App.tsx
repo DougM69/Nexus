@@ -32,6 +32,8 @@ import {
   setFrequency as apiSetFrequency,
   sstvTune as apiSstvTune,
   setBlockedCalls as apiSetBlockedCalls,
+  js8SetRxBlocklist,
+  js8SetGroups,
   tuneChannel as apiTuneChannel,
   aprsTune,
   setMode as apiSetMode,
@@ -117,7 +119,7 @@ import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
-import { Js8Cockpit } from './components/Js8Cockpit'
+import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
 import { js8ComposeConfig } from './js8Compose'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
@@ -1796,6 +1798,33 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     },
     [],
   )
+
+  // THE JS8 LISTS' SETTINGS (Settings ▸ JS8) for the cockpit, and its call list's two writes: each
+  // one field through its own verb, never the settings form, and the mirror patched with what was
+  // saved. The hosted page writes neither.
+  const js8Lists: Js8ListSettings | undefined = settings
+    ? {
+        rxBlocklist: settings.js8RxBlocklist ?? [],
+        highlightPrimary: settings.js8HighlightPrimary ?? [],
+        highlightSecondary: settings.js8HighlightSecondary ?? [],
+        eot: settings.js8Eot ?? '\u2662',
+        mfi: settings.js8Mfi ?? '\u2026\u2026',
+        sounds: settings.js8Sounds ?? [],
+        groups: settings.js8Groups ?? [],
+        setRxBlocklist: remote
+          ? undefined
+          : async (calls: string[]) => {
+              const saved = await withErrorToast(() => js8SetRxBlocklist(calls), t('js8.lists.saveFailed'))
+              if (saved) setSettings((prev) => (prev ? { ...prev, js8RxBlocklist: saved } : prev))
+            },
+        setGroups: remote
+          ? undefined
+          : async (groups: string[]) => {
+              const saved = await withErrorToast(() => js8SetGroups(groups), t('js8.lists.saveFailed'))
+              if (saved) setSettings((prev) => (prev ? { ...prev, js8Groups: saved } : prev))
+            },
+      }
+    : undefined
 
   const handleSstvTune = useCallback(
     (dialMhz: number, band: string, mode: string) => {
@@ -4160,6 +4189,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 boxes={boxesFor('js8')}
                 compose={js8ComposeConfig(settings)}
                 onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
+                lists={js8Lists}
               />
             </div>
           )}

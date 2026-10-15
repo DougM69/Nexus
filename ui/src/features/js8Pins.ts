@@ -1,12 +1,9 @@
-// ★ PINNED CALLS in the JS8 stations roster — "keep this one at the top while I work it".
+// PINNED CALLS in the JS8 stations roster — "keep this one at the top while I work it".
 //
-// JS8Call's call-activity table opens with an icon column (mainwindow.cpp:10225): a flag for a
-// stored message, ★ for a station that has acknowledged something of yours, ☎ for a recent CQ,
-// and it sorts the rows with waiting messages to the top. Two of those four are DERIVED from
-// state Nexus's `Js8Heard` does not carry (there is no ack timestamp and no relay-through
-// field), so a faithful copy of that column would sit blank forever. What an operator actually
-// asked for out of it — hold a watched call at the top of a roster that re-sorts under him
-// every period — is an operator PIN, and that is what this is. See tasks/js8-activity-parity.md.
+// JS8Call's call-activity table opens with its icon column (✕ ⚑ ★ ☎ ⚟, features/js8Lists), and
+// the roster draws it now; ★ is JS8Call's "hearing you" there. The pin is Nexus's own, from a
+// row's menu ("Pin to the top"): hold a watched call at the top of a roster that re-sorts under
+// the operator every period. Pinned rows come first, above JS8Call's order.
 //
 // Deliberately NOT the watch list (`watchlist.ts`): that is a standing statement about a call
 // or an entity, alerts on it, and survives a reinstall. A pin is about who is on the band right

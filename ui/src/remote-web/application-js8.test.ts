@@ -14,7 +14,7 @@ describe('JS8 capability negotiation', () => {
       expect(applicationCommands(version)).not.toContain('get_js8_state')
       expect(applicationCommands(version)).not.toContain('get_remote_js8_context')
     }
-    for (const command of ['js8_enter', 'js8_send', 'js8_arm', 'js8_inbox_delete', 'set_frequency']) {
+    for (const command of ['js8_enter', 'js8_send', 'js8_arm', 'js8_inbox_delete', 'js8_set_rx_blocklist', 'js8_set_groups', 'set_frequency']) {
       expect(applicationCommands(11)).not.toContain(command)
     }
   })

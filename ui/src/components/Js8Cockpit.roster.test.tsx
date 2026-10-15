@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { Js8Cockpit } from './Js8Cockpit'
 import { JS8_PINS_KEY } from '../features/js8Pins'
+import { JS8_VIEW_KEY } from '../features/js8View'
 import type { AppSnapshot, Js8State, LoggedQso } from '../types'
 import type { PanelLayoutApi, Js8PanelId } from '../features/panelState'
 import type { LogQuestion } from '../features/logAnswers'
@@ -199,6 +200,33 @@ async function joinedCell(call: string, selector: string): Promise<HTMLElement> 
 /** The ✓ column's mark for a call the log has not answered about yet. */
 const NOT_YET = '—'
 
+/** Turn on columns JS8Call ships hidden (its "Show Columns…", stored as the cockpit stores it), so a
+ *  test of a column's VALUES reads a column that is drawn. */
+function showColumns(band: Record<string, boolean>, call: Record<string, boolean>) {
+  window.localStorage.setItem(JS8_VIEW_KEY, JSON.stringify({ band: { columns: band }, call: { columns: call } }))
+}
+const DX_COLUMNS = { grid: true, distance: true, azimuth: true }
+
+/** The station rows' calls, top to bottom (not @ALLCALL and the groups above them). */
+const stationCalls = () =>
+  Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station:not(.js8-group) .js8-station-call')).map((b) => b.textContent)
+
+/** Open a station row's menu (its ⋯) and pick an entry by name. */
+async function rowMenuPick(call: string, entry: string) {
+  const trigger = stationRow(call).querySelector('.js8-row-menu') as HTMLButtonElement
+  await act(async () => {
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+  })
+  const item = await waitFor(() => {
+    const hit = Array.from(document.querySelectorAll('[role="menuitem"]')).find((el) => el.textContent === entry)
+    expect(hit, `no "${entry}" in ${call}'s menu`).toBeTruthy()
+    return hit as HTMLElement
+  })
+  await act(async () => {
+    fireEvent.click(item)
+  })
+}
+
 /** The roster row for a call, by its call button's text. */
 function stationRow(call: string): HTMLElement {
   const rows = Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station'))
@@ -219,6 +247,7 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
   })
 
   it('renders distance, azimuth, ✓ worked-before, name and comment for a heard station', async () => {
+    showColumns({}, DX_COLUMNS)
     await renderCockpit()
     const b4 = await joinedCell('W0IND', '.js8-b4')
     const row = stationRow('W0IND')
@@ -238,6 +267,8 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
   })
 
   it('leaves every joined column OFF a station with no grid and nothing in the log', async () => {
+    // Every one of those columns drawn, so an absence is the row's, not the column's.
+    showColumns({}, DX_COLUMNS)
     await renderCockpit()
     // The join has landed — W0IND carries its ✓ — so an absence below is the join's answer, not
     // a question still on its way.
@@ -264,35 +295,30 @@ describe('the call-activity roster carries JS8Call’s DX columns', () => {
 
   it('takes the grid from the LOG when the station has not sent one (JS8Call’s fallback)', async () => {
     log.current = [{ ...logFixture()[0], call: 'N0GRD', grid: 'FN31' }]
+    showColumns({}, DX_COLUMNS)
     await renderCockpit()
     await joinedCell('N0GRD', '.js8-dist')
     const row = stationRow('N0GRD')
     expect(row.querySelector('.js8-az'), 'no azimuth from the logged grid').not.toBeNull()
   })
 
-  it('★ pins a call to the top of the roster and remembers it', async () => {
+  // ★ is JS8Call's "hearing you" mark now; the operator's pin moved into the row's menu.
+  it('a pin from the row’s menu holds a call at the top of the roster and is remembered', async () => {
     await renderCockpit()
-    const before = Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
-    expect(before).toEqual(['W0IND', 'N0GRD'])
-    const pin = stationRow('N0GRD').querySelector('.js8-pin') as HTMLButtonElement
-    expect(pin.getAttribute('aria-pressed')).toBe('false')
-    await act(async () => {
-      fireEvent.click(pin)
-    })
-    const after = Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
-    expect(after, 'the pinned call did not move to the top').toEqual(['N0GRD', 'W0IND'])
-    expect(stationRow('N0GRD').querySelector('.js8-pin')!.getAttribute('aria-pressed')).toBe('true')
-    expect(window.localStorage.getItem(JS8_PINS_KEY)).toBe('N0GRD')
+    expect(stationCalls(), 'JS8Call’s default order: by callsign').toEqual(['N0GRD', 'W0IND'])
+    expect(stationRow('W0IND').classList.contains('pinned')).toBe(false)
+    await rowMenuPick('W0IND', 'Pin to the top')
+    expect(stationCalls(), 'the pinned call did not move to the top').toEqual(['W0IND', 'N0GRD'])
+    expect(stationRow('W0IND').classList.contains('pinned')).toBe(true)
+    expect(window.localStorage.getItem(JS8_PINS_KEY)).toBe('W0IND')
   })
 
-  it('★ un-pins, and the roster goes back to the engine’s order', async () => {
-    window.localStorage.setItem(JS8_PINS_KEY, 'N0GRD')
+  it('unpinning from the row’s menu puts the call back in the list’s order', async () => {
+    window.localStorage.setItem(JS8_PINS_KEY, 'W0IND')
     await renderCockpit()
-    expect(Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)).toEqual(['N0GRD', 'W0IND'])
-    await act(async () => {
-      fireEvent.click(stationRow('N0GRD').querySelector('.js8-pin') as HTMLButtonElement)
-    })
-    expect(Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)).toEqual(['W0IND', 'N0GRD'])
+    expect(stationCalls()).toEqual(['W0IND', 'N0GRD'])
+    await rowMenuPick('W0IND', 'Unpin')
+    expect(stationCalls()).toEqual(['N0GRD', 'W0IND'])
     expect(window.localStorage.getItem(JS8_PINS_KEY)).toBe('')
   })
 })
@@ -376,8 +402,7 @@ describe('a newly heard station', () => {
 })
 
 describe('the Stations list under JS8Call’s callsign aging', () => {
-  const calls = () =>
-    Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
+  const calls = stationCalls
   it('leaves off a call not heard for the aging, lists it with the aging off, and keeps it once selected', async () => {
     const now = Date.now()
     const [w0ind, n0grd] = js8Fixture().stations
@@ -387,43 +412,43 @@ describe('the Stations list under JS8Call’s callsign aging', () => {
     await act(async () => {
       fireEvent.change(document.querySelector('.js8-to') as HTMLInputElement, { target: { value: 'w0ind' } })
     })
-    expect(calls(), 'selected in the To box, it is listed again').toEqual(['W0IND', 'N0GRD'])
+    expect(calls(), 'selected in the To box, it is listed again').toEqual(['N0GRD', 'W0IND'])
     cleanup()
     await renderCockpit()
-    expect(calls(), 'the aging is off by default').toEqual(['W0IND', 'N0GRD'])
+    expect(calls(), 'the aging is off by default').toEqual(['N0GRD', 'W0IND'])
   })
 })
 
 // A MSG to me is filed UNREAD, and JS8Call shows it in its call list (mainwindow.cpp:10199-10251):
 // ⚑ "Message Available" on the station, and the station lifted to the top of the list.
 describe('a station with an unread message for me', () => {
-  const calls = () =>
-    Array.from(document.querySelectorAll('[data-pane="stations"] .js8-station-call')).map((b) => b.textContent)
+  const calls = stationCalls
   const unread = (from: string, state: 'unread' | 'read' = 'unread') => ({
     id: 7, from, to: 'KD9TAW', text: 'HELLO', path: [from], state, atMs: 1_757_000_020_000, freqHz: 900, snrDb: -19,
   })
+  // W0IND sorts after N0GRD by callsign, JS8Call's default order, so its lift is the message's.
   it('is flagged ⚑ and listed first; one without a message is not flagged', async () => {
-    state.current = { ...js8Fixture(), inbox: [unread('N0GRD')] }
+    state.current = { ...js8Fixture(), inbox: [unread('W0IND')] }
     await renderCockpit()
-    expect(calls(), 'N0GRD, with an unread message, heads the list').toEqual(['N0GRD', 'W0IND'])
-    const flag = Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).find((c) => c.textContent === '⚑')
+    expect(calls(), 'W0IND, with an unread message, heads the list').toEqual(['W0IND', 'N0GRD'])
+    const flag = Array.from(stationRow('W0IND').querySelectorAll('.js8-chip')).find((c) => c.textContent === '⚑')
     expect(flag, 'no ⚑ on the station with an unread message').toBeTruthy()
-    expect(flag!.getAttribute('title')).toMatch(/Unread message for you from N0GRD/)
+    expect(flag!.getAttribute('title')).toMatch(/Unread message for you from W0IND/)
     expect(
-      Array.from(stationRow('W0IND').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑'),
-      'W0IND has no message and no flag',
+      Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑'),
+      'N0GRD has no message and no flag',
     ).toBe(false)
   })
-  it('a message read is neither flagged nor lifted, and a ★ pin still comes first', async () => {
-    state.current = { ...js8Fixture(), inbox: [unread('N0GRD', 'read')] }
+  it('a message read is neither flagged nor lifted, and a pin still comes first', async () => {
+    state.current = { ...js8Fixture(), inbox: [unread('W0IND', 'read')] }
     await renderCockpit()
-    expect(calls(), 'read: the engine’s order').toEqual(['W0IND', 'N0GRD'])
-    expect(Array.from(stationRow('N0GRD').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑')).toBe(false)
+    expect(calls(), 'read: the list’s own order').toEqual(['N0GRD', 'W0IND'])
+    expect(Array.from(stationRow('W0IND').querySelectorAll('.js8-chip')).some((c) => c.textContent === '⚑')).toBe(false)
     cleanup()
-    window.localStorage.setItem(JS8_PINS_KEY, 'W0IND')
-    state.current = { ...js8Fixture(), inbox: [unread('N0GRD')] }
+    window.localStorage.setItem(JS8_PINS_KEY, 'N0GRD')
+    state.current = { ...js8Fixture(), inbox: [unread('W0IND')] }
     await renderCockpit()
-    expect(calls(), 'the operator’s ★ pin, then the message').toEqual(['W0IND', 'N0GRD'])
+    expect(calls(), 'the operator’s pin, then the message').toEqual(['N0GRD', 'W0IND'])
   })
 })
 
@@ -442,6 +467,7 @@ describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () =
   })
 
   it('carries the DT column the transcript drops', async () => {
+    showColumns({ tdrift: true }, {})
     await renderCockpit()
     const rows = Array.from(document.querySelectorAll('[data-pane="offsets"] .js8-offset-row'))
     expect(rows.map((r) => r.querySelector('.js8-dt')!.textContent)).toEqual(['-400 ms', '200 ms'])
@@ -496,13 +522,13 @@ describe('the band-activity-by-offset pane (JS8Call’s tableWidgetRXAll)', () =
   })
 })
 
-describe('the two "differs from JS8Call" notes are in the UI, not only the manual', () => {
-  it('the fused transcript says how it relates to the offset table', async () => {
+describe('the panes say what they are, in the UI and not only the manual', () => {
+  it('the RX pane says it is JS8Call’s, and where every frame is', async () => {
     await renderCockpit()
     const title = document.querySelector('.js8-activity')!.getAttribute('title') ?? ''
     expect(title).toMatch(/JS8Call/)
+    expect(title).toMatch(/RX offset/)
     expect(title).toMatch(/Band activity/)
-    expect(title).toMatch(/DT/)
   })
 
   it('every arm chip says the TX latch is the other half, on every face', async () => {

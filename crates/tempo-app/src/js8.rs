@@ -27,7 +27,7 @@ use modes::Js8Speed;
 use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
     Js8ActivityRow, Js8Armed, Js8ComposerPrefill, Js8NotArmed, Js8PendingReply, Js8Presence,
-    Js8QueueRow, Js8State, Js8Unarmed, SourceKind, Tier,
+    Js8QueueRow, Js8RowFlags, Js8State, Js8Unarmed, SourceKind, Tier,
 };
 use crate::settings::Settings;
 
@@ -275,11 +275,20 @@ impl Engine {
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
-        // The page's parser refuses a key it does not list, and none lists `presence` or
-        // `inboxTooLong` yet.
+        // The page's parser refuses a key it does not list, and none lists these yet: the
+        // desktop's `presence` and `inboxTooLong`, each row's place in its message (`flags`), and
+        // each station's ★ and ☎ (`ackMs`, `cqMs`). Its cockpit reads the sample as it read it
+        // before them.
         let mut state = self.js8_state();
         state.presence = None;
         state.inbox_too_long = Vec::new();
+        for row in &mut state.activity {
+            row.flags = None;
+        }
+        for heard in &mut state.stations {
+            heard.ack_ms = None;
+            heard.cq_ms = None;
+        }
         Some(state)
     }
 
@@ -536,6 +545,11 @@ impl Engine {
                     mine: false,
                     complete: m.complete,
                     low_conf: false,
+                    flags: Some(Js8RowFlags {
+                        first: false,
+                        last: false,
+                        assembled: true,
+                    }),
                 }),
                 MessageEvent::Message(_) => None,
             };
@@ -592,6 +606,11 @@ impl Engine {
             mine: false,
             complete: true,
             low_conf,
+            flags: Some(Js8RowFlags {
+                first: rx.i3.first,
+                last: rx.i3.last,
+                assembled: false,
+            }),
         }
     }
 
@@ -786,6 +805,44 @@ impl Engine {
         if self.js8_station.clear_inbox_dropped() {
             self.js8_persist();
         }
+    }
+
+    // ---- the call list's own writes (JS8Call's call activity menu, UI_Constructor.cpp:1059-1129):
+    // one field each, never the settings form, which would advance the TX gate generation ----
+
+    /// JS8Call 3.0's RX block list (`RXCallsignBlocklist`): "Block This Station" adds a call to it
+    /// (UI_Constructor.cpp:1119-1129) and Settings edits it. Stored trimmed and upper-cased, the
+    /// empties and repeats gone. Display only: nothing the station answers, files or sends reads it.
+    pub fn js8_set_rx_blocklist(&mut self, calls: Vec<String>) {
+        let mut list = js8_call_list(&calls);
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|c| seen.insert(c.clone()));
+        self.settings.js8_rx_blocklist = list;
+    }
+
+    /// "Add New Station or Group…" with a @GROUP and "Remove This Group" (JS8Call's `addGroup` and
+    /// `removeGroup`, UI_Constructor.cpp:1077-1081, :1108-1109): the joined groups, the Settings field
+    /// both write, reach the station at once, as a Settings save would. Each is stored upper-cased
+    /// with one '@', the repeats gone; a group JS8Call will not let be joined (@APRSIS, @JS8NET) is
+    /// refused, and nothing changes.
+    pub fn js8_set_groups(&mut self, groups: Vec<String>) -> Result<(), String> {
+        let mut joined: Vec<String> = Vec::new();
+        for g in &groups {
+            let name = g.trim().trim_start_matches('@').to_ascii_uppercase();
+            if name.is_empty() {
+                continue;
+            }
+            let group = format!("@{name}");
+            if !::js8::proto::callsign::may_join_group(&group) {
+                return Err(format!("{group} is a group that cannot be joined"));
+            }
+            if !joined.contains(&group) {
+                joined.push(group);
+            }
+        }
+        self.settings.js8_groups = joined;
+        self.js8_apply_station_config();
+        Ok(())
     }
 
     // ---- journal (the pending_msgs.json contract) ----
@@ -1170,7 +1227,16 @@ impl Engine {
     /// which period an over belongs to. `f0` is the offset the over KEYED at, a heartbeat's
     /// sub-band slot included: JS8Call moves `freq()` there before it shows the frame
     /// (`setFreqOffsetForRestore`, mainwindow.cpp:9681), so all three records sit there.
-    pub(crate) fn js8_note_tx_done(&mut self, plan_display: &str, now_ms: u64, f0: f32) {
+    /// `first`/`last` are the frame's own i3 bits, carried to the activity row so the RX pane closes
+    /// the line with its end mark as JS8Call's does (mainwindow.cpp:3660-3668).
+    pub(crate) fn js8_note_tx_done(
+        &mut self,
+        plan_display: &str,
+        now_ms: u64,
+        f0: f32,
+        first: bool,
+        last: bool,
+    ) {
         self.record_own_tx_at(plan_display.to_string(), f0);
         self.js8_activity.push_back(Js8ActivityRow {
             at_ms: now_ms,
@@ -1184,6 +1250,11 @@ impl Engine {
             mine: true,
             complete: true,
             low_conf: false,
+            flags: Some(Js8RowFlags {
+                first,
+                last,
+                assembled: false,
+            }),
         });
         while self.js8_activity.len() > JS8_ACTIVITY_CAP {
             self.js8_activity.pop_front();
@@ -1367,7 +1438,7 @@ impl Engine {
         // row; ALL.TXT Tx line) — plan time, on the period-start axis. The heartbeat timer
         // re-based itself in `next_frame` when the message's last frame went.
         self.js8_station.note_tx_done(&tf, period_start_ms);
-        self.js8_note_tx_done(&tf.display, period_start_ms, f0);
+        self.js8_note_tx_done(&tf.display, period_start_ms, f0, tf.first, tf.last);
         self.set_transmitting(true);
         Some(TxPlan {
             slot,
@@ -1413,13 +1484,20 @@ mod tests {
             let before = serde_json::to_value(e.js8_state()).unwrap();
             assert!(!before["activity"].as_array().unwrap().is_empty());
             assert!(!before["queue"].as_array().unwrap().is_empty());
-            // The desktop's `presence` is the one key the Remote's sample leaves out (the page's
-            // parser does not list it yet); everything else is the native state, unchanged.
+            // The desktop's `presence` and each row's place in its message are the keys the
+            // Remote's sample leaves out (the page's parser does not list them yet); everything
+            // else is the native state, unchanged.
             let mut native = before.clone();
             assert!(
                 native.as_object_mut().unwrap().remove("presence").is_some(),
                 "control: the desktop's state carries presence"
             );
+            for row in native["activity"].as_array_mut().unwrap() {
+                assert!(
+                    row.as_object_mut().unwrap().remove("flags").is_some(),
+                    "control: the desktop's row carries its place"
+                );
+            }
             assert_eq!(
                 serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),
                 native
@@ -4919,6 +4997,173 @@ mod tests {
         );
         drop((e, fresh)); // their journal writes land before the folder goes
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ===== the lists and views: where each row stands in its message, and the call list's writes =====
+
+    fn flags(first: bool, last: bool, assembled: bool) -> Option<Js8RowFlags> {
+        Some(Js8RowFlags {
+            first,
+            last,
+            assembled,
+        })
+    }
+
+    /// The RX pane and Band activity join a message's frames and close it with ♢ as JS8Call's
+    /// `displayTextForFreq` does (mainwindow.cpp:3106-3170, processRxActivity.cpp:116-128), by each
+    /// frame's i3 First/Last bits. So every frame row carries its own, and the reassembled line of a
+    /// multi-frame message says it is one, never a frame.
+    #[test]
+    fn each_activity_row_says_where_it_stands_in_its_message() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_ingest(
+            &[row(&hb("W0IND", "EN52"), whole(), Js8Speed::Normal, 900.0)],
+            4,
+        );
+        let header = Frame::Directed {
+            from: CallRef::Base("W1AW".to_string()),
+            to: CallRef::Base("KD9TAW".to_string()),
+            cmd: Command::Msg,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        };
+        let open = I3 {
+            first: true,
+            last: false,
+            data: false,
+        };
+        e.js8_ingest(&[row(&header, open, Js8Speed::Normal, 1500.0)], 5);
+        let text = Frame::Data {
+            text: "HELLO".into(),
+            dense: false,
+        };
+        let close = I3 {
+            first: false,
+            last: true,
+            data: true,
+        };
+        e.js8_ingest(&[row(&text, close, Js8Speed::Normal, 1500.0)], 6);
+        let got: Vec<_> = e
+            .js8_state()
+            .activity
+            .iter()
+            .map(|r| (r.from.clone(), r.flags))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("W0IND".to_string(), flags(true, true, false)),
+                ("W1AW".to_string(), flags(true, false, false)),
+                (String::new(), flags(false, true, false)),
+                ("W1AW".to_string(), flags(false, false, true)),
+            ],
+            "a heartbeat is one whole frame; the MSG's header opens, its text closes, then the line"
+        );
+    }
+
+    /// My own frames too: JS8Call prints what it sends in the RX pane and closes the line with ♢
+    /// after the last frame (mainwindow.cpp:3660-3668).
+    #[test]
+    fn my_own_frames_say_where_they_stand_in_the_message() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.js8_note_tx_done("KD9TAW: K1ABC MSG ", 15_000, 1500.0, true, false);
+        e.js8_note_tx_done("HELLO", 30_000, 1500.0, false, true);
+        let got: Vec<_> = e
+            .js8_state()
+            .activity
+            .iter()
+            .map(|r| (r.mine, r.flags))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (true, flags(true, false, false)),
+                (true, flags(false, true, false))
+            ]
+        );
+    }
+
+    /// The Remote page's sample is the state it always was: no row's place and no station's ★ or
+    /// ☎, which its parser does not list yet, while the desktop's state carries all three.
+    #[test]
+    fn the_remote_sample_leaves_out_the_desktops_new_keys() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_load_journal(
+            &serde_json::json!({"heard": [{"call": "W1AW", "grid": "FN31", "snrDb": -8,
+                "freqHz": 1500.0, "speed": "normal", "lastMs": 1, "lastHb": false, "lastCq": true,
+                "storedMsgs": 0, "ackMs": 5, "cqMs": 6}],
+            "inbox": [], "allcallReplied": [], "nextInboxId": 1})
+            .to_string(),
+        );
+        e.js8_ingest(
+            &[row(&hb("W0IND", "EN52"), whole(), Js8Speed::Normal, 900.0)],
+            4,
+        );
+        let native = serde_json::to_value(e.js8_state()).unwrap();
+        let w1aw = native["stations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["call"] == "W1AW")
+            .expect("the journal's station");
+        assert_eq!(
+            (w1aw["ackMs"].as_u64(), w1aw["cqMs"].as_u64()),
+            (Some(5), Some(6)),
+            "control"
+        );
+        assert!(native["activity"][0].get("flags").is_some(), "control");
+        let sample = serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap();
+        for h in sample["stations"].as_array().unwrap() {
+            assert!(h.get("ackMs").is_none() && h.get("cqMs").is_none(), "{h}");
+        }
+        for r in sample["activity"].as_array().unwrap() {
+            assert!(r.get("flags").is_none(), "{r}");
+        }
+        assert_eq!(
+            sample["stations"].as_array().unwrap().len(),
+            native["stations"].as_array().unwrap().len()
+        );
+    }
+
+    /// The call list's two writes: "Block This Station" (UI_Constructor.cpp:1119-1129) and the
+    /// groups it joins and leaves (:1077-1081, :1108-1109). Each lands in Settings normalised, the
+    /// groups reach the station at once, and @APRSIS / @JS8NET are refused with nothing changed.
+    #[test]
+    fn the_call_lists_writes_land_in_settings_and_the_station() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_set_rx_blocklist(vec![
+            " w1aw ".into(),
+            "".into(),
+            "W1AW".into(),
+            "k1abc".into(),
+        ]);
+        assert_eq!(e.settings().js8_rx_blocklist, ["W1AW", "K1ABC"]);
+        e.js8_set_groups(vec![
+            "fun".into(),
+            "@NET ".into(),
+            "@FUN".into(),
+            " ".into(),
+        ])
+        .expect("ordinary groups join");
+        assert_eq!(e.settings().js8_groups, ["@FUN", "@NET"]);
+        assert_eq!(
+            e.js8_station.config().groups,
+            ["@FUN", "@NET"],
+            "the station at once"
+        );
+        let refused = e.js8_set_groups(vec!["@FUN".into(), "@aprsis".into()]);
+        assert_eq!(
+            refused,
+            Err("@APRSIS is a group that cannot be joined".to_string())
+        );
+        assert_eq!(e.settings().js8_groups, ["@FUN", "@NET"], "nothing changed");
+        e.js8_set_groups(vec!["@NET".into()]).expect("leave @FUN");
+        assert_eq!(e.js8_station.config().groups, ["@NET"]);
     }
 }
 

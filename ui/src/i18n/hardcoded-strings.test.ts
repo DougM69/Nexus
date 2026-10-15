@@ -650,6 +650,17 @@ const MIGRATED = [
   // …and the note on a held message's Inbox row that it is too long to hand over at this speed —
   // migrated from birth; the speed's name is the mode's token.
   'components/Js8InboxTooLong.tsx',
+  // The JS8 lists as JS8Call 3.0.3 draws them — the RX pane, Band activity, the call list, the Inbox,
+  // their menus, the add-a-station dialog and their Settings — migrated from birth. Calls, offsets,
+  // reports, the received text and the marks (✕ ⚑ ★ ☎ ⚟ ♢) are data or glyphs.
+  'components/Js8RxPane.tsx',
+  'components/Js8BandActivity.tsx',
+  'components/Js8CallList.tsx',
+  'components/Js8InboxPanel.tsx',
+  'components/Js8AddStation.tsx',
+  'components/Js8ListMenu.tsx',
+  'components/js8ListMenus.ts',
+  'components/Js8ListsSettings.tsx',
 ]
 
 /**

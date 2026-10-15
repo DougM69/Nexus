@@ -230,7 +230,9 @@ describe('Js8Cockpit pane shell', () => {
   })
 
   it('every operator-content block renders through a CockpitPaneFrame inside the region', async () => {
-    await renderCockpit()
+    // The RX pane is JS8Call's: it prints what is heard on the RX offset, so RX sits on the
+    // fixture's CQ (1210 Hz) here.
+    await renderCockpit({ snap: { ...snap, radio: { ...snap.radio, rxOffsetHz: 1210 } } as AppSnapshot })
     for (const id of ['activity', 'offsets', 'stations', 'inbox', 'log']) {
       const pane = document.querySelector(`[data-pane="${id}"]`)
       expect(pane, `pane "${id}" missing`).not.toBeNull()
@@ -238,7 +240,7 @@ describe('Js8Cockpit pane shell', () => {
       expect(pane!.closest('.cockpit-panes'), `"${id}" renders outside the region`).not.toBeNull()
     }
     expect(document.querySelector('[data-pane="activity"] .js8-row')).not.toBeNull()
-    expect(document.querySelector('[data-pane="stations"] .js8-station-call')!.textContent).toBe('W0IND')
+    expect(document.querySelector('[data-pane="stations"] .js8-station:not(.js8-group) .js8-station-call')!.textContent).toBe('W0IND')
     expect(document.querySelector('[data-pane="inbox"] .js8-inbox-row')).not.toBeNull()
     expect(document.querySelector('[data-pane="log"] [data-testid="log-stub"]')).not.toBeNull()
   })
@@ -424,7 +426,7 @@ describe('Js8Cockpit column dividers', () => {
     expect(dividers(region)).toEqual([['log column width', 'cockpit-colseam-2']])
     await tier(region, 1800)
     expect(dividers(region)).toEqual([
-      ['Activity column / Stations column', 'cockpit-colseam-2'],
+      ['RX column / Stations column', 'cockpit-colseam-2'],
       ['log column width', 'cockpit-colseam-3'],
     ])
     await tier(region, 900)
@@ -497,23 +499,23 @@ describe('Js8Cockpit dividers between panes', () => {
 
   it('exist only in the bounded flow, each between its own pair, at three columns and at two', async () => {
     const region = await mountLive()
-    expect(seam(/^Activity \/ Band activity$/), 'a stack cannot be divided').toBeNull()
+    expect(seam(/^RX \/ Band activity$/), 'a stack cannot be divided').toBeNull()
     await tier(region, 1800)
-    expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
+    expect(around(seam(/^RX \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
     expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
     // A column's dividers, marked as such: the class the sheet keys their in-gap margins on
     // (styles.css `.in-column`; cockpit-shells.test.ts computes the net).
-    for (const name of [/^Activity \/ Band activity$/, /^Stations \/ Inbox$/]) {
+    for (const name of [/^RX \/ Band activity$/, /^Stations \/ Inbox$/]) {
       expect(seam(name)!.parentElement!.classList.contains('cockpit-col')).toBe(true)
       expect(seam(name)!.classList.contains('in-column'), `${name} takes a 12 px gap of its own`).toBe(true)
     }
     // Two columns: all four in the leading column, each divider still between its own pair.
     await tier(region, 1200)
     expect(region.getAttribute('data-cols')).toBe('2')
-    expect(around(seam(/^Activity \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
+    expect(around(seam(/^RX \/ Band activity$/)!)).toEqual(['activity', 'offsets'])
     expect(around(seam(/^Stations \/ Inbox$/)!)).toEqual(['stations', 'inbox'])
     await tier(region, 900)
-    expect(seam(/^Activity \/ Band activity$/)).toBeNull()
+    expect(seam(/^RX \/ Band activity$/)).toBeNull()
     expect(seam(/^Stations \/ Inbox$/)).toBeNull()
   })
 
@@ -532,13 +534,13 @@ describe('Js8Cockpit dividers between panes', () => {
     const rect = (top: number, h: number) => () => ({ top, bottom: top + h, height: h, left: 0, right: 600, width: 600, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
     pane('activity').getBoundingClientRect = rect(100, 300)
     pane('offsets').getBoundingClientRect = rect(412, 150)
-    fireEvent.keyDown(seam(/^Activity \/ Band activity$/)!, { key: 'ArrowDown' })
+    fireEvent.keyDown(seam(/^RX \/ Band activity$/)!, { key: 'ArrowDown' })
     const [a, b] = seamShares(300 / 450 + 0.05)
     expect(JSON.parse(localStorage.getItem(panelStorageKey('js8'))!).share).toEqual({ activity: a, offsets: b })
     expect(Number(pane('activity').style.getPropertyValue('--pane-share'))).toBeCloseTo(a * 1.5, 10)
     expect(Number(pane('offsets').style.getPropertyValue('--pane-share'))).toBeCloseTo(b * 1.5, 10)
     // Backspace: the stock split back, no share of its own left behind.
-    fireEvent.keyDown(seam(/^Activity \/ Band activity$/)!, { key: 'Backspace' })
+    fireEvent.keyDown(seam(/^RX \/ Band activity$/)!, { key: 'Backspace' })
     expect(JSON.parse(localStorage.getItem(panelStorageKey('js8'))!).share).toEqual({})
     expect(pane('activity').style.getPropertyValue('--pane-share')).toBe('')
   })
@@ -547,7 +549,7 @@ describe('Js8Cockpit dividers between panes', () => {
     localStorage.setItem(panelStorageKey('js8'), JSON.stringify({ v: 2, state: { offsets: 'removed' }, share: { activity: 0.3, offsets: 1.7 } }))
     const region = await mountLive()
     await tier(region, 1800)
-    expect(seam(/^Activity \/ Band activity$/)).toBeNull()
+    expect(seam(/^RX \/ Band activity$/)).toBeNull()
     expect(pane('activity').style.getPropertyValue('--pane-share'), 'a lone pane took a split share').toBe('')
     expect(pane('activity').style.minHeight, 'a lone pane took a split floor').toBe('var(--cockpit-fill-min, 0)')
   })

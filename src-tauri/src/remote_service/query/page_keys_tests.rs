@@ -1693,11 +1693,19 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
     let engine = engine();
     engine.lock().unwrap().js8_load_journal(
         &json!({"heard": [{"call": "W1AW", "grid": "FN31", "snrDb": -8, "freqHz": 1500.0,
-            "speed": "normal", "lastMs": 1, "lastHb": true, "lastCq": false, "storedMsgs": 1}],
+            "speed": "normal", "lastMs": 1, "lastHb": true, "lastCq": false, "storedMsgs": 1,
+            "ackMs": 1, "cqMs": 1}],
         "inbox": [{"id": 1, "from": "W1AW", "to": "K2ABC", "text": "HELLO", "path": ["W1AW"],
             "state": "unread", "atMs": 1, "freqHz": 1500.0, "snrDb": -8}],
         "allcallReplied": [], "nextInboxId": 2})
         .to_string(),
+    );
+    // The station's ★ and ☎ are the desktop's: its own state carries them (the control), and the
+    // page's sample, below, does not.
+    let native = serde_json::to_value(engine.lock().unwrap().js8_state()).unwrap();
+    assert!(
+        native["stations"][0].get("ackMs").is_some() && native["stations"][0].get("cqMs").is_some(),
+        "control: the desktop's station carries ★ and ☎"
     );
     let data = sample(
         &engine,
@@ -1802,6 +1810,7 @@ fn the_js8_sample_carries_only_the_keys_the_page_takes() {
         mine: false,
         complete: true,
         low_conf: false,
+        flags: None,
     };
     takes(
         "js8: a decoded row, every field",

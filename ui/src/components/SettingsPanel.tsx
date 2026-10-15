@@ -223,6 +223,7 @@ import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
+import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget } from '../settings/registry'
 import { changedSince, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -2135,6 +2136,19 @@ export function SettingsPanel({
       .map((c) => c.trim().toUpperCase())
       .filter(Boolean)
     setForm((prev) => (prev ? { ...prev, [key]: calls } : prev))
+  }
+  // The JS8 lists, marks and sounds (Js8ListsSettings): each list as it parses, each mark as typed.
+  const setJs8Words = (key: 'js8RxBlocklist' | 'js8HighlightPrimary' | 'js8HighlightSecondary', list: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, [key]: list } : prev))
+  }
+  const setJs8Mark = (key: 'js8Eot' | 'js8Mfi', value: string) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+  }
+  const setJs8Sounds = (events: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, js8Sounds: events } : prev))
   }
   const parseJs8Groups = (raw: string): string[] =>
     raw
@@ -9382,6 +9396,7 @@ export function SettingsPanel({
                 setForm((prev) => (prev ? { ...prev, ...patch } : prev))
               }}
             />
+            <Js8ListsSettings form={form} disabled={remote} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
           </fieldset>
           )}
 

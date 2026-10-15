@@ -1053,6 +1053,40 @@ pub struct Settings {
     /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
     #[serde(default)]
     pub js8_tx_offset_while_sending: bool,
+    // --- JS8 lists, views and sounds: JS8Call 3.0.3's own settings for them, at its defaults ---
+    /// JS8Call 3.0's "Hide messages from these callsigns in the RX pane" (`RXCallsignBlocklist`, empty
+    /// by default, Configuration.cpp:2137): a station on it, by its call as heard or its base call,
+    /// prints nothing in the cockpit's RX pane and is marked ✕ in the call list
+    /// (mainwindow.cpp:3108-3123, displayCallActivity.cpp:218-232). Display only: nothing the station
+    /// answers, files or sends reads it. The call list's "Block this station" adds to it
+    /// (`Engine::js8_set_rx_blocklist`).
+    #[serde(default)]
+    pub js8_rx_blocklist: Vec<String>,
+    /// JS8Call's "Highlight these words or callsigns with the primary background color"
+    /// (`PrimaryHighlightWords`, empty by default): a Band activity row holding one of these words,
+    /// or the call list row of one of these calls, takes the primary highlight
+    /// (displayBandActivity.cpp:328-337, displayCallActivity.cpp:427-432). Display only.
+    #[serde(default)]
+    pub js8_highlight_primary: Vec<String>,
+    /// The same with the secondary background (`SecondaryHighlightWords`); the primary wins a row
+    /// both name, as JS8Call paints the primary last.
+    #[serde(default)]
+    pub js8_highlight_secondary: Vec<String>,
+    /// JS8Call's "End of Transmission Character Indicator" (`EOTCharacter`, ♢ by default,
+    /// Configuration.cpp:2146): printed after the last frame of a message in the RX pane and in Band
+    /// activity. Empty prints nothing there.
+    #[serde(default = "default_js8_eot")]
+    pub js8_eot: String,
+    /// JS8Call's "Missing Frame Character Indicator" (`MFICharacter`, …… by default,
+    /// Configuration.cpp:2147): printed where a message's next frame did not come within one and a
+    /// half periods (mainwindow.cpp:6127-6162).
+    #[serde(default = "default_js8_mfi")]
+    pub js8_mfi: String,
+    /// JS8Call's notification sounds (`EnableNotifications` and its table, every row off by default,
+    /// Configuration.cpp:1996-2002, :2464): the events that play one, of "cq", "hb", "ack",
+    /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
+    #[serde(default)]
+    pub js8_sounds: Vec<String>,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -4776,6 +4810,16 @@ fn default_js8_idle_watchdog_min() -> u16 {
     60
 }
 
+/// JS8Call's `EOTCharacter` default. See [`Settings::js8_eot`].
+fn default_js8_eot() -> String {
+    "\u{2662}".to_string()
+}
+
+/// JS8Call's `MFICharacter` default. See [`Settings::js8_mfi`].
+fn default_js8_mfi() -> String {
+    "\u{2026}\u{2026}".to_string()
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
@@ -4851,6 +4895,12 @@ impl Default for Settings {
             js8_avoid_allcall: false,
             js8_hold_ptt: false,
             js8_tx_offset_while_sending: false,
+            js8_rx_blocklist: Vec::new(),
+            js8_highlight_primary: Vec::new(),
+            js8_highlight_secondary: Vec::new(),
+            js8_eot: default_js8_eot(),
+            js8_mfi: default_js8_mfi(),
+            js8_sounds: Vec::new(),
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -10174,6 +10224,80 @@ mod tests {
                 "ui/src/types.ts Settings lacks `{key}`"
             );
         }
+    }
+
+    /// The JS8 lists, the end and missing-frame marks and the sounds: JS8Call 3.0.3's defaults
+    /// (an empty RX block list and highlight lists, ♢ and ……, every sound off), the exact camelCase
+    /// wire keys, an upgrader's file, a round trip of chosen values, and the TS mirror.
+    #[test]
+    fn js8_list_mark_and_sound_settings_default_as_js8call_and_round_trip() {
+        let s = Settings::default();
+        assert!(s.js8_rx_blocklist.is_empty(), "RXCallsignBlocklist: empty");
+        assert!(
+            s.js8_highlight_primary.is_empty() && s.js8_highlight_secondary.is_empty(),
+            "Primary/SecondaryHighlightWords: empty"
+        );
+        assert_eq!(s.js8_eot, "\u{2662}", "EOTCharacter: ♢");
+        assert_eq!(s.js8_mfi, "\u{2026}\u{2026}", "MFICharacter: ……");
+        assert!(s.js8_sounds.is_empty(), "EnableNotifications: off");
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8RxBlocklist\":[]",
+            "\"js8HighlightPrimary\":[]",
+            "\"js8HighlightSecondary\":[]",
+            "\"js8Eot\":\"\u{2662}\"",
+            "\"js8Mfi\":\"\u{2026}\u{2026}\"",
+            "\"js8Sounds\":[]",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (old.js8_eot.as_str(), old.js8_mfi.as_str()),
+            ("\u{2662}", "\u{2026}\u{2026}"),
+            "an upgrader's file prints JS8Call's marks"
+        );
+        assert!(old.js8_rx_blocklist.is_empty() && old.js8_sounds.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8RxBlocklist":["W1AW"],"js8HighlightPrimary":["@FUN","K1ABC"],"js8HighlightSecondary":["NET"],"js8Eot":"","js8Mfi":"...","js8Sounds":["inbox","cq"]}"#,
+        )
+        .unwrap();
+        assert_eq!(chosen.js8_rx_blocklist, ["W1AW"]);
+        assert_eq!(chosen.js8_highlight_primary, ["@FUN", "K1ABC"]);
+        assert_eq!(chosen.js8_highlight_secondary, ["NET"]);
+        assert_eq!(
+            chosen.js8_eot, "",
+            "an empty end mark stays empty, not the default"
+        );
+        assert_eq!(chosen.js8_mfi, "...");
+        assert_eq!(chosen.js8_sounds, ["inbox", "cq"]);
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        for key in [
+            "js8RxBlocklist",
+            "js8HighlightPrimary",
+            "js8HighlightSecondary",
+            "js8Eot",
+            "js8Mfi",
+            "js8Sounds",
+        ] {
+            assert!(typed(key), "ui/src/types.ts Settings is missing `{key}`");
+        }
+        assert!(
+            !typed("js8RxBlockList"),
+            "control: a near miss is not found"
+        );
     }
 
     /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the

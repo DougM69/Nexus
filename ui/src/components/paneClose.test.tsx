@@ -454,7 +454,7 @@ const CASES: CloseCase[] = [
     cockpit: 'JS8',
     ids: JS8_PANEL_IDS,
     panes: [
-      ['activity', 'Activity'],
+      ['activity', 'RX'],
       ['offsets', 'Band activity'],
       ['stations', 'Stations'],
       ['inbox', 'Inbox'],
