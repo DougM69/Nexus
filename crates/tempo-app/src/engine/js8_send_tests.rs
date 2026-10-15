@@ -139,3 +139,118 @@ fn an_ft8_over_on_the_air_does_not_hold_the_tx_offset() {
     e.set_tx_offset(1800.0);
     assert_eq!(e.tx_offset_hz(), 1800.0);
 }
+
+// ===== Typeahead (JS8Call's compose box while its message goes out) =====
+
+/// The frame keyed at `slot` as the radio loop keys it, as a receiver decodes it: its text, first
+/// and last flags. `None` when nothing keyed.
+fn keyed_text(e: &mut Engine, slot: u64) -> Option<(String, bool, bool)> {
+    let plan = e.plan_tx(slot)?;
+    let TxWaveform::Js8 { word, speed, .. } = &plan.waveform else {
+        panic!("a JS8 plan carries the typed waveform");
+    };
+    let (frame, i3) = ::js8::proto::frame::decode_word(word, *speed).expect("decodes");
+    let keyed = (frame.render(), i3.first, i3.last);
+    let wave = plan.waveform.build();
+    assert!(!e.commit_tx(&plan, wave, slot).is_empty(), "committed");
+    Some(keyed)
+}
+
+/// ⭐ TYPEAHEAD ON THE ENGINE: after the first frame, what the box hands over is what the frames
+/// still to go key, by value: the new text, as data, none flagged first and the last flagged last.
+#[test]
+fn typeahead_keys_the_typed_text_in_the_frames_still_to_go() {
+    let mut e = js8_engine();
+    queue_message(&mut e);
+    let s = next_slot(&e);
+    let first = keyed_text(&mut e, s).expect("the first frame");
+    assert!(first.1 && !first.2, "premise: the message's first frame");
+    let v = e.js8_typeahead_state().expect("the box holds the message");
+    assert_eq!(v.sent, first.0, "what has gone");
+    e.js8_typeahead(v.sent.chars().count(), "HELLO AGAIN".into())
+        .expect("taken");
+    let mut rest = Vec::new();
+    while let Some(f) = keyed_text(&mut e, s + 1 + rest.len() as u64) {
+        rest.push(f);
+    }
+    assert_eq!(
+        rest.iter().map(|f| f.0.as_str()).collect::<String>(),
+        "HELLO AGAIN"
+    );
+    assert!(
+        rest.iter().all(|f| !f.1) && rest.last().is_some_and(|f| f.2),
+        "data: none first, the last last: {rest:?}"
+    );
+}
+
+/// A change in the box is an operator act, as a key press in JS8Call's box is: the idle count
+/// restarts.
+#[test]
+fn a_typeahead_change_restarts_the_idle_count() {
+    let mut e = js8_engine();
+    queue_message(&mut e);
+    let an_hour_ago = tempo_core::timing::now_unix_ms() as u64 - 60 * 60 * 1000;
+    e.js8_station.mark_active(an_hour_ago);
+    assert!(
+        e.js8_state().idle_minutes >= 59,
+        "premise: idle for an hour"
+    );
+    let v = e.js8_typeahead_state().expect("the box holds the message");
+    e.js8_typeahead(0, v.unsent).expect("taken");
+    assert_eq!(e.js8_state().idle_minutes, 0);
+}
+
+/// A MSG sent from the box is read-only while it goes, as in JS8Call, and the cockpit says why a
+/// change was not taken.
+#[test]
+fn a_msg_from_the_box_takes_no_typeahead_and_says_why() {
+    let mut e = js8_engine();
+    e.js8_send_command(
+        "W1AW".into(),
+        ::js8::Command::Msg.id(),
+        "HELLO THERE".into(),
+    )
+    .expect("queues");
+    let v = e.js8_typeahead_state().expect("the box holds the message");
+    assert!(v.locked);
+    let refused = e
+        .js8_typeahead(0, format!("{} AND MORE", v.unsent))
+        .expect_err("refused");
+    assert_eq!(
+        refused,
+        "A MSG or relay message cannot be changed while it goes out, as in JS8Call."
+    );
+    assert_eq!(e.js8_state().last_error, Some(refused));
+}
+
+/// Stop TX lets the box go: nothing of it is going out any more.
+#[test]
+fn stop_tx_lets_the_box_go() {
+    let mut e = js8_engine();
+    queue_message(&mut e);
+    assert!(e.js8_typeahead_state().is_some());
+    e.halt_tx();
+    assert_eq!(e.js8_typeahead_state(), None);
+}
+
+/// Hold PTT between frames holds across text typed after the last frame, which goes straight
+/// after it, as JS8Call holds once its box is framed again; with nothing typed it does not.
+#[test]
+fn hold_ptt_holds_across_text_typed_after_the_last_frame() {
+    let mut e = js8_engine();
+    e.settings.js8_hold_ptt = true;
+    e.js8_send(None, "HI".into()).expect("queues");
+    assert_eq!(e.js8_state().queue.len(), 1, "premise: a one-frame message");
+    let s = next_slot(&e);
+    let only = keyed_text(&mut e, s).expect("its frame");
+    assert!(only.2, "premise: its last frame");
+    assert!(!e.js8_holds_ptt_between_frames(), "nothing typed: no hold");
+    e.js8_typeahead(only.0.chars().count(), "MORE".into())
+        .expect("taken");
+    assert!(e.js8_holds_ptt_between_frames(), "typed after it: held");
+    assert_eq!(
+        keyed_text(&mut e, s + 1),
+        Some(("KD9TAW: MORE".to_string(), false, true)),
+        "straight after, a message of its own, not flagged first"
+    );
+}

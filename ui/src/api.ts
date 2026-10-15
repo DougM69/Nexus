@@ -44,6 +44,7 @@ import type {
   JourneySummary,
   Js8ComposerPrefill,
   Js8State,
+  Js8Typeahead,
   Js8InboxState,
   Js8Switch,
   LoggedQso,
@@ -3460,6 +3461,18 @@ export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
  * off, as JS8Call fills its compose box), or null. Keys nothing. */
 export async function js8Composer(composing: boolean, taken: number | null): Promise<Js8ComposerPrefill | null> {
   return invoke<Js8ComposerPrefill | null>('js8_composer', { composing, taken })
+}
+
+/** JS8Call's typeahead: what is still to go of the operator's message going out, `sentSeen` the
+ * characters of it the box had seen go. Taken just before the next frame; answered with what the box
+ * shows, or null once nothing of the box's is going out. Native only. */
+export async function js8Typeahead(sentSeen: number, unsent: string): Promise<Js8Typeahead | null> {
+  return invoke<Js8Typeahead | null>('js8_typeahead', { sentSeen, unsent })
+}
+
+/** What the compose box shows of the operator's message going out, or null once it has gone. */
+export async function js8TypeaheadState(): Promise<Js8Typeahead | null> {
+  return invoke<Js8Typeahead | null>('js8_typeahead_state')
 }
 
 /** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's

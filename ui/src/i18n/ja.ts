@@ -6307,6 +6307,9 @@ export const JA: PartialCatalog = {
   "js8.dock.compose.placeholder": "メッセージを入力… （Enter でキューに入れ、1 周期に 1 フレーム送信）",
   "js8.dock.compose.aria": "JS8 メッセージ",
   "js8.dock.send.label": "送信",
+  // JS8 typeahead: MACHINE TRANSLATIONS, for a native speaker to check.
+  "js8.dock.typeahead.sent": "送信済み",
+  "js8.dock.typeahead.locked": "MSG やリレーのメッセージは、JS8Call と同じく送信中に変更できません。",
   "js8.dock.cq.aria": "CQ の種類",
   "js8.dock.cq.title": "CQ を出す — @ALLCALL 宛てのハートビートフレームを次の周期に送ります",
   "js8.dock.cqRepeat.title.off": "CQ の繰り返しは停止中。クリックすると誰かが応答するまで {{min}} 分ごとに CQ を出します — 次の送信までの秒数はボタン上でカウントダウンします。TX オンのときだけ送信し、次回起動には引き継がれません。",

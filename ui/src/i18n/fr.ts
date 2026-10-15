@@ -2245,6 +2245,9 @@ export const FR: PartialCatalog = {
   "js8.dock.compose.placeholder": "Tapez un message… (Entrée le met en file ; une trame part par période)",
   "js8.dock.compose.aria": "Message JS8",
   "js8.dock.send.label": "Envoyer",
+  // JS8 typeahead: MACHINE TRANSLATIONS, for a native speaker to check.
+  "js8.dock.typeahead.sent": "Déjà envoyé",
+  "js8.dock.typeahead.locked": "Un message MSG ou de relais ne peut pas être modifié pendant son envoi, comme dans JS8Call.",
   "js8.dock.cq.aria": "Variante de CQ",
   "js8.dock.cq.title": "Appeler CQ — une trame heartbeat adressée à @ALLCALL, à la période suivante",
   "js8.dock.cqRepeat.title.off": "Répétition de CQ arrêtée. Cliquez pour appeler CQ toutes les {{min}} min jusqu’à ce que quelqu’un réponde — le bouton décompte jusqu’au prochain appel. Il n’émet que TX activé, et n’est jamais mémorisé d’un lancement à l’autre.",

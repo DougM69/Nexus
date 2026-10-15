@@ -34,6 +34,7 @@ import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
+import { sentTail, useJs8Typeahead } from './js8Typeahead'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
   atuTune,
@@ -239,7 +240,10 @@ export function Js8Cockpit({
       getJs8State()
         .then((s) => {
           if (owns()) setJs8(s)
-          if (!remote) return composerSync.current()
+          if (!remote) {
+            void typeahead.poll()
+            return composerSync.current()
+          }
         })
         .catch(() => { if (owns() && remote) setJs8(null) }),
     )
@@ -346,6 +350,8 @@ export function Js8Cockpit({
   // --- The dock's addressee + composer. The ENGINE is the authority on every send. ---
   const [toCall, setToCall] = useState('')
   const [text, setText] = useState('')
+  // JS8Call's typeahead: while the box's message goes out, the box holds what is still to go.
+  const typeahead = useJs8Typeahead(text, setText)
   const [cqIdx, setCqIdx] = useState(0)
   /** The directed command the composer sends, or null for a plain message / MSG. */
   const [cmdId, setCmdId] = useState<number | null>(null)
@@ -366,7 +372,7 @@ export function Js8Cockpit({
     const offered = await js8Composer(textRef.current.trim() !== '', taken).catch(() => undefined)
     if (offered === undefined) return
     if (takenRef.current === taken) takenRef.current = null
-    if (offered && typeof offered.text === 'string' && typeof offered.id === 'number' && textRef.current.trim() === '') {
+    if (offered && typeof offered.text === 'string' && typeof offered.id === 'number' && textRef.current.trim() === '' && !typeahead.active) {
       takenRef.current = offered.id
       textRef.current = offered.text
       setToCall('')
@@ -404,6 +410,11 @@ export function Js8Cockpit({
   }
   const send = () => {
     if (!canControl) return
+    // While the box's message goes out the box already feeds it (typeahead): nothing new is queued.
+    if (typeahead.active) {
+      typeahead.type(text)
+      return
+    }
     const body = text.trim()
     const to = toCall.trim().toUpperCase()
     if (cmdId !== null && !to) {
@@ -417,6 +428,7 @@ export function Js8Cockpit({
       if (s) {
         setJs8(s)
         setText('')
+        void typeahead.begin()
       }
     })
   }
@@ -1457,10 +1469,17 @@ export function Js8Cockpit({
               </option>
             ))}
           </select>
+          {typeahead.active && (
+            <span className="js8-typeahead-sent" title={t('js8.dock.typeahead.sent')}>
+              {sentTail(typeahead.sent)}
+            </span>
+          )}
           <input
             className="settings-input cw-type js8-compose"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => typeahead.type(e.target.value)}
+            readOnly={typeahead.locked}
+            title={typeahead.locked ? t('js8.dock.typeahead.locked') : undefined}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               e.preventDefault()
@@ -1472,7 +1491,7 @@ export function Js8Cockpit({
             spellCheck={false}
           />
           <span className={`js8-estimate${overCap ? ' over' : ''}`} title={t('js8.dock.estimate.title')}>
-            {estimateText}
+            {typeahead.active ? '' : estimateText}
           </span>
           <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!canControl || !canSend}>
             {t('js8.dock.send.label')}

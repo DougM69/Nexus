@@ -784,9 +784,13 @@ impl Engine {
         let r = self.js8_identity_set().and_then(|()| {
             self.js8_station
                 .send(to_ref.as_ref(), text.trim(), now_ms)
-                .map(|_| ())
                 .map_err(Self::js8_compose_error)
         });
+        // The compose box keeps a message it queued while it goes out (JS8Call's typeahead).
+        if r.as_ref().is_ok_and(|&frames| frames > 0) {
+            self.js8_station.begin_typeahead(to_ref.as_ref());
+        }
+        let r = r.map(|_| ());
         self.js8_after_verb(&r);
         r
     }
@@ -802,9 +806,13 @@ impl Engine {
         let r = self.js8_identity_set().and_then(|()| {
             self.js8_station
                 .send_command(&to_ref, command, arg.trim(), now_ms)
-                .map(|_| ())
                 .map_err(Self::js8_compose_error)
         });
+        // …and so is a directed command it sent (typeahead).
+        if r.as_ref().is_ok_and(|&frames| frames > 0) {
+            self.js8_station.begin_typeahead(Some(&to_ref));
+        }
+        let r = r.map(|_| ());
         self.js8_after_verb(&r);
         r
     }
@@ -1188,7 +1196,7 @@ impl Engine {
     }
 }
 
-/// JS8's send mechanics: Hold PTT between frames and the TX offset while sending.
+/// JS8's send mechanics: Hold PTT between frames, the TX offset while sending, and typeahead.
 #[path = "js8_send.rs"]
 mod send;
 

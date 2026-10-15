@@ -6707,6 +6707,9 @@ export const DE: PartialCatalog = {
   "js8.dock.compose.placeholder": "Nachricht eingeben… (Enter stellt sie in die Warteschlange; ein Frame pro Periode)",
   "js8.dock.compose.aria": "JS8-Nachricht",
   "js8.dock.send.label": "Senden",
+  // JS8 typeahead: MACHINE TRANSLATIONS, for a native speaker to check.
+  "js8.dock.typeahead.sent": "Bisher gesendet",
+  "js8.dock.typeahead.locked": "Eine MSG- oder Relay-Nachricht lässt sich nicht ändern, während sie gesendet wird, wie in JS8Call.",
   "js8.dock.cq.aria": "CQ-Variante",
   "js8.dock.cq.title": "CQ rufen — ein Heartbeat-Frame an @ALLCALL, in der nächsten Periode",
   "js8.dock.cqRepeat.title.off": "CQ-Wiederholung aus. Klicken, um alle {{min}} min CQ zu rufen, bis jemand antwortet — die Taste zählt bis zum nächsten Ruf herunter. Sie tastet nur bei eingeschaltetem TX und wird nie über einen Neustart hinweg gemerkt.",

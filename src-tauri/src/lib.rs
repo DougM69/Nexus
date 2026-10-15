@@ -16959,6 +16959,29 @@ async fn js8_composer(
     with_engine(&state, move |mut eng| eng.js8_composer(composing, taken)).await
 }
 
+/// The native cockpit's compose box while its message goes out (JS8Call's typeahead): what is still
+/// to go, `sent_seen` the characters of it the box had seen go. Taken just before the next frame,
+/// which goes out through every JS8 gate; answered with what the box shows, or none once nothing of
+/// the box's is going out.
+#[tauri::command(async)]
+fn js8_typeahead(
+    state: State<'_, SharedEngine>,
+    sent_seen: usize,
+    unsent: String,
+) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_typeahead(sent_seen, unsent)?;
+    Ok(eng.js8_typeahead_state())
+}
+
+/// What the compose box shows of the operator's message going out, or none once it has gone.
+#[tauri::command(async)]
+fn js8_typeahead_state(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
+    Ok(engine_lock(&state).js8_typeahead_state())
+}
+
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
 #[tauri::command(async)]
 fn js8_drop_queue(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
@@ -35496,6 +35519,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_cq_repeat,
             js8_answer_reply,
             js8_composer,
+            js8_typeahead,
+            js8_typeahead_state,
             js8_drop_queue,
             js8_inbox_mark,
             js8_inbox_delete,

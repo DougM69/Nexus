@@ -2874,6 +2874,8 @@
 "5","js8.dock.compose.placeholder","Type a message… (Enter queues it; one frame goes out per period)","","","""Enter"" is the key on the keyboard."
 "5","js8.dock.compose.aria","JS8 message","","JS8",""
 "5","js8.dock.send.label","Send","","","Short label on: JS8 cockpit — the message dock. The same English text ""Send"" is used by 7 different keys (e.g. tempo.composer.send, operate.strip.send.label, rtty.compose.send.label) — each can take a different Portuguese word, so choose the one that fits THIS screen."
+"5","js8.dock.typeahead.sent","Sent so far","","","Tooltip on the JS8 cockpit's message dock: the line beside the message box showing the part of the message already transmitted while the rest is still going out (typeahead)."
+"5","js8.dock.typeahead.locked","A MSG or relay message cannot be changed while it goes out, as in JS8Call.","","MSG | JS8Call","Tooltip on the JS8 cockpit's message box while a MSG or relay message is being sent: the box is read-only then. MSG is a JS8 command word and is not translated; a relay is a message passed on by another station."
 "5","js8.dock.cq.aria","CQ variant","","CQ",""
 "5","js8.dock.cq.title","Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period","","@ALLCALL | CQ",""
 "5","js8.dock.cqRepeat.title.off","Repeating CQ is off. Click to call CQ every {{min}} min until someone answers — the button counts down to the next one. It keys only while TX is on, and it is never remembered across launches.","","{{min}} | CQ | TX",""

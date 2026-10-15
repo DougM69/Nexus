@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JS8: keep typing while your message goes out (typeahead), as in JS8Call.** After Send the
+  message stays in the message box while it is sent, and each frame's text moves out of the box to
+  the line beside it as it goes. Type more, or change what has not gone yet, and the frames still to
+  go send what the box holds, taken just before each frame; text typed after the last frame goes
+  straight after it. Enter and Send do not queue a second message meanwhile. MSG and relay messages
+  stay as sent (the box is read-only), as in JS8Call. NEEDS-BENCH.
 - **JS8: Hold PTT between frames, JS8Call's option (off by default).** On (Settings ▸ Digital ▸
   JS8), the radio stays keyed from the end of one frame of a message to the start of the next,
   instead of dropping PTT after each frame and keying again (about 1.6 s unkeyed between frames at

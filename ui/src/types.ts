@@ -1946,6 +1946,15 @@ export interface Js8ComposerPrefill {
   text: string
 }
 
+/** The compose box's typeahead, JS8Call's: what has gone of the operator's message going out and
+ * what is still to go, as its frames render, and whether the box may change it (not a MSG or relay).
+ * Native only, never part of Js8State. */
+export interface Js8Typeahead {
+  sent: string
+  unsent: string
+  locked: boolean
+}
+
 export interface Js8PendingReply {
   origin: Js8Origin
   to: string
