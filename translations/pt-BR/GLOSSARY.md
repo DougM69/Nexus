@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 7,204 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 7,273 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,15 +20,15 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 284 | The program's name. |
+| Nexus | 286 | The program's name. |
 | QSO / QSOs | 114 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 98 | ARRL's Logbook of The World — a service name. |
 | CAT | 95 | Computer Aided Transceiver — the radio control protocol. |
-| TX / RX | 129 / 72 | Transmit and receive. Printed on the radio itself. |
+| TX / RX | 130 / 75 | Transmit and receive. Printed on the radio itself. |
 | CW | 78 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 75 | Both the Q-code and the callsign lookup site. |
 | CQ | 97 | The call. Translating it would be strange on the air and on screen. |
-| MHz / kHz / Hz | 74 / 22 / 49 | SI units. Never translated, never re-punctuated. |
+| MHz / kHz / Hz | 85 / 22 / 57 | SI units. Never translated, never re-punctuated. |
 | Doppler | 62 | The effect, in satellite work. Same word, proper name. |
 | DX | 70 | Distant station / distance working. |
 | ADIF | 54 | The log file format. |
@@ -48,9 +48,9 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | POTA / SOTA | 41 / 12 | Parks and Summits On The Air — programme names. |
 | CSV | 26 | File format. |
 | CHIRP | 26 | The radio-programming program. |
-| UTC | 58 | The time standard. Never "TUC". |
+| UTC | 62 | The time standard. Never "TUC". |
 | PSK / PSK31 | 28 / 8 | Mode names. |
-| QSY | 22 | Q-code: change frequency. |
+| QSY | 25 | Q-code: change frequency. |
 | SmartSDR / FlexRadio | 23 / 10 | Product names. |
 | Hamlib / rigctld | 23 / 13 | The radio-control library and its daemon. |
 | DXpedition | 20 | The activity. Widely used unchanged. |
@@ -95,35 +95,35 @@ word in, and use only that word in the CSV.
 
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
-| band | 374 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 313 | The rig itself, and the radio list in Settings. | |
+| band | 377 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
+| radio | 314 | The rig itself, and the radio list in Settings. | |
 | mode | 252 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
-| rig | 172 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
+| rig | 179 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 198 / 98 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
 | settings | 176 | The Settings screen and every reference to it. | |
 | grid | 142 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 136 | Sound cards, levels, routing. | |
-| station | 416 | Both your own station and the one you are working. | |
+| station | 417 | Both your own station and the one you are working. | |
 | port | 104 | Serial and network ports. | |
-| dial | 105 | The dial frequency. A radio term, but the word itself is prose. | |
+| dial | 106 | The dial frequency. A radio term, but the word itself is prose. | |
 | transmit / receive | 136 / 41 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 90 | A satellite pass. | |
 | callsign | 106 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 109 | "Worked before", "stations you have worked". | |
-| frequency | 99 | | |
+| frequency | 118 | | |
 | tune | 62 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 67 | RF power, in watts. | |
 | confirmed | 73 | A QSO confirmed by LoTW/eQSL/card. | |
-| decode | 65 | Both noun and verb. | |
+| decode | 67 | Both noun and verb. | |
 | spot / spots | 49 / 64 | A cluster or RBN spot. Both noun and verb. | |
 | needed | 57 | "Needed" is also a screen name in the navigation — keep the screen name and the word matching. | |
-| import / export | 47 / 51 | ADIF import and export. | |
+| import / export | 48 / 52 | ADIF import and export. | |
 | upload | 71 | Sending the log to LoTW, QRZ, eQSL, ClubLog. | |
 | satellite | 49 | | |
 | entity | 37 | A DXCC entity. Not the same thing as a country — the distinction matters to the award. | |
 | section | 38 | An ARRL/RAC section in Field Day. The section *codes* (WI, ENY) stay as they are. | |
 | cluster | 48 | The DX cluster. | |
-| waterfall | 45 | The scrolling spectrum display. | |
+| waterfall | 47 | The scrolling spectrum display. | |
 | contact | 64 | The plain-English word for a QSO. Where the row says QSO, keep QSO. | |
 | park / summit | 61 / 17 | POTA parks and SOTA summits. The reference codes stay as they are. | |
 | beacon | 33 | | |

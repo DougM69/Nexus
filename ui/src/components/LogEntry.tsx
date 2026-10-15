@@ -302,7 +302,20 @@ interface Props {
     rst: string | null
     name: string | null
     confirmed: boolean
+    /** The report we SEND them, when the host knows it (JS8: their SNR at this station, which
+     *  JS8Call's log dialog puts in "RST sent", mainwindow.cpp:3891-3896). Filled once per
+     *  call, into a box nobody has typed in, as `rst` fills the received one. */
+    rstSent?: string | null
   } | null
+  /** Hz above the dial the contact was on, for hosts whose logged frequency is the dial plus the
+   *  audio offset (JS8Call logs `m_freqNominal + freq()`, mainwindow.cpp:3899). Absent = the
+   *  dial, as before. An override's own frequency still wins. */
+  logOffsetHz?: number
+  /** When the contact started, as the host knows it, for the call it names: JS8Call's QSO start
+   *  is the moment the call was selected (`m_callSelectedTime`, mainwindow.cpp:3860-3866). Used
+   *  only while the strip's call is that call, and then the contact's end is when it is logged.
+   *  An override's own time still wins. */
+  startedAt?: { call: string; unix: number } | null
   /**
    * The host holds the SAME callsign in a field of its own (RTTY's Call box), and the two are
    * one field shown twice. Called with the strip's call, trimmed and uppercased, whenever it
@@ -463,6 +476,8 @@ export function LogEntry({
   pendingWork,
   onConsumeWork,
   cwLive,
+  logOffsetHz,
+  startedAt,
   onCallChange,
   onEntryCall,
   onReset,
@@ -1336,6 +1351,9 @@ export function LogEntry({
   // clobbering what the operator typed.
   const cwFilledFor = useRef<string | null>(null)
   const cwRstFilled = useRef(false)
+  // The report SENT this strip last filled in (`cwLive.rstSent`): it follows the host's value while
+  // the box still shows it, as JS8Call's log dialog takes their SNR when it opens.
+  const cwRstSentAuto = useRef<string | null>(null)
   const cwNameFilled = useRef(false)
   // The two-way link (`onCallChange`): the call the strip and its host last agreed on, trimmed and
   // uppercased. A fill sets it BEFORE the strip changes, so the change is not reported back; a
@@ -1371,8 +1389,15 @@ export function LogEntry({
         settledCallRef.current = cwLive.confirmed === true
         cwFilledFor.current = up
         cwRstFilled.current = false
+        cwRstSentAuto.current = null
         cwNameFilled.current = false
       }
+    }
+    if (cwFilledFor.current && cwLive.rstSent && cwLive.rstSent !== cwRstSentAuto.current) {
+      const sent = cwLive.rstSent
+      const auto = cwRstSentAuto.current
+      setLogRstSent((v) => (v == null || v.trim() === '' || v === defaultRst || v === auto ? sent : v))
+      cwRstSentAuto.current = sent
     }
     if (cwFilledFor.current && !cwRstFilled.current && rst) {
       // The decoder's read of `rst` is the report we RECEIVED from them.
@@ -1384,7 +1409,7 @@ export function LogEntry({
       cwNameFilled.current = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwLive?.call, cwLive?.rst, cwLive?.name])
+  }, [cwLive?.call, cwLive?.rst, cwLive?.name, cwLive?.rstSent])
   // …and the strip's side of the link: every change the fill above did not make is reported.
   useEffect(() => {
     const c = logCall.trim().toUpperCase()
@@ -1590,7 +1615,7 @@ export function LogEntry({
     setOvDate(date)
     setOvTime(time)
     setOvBand(snap.radio.band)
-    setOvFreq(String(snap.radio.dialMhz))
+    setOvFreq(String(liveFreqMhz))
     setOvMode(overrideModeFor(mode))
     setOverrideOpen(true)
   }
@@ -1806,8 +1831,12 @@ export function LogEntry({
   // Remote drafts survive navigation and other operators' QSYs. Keep their
   // captured contact context; the explicit other-radio override still wins.
   const draftContext = remoteMode ? remoteDraftContext : null
+  // The frequency a contact logged now is on: the dial, plus the host's audio offset where it logs
+  // one (`logOffsetHz`), to the hertz.
+  const liveFreqMhz =
+    logOffsetHz == null ? snap.radio.dialMhz : Math.round(snap.radio.dialMhz * 1e6 + logOffsetHz) / 1e6
   const effBand = overrideOpen ? ovBand : draftContext?.band ?? snap.radio.band
-  const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? snap.radio.dialMhz
+  const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? liveFreqMhz
   const effMode = overrideOpen ? ovMode : draftContext?.mode ?? mode
 
   useEffect(() => {
@@ -1969,7 +1998,10 @@ export function LogEntry({
     const rstRcvd = rstRcvdShown.trim() || defaultRst
     // Override open → the hand-entered UTC instant (one that is not a real date and time held
     // Log above); closed → now, exactly as before.
-    const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : Math.floor(Date.now() / 1000)
+    const nowUnix = Math.floor(Date.now() / 1000)
+    // The host's start for this call (`startedAt`), and then the contact ends now.
+    const started = !overrideOpen && startedAt && sameCall(startedAt.call, call) ? Math.min(startedAt.unix, nowUnix) : null
+    const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : started ?? nowUnix
     const rec: LoggedQso = {
       call,
       grid: logGrid.trim() || null,
@@ -1985,6 +2017,7 @@ export function LogEntry({
       comment: logComment.trim() || null,
       notes: logNotes.trim() || null,
       whenUnix,
+      ...(started != null ? { timeOffUnix: nowUnix } : {}),
       confirmed: false,
       awardConfirmed: false,
       // `asksForPark` FIRST: an exchange with no park row sends no park reference, by any

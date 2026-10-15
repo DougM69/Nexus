@@ -1102,6 +1102,11 @@ use crate::AppState;
 #[path = "js8.rs"]
 pub mod js8;
 
+/// JS8 frequencies, the decode filter, QSY to centre, the band schedule and DIRECTED.TXT
+/// (`crates/tempo-app/src/js8_freq.rs`) — a CHILD of this module, as `js8` is.
+#[path = "js8_freq.rs"]
+pub mod js8_freq;
+
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
 /// mean "not read yet / not reported". `cat_ok` mirrors the active radio's `(Option<bool>)` health.
 #[derive(Debug, Clone, Default)]
@@ -3127,6 +3132,11 @@ pub struct Engine {
     js8_last_error: Option<String>,
     /// `<config dir>/js8_station.json` — the inbox/heard journal (`set_js8_journal_path`).
     js8_journal_path: Option<PathBuf>,
+    /// The JS8 band schedule's session memory and the change waiting out its notice
+    /// (`js8_freq::Js8HopState`).
+    js8_hop: js8_freq::Js8HopState,
+    /// DIRECTED.TXT lines the shell has not appended yet (`Engine::take_js8_directed_pending`).
+    js8_directed_pending: Vec<String>,
     /// xorshift32 state for the heartbeat sub-band pick (`Station::next_frame`'s `rng`).
     /// Seeded from the clock; it only ever chooses an AUDIO offset inside 500–1000 Hz.
     pub(crate) js8_rng: u32,
@@ -5645,6 +5655,8 @@ impl Engine {
             js8_band_activity: std::collections::BTreeMap::new(),
             js8_last_error: None,
             js8_journal_path: None,
+            js8_hop: js8_freq::Js8HopState::default(),
+            js8_directed_pending: Vec::new(),
             js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
             js8_planned_slot: None,
             pending_tx_disable: false,
@@ -6187,6 +6199,14 @@ impl Engine {
         // have the next launch fold the old entries in AGAIN — returning one the operator had
         // removed from the watch list since. No form owns it; a restore/reset does (below).
         let live_wanted_calls = std::mem::take(&mut self.settings.wanted_calls);
+        // JS8's decode filter, its QSY centre and the dial last used on JS8 are ENGINE-OWNED: the
+        // cockpit's waterfall controls and the JS8 tick write them, so a form, a snapshot from
+        // whenever it loaded, keeps the live ones. A restore/reset takes the bundle's (below).
+        let live_js8_wf = (
+            self.settings.js8_filter,
+            self.settings.js8_qsy_center_hz,
+            self.settings.js8_last_dial_mhz,
+        );
         // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
         // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
         // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
@@ -6282,6 +6302,11 @@ impl Engine {
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
             self.settings.wanted_calls = live_wanted_calls;
+            (
+                self.settings.js8_filter,
+                self.settings.js8_qsy_center_hz,
+                self.settings.js8_last_dial_mhz,
+            ) = live_js8_wf;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
@@ -7548,6 +7573,10 @@ impl Engine {
         self.settings.dial_mhz = dial_mhz;
         self.settings.band = band.to_string();
         self.settings.sideband = mode.to_string();
+        // A QSY made while JS8 runs is the dial JS8's "return to the last used frequency" keeps.
+        if self.app.tier() == Tier::Js8 {
+            self.js8_remember_dial();
+        }
         // Declare the provenance of the dial just written: an operator QSY opens a fresh
         // residency; a machinery tune banks the residency it displaced and opens none.
         self.record_dial(origin);
@@ -8035,7 +8064,13 @@ impl Engine {
             Tier::Ft4 => "FT4",
             _ => "",
         };
-        let mut plan = crate::bandplan::band_plan_for(tier);
+        // JS8 reads the operator's own frequency list when there is one (Settings ▸ Digital ▸
+        // JS8), JS8Call's table otherwise.
+        let mut plan = if tier == Tier::Js8 {
+            crate::bandplan::js8_plan_from(self.settings.js8_frequencies.as_deref())
+        } else {
+            crate::bandplan::band_plan_for(tier)
+        };
         // #175 — the 60 m FT8 button follows the station's licence country. The stock row is
         // the US channel (5.3715, 100 W ERP); a station whose callsign is not a US one gets the
         // WRC-15 dial the rest of the world shares.
@@ -25457,6 +25492,8 @@ contact yourself."
             .decode_fhigh_hz
             .clamp(200, 4000)
             .max(nfa + 100);
+        // JS8Call's decode filter, when it is on, is the window instead (`js8_filter_window`).
+        let (nfa, nfb) = self.js8_filter_window().unwrap_or((nfa, nfb));
         Js8MultiJob {
             slices,
             params: ::js8::DecodeParams {
@@ -25627,6 +25664,11 @@ contact yourself."
             (nfa.max(nfqso - 25), nfb.min(nfqso + 25))
         } else {
             (nfa, nfb)
+        };
+        // JS8: JS8Call's decode filter, when it is on, is the window instead (`js8_filter_window`).
+        let (nfa, nfb) = match self.js8_filter_window() {
+            Some((lo, hi)) if self.app.tier() == Tier::Js8 => (lo as i32, hi as i32),
+            _ => (nfa, nfb),
         };
         DecodeJob {
             source,

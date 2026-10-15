@@ -650,6 +650,10 @@ const MIGRATED = [
   // …and the note on a held message's Inbox row that it is too long to hand over at this speed —
   // migrated from birth; the speed's name is the mode's token.
   'components/Js8InboxTooLong.tsx',
+  // JS8's frequencies and band schedule (Settings) and its waterfall controls (the decode filter,
+  // QSY to centre) — migrated from birth.
+  'components/Js8FrequencySettings.tsx',
+  'components/Js8WaterfallControls.tsx',
 ]
 
 /**

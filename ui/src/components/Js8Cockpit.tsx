@@ -32,6 +32,7 @@ import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
+import { Js8WaterfallControls } from './Js8WaterfallControls'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
@@ -316,12 +317,14 @@ export function Js8Cockpit({
       .catch(() => {})
   }, [active, canControl, remote])
 
-  // JS8 watering holes (JS8Call's FrequencyList), license-filtered.
+  // JS8 watering holes (JS8Call's FrequencyList, or the operator's own list from Settings),
+  // license-filtered. Asked again each time JS8 comes on screen: the list may have been edited in
+  // Settings while this keep-alive cockpit was hidden.
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
-    if (remote) return
+    if (remote || !active) return
     void getLicensedBandPlan('js8').then(setPlan).catch(() => {})
-  }, [remote])
+  }, [remote, active])
 
   // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns is asked of `LogSource`
   // (`logDetail`, below): the same `callHistory` rule the log strip and the Operate card answer
@@ -882,6 +885,24 @@ export function Js8Cockpit({
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
+  // JS8Call's QSO start for the log strip: when a call was first selected (`m_callSelectedTime`,
+  // mainwindow.cpp:5974-5978), kept per call, the last one's dropped when the selection is cleared
+  // (`clearCallsignSelected`, :6020-6022). Selected = a heard call in the To box.
+  const selectedTimes = useRef(new Map<string, number>())
+  const lastSelected = useRef('')
+  useEffect(() => {
+    const call = selected?.call ?? ''
+    if (call) {
+      if (!selectedTimes.current.has(call)) selectedTimes.current.set(call, Math.floor(Date.now() / 1000))
+      lastSelected.current = call
+    } else if (!selectedCall && lastSelected.current) {
+      selectedTimes.current.delete(lastSelected.current)
+      lastSelected.current = ''
+    }
+  }, [selected?.call, selectedCall])
+  const startedAt = selected
+    ? { call: selected.call, unix: selectedTimes.current.get(selected.call) ?? Math.floor(Date.now() / 1000) }
+    : null
   const now = js8DisplayNow(js8)
   // The list only: the station keeps every call it heard, so the log strip, the rotator and the
   // To box still know an aged one, as JS8Call's call activity does.
@@ -1331,11 +1352,15 @@ export function Js8Cockpit({
         defaultRst="599"
         exchange="terrestrial"
         titled={false}
+        // JS8Call's log dialog: their SNR here is the report SENT, the start is when the call was
+        // selected, and the frequency is the dial plus the TX offset (mainwindow.cpp:3858-3905).
         cwLive={
           selected
-            ? { call: selected.call, rst: fmtSnr(selected.snrDb), name: null, confirmed: true }
+            ? { call: selected.call, rst: null, rstSent: fmtSnr(selected.snrDb), name: null, confirmed: true }
             : null
         }
+        startedAt={startedAt}
+        logOffsetHz={snap.radio.txOffsetHz}
         onSnap={onSnap}
         fieldDay={snap.fieldDay ?? null}
         active={active}
@@ -1557,6 +1582,18 @@ export function Js8Cockpit({
           keyed={sending || (snap?.radio.tuning ?? false)}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+          // JS8Call's waterfall controls (the decode filter, QSY to centre), on its waterfall, as
+          // JS8Call keeps them: a plate naming the filter opens them (its own file).
+          headerExtra={
+            <Js8WaterfallControls
+              js8={js8}
+              rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
+              txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
+              canControl={canControl}
+              active={active}
+              onState={setJs8}
+            />
+          }
           onTune={(hz, target) => {
             if (!canControl) {
               if (target === 'rx') receiverSettings.tuneRx(hz)

@@ -238,16 +238,21 @@ fn the_inbox_notes_reach_the_state_and_clear() {
     assert_eq!(json["inboxDropped"][0]["why"], "count");
     assert_eq!(json["inboxDropped"][0]["entry"]["to"], "K0AA");
     assert_eq!(json["inboxDropped"][0]["atMs"], 1_100);
-    // The desktop's `presence` is the one key the Remote's sample leaves out (the page's parser
-    // does not list it yet); the notes ride in it as they are.
+    // The desktop's `presence` and `controls` are the keys the Remote's sample leaves out (the
+    // page's parser does not list them yet); the notes ride in it as they are.
     assert!(
         st.presence.is_some(),
         "control: the desktop's state carries presence"
+    );
+    assert!(
+        st.controls.is_some(),
+        "control: the desktop's state carries controls"
     );
     assert_eq!(
         e.bounded_js8_state(),
         Some(Js8State {
             presence: None,
+            controls: None,
             ..st
         }),
         "the Remote's copy is the same"

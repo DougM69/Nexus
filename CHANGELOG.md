@@ -179,6 +179,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Inbox, from your call, and goes out only when that station asks for it with QUERY MSGS and QUERY
   MSG n, under the same rules as every automatic reply. Storing it sends nothing. NEEDS-BENCH for
   the hand-over.
+- **JS8: your own frequency list.** Settings ▸ Digital ▸ JS8 ▸ Frequencies shows JS8Call 3.0.3's
+  suggested frequencies. Change, add or remove one and the list becomes yours, each frequency with
+  a description if you like: the JS8 band picker shows it, and opening JS8 tunes its first
+  frequency on the band. Reset puts JS8Call's list back; Export… saves yours to Downloads and
+  Import… reads such a file back.
+- **JS8: return to the last used frequency.** Off by default, as in JS8Call. On, opening JS8 tunes
+  the rig back to the frequency you last used in JS8 instead of the band's JS8 frequency.
+  NEEDS-BENCH: it moves the rig.
+- **JS8: the decode filter.** The new Filter plate on the JS8 waterfall shows what the decoder
+  listens to and opens the waterfall controls: the filter on or off, its centre and width, and
+  Centre on my RX offset. As in JS8Call it is on out of the box, at 1500 Hz and 2000 Hz wide, so JS8
+  now decodes 500–2500 Hz unless you widen it or switch it off (it decoded 200–2900 Hz before).
+- **JS8: QSY to centre.** In the same waterfall controls: moves the rig's dial so your TX offset
+  sits on the passband centre (1500 Hz unless you change it), for narrow filters and rigs whose
+  passband is uneven. Your RX offset and the stations heard move with it. Never while transmitting
+  or while a message is going out. NEEDS-BENCH: it moves the rig.
+- **JS8: the band schedule.** Settings ▸ Digital ▸ JS8 ▸ Change frequency by schedule, off by
+  default as in JS8Call. Give each row a frequency and a UTC window, and Nexus changes the rig's
+  frequency by itself, with nobody at the radio, 30 seconds after a notice you can cancel. Never
+  while transmitting or while a message is going out: it waits until both are clear. Move off the
+  scheduled frequency yourself and that row leaves you there. NEEDS-BENCH: it moves the rig with
+  nobody at it.
+- **JS8: DIRECTED.TXT.** With Write ALL.TXT decode log on, JS8 also writes JS8Call's DIRECTED.TXT
+  beside ALL.TXT, as JS8Call writes it: one line per directed message heard, with the date and time
+  (UTC), the dial, the offset, the SNR and the message, ♢ where it ended.
 
 ### Changed
 
@@ -294,6 +319,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unacknowledged for this. Each station is counted by its call as heard, as JS8Call counts it, so
   W1AW/P and W1AW are now each answered on @ALLCALL (Nexus used to count them as one).
   NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8 on 160 m is now 1.8435 MHz, and 60 m (5.363 MHz) is in the JS8 band picker**, as in
+  JS8Call 3. Opening JS8 on 160 m tunes 1.8435 instead of 1.842, and on 60 m it now tunes 5.363
+  (60 m is channelised and differs by country: check your own band plan).
 
 ### Fixed
 
@@ -669,6 +697,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fits, and its Inbox row says so and names that speed. A hand-over that fits only without its
   "NEXT MSG ID" goes without it, and a reply that no longer fits when it goes (you slowed down while
   it waited for your Yes) is not sent, and the log says why. NEEDS-BENCH.
+- **The JS8 log strip filed their SNR as the report you received.** It is the report you send
+  them, as JS8Call's log dialog has it, and it now goes in RST sent. The strip also logs the time
+  you selected the station (put their call in the To box) as the start, and the dial plus your TX
+  offset as the frequency, as JS8Call does.
 
 ### Security
 

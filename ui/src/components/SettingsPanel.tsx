@@ -14,6 +14,7 @@ import { JS8_ALL_SPEEDS_MASK, JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../j
 import { Js8ComposeSettings } from './Js8ComposeSettings'
 import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
+import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
@@ -9160,6 +9161,17 @@ export function SettingsPanel({
               </label>
             </div>
 
+            {/* JS8Call's Settings ▸ Frequencies: the operator's own list, returning to the last
+                frequency, and the band schedule (its own file). */}
+            <Js8FrequencySettings
+              form={form}
+              disabled={remote}
+              onChange={(patch) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, ...patch } : prev))
+              }}
+            />
+
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.js8.automatic.title')}</span>
               <label className="settings-field">
@@ -10562,6 +10574,9 @@ export function SettingsPanel({
                   </label>
                   <span className="settings-hint">
                     {t('settings.integrations.allTxt.hint')}
+                    {/* JS8Call's one "write logs" switch covers its DIRECTED.TXT too. */}
+                    {' '}
+                    {t('settings.integrations.allTxt.js8')}
                     {allTxtPath && (
                       <>
                         {' '}

@@ -791,11 +791,13 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const js8Frame=await frameSamples(js8,js8Request,['get_js8_state'])
     const js8Sample=js8Frame.samples.get('get_js8_state')
     assert.equal(js8Sample.type,'applicationResult',`the JS8 sample: ${js8Sample.error}`)
-    // The desktop's `presence` (heartbeat networking, the QSO pause) is the one key the page's sample leaves out: its
-    // parser does not list it yet. Everything else is the native state as it stands.
+    // The desktop's `presence` (heartbeat networking, the QSO pause) and `controls` (the waterfall controls and the band
+    // schedule's notice) are the keys the page's sample leaves out: its parser does not list them yet. Everything else is
+    // the native state as it stands.
     assert.ok(Object.hasOwn(nativeJs8.state,'presence'),'control: the desktop state carries presence')
-    const {presence:_presence,...nativeJs8Sampled}=nativeJs8.state
-    assert.deepEqual(js8Sample.data.state,nativeJs8Sampled,'the station read is the native JS8 DTO, presence left out')
+    assert.ok(Object.hasOwn(nativeJs8.state,'controls'),'control: the desktop state carries controls')
+    const {presence:_presence,controls:_controls,...nativeJs8Sampled}=nativeJs8.state
+    assert.deepEqual(js8Sample.data.state,nativeJs8Sampled,'the station read is the native JS8 DTO, presence and controls left out')
     assert.deepEqual(statsReference.parseJs8Sample(js8Sample.data,0,js8Sample.data.capturedAtMs),nativeJs8Sampled)
     js8.send({type:'applicationFrameAck',requestId:js8Frame.requestId,nextRequestId:crypto.randomUUID()})
     js8.send({type:'applicationSubscribe',topics:[],requestId:null})
