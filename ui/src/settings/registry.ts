@@ -355,7 +355,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
       'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
       'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
-      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging'],
+      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
+      'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
+      'outside 500', 'do not participate'],
   },
   {
     id: 'sstv',

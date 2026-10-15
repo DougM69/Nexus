@@ -31,6 +31,7 @@ import { regionGroups, type PaneDrop } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
+import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
@@ -47,9 +48,11 @@ import {
   js8CqRepeat,
   js8DropQueue,
   js8Enter,
+  js8HeartbeatNow,
   js8InboxDelete,
   js8InboxMark,
   js8LocatorRefusal,
+  js8SelectCall,
   js8Send,
   js8SendCommand,
   js8SetSpeed,
@@ -379,6 +382,14 @@ export function Js8Cockpit({
     if (!active || remote) return
     void composerSync.current()
   }, [composing, active, remote])
+  // JS8Call's SELECTED CALL is the call in the To box: told to the station as it changes, for the
+  // QSO pause (the HB repeat and HB ACKs hold while one is there). Native only, and only while
+  // this is the visible view; it keys nothing.
+  const selectedTo = toCall.trim().toUpperCase()
+  useEffect(() => {
+    if (!active || remote || !canControl) return
+    void js8SelectCall(selectedTo || null).catch(() => {})
+  }, [selectedTo, active, remote, canControl])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
@@ -450,12 +461,26 @@ export function Js8Cockpit({
   }
   // HB is the SESSION-ONLY schedule (never persisted): the second act for heartbeat frames.
   // Turning it on never keys by itself — the session TX latch is the first act (B7).
+  // With the QSO pause on, turning it on clears the To box, as JS8Call's HB button clears its
+  // selected call.
   const toggleHb = () => {
     if (!canControl) return
-    void withErrorToast(() => js8Arm('hb', js8?.hbOn !== true), t('js8.toast.arm.failed')).then((s) => {
+    const on = js8?.hbOn !== true
+    if (on && js8?.presence?.qsoPause) setToCall('')
+    void withErrorToast(() => js8Arm('hb', on), t('js8.toast.arm.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
+  // "Send heartbeat now" (JS8Call's HB menu): one heartbeat in the next period, the repeat as it is.
+  const sendHbNow = () => {
+    if (!canControl) return
+    if (refuseIfUnready()) return
+    void withErrorToast(() => js8HeartbeatNow(), t('js8.toast.hb.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
+  // The HB menu stands on the dock's top edge, over the panes: the dock is lifted while it is open.
+  const [hbMenuOpen, setHbMenuOpen] = useState(false)
   // JS8Call's CHECKABLE CQ button (mainwindow.cpp:6353): with a repeat interval set it arms
   // a schedule instead of sending once. Session-only and never persisted; keys nothing on
   // its own — the TX latch is the first act and the engine re-reads it every slot.
@@ -700,7 +725,14 @@ export function Js8Cockpit({
         ? notArmedTitle(js8.notArmed?.hb, t('js8.dock.hb.title.on'), {
             unscheduled: t('js8.dock.hb.notArmed.unscheduled'),
           })
-        : t('js8.dock.hb.title.off')
+        : js8?.presence?.hbPaused
+          ? t('js8.dock.hb.paused')
+          : t('js8.dock.hb.title.off')
+  // What holds an armed HB ACK back right now (JS8Call drops "ACK" from its HB button then), and
+  // the stations the 55-minute rule stopped answering.
+  const hbAckHeld = js8HbAckSuppressedTitle(js8?.presence, JS8_SPEEDS[js8?.speed ?? 'normal'].label)
+  const hbAckRateNote = js8HbAckRateBlockedNote(js8?.presence)
+  const withRateNote = (title: string) => (hbAckRateNote ? `${title} ${hbAckRateNote}` : title)
 
   /** JS8Call renders the countdown IN the button — `CQ (12)`, `HB (42)`, `HB (now)`
    *  (`updateRepeatButtonDisplay`, mainwindow.cpp:7800). Whole seconds, truncated, exactly
@@ -1423,7 +1455,7 @@ export function Js8Cockpit({
           "armed" only when both agree), a cancel for a reply that has not fired, or Drop
           queue — a SENDER-class control (it empties the queue; a frame already keyed
           finishes) that must never enter the stop-line sweep. */}
-      <div className={`cockpit-txdock${canControl ? '' : ' remote-observer-dock'}`}>
+      <div className={`cockpit-txdock${canControl ? '' : ' remote-observer-dock'}${canControl && hbMenuOpen ? ' cockpit-txdock-editing' : ''}`}>
         {remote && <div role="status" className="js8-observation-status">{js8 ? t('remote.applicationObserver') : t('remote.collectionUnavailable')}</div>}
         <div className="js8-dock-row js8-compose-row" role="group" aria-label={t('js8.dock.aria')}>
           <input
@@ -1437,7 +1469,8 @@ export function Js8Cockpit({
             spellCheck={false}
           />
           <datalist id="js8-to-list">
-            {[ALLCALL, ...(js8?.stations.map((h) => h.call) ?? [])].map((c) => (
+            {/* Not taking part in @ALLCALL, it leaves the list, as JS8Call's call table drops its row. */}
+            {[...(js8?.presence?.avoidAllcall ? [] : [ALLCALL]), ...(js8?.stations.map((h) => h.call) ?? [])].map((c) => (
               <option key={c} value={c} />
             ))}
           </datalist>
@@ -1511,16 +1544,28 @@ export function Js8Cockpit({
               <span className="cw-macro-label">{CQ}</span>
             </button>
           )}
-          <button
-            type="button"
-            className={`cw-macro rtty-arm js8-arm js8-hb${js8?.hbOn ? ' on' : ''}${js8?.hbOn && js8.armed.hb ? ' armed' : ''}`}
-            aria-pressed={js8?.hbOn === true}
-            disabled={!canControl}
-            onClick={toggleHb}
-            title={hbTitle}
-          >
-            <span className="cw-macro-label">{hbCount ? `${HB} (${hbCount})` : HB}</span>
-          </button>
+          {/* HB NET, then HB with its menu — only where JS8Call shows its HB button. */}
+          {js8?.presence && (
+            <Js8HbNetChip
+              presence={js8.presence}
+              canControl={canControl}
+              speed={JS8_SPEEDS[js8.speed].label}
+              onToggle={(on) => toggleSwitch('hbnet', on)}
+            />
+          )}
+          {js8HbShown(js8?.presence) && (
+            <Js8HbButton
+              label={hbCount ? `${HB} (${hbCount})` : HB}
+              title={hbTitle}
+              on={js8?.hbOn === true}
+              armed={js8?.armed.hb === true}
+              canControl={canControl}
+              intervalMin={js8?.hbIntervalMin ?? 0}
+              onToggle={toggleHb}
+              onSendNow={sendHbNow}
+              onOpenChange={setHbMenuOpen}
+            />
+          )}
           {armChip('autoreply', 'js8-autoreply', AUTOREPLY, js8?.autoreply === true, js8?.armed.autoreply === true, [
             t('js8.dock.autoreply.title.off'),
             notArmedTitle(js8?.notArmed?.autoreply, t('js8.dock.autoreply.title.on')),
@@ -1533,14 +1578,17 @@ export function Js8Cockpit({
             }),
             t('js8.dock.relay.title.armed'),
           ])}
-          {armChip('hback', 'js8-hback', HB_ACK, js8?.hbAck === true, js8?.armed.hbAck === true, [
+          {armChip('hback', 'js8-hback', HB_ACK, js8?.hbAck === true, js8?.armed.hbAck === true && hbAckHeld === null, [
             t('js8.dock.hbAck.title.off'),
-            notArmedTitle(js8?.notArmed?.hbAck, t('js8.dock.hbAck.title.on'), {
-              needsHb: t('js8.dock.hbAck.notArmed.needsHb'),
-              needsAuto: t('js8.dock.hbAck.notArmed.needsAuto'),
-              needsHbAndAuto: t('js8.dock.hbAck.notArmed.needsHbAndAuto'),
-            }),
-            t('js8.dock.hbAck.title.armed'),
+            withRateNote(
+              hbAckHeld ??
+                notArmedTitle(js8?.notArmed?.hbAck, t('js8.dock.hbAck.title.on'), {
+                  needsHb: t('js8.dock.hbAck.notArmed.needsHb'),
+                  needsAuto: t('js8.dock.hbAck.notArmed.needsAuto'),
+                  needsHbAndAuto: t('js8.dock.hbAck.notArmed.needsHbAndAuto'),
+                }),
+            ),
+            withRateNote(t('js8.dock.hbAck.title.armed')),
           ])}
           {/* JS8Call's idle watchdog (60 min default, floor 5, 0 = off): trips HB / AUTOREPLY /
               RELAY off and leaves the TX latch alone. An operator verb restarts it. */}
