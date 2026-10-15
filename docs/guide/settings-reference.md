@@ -509,6 +509,16 @@ Baud continue across to the right.*
   DAX, while Phone at the shack keeps the radio's own mic, and the voice keyer
   switches the radio to DAX for each message. Both are Beta and **unverified on hardware**, so both are opt-in; if
   the scope stays blank or decodes stop, turn them back off.
+- **Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+  bench-tested)** — appears once the **Flex native client (Beta)** serves the
+  radio (switched on, with the radio's IP set). Off by default, per radio. On
+  the client Nexus does not send CW through the radio's keyer, tune with the
+  radio's own carrier or run its ATU until a tester has checked each on a real
+  radio; this switch lets it do all three on that radio before then. Every
+  other check still applies, the TX-enable latch, your licence privileges and
+  the TX watchdog among them. **Not yet checked on a real Flex**: try them into
+  a dummy load first. Save to apply; Nexus reconnects to the radio. It changes
+  only at the shack, never through the Remote stream.
 - **CI-V bus diagnostic log** — appears once native CI-V is on. Records every
   byte to and from the radio to a file in your Downloads, for hardware-only
   issues like the IC-9700 PTT flicker. Turn on, reproduce, turn off, send the
@@ -558,7 +568,9 @@ target to copy.*
   Settings." Flat means no audio on that input.
 - **Tx Power** — the audio **drive** into the rig, the same control as the
   cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio."
+  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+  that turns its power down with the ALC, such as the FT-991A, the ALC reads above
+  zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
   from ~15–60 dB decodes fine; red means too hot." An audio error shows here.
 - **RX Gain** — "Boost a quiet interface until RX Level reads around 30 dB — the

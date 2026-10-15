@@ -846,6 +846,22 @@ export async function contestRestore(id: number): Promise<ContestRemovalAnswer> 
   return invoke<ContestRemovalAnswer>('contest_restore', { id })
 }
 
+/** What a Clear test contacts came to: how many contacts left the contest log (each now under
+ *  Removed), where any of them had already gone, and at a club whether the club drops them now —
+ *  or why nothing was cleared. */
+export type ContestClearAnswer =
+  | { outcome: 'cleared'; contacts: number; sentTo: ContestSentTo; club?: ContestClubRoute }
+  | { outcome: 'refused'; refusal: ContestRemovalRefusal }
+
+/** ⭐ **Clear test contacts** — every contact of this running out of the contest log, each kept
+ *  under Removed as `contestRemoveLast` keeps one, when the log is still what the screen named
+ *  (`rowCount` rows, the newest contact `call` at `whenUnix`), else `refused: changed`. Club seqs
+ *  stay spent, and the serial run starts again at 1. At a club the club takes each back too (`club`). Answers once the contest
+ *  journal holds the change. Never keys or stops TX. */
+export async function contestClear(rowCount: number, call: string, whenUnix: number): Promise<ContestClearAnswer> {
+  return invoke<ContestClearAnswer>('contest_clear', { rowCount, call, whenUnix })
+}
+
 /** The removed contacts, oldest removal first. */
 export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
@@ -2782,6 +2798,9 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's Beta setting that lets the Flex client send CW, Tune and ATU before a bench has
+   *  confirmed them (off by default; per-radio, as above). */
+  flexNativeUnbenched: boolean
   /** This radio's address, network user and control port for the Icom network connection (Beta;
    *  per-radio, as above). Its password is never here: the OS keychain holds it. */
   icomLanHost: string

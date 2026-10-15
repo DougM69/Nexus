@@ -229,9 +229,9 @@ pub(crate) struct KeyedOver {
 /// after the key; `now_ms` the clock the caller's tick read (see [`slot_clock_at`]).
 ///
 /// FT8 and FT4 as WSJT-X: the tones on the slot clock ([`slot_clock_skip`]) and the over ended on
-/// WSJT-X's window ([`wsjtx_over_end`]). An over whose every tone lies behind the key plays nothing:
-/// FT4's is still held to the window's end, as WSJT-X holds it, and FT8's drops PTT on the next
-/// tick. Every other tier as it always did: the whole wave from the key, held to [`tx_deadline_ms`].
+/// WSJT-X's window ([`wsjtx_over_end`]). An over whose every tone lies behind the key plays nothing
+/// and is still held to the window's end, as WSJT-X holds it. Every other tier as it always did: the
+/// whole wave from the key, held to [`tx_deadline_ms`].
 pub(crate) fn play_keyed_over(
     eng: &Engine,
     backend: &mut impl AudioBackend,
@@ -259,28 +259,23 @@ pub(crate) fn play_keyed_over(
         audio_until_ms: Some(end.audio_stop_ms),
     };
     if !tones_after(waves, skip) {
-        // ⭐ AN FT4 OVER KEYED WITH NO TONE LEFT IS HELD TO THE WINDOW'S END ALL THE SAME, SENDING
-        // NOTHING, AS WSJT-X HOLDS IT. FT4's tones end 5.54 s into the slot (the 0.5 s lead-in), before
-        // its latest key at 5.625 s ([`wsjtx_may_key_at`]): a late start between the two, or a key the
-        // radio answers past 5.54 s, has nothing left to send. WSJT-X asserts PTT on the tick that
-        // decided (`widgets/mainwindow.cpp:5126-5176`) and its Modulator finds `m_ic` past the last
-        // symbol and sends none (`Modulator/Modulator.cpp:96-99`, `:281`). PTT falls only at the
-        // window's end or a stop (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`,
-        // `stopTx2` `:5758-5760`), never because the Modulator ran out (the main window's only links
-        // to it run the other way, `:525-528`): PTT off at 6.24 s. This over dropped PTT on the next
-        // tick. The hold is the over's own, so Stop TX, TX Off and the watchdog end it as they end
-        // any FT4 over. A boundary decided past 5.54 s is still not keyed ([`slot_tx_phase`]).
-        //
-        // FT8's tones run to 13.14 s, past its latest key at 11.25 s, so it gets here only when more
-        // than 1.89 s pass between a decision in time and its carrier; it drops PTT on the next tick,
-        // as before.
-        if eng.tier() == tempo_app::dto::Tier::Ft4 {
-            return on_the_window;
-        }
-        return KeyedOver {
-            tx_until_ms: at_ms,
-            audio_until_ms: None,
-        };
+        // ⭐ AN FT8 OR FT4 OVER KEYED WITH NO TONE LEFT IS HELD TO THE WINDOW'S END ALL THE SAME,
+        // SENDING NOTHING, AS WSJT-X HOLDS IT. FT4's tones end 5.54 s into the slot (the 0.5 s
+        // lead-in), before its latest key at 5.625 s ([`wsjtx_may_key_at`]): a late start or a
+        // boundary decided between the two has nothing left to send ([`slot_tx_phase`]). So has any
+        // key in time whose carrier comes up after the last tone: FT8's tones run to 13.14 s, so more
+        // than 1.89 s after a decision by 11.25 s (split's CAT on a slow link, a late start's build
+        // waiting for a decode to let go of the modem). WSJT-X asserts PTT on the tick that decided
+        // (`widgets/mainwindow.cpp:5126-5176`) and starts its Modulator when the radio answers
+        // (`:8845-8856`, `startTx2` `:5711`); the Modulator finds `m_ic` past the last symbol and
+        // sends none (`Modulator/Modulator.cpp:96-99`, `:281`). PTT falls only at the window's end
+        // or a stop (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`, `stopTx2`
+        // `:5758-5760`), never because the Modulator ran out (the main window's only links to it run
+        // the other way, `:525-528`): FT8's at 13.84 s, FT4's at 6.24 s. Such an over dropped PTT on
+        // the next tick. The hold is the over's own, so Stop TX, TX Off and the watchdog end it as
+        // they end any over, and a carrier that comes after the window's end still drops at once
+        // ([`wsjtx_over_end`] never ends an over before its key).
+        return on_the_window;
     }
     for w in waves {
         let rest = &w[skip.min(w.len())..];
@@ -574,7 +569,8 @@ pub fn slot_tx_phase(
     rx_frame: Option<Vec<f32>>,
     // A waveform already built by the caller, or `None` to build it here.
     //
-    // Building takes `MODEM_LOCK`, which a running decode holds for the length of
+    // Building takes `MODEM_LOCK` (every Fortran-backed mode; FT8 and FT4 no longer,
+    // `modes::wsjt77`), which a running decode holds for the length of
     // that decode. Doing it here means doing it with the ENGINE mutex held, which
     // is what froze the UI: every Tauri snapshot and command queued behind a
     // decode. The radio loop therefore plans, RELEASES the engine, builds, and
@@ -614,15 +610,24 @@ pub fn slot_tx_phase(
     if !waves.is_empty() {
         let period_ms = eng.active_slot_secs() * 1000.0;
         // AN FT8/FT4 OVER WHOSE TONES ARE ALL BEHIND THE SLOT CLOCK HAS NOTHING TO SEND (a boundary
-        // keyed very late: past 13.14 s of FT8, 5.54 s of FT4). It keys nothing, as `commit_tx`
-        // keys nothing once its slot has gone, and its dial shift goes with it. It used to key and
-        // play the head of its message for the rest of the slot, a whole over late. WSJT-X's latest
-        // key (above) comes first for FT8 (11.25 s); FT4's tones end before its 5.625 s, so between
-        // the two this is what stops an FT4 boundary, and either tier's over whose plan ran past them.
+        // keyed very late: past 13.14 s of FT8, 5.54 s of FT4). Past WSJT-X's latest key it keys
+        // nothing, as `commit_tx` keys nothing once its slot has gone, and its dial shift goes with
+        // it: an over whose plan ran past the latest key, or whose clock has left the slot its tick
+        // decided for. It used to key and play the head of its message for the rest of the slot, a
+        // whole over late. Under the latest key, which only FT4 can be (its tones end before its
+        // 5.625 s; FT8's run past its 11.25 s), it keys, and [`play_keyed_over`] holds it silent to
+        // the window's end, as WSJT-X's GUI tick keys it (`widgets/mainwindow.cpp:5126-5176`) and
+        // holds it; it used to key nothing. The latest key is measured here on the clock as it is now,
+        // from the start of the tick's slot, with no fallback to the tick's clock (unlike
+        // [`into_tick_slot_ms`]): a re-read a period or more on, a clock step or a stall alike, is
+        // past it and keys nothing, as before.
         if wsjtx_tx_window_ms(eng.tier()).is_some() {
             let now_wall = now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64;
             let at_ms = slot_clock_at(now_wall.max(now_ms), now_ms, period_ms);
-            if !tones_after(&waves, slot_clock_skip(at_ms, period_ms)) {
+            let into_slot_ms = now_wall.max(now_ms) - (now_ms / period_ms).floor() * period_ms;
+            if !tones_after(&waves, slot_clock_skip(at_ms, period_ms))
+                && !wsjtx_may_key_at(into_slot_ms, period_ms)
+            {
                 let _ = eng.take_tx_dial_shift();
                 return SlotAction {
                     tx_until_ms: None,
@@ -1285,15 +1290,16 @@ mod tests {
     }
 
     #[test]
-    fn an_ft8_or_ft4_over_whose_tones_are_all_behind_the_slot_clock_keys_nothing() {
-        // A boundary keyed after the last tone's time (13.14 s of FT8) has nothing left to send:
-        // it keys nothing, and its dial shift goes with it, as `commit_tx` keys nothing once its
-        // slot has gone. It used to key and play the head of the message for the rest of the slot.
+    fn a_boundary_with_no_tone_left_keys_under_its_latest_key_and_is_held_to_the_window() {
+        // A boundary keyed after the last tone's time (13.14 s of FT8) has nothing left to send. Past
+        // WSJT-X's latest key (11.25 s) it keys nothing, and its dial shift goes with it, as
+        // `commit_tx` keys nothing once its slot has gone. It used to key and play the head of the
+        // message for the rest of the slot.
         //
-        // WSJT-X's latest key (11.25 s) now stops FT8 first, so FT8 13.0 s, this test's control
-        // until then, keys nothing either. FT4 is where the tones alone decide: they end at 5.54 s,
-        // under its latest key of 5.625 s, so 5.58 s keys nothing and 5.50 s, with 40 ms of tones
-        // still ahead, is the control.
+        // FT4's tones end at 5.54 s, under its latest key of 5.625 s. A boundary 5.58 s in keys there,
+        // as WSJT-X's GUI tick keys it (`widgets/mainwindow.cpp:5126-5176`): nothing plays, and PTT is
+        // held to the window's end, the audio stop at 6.04 s and PTT off at 6.24 s. It used to key
+        // nothing. 5.50 s, with 40 ms of tones still ahead, is the control.
         let mut eng = armed_engine();
         let late = steered_now_ms(&eng) + 13_200.0;
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
@@ -1320,10 +1326,20 @@ mod tests {
 
         // FT4 5.58 s: under its latest key, past its tones.
         let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft4);
+        let slot_start = steered_slot_start(&eng);
         let (act, backend, sent) = tx_phase_at(&mut eng, 5_580.0, Some(vec![ft4_stand_in()]));
-        assert!(sent.is_empty(), "FT4: a command went on the wire: {sent:?}");
-        assert!(!act.tx_this_slot && act.tx_until_ms.is_none() && backend.played.is_empty());
-        assert!(eng.tx_enabled(), "FT4: a missed over is not a halt");
+        assert_eq!(sent, ["T 1"], "FT4 5.58 s: not keyed");
+        assert!(
+            act.tx_this_slot && backend.played.is_empty(),
+            "FT4 5.58 s: {} samples played",
+            backend.played.len()
+        );
+        assert_eq!(
+            (act.audio_until_ms, act.tx_until_ms),
+            (Some(slot_start + 6_040.0), Some(slot_start + 6_240.0)),
+            "FT4 5.58 s: not held to WSJT-X's window"
+        );
+        assert!(eng.tx_enabled(), "FT4: TX went off");
 
         // The control: FT4 5.50 s, 40 ms of tones still ahead of the clock, and it keys.
         let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft4);
@@ -1585,12 +1601,12 @@ mod tests {
         }
     }
 
-    // ── A key in time with no tone left: FT4's is held to the window, as WSJT-X's is ────────────
-    // FT4's tones end 5.54 s into its slot (Nexus's 0.5 s lead-in), before its latest key at 5.625 s.
-    // WSJT-X keys there all the same (`widgets/mainwindow.cpp:5126-5176`), its Modulator finds every
-    // symbol behind it and sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT falls only at
-    // the window's end (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`, `stopTx2`
-    // `:5758-5760`).
+    // ── A key in time with no tone left: held to the window, FT8's and FT4's, as WSJT-X's is ──────
+    // FT4's tones end 5.54 s into its slot (Nexus's 0.5 s lead-in), before its latest key at 5.625 s,
+    // and any key in time whose carrier comes up after the last tone has none left either. WSJT-X keys
+    // all the same (`widgets/mainwindow.cpp:5126-5176`), its Modulator finds every symbol behind it and
+    // sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT falls only at the window's end
+    // (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`, `stopTx2` `:5758-5760`).
 
     #[test]
     fn every_key_in_time_ends_on_the_window_and_only_ft4_can_find_no_tone_left() {
@@ -1641,24 +1657,99 @@ mod tests {
     }
 
     #[test]
-    fn an_ft8_over_whose_key_came_after_its_last_tone_still_drops_ptt_at_once() {
+    fn an_ft8_over_whose_carrier_came_after_its_last_tone_is_held_to_the_window() {
         // FT8's tones run past its latest key, so it finds none left only when more than 1.89 s pass
         // between a decision in time and its carrier: split's CAT before the key on a slow link, or a
-        // late start's build waiting for a decode to let go of the modem. That is not FT4's case, and
-        // it is left as it was: nothing plays and PTT drops on the next tick. (WSJT-X holds that one
-        // to its window's end as well.)
+        // late start's build waiting for a decode to let go of the modem. Decided 11.2 s in, its
+        // carrier up 2.0 s later at 13.2 s: nothing plays, and PTT is held to 13.84 s (the audio stop
+        // at 13.64 s), as WSJT-X holds an over whose PTT was answered late (its Modulator starts on the
+        // answer, `widgets/mainwindow.cpp:8845-8856`, and finds nothing left). It used to drop PTT on
+        // the next tick.
         let eng = armed_engine_on(tempo_app::dto::Tier::Ft8);
         let waves = vec![armed_engine_on(tempo_app::dto::Tier::Ft8)
             .poll_tx(0)
             .remove(0)];
-        let keyed = 1_000.0 * FT8_PERIOD_MS + 13_200.0;
+        let slot_start = 1_000.0 * FT8_PERIOD_MS;
+        let (decided, keyed) = (slot_start + 11_200.0, slot_start + 13_200.0);
+        assert!(
+            wsjtx_may_key_at(decided - slot_start, FT8_PERIOD_MS),
+            "premise: decided in time"
+        );
         let mut backend = MockBackend::new();
-        let over = play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
-        assert!(backend.played.is_empty(), "FT8 13.2 s in: played");
+        let over = play_keyed_over(&eng, &mut backend, &waves, keyed, decided);
+        assert!(backend.played.is_empty(), "FT8 carrier 13.2 s in: played");
         assert_eq!(
             (over.audio_until_ms, over.tx_until_ms),
-            (None, keyed),
-            "FT8 13.2 s in: PTT not dropped at once"
+            (Some(slot_start + 13_640.0), slot_start + 13_840.0),
+            "FT8 carrier 13.2 s in: not held to WSJT-X's window"
+        );
+    }
+
+    /// A sound card whose transmit open, the last step before the key, takes `open`: a stand-in for
+    /// anything that puts the carrier late after a decision in time.
+    struct SlowOpen {
+        open: std::time::Duration,
+        played: Vec<f32>,
+    }
+
+    impl AudioBackend for SlowOpen {
+        fn capture(&mut self) -> Vec<f32> {
+            Vec::new()
+        }
+        fn play(&mut self, samples: &[f32]) {
+            self.played.extend_from_slice(samples);
+        }
+        fn prepare_tx(&mut self) -> Result<(), String> {
+            std::thread::sleep(self.open);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_ft8_boundary_whose_carrier_comes_after_its_last_tone_holds_ptt_to_the_window() {
+        // FT8's case through the TX phase, on the real (steered) clock: decided 11.2 s into the slot,
+        // under its latest key and with tones still ahead; the carrier up 2.4 s later, past the last
+        // tone at 13.14 s (split's CAT on a slow link would do it; here the sound card's open). The
+        // key goes out, nothing plays, and PTT is held to 13.84 s with the audio stop at 13.64 s, as
+        // WSJT-X holds it. It used to drop PTT on the next tick.
+        let wave = armed_engine().poll_tx(0).remove(0);
+        let mut eng = armed_engine();
+        // The wall clock 10.95 s into the slot; the tick read 11.2 s, ahead of it, so the decision is
+        // exactly 11.2 s in.
+        let offset = eng.clock_offset_ms().unwrap_or(0) - 10_950;
+        eng.set_clock_offset_ms(Some(offset));
+        assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
+        let slot_start = steered_slot_start(&eng);
+        let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = SlowOpen {
+            open: std::time::Duration::from_millis(2_400),
+            played: Vec::new(),
+        };
+        let mut rx = RxRing::new();
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            slot_start + 11_200.0,
+            false,
+            None,
+            Some(vec![wave]),
+            false,
+        );
+        assert_eq!(*log.lock().unwrap(), ["T 1"], "not keyed");
+        assert!(act.tx_this_slot, "not keyed");
+        assert!(
+            backend.played.is_empty(),
+            "{} samples played: the carrier came after the last tone",
+            backend.played.len()
+        );
+        assert_eq!(
+            (act.audio_until_ms, act.tx_until_ms),
+            (Some(slot_start + 13_640.0), Some(slot_start + 13_840.0)),
+            "not held to WSJT-X's window"
         );
     }
 
@@ -1705,6 +1796,120 @@ mod tests {
             (Some(slot_start + 6_040.0), Some(slot_start + 6_240.0)),
             "not held to WSJT-X's window"
         );
+    }
+
+    #[test]
+    fn an_over_with_no_tone_left_whose_build_ran_past_its_latest_key_keys_nothing() {
+        // The latest key is looked at again just before the key, after the build. An FT4 boundary
+        // decided 5.60 s into its slot (under 5.625 s, its tones already gone) whose build waits for a
+        // decode to let go of the modem until 5.70 s: past its latest key by then, with nothing to
+        // send, it keys nothing, as before. Only an over still under its latest key there is keyed
+        // with nothing to send.
+        //
+        // ⚠️ THE MODEM LOCK IS THE WHOLE PROCESS'S: held here for about 250 ms, the decision's build
+        // only.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft4);
+        let _ = eng.take_slot_tx_abort();
+        eng.set_tx_enabled(true);
+        eng.set_mode("qso-run").expect("premise: a CQ run");
+        eng.qso_freetext("<...> W9XYZ -10");
+        match eng.next_over_hint(0) {
+            Some(tempo_app::engine::TxWaveform::Native { text, .. }) => assert!(
+                tempo_core::modes::wsjt77::ft4_tones(&text).is_none(),
+                "premise: the lock-free encoder builds {text:?}, so nothing waits on the modem"
+            ),
+            _ => panic!("premise: the free text is not the next over"),
+        }
+        let (holding, held) = std::sync::mpsc::channel();
+        let (until_tx, until_rx) = std::sync::mpsc::channel::<(f64, f64)>();
+        let decode = std::thread::spawn(move || {
+            let modem = loop {
+                match tempo_core::modes::Ft8A7ResetGuard::try_acquire() {
+                    Some(modem) => break modem,
+                    None => std::thread::sleep(std::time::Duration::from_millis(1)),
+                }
+            };
+            holding.send(()).unwrap();
+            let (offset, until) = until_rx.recv().unwrap();
+            let give_up = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while now_unix_ms() - offset < until && std::time::Instant::now() < give_up {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            drop(modem);
+            std::time::Instant::now()
+        });
+        held.recv().unwrap();
+        // The wall clock 5.45 s into the slot; the tick read 5.60 s, ahead of it, so the decision is
+        // exactly 5.60 s in.
+        align_to_slot_start(&mut eng, 0);
+        let offset = eng.clock_offset_ms().unwrap_or(0) - 5_450;
+        eng.set_clock_offset_ms(Some(offset));
+        assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
+        let slot_start = steered_slot_start(&eng);
+        until_tx
+            .send((offset as f64, slot_start + 5_700.0))
+            .unwrap();
+        let (act, backend, sent) = tx_phase_at(&mut eng, 5_600.0, None);
+        let returned = std::time::Instant::now();
+        let let_go = decode.join().unwrap();
+        assert!(
+            returned >= let_go,
+            "premise: the over was planned and its build waited for the decode"
+        );
+        assert!(sent.is_empty(), "a command went on the wire: {sent:?}");
+        assert!(
+            !act.tx_this_slot && act.tx_until_ms.is_none() && backend.played.is_empty(),
+            "keyed"
+        );
+        assert!(eng.tx_enabled(), "a missed over is not a halt");
+    }
+
+    #[test]
+    fn an_over_with_no_tone_left_whose_clock_has_left_its_ticks_slot_keys_nothing() {
+        // A tick that read its clock 5.58 s into an FT4 slot two periods before the decision (a clock
+        // step, or a stall the slot code cannot tell from one). The decision falls back to the tick's
+        // clock (`into_tick_slot_ms`) and finds it under the latest key; the over has no tone left
+        // there. Its latest key is looked at on the clock as it is now, from the start of the tick's
+        // slot, so it is long past: it keys nothing, as before, rather than a key whose window ended
+        // before it, in a slot that is not its own.
+        //
+        // LEFT AS IT WAS, and not settled here: an over with a tone left in the same place (5.0 s)
+        // still keys and plays from where its tick put it.
+        for (into_ms, keys) in [(5_580.0, false), (5_000.0, true)] {
+            let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft4);
+            let tick = steered_slot_start(&eng) - 2.0 * FT4_PERIOD_MS + into_ms;
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut rx = RxRing::new();
+            let act = slot_tx_phase(
+                &mut eng,
+                &mut rig,
+                &mut backend,
+                &mut rx,
+                0,
+                tick,
+                false,
+                None,
+                Some(vec![ft4_stand_in()]),
+                false,
+            );
+            let sent = log.lock().unwrap().clone();
+            if keys {
+                assert_eq!(sent, ["T 1"], "a tone left, {into_ms} ms in: not keyed");
+                assert!(
+                    backend.played == ft4_stand_in()[(into_ms * 12.0) as usize..],
+                    "a tone left, {into_ms} ms in: not the rest of the over from the tick's place"
+                );
+            } else {
+                assert!(
+                    sent.is_empty() && !act.tx_this_slot && act.tx_until_ms.is_none(),
+                    "no tone left, {into_ms} ms in: keyed {sent:?}"
+                );
+                assert!(backend.played.is_empty(), "no tone left: played");
+            }
+        }
     }
 
     #[test]

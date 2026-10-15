@@ -89,4 +89,19 @@ describe('Check park states', () => {
     expect(await within(dialog).findByText(t('logbook.parkStates.none'))).toBeTruthy()
     expect((within(dialog).getByRole('button', { name: t('logbook.parkStates.apply', { count: 0 }) }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  // With thousands of lines, Tab otherwise passes every checkbox before Cancel. The dialog's first
+  // Tab stop skips the list to its buttons.
+  it('first Tab stop skips the list: it puts the keyboard on Cancel and changes nothing', async () => {
+    const { dialog, onClose } = await opened(ROWS)
+    const stops = [...dialog.querySelectorAll<HTMLElement>('button, input')].filter((e) => e.tabIndex >= 0)
+    const skip = within(dialog).getByRole('button', { name: 'Skip to Cancel and Change' })
+    expect(stops[0], 'the skip comes before every line').toBe(skip)
+    expect(stops.slice(1).every((e) => e.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_PRECEDING)).toBe(true)
+    fireEvent.click(skip)
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(apply).not.toHaveBeenCalled()
+    expect([boxOf(dialog, 'K1AA').checked, boxOf(dialog, 'K6FF').checked, boxOf(dialog, 'K7GG').checked]).toEqual([true, true, false])
+  })
 })

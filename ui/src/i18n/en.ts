@@ -1173,6 +1173,7 @@ export const EN = {
   'logbook.parkStates.confirmedTitle':
     'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
   'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.skip': 'Skip to Cancel and Change',
   'logbook.parkStates.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -1265,6 +1266,8 @@ export const EN = {
       '{{count}} LoTW records are for calls your log holds no contact under, such as a club call on your LoTW account; this check leaves them alone.',
   },
   'logbook.confirmations.cancel': 'Cancel',
+  'logbook.confirmations.skipCheck': 'Skip to Cancel and Check',
+  'logbook.confirmations.skipChange': 'Skip to Cancel and Change',
   'logbook.confirmations.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -4189,6 +4192,25 @@ export const EN = {
   'fieldDay.removed.notRemoved': 'That contact is no longer in the Removed list.',
   'fieldDay.removed.failed': 'Nexus could not restore the contact.',
   'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
+  'contest.clear.label': 'Clear test contacts',
+  'contest.clear.title': 
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back, and in a contest that sends a serial the next contact is 001. Click twice: the first click asks.',
+  'contest.clear.confirm': {
+    one: 'Clear {{count}} contact? Serials restart at 001. Click again',
+    other: 'Clear all {{count}} contacts? Serials restart at 001. Click again',
+  },
+  'contest.clear.done': {
+    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back. Serials restart at 001.',
+    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
+  },
+  'contest.clear.club': 'The club log drops them too, on every laptop, as soon as the host has them.',
+  'contest.clear.clubAway': 'This laptop is not with the club host right now: the club log drops them when the link is back.',
+  'contest.clear.sentTo': 'Some were already sent to {{places}}: delete them there too.',
+  'contest.clear.logbook': 'Some stay in your logbook.',
+  'contest.clear.logbookUploaded': 'Some stay in your logbook, and {{services}} have them: Nexus cannot take them back from there.',
+  'contest.clear.changed': 'The contest log changed, so nothing was cleared.',
+  'contest.clear.failed': 'Nexus could not clear the contacts, so nothing was cleared.',
+  'contest.clear.remote': 'Only at the station: a press through Remote clears no contact.',
   'fieldDay.log.dupe.title': 'Duplicate — kept in the log and worth no points',
   'fieldDay.log.mult.title': 'New section — multiplier',
   'fieldDay.log.mult': 'Mult!',
@@ -6104,6 +6126,9 @@ export const EN = {
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
     'This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings.',
+  // The lock when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
+  'bandPicker.txLock.usbOnlyTitle':
+    '60 m allows only USB phone — transmit is blocked. Pick USB or AUTO.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -6799,6 +6824,10 @@ export const EN = {
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
   'settings.rigControl.flexClient.hint':
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
+  'settings.rigControl.flexUnbenched.label':
+    'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)',
+  'settings.rigControl.flexUnbenched.hint':
+    '<b>Not yet checked on a real Flex:</b> try CW, Tune and the ATU into a dummy load first. Off by default. Save to apply; Nexus reconnects to the radio.',
   // ⚠️ `{{path}}` is a file path the backend chose. Markers are parsed BEFORE values are
   // substituted, so a path that happens to contain `<b>` is text, never markup.
   'settings.rigControl.civLog.label': 'CI-V bus diagnostic log',
@@ -11125,6 +11154,9 @@ export const EN = {
   'phone.mode.auto.title':
     'AUTO — sideband by band (now {{sideband}}); a band change re-asserts this',
   'phone.mode.force.title': 'Force {{mode}} until you change bands',
+  // The tooltip on the greyed LSB, AM and FM buttons on 60 m, where a US licence allows upper
+  // sideband only. "USB" is a mode name.
+  'phone.mode.usbOnly': '60 m allows only USB phone',
   'phone.mode.failed': 'Could not set mode',
   'phone.header.power.label': 'Power',
   'phone.header.power.title': 'RF output power',
@@ -11200,6 +11232,9 @@ export const EN = {
   // The BUTTON stays written in the cockpit (it is the stop-line census); these are the
   // toasts it raises, and a toast is neither a control nor anything a sweep can see.
   'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
+  // …when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
+  // "USB" and "AUTO" are the mode buttons' own names.
+  'phone.tx.usbOnly': 'TX locked — 60 m allows only USB phone. Pick USB or AUTO.',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
   'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
   'phone.tx.clockRepair':

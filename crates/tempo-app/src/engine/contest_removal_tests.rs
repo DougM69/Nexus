@@ -2,7 +2,7 @@
 //! across a mode change and a restart, carried from a Logbook delete, never in the club outbox,
 //! and never a change to the transmitter. Each answer says where the contact already went.
 
-use super::contest_removal::ContestSentTo;
+use super::contest_removal::{ContestRefusal, ContestRemoval, ContestSentTo};
 use super::*;
 use crate::test_util::StoredLog;
 use tempo_core::contest::qid_for;
@@ -555,4 +555,376 @@ fn a_log_of_contacts_that_score_nothing_is_still_journaled() {
         e.field_day_log_adif().is_some(),
         "the journal is written for a log that holds a row"
     );
+}
+
+/// ⭐ **Clear test contacts, through the engine: every contact out, each kept as a removal is,
+/// on disk before a crash could lose it, and back removed after a restart.** CONTROL first: a log
+/// that is not what the screen named clears nothing.
+#[test]
+fn clearing_takes_every_contact_out_and_journals_it() {
+    let path = std::env::temp_dir().join(format!(
+        "nexus_contest_clear_{}_{}.adi",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let engine = |path: &std::path::Path| {
+        let mut e = Engine::new("W9XYZ", "EN50", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ilqp".into();
+        s.contest_qth_state = "IL".into();
+        s.contest_qth_county = "KANE".into();
+        e.apply_settings(s);
+        e.set_fd_log_path(path.to_path_buf());
+        e.set_mode("fieldday-sp").expect("the party runs");
+        e
+    };
+    let mut e = engine(&path);
+    party(&mut e, "K9AAA", "COOK");
+    party(&mut e, "W9BBB", "LAKE");
+    party(&mut e, "N9CCC", "DUPG");
+    e.journal_mark().wait();
+    let (call, when) = newest(&e);
+
+    for (rows, call, when) in [(2, call.as_str(), when), (3, "K9AAA", when)] {
+        assert_eq!(
+            e.contest_clear(rows, call, when).unwrap(),
+            Err(ContestRefusal::Changed),
+            "{rows} rows, newest {call}"
+        );
+        assert_eq!(logged(&e).len(), 3, "nothing was cleared");
+    }
+
+    let gone = e
+        .contest_clear(3, &call, when)
+        .unwrap()
+        .expect("the log is what was named");
+    let calls = |list: &[ContestRemoval]| -> Vec<String> {
+        list.iter().map(|r| r.rows[0].call.clone()).collect()
+    };
+    assert_eq!(
+        calls(&gone),
+        ["K9AAA", "W9BBB", "N9CCC"],
+        "each its own entry"
+    );
+    assert!(logged(&e).is_empty());
+    assert_eq!(e.contest_removed(), gone, "…and each is kept under Removed");
+    assert!(
+        gone.iter().all(|r| r.club.is_none()),
+        "no club in the answer"
+    );
+    assert!(
+        e.fd_sync_outbox(0).is_empty(),
+        "the club outbox carries none of them"
+    );
+    e.journal_mark().wait();
+
+    // A crash right now: the journal on disk already holds the clear.
+    let crashed = engine(&path);
+    assert!(
+        logged(&crashed).is_empty(),
+        "the journal still held them live"
+    );
+    assert_eq!(calls(&crashed.contest_removed()), calls(&gone));
+    drop(crashed);
+
+    // Each restores on its own.
+    assert!(e.contest_restore(gone[1].entry.id()).unwrap().is_ok());
+    assert_eq!(logged(&e), [("W9BBB".to_string(), "LAKE".to_string())]);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// ⭐ **At a club, clearing owes the host one take-back per row, as a removal owes one** — at the
+/// host and at a position — the chip counts them until the host holds them so, and a restore
+/// sends that row up again. This is what the club already does with Remove, row by row, so the
+/// clear is offered at a club too. Away from the host they are taken back here and owed until the
+/// link is back, and the answer says so.
+#[test]
+fn at_a_club_clearing_owes_the_host_one_mark_per_row() {
+    use crate::fdevent::SyncState;
+    use tempo_net::fdsync::Mark;
+    for (role, on) in [
+        (
+            "host",
+            (|s: &mut Settings| s.fd_host_enable = true) as fn(&mut Settings),
+        ),
+        ("position", |s: &mut Settings| {
+            s.fd_join_addr = "192.168.1.20:42073".into()
+        }),
+    ] {
+        let mut e = ilqp(on);
+        assert!(e.fd_sync_enabled(), "premise: club sync runs at the {role}");
+        party(&mut e, "K9AAA", "COOK");
+        party(&mut e, "W9BBB", "LAKE");
+        party(&mut e, "N9CCC", "DUPG");
+        e.fd_mirror_mut().on_link(true, 1);
+        e.fd_mirror_mut().acked = 3;
+        assert_eq!(e.fd_sync_state(), SyncState::Synced, "{role}: premise");
+
+        let (call, when) = newest(&e);
+        let gone = e
+            .contest_clear(3, &call, when)
+            .unwrap()
+            .unwrap_or_else(|r| panic!("{role}: refused at a club: {r:?}"));
+        assert!(
+            gone.iter().all(|r| r.club == Some(true)),
+            "{role}: with the host now"
+        );
+        let owed = |seqs: &[u64]| -> Vec<Mark> {
+            seqs.iter()
+                .map(|&seq| Mark::Retract {
+                    pos: "aaaa0001".into(),
+                    seq,
+                })
+                .collect()
+        };
+        assert_eq!(
+            e.fd_sync_marks(),
+            owed(&[1, 2, 3]),
+            "{role}: one take-back per row"
+        );
+        assert_eq!(
+            e.fd_sync_state(),
+            SyncState::Behind { queued: 3 },
+            "{role}: and the chip counts them"
+        );
+        e.fd_mirror_mut().on_retracted(1, true);
+        e.fd_mirror_mut().on_retracted(2, true);
+        assert_eq!(e.fd_sync_marks(), owed(&[3]), "{role}: the host holds two");
+        e.fd_mirror_mut().on_retracted(3, true);
+        assert!(e.fd_sync_marks().is_empty(), "{role}");
+        assert_eq!(e.fd_sync_state(), SyncState::Synced, "{role}");
+
+        assert!(e.contest_restore(gone[1].entry.id()).unwrap().is_ok());
+        assert_eq!(
+            e.fd_sync_marks(),
+            [Mark::Restore(Box::new(wire_row(&e, 2)))],
+            "{role}: the row itself goes up with the restore"
+        );
+    }
+    // Away from the host: taken back here, owed, and said so.
+    let mut e = ilqp(|s| s.fd_join_addr = "192.168.1.20:42073".into());
+    party(&mut e, "K9AAA", "COOK");
+    party(&mut e, "W9BBB", "LAKE");
+    e.fd_mirror_mut().on_link(true, 1);
+    e.fd_mirror_mut().acked = 2;
+    e.fd_mirror_mut().on_link(false, 2);
+    let (call, when) = newest(&e);
+    let gone = e.contest_clear(2, &call, when).unwrap().unwrap();
+    assert!(
+        gone.iter().all(|r| r.club == Some(false)),
+        "not with the host now"
+    );
+    assert_eq!(
+        e.fd_sync_state(),
+        SyncState::Offline {
+            queued: 2,
+            since: 2
+        }
+    );
+}
+
+/// ⛔ **Clearing never keys, unkeys or stops the transmitter** — in a cockpit armed for CW, every
+/// transmit fact is the same after as before.
+#[test]
+fn clearing_never_touches_the_transmitter() {
+    let mut e = ilqp(|_| {});
+    e.set_operating_mode("cw", false);
+    assert!(e.tx_enabled(), "premise: the CW cockpit arms TX");
+    party(&mut e, "K9AAA", "COOK");
+    party(&mut e, "W9BBB", "LAKE");
+    let before = transmit_state(&e);
+    let (call, when) = newest(&e);
+    assert!(matches!(e.contest_clear(2, &call, when), Ok(Ok(_))));
+    assert_eq!(transmit_state(&e), before);
+}
+
+/// ⭐ **Clearing names where each contact had already gone** — the forwarders a slot boundary had
+/// handed it to, and the services holding the logbook's merged copies, read once through the
+/// command's path — and claims nothing for a contact that never left.
+#[test]
+fn clearing_names_where_each_contact_had_already_gone() {
+    let mut e = ilqp(|s| {
+        s.n3fjp_host = "192.168.1.20".into();
+        s.n1mm_addr = "192.168.1.255:12060".into();
+        s.wsjtx_udp = true;
+    });
+    party(&mut e, "K9AAA", "COOK");
+    let seq = match &e.mode {
+        Mode::FieldDay { station, .. } => station.log.max_seq(),
+        _ => unreachable!(),
+    };
+    e.note_fd_forwarded(seq); // a slot boundary handed K9AAA on
+    assert_eq!(e.fd_merge_to_general().unwrap().added(), 1);
+    assert!(e.stamp_qrz_upload(
+        &e.stored_log()[0].as_ref().clone(),
+        UploadOutcome::Accepted,
+        1_792_343_000,
+        None
+    ));
+    party(&mut e, "W9BBB", "LAKE"); // logged since: it never left
+    let (call, when) = newest(&e);
+    let shared = std::sync::Mutex::new(e);
+    let answer = super::contest_removal::clear(&shared, 2, &call, when)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        answer
+            .removals
+            .iter()
+            .map(|r| r.sent.clone())
+            .collect::<Vec<_>>(),
+        [
+            ContestSentTo {
+                n3fjp: Some("192.168.1.20".into()),
+                n1mm: Some("192.168.1.255:12060".into()),
+                wsjtx: true,
+            },
+            ContestSentTo::default(),
+        ],
+        "the forwarded one named, nothing claimed for the other"
+    );
+    assert_eq!(
+        answer.logbook,
+        Some(vec!["qrz"]),
+        "the merged copy, uploaded to QRZ"
+    );
+    let e = shared.into_inner().unwrap();
+    assert_eq!(
+        e.stored_log().len(),
+        1,
+        "…and it stays in the logbook: nothing taken back"
+    );
+}
+
+/// A Sweepstakes CW engine, a contest that sends a serial — journaling to `path` when one is given,
+/// and entered as a relaunch enters it: a fresh engine whose contest mode reads the journal back.
+fn ss_engine(path: Option<&std::path::Path>) -> Engine {
+    let mut e = Engine::new("W9XYZ", "EN50", 0);
+    let mut s = e.settings().clone();
+    s.mycall = "W9XYZ".into();
+    s.fd_active = true;
+    s.fd_event = "arrlss_cw".into();
+    s.fd_section = "WI".into();
+    s.contest_check = "74".into();
+    s.contest_category_assisted = "NON-ASSISTED".into();
+    s.contest_category_power = "LOW".into();
+    e.apply_settings(s);
+    if let Some(path) = path {
+        e.set_fd_log_path(path.to_path_buf());
+    }
+    e.set_mode("fieldday-sp").expect("Sweepstakes runs");
+    e
+}
+
+/// Log a Sweepstakes contact with `call` from the strip, and answer the serial its row sent.
+fn ss(e: &mut Engine, call: &str) -> String {
+    assert!(e
+        .contest_log_manual(
+            call,
+            &fields(&[
+                ("NR", "12"),
+                ("PREC", "A"),
+                ("CALL", call),
+                ("CK", "71"),
+                ("SEC", "CT")
+            ]),
+            "CW",
+            None
+        )
+        .unwrap());
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    let row = fd
+        .log
+        .iter()
+        .rev()
+        .find(|q| q.call == call)
+        .expect("logged");
+    row.sent
+        .iter()
+        .find(|(slot, _)| slot == "NR")
+        .map(|(_, nr)| nr.clone())
+        .expect("Sweepstakes sends a serial")
+}
+
+/// The serial the strip shows it will send next: the first word of the exchange it reads out.
+fn shown(e: &Engine) -> String {
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    fd.composing_text
+        .split(' ')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The live rows' club seqs.
+fn seqs(e: &Engine) -> Vec<u64> {
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    fd.log.iter().map(|q| q.seq).collect()
+}
+
+/// ⭐ **Clear test contacts starts a serial contest's run again at 1 — on the strip, on the next
+/// contact, across a Run/S&P switch and across a relaunch — and the club seq goes on** from the
+/// cleared contacts'. The relaunch is a second engine reading the journal file a crash leaves.
+#[test]
+fn clearing_restarts_the_serial_run_and_a_relaunch_agrees() {
+    let path = std::env::temp_dir().join(format!(
+        "nexus_contest_clear_serial_{}_{}.adi",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut e = ss_engine(Some(&path));
+    assert_eq!(ss(&mut e, "K2DEF"), "1");
+    assert_eq!(ss(&mut e, "W1AW"), "2");
+    assert_eq!(shown(&e), "3", "premise: the strip reads the serial");
+    let (call, when) = newest(&e);
+    assert!(matches!(e.contest_clear(2, &call, when), Ok(Ok(_))));
+    assert_eq!(shown(&e), "1", "the strip sends 1 next");
+    e.set_mode("fieldday-run").expect("Sweepstakes runs");
+    assert_eq!(
+        shown(&e),
+        "1",
+        "a Run/S&P switch reads the journal back, and keeps it"
+    );
+    e.journal_mark().wait();
+
+    let mut back = ss_engine(Some(&path));
+    assert_eq!(
+        back.contest_removed().len(),
+        2,
+        "premise: the relaunch read the journal"
+    );
+    assert_eq!(shown(&back), "1", "a relaunch sends 1 next too");
+    assert_eq!(ss(&mut back, "K3GHI"), "1");
+    assert_eq!(seqs(&back), [3], "the club seq goes on");
+    back.journal_mark().wait();
+    drop(back);
+
+    let mut again = ss_engine(Some(&path));
+    assert_eq!(shown(&again), "2");
+    assert_eq!(ss(&mut again, "N4JKL"), "2");
+    assert_eq!(seqs(&again), [3, 4]);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// ⭐ **A station half-worked before the clear takes no number into the new run.** A committed call
+/// holds the number it was given until it is logged; after Clear test contacts the next call
+/// committed is not handed the number in flight, and a station called during the test and worked
+/// later gets the next number of the new run, not its old one.
+#[test]
+fn clearing_releases_the_numbers_of_stations_half_worked_before_it() {
+    let mut e = ss_engine(None);
+    assert_eq!(ss(&mut e, "K2DEF"), "1");
+    e.contest_working("W1AW").unwrap(); // given 2
+    e.contest_entry_reset(); // wiped: W1AW keeps its 2
+    e.contest_working("N5XYZ").unwrap(); // given 3, in flight
+    assert_eq!(shown(&e), "3", "premise: N5XYZ's number is in flight");
+    let (call, when) = newest(&e);
+    assert!(matches!(e.contest_clear(1, &call, when), Ok(Ok(_))));
+    assert_eq!(shown(&e), "1", "not N5XYZ's 3");
+    assert_eq!(ss(&mut e, "K3GHI"), "1");
+    assert_eq!(ss(&mut e, "N4JKL"), "2");
+    assert_eq!(ss(&mut e, "W1AW"), "3", "not W1AW's 2 again");
 }

@@ -3,8 +3,9 @@
 //! The contest log keeps a removed contact as removed
 //! ([`FieldDayLog::remove_last`](tempo_core::fieldday::FieldDayLog::remove_last)) and its
 //! journal keeps it marked, so the serial and the club seq it was given stay spent and the
-//! contest screen can restore it exactly. **Nothing here keys, unkeys or stops a
-//! transmission.**
+//! contest screen can restore it exactly. Clear test contacts takes every contact out the same
+//! way, each its own removal, and starts the serial run again at 1 ([`Engine::contest_clear`]).
+//! **Nothing here keys, unkeys or stops a transmission.**
 //!
 //! ⭐ **At a club the club takes it back too**, at a position or at the host (a host is just
 //! another position): the removed rows' seqs, and a restore's rows, are what this position owes
@@ -126,6 +127,45 @@ impl Engine {
         removal.sent = self.contest_sent_to(&removal.entry.rows);
         removal.club = self.contest_club_route();
         Ok(Ok(removal))
+    }
+
+    /// ⭐ **Clear test contacts** — the contest screen's two-click action for contacts logged as
+    /// a test before the start: every contact of this running leaves the contest log, each as
+    /// [`Self::contest_remove_last`] takes the newest
+    /// ([`FieldDayLog::remove_all`](tempo_core::fieldday::FieldDayLog::remove_all)): kept under
+    /// Removed for Restore, its seq spent, the journal keeping it marked, and the serial run
+    /// starting again at 1, after a restart too. Only when the log is still what the screen named:
+    /// `row_count` rows, the newest contact `call` at `when_unix`.
+    /// At a club the club takes each back too, as a removal goes (each answer's `club`): this
+    /// laptop's log holds only its own contacts, and every removed row is a take-back the club
+    /// sync owes the host ([`Self::fd_sync_marks`]). `Err` only when no contest runs.
+    pub fn contest_clear(
+        &mut self,
+        row_count: usize,
+        call: &str,
+        when_unix: u64,
+    ) -> Result<Result<Vec<ContestRemoval>, ContestRefusal>, String> {
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Contest mode is not active".into());
+        };
+        let entries = match station
+            .log
+            .remove_all(row_count, call, when_unix, now_unix_secs())
+        {
+            Ok(entries) => entries,
+            Err(refusal) => return Ok(Err(refusal.into())),
+        };
+        self.persist_fd_log(); // journal it — the removals must survive a crash too
+        let club = self.contest_club_route();
+        Ok(Ok(entries
+            .into_iter()
+            .map(|entry| {
+                let mut removal = self.contest_removal_of(entry);
+                removal.sent = self.contest_sent_to(&removal.entry.rows);
+                removal.club = club;
+                removal
+            })
+            .collect()))
     }
 
     /// ⭐ **Put a removed contact back exactly as it was** — same time, serial and seq — by its
@@ -362,6 +402,42 @@ pub fn remove_last(
     };
     written.wait();
     with_logbook(engine, answer)
+}
+
+/// What a Clear test contacts came to, as a command answers it: the engine's removals, plus the
+/// services holding the logbook's copies of any of them, read once with the Engine lock released.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContestCleared {
+    pub removals: Vec<ContestRemoval>,
+    /// `Some` when the logbook holds a merged copy of any of them: the services that have taken
+    /// (or were sent) one, by the copies' own upload marks. `None` when none was merged.
+    pub logbook: Option<Vec<&'static str>>,
+}
+
+/// ★ [`Engine::contest_clear`] as a command makes it: the removals under the lock, the journal on
+/// disk before the answer, and the logbook's copies read after, in one read.
+///
+/// ⚠️ It waits and reads the store: never call it holding the Engine lock.
+pub fn clear(
+    engine: &Mutex<Engine>,
+    row_count: usize,
+    call: &str,
+    when_unix: u64,
+) -> Result<Result<ContestCleared, ContestRefusal>, String> {
+    let (answer, written) = {
+        let mut e = engine_lock(engine);
+        let answer = e.contest_clear(row_count, call, when_unix)?;
+        (answer, e.journal_mark())
+    };
+    written.wait();
+    let removals = match answer {
+        Ok(removals) => removals,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    let qids: Vec<_> = removals.iter().flat_map(|r| r.qids.clone()).collect();
+    let marks = crate::engine::log_plan(engine).merged_uploads(&qids)?;
+    let logbook = (!marks.is_empty()).then(|| holders(&marks));
+    Ok(Ok(ContestCleared { removals, logbook }))
 }
 
 /// ★ [`Engine::contest_restore`] as a command makes it: the journal on disk before the answer.

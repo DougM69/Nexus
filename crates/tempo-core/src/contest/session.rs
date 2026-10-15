@@ -252,7 +252,8 @@ pub struct ContestSession {
     /// partner's log.
     ///
     /// ⚠️ **Nothing is evicted by size, ever.** An entry leaves only when the contact is
-    /// logged, because the row carries the number from then on. Any capacity rule
+    /// logged, because the row carries the number from then on, or when Clear test contacts
+    /// starts the run again ([`restart_serials`](Self::restart_serials)). Any capacity rule
     /// reintroduces exactly the defect this exists to prevent — the station it forgets
     /// is the one that comes back. The cost of never forgetting is a callsign and a
     /// `u32` per half-worked station: ten thousand of them is well under a megabyte, in
@@ -802,6 +803,21 @@ Fill it in on the Contesting tab in Settings."
         self.issued
             .remove(peer.trim().to_ascii_uppercase().as_str());
         self.in_flight = None;
+    }
+
+    /// ⭐ **The serial run starts again at 1**: Clear test contacts emptied the log
+    /// ([`FieldDayLog::remove_all`](crate::fieldday::FieldDayLog::remove_all)).
+    ///
+    /// The number in flight and every half-worked station's binding go with it, because they
+    /// belong to the run that was cleared. Kept, the first call committed after the clear would
+    /// be handed the number in flight ([`working`](Self::working)'s first case), and a station
+    /// called during the test would be given its old number again, out of the new run's order. A
+    /// restart holds neither (`issued` is not persisted), so the live run and a restarted one
+    /// agree.
+    pub fn restart_serials(&mut self) {
+        self.next_serial = 1;
+        self.in_flight = None;
+        self.issued.clear();
     }
 
     /// ⭐ **The serial to SHOW right now** — the one already issued to the contact in

@@ -267,6 +267,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out. It is read-only: such a program cannot
   send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
   Remote page cannot turn it on.
+- **Clear test contacts on the Contest screen.** A gear test logged before the start stayed in the
+  event's log unless you deleted the journal file with Nexus closed. **Clear test contacts**, beside
+  the exports, takes every contact of this running out of the contest log at once: the first click
+  names how many, and a second within 5 seconds clears them. Each goes as Remove takes one: it waits
+  under Removed, where Restore puts it back, and it leaves the score, the dupe check and every
+  export. In a contest that sends a serial the numbers start again: the next contact is 001, after
+  a restart too. A contact you restore afterwards keeps the number it was sent, so a later contact
+  can send that number again. At a club only this laptop's contacts go, and the club drops them on
+  every laptop as it drops a removed one. Nothing transmits.
+- **Settings ▸ Licenses shows Nexus's NOTICE.** The Licenses screen now opens with the NOTICE file
+  the installers carry, before the license texts of the interface's npm packages and the Rust
+  crates.
+- **FlexRadio: a Beta switch lets the Flex native client send CW, run Tune and run the ATU before
+  a tester has checked them on a radio. Off by default.** **Settings ▸ Radio ▸ Rig & CAT ▸
+  Advanced ▸ Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+  bench-tested)**, shown only while the Flex native client (Beta) serves the radio, turns all three
+  on for that radio: CW goes to the radio's keyer a word at a time, Tune is the radio's own carrier
+  at its tune power, and the ATU button runs the radio's tuner. It is off for every radio until you
+  turn it on, it is kept per radio, and it changes only at the shack, never through the Remote
+  stream. It lifts only the client's "not yet checked on a radio" refusal: every other check still
+  decides each transmission, the TX-enable latch, your licence privileges and the TX watchdog
+  among them, and the client's own checks (Nexus's slice the transmit slice, nothing else keying
+  the radio, XIT off, break-in on and Sync CWX off for CW, a tuner fitted for the ATU). Saving a
+  change reconnects Nexus to the radio. Beta, not yet checked on a real Flex: try it into a dummy
+  load first. While it is off, a CW word, a Tune or an ATU press the client holds back says so and
+  names this switch. NEEDS-BENCH on a FLEX radio, into a dummy load: CW, Tune and the ATU through
+  the client.
 
 ### Changed
 
@@ -340,8 +367,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at 6.04 s and PTT drops at 6.24 s (it held about 0.56 s longer). FT4 keeps its tones 0.5 s into
   the slot. A decode still running when your slot starts no longer delays your over: Nexus builds
   the over it is about to send before that decode begins, and keys it on time; an over you change in
-  the last seconds of the slot (a new TX frequency or message) is built then and can still wait,
-  with its tones on the slot clock. A Call CQ or double-click inside your own slot still keys at
+  the last seconds of the slot (a new TX frequency or message) is built then, and no longer waits
+  either (see Fixed). A Call CQ or double-click inside your own slot still keys at
   once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
   the next one), and it now keys as late as WSJT-X does: while the slot is under 75 % of its period,
   up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (1.18.0 keyed
@@ -351,7 +378,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot.
   The same limit holds when your slot's own key comes late (a decode that finished late, a busy
   computer): past 75 % of the slot Nexus does not key it, as WSJT-X does not, and the over goes out
-  at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short).
+  at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short). An
+  FT4 one that comes between 5.54 s and that limit is keyed and held silent to 6.24 s, as the Call CQ
+  is. And an FT8 over keyed in time whose radio comes on after its last tone (more than about 1.9 s
+  late: split commands on a slow radio link, a busy computer) is held silent to its usual end at
+  13.84 s, as WSJT-X holds it.
   NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, a Call CQ about 10 s into an
   FT8 slot and another about 12 s in (the first keys at once, the second waits for the next slot, in
   both programs), an FT4 Call CQ about 5.6 s into your slot (TX on at once with nothing sent and off
@@ -403,6 +434,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: CQ and HB wait while a message is going out.** Both are greyed out while a message is
   waiting to go or going out, as JS8Call's are, so a CQ or a heartbeat no longer queues behind it.
   Needs a bench check.
+- **The manual's drive advice covers the Yaesus that turn their power down with the ALC.** On an
+  FT-991A below full power the ALC reads above zero however clean the drive, so "set it so your
+  rig's ALC reads zero" could not be met there. Rig and Audio Setup, Getting Started and the
+  settings reference now say to set the drive at full power on those radios.
 
 ### Fixed
 
@@ -788,6 +823,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them, as JS8Call's log dialog has it, and it now goes in RST sent. The strip also logs the time
   you selected the station (put their call in the To box) as the start, and the dial plus your TX
   offset as the frequency, as JS8Call does.
+- **Check park states and Check confirmations: one key skips the list.** With thousands of lines,
+  Tab passed every checkbox before Cancel. Each dialog's first Tab stop is now a skip, shown only
+  while it has the keyboard: Enter puts the keyboard on Cancel, which changes nothing, and Tab from
+  there reaches the dialog's other button.
+- **The manual names the contest journal by its real name.** Since club sync the journal is
+  `fieldday_backup_<id>.adi`, one per computer, not `fieldday_backup.adi`. Contest Log Persistence
+  now says so, and says how to start clean after a gear test with Clear test contacts.
+- **The FT-991A's, FT-710's and FTDX10's ALC meter reads on the radio's own scale.** Nexus showed the
+  ALC of these three radios at four times the radio's own reading, and at 100 % in red from a quarter
+  of the radio's ALC bar up. A 991A run below full power, which raises its ALC reading by design,
+  looked overdriven on every over. Nexus now reads the radio's own ALC value and shows the same
+  share of the bar as the radio. Every other radio's ALC reads as before. NEEDS-BENCH: an FT-991A
+  and an FTDX10 into a dummy load, each radio's ALC bar next to Nexus's at three drive levels.
+- **FT8 and FT4: an over you change in the last seconds before your slot no longer waits for the
+  decoder.** When what Nexus is about to send changes after the early decode has started (you move
+  the TX frequency, double-click a station, call CQ or change the message, or the sequencer moves
+  on), Nexus builds the over at the start of your slot. Building it had to wait until that decode
+  finished, so on a slow computer, a Raspberry Pi or a busy band the over could key late and lose
+  its first symbols. Nexus now builds FT8 and FT4 overs without waiting for the decoder, so they
+  key on time, as WSJT-X's do (its decoder runs separately). The tones are the same ones Nexus sent
+  before, checked against WSJT-X's own encoder for every kind of message, and a compound or hashed
+  call you send is still shown in full when the reply to it comes back. NEEDS-BENCH: beside
+  WSJT-X on a slow computer, an FT8 and an FT4 over changed in the last seconds before your slot (a
+  new TX frequency, a double-click) keys on time, and a QSO with a compound call completes.
+- **Phone on 60 m now sets the radio to USB.** Nexus put every band below 10 MHz on LSB, 60 m
+  included, so picking a 60 m channel in the Phone screen set the radio to LSB and the voice went
+  out on the wrong side of the channel. US rules put the 60 m carrier 1.5 kHz below each channel
+  centre, which only works on USB, and the IARU Region 1 and Canadian band plans use USB there too.
+  The Phone screen, an SSTV image sent from it, the transmit lock and the sideband a contact is
+  logged with now all use USB on 60 m; every other band is unchanged. NEEDS-BENCH: a radio on 60 m
+  into a dummy load, checking the mode on the radio's own display.
+- **US General and Extra operators can now talk on the four 60 m channels.** The rule sets a 60 m
+  phone carrier 1.5 kHz below the channel centre (5330.5, 5346.5, 5371.5 and 5403.5 kHz), but the
+  transmit lock only accepted a carrier at least 1.4 kHz below it, so it showed TX LOCKED on the
+  very frequency the rule names. Phone now keys on that carrier, in USB, and is still refused
+  anywhere the voice would leave the 2.8 kHz channel. The lock is also stricter on 60 m in four
+  places. LSB is refused everywhere on the band, the channels and the 5351.5 to 5366.5 kHz segment
+  alike. AM and FM are refused there too: the rule holds every 60 m signal to 2.8 kHz, and both
+  send the voice on each side of the carrier, so neither fits. A signal can no longer reach across
+  the 2.1 kHz gap between the 5348.0 kHz channel and the segment. CW keys only within 5 Hz of a
+  channel centre, where the rule puts the CW carrier, so the soundcard CW keyer, whose tone sits a
+  pitch away from its dial, keys only in the segment. Data, Technician and non-US operators are
+  unchanged, and AM and FM keep every other band. NEEDS-BENCH: a radio on 60 m into a dummy load,
+  checking that Nexus keys USB on a channel carrier and CW on a channel centre, and shows TX LOCKED
+  for LSB, AM, FM and CW off the centre.
+- **On 60 m the Phone screen greys LSB, AM and FM, and the lock says why.** A US licence allows only
+  upper sideband phone on 60 m, but the mode chips still offered LSB, AM and FM, and a pick showed
+  TX LOCKED with "this frequency is outside your license privileges" on a frequency that was fine.
+  The chips now grey those three on 60 m, with "60 m allows only USB phone" when you hover one. When
+  the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
+  tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
+  where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
 
 ### Security
 

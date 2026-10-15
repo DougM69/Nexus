@@ -1539,6 +1539,12 @@ export interface RadioStatus {
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */
   txEmissionMhz?: number | null
+  /** Upper sideband is the only phone the licence allows where this radio transmits (60 m, every
+   *  US class): the Phone cockpit greys its LSB, AM and FM picks. Absent when false. */
+  phoneUsbOnly?: boolean
+  /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
+   *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
+  phoneModeRefused?: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
@@ -4435,6 +4441,9 @@ export interface Settings {
   /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
    *  stays the default and the fallback. */
   flexNativeCat?: boolean
+  /** Let the Flex client send CW, Tune and ATU before a tester's bench has confirmed them (Beta;
+   *  off by default). Means something only where the client serves the radio. */
+  flexNativeUnbenched?: boolean
   /** The radio's own address for the Icom network connection (Beta): its "IP Address (LAN)". */
   icomLanHost?: string
   /** The network user the radio was set up with. Not secret; the password is in the OS keychain. */
@@ -5093,6 +5102,8 @@ export interface RadioProfile {
   flexNativeAudio?: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
   flexNativeCat?: boolean
+  /** This radio's Beta setting for the Flex client's CW, Tune and ATU (off by default). */
+  flexNativeUnbenched?: boolean
   /** This radio's Icom network address, user and control port (Beta). */
   icomLanHost?: string
   icomLanUser?: string

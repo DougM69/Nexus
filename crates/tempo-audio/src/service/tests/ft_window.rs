@@ -523,6 +523,100 @@ fn stop_tx_cuts_the_held_window_at_once_and_tx_off_lets_it_end_on_the_window() {
     assert_eq!(s.sent("T 1"), 1, "TX Off keyed the next over");
 }
 
+// ── This station's own FT4 boundary decided with no tone left: keyed, and held to the window ──────
+// The same rule when the slot's own key comes late (a decode that drained late, a stalled computer)
+// and finds it 5.54-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
+// tick keys it as it keys a late start (`widgets/mainwindow.cpp:5126-5176`) and holds it to the
+// window's end; Nexus keyed nothing there.
+
+/// ⭐ AN FT4 BOUNDARY DECIDED 5.58 s INTO THIS STATION'S OWN SLOT: KEYED, NOTHING PLAYED, THE AUDIO
+/// STOPPED AT 6.04 s AND PTT OFF AT 6.24 s, AS FOR A CALL CQ THERE. It used to key nothing, and the
+/// over it had planned was spent.
+#[test]
+fn an_ft4_boundary_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.cq();
+    s.t = t0 + 5_580.0; // the loop's first tick in the slot, 5.58 s in
+    s.run_to(t0 + 5_580.0);
+    assert_eq!(s.sent("T 1"), 1, "a boundary 5.58 s in did not key");
+    // The tick, in ms into the slot, of the first flush (the audio stop) and of the unkey.
+    let (flushes, mut audio_stop, mut ptt_off) = (s.backend.flush_calls, None, None);
+    while ptt_off.is_none() && s.t < t0 + 7_500.0 {
+        let at = s.t;
+        s.run_to(at);
+        if audio_stop.is_none() && s.backend.flush_calls > flushes {
+            audio_stop = Some(at - t0);
+        }
+        if s.sent("T 0") > 0 {
+            ptt_off = Some(at - t0);
+        }
+    }
+    assert_eq!(
+        (audio_stop, ptt_off),
+        (Some(6_040.0), Some(6_240.0)),
+        "the audio stop and PTT off, ms into the slot"
+    );
+    assert!(
+        s.backend.played.is_empty(),
+        "{} samples played: FT4's tones end at 5.54 s",
+        s.backend.played.len()
+    );
+}
+
+/// CONTROL: AN FT4 BOUNDARY DECIDED 5.70 s IN, PAST 75 %, STILL KEYS NOTHING: the CQ, never planned,
+/// goes out whole at the next own boundary, as WSJT-X's waits.
+#[test]
+fn an_ft4_boundary_past_75_percent_still_waits_for_the_next_own_slot() {
+    let mut on_time = Over::new(Tier::Ft4);
+    on_time.cq();
+    let t0 = on_time.t;
+    on_time.run_to(t0);
+
+    let mut late = Over::new(Tier::Ft4);
+    let t0 = late.t;
+    late.cq();
+    late.t = t0 + 5_700.0; // the loop's first tick in the slot, 5.7 s in
+    late.run_to(t0 + 14_980.0);
+    assert_eq!(late.sent("T 1"), 0, "a boundary 5.7 s in keyed");
+    late.run_to(t0 + 15_000.0);
+    assert_eq!(
+        late.sent("T 1"),
+        1,
+        "the CQ did not go out at the next own boundary"
+    );
+    if let Err(why) = same_audio(&late.backend.played, &on_time.backend.played) {
+        panic!("the next own boundary did not send the over that waited, whole: {why}");
+    }
+}
+
+/// STOP TX WHILE A BOUNDARY'S EMPTY OVER IS HELD UNKEYS AT ONCE, and nothing of it fires after: the
+/// hold is the over's own.
+#[test]
+fn stop_tx_cuts_a_held_boundary_at_once() {
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.cq();
+    s.t = t0 + 5_580.0;
+    s.run_to(t0 + 5_780.0);
+    assert_eq!(
+        (s.sent("T 1"), s.sent("T 0")),
+        (1, 0),
+        "premise: keyed 5.58 s in and held"
+    );
+    let flushes = s.backend.flush_calls;
+    s.engine.lock().unwrap().halt_tx();
+    s.run_to(t0 + 5_800.0);
+    assert_eq!(s.sent("T 0"), 1, "Stop TX did not unkey on the next tick");
+    assert_eq!(s.backend.flush_calls, flushes + 1, "Stop TX did not flush");
+    s.run_to(t0 + 7_480.0);
+    assert_eq!(
+        (s.sent("T 0"), s.backend.flush_calls),
+        (1, flushes + 1),
+        "the cut window unkeyed or flushed later"
+    );
+}
+
 /// ⭐ STOP TX MID-OVER STILL CUTS AT ONCE, AND NOTHING OF THE CUT OVER FIRES AFTER IT. The window's
 /// audio stop belongs to the over it was set for: once Stop TX has cut it, 13.64 s flushes nothing
 /// and 13.84 s unkeys nothing.
@@ -580,19 +674,22 @@ fn tx_off_mid_over_lets_it_finish_on_the_window() {
 }
 
 // ── A busy decoder does not hold up the key ────────────────────────────────────────────────────
-// An early decode still running at the boundary holds the modem, and building an over needs the
+// An early decode still running at the boundary holds the modem, and building an over needed the
 // modem too, so the key waited for the decode and the over went out late. WSJT-X's decoder is
-// another process and never delays a key. The early pass now builds the next over before it
-// dispatches its decode, and a boundary whose plan asks for exactly that over keys it as built.
+// another process and never delays a key. The early pass builds the next over before it
+// dispatches its decode, and a boundary whose plan asks for exactly that over keys it as built;
+// and an FT8 or FT4 over is now built without the modem at all (`modes::wsjt77`), so one that
+// changed after the early pass does not wait either.
 
 /// Steer the loop's clock (and the engine's, which the loop follows) so the REAL clock reads
 /// `phase_ms` into the odd slot before one of this station's even boundaries, and return that
 /// boundary. The busy path commits its over against a fresh read of the real clock
 /// (`commit_tx`'s slot check), so these scenes run on it rather than ahead of it.
 fn steer_into_the_odd_slot(over: &mut Over, phase_ms: f64) -> f64 {
-    let pair = 2.0 * 15_000.0;
+    let period = over.engine.lock().unwrap().active_slot_secs() * 1000.0;
+    let pair = 2.0 * period;
     let real = now_unix_ms();
-    let offset = (real.rem_euclid(pair) - (15_000.0 + phase_ms)).round() as i64;
+    let offset = (real.rem_euclid(pair) - (period + phase_ms)).round() as i64;
     over.engine
         .lock()
         .unwrap()
@@ -669,21 +766,22 @@ fn a_decode_holding_the_modem(
 /// decode; that decode is still holding the modem when the slot starts; the boundary keys the CQ
 /// on time, with every tone in place (0.5 s), and the decode lets go only afterwards.
 ///
-/// The control, in the same scene, is the over that was NOT built ahead (the TX frequency changed
-/// after the early pass): it still waits for the decode, as every over used to, and now goes out
-/// on the slot clock, what the wait cost skipped and its end unchanged.
+/// The second scene is the over that was NOT built ahead (the TX frequency changed after the early
+/// pass). It used to wait for the decode, as every over did; its build no longer needs the modem,
+/// so it keys before the decode lets go too (the scenes of every such change, FT8 and FT4, are
+/// `an_over_changed_after_the_early_pass_keys_on_time_while_a_decode_holds_the_modem`).
 ///
 /// ⚠️ THE MODEM LOCK IS THE WHOLE PROCESS'S, so every other test's decode waits while this scene
 /// holds it (one of them gives its decode a second, `in_flight_guard_serializes_dispatch`). It is
-/// held for the boundary tick only: let go as soon as that tick ends, or after 500 ms at most for
-/// the control, whose tick waits for it.
+/// held for the boundary tick only: let go as soon as that tick ends, or after 500 ms at most if a
+/// key ever waits for it again.
 #[test]
 fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
     for built_ahead in [true, false] {
         let what = if built_ahead {
             "built ahead"
         } else {
-            "control: not built ahead"
+            "not built ahead"
         };
         let mut s = Over::new(Tier::Ft8);
         s.cq();
@@ -759,17 +857,120 @@ fn a_busy_decoder_does_not_delay_the_key_of_the_over_built_before_it() {
             (lo..=hi).contains(&skipped),
             "{what}: {skipped} samples skipped, expected the key's place in the slot, {lo}..={hi}"
         );
-        if built_ahead {
+        assert!(
+            keyed_tick_ended < decode_let_go,
+            "{what}: the key waited for the decode to let go of the modem"
+        );
+        assert!(skipped < FT8_WAVE, "{what}: the over was dropped");
+    }
+}
+
+/// FT4's slot-positioned wave, in samples: 0.5 s of lead-in and the 72 576-sample frame.
+const FT4_WAVE: usize = 6_000 + 72_576;
+
+/// ⭐ AN OVER CHANGED AFTER THE EARLY PASS KEYS ON TIME WHILE A DECODE HOLDS THE MODEM, ON FT8 AND
+/// FT4. After the early pass (11.8 s, 5.5 s) the operator changes what the boundary sends: a new TX
+/// frequency for the CQ the early pass built, or a CQ called only after it (nothing was queued when
+/// it ran). Either way the boundary builds its over at the key, with a decode still holding the
+/// modem. That build waited for the decode: the over went out late by however long the decode
+/// overran, and on the slot clock lost that much of its start. WSJT-X's decoder is another process
+/// and never delays a key. Built without the modem (`modes::wsjt77`), the over keys before the
+/// decode lets go, plays from where the slot is at the key, and ends where an on-time over ends;
+/// and it is the over the plan asked for, sample for sample.
+#[test]
+fn an_over_changed_after_the_early_pass_keys_on_time_while_a_decode_holds_the_modem() {
+    for (tier, period, early_at, wave_len, end) in [
+        (Tier::Ft8, 15_000.0, 11_700.0, FT8_WAVE, 13_840.0),
+        (Tier::Ft4, 7_500.0, 5_400.0, FT4_WAVE, 6_240.0),
+    ] {
+        for called_late in [false, true] {
+            let what = format!(
+                "{tier:?}, {}",
+                if called_late {
+                    "CQ called after the early pass"
+                } else {
+                    "TX frequency changed after the early pass"
+                }
+            );
+            let mut s = Over::new(tier);
+            if !called_late {
+                s.cq();
+            }
+            let boundary = steer_into_the_odd_slot(&mut s, early_at);
+            let slot = (boundary / period) as u64;
+            let give_up = std::time::Instant::now() + Duration::from_secs(10);
+            let tick_until = |s: &mut Over, done: &dyn Fn(&Over) -> bool, why: &str| loop {
+                let ended = s.tick_now();
+                if done(s) {
+                    break ended;
+                }
+                assert!(std::time::Instant::now() < give_up, "{what}: {why}");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            s.tick_now(); // the odd slot's boundary, with nothing captured yet: no decode, no key
+            for _ in 0..400 {
+                s.backend.queue_capture(vec![0.0; 240]);
+            }
+            tick_until(&mut s, &|s| s.state.decode_in_flight, "no early pass");
+            tick_until(
+                &mut s,
+                &|s| !s.state.decode_in_flight,
+                "the early decode never came back",
+            );
+            if called_late {
+                s.cq();
+            } else {
+                s.engine.lock().unwrap().set_tx_offset(1_600.0);
+            }
+            // What the boundary will send, built now as the plan would build it, and not built ahead.
+            let over = s
+                .engine
+                .lock()
+                .unwrap()
+                .next_over_hint(slot)
+                .expect("the CQ");
+            assert!(
+                s.engine.lock().unwrap().prebuilt_wave(&over).is_none(),
+                "{what}: premise: the boundary's over was built ahead"
+            );
+            let want = over.build();
+            // A decode still running at the boundary, holding the modem.
+            let (go, decode) = a_decode_holding_the_modem(Duration::from_millis(500));
+            s.state.decode_in_flight = true;
+            steer_to_before(&mut s, boundary, 30.0);
+            // The rig's own reads held off past the boundary, as in the scene above.
+            let later = boundary + 60_000.0;
+            s.state.last_rig_poll = later;
+            s.state.last_freq_poll = later;
+            s.state.last_smeter_poll = later;
+            s.state.last_ptt_poll = later;
+            let keyed_tick_ended =
+                tick_until(&mut s, &|s| s.state.last_slot == Some(slot), "no boundary");
+            let tick_end_wall = now_unix_ms();
+            let _ = go.send(());
+            let decode_let_go = decode.join().unwrap();
+            assert_eq!(s.sent("T 1"), 1, "{what}: the boundary did not key");
             assert!(
                 keyed_tick_ended < decode_let_go,
                 "{what}: the key waited for the decode to let go of the modem"
             );
-        } else {
+            let offset = s.state.clock_offset_ms as f64;
+            let key_wall = s.key_at.lock().unwrap().expect("the key's time");
+            let lo = ((key_wall - offset - boundary) * 12.0).floor() as usize;
+            let hi = ((tick_end_wall - offset - boundary) * 12.0).ceil() as usize;
+            let skipped = wave_len - s.backend.played.len();
             assert!(
-                keyed_tick_ended >= decode_let_go,
-                "{what}: premise: an over not built ahead waits for the decode"
+                (lo..=hi).contains(&skipped),
+                "{what}: {skipped} samples skipped, expected the key's place in the slot, {lo}..={hi}"
             );
-            assert!(skipped < FT8_WAVE, "{what}: the over was dropped");
+            if let Err(why) = same_audio(&s.backend.played, &want[skipped..]) {
+                panic!("{what}: the over played is not the one planned, from the key on: {why}");
+            }
+            assert_eq!(
+                s.state.tx_until_ms,
+                Some(boundary + end),
+                "{what}: the over's end moved"
+            );
         }
     }
 }

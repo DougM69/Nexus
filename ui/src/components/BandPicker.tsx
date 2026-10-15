@@ -110,13 +110,16 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
             // which frequency — and under split that sentence was about the RX dial, a
             // frequency the operator is NOT transmitting on (field report 2026-08-25). When a
             // confirmed split TX differs from the dial, say so explicitly; otherwise the plain
-            // sentence is still exactly right.
-            splitTx != null
-              ? t('bandPicker.txLock.splitTitle', {
-                  tx: splitTx.toFixed(4),
-                  rx: snap.radio.dialMhz.toFixed(4),
-                })
-              : t('bandPicker.txLock.title')
+            // sentence is still exactly right. Where the phone MODE is the whole reason (LSB,
+            // AM or FM on 60 m, where USB would key) the frequency is fine, so name the rule.
+            snap.radio.phoneModeRefused
+              ? t('bandPicker.txLock.usbOnlyTitle')
+              : splitTx != null
+                ? t('bandPicker.txLock.splitTitle', {
+                    tx: splitTx.toFixed(4),
+                    rx: snap.radio.dialMhz.toFixed(4),
+                  })
+                : t('bandPicker.txLock.title')
           }
         >
           {t('bandPicker.txLock.label')}

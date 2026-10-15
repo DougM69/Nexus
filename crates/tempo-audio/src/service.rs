@@ -152,6 +152,13 @@ fn flex_client_ip(t: &Transport) -> Option<&str> {
         .then(|| t.flex_radio_ip.trim())
 }
 
+/// The radio's Beta setting for the Flex client's CW, Tune and ATU (`flex_native_unbenched`) where
+/// the client serves the radio ([`flex_client_ip`]); `None` on every other radio, so the setting
+/// restarts nothing there.
+fn flex_client_unbenched(t: &Transport) -> Option<bool> {
+    flex_client_ip(t).map(|_| t.flex_native_unbenched)
+}
+
 /// The CI-V bus address for [`native_civ_model`]'s rig. Split out from the model rather
 /// than resolved separately: the daemon needs BOTH (the address to talk on, the model to
 /// know which attenuator pads and preamps this rig has), and two independent lookups of the
@@ -258,7 +265,7 @@ fn spawn_cat_daemon(
     // start (no radio at that address, a refused registration, no slice of ours), SmartSDR CAT
     // through rigctld below is the fallback, and the reason is recorded as the CI-V daemon's is.
     if let Some(ip) = flex_client_ip(t) {
-        match crate::flex::FlexDaemon::start_for_ip(ip, t.rigctld_port) {
+        match crate::flex::FlexDaemon::start_for_ip(ip, t.rigctld_port, t.flex_native_unbenched) {
             Ok(d) => return Ok((CatDaemon::Flex(d), None)),
             Err(e) => {
                 tempo_core::applog::warn(
@@ -1017,6 +1024,22 @@ const TX_METER_POLL_MS: f64 = 150.0;
 /// poll, the capability ladder and its reset cannot disagree about the order.
 const TX_METERS: [&str; 4] = ["SWR", "ALC", "RFPOWER_METER_WATTS", "COMP_METER"];
 const N_TX_METERS: usize = TX_METERS.len();
+
+/// Read one transmit meter as the bars take it (SWR ratio, ALC 0 to 1, Po watts, COMP dB): Hamlib's
+/// `l NAME`, except the ALC of a radio that [`crate::rigmodels::raw_alc_query`] names. There the
+/// radio's own `RM4;` answer is read through rigctld's `w`, the same bytes `l ALC` puts on the
+/// wire, and placed on the radio's own bar instead of Hamlib's quarter of it. `None` is a missed
+/// read on either path, so the three-strikes ladder treats both alike, and `deadline_ms` bounds
+/// both. A read: nothing is set on the radio.
+fn read_tx_meter(rig: &mut Rig, meter: &str, model: u32, deadline_ms: Option<u64>) -> Option<f32> {
+    match crate::rigmodels::raw_alc_query(model) {
+        Some(query) if meter == "ALC" => rig
+            .send_raw_within(query, deadline_ms)
+            .and_then(|reply| crate::rigmodels::alc_bar_from_rm4(&reply)),
+        _ => rig.read_meter_f32_within(meter, deadline_ms),
+    }
+}
+
 /// The tune-time meter read's deadline. A tune carrier is fed one chunk per tick from a lead of
 /// [`TUNE_LEAD_MS`]; a meter read blocks the loop, so it may take at most this long before the
 /// ring would run dry. Past it the read is abandoned, never waited for.
@@ -1450,6 +1473,10 @@ pub struct RadioConfig {
     /// CAT daemon a tick later.
     pub flex_native_cat: bool,
     pub flex_radio_ip: String,
+    /// The radio's Beta setting that lets the Flex client start CW, Tune and the ATU before a
+    /// bench has confirmed them (`RadioProfile::flex_native_unbenched`, off by default), seeded
+    /// with the opt-in so the first client is started with it.
+    pub flex_native_unbenched: bool,
     /// The radio's address, network user and control port for Nexus's Icom network client (the
     /// "Icom network" Connection; `RadioProfile::icom_lan_host`), and the radio profile whose
     /// keychain entry holds the password, so the first launch connects rather than failing a
@@ -1510,6 +1537,7 @@ impl Default for RadioConfig {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
@@ -2321,6 +2349,7 @@ impl Transport {
             icom_native_cat: p.icom_native_cat,
             flex_native_cat: p.flex_native_cat,
             flex_radio_ip: p.flex_radio_ip.clone(),
+            flex_native_unbenched: p.flex_native_unbenched,
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
@@ -11593,7 +11622,8 @@ impl RadioLoop {
         // read ONLY while keyed (a tune carrier, a slot/CW/voice over, or live phone PTT), and
         // blanked on unkey so the bars never freeze on a stale reading. Read via the generic
         // `l NAME` level path, so it works on BOTH the native CI-V daemon (Icom 15 11/12/13/14)
-        // and any Hamlib rig reporting these levels; an unsupported meter returns None and
+        // and any Hamlib rig reporting these levels (an FT-991A's or FT-710's ALC is read raw
+        // instead, see `read_tx_meter`); an unsupported meter returns None and
         // simply doesn't render. Deliberately placed AFTER the PTT-drop above: a meter read is a
         // blocking CAT round-trip, so it must never sit upstream of the auto-unkey and hold the
         // transmitter keyed past the over on a slow rig. And only ONE meter is read per throttled
@@ -11708,7 +11738,8 @@ impl RadioLoop {
                     // alone while it transmits. See `tx_meter_supported`.
                     let mut reading = None;
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading = rig.read_meter_f32_within(TX_METERS[i], deadline);
+                        reading =
+                            read_tx_meter(rig, TX_METERS[i], self.applied.rig_model, deadline);
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
@@ -12876,14 +12907,15 @@ impl RadioLoop {
                     let n = ((elapsed_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
                     let frame = self.rx.frame_latest_padded(n);
                     // ⭐ BUILD THE NEXT OVER BEFORE THIS DECODE TAKES THE MODEM. The decode
-                    // holds `MODEM_LOCK` for its whole length, and building an over needs it
+                    // holds `MODEM_LOCK` for its whole length, and building an over needed it
                     // too, so an early decode still running at the boundary made the key wait
                     // for it: the over went out late, by however long the decode overran. WSJT-X
                     // never waits; its decoder is another process. The over the boundary will
                     // key if nothing changes first is built now, while the modem is free, and a
                     // boundary whose decoder is still busy keys it as built when its plan asks
                     // for exactly this over (`Engine::prebuilt_wave`). A guess only: a plan that
-                    // asks for anything else builds it then, as before.
+                    // asks for anything else builds it then, as before; for FT8 and FT4 that
+                    // build no longer needs the modem either (`modes::wsjt77`).
                     if let Some(next) = eng.next_over_hint(slot + 1) {
                         if eng.prebuilt_wave(&next).is_none() {
                             drop(eng);
@@ -13016,17 +13048,18 @@ impl RadioLoop {
                     // This is the ONE branch where the modem is contended: we are
                     // here because a decode from an earlier slot is STILL RUNNING,
                     // and that decode holds `MODEM_LOCK` for its whole duration.
-                    // The TX build needs the same lock, so it waits — and it used
-                    // to wait while holding the engine mutex, which every Tauri
+                    // A Fortran-backed mode's TX build needs the same lock, so it
+                    // waits — and it used to wait while holding the engine mutex, which every Tauri
                     // snapshot poll and every UI command also needs. The window
                     // went "not responding" for as long as the decoder took
                     // (sub-second here, seconds on a Pi).
                     //
                     // Plan under the lock, release, build, re-acquire, commit. An over
                     // built before the decode took the modem is not built again, and
-                    // nothing waits (below); any other over still waits here, and
-                    // `commit_tx` refuses the plan if the tier moved underneath us while
-                    // the engine was unlocked.
+                    // nothing waits (below); an FT8 or FT4 over is built without the modem
+                    // (`modes::wsjt77`) and does not wait either; any other over still
+                    // waits here, and `commit_tx` refuses the plan if the tier moved
+                    // underneath us while the engine was unlocked.
                     //
                     // Skipped entirely when this slot was already keyed at its
                     // boundary — `finish_boundary` is then housekeeping-only and
@@ -13044,7 +13077,9 @@ impl RadioLoop {
                                 // MODEM: the over keyed last, or the one the early pass built just
                                 // before it dispatched this decode (`Engine::prebuilt_wave`). Then
                                 // nothing waits, and the key is on time, as WSJT-X's is: its decoder
-                                // is another process. Any other over is built here and waits.
+                                // is another process. Any other over is built here: an FT8 or FT4
+                                // one without the modem (`modes::wsjt77`), so it does not wait
+                                // either; one of a Fortran-backed mode waits.
                                 let wave = match eng.prebuilt_wave(&plan.waveform) {
                                     Some(wave) => wave.to_vec(),
                                     None => {
@@ -13054,8 +13089,8 @@ impl RadioLoop {
                                         wave
                                     }
                                 };
-                                // Re-read the clock AFTER the build (it waited out
-                                // MODEM_LOCK): commit_tx refuses if the T/R slot
+                                // Re-read the clock AFTER the build (it may have waited
+                                // out MODEM_LOCK): commit_tx refuses if the T/R slot
                                 // rolled over meanwhile, and the PTT-hold deadline
                                 // must be measured from when the audio actually
                                 // starts — the boundary tick's `now` would leave
@@ -14650,6 +14685,10 @@ struct Transport {
     /// radio's own address it connects to. Read through [`flex_client_ip`] only.
     flex_native_cat: bool,
     flex_radio_ip: String,
+    /// The radio's Beta setting for the Flex client's CW, Tune and ATU
+    /// (`RadioProfile::flex_native_unbenched`), handed to the client's session when it starts, so
+    /// part of transport identity where the client serves the radio ([`flex_client_unbenched`]).
+    flex_native_unbenched: bool,
     /// The Icom network connection's address, network user and control port, and the radio
     /// profile whose keychain entry holds its password. Read through [`Transport::icom_lan_target`]
     /// only.
@@ -14720,6 +14759,7 @@ impl Transport {
             icom_native_cat: c.icom_native_cat,
             flex_native_cat: c.flex_native_cat,
             flex_radio_ip: c.flex_radio_ip.clone(),
+            flex_native_unbenched: c.flex_native_unbenched,
             icom_lan_host: c.icom_lan_host.clone(),
             icom_lan_user: c.icom_lan_user.clone(),
             icom_lan_port: c.icom_lan_port,
@@ -14777,6 +14817,7 @@ impl Transport {
             icom_native_cat: s.icom_native_cat,
             flex_native_cat: s.flex_native_cat,
             flex_radio_ip: s.flex_radio_ip.clone(),
+            flex_native_unbenched: s.flex_native_unbenched,
             icom_lan_host: s.icom_lan_host.clone(),
             icom_lan_user: s.icom_lan_user.clone(),
             icom_lan_port: s.icom_lan_port,
@@ -14837,6 +14878,9 @@ impl Transport {
             // the client is in play: an address edit on a radio NOT opted in restarts nothing, as
             // before the client existed.
             || flex_client_ip(self) != flex_client_ip(o)
+            // Its Beta setting for CW, Tune and the ATU, which the client's session is started
+            // with, compared the same way: on a radio the client does not serve it restarts nothing.
+            || flex_client_unbenched(self) != flex_client_unbenched(o)
             // The Icom network client's radio, compared only where that connection is in play,
             // like the Flex client's: an address edit on a serial radio restarts nothing.
             || self.icom_lan_target() != o.icom_lan_target()
@@ -16112,6 +16156,7 @@ mod tests {
     mod rf_pane;
     mod split_overs;
     mod wfview;
+    mod yaesu_alc;
     use super::should_command_rf_power;
 
     #[test]
@@ -31567,6 +31612,7 @@ mod tests {
             icom_native_cat: false,
             flex_native_cat: false,
             flex_radio_ip: String::new(),
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
@@ -31664,6 +31710,90 @@ mod tests {
             flex_client_ip(&Transport::from_profile(&p)),
             Some("192.0.2.20")
         );
+    }
+
+    /// ⭐ The radio's Beta setting for the Flex client's CW, Tune and ATU (`flex_native_unbenched`,
+    /// off by default) is fixed into the client's session when it starts, so where the client
+    /// serves the radio, turning it on or off restarts the client; on SmartSDR CAT or another
+    /// radio it restarts nothing. The first launch, the live rebuild from settings and a monitored
+    /// radio's profile all carry it, and all three carry it off by default.
+    #[test]
+    fn the_flex_clients_beta_setting_restarts_the_client_and_nothing_else() {
+        let client = || {
+            let mut t = cat_transport(4534, Some(4532));
+            t.rig_model = 2036;
+            t.rig_conn = "network".into();
+            t.rig_addr = "127.0.0.1:5002".into();
+            t.flex_native_cat = true;
+            t.flex_radio_ip = "192.0.2.20".into();
+            t
+        };
+        let with = |mut t: Transport, on: bool| {
+            t.flex_native_unbenched = on;
+            t
+        };
+        assert_eq!(flex_client_unbenched(&client()), Some(false));
+        assert_eq!(flex_client_unbenched(&with(client(), true)), Some(true));
+        assert!(
+            !with(client(), true).rig_differs(&with(client(), true)),
+            "the control: unchanged, nothing restarts"
+        );
+        assert!(
+            with(client(), true).rig_differs(&client()),
+            "turning it on restarts the client"
+        );
+        assert!(
+            client().rig_differs(&with(client(), true)),
+            "and so does turning it off"
+        );
+        let mut cat = client();
+        cat.flex_native_cat = false;
+        assert_eq!(flex_client_unbenched(&with(cat.clone(), true)), None);
+        assert!(
+            !with(cat.clone(), true).rig_differs(&cat),
+            "on SmartSDR CAT it restarts nothing"
+        );
+        let mut icom = client();
+        icom.rig_model = 3073;
+        assert!(
+            !with(icom.clone(), true).rig_differs(&icom),
+            "nor on another radio"
+        );
+        // The first launch, the live rebuild and a monitored radio's profile: off, then on.
+        for on in [false, true] {
+            let cfg = RadioConfig {
+                rig_model: 2036,
+                rig_conn: "network".into(),
+                flex_native_cat: true,
+                flex_radio_ip: "192.0.2.20".into(),
+                flex_native_unbenched: on,
+                ..RadioConfig::default()
+            };
+            assert_eq!(flex_client_unbenched(&Transport::from_cfg(&cfg)), Some(on));
+            let s = tempo_app::settings::Settings {
+                rig_model: 2036,
+                flex_native_cat: true,
+                flex_radio_ip: "192.0.2.20".into(),
+                flex_native_unbenched: on,
+                ..tempo_app::settings::Settings::default()
+            };
+            assert_eq!(
+                flex_client_unbenched(&Transport::from_settings(&s)),
+                Some(on)
+            );
+            let p = tempo_app::settings::RadioProfile {
+                rig_model: 2036,
+                flex_native_cat: true,
+                flex_radio_ip: "192.0.2.20".into(),
+                flex_native_unbenched: on,
+                ..tempo_app::settings::RadioProfile::default()
+            };
+            assert_eq!(
+                flex_client_unbenched(&Transport::from_profile(&p)),
+                Some(on)
+            );
+        }
+        assert!(!RadioConfig::default().flex_native_unbenched);
     }
 
     /// ⭐ #145 AT THE **FIRST** LAUNCH, which is the launch that keys.
