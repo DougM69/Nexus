@@ -6276,6 +6276,8 @@ export const EN = {
   'settings.save.fdPositionName': 'Name this position on the Contesting tab before hosting or joining a club event — the club band board shows this name.',
   'settings.save.js8GroupCannotJoin':
     '{{group}} is a group that cannot be joined. Take it out of Groups under JS8 on the Digital tab before saving.',
+  'settings.save.js8CqText':
+    'The JS8 CQ message must start with CQ or hold your callsign, as in JS8Call. Change it under JS8 on the Digital tab before saving.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 
@@ -7835,6 +7837,34 @@ export const EN = {
   'settings.js8.txOffsetWhileSending.label': 'Allow TX offset changes while sending',
   'settings.js8.txOffsetWhileSending.hint':
     'Off by default, as in JS8Call: while a message is waiting to go or going out, the TX offset stays where it is. On, you can move it, and the frames still to go are sent at the new offset.',
+  // The compose box as JS8Call 3.0.3 keeps it (Js8ComposeSettings). `{{default}}` is JS8Call's own
+  // default text, a protocol token; the CQ forms and the macro list are tokens drawn by the panel.
+  'settings.js8.compose.title': 'Composing',
+  'settings.js8.cqText.label': 'CQ message',
+  'settings.js8.cqText.hint':
+    'What the CQ button and the repeating CQ send. {{default}}, the JS8Call default, is one CQ frame, and so is any of the eight CQ forms in the list. Longer text takes more frames. It must start with CQ or hold your callsign. Empty sends CQ CQ CQ and your square.',
+  'settings.js8.replyText.label': 'Reply message',
+  'settings.js8.replyText.hint': 'What REPLY sends to the call in the To box. {{default}} is the JS8Call default.',
+  'settings.js8.saved.label': 'Saved messages',
+  'settings.js8.saved.empty': 'No saved messages.',
+  'settings.js8.saved.row.aria': 'Saved message {{n}}',
+  'settings.js8.saved.up.aria': 'Move saved message {{n}} up',
+  'settings.js8.saved.down.aria': 'Move saved message {{n}} down',
+  'settings.js8.saved.remove.aria': 'Delete saved message {{n}}',
+  'settings.js8.saved.add.placeholder': 'A new saved message',
+  'settings.js8.saved.add': 'Add',
+  'settings.js8.saved.hint':
+    'The Saved menu by the JS8 compose box lists these, in this order. A saved message goes to the call in the To box, or to everyone when the box is empty.',
+  'settings.js8.macros.label':
+    'These words are replaced with your own when a message is used, in saved messages and in the CQ, reply, INFO and STATUS text:',
+  'settings.js8.sendAtOnce.label': "Send CQ, REPLY, SNR, INFO, STATUS, saved messages and a station's asks at once",
+  'settings.js8.sendAtOnce.hint':
+    'On by default, as in JS8Call. Off, those buttons put their message in the compose box and Send sends it. The repeating CQ always sends.',
+  'settings.js8.pills.label': 'Show calls and commands as pills in the compose box',
+  'settings.js8.pills.hint': 'On by default, as in JS8Call 3.0. Point at a pill to read what that part of the message does.',
+  'settings.js8.wordSuggestions.label': 'Suggest cheaper words in the compose box',
+  'settings.js8.wordSuggestions.hint':
+    'On by default, as in JS8Call. A word the JS8 dictionary sends in pieces is underlined. Right-click it for words that take less airtime.',
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
@@ -10058,8 +10088,87 @@ export const EN = {
   // takes more typing; what has gone sits beside it.
   'js8.dock.typeahead.sent': 'Sent so far',
   'js8.dock.typeahead.locked': 'A MSG or relay message cannot be changed while it goes out, as in JS8Call.',
-  'js8.dock.cq.aria': 'CQ variant',
-  'js8.dock.cq.title': 'Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period',
+  // `{{text}}` is the CQ message as it goes out, macros replaced (a protocol token).
+  'js8.dock.cq.send': 'Call CQ in the next period: {{text}}. The CQ message is set in Settings ▸ Digital ▸ JS8.',
+  'js8.dock.cq.fill': 'Put the CQ message in the compose box, and Send sends it: {{text}}. It is set in Settings ▸ Digital ▸ JS8.',
+  // JS8Call's one-click buttons and the Saved menu (Js8ComposeActions). REPLY, SNR, INFO and STATUS
+  // are the mode's own words and are drawn by the dock.
+  'js8.dock.quick.aria': 'One-click messages',
+  'js8.dock.quick.needsCall': 'Put a call in the To box first.',
+  'js8.dock.quick.reply.send': 'Send your reply message to {{call}}.',
+  'js8.dock.quick.reply.fill': 'Put your reply message to {{call}} in the compose box.',
+  'js8.dock.quick.snr.notHeard': 'No report to send: {{call}} has not been heard lately.',
+  'js8.dock.quick.snr.send': 'Send {{call}} the signal report you hear.',
+  'js8.dock.quick.snr.fill': 'Put the signal report you hear from {{call}} in the compose box.',
+  'js8.dock.quick.info.unset': 'Set INFO in Settings ▸ Digital ▸ JS8 to send it.',
+  'js8.dock.quick.info.send': 'Send your INFO, to the call in the To box or to everyone.',
+  'js8.dock.quick.info.fill': 'Put your INFO in the compose box.',
+  'js8.dock.quick.status.send': 'Send your STATUS, to the call in the To box or to everyone.',
+  'js8.dock.quick.status.fill': 'Put your STATUS in the compose box.',
+  'js8.dock.saved.label': 'Saved',
+  'js8.dock.saved.title.send': 'Saved messages. Pick one to send it, to the call in the To box or to everyone.',
+  'js8.dock.saved.title.fill': 'Saved messages. Pick one to put it in the compose box.',
+  'js8.dock.saved.restore': 'Restore previous message',
+  'js8.dock.saved.none': 'No saved messages',
+  'js8.dock.saved.edit': 'Edit saved messages…',
+  'js8.dock.saved.keep': 'Save current message',
+  // The compose box (Js8ComposeBox): the underline's hover, its right-click menu, and what a pill
+  // says on hover. `{{call}}`, `{{group}}`, `{{to}}`, `{{via}}`, `{{id}}` and `{{grid}}` are tokens.
+  'js8.compose.flag.title': 'The JS8 dictionary sends this word in pieces. Right-click it for cheaper words.',
+  'js8.compose.suggest.aria': 'Cheaper words',
+  'js8.compose.suggest.asking': 'Looking it up…',
+  'js8.compose.suggest.none': 'No suggestions',
+  'js8.pill.sender': 'From {{call}}',
+  'js8.pill.recipient': 'To {{call}}',
+  'js8.pill.group': 'To the group {{group}}',
+  'js8.pill.relay.to': 'Relayed to {{to}}',
+  'js8.pill.relay.via': 'Relayed through {{via}} to {{to}}',
+  'js8.pill.withArg': '{{what}}: {{arg}}',
+  'js8.pill.toBox': '{{what}}. To {{call}}, the call in the To box.',
+  'js8.pill.arg.call': 'station {{call}}',
+  'js8.pill.arg.callMissing': 'the callsign is missing',
+  'js8.pill.arg.id': 'message {{id}}',
+  'js8.pill.arg.idMissing': 'the message number is missing',
+  'js8.pill.arg.grid': 'locator {{grid}}',
+  'js8.pill.arg.gridMissing': 'the locator is missing',
+  'js8.pill.cmd.agnQ': 'Asks them to send the last message again',
+  'js8.pill.cmd.qslQ': 'Asks whether they received it',
+  'js8.pill.cmd.hwCpyQ': 'Asks how they copy you',
+  'js8.pill.cmd.snrQ': 'Asks for your signal report',
+  'js8.pill.cmd.infoQ': 'Asks for their station information',
+  'js8.pill.cmd.gridQ': 'Asks for their locator',
+  'js8.pill.cmd.statusQ': 'Asks for their status',
+  'js8.pill.cmd.queryMsgs': 'Asks whether they hold messages for you',
+  'js8.pill.cmd.hearingQ': 'Asks which stations they hear',
+  'js8.pill.cmd.msgTo': 'Leaves a message for a station to collect later',
+  'js8.pill.cmd.heartbeatSnr': 'A signal report for a heartbeat',
+  'js8.pill.cmd.queryCall': 'Asks whether they can reach a station',
+  'js8.pill.cmd.queryMsg': 'Asks for a message they hold',
+  'js8.pill.cmd.query': 'A query',
+  'js8.pill.cmd.ditDit': 'Two dits, a casual goodbye',
+  'js8.pill.cmd.status': 'Your status',
+  'js8.pill.cmd.hearing': 'The stations you hear',
+  'js8.pill.cmd.cmd': 'A command',
+  'js8.pill.cmd.msg': 'A message, checked on arrival so it is read whole',
+  'js8.pill.cmd.nack': 'Not received',
+  'js8.pill.cmd.ack': 'Received',
+  'js8.pill.cmd.snr': 'A signal report',
+  'js8.pill.cmd.qsl': 'Confirms you received it',
+  'js8.pill.cmd.info': 'Your station information',
+  'js8.pill.cmd.grid': 'Your locator',
+  'js8.pill.cmd.seventyThree': 'Best regards, the end of a contact',
+  'js8.pill.cmd.yes': 'Yes',
+  'js8.pill.cmd.no': 'No',
+  'js8.pill.cmd.rr': 'Roger, received',
+  'js8.pill.cmd.sk': 'Signing off',
+  'js8.pill.cmd.fb': 'Fine business',
+  'js8.pill.cmd.cq': 'A CQ to any station',
+  'js8.pill.cmd.cqContest': 'A CQ for contest stations',
+  'js8.pill.cmd.cqField': 'A CQ for Field Day stations',
+  'js8.pill.cmd.cqDx': 'A CQ for DX stations',
+  'js8.pill.cmd.cqQrp': 'A CQ at low power',
+  'js8.pill.cmd.hb': 'A heartbeat: you are on the air',
+  'js8.pill.cmd.other': 'A command',
   'js8.dock.cqRepeat.title.off':
     'Repeating CQ is off. Click to call CQ every {{min}} min until someone answers — the button counts down to the next one. It keys only while TX is on, and it is never remembered across launches.',
   'js8.dock.cqRepeat.title.on':
@@ -10167,6 +10276,8 @@ export const EN = {
 
   // ── JS8 ▸ the toasts ─────────────────────────────────────────────────────────────────
   'js8.toast.noCallsign': 'Set your callsign in Settings before transmitting',
+  'js8.toast.savedMessage': 'Added to the saved messages: {{text}}',
+  'js8.toast.savedMessage.failed': 'The message could not be saved',
   'js8.toast.txLocked': 'TX locked — this frequency is outside your license privileges',
   'js8.toast.send.failed': 'JS8 send refused',
   'js8.toast.cq.failed': 'JS8 CQ refused',

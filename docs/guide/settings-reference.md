@@ -1373,6 +1373,32 @@ nothing until you enable TX in the cockpit, every session.
   says why when you try to move it. On, the move is taken and the frames still to go are
   sent at the new offset.
 
+**Composing**
+
+The JS8 compose box as JS8Call 3.0.3 keeps it; the [JS8 chapter](js8.md#composing) shows it
+at work.
+
+- **CQ message** — what the **CQ** button and the repeating CQ send. JS8Call's default,
+  `CQ CQ CQ <MYGRID4>`, is one CQ frame, and so is any of the eight CQ forms the field offers
+  (`CQ DX <MYGRID4>` and the rest). Longer text takes more frames. It must start with `CQ` or
+  hold your callsign, as in JS8Call: Settings will not save otherwise, and says so. Empty
+  sends `CQ CQ CQ` and your square.
+- **Reply message** — what **REPLY** sends to the call in the To box; `HW CPY?` by default,
+  as in JS8Call.
+- **Saved messages** — the dock's **Saved** menu, in this order: add, edit, move up or down,
+  delete. `TNX 73 GL` to start with, as in JS8Call; a list you empty stays empty. The
+  macros a message may carry are listed under it, and work in the CQ and reply messages,
+  INFO and STATUS too: `<MYCALL>`, `<MYGRID4>`, `<MYGRID12>`, `<MYINFO>`, `<MYCQ>`, `<MYHB>`,
+  `<MYREPLY>`, `<MYSTATUS>`, `<MYVERSION>`, `<MYIDLE>`, and for the call in the To box once
+  it has been heard, `<CALL>`, `<SNR>` and `<TDELTA>`.
+- **Send CQ, REPLY, SNR, INFO, STATUS, saved messages and a station's asks at once** — on by
+  default, as JS8Call's *Immediately transmit…*. Off, those buttons and a station row's quick
+  asks put their message in the compose box, and **Send** sends it. The repeating CQ always
+  sends.
+- **Show calls and commands as pills in the compose box** — on by default, as in JS8Call 3.0.
+- **Suggest cheaper words in the compose box** — on by default, as in JS8Call. A word the JS8
+  dictionary sends in pieces is underlined; right-click it for words that take less airtime.
+
 ### SSTV
 
 ![The SSTV group: "Start receiving when SSTV opens" on, ISS SSTV auto-arm off, Transmit mode set to "Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)", and an empty Transmit power percentage box.](../img/manual/settings-sstv.webp)

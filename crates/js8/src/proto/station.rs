@@ -287,6 +287,13 @@ pub struct StationConfig {
     pub groups: Vec<String>,
     pub info: String,
     pub status: String,
+    /// JS8Call's CQ message (`CQMessage`, Configuration.cpp:2154-2155): what the CQ button and
+    /// the CQ repeat send, its macros replaced ([`crate::proto::macros`]). Empty sends JS8Call's
+    /// fallback, `CQ CQ CQ` and the square (`sendCQ`, mainwindow.cpp:4534-4537).
+    pub cq_text: String,
+    /// JS8Call's reply message (`Reply`, Configuration.cpp:2156). The station reads it only for
+    /// `<MYREPLY>`; the cockpit's REPLY button sends it.
+    pub reply_text: String,
     pub allcall_reply_interval_ms: u64,
     /// JS8Call's `AutoreplyConfirmation`, "Ask for confirmation before sending autoreply
     /// transmissions" (Configuration.ui:855), on as JS8Call ships it (Configuration.cpp:1949).
@@ -346,6 +353,8 @@ impl Default for StationConfig {
             groups: Vec::new(),
             info: String::new(),
             status: String::new(),
+            cq_text: crate::proto::macros::DEFAULT_CQ.to_string(),
+            reply_text: crate::proto::macros::DEFAULT_REPLY.to_string(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
             autoreply_confirmation: true,
             autoreply_allow: Vec::new(),
@@ -640,10 +649,9 @@ pub struct Station {
     hb_on: bool,
     hb_next_ms: Option<u64>,
     /// The CQ repeat: session-only, exactly like `hb_on` (never journaled, so the app can
-    /// never launch calling CQ). `cq_idx` is the CQS variant the operator armed it with.
+    /// never launch calling CQ). It sends the CQ message, as the CQ button does.
     cq_on: bool,
     cq_next_ms: Option<u64>,
-    cq_idx: u8,
     last_activity_ms: u64,
     idle_tripped: bool,
     last_tx_display: Option<String>,
@@ -691,7 +699,6 @@ impl Station {
             hb_next_ms: None,
             cq_on: false,
             cq_next_ms: None,
-            cq_idx: 0,
             last_activity_ms: 0,
             idle_tripped: false,
             last_tx_display: None,
@@ -1217,7 +1224,7 @@ impl Station {
             Command::GridQuery => Some(format!("{from} GRID {}", self.cfg.grid)),
             Command::InfoQuery => Some(format!(
                 "{from} INFO {}",
-                self.expand_grid_macros(&self.cfg.info)
+                self.expand_macros(&self.cfg.info, now_ms)
             )),
             Command::StatusQuery => Some(format!("{from} STATUS {}", self.status_text(now_ms))),
             Command::HearingQuery => Some(self.hearing_reply(&from, now_ms)),
@@ -1739,8 +1746,27 @@ impl Station {
                 idle_since(self.idle_minutes(now_ms))
             )
         } else {
-            clamp_str(&self.expand_grid_macros(&self.cfg.status), MAX_INFO_LEN)
+            clamp_str(&self.expand_macros(&self.cfg.status, now_ms), MAX_INFO_LEN)
         }
+    }
+
+    /// JS8Call's macros in a text this station makes itself (the CQ, the INFO? and STATUS?
+    /// replies): every one it can value, then every `<…>` left removed, as JS8Call's `sendCQ` and
+    /// replies call `replaceMacros(…, true)` (mainwindow.cpp:4541; processCommandActivity.cpp:
+    /// 347-358). A station has no selected call, so `<CALL>`, `<SNR>` and `<TDELTA>` go.
+    fn expand_macros(&self, text: &str, now_ms: u64) -> String {
+        let input = crate::proto::macros::MacroInput {
+            mycall: &self.cfg.mycall,
+            grid: &self.cfg.grid,
+            info: &self.cfg.info,
+            status: &self.cfg.status,
+            cq: &self.cfg.cq_text,
+            reply: &self.cfg.reply_text,
+            idle_minutes: self.idle_minutes(now_ms),
+            selected: None,
+        };
+        let values = crate::proto::macros::values(&input);
+        crate::proto::macros::replace(text, &values, true)
     }
 
     /// JS8Call's `<MYGRID4>` and `<MYGRID12>` (`buildMacroValues`, mainwindow.cpp:7024-7025): the
@@ -2007,7 +2033,7 @@ impl Station {
         if self.cq_on && self.outbox.is_empty() {
             if let Some(next) = self.cq_next_ms {
                 if now_ms >= next {
-                    let _ = self.enqueue_cq();
+                    let _ = self.enqueue_cq(now_ms);
                     if self.cfg.cq_interval_min > 0 {
                         self.bump_cq_schedule(now_ms);
                     } else {
@@ -2234,23 +2260,30 @@ impl Station {
         Ok(if self.push_outbox(out) { n } else { 0 })
     }
 
-    pub fn call_cq(&mut self, idx: u8, now_ms: u64) -> Result<(), ComposeError> {
+    pub fn call_cq(&mut self, now_ms: u64) -> Result<(), ComposeError> {
         self.mark_active(now_ms);
-        let out = self.compose_cq(idx, Origin::Operator)?;
+        let out = self.compose_cq(Origin::Operator, now_ms)?;
         self.push_outbox(out);
         Ok(())
     }
 
     /// The CQ line both the operator's click and the repeat schedule send, differing only in
     /// `origin`. Shared so a change to the wire text can never drift between them.
-    fn compose_cq(&self, idx: u8, origin: Origin) -> Result<OutMsg, ComposeError> {
-        let cqs = crate::proto::alphabet::CQS[(idx & 7) as usize];
-        // The 4-character square, as JS8Call's CQ carries it (its default CQ text is
-        // `CQ CQ CQ <MYGRID4>`, and `sendCQ` falls back to `my_grid().left(4)`,
-        // mainwindow.cpp:6344): a longer locator spills into a data frame that keys on the
-        // next period.
-        let grid4: String = self.cfg.grid.chars().take(4).collect();
-        let line = format!("{cqs} {grid4}");
+    ///
+    /// JS8Call's `sendCQ` (mainwindow.cpp:4524-4545): the CQ message with its macros replaced and
+    /// the rest pruned, or, when the message is empty, `CQ CQ CQ` and the 4-character square
+    /// (:4534-4537). Its default, `CQ CQ CQ <MYGRID4>`, is the one CQ frame JS8Call sends: the
+    /// square, never a longer locator, which would spill into a data frame keying on the next
+    /// period. A message that is not one of the eight CQ forms and a square goes as JS8Call
+    /// frames it, through `frames_with_grid`, in as many frames as it takes.
+    fn compose_cq(&self, origin: Origin, now_ms: u64) -> Result<OutMsg, ComposeError> {
+        let message = self.cfg.cq_text.trim().replace("CQCQCQ", "CQ CQ CQ");
+        let line = if message.is_empty() {
+            let grid4: String = self.cfg.grid.chars().take(4).collect();
+            format!("CQ CQ CQ {grid4}")
+        } else {
+            self.expand_macros(&message, now_ms)
+        };
         let seq = frames_with_grid(
             &self.cfg.mycall,
             &self.cfg.grid,
@@ -2271,8 +2304,8 @@ impl Station {
     /// Enqueue ONE scheduled CQ. Deliberately does NOT `mark_active`: an automatic origin
     /// must not reset the idle-watchdog baseline, or the repeat outlives the watchdog that
     /// bounds it. `enqueue_heartbeat`'s rule, for the same reason.
-    fn enqueue_cq(&mut self) -> Result<(), ComposeError> {
-        let out = self.compose_cq(self.cq_idx, Origin::CqRepeat)?;
+    fn enqueue_cq(&mut self, now_ms: u64) -> Result<(), ComposeError> {
+        let out = self.compose_cq(Origin::CqRepeat, now_ms)?;
         self.push_outbox(out);
         Ok(())
     }
@@ -2344,14 +2377,13 @@ impl Station {
         self.hb_next_ms
     }
 
-    /// Arm/disarm the repeating CQ with the CQS variant to send (JS8Call's checkable
-    /// `cqMacroButton`). `set_hb`'s shape exactly: the first CQ fires now (interval 0 = "on
+    /// Arm/disarm the repeating CQ (JS8Call's checkable `cqMacroButton`), which sends the CQ
+    /// message (`compose_cq`). `set_hb`'s shape exactly: the first CQ fires now (interval 0 = "on
     /// demand" = once) or after the interval, and disarming clears the schedule. Arming keys
     /// NOTHING by itself — it only schedules; `plan_js8_tx` still re-reads the TX latch.
-    pub fn set_cq(&mut self, on: bool, idx: u8, now_ms: u64) {
+    pub fn set_cq(&mut self, on: bool, now_ms: u64) {
         self.cq_on = on;
         if on {
-            self.cq_idx = idx & 7;
             self.cq_next_ms = Some(now_ms + self.cfg.cq_interval_min as u64 * 60 * 1000);
         } else {
             self.cq_next_ms = None;
@@ -3238,7 +3270,7 @@ mod tests {
                 };
                 match origin {
                     Origin::Heartbeat => s.set_hb(true, 0),
-                    _ => s.set_cq(true, 0, 0),
+                    _ => s.set_cq(true, 0),
                 }
                 let before = of(s.readiness(true));
                 let mut keyed = 0;
@@ -3744,7 +3776,7 @@ mod tests {
         c.cq_interval_min = 5;
         let mut s = Station::new(c);
         s.mark_active(0);
-        s.set_cq(true, 0, 0);
+        s.set_cq(true, 0);
         assert_eq!(
             s.cq_next_ms(),
             Some(5 * 60 * 1000),
@@ -3783,7 +3815,7 @@ mod tests {
         c.cq_interval_min = 5;
         let mut s = Station::new(c);
         s.mark_active(0);
-        s.set_cq(true, 0, 0);
+        s.set_cq(true, 0);
         let mut cqs_sent = 0;
         let mut tripped_at = None;
         for min in 1..=61u64 {
@@ -3831,7 +3863,7 @@ mod tests {
         c.hb_interval_min = 5;
         let mut s = Station::new(c);
         s.mark_active(0);
-        s.set_cq(true, 0, 0);
+        s.set_cq(true, 0);
         s.set_hb(true, 0);
         s.on_event(
             &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -7),
@@ -3857,7 +3889,7 @@ mod tests {
         c.cq_interval_min = 1;
         let mut s = Station::new(c);
         s.mark_active(0);
-        s.set_cq(true, 3, 0);
+        s.set_cq(true, 0);
         s.tick(60_000);
         assert!(
             s.cq_on() && drain(&mut s, 60_000).is_some(),
@@ -4321,7 +4353,7 @@ mod tests {
         let mut c = cfg();
         c.grid = "EN52HW".into();
         let mut s = Station::new(c);
-        s.call_cq(0, 0).unwrap();
+        s.call_cq(0).unwrap();
         assert_eq!(
             keyed_wire(&mut s, 0),
             one_cq_frame("EN52"),
@@ -4337,7 +4369,7 @@ mod tests {
         c.cq_interval_min = 1;
         let mut s = Station::new(c);
         s.mark_active(0);
-        s.set_cq(true, 0, 0);
+        s.set_cq(true, 0);
         s.tick(60_000);
         assert_eq!(
             keyed_wire(&mut s, 60_000),
@@ -4350,8 +4382,89 @@ mod tests {
     #[test]
     fn a_cq_with_a_four_character_locator_is_unchanged() {
         let mut s = Station::new(cfg()); // EN52
-        s.call_cq(0, 0).unwrap();
+        s.call_cq(0).unwrap();
         assert_eq!(keyed_wire(&mut s, 0), one_cq_frame("EN52"));
+    }
+
+    /// One CQ frame of form `idx` (JS8Call's `cqs` table: 1 is CQ DX, 2 CQ QRP) with `grid`.
+    fn one_cq_form(idx: u8, grid: &str) -> Vec<(Frame, bool, bool)> {
+        let cq = Frame::Heartbeat {
+            call: "KD9TAW".into(),
+            grid: Some(grid.into()),
+            is_cq: true,
+            idx,
+        };
+        vec![(cq, true, true)]
+    }
+
+    /// The CQ message is what the CQ button keys (JS8Call's `CQMessage`, sent by `sendCQ`,
+    /// mainwindow.cpp:4524-4545), its macros replaced: `CQ DX <MYGRID4>` is the one CQ DX frame
+    /// with the square.
+    #[test]
+    fn the_cq_message_is_what_the_cq_button_keys() {
+        let mut c = cfg();
+        c.cq_text = "CQ DX <MYGRID4>".into();
+        let mut s = Station::new(c);
+        s.call_cq(0).unwrap();
+        assert_eq!(keyed_wire(&mut s, 0), one_cq_form(1, "EN52"));
+    }
+
+    /// …and what the CQ repeat keys: both compose through `compose_cq`.
+    #[test]
+    fn the_cq_message_is_what_the_cq_repeat_keys() {
+        let mut c = cfg();
+        c.cq_text = "CQ QRP <MYGRID4>".into();
+        c.cq_interval_min = 1;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 0);
+        s.tick(60_000);
+        assert_eq!(keyed_wire(&mut s, 60_000), one_cq_form(2, "EN52"));
+    }
+
+    /// A CQ message longer than a CQ form goes as JS8Call frames the same words: the CQ frame,
+    /// then the rest in data frames. Every macro is replaced, and the selected-call words, which
+    /// a CQ never has (`sendCQ` clears the selection first, mainwindow.cpp:4539), are pruned.
+    #[test]
+    fn a_longer_cq_message_keys_its_words_with_the_macros_replaced() {
+        let mut c = cfg();
+        c.cq_text = "CQ CQ CQ <MYGRID4> <CALL>QRP DE <MYCALL>".into();
+        let mut s = Station::new(c);
+        s.call_cq(0).unwrap();
+        let mut plain = Station::new(cfg());
+        plain.send(None, "CQ CQ CQ EN52 QRP DE KD9TAW", 0).unwrap();
+        let cq = keyed_wire(&mut s, 0);
+        assert_eq!(
+            cq,
+            keyed_wire(&mut plain, 0),
+            "the same frames as those words"
+        );
+        assert!(cq.len() > 1, "more than the CQ frame: {cq:?}");
+        assert_eq!(cq[0].0, one_cq_frame("EN52")[0].0, "the CQ frame leads");
+        let mut s = Station::new(StationConfig {
+            cq_text: "CQ CQ CQ <MYGRID4> <CALL>QRP DE <MYCALL>".into(),
+            ..cfg()
+        });
+        s.call_cq(0).unwrap();
+        assert_eq!(
+            drain(&mut s, 0).map(|f| f.display).as_deref(),
+            Some("KD9TAW: @ALLCALL CQ CQ CQ EN52 QRP DE KD9TAW")
+        );
+    }
+
+    /// An empty CQ message sends JS8Call's fallback, `CQ CQ CQ` and the square
+    /// (mainwindow.cpp:4534-4537); the legacy `CQCQCQ` is read as `CQ CQ CQ` (Configuration.cpp:
+    /// 1288-1290).
+    #[test]
+    fn an_empty_cq_message_sends_cq_cq_cq_and_the_square() {
+        for text in ["", "   ", "CQCQCQ <MYGRID4>"] {
+            let mut c = cfg();
+            c.cq_text = text.into();
+            c.grid = "EN52HW".into();
+            let mut s = Station::new(c);
+            s.call_cq(0).unwrap();
+            assert_eq!(keyed_wire(&mut s, 0), one_cq_frame("EN52"), "{text:?}");
+        }
     }
 
     /// A compound callsign's directed message leads with JS8Call's compound announcement,
@@ -4520,6 +4633,27 @@ mod tests {
             reply_to(&mut s, Command::StatusQuery).as_deref(),
             Some("KD9TAW: W1AW STATUS PORTABLE IN EN52"),
             "STATUS? is answered with the macros replaced"
+        );
+    }
+
+    /// INFO? and STATUS? are answered with every macro JS8Call knows replaced and any `<…>` left
+    /// pruned (`replaceMacros(…, true)`, processCommandActivity.cpp:347-358). A station has no
+    /// selected call, so `<CALL>` goes; an idle station that has not yet been used is idle 0M.
+    #[test]
+    fn info_and_status_replies_replace_every_macro_and_prune_the_rest() {
+        let mut s = macro_station(
+            "EN52hw12",
+            "<mycall> QTH <MYGRID4><CALL> IDLE <MYIDLE> <MYHB>",
+            "",
+        );
+        assert_eq!(
+            reply_to(&mut s, Command::InfoQuery).as_deref(),
+            Some("KD9TAW: W1AW INFO KD9TAW QTH EN52 IDLE 0M HB EN52")
+        );
+        let mut s = macro_station("EN52", "", "<FOO>ON <MYVERSION> <MYCQ>");
+        assert_eq!(
+            reply_to(&mut s, Command::StatusQuery).as_deref(),
+            Some("KD9TAW: W1AW STATUS ON NEXUS CQ CQ CQ EN52")
         );
     }
 
@@ -6250,7 +6384,7 @@ mod tests {
             ..asking_cfg()
         });
         s.on_event(&snr_query("W1AW"), 500); // before the CQ: traffic to me stops a repeat
-        s.set_cq(true, 0, 1000);
+        s.set_cq(true, 1000);
         assert!(
             s.pending_reply().is_some(),
             "control: a reply asks at the CQ"
@@ -7133,7 +7267,7 @@ mod tests {
                 hb_qso_pause: pause,
                 ..cfg()
             });
-            s.set_cq(true, 0, 0);
+            s.set_cq(true, 0);
             s.select_call(Some("W1AW"), 1_000);
             s.select_call(None, 2_000);
             let cqs: Vec<u64> = (1..=25u64)

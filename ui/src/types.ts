@@ -4080,6 +4080,20 @@ export interface Settings {
    * 0-1440): a Band activity row whose newest decode is this old leaves the pane, unless RX is on
    * its offset. Display only. */
   js8ActivityAgingMin: number
+  /** JS8Call's CQ message (default `CQ CQ CQ <MYGRID4>`): what the CQ button and the CQ repeat
+   * send, its macros replaced. Empty sends `CQ CQ CQ` and the square, as JS8Call does. */
+  js8CqText: string
+  /** JS8Call's reply message (default `HW CPY?`): REPLY sends it to the call in the To box. */
+  js8ReplyText: string
+  /** JS8Call's saved messages (default the one `TNX 73 GL`): the dock's Saved menu, in order. */
+  js8SavedMessages: string[]
+  /** JS8Call's "Immediately transmit CQ, Reply, Info, Saved, and Directed messages from the menu"
+   * (default on). Off, those buttons and a station row's asks only fill the compose box. */
+  js8SendAtOnce: boolean
+  /** JS8Call 3.0's pills for calls and commands in the compose box (default on). */
+  js8Pills: boolean
+  /** JS8Call's word suggestions from the JSC dictionary in the compose box (default on). */
+  js8WordSuggestions: boolean
   /** Free text answered to INFO?. */
   js8Info: string
   /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */

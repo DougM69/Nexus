@@ -16886,14 +16886,11 @@ fn js8_send_command(
     Ok(eng.js8_state())
 }
 
-/// Call CQ (`idx` = the CQ variant 0..=7). Refused here.
+/// Call CQ with the CQ message from Settings (JS8Call's `CQMessage`). Refused here.
 #[tauri::command(async)]
-fn js8_call_cq(
-    state: State<'_, SharedEngine>,
-    idx: u8,
-) -> Result<tempo_app::dto::Js8State, String> {
+fn js8_call_cq(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_call_cq(idx)?;
+    eng.js8_call_cq()?;
     Ok(eng.js8_state())
 }
 
@@ -16916,7 +16913,7 @@ fn js8_arm(
     Ok(eng.js8_state())
 }
 
-/// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). SESSION-ONLY and
+/// Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings. SESSION-ONLY and
 /// never written to disk, exactly like the HB toggle — a relaunch can never come back calling
 /// CQ. The repeat INTERVAL is the persisted half and lives in Settings (`js8CqIntervalMin`).
 /// Arming keys nothing: the TX latch is the first act and is re-read at plan time every slot.
@@ -16924,10 +16921,9 @@ fn js8_arm(
 fn js8_cq_repeat(
     state: State<'_, SharedEngine>,
     on: bool,
-    idx: u8,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_set_cq_repeat(on, idx)?;
+    eng.js8_set_cq_repeat(on)?;
     Ok(eng.js8_state())
 }
 
@@ -16945,6 +16941,21 @@ fn js8_answer_reply(
     let mut eng = engine_lock(&state);
     eng.js8_answer_reply(yes, display, fires_at_ms)?;
     Ok(eng.js8_state())
+}
+
+/// The compose box's words that JS8Call underlines, one answer per word in order (its word
+/// check, "Suggest alternative word choices…", on by default). The JSC dictionary only: no engine
+/// lock, and nothing keys.
+#[tauri::command(async)]
+fn js8_word_check(words: Vec<String>) -> Vec<bool> {
+    tempo_app::engine::js8::js8_word_check(&words)
+}
+
+/// What JS8Call's right-click offers for one underlined word: up to five cheaper words, cheapest
+/// first, and whether the dictionary held any prefix of it. The JSC dictionary only.
+#[tauri::command(async)]
+fn js8_word_suggestions(word: String) -> tempo_app::engine::js8::Js8WordSuggestions {
+    tempo_app::engine::js8::js8_word_suggestions(&word)
 }
 
 /// The native cockpit's compose box, both ways (polled with the state while JS8 is visible):
@@ -35555,6 +35566,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_locator_refusal,
             js8_set_speed,
             js8_set_rx_speeds,
+            js8_word_check,
+            js8_word_suggestions,
             js8_send,
             js8_send_command,
             js8_call_cq,

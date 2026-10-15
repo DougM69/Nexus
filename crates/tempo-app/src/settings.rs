@@ -975,6 +975,34 @@ pub struct Settings {
     /// JS8Call's field runs 0-1440.
     #[serde(default = "default_js8_activity_aging_min")]
     pub js8_activity_aging_min: u16,
+    /// JS8Call's CQ message (`CQMessage`, default `CQ CQ CQ <MYGRID4>`): what the CQ button and
+    /// the CQ repeat send, its macros replaced (`js8::proto::macros`). Empty sends `CQ CQ CQ` and
+    /// the square, as JS8Call does. A file from before this setting loads the default, which keys
+    /// the same CQ frame every earlier Nexus keyed.
+    #[serde(default = "default_js8_cq_text")]
+    pub js8_cq_text: String,
+    /// JS8Call's reply message (`Reply`, default `HW CPY?`): the cockpit's REPLY button sends it
+    /// to the call in the To box.
+    #[serde(default = "default_js8_reply_text")]
+    pub js8_reply_text: String,
+    /// JS8Call's saved messages (`Macros`, default the one `TNX 73 GL`): the dock's Saved menu, in
+    /// this order, each with its macros replaced when it is used. An empty list stays empty.
+    #[serde(default = "default_js8_saved_messages")]
+    pub js8_saved_messages: Vec<String>,
+    /// JS8Call's "Immediately transmit CQ, Reply, Info, Saved, and Directed messages from the
+    /// menu" (`TransmitDirected`, default ON). Off, those buttons and a station row's one-click
+    /// asks only fill the compose box, and Send sends it.
+    #[serde(default = "default_true")]
+    pub js8_send_at_once: bool,
+    /// JS8Call 3.0's "Display callsigns and commands as pills" in the compose box
+    /// (`PillsEnabled`, default ON). Display only.
+    #[serde(default = "default_true")]
+    pub js8_pills: bool,
+    /// JS8Call's "Suggest alternative word choices for more efficient message transmission"
+    /// (`Spellcheck`, default ON): a word the JSC dictionary codes in pieces is underlined in the
+    /// compose box, and a right-click on it offers cheaper words. Display only.
+    #[serde(default = "default_true")]
+    pub js8_word_suggestions: bool,
     /// Free text answered to `INFO?` (JS8Call "My Info").
     #[serde(default)]
     pub js8_info: String,
@@ -4701,6 +4729,22 @@ fn default_msk144_period_s() -> u16 {
     15
 }
 
+/// JS8Call's CQ message. See [`Settings::js8_cq_text`].
+fn default_js8_cq_text() -> String {
+    ::js8::proto::macros::DEFAULT_CQ.to_string()
+}
+
+/// JS8Call's reply message. See [`Settings::js8_reply_text`].
+fn default_js8_reply_text() -> String {
+    ::js8::proto::macros::DEFAULT_REPLY.to_string()
+}
+
+/// JS8Call's one saved message out of the box (`Macros`, Configuration.cpp:2308-2309). See
+/// [`Settings::js8_saved_messages`].
+fn default_js8_saved_messages() -> Vec<String> {
+    vec!["TNX 73 GL".to_string()]
+}
+
 /// JS8 Normal = index 1 of `Js8Speed::ALL`. See [`Settings::js8_speed`].
 fn default_js8_speed() -> u8 {
     1
@@ -4791,6 +4835,12 @@ impl Default for Settings {
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
             js8_callsign_aging_min: 0,
             js8_activity_aging_min: default_js8_activity_aging_min(),
+            js8_cq_text: default_js8_cq_text(),
+            js8_reply_text: default_js8_reply_text(),
+            js8_saved_messages: default_js8_saved_messages(),
+            js8_send_at_once: true,
+            js8_pills: true,
+            js8_word_suggestions: true,
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
@@ -9772,6 +9822,82 @@ mod tests {
         assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
         assert_eq!(kept_aside_in(&dir).len(), 1, "the file was kept aside");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The compose box's six JS8 fields: JS8Call 3.0.3's own defaults (`CQMessage`, `Reply`,
+    /// `Macros`, `TransmitDirected`, `PillsEnabled`, `Spellcheck`), the exact camelCase wire keys,
+    /// an upgrader's file, a cleared list and text that stay cleared, and the TS mirror read from
+    /// `ui/src/types.ts` itself.
+    #[test]
+    fn js8_compose_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.js8_cq_text, "CQ CQ CQ <MYGRID4>", "JS8Call CQMessage");
+        assert_eq!(s.js8_reply_text, "HW CPY?", "JS8Call Reply");
+        assert_eq!(
+            s.js8_saved_messages,
+            vec!["TNX 73 GL".to_string()],
+            "JS8Call Macros"
+        );
+        assert!(s.js8_send_at_once, "JS8Call TransmitDirected: on");
+        assert!(s.js8_pills, "JS8Call PillsEnabled: on");
+        assert!(s.js8_word_suggestions, "JS8Call Spellcheck: on");
+
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8CqText\":\"CQ CQ CQ <MYGRID4>\"",
+            "\"js8ReplyText\":\"HW CPY?\"",
+            "\"js8SavedMessages\":[\"TNX 73 GL\"]",
+            "\"js8SendAtOnce\":true",
+            "\"js8Pills\":true",
+            "\"js8WordSuggestions\":true",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        // An upgrader's file predates every key: JS8Call's defaults, so the CQ button keys the CQ
+        // it always keyed.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_cq_text, "CQ CQ CQ <MYGRID4>");
+        assert_eq!(old.js8_saved_messages, vec!["TNX 73 GL".to_string()]);
+        assert!(old.js8_send_at_once && old.js8_pills && old.js8_word_suggestions);
+        // What the operator cleared or turned off stays so, not the default.
+        let mine: Settings = serde_json::from_str(
+            r#"{"js8CqText":"","js8ReplyText":"TNX FER CALL","js8SavedMessages":[],"js8SendAtOnce":false,"js8Pills":false,"js8WordSuggestions":false}"#,
+        )
+        .unwrap();
+        assert_eq!(mine.js8_cq_text, "", "an empty CQ message stays empty");
+        assert_eq!(mine.js8_reply_text, "TNX FER CALL");
+        assert!(
+            mine.js8_saved_messages.is_empty(),
+            "no saved messages stays none"
+        );
+        assert!(!mine.js8_send_at_once && !mine.js8_pills && !mine.js8_word_suggestions);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&mine).unwrap()).unwrap();
+        assert_eq!(back, mine);
+
+        // The TS mirror carries every key, as a typed field line (`  js8CqText: string`).
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8CqText",
+            "js8ReplyText",
+            "js8SavedMessages",
+            "js8SendAtOnce",
+            "js8Pills",
+            "js8WordSuggestions",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+        // CONTROL: the scan finds nothing that is not there.
+        assert!(!body
+            .lines()
+            .any(|l| l.trim_start().starts_with("js8CqIdx:")));
     }
 
     /// The ten JS8 fields: JS8Call's own defaults (G3, operator-approved 2026-09-05), the

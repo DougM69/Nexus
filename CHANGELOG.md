@@ -29,6 +29,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chart, or focus it and use the arrow keys, to read each hour, day or month; a screen reader gets
   every count as a table. It opens on the past 30 days. A Remote observer's Statistics does not
   show it yet.
+- **JS8: pills and cheaper words in the compose box, as in JS8Call 3.0.** As you type, the parts of
+  a message are drawn as pills: who it goes to (a call, a relay route or a group), who it is from,
+  and the command. Point at one to read what it does. A word the JS8 dictionary sends in pieces is
+  underlined, and a right-click on it offers up to five words that take less airtime. Both are on
+  by default, and Settings ▸ Digital ▸ JS8 ▸ Composing turns either off.
+- **JS8: REPLY, SNR, INFO, STATUS and saved messages, as in JS8Call.** The buttons sit under the
+  compose box. REPLY sends your reply message (HW CPY? unless you change it) to the call in the To
+  box, SNR sends that station the report you hear from it, and INFO and STATUS send yours. The
+  Saved menu sends a saved message in one click (TNX 73 GL to start with), saves what is in the
+  compose box, opens Settings to edit the list, and restores the last message you sent. Saved
+  messages, the CQ and reply messages, INFO and STATUS may carry JS8Call's 13 macros, such as
+  `<MYCALL>`, `<MYGRID4>`, `<CALL>` and `<SNR>`, replaced when the message is used, and a macro
+  typed into the compose box is replaced when you press Send. The answers to INFO? and STATUS?
+  replace them too. NEEDS-BENCH: a REPLY, an SNR and an INFO? answered with macros in INFO, on the
+  air beside JS8Call.
+- **JS8: the one-click buttons can fill the compose box instead of sending.** JS8Call's
+  "Immediately transmit…" switch, in Settings ▸ Digital ▸ JS8 ▸ Composing, on by default. Off, CQ,
+  REPLY, SNR, INFO, STATUS, a saved message and a station row's quick asks put their message in the
+  compose box, and Send sends it. The repeating CQ always sends.
 - **Change what an RTTY, PSK or CW macro key sends on the fly.** Right-click a key, or press
   Ctrl+Shift with its F-key (Ctrl+Shift+F3 for F3), and that key's editor opens with the cursor in
   its message. Neither sends anything, and the browser's menu no longer opens over a key. The editor
@@ -173,6 +192,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   System is there on every computer. A theme you picked stays as you picked it. Earlier versions
   saved Dark for everyone who never picked one, so a computer that ran them keeps Dark: pick System
   to follow the computer. NEEDS-BENCH: Windows, switched between light and dark.
+- **JS8: CQ sends your CQ message.** The CQ button and the repeating CQ send the CQ message set in
+  Settings ▸ Digital ▸ JS8 ▸ Composing, JS8Call's `CQ CQ CQ <MYGRID4>` by default, which keys the
+  same one CQ frame as before. The CQ form picker beside the button is gone: put the form you want
+  in the CQ message, or keep a few as saved messages. Pressing CQ, or turning the repeating CQ on,
+  clears the To box, as JS8Call does. NEEDS-BENCH: a CQ and a repeating CQ with a changed CQ
+  message, on the air beside JS8Call.
 - **Light has the softer silver look of the Silver chassis theme.** A pale silver page, white
   panels, graphite text and steel blue keys, by day and with Night on, and the scopes and meters
   take Silver's lit keys and digits. If you had Silver chassis picked, you see Light, which looks

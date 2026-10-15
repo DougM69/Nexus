@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn only_the_box_message_counts_as_sent() {
         let mut s = station();
-        s.call_cq(0, 0).expect("a CQ queued");
+        s.call_cq(0).expect("a CQ queued");
         send(&mut s, None, LONG);
         let cq = key(&mut s, 0).expect("the CQ");
         assert!(cq.0.contains("CQ"), "premise: the CQ goes first");

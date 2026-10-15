@@ -27357,6 +27357,20 @@ button.sat-chip:disabled {
 .js8-to {
   flex: 0 1 14em;
 }
+/* THE COMPOSE BOX (Js8ComposeBox): the input over a BACKDROP that repeats its text, transparent,
+   and paints JS8Call 3.0's pills and the word-suggestion underline behind the input's own letters.
+   The wrapper takes the field's place in the row and its fill; the input is see-through so the
+   backdrop shows, and stacks above it so the caret, the selection and the pointer are the input's.
+   The backdrop's font, padding and border widths are copied from the input at run time
+   (Js8ComposeBox `follow`), and its track follows the input's horizontal scroll. */
+.js8-compose-wrap {
+  flex: 1 1 12em;
+  position: relative;
+  display: flex;
+  min-width: 0;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
 .js8-compose {
   flex: 1 1 12em;
 }
@@ -27371,9 +27385,93 @@ button.sat-chip:disabled {
   font-size: var(--fs-label);
   color: var(--text-dim);
 }
-.js8-cq-select {
-  flex: 0 0 auto;
-  width: auto;
+.js8-compose-wrap > .js8-compose {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+}
+.js8-compose-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 0 solid transparent;
+  white-space: pre;
+  color: transparent;
+}
+.js8-compose-track {
+  display: inline-block;
+  white-space: pre;
+}
+/* A pill's fill hugs its letters (no padding, which would move them off the input's own); the
+   ring of the same tint around it reads as the padding. */
+.js8-pill {
+  --pill: var(--accent);
+  background: color-mix(in srgb, var(--pill) 28%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pill) 28%, transparent);
+}
+.js8-pill.first {
+  border-top-left-radius: var(--radius-sm);
+  border-bottom-left-radius: var(--radius-sm);
+}
+.js8-pill.last {
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+}
+.js8-pill.relay {
+  --pill: var(--alert-info);
+}
+.js8-pill.group {
+  --pill: var(--status-new-mode);
+}
+.js8-pill.command {
+  --pill: var(--status-confirmed);
+}
+.js8-pill.sender {
+  --pill: var(--text-faint);
+}
+.js8-word-flag {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--snr-weak);
+  text-decoration-skip-ink: none;
+}
+/* Settings ▸ JS8 ▸ Composing: the saved messages, one row each, and the row that adds one. */
+.js8-saved-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.js8-saved-row,
+.js8-saved-add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.js8-saved-row .settings-input,
+.js8-saved-add .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.js8-macro-list code {
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+/* REPLY · SNR · INFO · STATUS · Saved (Js8ComposeActions), leading the CQ row as one group that
+   wraps as a group when the row runs out of width. */
+.js8-quick-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 /* Three faces for a second-act chip: off · on-but-not-armed (the switch is on but something
    else it needs is not: the session TX latch, a clear idle watchdog, HB or AUTOREPLY — nothing

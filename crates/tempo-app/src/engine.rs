@@ -5514,6 +5514,8 @@ impl Engine {
             groups: Vec::new(),
             info: String::new(),
             status: String::new(),
+            cq_text: String::new(),
+            reply_text: String::new(),
             allcall_reply_interval_ms: 15 * 60 * 1000,
             autoreply_confirmation: true,
             autoreply_allow: Vec::new(),
@@ -56340,7 +56342,7 @@ mod tests {
         e.settings.js8_cq_interval_min = 1;
         e.js8_apply_station_config();
         e.js8_enter();
-        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        e.js8_set_cq_repeat(true).expect("the session CQ toggle");
         assert!(!e.tx_enabled(), "the FIRST act was never given");
         let st = e.js8_state();
         assert!(st.cq_on, "the switch is on…");
@@ -56377,7 +56379,7 @@ mod tests {
         e.js8_enter();
         e.set_tx_offset(1500.0);
         e.set_tx_enabled(true);
-        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        e.js8_set_cq_repeat(true).expect("the session CQ toggle");
         assert!(e.js8_state().armed.cq, "both acts present → armed");
         // The once-a-second service tick is what moves a due CQ into the outbox.
         e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
@@ -56418,7 +56420,7 @@ mod tests {
         e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
         let base = tempo_core::timing::now_unix_ms() as u64;
         let s0 = js8_slot_now();
@@ -56461,7 +56463,7 @@ mod tests {
             e.js8_apply_station_config();
             e.js8_enter();
             e.set_tx_enabled(true);
-            e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+            e.js8_set_cq_repeat(true).expect("CQ repeat on");
             e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
             assert!(
                 e.js8_state().cq_on && !e.js8_state().queue.is_empty(),
@@ -56516,7 +56518,7 @@ mod tests {
         e.js8_apply_station_config();
         e.js8_enter();
         e.set_tx_enabled(true);
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         let base = tempo_core::timing::now_unix_ms() as u64;
         let s0 = js8_slot_now();
         for min in 1..=10u64 {
@@ -56587,7 +56589,7 @@ mod tests {
         e.settings.js8_hb_networking = true; // HB needs heartbeat networking (JS8Call)
         e.js8_enter();
         e.set_tx_enabled(true);
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
         assert!(e.js8_state().cq_on, "precondition");
         e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
@@ -56608,7 +56610,7 @@ mod tests {
         e.js8_apply_station_config();
         e.js8_enter();
         e.set_tx_enabled(true);
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
         e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
         assert!(
@@ -56686,7 +56688,7 @@ mod tests {
         e.js8_send(None, "TEST".to_string()).expect("queues");
         assert_eq!(e.tx_watchdog_start, None, "js8_send restarts the clock");
         e.tx_watchdog_start = Some(1);
-        e.js8_call_cq(0).expect("queues");
+        e.js8_call_cq().expect("queues");
         assert_eq!(e.tx_watchdog_start, None, "js8_call_cq restarts the clock");
         e.tx_watchdog_start = Some(1);
         e.js8_send_command(
@@ -56768,7 +56770,7 @@ mod tests {
             let mut e = Engine::new("KD9TAW", "EN52", 0);
             e.js8_enter();
             e.set_tx_enabled(true);
-            e.js8_call_cq(0).expect("queues");
+            e.js8_call_cq().expect("queues");
             let plan = e.plan_tx(js8_slot_now() + 1).expect("plans");
             let wave = plan.waveform.build();
             assert!(!wave.is_empty());

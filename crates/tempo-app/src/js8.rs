@@ -97,6 +97,24 @@ fn js8_rng_next(state: &mut u32) -> u32 {
     x
 }
 
+/// JS8Call's word check for the compose box (`js8::proto::suggest::needs_suggestion`): one answer
+/// per word, in order, true where JS8Call underlines the word. The JSC dictionary only: no engine
+/// state, and it keys nothing.
+pub fn js8_word_check(words: &[String]) -> Vec<bool> {
+    words
+        .iter()
+        .map(|w| ::js8::proto::suggest::needs_suggestion(w))
+        .collect()
+}
+
+/// What JS8Call's right-click offers for an underlined word (`js8::proto::suggest::suggestions`):
+/// up to five cheaper words, cheapest first. The JSC dictionary only; it keys nothing.
+pub fn js8_word_suggestions(word: &str) -> Js8WordSuggestions {
+    ::js8::proto::suggest::suggestions(word, ::js8::proto::suggest::OFFERED)
+}
+
+pub use ::js8::proto::suggest::Suggestions as Js8WordSuggestions;
+
 impl Engine {
     /// ONE place Settings → `StationConfig` (an associated fn on `&Settings`, so the arm
     /// verbs and `js8_apply_station_config` build it from the SAME source the persisted
@@ -132,6 +150,8 @@ impl Engine {
                 .collect(),
             info: s.js8_info.clone(),
             status: s.js8_status.clone(),
+            cq_text: s.js8_cq_text.clone(),
+            reply_text: s.js8_reply_text.clone(),
             allcall_reply_interval_ms: JS8_ALLCALL_INTERVAL_MS,
             autoreply_confirmation: s.js8_autoreply_confirmation,
             autoreply_allow: js8_call_list(&s.js8_autoreply_allow),
@@ -925,13 +945,14 @@ impl Engine {
         r
     }
 
-    /// CQ (`idx` into the CQS table: 0 "CQ CQ CQ" … 7 "CQ"). Counts as Operator origin.
-    pub fn js8_call_cq(&mut self, idx: u8) -> Result<(), String> {
+    /// CQ: the CQ message from Settings (`js8_cq_text`, JS8Call's `CQMessage`), its macros
+    /// replaced (`Station::call_cq`). Counts as Operator origin.
+    pub fn js8_call_cq(&mut self) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         self.js8_restart_idle_clock(now_ms);
         let r = self.js8_identity_set().and_then(|()| {
             self.js8_station
-                .call_cq(idx, now_ms)
+                .call_cq(now_ms)
                 .map_err(Self::js8_compose_error)
         });
         self.js8_after_verb(&r);
@@ -1043,17 +1064,17 @@ impl Engine {
         self.js8_hb_on = self.js8_station.hb_on();
     }
 
-    /// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant, ignored when disarming).
+    /// Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings.
     /// The SECOND act, session-only and never persisted — the same rule the heartbeat toggle
     /// follows (G3), so a crash or a relaunch can never come back calling CQ. Arming keys
     /// nothing: `plan_js8_tx` re-reads the TX latch every slot, and the idle watchdog, Stop
     /// TX, a tier change and a mode change each cancel the schedule.
-    pub fn js8_set_cq_repeat(&mut self, on: bool, idx: u8) -> Result<(), String> {
+    pub fn js8_set_cq_repeat(&mut self, on: bool) -> Result<(), String> {
         let now_ms = tempo_core::timing::now_unix_ms() as u64;
         // An operator verb: on or off, it restarts the idle count and ends an idle trip; on, it
         // restarts the wall clock.
         self.js8_restart_idle_clock(now_ms);
-        self.js8_station.set_cq(on, idx, now_ms);
+        self.js8_station.set_cq(on, now_ms);
         if on {
             self.reset_tx_watchdog();
         }
@@ -2205,7 +2226,7 @@ mod tests {
     #[test]
     fn a_js8_cq_with_a_six_character_locator_keys_one_over() {
         let mut e = hb_engine("EN52HW", 0, 1500.0);
-        e.js8_call_cq(0).expect("CQ queued");
+        e.js8_call_cq().expect("CQ queued");
         let overs = run_js8_loop(&mut e, 60);
         assert_eq!(
             overs.len(),
@@ -2223,6 +2244,61 @@ mod tests {
             booked,
             vec!["KD9TAW: @ALLCALL CQ CQ CQ EN52".to_string()],
             "…booked once, with the square it carried"
+        );
+    }
+
+    /// The compose box's word check and suggestions reach the dictionary.
+    #[test]
+    fn the_word_check_and_suggestions_answer_from_the_dictionary() {
+        let words: Vec<String> = ["HELLOX", "HELLO", "KD9TAW", "TNX"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(js8_word_check(&words), vec![true, false, false, false]);
+        let s = js8_word_suggestions("HELLOX");
+        assert!(
+            s.found && s.words.first().map(String::as_str) == Some("HELLO"),
+            "{s:?}"
+        );
+    }
+
+    /// What the operator's own CQs read as, booked in the activity (the text each over carried).
+    fn booked_mine(e: &Engine) -> Vec<String> {
+        e.js8_state()
+            .activity
+            .iter()
+            .filter(|r| r.mine)
+            .map(|r| r.text.clone())
+            .collect()
+    }
+
+    /// The CQ message is a Setting (JS8Call's `CQMessage`): set to `CQ DX <MYGRID4>`, the clicked
+    /// CQ keys one over on the real path, booked as the CQ DX it carried, and the CQ repeat keys
+    /// the same words from the same Setting.
+    #[test]
+    fn the_cq_message_in_settings_is_what_the_js8_cq_and_its_repeat_key() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_cq_text = "CQ DX <MYGRID4>".into();
+        e.js8_apply_station_config();
+        e.js8_call_cq().expect("CQ queued");
+        let overs = run_js8_loop(&mut e, 60);
+        assert_eq!(overs.len(), 1, "one CQ over, got {overs:?}");
+        assert_eq!(
+            booked_mine(&e),
+            vec!["KD9TAW: @ALLCALL CQ DX EN52".to_string()]
+        );
+
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.settings.js8_cq_text = "CQ QRP <MYGRID4>".into();
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
+        let overs = run_js8_loop(&mut e, 150);
+        assert!(!overs.is_empty(), "control: the repeat keyed");
+        let booked = booked_mine(&e);
+        assert!(
+            !booked.is_empty() && booked.iter().all(|t| t == "KD9TAW: @ALLCALL CQ QRP EN52"),
+            "every repeated CQ is the CQ message: {booked:?}"
         );
     }
 
@@ -2396,7 +2472,7 @@ mod tests {
             let snr = Command::SnrQuery.id();
             let query = e.js8_send_command("W1AW".into(), snr, String::new());
             assert_eq!(query, refused, "{grid:?}: a directed query");
-            assert_eq!(e.js8_call_cq(0), refused, "{grid:?}: a CQ");
+            assert_eq!(e.js8_call_cq(), refused, "{grid:?}: a CQ");
             let st = e.js8_state();
             assert!(
                 st.queue.is_empty(),
@@ -2432,7 +2508,7 @@ mod tests {
         e.js8_apply_station_config();
         e.js8_send(None, "FIRST".into()).expect("queues");
         e.js8_send(None, "SECOND".into()).expect("queues");
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         e.settings.mygrid = "EN5".into(); // a slip in Settings
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let refused = run_js8_loop_from(&mut e, t0, 75); // the CQ repeat queues its call at 60 s
@@ -3049,8 +3125,8 @@ mod tests {
             }),
             ("HB on", |e| e.js8_arm(Js8Switch::Hb, true).unwrap()),
             ("HB off", |e| e.js8_arm(Js8Switch::Hb, false).unwrap()),
-            ("CQ repeat on", |e| e.js8_set_cq_repeat(true, 0).unwrap()),
-            ("CQ repeat off", |e| e.js8_set_cq_repeat(false, 0).unwrap()),
+            ("CQ repeat on", |e| e.js8_set_cq_repeat(true).unwrap()),
+            ("CQ repeat off", |e| e.js8_set_cq_repeat(false).unwrap()),
             ("Drop queue", |e| e.js8_drop_queue()),
             ("Yes", |e| {
                 let _ = e.js8_answer_reply(true, "W1AW SNR -07".into(), 0);
@@ -3073,7 +3149,7 @@ mod tests {
                 e.js8_send_command("W1AW".into(), Command::SnrQuery.id(), String::new())
                     .unwrap()
             }),
-            ("CQ", |e| e.js8_call_cq(0).unwrap()),
+            ("CQ", |e| e.js8_call_cq().unwrap()),
         ];
         for (name, act) in acts {
             let (mut e, t0) = tripped_engine();
@@ -3152,7 +3228,7 @@ mod tests {
         e.js8_apply_station_config();
         e.js8_arm(Js8Switch::HbAck, true).expect("HB ACK on");
         e.js8_arm(Js8Switch::Hb, true).expect("HB on");
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         let all = Js8Armed {
             autoreply: true,
             relay: true,
@@ -3438,7 +3514,7 @@ mod tests {
             }
             // After the MSG: traffic to me stops a repeating CQ (somebody answered).
             e.js8_arm(Js8Switch::Hb, true).unwrap();
-            e.js8_set_cq_repeat(true, 0).unwrap();
+            e.js8_set_cq_repeat(true).unwrap();
             let before = switches(&e);
             assert!(
                 before
@@ -3756,7 +3832,7 @@ mod tests {
         e.set_license_class("general");
         e.settings.js8_cq_interval_min = 1;
         e.js8_apply_station_config();
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         e.set_frequency(14.020, "20m", "USB");
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let off = run_js8_loop_from(&mut e, t0, 75); // the repeat queues its call at 60 s
@@ -3853,7 +3929,7 @@ mod tests {
         let mut e = hb_engine("EN52", 0, 1500.0);
         e.settings.js8_cq_interval_min = 1;
         e.js8_apply_station_config();
-        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_set_cq_repeat(true).expect("CQ repeat on");
         e.set_tx_enabled(false);
         let t0 = tempo_core::timing::now_unix_ms() as u64;
         let off = run_js8_loop_from(&mut e, t0, 75); // the repeat queues its call at 60 s

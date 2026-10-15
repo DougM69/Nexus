@@ -3437,9 +3437,10 @@ export async function js8SendCommand(to: string, cmd: number, arg: string): Prom
   return invoke<Js8State>('js8_send_command', { to, cmd, arg })
 }
 
-/** Call CQ (`idx` = the CQ variant 0..7: "CQ CQ CQ" … "CQ"). */
-export async function js8CallCq(idx: number): Promise<Js8State> {
-  return invoke<Js8State>('js8_call_cq', { idx })
+/** Call CQ with the CQ message from Settings (`js8CqText`, JS8Call's CQ message), its macros
+ * replaced by the station. */
+export async function js8CallCq(): Promise<Js8State> {
+  return invoke<Js8State>('js8_call_cq')
 }
 
 /** The SECOND act of the two-act rule: autoreply | relay | hback | hbnet (persisted) or hb
@@ -3449,11 +3450,11 @@ export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
   return invoke<Js8State>('js8_arm', { which, on })
 }
 
-/** Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). Session-only and
- * never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
+/** Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings. Session-only
+ * and never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
  * Arming keys nothing — the session TX latch is the first act. */
-export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
-  return invoke<Js8State>('js8_cq_repeat', { on, idx })
+export async function js8CqRepeat(on: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_cq_repeat', { on })
 }
 
 /** The native cockpit's compose box, both ways: whether it holds text, and the id of the reply
@@ -3473,6 +3474,23 @@ export async function js8Typeahead(sentSeen: number, unsent: string): Promise<Js
 /** What the compose box shows of the operator's message going out, or null once it has gone. */
 export async function js8TypeaheadState(): Promise<Js8Typeahead | null> {
   return invoke<Js8Typeahead | null>('js8_typeahead_state')
+}
+
+/** The compose box's words JS8Call underlines (its word check): one answer per word, in order,
+ * true where the JSC dictionary codes the word in pieces. The dictionary only; nothing keys. */
+export async function js8WordCheck(words: string[]): Promise<boolean[]> {
+  return invoke<boolean[]>('js8_word_check', { words })
+}
+
+/** What JS8Call's right-click offers for an underlined word. */
+export interface Js8WordSuggestions {
+  /** Up to five cheaper words, cheapest first. */
+  words: string[]
+  /** The dictionary holds some prefix of the word: "No suggestions" when `words` is empty. */
+  found: boolean
+}
+export async function js8WordSuggestions(word: string): Promise<Js8WordSuggestions> {
+  return invoke<Js8WordSuggestions>('js8_word_suggestions', { word })
 }
 
 /** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's

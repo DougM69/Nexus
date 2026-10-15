@@ -354,6 +354,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'digital',
     keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
       'store and forward', 'slow', 'normal', 'fast', 'turbo', 'js8 40', 'js8 60', 'ultra', '7.078', '14.078',
+      'cq message', 'reply message', 'saved messages', 'macros', 'send at once', 'immediately transmit',
+      'pills', 'word suggestions', 'spellcheck',
       'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
       'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
       'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
