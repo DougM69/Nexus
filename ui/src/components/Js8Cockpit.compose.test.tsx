@@ -185,32 +185,77 @@ describe('the CQ button sends the CQ message in Settings, or puts it in the box'
 })
 
 describe('REPLY, SNR, INFO and STATUS', () => {
-  it('REPLY needs a call in the To box, and sends the reply message to it, leaving the box alone', async () => {
+  // JS8Call's buttons put their words in the box at the caret (`addMessageText`) and then press its
+  // TX button (`toggleTx(true)`, mainwindow.cpp:4579-4640): the whole box goes, what was typed in it
+  // included, as Send would send it, and the box empties once the engine has it. REPLY's and SNR's
+  // words carry the call, `W1AW HW CPY?` and `W1AW SNR -03`, as JS8Call's do; INFO's, STATUS's and a
+  // saved message's do not.
+  it('REPLY needs a call in the To box; it puts the call and the reply message in the box and sends the box, typing and all', async () => {
     await renderCockpit()
     const reply = q<HTMLButtonElement>('.js8-reply')
     expect(reply.disabled).toBe(true)
     type(toBox(), 'w1aw')
     type(box(), 'TNX')
     expect(reply.disabled).toBe(false)
+    expect(reply.title).toBe(t('js8.dock.quick.reply.send', { call: 'W1AW' }))
     await click(reply)
-    expect(js8Send).toHaveBeenCalledWith('W1AW', 'HW CPY?')
-    expect(box().value).toBe('TNX')
+    expect(js8Send).toHaveBeenCalledTimes(1)
+    expect(js8Send).toHaveBeenCalledWith('W1AW', 'TNX W1AW HW CPY?')
+    expect(box().value).toBe('')
+  })
+
+  it('REPLY with a command picked sends the box as a message, the command back to none, as its words carry their own', async () => {
+    await renderCockpit()
+    type(toBox(), 'W1AW')
+    fireEvent.change(q<HTMLSelectElement>('.js8-cmd-select'), { target: { value: '9' } })
+    type(box(), 'TNX')
+    await click(q('.js8-reply'))
+    expect(js8SendCommand).not.toHaveBeenCalled()
+    expect(js8Send).toHaveBeenCalledWith('W1AW', 'TNX W1AW HW CPY?')
+    expect(q<HTMLSelectElement>('.js8-cmd-select').value).toBe('')
+  })
+
+  it('SNR, INFO and STATUS send the box with their words in it too, to the To box call or to everyone', async () => {
+    await renderCockpit({ info: 'QTH <MYGRID4>' })
+    type(toBox(), 'W1AW')
+    type(box(), 'GM')
+    await click(q('.js8-snr-send'))
+    expect(js8Send).toHaveBeenLastCalledWith('W1AW', 'GM W1AW SNR -03')
+    type(box(), 'TU')
+    await click(q('.js8-info'))
+    expect(js8Send).toHaveBeenLastCalledWith('W1AW', 'TU INFO QTH EN52')
+    type(toBox(), '')
+    type(box(), 'HELLO ALL')
+    await click(q('.js8-status'))
+    expect(js8Send).toHaveBeenLastCalledWith(null, 'HELLO ALL STATUS IDLE 0M VERSION NEXUS')
+    expect(js8Send).toHaveBeenCalledTimes(3)
+    expect(box().value).toBe('')
+  })
+
+  it('a send the station refuses leaves the words in the box, as JS8Call leaves them', async () => {
+    await renderCockpit({}, { snap: { ...snap, mycall: '' } as AppSnapshot })
+    type(toBox(), 'W1AW')
+    type(box(), 'TNX')
+    await click(q('.js8-reply'))
+    expect(js8Send).not.toHaveBeenCalled()
+    expect(toast.pushToast).toHaveBeenCalledWith(t('js8.toast.noCallsign'), 'info', 3500)
+    expect(box().value).toBe('TNX W1AW HW CPY?')
   })
 
   it('REPLY replaces every macro it can value and prunes the rest', async () => {
     await renderCockpit({ replyText: '<CALL> DE <MYCALL> <SNR> <TDELTA><FOO>' })
     type(toBox(), 'W1AW')
     await click(q('.js8-reply'))
-    expect(js8Send).toHaveBeenCalledWith('W1AW', 'W1AW DE KD9TAW -03 -120 MS')
+    expect(js8Send).toHaveBeenCalledWith('W1AW', 'W1AW W1AW DE KD9TAW -03 -120 MS')
   })
 
-  it('with "send at once" off, REPLY puts the reply at the caret and clears the command, sending nothing', async () => {
+  it('with "send at once" off, REPLY puts the call and the reply at the caret and clears the command, sending nothing', async () => {
     await renderCockpit({ sendAtOnce: false })
     type(toBox(), 'W1AW')
     fireEvent.change(q<HTMLSelectElement>('.js8-cmd-select'), { target: { value: '9' } })
     type(box(), 'TNX')
     await click(q('.js8-reply'))
-    expect(box().value).toBe('TNX HW CPY?')
+    expect(box().value).toBe('TNX W1AW HW CPY?')
     expect(q<HTMLSelectElement>('.js8-cmd-select').value).toBe('')
     expect(js8Send).not.toHaveBeenCalled()
   })
@@ -223,7 +268,7 @@ describe('REPLY, SNR, INFO and STATUS', () => {
     type(toBox(), 'W1AW')
     expect(snr.disabled).toBe(false)
     await click(snr)
-    expect(js8Send).toHaveBeenCalledWith('W1AW', 'SNR -03')
+    expect(js8Send).toHaveBeenCalledWith('W1AW', 'W1AW SNR -03')
   })
 
   it('INFO is off until INFO is set; it goes to the To box call, or to everyone', async () => {
@@ -263,8 +308,20 @@ describe('the Saved menu', () => {
       t('js8.dock.saved.keep'),
     ])
     await click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'DE KD9TAW <FOO>' }))
-    // Sent pruned, as JS8Call's saved-message action replaces it.
-    expect(js8Send).toHaveBeenCalledWith('W1AW', 'DE KD9TAW ')
+    // Put in the box pruned, as JS8Call's saved-message action replaces it, and the box sent as
+    // Send sends it: its end trimmed.
+    expect(js8Send).toHaveBeenCalledWith('W1AW', 'DE KD9TAW')
+  })
+
+  it('sends the box with the saved message in it, and keeps the command, as a MSG\'s text', async () => {
+    await renderCockpit()
+    type(toBox(), 'W1AW')
+    fireEvent.change(q<HTMLSelectElement>('.js8-cmd-select'), { target: { value: '9' } })
+    type(box(), 'QRV')
+    await pick(q('.js8-saved'), 'TNX 73 GL')
+    expect(js8Send).not.toHaveBeenCalled()
+    expect(js8SendCommand).toHaveBeenCalledWith('W1AW', 9, 'QRV TNX 73 GL')
+    expect(box().value).toBe('')
   })
 
   it('with "send at once" off, a saved message goes in at the caret and keeps the command, as a MSG\'s text', async () => {

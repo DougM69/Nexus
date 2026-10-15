@@ -224,7 +224,7 @@ import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { resolveTarget } from '../settings/registry'
-import { changedSince, patchSettings } from '../settings/patch'
+import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -2930,9 +2930,19 @@ export function SettingsPanel({
   // `forced` reaches the backend whatever the form held when it loaded: the contest-over checklist's
   // put-backs, which "what changed since" would drop when a value was changed elsewhere after Settings
   // opened (a seat swap in the pop-out scoreboard) and is being put back to what the form still holds.
+  //
+  // One list another writer adds to while the form is open: the 55-minute rule puts the stations it
+  // stops on the JS8 "never acknowledge" list. The form's edit of it goes over the list as it is now
+  // (`mergeListEdit`), so a station the rule added since Settings opened is never written away.
   const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     const changes = changedSince(savedRef.current, payload)
-    return patchSettings((live) => ({ ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }))
+    return patchSettings((live) => {
+      const sent: Partial<Settings> = { ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }
+      if ('js8HbAckDeny' in sent) {
+        sent.js8HbAckDeny = mergeListEdit(savedRef.current?.js8HbAckDeny ?? [], payload.js8HbAckDeny ?? [], live.js8HbAckDeny ?? [])
+      }
+      return sent
+    })
   }
 
   // Persist the rig form to the radio it actually describes.

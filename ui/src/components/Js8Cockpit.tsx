@@ -453,33 +453,36 @@ export function Js8Cockpit({
       idleMinutes: 0,
       selected: cq ? null : js8MacroSelected(toCall, js8?.stations ?? [], js8?.activity ?? []),
     })
-  const send = () => {
+  /** Send the box: `box` its text and `cmd` its command (the one-click buttons hand over the box
+   *  they have just put their words in, before React has rendered it). */
+  const sendBox = (box: string, cmd: number | null) => {
     if (!canControl) return
     // While the box's message goes out the box already feeds it (typeahead): nothing new is queued.
     if (typeahead.active) {
-      typeahead.type(text)
+      typeahead.type(box)
       return
     }
     // Every macro the box holds, replaced and NOT pruned, as JS8Call's `createMessage` frames it
     // (mainwindow.cpp:3436-3440).
-    const body = replaceJs8Macros(text, macroValues(), false).trim()
+    const body = replaceJs8Macros(box, macroValues(), false).trim()
     const to = toCall.trim().toUpperCase()
-    if (cmdId !== null && !to) {
+    if (cmd !== null && !to) {
       pushToast(t('js8.toast.noAddressee'), 'info', 3000)
       return
     }
-    if (cmdId === null && !body) return
+    if (cmd === null && !body) return
     if (refuseIfUnready()) return
-    const call = cmdId !== null ? () => js8SendCommand(to, cmdId, body) : () => js8Send(to || null, body)
+    const call = cmd !== null ? () => js8SendCommand(to, cmd, body) : () => js8Send(to || null, body)
     void withErrorToast(call, t('js8.toast.send.failed')).then((s) => {
       if (s) {
         setJs8(s)
         setText('')
         void typeahead.begin()
-        setPrevious({ to, cmdId, text: body })
+        setPrevious({ to, cmdId: cmd, text: body })
       }
     })
   }
+  const send = () => sendBox(text, cmdId)
   const toggleSwitch = (which: Js8Switch, on: boolean) => {
     if (!canControl) return
     void withErrorToast(() => js8Arm(which, !on), t('js8.toast.arm.failed')).then((s) => {
@@ -602,16 +605,18 @@ export function Js8Cockpit({
   }
 
   // ---- JS8Call's one-click buttons and saved messages (mainwindow.cpp:4579-4640, :4960-4990) ----
-  // Each makes the words JS8Call's makes, its macros replaced and the rest pruned, then SENDS them
-  // at once (Settings ▸ JS8, JS8Call's "Immediately transmit…", on by default) or FILLS the box for
-  // Send. Sent at once, they leave what is typed in the box alone, as the station rows' asks do.
+  // Each makes the words JS8Call's makes, its macros replaced and the rest pruned, and puts them in
+  // the box at the caret, as JS8Call's `addMessageText` does; with "send at once" on (Settings ▸
+  // JS8, JS8Call's "Immediately transmit…", on by default) the WHOLE box then goes, as JS8Call's
+  // buttons then press its TX button (`toggleTx(true)`): what was typed there, with the words.
   /** `insert` into the box as JS8Call's `addMessageText` does, at the caret (`clear`: in place of
    *  everything); `to` sets the To box. The command palette goes back to "no command" — the words
-   *  carry their own — except for a saved message (`keepCmd`), which may be a MSG's text. */
-  const fill = (insert: string, o: { to?: string; clear?: boolean; keepCmd?: boolean } = {}) => {
+   *  carry their own — except for a saved message (`keepCmd`), which may be a MSG's text. The box
+   *  as it now reads, or null when nothing went in. */
+  const fill = (insert: string, o: { to?: string; clear?: boolean; keepCmd?: boolean } = {}): string | null => {
     // Nothing while the box's message goes out (typeahead): JS8Call adds no text while one is
     // queued (`addMessageText`, mainwindow.cpp:3288-3294).
-    if (typeahead.active) return
+    if (typeahead.active) return null
     const input = composeRef.current
     const now = textRef.current
     const at = js8InsertText(now, input?.selectionStart ?? now.length, input?.selectionEnd ?? now.length, insert, o.clear === true)
@@ -625,21 +630,15 @@ export function Js8Cockpit({
       el.focus({ preventScroll: true })
       el.setSelectionRange(at.caret, at.caret)
     })
+    return at.text
   }
-  /** One button's words to `to`: sent now, or into the box. */
-  const oneClick = (to: string | null, words: string, keepCmd = false) => {
+  /** One button's words into the box, and with "send at once" on the box sent, to the To box's
+   *  call or to everyone, as Send sends it. */
+  const oneClick = (words: string, keepCmd = false) => {
     if (!canControl) return
-    if (!compose.sendAtOnce) {
-      fill(words, { keepCmd })
-      return
-    }
-    if (refuseIfUnready()) return
-    void withErrorToast(() => js8Send(to, words), t('js8.toast.send.failed')).then((s) => {
-      if (s) {
-        setJs8(s)
-        setPrevious({ to: to ?? '', cmdId: null, text: words })
-      }
-    })
+    const box = fill(words, { keepCmd })
+    if (box === null || !compose.sendAtOnce) return
+    sendBox(box, keepCmd ? cmdId : null)
   }
   const boxCall = () => toCall.trim().toUpperCase()
   /** The To box's call as heard and inside JS8Call's callsign aging, which SNR needs (:4598-4606). */
@@ -649,30 +648,28 @@ export function Js8Cockpit({
     const aged = h != null && callsignAgingMin > 0 && Math.trunc((js8DisplayNow(js8) - h.lastMs) / 60_000) >= callsignAgingMin
     return sel && !aged ? sel : null
   }
-  // REPLY (:4579-4589): the reply message, to the selected call.
+  // REPLY (:4579-4589): the selected call and the reply message, `<call> <reply>` as JS8Call puts it
+  // in its box.
   const sendReply = () => {
     const to = boxCall()
-    if (to) oneClick(to, replaceJs8Macros(compose.replyText, macroValues(), true))
+    if (to) oneClick(`${to} ${replaceJs8Macros(compose.replyText, macroValues(), true)}`)
   }
-  // SNR (:4591-4616): the selected call's report as heard.
+  // SNR (:4591-4616): the selected call and its report as heard, `<call> SNR <snr>`.
   const sendSnr = () => {
     const sel = heardSelected()
-    if (sel) oneClick(sel.call, `${JS8_COMMANDS[25].label} ${js8FormatSnr(sel.snrDb)}`)
+    if (sel) oneClick(`${sel.call} ${JS8_COMMANDS[25].label} ${js8FormatSnr(sel.snrDb)}`)
   }
   // INFO (:4618-4628) and STATUS (:4630-4640): to the selected call, or to everyone.
   const sendInfo = () => {
     if (compose.info.trim() === '') return
-    oneClick(boxCall() || null, `${JS8_COMMANDS[17].label} ${replaceJs8Macros(compose.info.trim(), macroValues(), true)}`)
+    oneClick(`${JS8_COMMANDS[17].label} ${replaceJs8Macros(compose.info.trim(), macroValues(), true)}`)
   }
   const sendStatus = () =>
-    oneClick(
-      boxCall() || null,
-      `${JS8_COMMANDS[7].label} ${replaceJs8Macros(compose.status.trim() || JS8_DEFAULT_STATUS, macroValues(), true)}`,
-    )
+    oneClick(`${JS8_COMMANDS[7].label} ${replaceJs8Macros(compose.status.trim() || JS8_DEFAULT_STATUS, macroValues(), true)}`)
   // A saved message (:4964-4970): it may be a MSG's text, so the command stays.
   const sendSaved = (i: number) => {
     const m = compose.savedMessages[i]
-    if (m !== undefined) oneClick(boxCall() || null, replaceJs8Macros(m, macroValues(), true), true)
+    if (m !== undefined) oneClick(replaceJs8Macros(m, macroValues(), true), true)
   }
   // "Restore Previous Message": the last message sent, back in the box in place of what is there.
   const restorePrevious = () => {

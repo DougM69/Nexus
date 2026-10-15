@@ -7800,7 +7800,7 @@ export const EN = {
     'On by default, as in JS8Call (its pause while in a QSO). While the cockpit’s To box holds a call, the heartbeat repeat pauses and starts again one interval after you clear the box, no heartbeat is acknowledged, and a repeating CQ stops. Turning the heartbeat repeat on clears the To box.',
   'settings.js8.hbAckRateLimit.label': 'Don’t acknowledge stations that heartbeat more often than every 55 minutes',
   'settings.js8.hbAckRateLimit.hint':
-    'Off by default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its last acknowledged heartbeat gets no acknowledgement then or later, and the cockpit’s HB ACK chip names it. Turning this off forgets those stations.',
+    'Off by default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its last acknowledged heartbeat is added to Never acknowledge heartbeats from these callsigns, as JS8Call adds it to its list, and the cockpit’s HB ACK chip names it. Take it off that list to acknowledge it again; turning this off leaves the list as it is.',
   'settings.js8.avoidAllcall.label': 'Do not take part in @ALLCALL',
   'settings.js8.avoidAllcall.hint':
     'Off by default, as in JS8Call. On, nothing addressed to @ALLCALL is answered (a QUERY MSGS included) or marked as addressed to you, and @ALLCALL leaves the To box’s list. Heartbeats and CQs are handled as before.',
@@ -7836,7 +7836,7 @@ export const EN = {
     'Off by default, as in JS8Call. On, the radio stays keyed from the end of one frame of a message until the next frame starts, instead of dropping PTT after each frame and keying again. PTT still drops after the last frame, and at once when you stop transmitting.',
   'settings.js8.txOffsetWhileSending.label': 'Allow TX offset changes while sending',
   'settings.js8.txOffsetWhileSending.hint':
-    'Off by default, as in JS8Call: while a message is waiting to go or going out, the TX offset stays where it is. On, you can move it, and the frames still to go are sent at the new offset.',
+    'Off by default, as in JS8Call: while a message is waiting to go or going out, the TX offset stays where it is. On, you can move it at once: the frame on the air moves too, from where it has got to, and the frames still to go are sent at the new offset.',
   // The compose box as JS8Call 3.0.3 keeps it (Js8ComposeSettings). `{{default}}` is JS8Call's own
   // default text, a protocol token; the CQ forms and the macro list are tokens drawn by the panel.
   'settings.js8.compose.title': 'Composing',
@@ -10095,18 +10095,18 @@ export const EN = {
   // are the mode's own words and are drawn by the dock.
   'js8.dock.quick.aria': 'One-click messages',
   'js8.dock.quick.needsCall': 'Put a call in the To box first.',
-  'js8.dock.quick.reply.send': 'Send your reply message to {{call}}.',
+  'js8.dock.quick.reply.send': 'Put your reply message to {{call}} in the compose box and send the box.',
   'js8.dock.quick.reply.fill': 'Put your reply message to {{call}} in the compose box.',
   'js8.dock.quick.snr.notHeard': 'No report to send: {{call}} has not been heard lately.',
-  'js8.dock.quick.snr.send': 'Send {{call}} the signal report you hear.',
+  'js8.dock.quick.snr.send': 'Put the signal report you hear from {{call}} in the compose box and send the box.',
   'js8.dock.quick.snr.fill': 'Put the signal report you hear from {{call}} in the compose box.',
   'js8.dock.quick.info.unset': 'Set INFO in Settings ▸ Digital ▸ JS8 to send it.',
-  'js8.dock.quick.info.send': 'Send your INFO, to the call in the To box or to everyone.',
+  'js8.dock.quick.info.send': 'Put your INFO in the compose box and send the box, to the call in the To box or to everyone.',
   'js8.dock.quick.info.fill': 'Put your INFO in the compose box.',
-  'js8.dock.quick.status.send': 'Send your STATUS, to the call in the To box or to everyone.',
+  'js8.dock.quick.status.send': 'Put your STATUS in the compose box and send the box, to the call in the To box or to everyone.',
   'js8.dock.quick.status.fill': 'Put your STATUS in the compose box.',
   'js8.dock.saved.label': 'Saved',
-  'js8.dock.saved.title.send': 'Saved messages. Pick one to send it, to the call in the To box or to everyone.',
+  'js8.dock.saved.title.send': 'Saved messages. Pick one to put it in the compose box and send the box, to the call in the To box or to everyone.',
   'js8.dock.saved.title.fill': 'Saved messages. Pick one to put it in the compose box.',
   'js8.dock.saved.restore': 'Restore previous message',
   'js8.dock.saved.none': 'No saved messages',

@@ -388,3 +388,32 @@ describe('Settings ▸ Digital ▸ JS8 ▸ Sending', () => {
     )
   })
 })
+
+// The 55-minute rule puts the stations it stops on "Never acknowledge heartbeats from these
+// callsigns" from the station itself, as JS8Call's addToHbBlacklist does (Configuration.cpp:
+// 1226-1231), while this form may be open. The form's Save carries only what the operator changed,
+// over the settings the backend holds at the Save, and its edit of that list is made against the
+// list as it is then: a station the rule added after Settings opened is never written away.
+describe('Settings ▸ Digital ▸ JS8: the never-acknowledge list the 55-minute rule adds to', () => {
+  it('keeps a station the rule added while Settings was open, the list edited or not', async () => {
+    const loaded = { ...defaultSettings, ...js8Defaults, mycall: 'KD9TAW', mygrid: 'EN52', js8HbAckDeny: ['N0XYZ', 'K9ZZZ'] }
+    api.get('getSettings').mockImplementation(() => Promise.resolve(loaded as never))
+    const fs = await openJs8()
+    const list = control(fs, 'Never acknowledge heartbeats from these callsigns') as HTMLInputElement
+    expect(list.value, 'the form shows the list it loaded').toBe('N0XYZ, K9ZZZ')
+    // The rule adds W1AW in the backend; the open form still holds what it loaded.
+    const live = { ...loaded, js8HbAckDeny: ['N0XYZ', 'K9ZZZ', 'W1AW'] }
+    api.get('getSettings').mockImplementation(() => Promise.resolve(live as never))
+    const sent = () => (api.get('setSettings').mock.lastCall?.[0] as Settings | undefined)?.js8HbAckDeny
+    // Another field saved: the list is the backend's, W1AW in it.
+    fireEvent.change(control(fs, 'Idle watchdog (minutes)'), { target: { value: '30' } })
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalledTimes(1))
+    expect(sent(), 'another field saved').toEqual(['N0XYZ', 'K9ZZZ', 'W1AW'])
+    // The list itself edited, K9ZZZ out and K1ABC in: the edit goes over the list as it is now.
+    fireEvent.change(list, { target: { value: 'N0XYZ, K1ABC' } })
+    await clickSave()
+    await waitFor(() => expect(api.get('setSettings')).toHaveBeenCalledTimes(2))
+    expect(sent(), 'the list edited').toEqual(['N0XYZ', 'W1AW', 'K1ABC'])
+  })
+})
