@@ -36,6 +36,7 @@ import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { Js8InboxDropped } from './Js8InboxDropped'
+import { Js8InboxTooLongNote } from './Js8InboxTooLong'
 import { Js8StoreMessage } from './Js8StoreMessage'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
@@ -1099,6 +1100,7 @@ export function Js8Cockpit({
               </span>
               <span className="js8-cell js8-text">{m.text}</span>
               {m.path.length > 1 && <span className="js8-cell js8-path">{m.path.join('>')}</span>}
+              <Js8InboxTooLongNote id={m.id} tooLong={js8.inboxTooLong} />
               {m.state === 'unread' && (
                 <button
                   type="button"

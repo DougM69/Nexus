@@ -2254,6 +2254,8 @@ export const ES: PartialCatalog = {
   "js8.inbox.dropped.bytes.mine": "Tus mensajes pueden ocupar como máximo 64 KB; este dejó sitio a uno nuevo",
   "js8.inbox.dropped.clear.label": "Borrar avisos",
   "js8.inbox.dropped.clear.title": "Borrar estos avisos de mensajes que la bandeja quitó",
+  "js8.inbox.tooLong.fits": "No se ofrece a esta velocidad: entregarlo lleva {{frames}} tramas y una transmisión admite {{max}}. Se ofrece en {{speed}}.",
+  "js8.inbox.tooLong.never": "No se ofrece: entregarlo lleva {{frames}} tramas, más de las que admite una transmisión a cualquier velocidad.",
   "js8.dock.aria": "Redactor JS8",
   "js8.dock.to.placeholder": "Para — un indicativo, @ALLCALL o @GRUPO (vacío = todos)",
   "js8.dock.to.aria": "Destinatario",

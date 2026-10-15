@@ -2883,6 +2883,8 @@
 "5","js8.inbox.dropped.bytes.mine","Your messages may take at most 64 KB; this one made room for a new one","","KB","Why one of your own messages was removed."
 "5","js8.inbox.dropped.clear.label","Clear notes","","","Button under those notes in the JS8 Inbox."
 "5","js8.inbox.dropped.clear.title","Clear these notes of messages the inbox removed","","","Tooltip on the Clear notes button."
+"5","js8.inbox.tooLong.fits","Not offered at this speed: handing it over takes {{frames}} frames, one transmission holds {{max}}. Offered at {{speed}}.","","{{frames}} | {{max}} | {{speed}}","On a JS8 Inbox row: a message held for another station is too long to hand over in one transmission at the current speed, so it is not offered yet. {{speed}} is a JS8 speed name (Slow, Normal, Fast, Turbo), kept in English."
+"5","js8.inbox.tooLong.never","Not offered: handing it over takes {{frames}} frames, more than one transmission holds at any speed.","","{{frames}}","On a JS8 Inbox row: a message held for another station is too long to hand over in one transmission at any speed."
 "5","js8.dock.aria","JS8 composer","","JS8",""
 "5","js8.dock.to.placeholder","To — a callsign, @ALLCALL or @GROUP (blank = everyone)","","@ALLCALL","@ALLCALL is a JS8 address and stays as it is. In ""@GROUP"", GROUP stands for the name of any group, written with an @ in front."
 "5","js8.dock.to.aria","Addressee","","","One-word control on: JS8 cockpit — the message dock. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Portuguese word."

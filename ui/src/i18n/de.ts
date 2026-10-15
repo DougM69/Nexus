@@ -6720,6 +6720,8 @@ export const DE: PartialCatalog = {
   "js8.inbox.dropped.bytes.mine": "Ihre Nachrichten dürfen höchstens 64 KB belegen; diese hat Platz für eine neue gemacht",
   "js8.inbox.dropped.clear.label": "Hinweise löschen",
   "js8.inbox.dropped.clear.title": "Diese Hinweise auf vom Posteingang entfernte Nachrichten löschen",
+  "js8.inbox.tooLong.fits": "Bei diesem Tempo nicht angeboten: die Übergabe braucht {{frames}} Frames, eine Aussendung fasst {{max}}. Angeboten bei {{speed}}.",
+  "js8.inbox.tooLong.never": "Nicht angeboten: die Übergabe braucht {{frames}} Frames, mehr als eine Aussendung bei jedem Tempo fasst.",
   "js8.dock.aria": "JS8-Eingabe",
   "js8.dock.to.placeholder": "An — Rufzeichen, @ALLCALL oder @GRUPPE (leer = alle)",
   "js8.dock.to.aria": "Empfänger",

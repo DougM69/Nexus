@@ -2254,6 +2254,8 @@ export const FR: PartialCatalog = {
   "js8.inbox.dropped.bytes.mine": "Vos messages occupent au plus 64 Ko ; celui-ci a fait place à un nouveau",
   "js8.inbox.dropped.clear.label": "Effacer les avis",
   "js8.inbox.dropped.clear.title": "Effacer ces avis de messages retirés de la boîte",
+  "js8.inbox.tooLong.fits": "Non proposé à cette vitesse : le remettre prend {{frames}} trames, une émission en contient {{max}}. Proposé en {{speed}}.",
+  "js8.inbox.tooLong.never": "Non proposé : le remettre prend {{frames}} trames, plus qu’une émission n’en contient à n’importe quelle vitesse.",
   "js8.dock.aria": "Composeur JS8",
   "js8.dock.to.placeholder": "À — un indicatif, @ALLCALL ou @GROUPE (vide = tout le monde)",
   "js8.dock.to.aria": "Destinataire",

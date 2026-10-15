@@ -6320,6 +6320,8 @@ export const JA: PartialCatalog = {
   "js8.inbox.dropped.bytes.mine": "自局宛てのメッセージは最大 64 KB までです。新しいメッセージのためにこのメッセージが削除されました",
   "js8.inbox.dropped.clear.label": "通知を消去",
   "js8.inbox.dropped.clear.title": "受信箱が削除したメッセージの通知を消去します",
+  "js8.inbox.tooLong.fits": "この速度では提示しません: 渡すには {{frames}} フレームが必要で、1 回の送信は {{max}} フレームまでです。{{speed}} で提示します。",
+  "js8.inbox.tooLong.never": "提示しません: 渡すには {{frames}} フレームが必要で、どの速度でも 1 回の送信に収まりません。",
   "js8.dock.aria": "JS8 作成欄",
   "js8.dock.to.placeholder": "宛先 — コールサイン、@ALLCALL または @グループ（空欄 = 全局）",
   "js8.dock.to.aria": "宛先",

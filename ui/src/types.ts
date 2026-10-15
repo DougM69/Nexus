@@ -1942,6 +1942,16 @@ export interface Js8InboxDrop {
   entry: Js8InboxEntry
 }
 
+/** A held message too long to hand over at the current speed, which the station does not offer:
+ * its hand-over needs `frames`, one transmission at this speed holds `max`, and it goes at
+ * `fitsAt` (null: at no speed). */
+export interface Js8InboxTooLong {
+  id: number
+  frames: number
+  max: number
+  fitsAt: Js8Speed | null
+}
+
 /** One outbox row (empty in the receive-only build). */
 export interface Js8QueueRow {
   origin: Js8Origin
@@ -1999,6 +2009,9 @@ export interface Js8State {
   inbox: Js8InboxEntry[]
   /** What a cap took out of the inbox, oldest first, at most ten. Absent while there are none. */
   inboxDropped?: Js8InboxDrop[]
+  /** Held messages too long to hand over at the current speed. Absent while there are none, and
+   * from the Remote page's sample. */
+  inboxTooLong?: Js8InboxTooLong[]
   queue: Js8QueueRow[]
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */

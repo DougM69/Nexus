@@ -10034,6 +10034,8 @@ export const EN = {
   'js8.inbox.dropped.bytes.mine': 'Your messages may take at most 64 KB; this one made room for a new one',
   'js8.inbox.dropped.clear.label': 'Clear notes',
   'js8.inbox.dropped.clear.title': 'Clear these notes of messages the inbox removed',
+  'js8.inbox.tooLong.fits': 'Not offered at this speed: handing it over takes {{frames}} frames, one transmission holds {{max}}. Offered at {{speed}}.',
+  'js8.inbox.tooLong.never': 'Not offered: handing it over takes {{frames}} frames, more than one transmission holds at any speed.',
 
   // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
   'js8.dock.aria': 'JS8 composer',
