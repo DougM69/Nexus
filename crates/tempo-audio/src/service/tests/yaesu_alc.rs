@@ -1,5 +1,5 @@
-//! The ALC meter of a Yaesu FT-991/991A (Hamlib model 1035) and FT-710 (1049), on the radio's own
-//! scale.
+//! The ALC meter of a Yaesu FT-991/991A (Hamlib model 1035), FT-710 (1049) and FTDX10 (1042), on
+//! the radio's own scale.
 //!
 //! Both radios give their ALC meter as 0 to 255. Yaesu's FT-991A CAT manual, `RM` READ METER:
 //! `RM4;` is answered `RM4` and three digits. Its FT-710 CAT manual: the same three digits, then a
@@ -106,12 +106,18 @@ fn alc_after_an_over(model: u32, raw: u16, p3: &'static str) -> (Option<f32>, Ve
     (alc, sent)
 }
 
-/// ⭐ THE FT-991A AND THE FT-710 SHOW THE RADIO'S OWN BAR. Raw 64 is a quarter of the radio's bar
+/// ⭐ THE FT-991A, THE FT-710 AND THE FTDX10 SHOW THE RADIO'S OWN BAR. Raw 64 is a quarter of the radio's bar
 /// and 128 half of it; Nexus showed both as 100 %, red. Asserted by value first, every reading
 /// against the bar position, raw / 255, for each radio's own reply shape; then how it was asked.
+/// The FTDX10's CAT manual gives the FT-710's reply shape and range, and Hamlib 4.7.1's `ftdx10.c`
+/// has no ALC table either, so it showed the same four times.
 #[test]
-fn an_ft991a_and_an_ft710_show_alc_where_the_radios_own_bar_is() {
-    for (model, name, p3) in [(1035u32, "FT-991A", ""), (1049, "FT-710", "000")] {
+fn an_ft991a_an_ft710_and_an_ftdx10_show_alc_where_the_radios_own_bar_is() {
+    for (model, name, p3) in [
+        (1035u32, "FT-991A", ""),
+        (1049, "FT-710", "000"),
+        (1042, "FTDX10", "000"),
+    ] {
         let overs: Vec<(u16, Option<f32>, Vec<String>)> = [0u16, 64, 128, 255]
             .into_iter()
             .map(|raw| {
@@ -155,13 +161,13 @@ fn an_ft991a_and_an_ft710_show_alc_where_the_radios_own_bar_is() {
     }
 }
 
-/// …and every other radio reads its ALC as it did: another Yaesu on the same Hamlib table (the
-/// FTDX10) and an Icom (the IC-7300 through Hamlib). Whatever `l ALC` answers is what the meter
+/// …and every other radio reads its ALC as it did: another Yaesu (the FTDX101D, whose Hamlib
+/// backend has an ALC table of its own) and an Icom (the IC-7300 through Hamlib). Whatever `l ALC` answers is what the meter
 /// is given, and the radio is sent no `RM4;`, which on an Icom's CI-V bus is junk. By value
 /// first, every reading, as above: raw 0 reads 0 on either scale, so it proves nothing alone.
 #[test]
 fn every_other_radios_alc_still_reads_through_hamlib() {
-    for (model, name) in [(1042u32, "FTDX10"), (3073, "IC-7300")] {
+    for (model, name) in [(1040u32, "FTDX101D"), (3073, "IC-7300")] {
         let overs: Vec<(u16, Option<f32>, Vec<String>)> = [0u16, 64, 128, 255]
             .into_iter()
             .map(|raw| {

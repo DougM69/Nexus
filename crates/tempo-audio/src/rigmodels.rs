@@ -750,19 +750,20 @@ pub(crate) fn raw_mode_query(model: u32) -> Option<&'static str> {
 }
 
 /// The raw query that reads this radio's ALC meter on the radio's OWN scale: Yaesu's `RM4;`
-/// (READ METER, ALC) for the FT-991/991A (1035) and the FT-710 (1049), sent through rigctld's
-/// `w`. `None` for every other model, which keeps Hamlib's `l ALC` unchanged.
+/// (READ METER, ALC) for the FT-991/991A (1035), the FT-710 (1049) and the FTDX10 (1042), sent
+/// through rigctld's `w`. `None` for every other model, which keeps Hamlib's `l ALC` unchanged.
 ///
 /// The radio is asked nothing new: Hamlib 4.7.1 answers `l ALC` by sending the same `RM4;`
-/// (`rigs/yaesu/newcat.c:5285-5299`, `newcat_get_level`). What differs is the scale. Neither
-/// `ft991.c` nor `ft710.c` gives an `alc_cal`, so newcat falls back to `yaesu_default_alc_cal`,
-/// raw 0 = 0.0 and raw 64 = 1.0 (`newcat.c:373-381`, marked "TODO: Provide sane defaults"), and
-/// `rig_raw2val_float` clamps past its last point (`src/cal.c`). Yaesu's own CAT manuals give
-/// both radios' ALC as 0 to 255:
+/// (`rigs/yaesu/newcat.c:5285-5299`, `newcat_get_level`). What differs is the scale. None of
+/// `ft991.c`, `ft710.c` and `ftdx10.c` gives an `alc_cal`, so newcat falls back to
+/// `yaesu_default_alc_cal`, raw 0 = 0.0 and raw 64 = 1.0 (`newcat.c:373-381`, marked "TODO: Provide
+/// sane defaults"), and `rig_raw2val_float` clamps past its last point (`src/cal.c`). Yaesu's own CAT
+/// manuals give the three radios' ALC as 0 to 255:
 ///  * FT-991A, `RM` READ METER (printed page 15): read `RM P1;`, answer `RM P1 P2 P2 P2;`, P1 `4`
 ///    ALC, P2 `0 - 255`;
 ///  * FT-710 (Japanese edition), `RM` READ METER (printed page 20): answer
-///    `RM P1 P2 P2 P2 P3 P3 P3;`, P1 `4` ALC, P2 the meter value 0 to 255, P3 `000` (fixed).
+///    `RM P1 P2 P2 P2 P3 P3 P3;`, P1 `4` ALC, P2 the meter value 0 to 255, P3 `000` (fixed);
+///  * FTDX10, `RM` READ METER: the FT-710's answer, P2 0 to 255 then P3 `000`.
 ///
 /// So the meter showed four times the radio's own reading, and full scale, red, from a quarter
 /// of the radio's bar up, with everything above that clamped away before it reached Nexus.
@@ -770,10 +771,12 @@ pub(crate) fn raw_mode_query(model: u32) -> Option<&'static str> {
 /// draws its bar evenly over 0 to 255 is the manuals' range, not a measurement.
 #[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
 pub(crate) fn raw_alc_query(model: u32) -> Option<&'static str> {
-    /// `RIG_MODEL_FT991` and `RIG_MODEL_FT710` in Hamlib's `include/hamlib/riglist.h`.
+    /// `RIG_MODEL_FT991`, `RIG_MODEL_FT710` and `RIG_MODEL_FTDX10` in Hamlib's
+    /// `include/hamlib/riglist.h`.
     const FT991: u32 = 1035;
     const FT710: u32 = 1049;
-    matches!(model, FT991 | FT710).then_some("RM4;")
+    const FTDX10: u32 = 1042;
+    matches!(model, FT991 | FT710 | FTDX10).then_some("RM4;")
 }
 
 /// The ALC bar position, 0.0 (empty) to 1.0 (full), from the radio's answer to
@@ -1759,14 +1762,15 @@ mod tests {
         }
     }
 
-    /// Only the FT-991/991A and the FT-710 read their ALC with Yaesu's own `RM4;`. Every other
-    /// model keeps Hamlib's `l ALC`: the FTDX10, on the same default table, the FTDX101D, which
-    /// has a table of its own, the FTX-1, an Icom, a Kenwood, and models nobody names.
+    /// Only the FT-991/991A, the FT-710 and the FTDX10 read their ALC with Yaesu's own `RM4;`.
+    /// Every other model keeps Hamlib's `l ALC`: the FTDX101D, which has a table of its own, the
+    /// FTX-1, an Icom, a Kenwood, and models nobody names.
     #[test]
-    fn only_the_ft991a_and_the_ft710_read_their_alc_raw() {
+    fn only_the_ft991a_the_ft710_and_the_ftdx10_read_their_alc_raw() {
         assert_eq!(raw_alc_query(1035), Some("RM4;"), "FT-991/991A");
         assert_eq!(raw_alc_query(1049), Some("RM4;"), "FT-710");
-        for model in [1042, 1040, 1051, 3073, 2031, 0, 999_999] {
+        assert_eq!(raw_alc_query(1042), Some("RM4;"), "FTDX10");
+        for model in [1040, 1051, 3073, 2031, 0, 999_999] {
             assert_eq!(raw_alc_query(model), None, "model {model} keeps l ALC");
         }
     }
