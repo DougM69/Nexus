@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 7,057 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 7,059 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -20,12 +20,12 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 
 | Term | Rows | Why it stays |
 |---|---:|---|
-| Nexus | 284 | The program's name. |
+| Nexus | 286 | The program's name. |
 | QSO / QSOs | 111 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 98 | ARRL's Logbook of The World — a service name. |
 | CAT | 95 | Computer Aided Transceiver — the radio control protocol. |
 | TX / RX | 126 / 72 | Transmit and receive. Printed on the radio itself. |
-| CW | 78 | The mode. Never "telegrafia" in a mode picker. |
+| CW | 80 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 75 | Both the Q-code and the callsign lookup site. |
 | CQ | 85 | The call. Translating it would be strange on the air and on screen. |
 | MHz / kHz / Hz | 74 / 22 / 47 | SI units. Never translated, never re-punctuated. |
@@ -64,7 +64,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | HRDLog / HRD | 16 / 9 | Product names. |
 | DAX | 18 | FlexRadio's audio transport. |
 | VUCC / WAS / WAZ | 15 / 11 / 7 | Award programme names. |
-| ALC / AGC / SWR / ATU | 15 / 6 / 7 / 0 | Front-panel radio vocabulary. |
+| ALC / AGC / SWR / ATU | 15 / 6 / 7 / 2 | Front-panel radio vocabulary. |
 | CI-V | 15 | Icom's CAT protocol. |
 | DSP | 8 | Digital signal processing. |
 | TQSL | 15 | The LoTW upload program. |
@@ -111,7 +111,7 @@ word in, and use only that word in the CSV.
 | callsign | 103 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 109 | "Worked before", "stations you have worked". | |
 | frequency | 99 | | |
-| tune | 62 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
+| tune | 64 | Two senses: tuning the radio, and the Tune button that keys a carrier. | |
 | power | 66 | RF power, in watts. | |
 | confirmed | 73 | A QSO confirmed by LoTW/eQSL/card. | |
 | decode | 65 | Both noun and verb. | |

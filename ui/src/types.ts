@@ -4216,6 +4216,9 @@ export interface Settings {
   /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
    *  stays the default and the fallback. */
   flexNativeCat?: boolean
+  /** Let the Flex client send CW, Tune and ATU before a tester's bench has confirmed them (Beta;
+   *  off by default). Means something only where the client serves the radio. */
+  flexNativeUnbenched?: boolean
   /** The radio's own address for the Icom network connection (Beta): its "IP Address (LAN)". */
   icomLanHost?: string
   /** The network user the radio was set up with. Not secret; the password is in the OS keychain. */
@@ -4874,6 +4877,8 @@ export interface RadioProfile {
   flexNativeAudio?: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
   flexNativeCat?: boolean
+  /** This radio's Beta setting for the Flex client's CW, Tune and ATU (off by default). */
+  flexNativeUnbenched?: boolean
   /** This radio's Icom network address, user and control port (Beta). */
   icomLanHost?: string
   icomLanUser?: string

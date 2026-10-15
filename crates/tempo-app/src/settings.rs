@@ -1864,6 +1864,18 @@ pub struct Settings {
     /// per-radio truth is `RadioProfile::flex_native_cat` and this is the active radio's mirror.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// Let Nexus's own Flex client start, on this radio, the transmissions no tester's bench has
+    /// confirmed yet: CW through the radio's keyer (CWX), Tune with the radio's own carrier and
+    /// the radio's ATU (`tempo_net::flex::admission::BETA`). OFF by default, for every radio and
+    /// every settings file written before it existed (operator ruling, 2026-10-14: "A Beta
+    /// setting, off by default"). It changes only which starts the client's admission takes past
+    /// its "no readback yet" refusal: every other Flex-side check, and every gate the engine runs
+    /// in front of it (the TX-enable latch, licence privileges, the watchdog, the one
+    /// transmitter), still decides each one. It means something only where the client serves the
+    /// radio (`flex_native_cat`), and a change restarts the client. The per-radio truth is
+    /// `RadioProfile::flex_native_unbenched` and this is the active radio's mirror.
+    #[serde(default)]
+    pub flex_native_unbenched: bool,
     /// The radio's own address for Nexus's Icom network client (the "Icom network (LAN / Wi-Fi)"
     /// Connection choice, Beta): the radio's "IP Address (LAN)". IPv4. The per-radio truth is
     /// `RadioProfile::icom_lan_host` and this is the active radio's mirror. The network user's
@@ -3839,6 +3851,10 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_cat`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// Let the Flex client start THIS radio's CW, Tune and ATU before a bench has confirmed them
+    /// (Beta, off by default; see [`Settings::flex_native_unbenched`]). Per-radio, as above.
+    #[serde(default)]
+    pub flex_native_unbenched: bool,
     /// THIS radio's address, network user and control port for the Icom network client (see
     /// [`Settings::icom_lan_host`]). Per-radio, as above. Its password is in the OS keychain.
     #[serde(default)]
@@ -3943,6 +3959,9 @@ pub struct RadioProfilePatch {
     /// sends it, and a payload without it must fail loudly rather than quietly turn the opt-in
     /// off on every save.
     pub flex_native_cat: bool,
+    /// See `RadioProfile::flex_native_unbenched`. No serde default, for the same reason: a payload
+    /// without it must fail loudly rather than quietly decide the setting on every save.
+    pub flex_native_unbenched: bool,
     /// See `RadioProfile::icom_lan_host`. No serde default, for the reason above: a save that
     /// lost the address would leave the radio unreachable with nothing to say why.
     pub icom_lan_host: String,
@@ -4009,6 +4028,7 @@ impl RadioProfilePatch {
         }
         p.flex_native_audio = self.flex_native_audio;
         p.flex_native_cat = self.flex_native_cat;
+        p.flex_native_unbenched = self.flex_native_unbenched;
         p.icom_lan_host = self.icom_lan_host;
         p.icom_lan_user = self.icom_lan_user;
         p.icom_lan_port = self.icom_lan_port;
@@ -4130,6 +4150,7 @@ impl Default for RadioProfile {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: ICOM_LAN_DEFAULT_PORT,
@@ -4912,6 +4933,7 @@ impl Default for Settings {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: ICOM_LAN_DEFAULT_PORT,
@@ -5250,6 +5272,7 @@ impl Settings {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
+            flex_native_unbenched: self.flex_native_unbenched,
             icom_lan_host: self.icom_lan_host.clone(),
             icom_lan_user: self.icom_lan_user.clone(),
             icom_lan_port: self.icom_lan_port,
@@ -5661,6 +5684,7 @@ impl Settings {
         self.flex_native_pan = p.flex_native_pan;
         self.flex_native_audio = p.flex_native_audio;
         self.flex_native_cat = p.flex_native_cat;
+        self.flex_native_unbenched = p.flex_native_unbenched;
         self.icom_lan_host = p.icom_lan_host;
         self.icom_lan_user = p.icom_lan_user;
         self.icom_lan_port = p.icom_lan_port;
@@ -5706,6 +5730,7 @@ impl Settings {
             flex_native_pan,
             flex_native_audio,
             flex_native_cat,
+            flex_native_unbenched,
             icom_lan_host,
             icom_lan_user,
             icom_lan_port,
@@ -5742,6 +5767,7 @@ impl Settings {
             self.flex_native_pan,
             self.flex_native_audio,
             self.flex_native_cat,
+            self.flex_native_unbenched,
             self.icom_lan_host.clone(),
             self.icom_lan_user.clone(),
             self.icom_lan_port,
@@ -5779,6 +5805,7 @@ impl Settings {
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
             p.flex_native_cat = flex_native_cat;
+            p.flex_native_unbenched = flex_native_unbenched;
             p.icom_lan_host = icom_lan_host;
             p.icom_lan_user = icom_lan_user;
             p.icom_lan_port = icom_lan_port;
@@ -6846,6 +6873,7 @@ mod tests {
             )])),
             flex_native_audio: true,
             flex_native_cat: true,
+            flex_native_unbenched: true,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7186,6 +7214,7 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7339,6 +7368,7 @@ mod tests {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7409,6 +7439,7 @@ mod tests {
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false, "flexNativeCat": false,
+            "flexNativeUnbenched": false,
             "icomLanHost": "", "icomLanUser": "", "icomLanPort": 50001,
             "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
@@ -7598,6 +7629,7 @@ mod tests {
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            flex_native_unbenched: p.flex_native_unbenched,
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
@@ -7710,6 +7742,126 @@ mod tests {
             e.settings().flex_native_audio,
             "the Flex's choice comes back with it"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ⭐ The Flex client's Beta setting for CW, Tune and the ATU (`flex_native_unbenched`) is OFF
+    /// for everyone: a fresh station, a radio added later, and a settings file written before it
+    /// existed, on the flat mirror and on every radio. Turned on for one radio it is that radio's
+    /// alone: through a save and a load, a switch to another radio and back, and the per-radio
+    /// patch the Settings form saves a radio not in use with, which must state it.
+    #[test]
+    fn the_flex_beta_setting_is_off_by_default_and_stays_with_its_radio() {
+        let mut fresh = crate::engine::Engine::with_settings(Settings::default());
+        let added = fresh.add_radio();
+        assert!(!fresh.settings().flex_native_unbenched, "a fresh station");
+        assert!(
+            fresh
+                .settings()
+                .radios
+                .iter()
+                .all(|r| !r.flex_native_unbenched),
+            "its radios, radio {added} included"
+        );
+        assert!(!RadioProfile::default().flex_native_unbenched);
+        // A station with no radio profile yet makes its first from the flat mirror, setting and all.
+        let mut flat_only = Settings {
+            flex_native_unbenched: true,
+            ..Settings::default()
+        };
+        flat_only.ensure_radio_profiles();
+        assert!(flat_only.radios[0].flex_native_unbenched);
+
+        // The 1.18.0 file: the client on for the Flex, and no key for this anywhere.
+        let dir = std::env::temp_dir().join("tempo_settings_flex_unbenched");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("flex_unbenched_{}.json", std::process::id()));
+        let old = serde_json::json!({
+            "mycall": "KD9TAW",
+            "activeRadio": 1,
+            "rigModel": 2036,
+            "rigConn": "network",
+            "flexNativeCat": true,
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "FLEX-6400", "rigModel": 2036, "rigConn": "network",
+                  "rigAddr": "127.0.0.1:5002", "flexRadioIp": "192.0.2.77",
+                  "flexNativeCat": true },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+        let mut s = Settings::load(&path);
+        assert!(
+            s.flex_native_cat,
+            "precondition: the client serves the Flex"
+        );
+        assert!(!s.flex_native_unbenched, "an old file loads it off");
+        assert!(
+            s.radios.iter().all(|r| !r.flex_native_unbenched),
+            "on every radio"
+        );
+
+        // On for the Flex, the radio in use, as the form saves it: the flat mirror, then the file.
+        s.flex_native_unbenched = true;
+        s.sync_active_from_flat();
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let radio = |id: u32| {
+            written["radios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == serde_json::json!(id))
+                .expect("the radio is written")["flexNativeUnbenched"]
+                .clone()
+        };
+        assert_eq!(written["flexNativeUnbenched"], serde_json::json!(true));
+        assert_eq!(radio(1), serde_json::json!(true), "the Flex's, on");
+        assert_eq!(radio(0), serde_json::json!(false), "the other radio's, off");
+
+        let mut e = crate::engine::Engine::with_settings(Settings::load(&path));
+        assert!(e.settings().flex_native_unbenched, "it loads again, on");
+        e.set_active_radio(0);
+        assert!(
+            !e.settings().flex_native_unbenched,
+            "the other radio has its own, off"
+        );
+        e.set_active_radio(1);
+        assert!(
+            e.settings().flex_native_unbenched,
+            "the Flex's comes back with it"
+        );
+
+        // The patch for a radio not in use carries it both ways, by value, and a payload that does
+        // not state it is refused rather than read as either.
+        let mut ftdx = e
+            .settings()
+            .radios
+            .iter()
+            .find(|r| r.id == 0)
+            .unwrap()
+            .clone();
+        RadioProfilePatch {
+            flex_native_unbenched: true,
+            ..patch_of(&ftdx)
+        }
+        .apply_to(&mut ftdx);
+        assert!(ftdx.flex_native_unbenched);
+        RadioProfilePatch {
+            flex_native_unbenched: false,
+            ..patch_of(&ftdx)
+        }
+        .apply_to(&mut ftdx);
+        assert!(!ftdx.flex_native_unbenched);
+        let mut payload = serde_json::to_value(patch_of(&ftdx)).unwrap();
+        assert!(payload
+            .as_object_mut()
+            .unwrap()
+            .remove("flexNativeUnbenched")
+            .is_some());
+        assert!(serde_json::from_value::<RadioProfilePatch>(payload).is_err());
 
         let _ = std::fs::remove_file(&path);
     }

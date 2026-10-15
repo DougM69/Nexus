@@ -54859,6 +54859,7 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            flex_native_unbenched: p.flex_native_unbenched,
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,

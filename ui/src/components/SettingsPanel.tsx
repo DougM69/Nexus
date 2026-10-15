@@ -8,6 +8,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { LanStation } from '../remote-native/LanStation'
+import { isStreamInput } from '../remote-native/stream-input'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
@@ -895,6 +896,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
     flexNativeCat: s.flexNativeCat ?? false,
+    flexNativeUnbenched: s.flexNativeUnbenched ?? false,
     icomLanHost: s.icomLanHost ?? '',
     icomLanUser: s.icomLanUser ?? '',
     icomLanPort: s.icomLanPort ?? 50001,
@@ -6256,6 +6258,41 @@ export function SettingsPanel({
                   </span>
                 </label>
               )}
+
+              {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
+                  (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
+                  shown only where Nexus's own Flex client is this radio's connection, the one place
+                  it means anything (`flex_client_reachable` and the opt-in above). Only at the
+                  shack: a press that comes through the Remote stream changes nothing. */}
+              {form.rigConn === 'network' &&
+                [2036, 23005].includes(form.rigModel) &&
+                form.flexNativeCat &&
+                (form.flexRadioIp ?? '').trim() !== '' && (
+                  <label className="settings-field">
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexUnbenched.label')}
+                    </span>
+                    <button disabled={remote}
+                      type="button"
+                      role="switch"
+                      aria-checked={form.flexNativeUnbenched ?? false}
+                      className={`toggle${form.flexNativeUnbenched ? ' on' : ''}`}
+                      onClick={() => {
+                        // Read before anything else, while the stream's dispatch is still running.
+                        if (isStreamInput()) {
+                          pushToast(t('remote.lan.atShackOnly'), 'error')
+                          return
+                        }
+                        updateBool('flexNativeUnbenched', !form.flexNativeUnbenched)
+                      }}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                )}
 
               {/* The log records Nexus's own CI-V engine, so it is offered where that engine drives
                   the radio, asked the way the native switch above asks it: by the model NUMBER and

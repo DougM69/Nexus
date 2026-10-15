@@ -177,7 +177,7 @@ impl FlexScene {
             }
             // What `open_cat` does for a radio Nexus's own client serves: a fresh client, which
             // remembers the handles of the sessions it replaces, probed as every open is.
-            match FlexDaemon::start(radio, 0) {
+            match FlexDaemon::start(radio, 0, t.flex_native_unbenched) {
                 Ok(d) => {
                     let mut rig = Rig::rigctld(&format!("127.0.0.1:{}", d.local_addr().port()));
                     let probe = finish_cat_open(&mut rig, t);
@@ -1300,7 +1300,7 @@ fn want_the_flex_radio(pool: &MonitorPool) -> Vec<(u32, Transport)> {
 fn reopen_flex(
     radio: std::net::SocketAddr,
 ) -> impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
-    move |_| match FlexDaemon::start(radio, 0) {
+    move |t| match FlexDaemon::start(radio, 0, t.flex_native_unbenched) {
         Ok(d) => {
             let cat = format!("127.0.0.1:{}", d.local_addr().port());
             let rig = Rig::with_control(Some(cat), PttMode::Vox);
@@ -3162,8 +3162,8 @@ fn the_cw_id_after_73_stays_refused_on_a_digu_slice() {
 /// ⭐ A word the client refuses drops the rest of the message, as a refused key does, so the
 /// message cannot resume part way once the radio would take a word: here the first word is
 /// refused on a DIGU slice, the slice is in CW by the time the second word is due, and nothing goes
-/// out. As it ships, the CW line says the client does not send CW yet, in place of the Hamlib
-/// advice, which does not apply to it.
+/// out. As it ships, the CW line says the client's CW is not bench-tested yet and names the switch
+/// that turns it on, in place of the Hamlib advice, which does not apply to it.
 #[test]
 fn a_refused_word_drops_the_rest_of_the_message_and_says_why() {
     let mut s = FlexScene::with_faults(false, reports(&["CW", "DIGU"]), Vec::new(), unbenched());
@@ -3193,8 +3193,10 @@ fn a_refused_word_drops_the_rest_of_the_message_and_says_why() {
     assert_eq!(
         cw_line(&s).as_deref(),
         Some(
-            "CW not sent: the Flex native client does not send CW yet. For CW, turn the Flex \
-             native client off (SmartSDR CAT sends it), or use the WinKeyer or Soundcard keyer."
+            "CW not sent: CW through the Flex native client is not bench-tested yet. To try it, \
+             turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in \
+             Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first), or turn the Flex \
+             native client off (SmartSDR CAT sends CW), or use the WinKeyer or Soundcard keyer."
         )
     );
     s.run(3_000);

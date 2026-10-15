@@ -194,6 +194,12 @@ pub struct Config {
     /// The UDP registration's datagram, sent after registration, just before `client udpport`;
     /// `None` sends none.
     pub udp_registration: Option<UdpRegistration>,
+    /// The operator's Beta setting for this radio (the radio profile's `flex_native_unbenched` in
+    /// tempo-app): admit the kinds no bench has confirmed yet ([`admission::BETA`]: tune, ATU,
+    /// CWX) past [`Refusal::NoReadback`], every other check still deciding them
+    /// ([`admission::admit_beta`]). Off by default, and fixed for the session's life: a change
+    /// reaches the radio through a new session.
+    pub beta: bool,
     /// Admit every kind, also those whose readback no bench has confirmed: the tests' way to run
     /// the readback per kind. Compiled only in this crate's tests and with the test-support
     /// feature `flex-unbenched` (tempo-audio's tests), which a release build refuses
@@ -229,6 +235,7 @@ impl Config {
             teardown_timeout_ms: 2_000,
             previous_handles: Vec::new(),
             udp_registration: None,
+            beta: false,
             #[cfg(any(test, feature = "flex-unbenched"))]
             unbenched: false,
             #[cfg(any(test, feature = "flex-unbenched"))]
@@ -641,21 +648,26 @@ impl Session {
     }
 
     /// Whether admission takes starts of `kind` on this session: a kind a tester's bench has
-    /// confirmed ([`admission::BENCHED`]), or, under test, any kind when the configuration's door
-    /// is open. Its other checks still decide each start.
+    /// confirmed ([`admission::BENCHED`]), one the operator's Beta setting admits when it is on
+    /// ([`Config::beta`]), or, under test, any kind when the configuration's door is open. Its
+    /// other checks still decide each start.
     pub fn switched_on(&self, kind: StartKind) -> bool {
         #[cfg(any(test, feature = "flex-unbenched"))]
         if self.config.unbenched {
             return true;
         }
-        admission::BENCHED.contains(&kind)
+        admission::switched_on(kind, self.config.beta)
     }
 
-    /// Admission for `start`; under test, every kind when the configuration says so.
+    /// Admission for `start`: with the operator's Beta setting on, the kinds it admits as well
+    /// ([`Config::beta`]); under test, every kind when the configuration says so.
     fn admit(&self, start: TxStart) -> Result<Admitted, Refusal> {
         #[cfg(any(test, feature = "flex-unbenched"))]
         if self.config.unbenched {
             return admission::admit_unbenched(&self.model, &self.facts(), start);
+        }
+        if self.config.beta {
+            return admission::admit_beta(&self.model, &self.facts(), start);
         }
         admission::admit(&self.model, &self.facts(), start)
     }
