@@ -1291,6 +1291,24 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
   Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX
   is on its offset. 0 keeps every row. Up to 1440, a day.
 
+**Frequencies**
+
+- **Return to the last used frequency** — off by default, as in JS8Call. On, opening JS8
+  tunes the rig back to the frequency you last used in JS8, instead of the band's JS8
+  frequency.
+- **JS8 frequencies** — JS8Call 3.0.3's suggested frequencies until you change, add or remove
+  one; then the list is your own, each row a dial in MHz and an optional description. The JS8
+  band picker shows it, and opening JS8 tunes the first one on the band. **Reset** puts
+  JS8Call's list back (asked first); **Export…** saves yours to Downloads as a file and
+  **Import…** reads one back (it asks before replacing a list of your own).
+- **Change frequency by schedule** — off by default, as in JS8Call. On, Nexus changes the
+  rig's frequency **by itself**, with nobody at the radio, at the times in the schedule: a
+  notice in the JS8 screen first, then the change 30 seconds later unless you cancel it. Never
+  while transmitting or while a message is going out. Each row of the **Schedule (UTC)** is a
+  frequency and a window (both ends count; one that ends before it starts runs over midnight;
+  where rows overlap, the one starting later wins). Nothing changes back when a row ends: add
+  a row for that. Move off a scheduled frequency yourself and that row leaves you there.
+
 **Automatic transmissions**
 
 Every one of these is the *second* of two acts. The first is the session TX latch in the

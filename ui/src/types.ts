@@ -1955,11 +1955,49 @@ export interface Js8PendingReply {
 
 /** The live JS8 state (poll ~500 ms while the cockpit is visible). Every field is engine
  * truth at poll time. */
+/** JS8Call's decode filter: on, the decoder searches only centre ± width/2 (Hz). */
+export interface Js8Filter {
+  enabled: boolean
+  centerHz: number
+  widthHz: number
+}
+
+/** One row of the operator's own JS8 frequency list: a dial (MHz) and its description. */
+export interface Js8Freq {
+  mhz: number
+  description: string
+}
+
+/** One row of JS8Call's Frequency Schedule: switch the dial to `mhz` while the UTC time of day is
+ *  inside [fromMin, untilMin] (minutes after 00:00 UTC; both ends count, and a window that ends
+ *  before it starts runs over midnight). */
+export interface Js8Hop {
+  mhz: number
+  fromMin: number
+  untilMin: number
+  description: string
+}
+
+/** A scheduled frequency change waiting out its notice. `firesAtMs` is 0 once "Change now" was
+ *  pressed; `held` = due, and waiting for a transmission or a message going out to end. */
+export interface Js8HopNotice {
+  mhz: number
+  firesAtMs: number
+  description: string
+  held: boolean
+}
+
 export interface Js8State {
   /** The TRANSMIT speed (= the slot clock). */
   speed: Js8Speed
   /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
   rxSpeeds: number
+  /** JS8Call's decode filter and its passband centre for QSY (the waterfall controls), as stored.
+   *  Optional: an older station sends neither. */
+  filter?: Js8Filter
+  qsyCenterHz?: number
+  /** A scheduled frequency change waiting out its notice (JS8Call's 30-second box), if any. */
+  hop?: Js8HopNotice | null
   txEnabled: boolean
   sending: boolean
   hbOn: boolean
@@ -3981,6 +4019,23 @@ export interface Settings {
   /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8.
    * Default 15 (all four — JS8Call's SubModeMultiDecode). */
   js8RxSpeeds: number
+  /** The operator's own JS8 frequency list (JS8Call's working frequencies with descriptions);
+   *  null/absent = JS8Call 3.0.3's own table. */
+  js8Frequencies?: Js8Freq[] | null
+  /** JS8Call's "Monitor returns to last used frequency": entering JS8 tunes back to the dial last
+   *  used there. Off by default. */
+  js8ReturnToLastDial?: boolean
+  /** The dial last used on JS8 (MHz; 0 = none). Engine-owned: a form save keeps the live one. */
+  js8LastDialMhz?: number
+  /** JS8Call's decode filter. Engine-owned (the cockpit's waterfall controls write it). */
+  js8Filter?: Js8Filter
+  /** The passband centre "QSY to centre" moves the TX offset to (Hz). Engine-owned. */
+  js8QsyCenterHz?: number
+  /** JS8Call's "Automatically switch bands / frequencies at specific times of day". Off by
+   *  default; on, the rig's frequency changes by itself with nobody at the radio. */
+  js8BandHop?: boolean
+  /** JS8Call's Frequency Schedule. */
+  js8Schedule?: Js8Hop[]
   /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
    * session-only and is NOT here — the app can never launch beaconing. */
   js8HbIntervalMin: number

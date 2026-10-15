@@ -26972,6 +26972,34 @@ button.sat-chip:disabled {
   min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
   max-height: calc(0.45 * var(--vh-eff, 100vh));
 }
+/* JS8's waterfall controls (Js8WaterfallControls): the header pill that names the decode filter
+   and opens them. A button drawn as the header's pills are. */
+.js8-filter-pill {
+  background: transparent;
+  cursor: pointer;
+}
+.js8-filter-pill.on {
+  color: var(--text);
+}
+.ui-dialog.js8-wf-dialog {
+  width: min(480px, calc(100vw - 2 * var(--space-4)));
+}
+/* Settings ▸ Digital ▸ JS8 ▸ Frequencies (Js8FrequencySettings): a frequency row (dial,
+   description, ✕) and a schedule row (dial, from, until, description, ✕). */
+.js8-freq-row,
+.js8-hop-row {
+  display: grid;
+  gap: var(--space-2);
+  align-items: center;
+  max-width: 560px;
+  margin-bottom: var(--space-1);
+}
+.js8-freq-row {
+  grid-template-columns: minmax(90px, 130px) minmax(0, 1fr) auto;
+}
+.js8-hop-row {
+  grid-template-columns: minmax(90px, 130px) auto auto minmax(0, 1fr) auto;
+}
 /* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
 .cockpit-ph-pill {
   font-size: var(--fs-label);

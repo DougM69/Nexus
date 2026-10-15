@@ -632,6 +632,10 @@ const MIGRATED = [
   // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
   // birth.
   'components/RadioTuneNote.tsx',
+  // JS8's frequencies and band schedule (Settings) and its waterfall controls (the decode filter,
+  // QSY to centre) — migrated from birth.
+  'components/Js8FrequencySettings.tsx',
+  'components/Js8WaterfallControls.tsx',
 ]
 
 /**
