@@ -202,8 +202,14 @@ impl Engine {
     /// (stay-on-miss). KEYS NOTHING: the TX latch is untouched and `tier_is_rx_only`
     /// refuses to arm it anyway.
     pub fn js8_enter(&mut self) {
+        // "Return to the last used frequency" (off by default): read before the tier switch
+        // retunes to the band's JS8 frequency, put back after it (`js8_freq`).
+        let back_to = self.js8_return_dial();
         self.js8_start_session();
         self.set_tier(Tier::Js8);
+        if let Some(mhz) = back_to {
+            self.js8_return_to(mhz);
+        }
     }
 
     /// Shared session-entry effects before the native decoder transition.
@@ -275,11 +281,12 @@ impl Engine {
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
-        // The page's parser refuses a key it does not list, and none lists `presence` or
-        // `inboxTooLong` yet.
+        // The page's parser refuses a key it does not list, and none lists `presence`,
+        // `inboxTooLong` or `controls` yet.
         let mut state = self.js8_state();
         state.presence = None;
         state.inbox_too_long = Vec::new();
+        state.controls = None;
         Some(state)
     }
 
@@ -303,6 +310,11 @@ impl Engine {
         Js8State {
             speed: self.js8_tx_speed_setting(),
             rx_speeds: s.js8_rx_speeds,
+            controls: Some(crate::dto::Js8Controls {
+                filter: s.js8_filter,
+                qsy_center_hz: s.js8_qsy_center_hz,
+                hop: self.js8_hop_notice(),
+            }),
             tx_enabled: self.tx_enabled,
             sending: self.app.transmitting(),
             hb_on: self.js8_hb_on,
@@ -512,13 +524,22 @@ impl Engine {
         }
         let actions = self.js8_station.tick(now_ms);
         self.js8_handle_actions(actions);
+        // The dial remembered for "return to the last used frequency", and the band schedule.
+        self.js8_freq_tick(now_ms);
     }
 
     /// Reassembler events → activity rows + station actions.
     fn js8_handle_events(&mut self, events: Vec<MessageEvent>, low_conf: bool, now_ms: u64) {
+        // Whether the frame before a single-frame message was its Last: DIRECTED.TXT marks a
+        // message that ended (`js8_freq::js8_directed_line`).
+        let mut frame_last = true;
         for ev in events {
+            if let MessageEvent::Message(m) = &ev {
+                self.js8_log_directed(m, m.frames > 1 || !m.complete || frame_last, now_ms);
+            }
             let row = match &ev {
                 MessageEvent::Frame(rx) => {
+                    frame_last = rx.i3.last;
                     self.js8_file_band_activity(rx.freq_hz, rx.speed, rx.at_ms);
                     Some(self.js8_row_for_frame(rx, low_conf))
                 }
@@ -1480,12 +1501,17 @@ mod tests {
             let before = serde_json::to_value(e.js8_state()).unwrap();
             assert!(!before["activity"].as_array().unwrap().is_empty());
             assert!(!before["queue"].as_array().unwrap().is_empty());
-            // The desktop's `presence` is the one key the Remote's sample leaves out (the page's
-            // parser does not list it yet); everything else is the native state, unchanged.
+            // The desktop's `presence` and `controls` (the waterfall controls and the schedule's
+            // notice) are the keys the Remote's sample leaves out (the page's parser does not list
+            // them yet); everything else is the native state, unchanged.
             let mut native = before.clone();
             assert!(
                 native.as_object_mut().unwrap().remove("presence").is_some(),
                 "control: the desktop's state carries presence"
+            );
+            assert!(
+                native.as_object_mut().unwrap().remove("controls").is_some(),
+                "control: the desktop's state carries controls"
             );
             assert_eq!(
                 serde_json::to_value(e.bounded_js8_state().unwrap()).unwrap(),

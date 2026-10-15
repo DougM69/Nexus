@@ -43,6 +43,8 @@ import type {
   ImportStats,
   JourneySummary,
   Js8ComposerPrefill,
+  Js8Filter,
+  Js8Freq,
   Js8State,
   Js8Typeahead,
   Js8InboxState,
@@ -3423,6 +3425,34 @@ export async function js8SetSpeed(speed: number): Promise<Js8State> {
  * Persisted; a mask that decodes nothing is refused (the engine returns why). */
 export async function js8SetRxSpeeds(mask: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_rx_speeds', { mask })
+}
+
+/** JS8Call's decode filter (on/off, centre and width in Hz): the waterfall controls and the row
+ *  menus' "Centre filter at …Hz". Receive only. Persisted. */
+export async function js8SetFilter(filter: Js8Filter): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_filter', { filter })
+}
+
+/** JS8Call 3.0.3's own frequency table as rows of the operator's list: what Settings shows while
+ *  no list of the operator's own is kept, and what Reset returns to. */
+export async function js8DefaultFrequencies(): Promise<Js8Freq[]> {
+  return invoke<Js8Freq[]>('js8_default_frequencies')
+}
+
+/** The passband centre "QSY to centre" puts the transmit offset on, Hz. Moves nothing by itself. */
+export async function js8SetQsyCenter(hz: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_qsy_center', { hz })
+}
+
+/** JS8Call's QSY: move the dial so the transmit offset sits on the passband centre. MOVES THE RIG;
+ *  refused while anything transmits or a JS8 message is going out (the engine says why). */
+export async function js8QsyToCentre(): Promise<Js8State> {
+  return invoke<Js8State>('js8_qsy_to_centre')
+}
+
+/** Answer a scheduled frequency change's notice: `go` = change now, otherwise cancel (stay). */
+export async function js8HopAnswer(go: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_hop_answer', { go })
 }
 
 /** Queue a message to `to` (a callsign, an @GROUP, or null for @ALLCALL). An explicit

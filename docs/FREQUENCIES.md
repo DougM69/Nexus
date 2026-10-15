@@ -47,7 +47,7 @@ where relevant.
 
 | Band | Nexus dial (MHz) | Nearest watering holes / edges (gap to emission) | Notes |
 |---|---|---|---|
-| 160 m | **1.8460** | above the whole FT8/JS8 cluster (≤1.843); JS8 1.842 (+5.5 k); PSK31 1.838 | tight band — keep audio low |
+| 160 m | **1.8460** | above the FT8/JS8 cluster (FT8 1.840, JS8 1.8435 since JS8Call 3.x); JS8 1.8435 (+4 k; was 1.842, +5.5 k); PSK31 1.838 | tight band — keep audio low |
 | 80 m | **3.5935** | PSK31/RTTY hole 3.580–3.590 (+5 k); data edge 3.600 (−5 k); FT8/FT4 3.573/3.575 | between the RTTY hole and the band/phone edge |
 | 40 m | **7.0430** | QRP CW 7.040 (−4.5 k); FT4 7.0475 (+3 k); FT8 7.074 | IARU NB segment; in the CW↔FT4 notch |
 | 30 m | **10.1425** | FT4 10.140 / PSK 10.141 (−3 k); edge 10.150 (+6 k); FT8 10.136 | secondary band — tread lightly |

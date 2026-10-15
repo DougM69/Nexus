@@ -12,7 +12,8 @@ canned exchange is not a conversation.
 after APRS. If you don't operate it, switch it off in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features). Entering the screen
 tunes the rig to the JS8 watering hole for the current band (7.078, 14.078, 3.578 … —
-JS8Call's own list, USB) and starts decoding every speed at once. Nothing transmits
+JS8Call 3.0.3's own list, USB, or your own; see [Frequencies](#frequencies-the-decode-filter-and-the-band-schedule))
+and starts decoding every speed at once. Nothing transmits
 until you enable TX in the header, every session. The mode's own switches — transmit
 speed, which speeds to decode, heartbeat interval, heartbeat networking and its rules, the
 three automatic-reply switches, the idle watchdog and your INFO/STATUS/group texts — are in
@@ -64,8 +65,10 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
   which holds at most 19 frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo; one that needs
   more is not offered or handed over until you change to a speed it fits, and its row says so and
   names that speed.
-- **Log** — the log strip, prefilled from the station you last addressed. A JS8 QSO logs
-  as `MFSK` / `JS8` in ADIF.
+- **Log** — the log strip, prefilled from the station you last addressed, as JS8Call's log
+  dialog is: their SNR at your station in **RST sent**, the start time when you selected
+  them (put their call in the To box), and the frequency the dial plus your TX offset. A JS8
+  QSO logs as `MFSK` / `JS8` in ADIF.
 - **Boxes** — up to six panes of [Conditions](connect.md) among these, from ⊞ Panels ▸
   **Arrange** ▸ **+ Add a box** at the foot of a column, each closed by its own **✕** (see
   [Phone](phone.md)). Nothing in a box transmits.
@@ -133,6 +136,44 @@ The compose box works as JS8Call 3.0's does. Its switches and texts are in
   asks at once** (JS8Call's "Immediately transmit…") and those buttons, and the quick asks on a
   station row, put their message in the compose box instead; **Send** sends it. The repeating
   CQ always sends.
+
+## Frequencies, the decode filter and the band schedule
+
+**Frequencies.** The band picker holds JS8Call 3.0.3's suggested frequencies: 1.8435,
+3.578, 5.363, 7.078, 10.130, 14.078, 18.104, 21.078, 24.922, 28.078, 50.318 and
+144.178 MHz, all USB. JS8Call 3 moved 160 m up to 1.8435 and added 60 m at 5.363; 60 m is
+channelised and differs by country, so check your own band plan there. Your own list is
+in [Settings ▸ Digital ▸ JS8](settings-reference.md#js8) under **Frequencies**: change, add
+or remove a row and the list becomes yours, each row with a description if you like.
+**Reset** puts JS8Call's list back, **Export…** saves yours to Downloads, and **Import…**
+reads such a file back. Opening JS8 tunes the first frequency of the list on the current
+band. **Return to the last used frequency** (off by default, as in JS8Call) tunes back to
+the frequency you last used in JS8 instead.
+
+**The decode filter.** The **Filter** plate on the waterfall says what the decoder listens to,
+**Filter 500–2500 Hz** out of the box as JS8Call ships it, and opens the waterfall
+controls. Switch the filter off to decode the whole passband, or set its centre and width;
+**Centre on my RX offset** puts it on the station you are listening to.
+
+**QSY to centre**, in the same controls, moves the rig's dial so your TX offset sits on the
+passband centre (1500 Hz unless you change it): for narrow filters, and rigs whose passband
+is uneven. Your RX offset moves with it, so you stay on the same station, and the stations
+heard move to their new offsets. It never moves the rig while you are transmitting or while
+a message is going out.
+
+**The band schedule** (Settings ▸ Digital ▸ JS8 ▸ **Change frequency by schedule**, off by
+default, as in JS8Call) changes the rig's frequency **by itself**, with nobody at the radio.
+Give each row a frequency and a UTC window. When a window opens, the JS8 screen shows a
+notice, and 30 seconds later the frequency changes unless you press **Cancel**. It never
+changes while you are transmitting or while a message is going out: it waits until both are
+clear. If you move off the scheduled frequency yourself, that row leaves you there; the
+next row with another frequency moves you again. The frequency does not change back when a
+row ends; add a row for that.
+
+**DIRECTED.TXT.** With **Write ALL.TXT decode log** on
+([Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds)), JS8 also writes
+JS8Call's DIRECTED.TXT beside ALL.TXT: one line per directed message heard, with the date and
+time (UTC), the dial, the offset, the SNR and the message, ♢ where it ended.
 
 ## Transmitting
 

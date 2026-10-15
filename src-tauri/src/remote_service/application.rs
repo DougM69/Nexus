@@ -619,8 +619,9 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let engine = tempo_app::engine::Engine::with_settings(Default::default());
         let mut expected = serde_json::to_value(engine.js8_state()).unwrap();
-        // The desktop's `presence` is the one key the page's sample leaves out (its parser does
-        // not list it yet); everything else is the native state as it stands.
+        // The desktop's `presence` and `controls` (the waterfall controls and the schedule's
+        // notice) are the keys the page's sample leaves out (its parser does not list them yet);
+        // everything else is the native state as it stands.
         assert!(
             expected
                 .as_object_mut()
@@ -628,6 +629,14 @@ mod tests {
                 .remove("presence")
                 .is_some(),
             "control: the desktop's state carries presence"
+        );
+        assert!(
+            expected
+                .as_object_mut()
+                .unwrap()
+                .remove("controls")
+                .is_some(),
+            "control: the desktop's state carries controls"
         );
         let settings = serde_json::to_value(engine.settings()).unwrap();
         let shared = Arc::new(Mutex::new(engine));
