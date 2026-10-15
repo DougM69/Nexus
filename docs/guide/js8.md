@@ -20,10 +20,12 @@ three automatic-reply switches, the idle watchdog and your INFO/STATUS/group tex
 
 ## The tour
 
-**The header.** A **JS8** badge, then the four speed chips — **Slow · Normal · Fast ·
-Turbo** (30 / 15 / 10 / 6 second periods); the lit one is the speed *you* transmit at and
-the period the TX clock follows. Beside them an **RX ▼ n/4** plate says how many of the
-four speeds the receiver is decoding right now (all four by default). Then the band
+**The header.** A **JS8** badge, then the five speed chips — **Slow · Normal · Fast ·
+JS8 40 · JS8 60** (30 / 15 / 10 / 6 / 4 second periods), named as JS8Call 3.0 names them:
+JS8 40 is the speed called Turbo before 3.0, and the chip's tooltip says so; JS8 60 is 3.0's
+newest speed (its tooltip calls it Ultra, its name in JS8Call's code). The lit one is the speed
+*you* transmit at and the period the TX clock follows. Beside them an **RX ▼ n/5** plate says
+how many of the five speeds the receiver is decoding right now (all five by default). Then the band
 picker with the JS8 watering holes, license-filtered per band; a **Drive** slider (TX
 audio level — set it so the rig's ALC barely moves); **Tune**; an **ATU** button when your
 rig reports a tuner; the **TX On / TX Off** latch; **Stop TX**; and **⊞ Panels**.
@@ -35,7 +37,7 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
 **The panes** (each removable from ⊞ Panels):
 
 - **Activity** — every frame decoded at every enabled speed, one row each: UTC, the
-  speed letter (E Slow · A Normal · B Fast · C Turbo, JS8Call's ALL.TXT letters), the
+  speed letter (E Slow · A Normal · B Fast · C JS8 40 · I JS8 60, JS8Call's ALL.TXT letters), the
   audio offset, the SNR, and the message exactly as JS8Call would print it. Rows
   addressed to you carry a bar; your own transmissions are tinted; faint rows are
   low-confidence copy; italic rows closed without their last frame. Double-click a row
@@ -65,11 +67,19 @@ idle-watchdog readout.
 
 ## Receiving
 
-All four speeds decode at once, exactly as JS8Call's multi-decode does: a Slow station at
-−26 dB and a Turbo station rattling off a paragraph on the same band both print. Untick
-speeds in Settings if a small machine struggles. A long message arrives one frame per
-period and is stitched together by audio offset — you see the frames arrive in Activity,
-and the finished message in Inbox if it was for you.
+Every speed decodes at once, exactly as JS8Call 3.0's multi-decode does: a Slow station at
+−26 dB and a JS8 60 station rattling off a paragraph on the same band both print. Untick
+speeds in Settings if a small machine struggles. Settings saved before JS8 60 arrived keep the
+four speeds they had; tick **JS8 60** under *Decode these speeds* to add it. A long message
+arrives one frame per period and is stitched together by audio offset — you see the frames
+arrive in Activity, and the finished message in Inbox if it was for you.
+
+**JS8 60** is JS8Call 3.0's newest speed, and JS8Call calls it experimental: 4-second
+periods, a signal 250 Hz wide, each frame about 2.6 s on the air, so the band carries a
+paragraph in a few periods — when signals are strong. It needs the most signal of the five
+(JS8Call puts its floor at −18 dB on its own scale, against Normal's −24). Pick it only
+when the station you are working copies you well, and do not expect JS8Call 2.x stations to
+see it: only JS8Call 3.0 and later decode it.
 
 ## Transmitting
 
@@ -127,8 +137,8 @@ your license privileges, and the screen says so.
 
 ## Compatibility
 
-On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and Turbo.
-Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0), and the
-APRS-IS and @JS8NET internet gateways. The full protocol reference is
+On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and JS8 40
+(Turbo); JS8Call 3.0 and later at JS8 60 as well, a speed JS8Call 2.x does not decode.
+Not implemented: the APRS-IS and @JS8NET internet gateways. The full protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see
 NOTICE.

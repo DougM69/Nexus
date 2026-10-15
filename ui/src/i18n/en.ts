@@ -7758,16 +7758,17 @@ export const EN = {
     'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
 
   // ── Settings ▸ JS8 ──────────────────────────────────────────────────────────────────
-  // Speed names (Slow/Normal/Fast/Turbo) and the command words (SNR?, GRID?, HEARTBEAT SNR,
-  // MSG TO:, @ALLCALL, @GROUP) are the mode's own vocabulary and stay verbatim in every locale.
+  // Speed names (Slow/Normal/Fast/JS8 40/JS8 60, and the aliases Turbo/Ultra) and the command words
+  // (SNR?, GRID?, HEARTBEAT SNR, MSG TO:, @ALLCALL, @GROUP) are the mode's own vocabulary and stay
+  // verbatim in every locale.
   'settings.js8.legend': 'JS8',
   'settings.js8.receiving.title': 'Speed & receiving',
   'settings.js8.speed.label': 'Transmit speed',
   'settings.js8.speed.hint':
-    'The speed your frames go out at, and the period the TX clock follows: Slow 30 s, Normal 15 s, Fast 10 s, Turbo 6 s. Normal is what most of the band runs. The speed chips in the JS8 header change this same setting.',
+    'The speed your frames go out at, and the period the TX clock follows: Slow 30 s, Normal 15 s, Fast 10 s, JS8 40 6 s, JS8 60 4 s. Normal is what most of the band runs. JS8 40 (called Turbo before JS8Call 3.0) and JS8 60 are for strong signals; JS8Call 3.0 marks JS8 60 experimental. The speed chips in the JS8 header change this same setting.',
   'settings.js8.rxSpeeds.label': 'Decode these speeds',
   'settings.js8.rxSpeeds.hint':
-    'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+    'Every speed is decoded at once by default, as JS8Call does — a Slow station and a JS8 60 station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C/I). A list saved before JS8 60 arrived keeps the four speeds it had: tick JS8 60 to add it.',
   'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
   'settings.js8.callsignAgingMin.hint':
     'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
@@ -9964,7 +9965,7 @@ export const EN = {
   'js8.seam.stationsInbox.label': 'Stations / Inbox',
   'js8.waterfall.splitter.label': 'waterfall height',
   'js8.panel.activity.title':
-    'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
+    'Every decoded frame at every enabled speed — E/A/B/C/I is the speed (Slow/Normal/Fast/JS8 40/JS8 60), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
   // Appended to the tooltip above rather than folded into it: a translated catalog keeps its
   // sentence and this one falls back to English, instead of the note going missing wherever the
   // translation is older than the pane.
@@ -9986,9 +9987,11 @@ export const EN = {
   'js8.header.speed.aria': 'Transmit speed',
   'js8.header.speed.chip.title':
     'Transmit at {{speed}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.',
+  'js8.header.speed.chip.aliasTitle':
+    'Transmit at {{speed}}, also called {{alias}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.',
   'js8.header.speed.failed': 'JS8 speed change refused',
   'js8.header.rx.title':
-    'Decoding {{n}} of the 4 speeds at once — choose them in Settings ▸ Digital ▸ JS8',
+    'Decoding {{n}} of the {{total}} speeds at once — choose them in Settings ▸ Digital ▸ JS8',
   'js8.header.band.title': "Showing the rig's current band",
 
   // ── JS8 ▸ the stations pane ──────────────────────────────────────────────────────────

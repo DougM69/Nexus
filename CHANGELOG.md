@@ -117,6 +117,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not answer right now (at Turbo, while a message is still arriving, or while a call is in the To
   box), the chip reads not armed and its tooltip says why, as JS8Call drops "ACK" from its HB
   button then.
+- **JS8 60, JS8Call 3.0's fifth speed, to receive and to transmit.** A fifth speed chip in the
+  JS8 header, **JS8 60**: 4-second periods, a 250 Hz wide signal, each frame about 2.6 s on the
+  air, as JS8Call 3.0 sends it (JS8Call calls it experimental; it is for strong signals). A new
+  install decodes it with the other four at once, and Nexus transmits at it when you pick its
+  chip or Settings ▸ Digital ▸ JS8 ▸ Transmit speed. Its activity rows carry the letter I. Checked
+  both ways in the lab against JS8Call 3.0.3's own transmitter and receiver — what Nexus sends
+  prints in JS8Call 3.0.3 and what JS8Call 3.0.3 sends prints in Nexus, text for text — but not
+  yet on the air. JS8Call 2.x does not decode JS8 60. A settings file saved before this release
+  keeps decoding the four speeds it had: tick JS8 60 under Decode these speeds to add it.
+  NEEDS-BENCH: JS8 60 to and from JS8Call 3.0.3 on the air.
 
 ### Changed
 
@@ -199,6 +209,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acknowledgements answer while HB NET and AUTOREPLY are on, whether or not your own heartbeat
   repeat is running; before, they answered only while HB was on. HB NET is off after the update, so
   nothing is acknowledged until you turn it on. NEEDS-BENCH.
+- **JS8's Turbo speed is called JS8 40, as JS8Call 3.0 calls it.** The speed chip, Settings and
+  the activity help say JS8 40, and the chip's tooltip says it is the speed once called Turbo
+  (JS8 60's says Ultra, its name in JS8Call's code). The speed itself is unchanged: 6-second
+  periods, the letter C, the same signal on the air.
 
 ### Fixed
 

@@ -5607,7 +5607,7 @@ mod tests {
     /// Normal ACKs one period after the MSG, a Fast one in the next Fast period.)
     #[test]
     fn with_confirmation_off_a_reply_keys_in_the_period_js8call_keys_it() {
-        for speed in [Speed::Slow, Speed::Normal, Speed::Fast, Speed::Turbo] {
+        for speed in Speed::ALL {
             let period = u64::from(speed.period_s()) * 1000;
             let decoded = 100 * period + (speed.frames_needed() as u64 * 1000) / 12_000;
             let mut s = Station::new(StationConfig {

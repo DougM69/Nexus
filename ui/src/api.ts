@@ -3412,13 +3412,13 @@ export async function js8LocatorRefusal(): Promise<string | null> {
   return invoke<string | null>('js8_locator_refusal')
 }
 
-/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo). Persisted; the slot
+/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 JS8 40 | 4 JS8 60). Persisted; the slot
  * clock and the boundary decode window follow. Never touches the TX latch. */
 export async function js8SetSpeed(speed: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_speed', { speed })
 }
 
-/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8).
+/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16).
  * Persisted; a mask that decodes nothing is refused (the engine returns why). */
 export async function js8SetRxSpeeds(mask: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_rx_speeds', { mask })

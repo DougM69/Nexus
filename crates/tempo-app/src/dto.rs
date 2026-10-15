@@ -4954,8 +4954,15 @@ mod tests {
             assert_eq!(Tier::from_mode_kind(kind), Tier::Js8);
             assert_eq!(Tier::Js8.mode_kind(60, 0, 120, 15, 0, i as u8), Some(kind));
         }
+        assert_eq!(
+            Tier::js8_kind(4),
+            ModeKind::Js8 {
+                speed: Js8Speed::Ultra
+            },
+            "index 4 is JS8 60"
+        );
         // A stale or hand-edited index degrades to Normal instead of refusing to decode.
-        assert_eq!(Tier::js8_kind(4), ModeKind::JS8_NORMAL);
+        assert_eq!(Tier::js8_kind(5), ModeKind::JS8_NORMAL);
         assert_eq!(Tier::js8_kind(255), ModeKind::JS8_NORMAL);
     }
 

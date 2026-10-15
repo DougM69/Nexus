@@ -30,10 +30,15 @@
 //! — at −10 dB Fast 3/3 vs 3/3 and Turbo 3/3 vs 3/3, zero payload/dt
 //! mismatches, zero Nexus false decodes, mean SNR offset stock−Nexus −0.33 dB
 //! (B) / −1.67 dB (C) (Slow +1.00 / Normal +0.33), all < 3 dB. The weaker B/C
-//! corpus points sit at/below the knee (0/3 both sides). One yield gap worth
-//! naming: at Normal −20 dB stock decodes 2/3 and Nexus 0/3 — this decoder
-//! runs ~2 dB less sensitive than stock on synthetic AWGN at Normal (it still
-//! reproduces every real off-air Normal decode). Reported, not gated.
+//! corpus points sit at/below the knee (0/3 both sides). One yield gap was
+//! named then: at Normal −20 dB stock decoded 2/3 and Nexus 0/3, read as
+//! "~2 dB less sensitive at Normal". Re-measured 2026-10-15 at 30 seeds a
+//! point, 1 dB apart, on one 1860-file corpus (paritylab/js8/js8call-3.0.3,
+//! results/ladder-2026-10-15.txt), the SNR at 50 % decode puts this decoder
+//! within 0.1 dB of JS8Call 3.0.3's own at every speed, JS8 60 included, and
+//! 0.4–0.9 dB behind the 2.x Fortran oracle (+0.5 dB at Normal): the 2 dB was
+//! three seeds. Reported, not gated. The same lab decodes JS8Call 3.0.3's
+//! waves here and these in JS8Call 3.0.3, text identical, at all five speeds.
 //!
 //! Tolerances vs stock: the spec's 1 Hz / 0.02 s PLUS the CLI's print
 //! quantisation — `js8` prints FREQ as an integer (±0.5 Hz) and DT with one
@@ -289,11 +294,12 @@ fn every_stock_decode_is_reproduced_within_tolerance() {
 /// one of the 11 stock off-air decodes is reproduced above. The points below
 /// are our own measured majority-of-5 thresholds (2026-09-06 sweep), which sit
 /// AT or just under stock's knees: Slow −22 (4/5), Normal −18 (5/5), Fast −16
-/// (5/5), Turbo −14 (3/5). Normal runs ~2 dB below stock's synthetic knee here
-/// (a synthetic-AWGN / SNR-convention gap — it reproduces stock's real Normal
-/// decodes exactly), the reason its point is not −20. Do NOT deepen these to
-/// the spec numbers to look better; that only makes the gate permanently red
-/// for a decoder that faithfully tracks stock.
+/// (5/5), Turbo −14 (3/5). Normal's point is not −20: at −20 this decoder
+/// yields 8/30 and JS8Call 3.0.3's 8/30 (2.x's Fortran 14/30) on the 2026-10-15
+/// lab corpus. JS8 60's point, −11 dB, is where this decoder and JS8Call
+/// 3.0.3's both decode 26/30 on that corpus (−12: 11/30 and 12/30). Do NOT
+/// deepen these to the spec numbers to look better; that only makes the gate
+/// permanently red for a decoder that faithfully tracks stock.
 #[test]
 fn holds_the_awgn_ladder_at_every_speed() {
     let ladder = [
@@ -301,6 +307,7 @@ fn holds_the_awgn_ladder_at_every_speed() {
         (Speed::Normal, -18.0),
         (Speed::Fast, -16.0),
         (Speed::Turbo, -14.0),
+        (Speed::Ultra, -11.0),
     ];
     for (speed, point) in ladder {
         let w = word("KD9TAWEN52ab");

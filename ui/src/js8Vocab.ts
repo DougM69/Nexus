@@ -29,28 +29,36 @@ export interface Js8SpeedInfo {
   key: Js8Speed
   /** Index into `Speed::ALL` — the `js8_speed` setting and `js8_set_speed`'s argument. */
   idx: number
-  /** The submode's own name (Slow/Normal/Fast/Turbo — an invariant token). */
+  /** The submode's own name as JS8Call 3.0 shows it (Slow/Normal/Fast/JS8 40/JS8 60 — an
+   *  invariant token; 3.0.3 JS8Submode.cpp:132, :147 and the Mode menu). */
   label: string
-  /** ALL.TXT submode letter (E/A/B/C). */
+  /** The other name the speed goes by, for its tooltip: Turbo (JS8 40's name before 3.0) and
+   *  Ultra (JS8 60's name in JS8Call's code). Null for the speeds 3.0 did not rename. */
+  alias: string | null
+  /** ALL.TXT submode letter (E/A/B/C/I). */
   letter: string
   periodS: number
   /** §97.119 airtime cap: frames × period < 600 s (compose::max_frames). */
   maxFrames: number
   /** `JS8::Submode::rxThreshold`, in Hz: how far a decode may drift and still be the same
-   *  signal. 10 is the default (JS8Submode.cpp:62); Fast and Turbo set 16 and 32 (:122-123). */
+   *  signal. 10 is the default (JS8Submode.cpp:62); Fast, JS8 40 and JS8 60 set 16, 32 and 50
+   *  (:122-123; 3.0.3 :153). */
   rxThresholdHz: number
 }
 
 export const JS8_SPEEDS: Record<Js8Speed, Js8SpeedInfo> = {
-  slow: { key: 'slow', idx: 0, label: 'Slow', letter: 'E', periodS: 30, maxFrames: 19, rxThresholdHz: 10 },
-  normal: { key: 'normal', idx: 1, label: 'Normal', letter: 'A', periodS: 15, maxFrames: 39, rxThresholdHz: 10 },
-  fast: { key: 'fast', idx: 2, label: 'Fast', letter: 'B', periodS: 10, maxFrames: 59, rxThresholdHz: 16 },
-  turbo: { key: 'turbo', idx: 3, label: 'Turbo', letter: 'C', periodS: 6, maxFrames: 99, rxThresholdHz: 32 },
+  slow: { key: 'slow', idx: 0, label: 'Slow', alias: null, letter: 'E', periodS: 30, maxFrames: 19, rxThresholdHz: 10 },
+  normal: { key: 'normal', idx: 1, label: 'Normal', alias: null, letter: 'A', periodS: 15, maxFrames: 39, rxThresholdHz: 10 },
+  fast: { key: 'fast', idx: 2, label: 'Fast', alias: null, letter: 'B', periodS: 10, maxFrames: 59, rxThresholdHz: 16 },
+  turbo: { key: 'turbo', idx: 3, label: 'JS8 40', alias: 'Turbo', letter: 'C', periodS: 6, maxFrames: 99, rxThresholdHz: 32 },
+  ultra: { key: 'ultra', idx: 4, label: 'JS8 60', alias: 'Ultra', letter: 'I', periodS: 4, maxFrames: 149, rxThresholdHz: 50 },
 }
 /** Display / index order (= Speed::ALL). */
 export const JS8_SPEED_LIST: readonly Js8SpeedInfo[] = [
-  JS8_SPEEDS.slow, JS8_SPEEDS.normal, JS8_SPEEDS.fast, JS8_SPEEDS.turbo,
+  JS8_SPEEDS.slow, JS8_SPEEDS.normal, JS8_SPEEDS.fast, JS8_SPEEDS.turbo, JS8_SPEEDS.ultra,
 ]
+/** Every speed's `js8_rx_speeds` bit (`Speed::ALL_BITS`, 31): the mask a fresh install decodes. */
+export const JS8_ALL_SPEEDS_MASK = JS8_SPEED_LIST.reduce((m, s) => m | (1 << s.idx), 0)
 
 /** The CQ variants a heartbeat-with-isAlt frame carries, by `cqs` index (varicode.cpp:283-292). */
 export const JS8_CQS: readonly string[] = [

@@ -654,7 +654,7 @@ impl Engine {
     ) -> Result<(), String> {
         if Js8Speed::from_index(speed_idx).is_none() {
             return Err(format!(
-                "JS8 speed index {speed_idx} is not 0..=3 (Slow/Normal/Fast/Turbo)"
+                "JS8 speed index {speed_idx} is not 0..=4 (Slow/Normal/Fast/JS8 40/JS8 60)"
             ));
         }
         self.remote_actuation.revoke();
@@ -680,10 +680,10 @@ impl Engine {
     /// decodes nothing is refused — nobody means "go deaf". The command layer persists.
     pub fn js8_set_rx_speeds(&mut self, mask: u8) -> Result<(), String> {
         self.js8_restart_idle_clock(tempo_core::timing::now_unix_ms() as u64);
-        if mask & 0x0F == 0 {
+        if mask & Js8Speed::ALL_BITS == 0 {
             return Err("at least one JS8 speed must stay enabled".to_string());
         }
-        self.settings.js8_rx_speeds = mask & 0x0F;
+        self.settings.js8_rx_speeds = mask & Js8Speed::ALL_BITS;
         Ok(())
     }
 
@@ -1426,7 +1426,7 @@ mod tests {
         }
         let st = e.js8_state();
         assert_eq!(st.speed, Js8Speed::Normal);
-        assert_eq!(st.rx_speeds, 15);
+        assert_eq!(st.rx_speeds, 31, "every speed decodes, JS8 60 too");
         assert!(
             !st.armed.autoreply && !st.armed.relay && !st.armed.hb_ack && !st.armed.hb,
             "latch down at launch → nothing is armed"
@@ -1777,7 +1777,7 @@ mod tests {
     fn js8_set_speed_rebuilds_the_kind_and_refuses_a_bad_index() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.js8_enter();
-        assert!(e.js8_set_speed(4).is_err());
+        assert!(e.js8_set_speed(5).is_err(), "past JS8 60, the last speed");
         e.js8_set_speed(3).unwrap();
         assert_eq!(e.settings().js8_speed, 3);
         assert_eq!(
@@ -1794,7 +1794,47 @@ mod tests {
         );
         e.js8_set_rx_speeds(0b0110).unwrap();
         assert_eq!(e.js8_state().rx_speeds, 6);
+        e.js8_set_rx_speeds(0b1_0000).unwrap();
+        assert_eq!(
+            e.js8_state().rx_speeds,
+            16,
+            "JS8 60 alone is a mask that decodes"
+        );
+        assert!(
+            e.js8_set_rx_speeds(0b10_0000).is_err(),
+            "a bit past the five speeds decodes nothing"
+        );
         assert!(!e.tx_enabled());
+    }
+
+    /// JS8 60, JS8Call 3.0's fifth speed (submode I, index 4): picking it points the slot
+    /// clock at its 4 s period and the decoder at its window, and the station transmits at
+    /// it — the speed's numbers BY VALUE, so the test reads the same before and after the
+    /// table grew a row.
+    #[test]
+    fn js8_set_speed_4_is_js8_60_on_the_slot_clock_the_decoder_and_the_station() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_set_speed(4).expect("JS8 60 is index 4");
+        assert_eq!(e.settings().js8_speed, 4);
+        let tx = e.js8_tx_speed();
+        assert_eq!(
+            (tx.letter(), tx.period_s(), tx.nsps(), tx.delay_ms()),
+            ('I', 4, 384, 100),
+            "3.0.3 commons.h:45-47"
+        );
+        assert_eq!(
+            e.active_slot_secs(),
+            4.0,
+            "JS8 60's period drives the slot clock"
+        );
+        assert_eq!(e.js8_station.config().speed, tx);
+        assert_eq!(e.js8_state().speed, tx);
+        assert!(
+            (e.tx_over_secs() - 2.628).abs() < 1e-3,
+            "100 ms start delay + 79 symbols of 384 samples"
+        );
+        assert!(!e.tx_enabled(), "a speed pick never arms TX");
     }
 
     // REMOVED at B7.7: `js8_tx_verbs_refuse_in_the_receive_only_build` tested a state that no
@@ -2650,6 +2690,64 @@ mod tests {
             "booked where it keyed"
         );
         let after = run_js8_loop_from(&mut e, (slot + 1) * 15_000, 60);
+        assert!(after.is_empty(), "one ACK, and nothing after it: {after:?}");
+    }
+
+    /// ⭐ THE ACK AT JS8 60. The same MSG with the transmit speed at JS8 60 (index 4) is
+    /// answered in the next 4 s period: `W1AW ACK`, one frame, on my own offset, at JS8 60 —
+    /// the keyed wave is exactly that word modulated at 31.25 Hz tones after a 100 ms start
+    /// delay, 2.628 s in all — and nothing after it.
+    #[test]
+    fn a_js8_msg_to_me_is_acked_at_js8_60_in_the_next_4_s_period() {
+        let mut e = hb_engine("EN52", 0, 1500.0);
+        e.js8_set_speed(4).expect("JS8 60 is index 4");
+        let speed = e.js8_tx_speed();
+        assert_eq!(
+            (speed.letter(), speed.period_s()),
+            ('I', 4),
+            "control: JS8 60"
+        );
+        for d in msg_to_me("W1AW", "HELLO FROM OHIO") {
+            e.js8_ingest(&[d], 0);
+        }
+        let slot = tempo_core::timing::now_unix_ms() as u64 / 4_000 + 1;
+        e.js8_tick(slot * 4_000 - 1_000);
+        let plan = e
+            .plan_tx(slot)
+            .expect("the ACK keys in the next JS8 60 period");
+        let TxWaveform::Js8 {
+            word,
+            f0,
+            speed: keyed,
+        } = &plan.waveform
+        else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(*word, w1aw_ack(), "JS8Call's `W1AW ACK`, one frame");
+        assert_eq!(*f0, 1500.0, "on my own offset: a reply never moves");
+        assert_eq!(*keyed, speed, "at the transmit speed, JS8 60");
+        let wave = plan.waveform.build();
+        assert_eq!(
+            wave.len(),
+            1_200 + 79 * 384,
+            "100 ms of start delay, then 79 symbols of 384 samples"
+        );
+        assert!(
+            wave[..1_200].iter().all(|&x| x == 0.0),
+            "the delay is silence"
+        );
+        assert_eq!(
+            wave,
+            ::js8::phy::modulate(
+                &::js8::phy::encode_word(&w1aw_ack(), speed),
+                speed,
+                1500.0,
+                tempo_core::tempo_fast::SAMPLE_RATE
+            ),
+            "the word's own JS8 60 tones"
+        );
+        assert!(!e.commit_tx(&plan, wave, slot).is_empty(), "…and it keys");
+        let after = run_js8_loop_from(&mut e, (slot + 1) * 4_000, 60);
         assert!(after.is_empty(), "one ACK, and nothing after it: {after:?}");
     }
 

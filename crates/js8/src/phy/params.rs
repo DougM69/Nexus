@@ -1,5 +1,6 @@
-//! Per-speed decoder geometry — JS8Call's four `Mode{A,B,C,E}` constant
-//! blocks (JS8.cpp:211-338 @ a7ff1be0) as ONE runtime table, so every DSP
+//! Per-speed decoder geometry — JS8Call's `Mode{A,B,C,E}` constant blocks
+//! (JS8.cpp:211-338 @ a7ff1be0) and 3.0.3's `ModeI` for JS8 60 (JS8.cpp:342-367
+//! @ v3.0.3, the same constants 2.3 carried unused) as ONE runtime table, so every DSP
 //! module below is written once and takes `geom(speed)` instead of being
 //! instantiated per speed the way JS8.cpp's `DecodeMode<Mode>` template is.
 //!
@@ -9,7 +10,7 @@
 //! NSPS/NDOWNSPS, NDFFT1 = NSPS·NDD, NDFFT2 = NDFFT1/NDOWN, NP2 = NN·NDOWNSPS,
 //! FS2 = 12000/NDOWN, DF = 12000/NFFT1, TSTEP = NSTEP/12000). JSTRT is a
 //! TABLE, not a division: JS8.cpp computes `static_cast<int>(ASTART/TSTEP)`
-//! in float and the truncation of 6.25 / 12.5 / 8.0 / 8.0 is a fact we pin
+//! in float and the truncation of 6.25 / 12.5 / 8.0 / 8.0 / 12.5 is a fact we pin
 //! rather than re-derive in a different arithmetic.
 //!
 //! WHY NDD/BASESUB/AZ live here and not in `Speed` (interfaces §1.1): they
@@ -80,7 +81,7 @@ pub(crate) struct Geom {
     pub nqsymbol: isize,
 }
 
-/// JS8.cpp:211-338, one row per speed.
+/// JS8.cpp:211-338 (3.0.3 :342-367 for Ultra), one row per speed.
 pub(crate) fn geom(speed: Speed) -> Geom {
     // (NDD, BASESUB, AZ factor, JSTRT) — transcribed per Mode block.
     let (ndd, basesub, az_fac, jstrt) = match speed {
@@ -88,6 +89,7 @@ pub(crate) fn geom(speed: Speed) -> Geom {
         Speed::Normal => (100, 40.0, 0.64, 12),             // ModeA, :211-240
         Speed::Fast => (100, 39.0, 0.8, 8),                 // ModeB, :242-271
         Speed::Turbo => (120, 38.0, 0.6, 8),                // ModeC, :273-302
+        Speed::Ultra => (125, 36.0, 0.64, 12),              // ModeI, 3.0.3 :342-367
     };
     let nsps = speed.nsps();
     let nmax = speed.period_s() as usize * 12_000;
@@ -127,10 +129,12 @@ mod tests {
     use super::*;
 
     /// Every derived constant against JS8Call's Mode{E,A,B,C} blocks
-    /// (JS8.cpp:211-338) — the values a human can read off the C++ without
-    /// running it. JSTRT is `static_cast<int>(ASTART / TSTEP)` evaluated in
-    /// float: 0.5/0.08 → 6.25 → 6, 0.5/0.04 → 12.5 → 12, 0.2/0.025 → 8,
-    /// 0.1/0.0125 → 8 (JS8.cpp:236, :267, :299, :334).
+    /// (JS8.cpp:211-338) and 3.0.3's ModeI (:342-367) — the values a human can
+    /// read off the C++ without running it. JSTRT is `static_cast<int>(ASTART /
+    /// TSTEP)` evaluated in float: 0.5/0.08 → 6.25 → 6, 0.5/0.04 → 12.5 → 12,
+    /// 0.2/0.025 → 8, 0.1/0.0125 → 8, 0.1/0.008 → 12.5 → 12 (JS8.cpp:236, :267,
+    /// :299, :334; 3.0.3 :366 — the last measured by compiling ModeI's own
+    /// constexpr lines with g++ 13: 12).
     #[test]
     fn geometry_matches_js8call_mode_blocks() {
         let rows = [
@@ -206,6 +210,24 @@ mod tests {
                 3,
                 12.0,
                 38.0,
+            ),
+            (
+                Speed::Ultra,
+                48_000,
+                768,
+                96,
+                497,
+                32,
+                48_000,
+                1500,
+                948,
+                375.0,
+                15.625,
+                0.008,
+                12,
+                3,
+                20.0,
+                36.0,
             ),
         ];
         for (

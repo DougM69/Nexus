@@ -898,17 +898,20 @@ pub struct Settings {
     pub q65_submode: u8,
     // --- JS8 (JS8Call-compatible keyboard-to-keyboard; `crates/js8`) ---
     /// JS8 TRANSMIT speed as an index into `Js8Speed::ALL`: 0 Slow (30 s), 1 Normal (15 s),
-    /// 2 Fast (10 s), 3 Turbo (6 s). An index rather than the enum — the house shape of
+    /// 2 Fast (10 s), 3 Turbo (6 s; "JS8 40" in JS8Call 3.0), 4 Ultra (4 s; "JS8 60", 3.0's
+    /// experimental speed). An index rather than the enum — the house shape of
     /// `q65_submode`/`jt65_submode` — so a stale or hand-edited file degrades to Normal
     /// (`Tier::js8_kind`) instead of refusing to load. Sets the slot clock and the boundary
     /// decode window; receive decodes every speed in `js8_rx_speeds` regardless.
     #[serde(default = "default_js8_speed")]
     pub js8_speed: u8,
     /// Bitmask of speeds the receiver decodes each cycle: Slow 1 · Normal 2 · Fast 4 ·
-    /// Turbo 8. Defaults to 15 (all four) — JS8Call's `SubModeMultiDecode=true` — so a
-    /// fresh install hears every station on the watering hole with zero toggles. 0 is
-    /// treated as 15 by the scheduler (a mask that decodes nothing is never what anyone
-    /// meant).
+    /// Turbo 8 · Ultra 16. Defaults to 31 (all five) — JS8Call 3.0's `SubModeMultiDecode=true`
+    /// (mainwindow.cpp:528-529), whose every-speed decode includes JS8 60 — so a fresh install
+    /// hears every station on the watering hole with zero toggles. A stored mask is kept as
+    /// it is: a file saved before JS8 60 existed decodes the speeds it names, and the JS8 60
+    /// switch adds it. 0 is treated as every speed by the scheduler (a mask that decodes
+    /// nothing is never what anyone meant).
     #[serde(default = "default_js8_rx_speeds")]
     pub js8_rx_speeds: u8,
     /// Heartbeat repeat interval in minutes; 0 = on demand (JS8Call `HBInterval` default).
@@ -4689,9 +4692,10 @@ fn default_js8_speed() -> u8 {
     1
 }
 
-/// All four JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8). See [`Settings::js8_rx_speeds`].
+/// All five JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8 | Ultra 16). See
+/// [`Settings::js8_rx_speeds`].
 fn default_js8_rx_speeds() -> u8 {
-    15
+    modes::Js8Speed::ALL_BITS
 }
 
 /// JS8Call ships autoreply ON (G3). See [`Settings::js8_autoreply`].
@@ -9764,8 +9768,8 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.js8_speed, 1, "Normal is index 1 of Speed::ALL");
         assert_eq!(
-            s.js8_rx_speeds, 15,
-            "all four speeds decode with zero toggles"
+            s.js8_rx_speeds, 31,
+            "all five speeds, JS8 60 too, decode with zero toggles"
         );
         assert_eq!(
             s.js8_hb_interval_min, 0,
@@ -9805,7 +9809,7 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let keys = [
             "\"js8Speed\":1",
-            "\"js8RxSpeeds\":15",
+            "\"js8RxSpeeds\":31",
             "\"js8HbIntervalMin\":0",
             "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
@@ -9828,6 +9832,13 @@ mod tests {
         // An upgrader's file predates every key: defaults apply, nothing fails to load.
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
+        assert_eq!(old.js8_rx_speeds, 31, "no key: every speed, JS8 60 too");
+        // A mask saved before JS8 60 existed keeps its meaning — the four speeds it names.
+        let four: Settings = serde_json::from_str(r#"{"js8RxSpeeds":15}"#).unwrap();
+        assert_eq!(
+            four.js8_rx_speeds, 15,
+            "a stored mask is never widened on load"
+        );
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
         assert!(
             old.js8_autoreply_confirmation,
