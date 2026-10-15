@@ -1540,9 +1540,9 @@ impl Engine {
         let st = &self.js8_station;
         let (going, boxed) = match on_air {
             Some((_, last, _)) => (st.last_tx_display().unwrap_or(""), !*last),
-            None => (st.going_out().unwrap_or(""), st.outbox_len() > 0),
+            None => (st.going_out().unwrap_or(""), st.outbox_count() > 0),
         };
-        let waiting = (st.queued_len() + st.outbox_len()).saturating_sub(usize::from(boxed));
+        let waiting = (st.queued_len() + st.outbox_count()).saturating_sub(usize::from(boxed));
         let going_chars = going.chars().count();
         Js8ApiSnapshot {
             callsign: s.mycall.trim().to_ascii_uppercase(),

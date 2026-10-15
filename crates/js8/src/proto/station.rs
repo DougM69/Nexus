@@ -2001,7 +2001,7 @@ impl Station {
     }
 
     /// Messages composed and waiting to key, the one going out first.
-    pub fn outbox_len(&self) -> usize {
+    pub fn outbox_count(&self) -> usize {
         self.outbox.len()
     }
 
