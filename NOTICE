@@ -41,6 +41,19 @@ modifications marked and the full provenance documented in
 - the **`four2a` FFT** routine and surrounding DSP infrastructure that
   `libtempo` reuses (alongside FFTW3, below).
 
+Nexus also carries a **Rust translation of WSJT-X's FT8/FT4 transmit encoder**, in
+`crates/modes/src/wsjt77/` (`mod.rs`, `pack.rs`, `wave.rs`), ported statement by statement
+from the vendored copies of `lib/77bit/packjt77.f90` (`pack77`, and the transmit-side check
+in `unpack77`), `lib/ft8/genft8.f90`, `lib/ft4/genft4.f90`, `lib/ft8/encode174_91.f90`,
+`lib/crc14.cpp`, `lib/ft8/gen_ft8wave.f90`, `lib/ft4/gen_ft4wave.f90` and
+`lib/ft2/gfsk_pulse.f90`; it reads the LDPC generator table
+`lib/ft8/ldpc_174_91_c_generator.f90` at compile time. It builds FT8 and FT4 overs without
+the lock the Fortran encoder shares with the decoder. Where its result could differ from the
+Fortran's it declines and the vendored encoder makes the message, and the vendored encoder
+still runs on every message sent, for the callsign tables the decoder reads. It is a derived
+work of WSJT-X under the same GPLv3 terms; each file's header names its sources, and the
+module header lists the differences.
+
 WSJT-X is the work of Joe Taylor (K1JT) and the WSJT Development Group,
 including Steve Franke (K9AN), Bill Somerville (G4WJS), Nico Palermo (IV3NWV),
 Uwe Risse (DG2YCB), Brian Moran (N9ADG), and others. See the upstream project

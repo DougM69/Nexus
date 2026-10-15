@@ -165,8 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at 6.04 s and PTT drops at 6.24 s (it held about 0.56 s longer). FT4 keeps its tones 0.5 s into
   the slot. A decode still running when your slot starts no longer delays your over: Nexus builds
   the over it is about to send before that decode begins, and keys it on time; an over you change in
-  the last seconds of the slot (a new TX frequency or message) is built then and can still wait,
-  with its tones on the slot clock. A Call CQ or double-click inside your own slot still keys at
+  the last seconds of the slot (a new TX frequency or message) is built then, and no longer waits
+  either (see Fixed). A Call CQ or double-click inside your own slot still keys at
   once, now with its tones on the slot clock and its PTT ending inside the slot (it ran 0.25 s into
   the next one), and it now keys as late as WSJT-X does: while the slot is under 75 % of its period,
   up to 11.25 s into an FT8 slot or 5.6 s into FT4, sending the symbols that remain (1.18.0 keyed
@@ -558,6 +558,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   looked overdriven on every over. Nexus now reads the radio's own ALC value and shows the same
   share of the bar as the radio. Every other radio's ALC reads as before. NEEDS-BENCH: an FT-991A
   and an FTDX10 into a dummy load, each radio's ALC bar next to Nexus's at three drive levels.
+- **FT8 and FT4: an over you change in the last seconds before your slot no longer waits for the
+  decoder.** When what Nexus is about to send changes after the early decode has started (you move
+  the TX frequency, double-click a station, call CQ or change the message, or the sequencer moves
+  on), Nexus builds the over at the start of your slot. Building it had to wait until that decode
+  finished, so on a slow computer, a Raspberry Pi or a busy band the over could key late and lose
+  its first symbols. Nexus now builds FT8 and FT4 overs without waiting for the decoder, so they
+  key on time, as WSJT-X's do (its decoder runs separately). The tones are the same ones Nexus sent
+  before, checked against WSJT-X's own encoder for every kind of message, and a compound or hashed
+  call you send is still shown in full when the reply to it comes back. NEEDS-BENCH: beside
+  WSJT-X on a slow computer, an FT8 and an FT4 over changed in the last seconds before your slot (a
+  new TX frequency, a double-click) keys on time, and a QSO with a compound call completes.
 
 ### Security
 

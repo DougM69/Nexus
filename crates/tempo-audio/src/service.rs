@@ -12848,14 +12848,15 @@ impl RadioLoop {
                     let n = ((elapsed_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
                     let frame = self.rx.frame_latest_padded(n);
                     // ⭐ BUILD THE NEXT OVER BEFORE THIS DECODE TAKES THE MODEM. The decode
-                    // holds `MODEM_LOCK` for its whole length, and building an over needs it
+                    // holds `MODEM_LOCK` for its whole length, and building an over needed it
                     // too, so an early decode still running at the boundary made the key wait
                     // for it: the over went out late, by however long the decode overran. WSJT-X
                     // never waits; its decoder is another process. The over the boundary will
                     // key if nothing changes first is built now, while the modem is free, and a
                     // boundary whose decoder is still busy keys it as built when its plan asks
                     // for exactly this over (`Engine::prebuilt_wave`). A guess only: a plan that
-                    // asks for anything else builds it then, as before.
+                    // asks for anything else builds it then, as before; for FT8 and FT4 that
+                    // build no longer needs the modem either (`modes::wsjt77`).
                     if let Some(next) = eng.next_over_hint(slot + 1) {
                         if eng.prebuilt_wave(&next).is_none() {
                             drop(eng);
@@ -12988,17 +12989,18 @@ impl RadioLoop {
                     // This is the ONE branch where the modem is contended: we are
                     // here because a decode from an earlier slot is STILL RUNNING,
                     // and that decode holds `MODEM_LOCK` for its whole duration.
-                    // The TX build needs the same lock, so it waits — and it used
-                    // to wait while holding the engine mutex, which every Tauri
+                    // A Fortran-backed mode's TX build needs the same lock, so it
+                    // waits — and it used to wait while holding the engine mutex, which every Tauri
                     // snapshot poll and every UI command also needs. The window
                     // went "not responding" for as long as the decoder took
                     // (sub-second here, seconds on a Pi).
                     //
                     // Plan under the lock, release, build, re-acquire, commit. An over
                     // built before the decode took the modem is not built again, and
-                    // nothing waits (below); any other over still waits here, and
-                    // `commit_tx` refuses the plan if the tier moved underneath us while
-                    // the engine was unlocked.
+                    // nothing waits (below); an FT8 or FT4 over is built without the modem
+                    // (`modes::wsjt77`) and does not wait either; any other over still
+                    // waits here, and `commit_tx` refuses the plan if the tier moved
+                    // underneath us while the engine was unlocked.
                     //
                     // Skipped entirely when this slot was already keyed at its
                     // boundary — `finish_boundary` is then housekeeping-only and
@@ -13016,7 +13018,9 @@ impl RadioLoop {
                                 // MODEM: the over keyed last, or the one the early pass built just
                                 // before it dispatched this decode (`Engine::prebuilt_wave`). Then
                                 // nothing waits, and the key is on time, as WSJT-X's is: its decoder
-                                // is another process. Any other over is built here and waits.
+                                // is another process. Any other over is built here: an FT8 or FT4
+                                // one without the modem (`modes::wsjt77`), so it does not wait
+                                // either; one of a Fortran-backed mode waits.
                                 let wave = match eng.prebuilt_wave(&plan.waveform) {
                                     Some(wave) => wave.to_vec(),
                                     None => {
@@ -13026,8 +13030,8 @@ impl RadioLoop {
                                         wave
                                     }
                                 };
-                                // Re-read the clock AFTER the build (it waited out
-                                // MODEM_LOCK): commit_tx refuses if the T/R slot
+                                // Re-read the clock AFTER the build (it may have waited
+                                // out MODEM_LOCK): commit_tx refuses if the T/R slot
                                 // rolled over meanwhile, and the PTT-hold deadline
                                 // must be measured from when the audio actually
                                 // starts — the boundary tick's `now` would leave
