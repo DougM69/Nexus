@@ -54,7 +54,10 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
   QUERY MSGS to the group, and handed to each of them once. The inbox keeps at most 100 messages
   (and 64 KB) of yours and as many held for others; when it is full, a message already handed
   over goes first, then the oldest, and a note at the top of the Inbox says which message went
-  and why until you press **Clear notes**.
+  and why until you press **Clear notes**. A held message is handed over in one transmission,
+  which holds at most 19 frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo; one that needs
+  more is not offered or handed over until you change to a speed it fits, and its row says so and
+  names that speed.
 - **Log** — the log strip, prefilled from the station you last addressed. A JS8 QSO logs
   as `MFSK` / `JS8` in ADIF.
 - **Boxes** — up to six panes of [Conditions](connect.md) among these, from ⊞ Panels ▸
@@ -113,7 +116,10 @@ is no **HB** button and no heartbeat acknowledgement. **HB** starts the repeat (
 the interval; the first heartbeat goes one interval after you switch it on), or at interval 0
 sends one heartbeat. Its menu has **Send heartbeat now** and, with an interval set, **Start**
 or **Stop heartbeat timer**. Heartbeats and acknowledgements go out at Slow, Normal and Fast
-only: at Turbo **HB** disappears, **HB NET** is greyed out, and a running repeat stops. With the
+only: at Turbo **HB** disappears, **HB NET** is greyed out, and a running repeat stops. As in
+JS8Call, a heartbeat counts as @ALLCALL traffic: a station's heartbeat is acknowledged at most once
+in 15 minutes, and a station just acknowledged, or just answered on @ALLCALL, gets neither again
+for 15 minutes; the log says when a heartbeat goes unacknowledged for this. With the
 **QSO pause** (on by default), a call in the **To** box pauses the heartbeat repeat until you
 clear the box, holds back every acknowledgement, and stops a repeating CQ; switching **HB** on
 clears the **To** box. When **HB ACK** is on but held back for one of these reasons (the speed,

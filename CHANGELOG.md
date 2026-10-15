@@ -225,6 +225,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds at most 100 messages (and 64 KB) of your own and as many held for others. When it is full a
   message already handed over goes first, then the oldest, and the Inbox now lists which message
   went and why until you press Clear notes.
+- **JS8: a station's heartbeat is acknowledged at most once in 15 minutes, as in JS8Call.** JS8Call
+  counts a heartbeat as @ALLCALL traffic: once it acknowledges a station's heartbeat it neither
+  acknowledges that station again nor answers its @ALLCALL QUERY CALL or QUERY MSGS for 15 minutes,
+  and a station it answered on @ALLCALL gets no acknowledgement for 15 minutes. Nexus acknowledged
+  every heartbeat; it now does as JS8Call does, and the log says when a heartbeat goes
+  unacknowledged for this. Each station is counted by its call as heard, as JS8Call counts it, so
+  W1AW/P and W1AW are now each answered on @ALLCALL (Nexus used to count them as one).
+  NEEDS-BENCH against JS8Call 3.0.3.
 
 ### Fixed
 
@@ -587,6 +595,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DXCC entity, but the search still looked only at the country text stored with the contact, so a
   contact stored as `Germany` from a QRZ lookup was not found by "Fed. Rep. of Germany", the name
   on its row. The search now looks in both, on the desktop and on the Remote page.
+- **JS8: a MSG whose text starts with "MSG" reaches your Inbox.** A message to you reading, for
+  example, "MSG 5" was taken for QUERY MSG 5, a request for held message 5: it never reached your
+  Inbox and was never acknowledged, and if you held message 5 for the sender, Nexus sent it to
+  them. 1.18.0 did this too. It is now filed and acknowledged like any other message, as JS8Call
+  does; only QUERY MSG 5 asks for message 5. NEEDS-BENCH.
+- **JS8: a held message too long to hand over at your speed is no longer offered again and again.**
+  A message you hold for another station is handed over in one transmission, which holds at most 19
+  frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo. One that needed more was still offered
+  ("YES MSG ID 5", and in a heartbeat acknowledgement), then silently failed to go, and was offered
+  again at every query. It is now not offered, counted or handed over until you change to a speed it
+  fits, and its Inbox row says so and names that speed. A hand-over that fits only without its
+  "NEXT MSG ID" goes without it, and a reply that no longer fits when it goes (you slowed down while
+  it waited for your Yes) is not sent, and the log says why. NEEDS-BENCH.
 
 ### Security
 
