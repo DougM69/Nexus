@@ -267,6 +267,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out. It is read-only: such a program cannot
   send, tune or change a setting through Nexus. Only programs on this computer can connect, and the
   Remote page cannot turn it on.
+- **JS8 on Nexus Remote shows what the station's JS8 screen shows.** HB NET and what is holding HB
+  ACK back, the call list's ★ (hearing you) and ☎ (called CQ in the last five minutes), the Inbox's
+  note on a held message too long to hand over at this speed, the decode filter's plate over the
+  waterfall, and the RX pane with a line for each message, closed by its end mark. They are there to
+  see: the decode filter, QSY to centre, the band schedule and the call list's groups and block list
+  are changed at the station only, as before. A station on 1.18.0 or earlier shows its JS8 screen on
+  the Remote as it did. NEEDS-BENCH: a station on this build, watched on the Remote page from a
+  phone.
 
 ### Changed
 
