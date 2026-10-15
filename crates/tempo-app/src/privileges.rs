@@ -321,6 +321,15 @@ pub fn wide_phone_allowed(class: LicenseClass, carrier_mhz: f64) -> bool {
         || crate::bandplan::band_for_dial(carrier_mhz) != Some("60m")
 }
 
+/// Is upper sideband the only phone `class` may transmit with its carrier at `carrier_mhz`: LSB
+/// refused ([`lsb_phone_allowed`]) and every word that is not one sideband refused too
+/// ([`wide_phone_allowed`])? 60 m, for every US class. It decides nothing about keying, which those
+/// two decide: the Phone cockpit greys its LSB, AM and FM picks where it holds, and the lock names
+/// this rule rather than the frequency when the pick is all that stands in the way.
+pub fn usb_only_phone(class: LicenseClass, carrier_mhz: f64) -> bool {
+    !lsb_phone_allowed(class, carrier_mhz) && !wide_phone_allowed(class, carrier_mhz)
+}
+
 /// The lowest frequency (MHz) at which `class` may use `mode` on `band` — where a band
 /// dropdown should park the VFO. `None` = the operator has no privilege for that band+mode
 /// (so the band is omitted from the dropdown). 60 m is excluded (channelized; tune manually).

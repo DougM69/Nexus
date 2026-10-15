@@ -72,6 +72,9 @@ mod held_form_tests;
 mod kept_files_tests;
 mod mode_entry;
 pub mod parsec_presence;
+/// 60 m allows only USB phone: the picks the cockpit greys, and the lock naming the rule.
+#[cfg(test)]
+mod phone_usb_only_tests;
 /// A contest picked while Contest mode is on, switched on Save exactly as off-and-on switches it.
 #[cfg(test)]
 mod pick_switch_tests;
@@ -1692,6 +1695,13 @@ const SSTV_REFUSED_TX_OFF: &str = "SSTV stopped: transmit was turned off, so the
 const SSTV_REFUSED_PRIVILEGES: &str = "SSTV not sent: this frequency is outside your license \
      privileges, so the picture that was waiting was dropped, not held for later. Send it again \
      from inside them.";
+/// …and when the phone MODE is the whole reason ([`Engine::phone_mode_refused`]): an image under
+/// an FM pick on 60 m, where a USB pick would have sent it.
+const SSTV_REFUSED_USB_ONLY: &str = "SSTV not sent: 60 m allows only USB phone, so the picture \
+     that was waiting was dropped, not held for later. Pick USB or AUTO and send it again.";
+/// The licence lock's words when the phone MODE is the whole reason ([`Engine::phone_mode_refused`]):
+/// on 60 m the frequency is fine for USB, and the pick is LSB, AM or FM.
+const PHONE_USB_ONLY: &str = "TX locked — 60 m allows only USB phone. Pick USB or AUTO.";
 const SSTV_REFUSED_RADIO_HAS_MIC: &str = "SSTV not sent: the radio has the mic (Flex native DAX \
      audio, Phone at the shack), so the picture that was waiting was dropped, not held for later. \
      Nothing was keyed.";
@@ -11005,9 +11015,7 @@ impl Engine {
             return Err(why.to_string());
         }
         if !self.tx_allowed() {
-            return Err(
-                "TX locked — this frequency is outside your license privileges".to_string(),
-            );
+            return Err(self.licence_lock_text().to_string());
         }
         // Nexus's own Flex client runs the radio's ATU: the cycle is the radio's carrier, where
         // the radio transmits, so it is judged as CW there too, as its tune carrier is. Only ever
@@ -11229,9 +11237,7 @@ impl Engine {
                 "tx",
                 "voice-keyer message refused: the dial is outside the licence's privileges",
             );
-            return Err(
-                "TX locked — this frequency is outside your license privileges".to_string(),
-            );
+            return Err(self.licence_lock_text().to_string());
         }
         if self.flex_radio_has_mic {
             // The pending message is the one this replaces, not something else transmitting.
@@ -22148,9 +22154,7 @@ contact yourself."
             return Err(why.to_string());
         }
         if !self.tx_allowed() {
-            return Err(
-                "TX locked — this frequency is outside your license privileges".to_string(),
-            );
+            return Err(self.licence_lock_text().to_string());
         }
         // Ownership from the ONE arbiter. This gate's field list was the complete
         // one the other gates lacked; `tx_owner()` is that list, generalised.
@@ -22245,7 +22249,11 @@ contact yourself."
         } else if in_section && !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
-                SSTV_REFUSED_PRIVILEGES,
+                if self.phone_mode_refused() {
+                    SSTV_REFUSED_USB_ONLY
+                } else {
+                    SSTV_REFUSED_PRIVILEGES
+                },
             ))
         } else if self.flex_radio_has_mic {
             Some((
@@ -22636,6 +22644,38 @@ contact yourself."
             .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
     }
 
+    /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is
+    /// the only phone at the transmit carrier ([`crate::privileges::usb_only_phone`]: 60 m, every
+    /// US class), and a USB pick would key on every frequency the gate judges. Then the pick (LSB,
+    /// AM or FM, or a data form of one) is all that stands in the way, and the lock says so,
+    /// [`PHONE_USB_ONLY`]; where USB is refused too, the frequency is the reason and the lock keeps
+    /// its frequency sentence.
+    ///
+    /// DISPLAY ONLY: it picks the words for a refusal [`Self::tx_allowed`] has already made, and
+    /// nothing keys or refuses on it.
+    pub fn phone_mode_refused(&self) -> bool {
+        use crate::settings::OperatingMode;
+        self.settings.operating_mode == OperatingMode::Phone
+            && crate::privileges::usb_only_phone(
+                self.settings.license_class,
+                self.tx_source_verdict().emission_mhz,
+            )
+            && !self.tx_allowed()
+            // The gate with a USB pick: the band convention is USB on 60 m too, so the one
+            // phone model asked of USB is the whole of what it would judge.
+            && self.every_tx_frequency(|mhz| self.phone_emission_allowed(mhz, "USB"))
+    }
+
+    /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
+    /// ([`Self::phone_mode_refused`]), else the frequency sentence every transmit path has said.
+    fn licence_lock_text(&self) -> &'static str {
+        if self.phone_mode_refused() {
+            PHONE_USB_ONLY
+        } else {
+            "TX locked — this frequency is outside your license privileges"
+        }
+    }
+
     /// THE KEY-TIME JUDGEMENT OF THE FREQUENCY THE NEXT OVER IS EMITTED ON: the whole licence
     /// gate before the D1 switch, unchanged, and still the whole of it whenever Main transmits
     /// ([`Self::tx_allowed`], [`Self::tx_source_verdict`]).
@@ -22647,6 +22687,13 @@ contact yourself."
     /// frequencies, each through `om`'s emission model. CW keyed from another section — the CW
     /// ID after an FT 73 — is judged as CW too ([`Self::poll_cw_one`]).
     fn tx_allowed_as(&self, om: crate::settings::OperatingMode) -> bool {
+        self.every_tx_frequency(|mhz| self.emission_in_use_allowed_as(om, mhz))
+    }
+
+    /// Does `judge` pass every frequency the next over is emitted on? The frame of
+    /// [`Self::tx_allowed_as`], which asks it of the emission in use; [`Self::phone_mode_refused`]
+    /// asks it of a USB pick, so the two never disagree about which frequencies count.
+    fn every_tx_frequency(&self, judge: impl Fn(f64) -> bool) -> bool {
         if self.connection_tx_refusal().is_some() {
             return false;
         }
@@ -22655,7 +22702,6 @@ contact yourself."
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        let judge = |mhz: f64| self.emission_in_use_allowed_as(om, mhz);
         // `tx_emission_mhz` already carries XIT.
         let emission = self.tx_emission_mhz();
         // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
@@ -23746,6 +23792,11 @@ contact yourself."
         s.radio.tx_allowed = self.tx_allowed();
         s.radio.tx_refusal = self.connection_tx_refusal().map(str::to_string);
         s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
+        s.radio.phone_usb_only = crate::privileges::usb_only_phone(
+            self.settings.license_class,
+            self.tx_source_verdict().emission_mhz,
+        );
+        s.radio.phone_mode_refused = self.phone_mode_refused();
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);

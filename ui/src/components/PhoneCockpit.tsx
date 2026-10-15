@@ -1096,7 +1096,12 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
     if (!control) return
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
     if (on && !snapRef.current.radio.txAllowed) {
-      pushToast(snapRef.current.radio.txRefusal ?? t('phone.tx.locked'), 'info', 3500)
+      const radio = snapRef.current.radio
+      pushToast(
+        radio.txRefusal ?? (radio.phoneModeRefused ? t('phone.tx.usbOnly') : t('phone.tx.locked')),
+        'info',
+        3500,
+      )
       return
     }
     // …nor while a clock repair holds transmit (`Engine::hold_tx_for_clock_repair`): the engine
@@ -2578,19 +2583,26 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
               // and differs by region, while the RIG already knows what it supports and refuses
               // what it does not. Nexus does not get to have an opinion about where AM belongs;
               // that is the operator's business and his licence.
+              //
+              // The licence's one word on it is the engine's, not a band plan here: on 60 m a US
+              // class may talk upper sideband only (`phoneUsbOnly`), so LSB, AM and FM are greyed
+              // there with that reason rather than offered and then refused with TX LOCKED.
               .map((m) => {
               const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
+              const usbOnly = snap.radio.phoneUsbOnly === true && (m === 'LSB' || m === 'FM' || m === 'AM')
               return (
                 <button
                   key={m}
                   type="button"
                   className={`ph-mode-btn${active ? ' active' : ''}`}
                   aria-pressed={active}
-                  disabled={!phoneModeControl.canPick(m === 'AUTO' ? null : m) || !catOk}
+                  disabled={!phoneModeControl.canPick(m === 'AUTO' ? null : m) || !catOk || usbOnly}
                   title={
-                    m === 'AUTO'
-                      ? t('phone.mode.auto.title', { sideband: sidebandAuto })
-                      : t('phone.mode.force.title', { mode: m })
+                    usbOnly
+                      ? t('phone.mode.usbOnly')
+                      : m === 'AUTO'
+                        ? t('phone.mode.auto.title', { sideband: sidebandAuto })
+                        : t('phone.mode.force.title', { mode: m })
                   }
                   onClick={() => pickMode(m === 'AUTO' ? null : m)}
                 >
@@ -3220,7 +3232,9 @@ export function PhoneCockpit({ esmSetting, active = true, snap, theme, pendingWo
           title={
             !snap.radio.txAllowed
               ? snap.radio.txRefusal ??
-                'TX locked — outside your license privileges (pick a band, or change your license in Settings)'
+                (snap.radio.phoneModeRefused
+                  ? 'TX locked — 60 m allows only USB phone (pick USB or AUTO)'
+                  : 'TX locked — outside your license privileges (pick a band, or change your license in Settings)')
               : !snap.radio.txEnabled
                 ? "Transmit is switched OFF, so keying is discarded — Stop TX, the TX watchdog or a logger's Halt Tx turns it off. Click to enable transmit, then hold to talk. You talk on the rig's mic."
                 : "Hold to talk (or Space). Toggle 'Lock' for hands-free (then Enter keys/unkeys). You talk on the rig's mic."

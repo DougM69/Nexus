@@ -147,6 +147,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, and AM and FM keep every other band. NEEDS-BENCH: a radio on 60 m into a dummy load,
   checking that Nexus keys USB on a channel carrier and CW on a channel centre, and shows TX LOCKED
   for LSB, AM, FM and CW off the centre.
+- **On 60 m the Phone screen greys LSB, AM and FM, and the lock says why.** A US licence allows only
+  upper sideband phone on 60 m, but the mode chips still offered LSB, AM and FM, and a pick showed
+  TX LOCKED with "this frequency is outside your license privileges" on a frequency that was fine.
+  The chips now grey those three on 60 m, with "60 m allows only USB phone" when you hover one. When
+  the mode is the only reason TX is locked, push-to-talk, the band lock, the voice keyer, the radio's
+  tuner button and SSTV say that 60 m allows only USB phone and ask for USB or AUTO. A frequency
+  where USB is refused too keeps the old sentence. What keys and what is refused is unchanged.
 
 - **A contest log that cannot be saved to disk now says so.** When the contest journal could not
   be written (a full disk, or a file held by another program), the contacts since the last good

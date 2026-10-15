@@ -1539,6 +1539,12 @@ export interface RadioStatus {
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */
   txEmissionMhz?: number | null
+  /** Upper sideband is the only phone the licence allows where this radio transmits (60 m, every
+   *  US class): the Phone cockpit greys its LSB, AM and FM picks. Absent when false. */
+  phoneUsbOnly?: boolean
+  /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
+   *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
+  phoneModeRefused?: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
