@@ -1421,7 +1421,7 @@ JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays it
 **Sending**
 
 - **Hold PTT between frames** — off by default, as in JS8Call: PTT drops after each frame
-  of a message and keys again for the next (at Normal the radio is unkeyed for about 1.6
+  of a message and keys again for the next (at Normal the radio is unkeyed for about 1.4
   seconds between two frames). On, the radio stays keyed from the end of one frame to the
   start of the next. It still drops after the message's last frame, never holds from one
   message into the next, and drops at once on Stop TX or TX Off.
@@ -1431,6 +1431,10 @@ JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays it
   or the jump is taken at once: the frame on the air
   moves too, from where it has got to (a heartbeat on its own spot stays there), and the
   frames still to go are sent at the new offset.
+- **TX delay** — 0.2 seconds by default, as in JS8Call (0.1 to 0.5): how long before each
+  period a frame keys the radio. The frame's first tone still goes out at the period's start
+  delay, so a radio slow to switch to transmit no longer sends it late. Lengthen it for an
+  amplifier or a radio whose relay is slow.
 
 **Composing**
 

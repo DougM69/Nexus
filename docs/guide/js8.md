@@ -291,12 +291,24 @@ adds no text then. A macro typed into the box meanwhile is replaced as **Send** 
 `<CALL>`, `<SNR>` and `<TDELTA>`, which stay as typed. The box empties when the message has gone,
 or when you press **Stop TX**.
 
+**When a frame keys.** As in JS8Call, each frame keys the radio a moment before its period
+begins, the **TX delay** (0.2 seconds unless you change it in Settings ▸ Digital ▸ JS8, from 0.1 to
+0.5), and sends silence up to the period's start delay, so its first tone goes out on time however
+long the radio takes to switch to transmit, and a station hearing you reads your timing (DT) near
+0.0. A radio slow to key plays less of that silence; one that keys after the start delay leaves out
+what it missed, as JS8Call does. If the radio keys so late that JS8Call would not have started the
+frame at all (at Normal, about 2.2 seconds into the period), Nexus unkeys at once and sends nothing
+of that frame, and the screen says why: TX stays on and the rest of the message goes out in the
+next periods, but the station you are sending to misses that frame. **Stop TX** or **TX Off**
+during the delay unkeys at once, and nothing of that frame goes out.
+
 **Between frames.** The radio drops PTT after each frame and keys again for the next, as JS8Call
-does by default: at Normal it is unkeyed for about 1.6 seconds between two frames (Slow about 4,
-Fast and JS8 40 about 1.7, JS8 60 about 1.1). Turn on **Hold PTT between frames** in Settings ▸
+does by default: at Normal it is unkeyed for about 1.4 seconds between two frames (Slow about 3.8,
+Fast and JS8 40 about 1.5, JS8 60 about 0.9). Turn on **Hold PTT between frames** in Settings ▸
 Digital ▸ JS8 and it stays keyed from the end of one frame of a message to the start of the next
-instead. It still drops after the message's last frame, never holds from one message into the
-next, and drops at once on **Stop TX** or **TX Off**.
+instead, and each frame after the first starts on its period, the radio being keyed already. It
+still drops after the message's last frame, never holds from one message into the next, and drops
+at once on **Stop TX** or **TX Off**.
 
 **Moving the TX offset while sending.** While a message is waiting to go or going out, the TX
 offset stays where it is, as in JS8Call: a right-click on the waterfall is refused and the screen

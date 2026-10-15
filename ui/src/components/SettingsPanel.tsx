@@ -9450,6 +9450,22 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">{t('settings.js8.txOffsetWhileSending.hint')}</span>
               </div>
+              {/* JS8Call's Tx delay: its spin box's 0.1 to 0.5 s, 0.2 s by default. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.txDelay.label')}</span>
+                <select disabled={remote}
+                  className="settings-input"
+                  value={String(form.js8TxDelayMs ?? 200)}
+                  onChange={(e) => updateNum('js8TxDelayMs', Number(e.target.value))}
+                >
+                  {[100, 200, 300, 400, 500].map((ms) => (
+                    <option key={ms} value={String(ms)}>
+                      {t('settings.js8.txDelay.option', { s: (ms / 1000).toFixed(1) })}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.js8.txDelay.hint')}</span>
+              </label>
             </div>
             <Js8ComposeSettings
               form={form}

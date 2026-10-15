@@ -38,6 +38,7 @@ use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
 use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
+mod js8_lead;
 mod monitor_claims;
 mod remote_radio;
 mod remote_selection;
@@ -3796,6 +3797,9 @@ struct RadioLoop {
     /// the slot. Never cleared per-slot: slots are monotonic, so a stale entry can
     /// never match a future boundary; reset on a tier switch (new slot numbering).
     boundary_keyed: Option<KeyedBoundary>,
+    /// JS8's TX delay: the frame keyed before its period, whose boundary the loop took then
+    /// (`service::js8_lead`). Reset on a tier switch with the slot numbering.
+    js8_lead: js8_lead::Js8Lead,
     /// Read-only launch latch: has the rig's mode been COMMANDED (asserted) this
     /// session? While `false`, `ensure_commanded` pushes dial/mode immediately before
     /// any key-up — closing the silent-no-op-transmit hole that removing the launch
@@ -4289,6 +4293,7 @@ impl RadioLoop {
             js8_multi_pending: 0,
             js8_last_tick_ms: 0,
             boundary_keyed: None,
+            js8_lead: js8_lead::Js8Lead::default(),
             rig_asserted: false, // read-only launch: nothing asserted until a real command
             cur_dial: 0,
             cur_md: String::new(),
@@ -12345,7 +12350,9 @@ impl RadioLoop {
         if self.tx_until_ms.is_none() {
             self.slot_tx_until_ms = 0.0;
         }
-        let slot_over_in_flight = now < self.slot_tx_until_ms;
+        // …but a JS8 frame still in its TX delay has sent nothing, and its period is the next cycle
+        // TX Off turns down: it is cut at once, as Stop TX cuts it (`js8_lead::in_js8_lead`).
+        let slot_over_in_flight = now < self.slot_tx_until_ms && !self.in_js8_lead(now);
         let tx_off_cut = !eng.tx_enabled() && !slot_over_in_flight;
         // ⚠️ THE HOLD GUARD IS ASYMMETRIC, DELIBERATELY — do not "tidy" this back into
         // one condition.
@@ -12706,6 +12713,7 @@ impl RadioLoop {
             self.early_msk_done = None;
             self.js8_done = [None; Js8Speed::ALL.len()];
             self.boundary_keyed = None;
+            self.js8_lead = js8_lead::Js8Lead::default();
             // Including the index THIS tick already computed, above, from the clock we
             // just replaced. `last_slot = None` makes the boundary block below fire on
             // this very tick, so leaving it stale ran that boundary — and the TX
@@ -12934,6 +12942,15 @@ impl RadioLoop {
             }
         }
 
+        // JS8's TX delay (JS8Call's `TxDelay`): the next period's frame is planned in the last
+        // stretch of this one, and when there is one, that period's boundary is taken now, its frame
+        // keyed with the boundary's own TX decision below (`js8_lead`).
+        let mut js8_lead_waves = None;
+        if tier_now == Tier::Js8 {
+            js8_lead_waves = self.js8_lead_frame(&mut eng, now, slot, is_tuning);
+            slot = self.js8_boundary_slot(slot);
+        }
+
         // New slot boundary: decode the just-ended RX slot (async) or, when there
         // is nothing to decode (own carrier / empty ring), run the TX decision now.
         // A boundary that needs a decode DEFERS its TX decision until the worker
@@ -12954,9 +12971,14 @@ impl RadioLoop {
                     // the HEAD of its buffer, so take the latest period, tail-padded — the
                     // early-pass slice shape. `frame()` would hand the decoder 36 s of audio
                     // with the period at the tail and the cycle start nowhere near sample 0.
+                    // Taken in a frame's TX delay, the period ends where the key is, tx_delay early,
+                    // as JS8Call's does: what has been heard of it (`js8_lead::heard_of_period`).
                     let frame = if tier_now == Tier::Js8 {
-                        let period = (self.cur_slot_secs * tempo_fast::SAMPLE_RATE as f64) as usize;
-                        self.rx.frame_latest_padded(period)
+                        self.rx.frame_latest_padded(js8_lead::heard_of_period(
+                            now,
+                            slot,
+                            self.cur_slot_secs,
+                        ))
                     } else {
                         self.rx.frame()
                     };
@@ -13003,8 +13025,9 @@ impl RadioLoop {
                             | tempo_app::dto::Tier::Ft2
                     );
                     if !has_early_pass || self.early_done_slot == Some(slot.wrapping_sub(1)) {
+                        let lead = js8_lead_waves.take();
                         let _ = self
-                            .key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, None);
+                            .key_boundary_tx(&mut eng, rig, backend, now, slot, false, None, lead);
                     }
                     let job = eng.build_decode_job(frame, slot, DecodePass::Boundary);
                     self.decode.dispatch(WorkerJob::Slot(job));
@@ -13070,6 +13093,13 @@ impl RadioLoop {
                         self.boundary_keyed.map(|k| k.slot == slot).unwrap_or(false);
                     let (prebuilt, now_tx) = if already_keyed {
                         (None, now)
+                    } else if let Some(lead) = js8_lead_waves.take() {
+                        // JS8's frame, planned in its TX delay: not planned again.
+                        (Some(lead), now)
+                    } else if crate::js8_slot::past_late_start(&eng, slot, now) {
+                        // Past JS8Call's late start nothing keys, so nothing is planned: the frame
+                        // stays queued for the next period (`js8_slot::past_late_start`).
+                        (Some(Vec::new()), now)
                     } else {
                         match eng.plan_tx(slot) {
                             Some(plan) => {
@@ -13116,8 +13146,9 @@ impl RadioLoop {
                     self.rx.clear();
                 }
                 // Nothing to decode -> run the TX decision + emission immediately.
+                let lead = js8_lead_waves.take();
                 self.finish_boundary(
-                    &mut eng, rig, backend, sinks, station, now, slot, false, None, None,
+                    &mut eng, rig, backend, sinks, station, now, slot, false, None, lead,
                 )?;
             }
             // The boundary is consumed on every branch above, so the ring now
@@ -16149,6 +16180,7 @@ mod tests {
     mod icom_lan;
     mod js8_frames;
     mod js8_retune;
+    mod js8_tx_delay;
     mod omnirig_coverage;
     mod receive_source;
     mod refused_key;

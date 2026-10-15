@@ -413,6 +413,27 @@ describe('Settings ▸ Digital ▸ JS8 ▸ Sending', () => {
       ),
     )
   })
+
+  // JS8Call's Tx delay (TxDelay, Configuration.cpp:2275): 0.2 s by default, 0.1 to 0.5 s on its
+  // spin box (Configuration.ui sbTxDelay). Stored in ms; a file from before it reads 0.2 s.
+  it('TX delay reads 0.2 s with no key in the file, offers 0.1 to 0.5 s, and saves the pick in ms', async () => {
+    const fs = await openJs8()
+    const sel = control(fs, 'TX delay') as HTMLSelectElement
+    expect(sel.tagName).toBe('SELECT')
+    expect(sel.value, "JS8Call's default").toBe('200')
+    expect([...sel.options].map((o) => [o.value, o.textContent])).toEqual([
+      ['100', '0.1 s'],
+      ['200', '0.2 s'],
+      ['300', '0.3 s'],
+      ['400', '0.4 s'],
+      ['500', '0.5 s'],
+    ])
+    fireEvent.change(sel, { target: { value: '400' } })
+    await clickSave()
+    await waitFor(() =>
+      expect(api.get('setSettings')).toHaveBeenCalledWith(expect.objectContaining({ js8TxDelayMs: 400 })),
+    )
+  })
 })
 
 // The 55-minute rule puts the stations it stops on "Never acknowledge heartbeats from these

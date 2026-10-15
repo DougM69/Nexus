@@ -200,6 +200,7 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "js8RxSpeeds",
     "js8Speed",
     "js8Status",
+    "js8TxDelayMs",
     "js8TxOffsetWhileSending",
     "jt65Submode",
     "licenseClass",
@@ -571,6 +572,8 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     // JS8Call's two send options: transmit behaviour, set at the shack like the watchdog above.
     "js8HoldPtt",
     "js8TxOffsetWhileSending",
+    // …and its TX delay: when a frame keys.
+    "js8TxDelayMs",
     "beacon",
     "beaconTxPercent",
     "beaconPowerDbm",
@@ -826,6 +829,7 @@ impl Serialize for SettingsView<'_> {
             "js8TxOffsetWhileSending",
             &self.0.js8_tx_offset_while_sending,
         )?;
+        out.serialize_field("js8TxDelayMs", &self.0.js8_tx_delay_ms)?;
         out.serialize_field("rptrOffsetOverrideHz", &self.0.rptr_offset_override_hz)?;
         out.serialize_field("fdActive", &self.0.fd_active)?;
         out.serialize_field("fdClass", &self.0.fd_class)?;

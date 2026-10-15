@@ -7935,6 +7935,11 @@ export const EN = {
   'settings.js8.txOffsetWhileSending.label': 'Allow TX offset changes while sending',
   'settings.js8.txOffsetWhileSending.hint':
     'Off by default, as in JS8Call: while a message is waiting to go or going out, the TX offset stays where it is. On, you can move it at once: the frame on the air moves too, from where it has got to, and the frames still to go are sent at the new offset.',
+  'settings.js8.txDelay.label': 'TX delay',
+  'settings.js8.txDelay.hint':
+    "How long before each period a JS8 frame keys the radio, as JS8Call's Tx delay (0.2 s by default). The frame's first tone still goes out on time, at the period's start delay, so a radio slow to key no longer sends it late. Lengthen it for an amplifier or a radio whose relay is slow.",
+  // The delay in seconds, `{{s}}` a number such as 0.2.
+  'settings.js8.txDelay.option': '{{s}} s',
   // The compose box as JS8Call 3.0.3 keeps it (Js8ComposeSettings). `{{default}}` is JS8Call's own
   // default text, a protocol token; the CQ forms and the macro list are tokens drawn by the panel.
   'settings.js8.compose.title': 'Composing',
