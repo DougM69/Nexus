@@ -523,6 +523,100 @@ fn stop_tx_cuts_the_held_window_at_once_and_tx_off_lets_it_end_on_the_window() {
     assert_eq!(s.sent("T 1"), 1, "TX Off keyed the next over");
 }
 
+// ── This station's own FT4 boundary decided with no tone left: keyed, and held to the window ──────
+// The same rule when the slot's own key comes late (a decode that drained late, a stalled computer)
+// and finds it 5.54-5.625 s into the slot: past FT4's last tone, under its latest key. WSJT-X's GUI
+// tick keys it as it keys a late start (`widgets/mainwindow.cpp:5126-5176`) and holds it to the
+// window's end; Nexus keyed nothing there.
+
+/// ⭐ AN FT4 BOUNDARY DECIDED 5.58 s INTO THIS STATION'S OWN SLOT: KEYED, NOTHING PLAYED, THE AUDIO
+/// STOPPED AT 6.04 s AND PTT OFF AT 6.24 s, AS FOR A CALL CQ THERE. It used to key nothing, and the
+/// over it had planned was spent.
+#[test]
+fn an_ft4_boundary_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.cq();
+    s.t = t0 + 5_580.0; // the loop's first tick in the slot, 5.58 s in
+    s.run_to(t0 + 5_580.0);
+    assert_eq!(s.sent("T 1"), 1, "a boundary 5.58 s in did not key");
+    // The tick, in ms into the slot, of the first flush (the audio stop) and of the unkey.
+    let (flushes, mut audio_stop, mut ptt_off) = (s.backend.flush_calls, None, None);
+    while ptt_off.is_none() && s.t < t0 + 7_500.0 {
+        let at = s.t;
+        s.run_to(at);
+        if audio_stop.is_none() && s.backend.flush_calls > flushes {
+            audio_stop = Some(at - t0);
+        }
+        if s.sent("T 0") > 0 {
+            ptt_off = Some(at - t0);
+        }
+    }
+    assert_eq!(
+        (audio_stop, ptt_off),
+        (Some(6_040.0), Some(6_240.0)),
+        "the audio stop and PTT off, ms into the slot"
+    );
+    assert!(
+        s.backend.played.is_empty(),
+        "{} samples played: FT4's tones end at 5.54 s",
+        s.backend.played.len()
+    );
+}
+
+/// CONTROL: AN FT4 BOUNDARY DECIDED 5.70 s IN, PAST 75 %, STILL KEYS NOTHING: the CQ, never planned,
+/// goes out whole at the next own boundary, as WSJT-X's waits.
+#[test]
+fn an_ft4_boundary_past_75_percent_still_waits_for_the_next_own_slot() {
+    let mut on_time = Over::new(Tier::Ft4);
+    on_time.cq();
+    let t0 = on_time.t;
+    on_time.run_to(t0);
+
+    let mut late = Over::new(Tier::Ft4);
+    let t0 = late.t;
+    late.cq();
+    late.t = t0 + 5_700.0; // the loop's first tick in the slot, 5.7 s in
+    late.run_to(t0 + 14_980.0);
+    assert_eq!(late.sent("T 1"), 0, "a boundary 5.7 s in keyed");
+    late.run_to(t0 + 15_000.0);
+    assert_eq!(
+        late.sent("T 1"),
+        1,
+        "the CQ did not go out at the next own boundary"
+    );
+    if let Err(why) = same_audio(&late.backend.played, &on_time.backend.played) {
+        panic!("the next own boundary did not send the over that waited, whole: {why}");
+    }
+}
+
+/// STOP TX WHILE A BOUNDARY'S EMPTY OVER IS HELD UNKEYS AT ONCE, and nothing of it fires after: the
+/// hold is the over's own.
+#[test]
+fn stop_tx_cuts_a_held_boundary_at_once() {
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.cq();
+    s.t = t0 + 5_580.0;
+    s.run_to(t0 + 5_780.0);
+    assert_eq!(
+        (s.sent("T 1"), s.sent("T 0")),
+        (1, 0),
+        "premise: keyed 5.58 s in and held"
+    );
+    let flushes = s.backend.flush_calls;
+    s.engine.lock().unwrap().halt_tx();
+    s.run_to(t0 + 5_800.0);
+    assert_eq!(s.sent("T 0"), 1, "Stop TX did not unkey on the next tick");
+    assert_eq!(s.backend.flush_calls, flushes + 1, "Stop TX did not flush");
+    s.run_to(t0 + 7_480.0);
+    assert_eq!(
+        (s.sent("T 0"), s.backend.flush_calls),
+        (1, flushes + 1),
+        "the cut window unkeyed or flushed later"
+    );
+}
+
 /// ⭐ STOP TX MID-OVER STILL CUTS AT ONCE, AND NOTHING OF THE CUT OVER FIRES AFTER IT. The window's
 /// audio stop belongs to the over it was set for: once Stop TX has cut it, 13.64 s flushes nothing
 /// and 13.84 s unkeys nothing.

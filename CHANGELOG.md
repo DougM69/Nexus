@@ -176,7 +176,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slot.
   The same limit holds when your slot's own key comes late (a decode that finished late, a busy
   computer): past 75 % of the slot Nexus does not key it, as WSJT-X does not, and the over goes out
-  at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short).
+  at your next slot instead (1.18.0 keyed it however late, and the boundary cut the over short). An
+  FT4 one that comes between 5.54 s and that limit is keyed and held silent to 6.24 s, as the Call CQ
+  is. And an FT8 over keyed in time whose radio comes on after its last tone (more than about 1.9 s
+  late: split commands on a slow radio link, a busy computer) is held silent to its usual end at
+  13.84 s, as WSJT-X holds it.
   NEEDS-BENCH: an FT8 and an FT4 over on a dummy load beside WSJT-X, a Call CQ about 10 s into an
   FT8 slot and another about 12 s in (the first keys at once, the second waits for the next slot, in
   both programs), an FT4 Call CQ about 5.6 s into your slot (TX on at once with nothing sent and off
