@@ -1309,6 +1309,8 @@ nothing until you enable TX in the cockpit, every session.
 - **Heartbeat networking** — off by default, as in JS8Call (its *Enable Heartbeat
   Networking*). On, the cockpit shows the **HB** button and **Answer heartbeats** can answer;
   off, no heartbeat and no acknowledgement goes out. It is the cockpit's **HB NET** switch.
+  Updating from a version without it turns it on if **Answer heartbeats** was on or a
+  heartbeat interval was set, so the **HB** button stays.
   Heartbeats and acknowledgements go out at Slow, Normal and Fast only, never at Turbo.
 - **Allow heartbeats outside 500–1000 Hz** — off by default, as in JS8Call. On, heartbeats
   and acknowledgements go out on your own TX offset instead of a free spot in 500–1000 Hz.
@@ -1318,8 +1320,10 @@ nothing until you enable TX in the cockpit, every session.
   CQ stops. Switching **HB** on clears the To box.
 - **Don't acknowledge stations that heartbeat more often than every 55 minutes** — off by
   default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its
-  last acknowledged heartbeat is not acknowledged then or later; the **HB ACK** chip names
-  it. Turning this off forgets those stations.
+  last acknowledged heartbeat is added to **Never acknowledge heartbeats from these callsigns**,
+  as JS8Call adds it to its list, and is not acknowledged then or later; the **HB ACK** chip
+  names it. Take it off that list to acknowledge it again; turning this off leaves the list as
+  it is. A station added while this screen is open is kept when you save it.
 - **Do not take part in @ALLCALL** — off by default, as in JS8Call. On, nothing addressed to
   `@ALLCALL` is answered (`QUERY MSGS` included) or marked as addressed to you, and
   `@ALLCALL` leaves the To box's list. Heartbeats and CQs are handled as before.
@@ -1370,8 +1374,9 @@ nothing until you enable TX in the cockpit, every session.
   message into the next, and drops at once on Stop TX or TX Off.
 - **Allow TX offset changes while sending** — off by default, as in JS8Call: while a
   message is waiting to go or going out, the TX offset stays where it is, and the cockpit
-  says why when you try to move it. On, the move is taken and the frames still to go are
-  sent at the new offset.
+  says why when you try to move it. On, the move is taken at once: the frame on the air
+  moves too, from where it has got to (a heartbeat on its own spot stays there), and the
+  frames still to go are sent at the new offset.
 
 **Composing**
 

@@ -38,9 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underlined, and a right-click on it offers up to five words that take less airtime. Both are on
   by default, and Settings ▸ Digital ▸ JS8 ▸ Composing turns either off.
 - **JS8: REPLY, SNR, INFO, STATUS and saved messages, as in JS8Call.** The buttons sit under the
-  compose box. REPLY sends your reply message (HW CPY? unless you change it) to the call in the To
-  box, SNR sends that station the report you hear from it, and INFO and STATUS send yours. The
-  Saved menu sends a saved message in one click (TNX 73 GL to start with), saves what is in the
+  compose box. REPLY puts the call in the To box and your reply message (HW CPY? unless you change
+  it) in the compose box, SNR that call and the report you hear from it, and INFO and STATUS
+  yours; each goes in where the cursor is and then the whole box is sent, with anything you had
+  typed, as JS8Call's buttons send it (with "GM" typed, REPLY sends "W1AW GM W1AW HW CPY?", as
+  JS8Call does). The Saved menu does the same with a saved message in one click (TNX 73 GL to start
+  with), saves what is in the
   compose box, opens Settings to edit the list, and restores the last message you sent. Saved
   messages, the CQ and reply messages, INFO and STATUS may carry JS8Call's 13 macros, such as
   `<MYCALL>`, `<MYGRID4>`, `<CALL>` and `<SNR>`, replaced when the message is used, and a macro
@@ -145,8 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three more JS8Call options in Settings ▸ Digital ▸ JS8, all off by default.** *Allow heartbeats
   outside 500–1000 Hz* sends your heartbeats and acknowledgements on your own TX offset. *Don't
   acknowledge stations that heartbeat more often than every 55 minutes* is JS8Call 3.0's rule: such
-  a station gets no acknowledgement again, the HB ACK chip names it, and turning the option off
-  forgets those stations. *Do not take part in @ALLCALL*: nothing addressed to @ALLCALL is answered
+  a station is added to *Never acknowledge heartbeats from these callsigns* (Settings ▸ Digital ▸
+  JS8), as JS8Call adds it to its list, gets no acknowledgement again, and the HB ACK chip names it;
+  take it off that list to acknowledge it again (turning the option off leaves the list as it is).
+  A station the rule adds while Settings is open is kept when you save it. *Do not take part in
+  @ALLCALL*: nothing addressed to @ALLCALL is answered
   or marked as addressed to you, and @ALLCALL leaves the To box's list. NEEDS-BENCH.
 - **The JS8 HB ACK chip says when an acknowledgement is held back.** When HB ACK is armed but would
   not answer right now (at JS8 40 or JS8 60, while a message is still arriving, or while a call is in the To
@@ -171,9 +177,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message to you is still arriving, follow the only-reply and never-reply lists, and stop with the
   idle watchdog, as every automatic reply does. NEEDS-BENCH against JS8Call 3.0.3.
 - **JS8: a message left for a group is handed to each member.** A `MSG TO:@GROUP` held at your
-  station is offered to any station that sends QUERY MSGS to that group, if you joined it, and
-  handed once to each station that then asks for it with QUERY MSG n. It is held 48 hours, as long
-  as JS8Call offers one. NEEDS-BENCH.
+  station is offered once to each station that sends QUERY MSGS to that group, if you joined it,
+  and handed over whenever a station asks for it with QUERY MSG n, a second time too, as JS8Call
+  hands it. It is held 48 hours, as long as JS8Call offers one. NEEDS-BENCH.
 - **JS8: Store… leaves a message at your station for a heard station.** The button at the end of a
   row in Stations opens a box ("Store this message locally for W1AW:"). The message waits in the
   Inbox, from your call, and goes out only when that station asks for it with QUERY MSGS and QUERY
@@ -186,8 +192,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offset between two frames of a message used to send the rest of the message on the new offset, so
   one message went out on two. Now the move is refused while a message is waiting to go or going out,
   and the screen says why; once it has gone, the offset moves as before. **Allow TX offset changes
-  while sending** in Settings ▸ Digital ▸ JS8 (JS8Call's option, off by default) brings the old
-  behaviour back: the frames still to go are sent at the new offset. NEEDS-BENCH.
+  while sending** in Settings ▸ Digital ▸ JS8 (JS8Call's option, off by default) takes the move at
+  once, as JS8Call does: the frame on the air moves to the new offset a tenth of a second later,
+  from where it has got to (receivers lose that frame, as with JS8Call), and the frames still to go
+  are sent there. A heartbeat on its own spot stays there, and a move out of your privileges leaves
+  the frame where it is. NEEDS-BENCH.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as
@@ -271,8 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. NEEDS-BENCH: Windows, with Light, Dark and System picked in turn.
 - **JS8 HB ACK needs heartbeat networking, not the HB repeat.** As in JS8Call, heartbeat
   acknowledgements answer while HB NET and AUTOREPLY are on, whether or not your own heartbeat
-  repeat is running; before, they answered only while HB was on. HB NET is off after the update, so
-  nothing is acknowledged until you turn it on. NEEDS-BENCH.
+  repeat is running; before, they answered only while HB was on. After the update HB NET is on if
+  you had HB ACK on or a heartbeat repeat interval set, so your HB button and acknowledgements carry
+  on, and off for everyone else, as JS8Call ships it. NEEDS-BENCH.
 - **JS8's Turbo speed is called JS8 40, as JS8Call 3.0 calls it.** The speed chip, Settings and
   the activity help say JS8 40, and the chip's tooltip says it is the speed once called Turbo
   (JS8 60's says Ultra, its name in JS8Call's code). The speed itself is unchanged: 6-second
@@ -294,6 +304,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unacknowledged for this. Each station is counted by its call as heard, as JS8Call counts it, so
   W1AW/P and W1AW are now each answered on @ALLCALL (Nexus used to count them as one).
   NEEDS-BENCH against JS8Call 3.0.3.
+- **JS8 keeps a station as it was heard, /P included, as JS8Call does.** W1AW and W1AW/P are two
+  rows in Stations, each with its own report, and a message to you from W1AW/P comes from W1AW/P
+  in the Inbox. So a QUERY CALL about W1AW/P is answered when W1AW/P was heard (before, it went
+  unanswered), and a HEARING? from W1AW/P names W1AW when you heard it too. NEEDS-BENCH against
+  JS8Call 3.0.3.
 
 ### Fixed
 
@@ -660,7 +675,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example, "MSG 5" was taken for QUERY MSG 5, a request for held message 5: it never reached your
   Inbox and was never acknowledged, and if you held message 5 for the sender, Nexus sent it to
   them. 1.18.0 did this too. It is now filed and acknowledged like any other message, as JS8Call
-  does; only QUERY MSG 5 asks for message 5. NEEDS-BENCH.
+  does; only QUERY MSG 5 asks for message 5, and a QUERY reading "MSGS 5" asks for nothing, as in
+  JS8Call. NEEDS-BENCH.
+- **JS8: a long message you hold is handed over with its "FROM".** A held message near the 512
+  character limit, handed over at Fast or faster, lost the end of "FROM W1AW" from the reply. The
+  end of the message is cut instead now, so the reply always says who it is from, and a NEXT MSG ID
+  that would not fit whole is left off (that message is offered at the next QUERY MSGS).
+  NEEDS-BENCH.
 - **JS8: a held message too long to hand over at your speed is no longer offered again and again.**
   A message you hold for another station is handed over in one transmission, which holds at most 19
   frames at Slow, 39 at Normal, 59 at Fast and 99 at Turbo. One that needed more was still offered

@@ -43,7 +43,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
   low-confidence copy; italic rows closed without their last frame. Double-click a row
   to write to that station.
 - **Stations** — everyone heard, with grid, SNR, offset, speed, age, and chips for a
-  recent heartbeat, a recent CQ, and any messages you hold for them. Click a callsign to
+  recent heartbeat, a recent CQ, and any messages you hold for them. A station is kept as it was
+  heard, as in JS8Call: W1AW and W1AW/P are two rows, each with its own report, and a message
+  from W1AW/P comes from W1AW/P in the Inbox. Click a callsign to
   address it; the five quick buttons send **SNR? · GRID? · INFO? · HEARING? · QUERY MSGS**
   to that station, which answers by itself if its auto-reply is on. **Store…** at the end of a
   row leaves a message at your station for that station, as JS8Call's Store Message does: it
@@ -53,7 +55,9 @@ both. JS8 stations sit anywhere from 500 to 2500 Hz; heartbeats cluster in the
   someone else until they collect them (store and forward). Mark read, delete. A message held
   for one station stays until you delete it, as in JS8Call. One left for a group
   (`MSG TO:@GROUP`, a group you joined) is offered for 48 hours to every station that sends
-  QUERY MSGS to the group, and handed to each of them once. The inbox keeps at most 100 messages
+  QUERY MSGS to the group, once to each, and handed over whenever a station asks for it with
+  QUERY MSG n, again too, as in JS8Call. A long one keeps its `FROM <call>`: what does not fit
+  one reply is cut from the end of the message, never from the `FROM`. The inbox keeps at most 100 messages
   (and 64 KB) of yours and as many held for others; when it is full, a message already handed
   over goes first, then the oldest, and a note at the top of the Inbox says which message went
   and why until you press **Clear notes**. A held message is handed over in one transmission,
@@ -107,13 +111,17 @@ The compose box works as JS8Call 3.0's does. Its switches and texts are in
 - **Cheaper words.** A word the JS8 dictionary sends in pieces is underlined in red.
   Right-click it for up to five words that take less airtime, cheapest first, and pick one to
   put it in place.
-- **One-click messages.** **REPLY** sends your reply message (`HW CPY?` unless you change it)
-  to the call in the **To** box. **SNR** sends that station the report you hear from it, once
-  it has been heard. **INFO** and **STATUS** send yours, to the **To** box call or to everyone.
-  **CQ** sends your CQ message (`CQ CQ CQ` and your square unless you change it), and clears
-  the **To** box as JS8Call does. A button that sends leaves what you were typing in the box.
+- **One-click messages.** **REPLY** puts the call in the **To** box and your reply message
+  (`HW CPY?` unless you change it) in the compose box, `W1AW HW CPY?`. **SNR** puts in that call
+  and the report you hear from it, `W1AW SNR -07`, once it has been heard. **INFO** and
+  **STATUS** put in yours, for the **To** box call or for everyone. Each goes in where the cursor
+  is, and then the whole box is sent, with anything you had typed, as JS8Call's buttons send it:
+  with "GM" typed, **REPLY** sends `W1AW GM W1AW HW CPY?`, as JS8Call does. **CQ** sends your CQ
+  message (`CQ CQ CQ` and your square unless you change it), and clears the **To** box as JS8Call
+  does.
 - **Saved messages.** The **Saved** menu lists the messages you keep (`TNX 73 GL` to start
-  with). Pick one to send it, to the **To** box call or to everyone. **Save current message**
+  with). Pick one to put it in the compose box and send the box, to the **To** box call or to
+  everyone. **Save current message**
   adds what is in the compose box, **Edit saved messages…** opens Settings, and **Restore
   previous message** puts the last message you sent back in the box.
 - **Macros.** A saved message, the CQ and reply messages, INFO and STATUS may carry JS8Call's
@@ -169,9 +177,12 @@ clears the **To** box. When **HB ACK** is on but held back for one of these reas
 the QSO pause, or a message still arriving) it shows as not armed and says why. Settings also
 has JS8Call's *Allow heartbeats outside 500–1000 Hz* (your own TX offset instead of a free
 spot), *Don't acknowledge stations that heartbeat more often than every 55 minutes* (such a
-station gets no acknowledgement again; **HB ACK** names them, and turning the option off
-forgets them) and *Do not take part in @ALLCALL* (nothing to @ALLCALL is answered or marked
-as yours), all off by default.
+station is added to *Never acknowledge heartbeats from these callsigns*, as JS8Call adds it to
+its list, and gets no acknowledgement again; **HB ACK** names the ones the rule added; take a
+station off that list to acknowledge it again, and turning the option off leaves the list as it
+is) and *Do not take part in @ALLCALL* (nothing to @ALLCALL is answered or marked as yours), all
+off by default. An update from a version without **HB NET** turns it on if you had **HB ACK**
+on or a heartbeat repeat interval set, so the **HB** button stays; otherwise it starts off.
 Every automatic reply first asks in the dock, as JS8Call asks: "A transmission is queued for
 autoreply … would you like to send this transmission?" **Yes** sends it in the next period; **No**
 sends nothing, and so does no answer, which is No after 89 seconds. A message you hold for
@@ -211,9 +222,12 @@ next, and drops at once on **Stop TX** or **TX Off**.
 
 **Moving the TX offset while sending.** While a message is waiting to go or going out, the TX
 offset stays where it is, as in JS8Call: a right-click on the waterfall is refused and the screen
-says why. Turn on **Allow TX offset changes while sending** and the move is taken; the frames still
-to go are sent at the new offset (the frame on the air finishes where it started). Moving RX is
-never held.
+says why. Turn on **Allow TX offset changes while sending** and the move is taken at once, as in
+JS8Call: the frame on the air moves to the new offset a tenth of a second later, from where it has
+got to (receivers lose that frame, as they lose JS8Call's), and the frames still to go are sent
+there. A heartbeat or acknowledgement on its own spot in 500–1000 Hz stays on it, and so does a
+frame when the move would leave your licence's privileges; on a Flex radio's own audio (DAX) the
+frame on the air finishes where it started. Moving RX is never held.
 
 ## Compatibility
 
