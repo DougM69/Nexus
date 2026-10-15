@@ -1100,7 +1100,8 @@ use crate::AppState;
 pub mod js8;
 
 /// JS8's internet links (`crates/tempo-app/src/js8_links.rs`): PSK Reporter and JS8NET spots, the
-/// @APRSIS gateway and the never-spot list. A child of this module for the same reason as `js8`.
+/// @APRSIS gateway, the never-spot list and the inbound APRS-IS relay. A child of this module for
+/// the same reason as `js8`.
 #[path = "js8_links.rs"]
 pub mod js8_links;
 

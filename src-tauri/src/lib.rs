@@ -1089,13 +1089,14 @@ struct AprsIsFeed {
 static APRS_IS_FEED: Mutex<Option<AprsIsFeed>> = Mutex::new(None);
 
 /// What the one APRS-IS session should be: whether it runs, its login line, the server, and what
-/// the socket thread does with a line (the APRS screen's store, or not). No `Debug`,
+/// the socket thread does with a line (the APRS screen's store; JS8's inbound relay). No `Debug`,
 /// deliberately: the login line carries the passcode, and nothing may print it.
 struct AprsIsSession {
     want: bool,
     login: String,
     addr: String,
     screen: bool,
+    relay: bool,
 }
 
 /// [`AprsIsSession`] from Settings and JS8's demand (`Engine::js8_aprs_link`). Pure, so the login a
@@ -1103,8 +1104,9 @@ struct AprsIsSession {
 ///
 /// **JS8's @APRSIS gateway rides the APRS screen's session.** While JS8 runs with the gateway on,
 /// the login carries the passcode, logging in exactly as the iGate does; the session comes up when
-/// a gateway line waits (and stays a minute after the last is handed over). Up for JS8 alone, it
-/// subscribes to nothing and puts nothing on the APRS screen.
+/// a gateway line waits (and stays a minute after the last is handed over) or while the inbound
+/// relay listens, whose filter term `t/m` is JS8Call's. Up for JS8 alone, it subscribes to nothing
+/// else and puts nothing on the APRS screen.
 fn aprs_is_session(
     s: &tempo_app::settings::Settings,
     js8: tempo_app::engine::js8_links::Js8AprsLink,
@@ -1118,7 +1120,7 @@ fn aprs_is_session(
     // The uplink additionally needs the passcode, which is derived from that same callsign.
     // JS8's gateway uploads too, so it logs in the same way while it is armed.
     let code = (s.aprs_is_uplink || js8.armed).then(|| tempo_core::aprs::is::passcode(&call));
-    let filter = if screen {
+    let mut filter = if screen {
         tempo_core::aprs::is::FilterSpec {
             range_km: Some(s.aprs_is_radius_km),
             center: propagation::geo::maidenhead_to_latlon(s.mygrid.trim()),
@@ -1131,6 +1133,12 @@ fn aprs_is_session(
     } else {
         String::new()
     };
+    if js8.relay {
+        if !filter.is_empty() {
+            filter.push(' ');
+        }
+        filter.push_str("t/m");
+    }
     let login =
         tempo_core::aprs::is::login_line(&call, code, "Nexus", env!("CARGO_PKG_VERSION"), &filter);
     let host = s.aprs_is_host.trim();
@@ -1144,6 +1152,7 @@ fn aprs_is_session(
         login,
         addr: format!("{host}:{}", s.aprs_is_port),
         screen,
+        relay: js8.relay,
     }
 }
 
@@ -1164,6 +1173,7 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
         login,
         addr,
         screen,
+        relay,
     } = {
         let mut eng = engine_lock(engine);
         let js8 = eng.js8_aprs_link(now_unix().max(0) as u64);
@@ -1172,7 +1182,7 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
 
     // What the socket thread does with a line is fixed when it starts, so a change in it is a
     // new session too.
-    let fingerprint = format!("{addr}\u{1}{login}\u{1}{screen}");
+    let fingerprint = format!("{addr}\u{1}{login}\u{1}{screen}{relay}");
     let mut slot = APRS_IS_FEED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(f) = slot.as_ref() {
         if want && f.fingerprint == fingerprint {
@@ -1212,7 +1222,7 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
                 tempo_net::aprsis::run(
                     &addr,
                     &login,
-                    |line| aprs_is_line(&eng, line, screen),
+                    |line| aprs_is_line(&eng, line, screen, relay),
                     &stop,
                     &state,
                     &outbox,
@@ -1233,10 +1243,16 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
     }
 }
 
-/// One line off the APRS-IS session. Only the APRS screen's own feed reaches its store, tagged
-/// `Inet` so nothing downstream has to guess where a station came from: a session up for JS8
-/// alone puts nothing there.
-fn aprs_is_line(engine: &SharedEngine, line: &[u8], screen: bool) {
+/// One line off the APRS-IS session. JS8's inbound relay sees an APRS message, parsed strictly
+/// before the engine sees it (untrusted internet input that may be keyed). Only the APRS screen's
+/// own feed reaches its store, tagged `Inet` so nothing downstream has to guess where a station
+/// came from: a session up for JS8 alone puts nothing there.
+fn aprs_is_line(engine: &SharedEngine, line: &[u8], screen: bool, relay: bool) {
+    if relay {
+        if let Some(msg) = tempo_core::aprs::js8gate::parse_inbound_message(line) {
+            engine_lock(engine).js8_aprs_inbound(&msg);
+        }
+    }
     if !screen {
         return;
     }
@@ -1348,8 +1364,8 @@ fn aprs_is_bridge(
 
 /// JS8's internet links, off the radio loop: once a minute the JS8NET batch
 /// (`Engine::take_js8net`) goes to `spot.js8call.com:50000` as JS8Call 3.0.3 sends it, and every
-/// few seconds the APRS-IS session is brought in line with what JS8's @APRSIS gateway needs
-/// (`sync_aprs_is_feed`). Outbound only: a UDP port bound for each batch and dropped after.
+/// few seconds the APRS-IS session is brought in line with what JS8's @APRSIS gateway and relay
+/// need (`sync_aprs_is_feed`). Outbound only: a UDP port bound for each batch and dropped after.
 /// The DNS lookup happens here, never on the radio loop, and a failed one costs that minute's
 /// batch only.
 fn start_js8_links(engine: SharedEngine) {
@@ -1393,6 +1409,7 @@ mod aprs_is_session_tests {
     const JS8_OFF: Js8AprsLink = Js8AprsLink {
         armed: false,
         want: false,
+        relay: false,
     };
 
     /// The login the iGate presents for W1AW, with `filter`. Compared with `==` and a message,
@@ -1415,6 +1432,7 @@ mod aprs_is_session_tests {
             Js8AprsLink {
                 armed: true,
                 want: false,
+                relay: false,
             },
         );
         assert!(!idle.want, "armed with nothing waiting: no session");
@@ -1423,12 +1441,26 @@ mod aprs_is_session_tests {
             Js8AprsLink {
                 armed: true,
                 want: true,
+                relay: false,
             },
         );
-        assert!(up.want && !up.screen);
+        assert!(up.want && !up.screen && !up.relay);
         assert!(
             up.login == igate_login(""),
             "the gateway's login is the iGate's, subscribing to nothing"
+        );
+        let relay = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: true,
+                relay: true,
+            },
+        );
+        assert!(relay.want && relay.relay && !relay.screen);
+        assert!(
+            relay.login == igate_login("t/m"),
+            "the relay adds JS8Call's message filter and nothing else"
         );
         assert_eq!(up.addr, "rotate.aprs2.net:14580");
         // CONTROL: no real callsign, no session, whatever JS8 wants.
@@ -1440,6 +1472,7 @@ mod aprs_is_session_tests {
                 Js8AprsLink {
                     armed: true,
                     want: true,
+                    relay: true
                 }
             )
             .want
@@ -1450,13 +1483,13 @@ mod aprs_is_session_tests {
     fn a_session_up_for_js8_alone_puts_nothing_on_the_aprs_screen() {
         let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(station())));
         let line = b"N0CALL-9>APDR16,TCPIP*,qAC,T2TEXAS:!4140.00N/07200.00W>test";
-        aprs_is_line(&engine, line, false);
+        aprs_is_line(&engine, line, false, true);
         assert!(
             engine_lock(&engine).aprs_heard().is_empty(),
             "JS8 alone: nothing stored"
         );
         // CONTROL: the screen's own feed stores the same line.
-        aprs_is_line(&engine, line, true);
+        aprs_is_line(&engine, line, true, false);
         assert_eq!(engine_lock(&engine).aprs_heard().len(), 1);
     }
 
@@ -1466,7 +1499,7 @@ mod aprs_is_session_tests {
         s.aprs_is_enabled = true;
         s.aprs_is_radius_km = 100;
         let read_only = aprs_is_session(&s, JS8_OFF);
-        assert!(read_only.want && read_only.screen);
+        assert!(read_only.want && read_only.screen && !read_only.relay);
         assert!(
             read_only.login.contains(" filter r/"),
             "precondition: the screen subscribes to a range"
@@ -1480,6 +1513,7 @@ mod aprs_is_session_tests {
             Js8AprsLink {
                 armed: true,
                 want: false,
+                relay: false,
             },
         );
         assert!(armed.want && armed.screen);

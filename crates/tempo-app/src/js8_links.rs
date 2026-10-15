@@ -1,13 +1,13 @@
 //! JS8's internet links — the engine half of JS8Call 3.0.3's spotting: stations heard on JS8 go to
 //! PSK Reporter and JS8NET, commands to a group go to JS8NET, the `@APRSIS` gateway's lines go to
-//! APRS-IS, and a never-spot list keeps calls off all three. A CHILD module of `engine` (declared
-//! with `#[path]` there, like `js8`), so it reads the engine's private fields with no visibility
-//! widening.
+//! APRS-IS, a never-spot list keeps calls off all three, and the inbound APRS-IS relay keys APRS
+//! messages for heard stations. A CHILD module of `engine` (declared with `#[path]` there, like
+//! `js8`), so it reads the engine's private fields with no visibility widening.
 //!
 //! WHO DOES WHAT. JS8Call: `logCallActivity(…, spot = true)` → `processSpots` → `spotReport`
 //! (JS8NET `RX.SPOT`) and `pskLogReport` (PSK Reporter, mode "JS8"); `spotCmd` (JS8NET
-//! `RX.DIRECTED`, a command to any `@` group); `spotAprsGrid` / `spotAprsCmd` (APRS-IS). Here,
-//! [`Engine::js8_links_on_event`] runs for every reassembler
+//! `RX.DIRECTED`, a command to any `@` group); `spotAprsGrid` / `spotAprsCmd` (APRS-IS);
+//! `AprsInboundRelay` (the relay). Here, [`Engine::js8_links_on_event`] runs for every reassembler
 //! event AFTER the station has seen it — so the heard list holds the grid JS8Call's call activity
 //! would — and fills three bounded queues. The radio loop drains the PSK Reporter spots into its
 //! own upload ([`Engine::take_js8_psk_spots`]: the same reporter, switch and flush as FT8's); a
@@ -19,8 +19,18 @@
 //! GATES, JS8Call's: every link needs spotting on — Nexus's PSK Reporter switch as it uploads
 //! (`pskreporter_uploading`, so a contest that allows spots only over RF stops all three) — and a
 //! real callsign, as the iGate needs. The gateway also needs `js8_spot_aprs` (JS8Call's
-//! `SpotToAPRS`, on by default). A station on `js8_spot_never` (JS8Call's `SpotBlacklist`), as
-//! heard or by its base call, is sent to no network.
+//! `SpotToAPRS`, on by default) and the relay `js8_aprs_relay` (`APRSISRelay`, off by default). A
+//! station on `js8_spot_never` (JS8Call's `SpotBlacklist`), as heard or by its base call, is sent
+//! to no network, and no APRS message is relayed to one.
+//!
+//! ⚠️ THE RELAY TRANSMITS with nobody at the radio. It is taken only when this station could key
+//! it NOW (JS8 running, the TX latch up, no idle trip, a usable locator, inside the licence's
+//! privileges); otherwise it is neither acknowledged nor queued, where JS8Call acknowledges it and
+//! then drops it at its own TX refusal. Taken, it is queued in the station as
+//! `Origin::AprsRelay`, and `plan_js8_tx` re-reads the same switches at the key, under every guard
+//! the JS8 TX route has: the latch, the licence gate, the idle watchdog and the wall-clock TX
+//! watchdog. JS8Call's own limits hold: a message id is relayed once per two minutes (every copy
+//! still acknowledged), one message goes out at a time, the queue is capped.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -48,6 +58,9 @@ const APRS_LINE_TTL_SECS: u64 = 300;
 /// The session stays up this long after JS8 last handed it a line, so a line handed over is
 /// written before the session goes.
 const APRS_LINGER_SECS: u64 = 60;
+/// An APRS message id relayed once per this long; every copy is still acknowledged
+/// (`kAckDedupSeconds`, AprsInboundRelay.cpp).
+const RELAY_ID_SECS: u64 = 120;
 
 /// The engine's JS8-links state: three queues and the caches that shape them. Session-only.
 #[derive(Debug, Default)]
@@ -60,6 +73,7 @@ pub struct Js8Links {
     js8net_dial: u64,
     aprs: VecDeque<(u64, String)>,
     aprs_handoff_secs: Option<u64>,
+    relay_ids: HashMap<String, u64>,
 }
 
 /// What the APRS-IS session must do for JS8 now.
@@ -67,8 +81,10 @@ pub struct Js8Links {
 pub struct Js8AprsLink {
     /// The gateway is on while JS8 runs: the login carries the passcode, as the iGate's does.
     pub armed: bool,
-    /// The session must be up: a line waits, or one was just handed over.
+    /// The session must be up: a line waits, one was just handed over, or the relay listens.
     pub want: bool,
+    /// The relay listens: the session subscribes to APRS messages (`t/m`, JS8Call's filter).
+    pub relay: bool,
 }
 
 /// A callsign the app treats as real, as `is_real_call` in the app does for the iGate and the
@@ -142,6 +158,23 @@ impl Engine {
     /// The @APRSIS gateway is on (JS8Call's `spot_to_aprs()`).
     fn js8_aprs_gateway(&self) -> bool {
         self.js8_spotting() && self.settings.js8_spot_aprs
+    }
+
+    /// The relay's switches (JS8Call's `spot_to_aprs_relay()`). `plan_js8_tx` keys an
+    /// `Origin::AprsRelay` frame only while this holds.
+    pub(crate) fn js8_aprs_relay_switch(&self) -> bool {
+        self.js8_aprs_gateway() && self.settings.js8_aprs_relay
+    }
+
+    /// The relay may take a message now: its switches, JS8 running, and every condition this
+    /// station keys under — so a message is never acknowledged that cannot go out.
+    fn js8_aprs_relay_can_key(&self) -> bool {
+        self.js8_aprs_relay_switch()
+            && self.tier() == Tier::Js8
+            && self.tx_enabled()
+            && !self.js8_station.idle_tripped()
+            && !self.js8_no_usable_locator()
+            && self.tx_allowed()
     }
 
     /// On the never-spot list, as heard or by its base call (JS8Call's
@@ -465,13 +498,73 @@ impl Engine {
         self.js8_links
             .aprs
             .retain(|(at, _)| now_secs.saturating_sub(*at) <= APRS_LINE_TTL_SECS);
+        let relay = self.js8_aprs_relay_switch();
         let lingering = self
             .js8_links
             .aprs_handoff_secs
             .is_some_and(|t| now_secs.saturating_sub(t) < APRS_LINGER_SECS);
         Js8AprsLink {
             armed,
-            want: lingering || !self.js8_links.aprs.is_empty(),
+            want: relay || lingering || !self.js8_links.aprs.is_empty(),
+            relay,
+        }
+    }
+
+    /// One APRS message off the APRS-IS session, for the inbound relay (JS8Call 3.0.3
+    /// `AprsInboundRelay::onMessageReceived`). Taken only for a station heard here, not on the
+    /// never-spot list, inside callsign aging, and not an `ack`/`rej`; then acknowledged as that
+    /// station (every copy) and, the first time its id is seen in two minutes, queued for the air
+    /// as `@APRSIS MSG TO:<call> <text> DE <sender>`. Nothing at all unless the relay could key
+    /// it now (module header).
+    pub fn js8_aprs_inbound(&mut self, msg: &js8gate::InboundMessage) {
+        if !self.js8_aprs_relay_can_key() || self.js8_never_spot(&msg.to) {
+            return;
+        }
+        let now_ms = now_unix_secs() * 1000;
+        let Some(heard) = self
+            .js8_station
+            .heard()
+            .iter()
+            .find(|h| h.call.eq_ignore_ascii_case(&msg.to))
+        else {
+            return;
+        };
+        let aging_ms = u64::from(self.settings.js8_callsign_aging_min) * 60_000;
+        if aging_ms > 0 && now_ms.saturating_sub(heard.last_ms) > aging_ms {
+            return;
+        }
+        if js8gate::is_ack_or_rej(&msg.text) {
+            return;
+        }
+        if let Some(id) = &msg.id {
+            let now = now_ms / 1000;
+            let key = format!("{}|{}|{id}", msg.from, msg.to).to_ascii_uppercase();
+            let ids = &mut self.js8_links.relay_ids;
+            ids.retain(|_, t| now.saturating_sub(*t) <= RELAY_ID_SECS);
+            let repeat = ids.contains_key(&key);
+            if !repeat {
+                ids.insert(key, now);
+            }
+            if let Some(ack) = js8gate::ack_line(&msg.to, &msg.from, id) {
+                self.js8_aprs_push(ack);
+            }
+            if repeat {
+                return;
+            }
+        }
+        let text = format!("@APRSIS MSG TO:{} {} DE {}", msg.to, msg.text, msg.from);
+        if self.js8_station.enqueue_aprs_relay(&text) {
+            tempo_core::applog::info(
+                "js8",
+                &format!("APRS-IS relay: {} -> {}: {}", msg.from, msg.to, msg.text),
+            );
+            let actions = self.js8_station.process_tx_queue();
+            self.js8_handle_actions(actions);
+        } else {
+            tempo_core::applog::info(
+                "js8",
+                &format!("APRS-IS relay not queued, the queue is full: {text}"),
+            );
         }
     }
 }
@@ -860,6 +953,7 @@ mod tests {
             Js8AprsLink {
                 armed: true,
                 want: true,
+                relay: false
             },
             "lines wait: the session must come up, with the passcode"
         );
@@ -910,5 +1004,151 @@ mod tests {
         assert_eq!(left.js8_aprs_link(now), Js8AprsLink::default());
         left.js8_enter();
         assert!(left.take_js8_aprs_uplink(now).is_empty());
+    }
+
+    /// JS8 armed to transmit on 14.078 MHz at a 1500 Hz offset, the relay on, W1AW heard.
+    fn relay_engine() -> Engine {
+        let mut e = links_engine();
+        e.settings.js8_aprs_relay = true;
+        e.js8_apply_station_config();
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_ingest(&[beacon("W1AW", "FN31", false, 1200.0)], 1);
+        e
+    }
+
+    const INBOUND: &[u8] = b"N0CALL-9>APDR16,TCPIP*,qAC,T2TEXAS::W1AW     :HELLO THERE{12";
+
+    fn inbound(line: &[u8]) -> js8gate::InboundMessage {
+        js8gate::parse_inbound_message(line).expect("a message line")
+    }
+
+    /// What the engine keys over the next `n` periods, frame by frame as it reads on the air,
+    /// with the audio offset and speed of each over.
+    fn keyed(e: &mut Engine, n: u64) -> Vec<(Frame, f32, Js8Speed)> {
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let first = now_unix_secs() * 1000 / period_ms + 1;
+        let mut out = Vec::new();
+        for slot in first..first + n {
+            e.js8_tick(slot * period_ms);
+            let Some(plan) = e.plan_tx(slot) else {
+                continue;
+            };
+            let crate::engine::TxWaveform::Js8 { speed, word, f0 } = plan.waveform else {
+                panic!("a JS8 plan carries the typed waveform");
+            };
+            let (frame, _) = ::js8::proto::decode_word(&word, speed).expect("decodes");
+            out.push((frame, f0, speed));
+            let wave = plan.waveform.build();
+            e.commit_tx(&plan, wave, slot);
+        }
+        out
+    }
+
+    #[test]
+    fn an_aprs_message_for_a_heard_station_is_acked_as_it_and_keyed_as_msg_to_through_the_js8_route(
+    ) {
+        let mut e = relay_engine();
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        let now = now_unix_secs();
+        assert_eq!(
+            e.take_js8_aprs_uplink(now),
+            vec!["W1AW>APRS,TCPIP*::N0CALL-9 :ack12".to_string()],
+            "acknowledged as the station it is for"
+        );
+        let link = e.js8_aprs_link(now);
+        assert!(
+            link.armed && link.want && link.relay,
+            "the relay listens: t/m"
+        );
+        let wire = keyed(&mut e, 12);
+        let text = "W1AW HELLO THERE DE N0CALL-9";
+        let body = format!("{text} {}", ::js8::proto::crc16::checksum3(text));
+        assert_eq!(
+            wire.first().map(|w| w.0.clone()),
+            Some(Frame::Directed {
+                from: ::js8::proto::callsign::CallRef::Base("KD9TAW".into()),
+                to: ::js8::proto::callsign::CallRef::parse("@APRSIS").unwrap(),
+                cmd: Command::MsgTo,
+                num: None,
+                portable_from: false,
+                portable_to: false,
+            })
+        );
+        let data: String = wire
+            .iter()
+            .skip(1)
+            .map(|(f, _, _)| match f {
+                Frame::Data { text, .. } => text.clone(),
+                other => panic!("data after the head: {other:?}"),
+            })
+            .collect();
+        assert_eq!(data, body, "the message, DE its sender, and the checksum");
+        assert!(
+            wire.iter()
+                .all(|(_, f0, speed)| *f0 == 1500.0 && *speed == Js8Speed::Normal),
+            "on my own offset, at my speed"
+        );
+        // A copy of the same message inside two minutes is acknowledged again, keyed never.
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        assert_eq!(e.take_js8_aprs_uplink(now).len(), 1, "every copy is acked");
+        assert!(keyed(&mut e, 12).is_empty(), "but relayed once");
+    }
+
+    #[test]
+    fn the_relay_takes_nothing_it_could_not_key_now_and_nothing_the_rules_exclude() {
+        let now = now_unix_secs();
+        let nothing = |e: &mut Engine, why: &str| {
+            assert!(e.take_js8_aprs_uplink(now).is_empty(), "no ack: {why}");
+            assert!(keyed(e, 4).is_empty(), "nothing keyed: {why}");
+        };
+        let mut e = relay_engine();
+        e.settings.js8_aprs_relay = false;
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        nothing(&mut e, "the relay is off");
+        let mut e = relay_engine();
+        e.settings.js8_spot_aprs = false;
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        nothing(&mut e, "the @APRSIS gateway it hangs from is off");
+        let mut e = relay_engine();
+        e.set_tx_enabled(false);
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        nothing(&mut e, "TX is off");
+        let mut e = relay_engine();
+        e.js8_aprs_inbound(&inbound(b"N0CALL-9>APDR16,TCPIP*::K1ABC    :HELLO{12"));
+        nothing(&mut e, "K1ABC was never heard");
+        let mut e = relay_engine();
+        e.settings.js8_spot_never = vec!["W1AW".into()];
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        nothing(&mut e, "W1AW is never spotted");
+        let mut e = relay_engine();
+        e.js8_aprs_inbound(&inbound(b"N0CALL-9>APDR16,TCPIP*::W1AW     :ack12"));
+        nothing(&mut e, "an ack is protocol, not a message");
+        // Callsign aging: heard longer ago than it allows, the station is not relayed to.
+        let mut e = relay_engine();
+        e.settings.js8_callsign_aging_min = 1;
+        e.js8_apply_station_config();
+        let mut old = e.js8_station.snapshot(0);
+        old.heard[0].last_ms = (now - 61) * 1000;
+        e.js8_station.restore(old, 0);
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        nothing(&mut e, "W1AW aged out");
+        // CONTROL: the same engine, the station heard just now, relays.
+        e.js8_ingest(&[beacon("W1AW", "FN31", false, 1200.0)], 2);
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        assert_eq!(e.take_js8_aprs_uplink(now).len(), 1);
+        assert!(!keyed(&mut e, 12).is_empty());
+    }
+
+    #[test]
+    fn a_relay_already_queued_never_keys_once_its_switch_goes_off() {
+        let mut e = relay_engine();
+        e.js8_aprs_inbound(&inbound(INBOUND));
+        e.settings.js8_aprs_relay = false;
+        assert!(keyed(&mut e, 12).is_empty(), "re-read at the key: withheld");
+        // CONTROL: left on, it keys.
+        let mut on = relay_engine();
+        on.js8_aprs_inbound(&inbound(INBOUND));
+        assert!(!keyed(&mut on, 12).is_empty());
     }
 }

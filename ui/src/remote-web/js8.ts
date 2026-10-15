@@ -8,7 +8,10 @@ const text = (v: unknown, max = 1024): v is string => typeof v === 'string' && n
 const bool = (v: unknown) => typeof v === 'boolean'
 const nullableTime = (v: unknown) => v === null || integer(v)
 const speed = (v: unknown) => ['slow','normal','fast','turbo'].includes(String(v))
-const origin = (v: unknown) => ['operator','heartbeat','hbAck','autoReply','relay','cqRepeat'].includes(String(v))
+// `aprsRelay`: an APRS-IS message the station relays to a heard JS8 station (off by default). A page
+// without it refuses a sample whose queue holds one, so this page must be deployed before a
+// station that sends it.
+const origin = (v: unknown) => ['operator','heartbeat','hbAck','autoReply','relay','cqRepeat','aprsRelay'].includes(String(v))
 const unarmed = (v: unknown) => ['idle','txOff','needsHb','needsAuto','needsHbAndAuto','unscheduled'].includes(String(v))
 function object(v: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
   if (!v || typeof v !== 'object' || Array.isArray(v) || !keys.every(k => Object.prototype.hasOwnProperty.call(v,k)) ||

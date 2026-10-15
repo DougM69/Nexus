@@ -755,6 +755,8 @@ export function Js8Cockpit({
         return t('js8.dock.origin.relay')
       case 'cqRepeat':
         return t('js8.dock.origin.cqRepeat')
+      case 'aprsRelay':
+        return t('js8.dock.origin.aprsRelay')
     }
   }
   /** One second-act chip with its three faces: off · on but not armed (`notArmedTitle` says

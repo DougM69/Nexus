@@ -1353,6 +1353,10 @@ JS8NET, and commands sent to a `@group` go to JS8NET. The [JS8 chapter](js8.md) 
   `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD` goes
   to APRS-IS as a raw packet, under your callsign; Nexus logs in to APRS-IS with the passcode
   worked out from it, as the iGate does.
+- **Relay APRS-IS messages to heard stations** — off by default. **It transmits with nobody at
+  the radio:** an APRS message for a station heard on JS8 is keyed to it as `@APRSIS MSG TO:`,
+  only while TX is on and through every transmit guard, and never to a station on the
+  never-spot list. Needs the switch above.
 - **Never spot these callsigns** — comma-separated, empty by default, as in JS8Call. A station
   on it, as heard or by its base call, is spotted to no network.
 

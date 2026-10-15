@@ -105,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does, only while JS8 is open and something waits to go. On by default, as in JS8Call; switch it
   off in Settings ▸ Digital ▸ JS8. **Never spot these callsigns** there keeps a station off PSK
   Reporter, JS8NET and APRS-IS. NEEDS-BENCH: seeing the spots arrive needs a station on the air.
+- **JS8 can relay APRS-IS messages to stations you hear (JS8Call 3.0), off by default.** Turned
+  on, it transmits with nobody at the radio: an APRS message for a station heard on JS8 is
+  acknowledged on APRS-IS in that station's name and keyed to it as `@APRSIS MSG TO:`, only while
+  TX is on and through every transmit guard. A message relayed to you this way lands in your JS8
+  Inbox from APRS. NEEDS-BENCH before it is used on the air.
 
 ### Changed
 

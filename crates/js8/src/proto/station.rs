@@ -60,6 +60,10 @@
 //!   held for others and never expires.
 //! - Idle watchdog: on trip, stop TX and turn autoreply/relay/HB OFF, clear the outbox, surface a
 //!   toast — `tx_enabled` (the engine's latch) is NOT touched.
+//! - The APRS-IS relay (JS8Call 3.0.3): the engine hands `enqueue_aprs_relay` an APRS message for a
+//!   station heard here, as `@APRSIS MSG TO:<call> <text> DE <sender>`; it waits ahead of every
+//!   automatic reply and keys whatever AUTO says (`Origin::AprsRelay`). Heard the other way, an
+//!   `@APRSIS MSG TO:` (or `MSG TO:` text) naming my call is filed in my inbox from "APRS".
 use crate::phy::{Speed, Word87, I3};
 use crate::proto::callsign::{split_portable, CallRef};
 use crate::proto::command::Command;
@@ -147,6 +151,35 @@ fn has_text(e: &InboxEntry) -> bool {
     !e.text.trim().is_empty()
 }
 
+/// JS8Call files a repeat of the same relayed APRS message only after a minute
+/// (`m_aprsRelayDedupCache`, processCommandActivity.cpp:553-566).
+const APRS_FILE_DEDUPE_MS: u64 = 60_000;
+
+/// The inbound relay's `<CALL> <message>` when `m` is an APRS message relayed to @APRSIS, in either
+/// form JS8Call 3.0.3 files: a `MSG TO:` whose body is `<CALL> <message>`, or a `MSG` whose body
+/// is `TO:<CALL> <message>` (`^TO:\s*(\S+)\s+(.*)$`). `None` for anything else.
+///
+/// ⚠️ JS8Call 3.0.3 KEYS these with no checksum (`skipAprsChecksum`, Varicode.cpp:2275-2281) but its
+/// own receiver still demands one for MSG and MSG TO: (processBufferedActivity.cpp:64-78), so it
+/// discards every relay it sends. Here a body whose checksum verifies is read without it, and one
+/// that does not (`Checksum::Bad`, its raw body) is read whole, so a JS8Call relay is filed.
+fn aprs_relay_text(m: &Message) -> Option<String> {
+    if !m.to_text.eq_ignore_ascii_case("@APRSIS") {
+        return None;
+    }
+    let body = m.text.trim();
+    match m.cmd? {
+        Command::MsgTo => Some(body.to_string()),
+        Command::Msg => {
+            let rest = body.strip_prefix("TO:")?.trim_start();
+            let (to, text) = rest.split_once(char::is_whitespace)?;
+            let text = text.trim();
+            (!to.is_empty() && !text.is_empty()).then(|| format!("{to} {text}"))
+        }
+        _ => None,
+    }
+}
+
 /// Truncate `s` to at most `max` bytes on a char boundary (air-sourced strings are never large;
 /// see the bounds block above).
 fn clamp_str(s: &str, max: usize) -> String {
@@ -176,6 +209,9 @@ pub enum Origin {
     AutoReply,
     Relay,
     CqRepeat,
+    /// An APRS-IS message relayed to a station heard here (`enqueue_aprs_relay`). Automatic: it
+    /// keys with nobody at the radio, gated by its own persisted switch at plan time.
+    AprsRelay,
 }
 
 /// Where a frame wants to transmit. `HbSubband` is a free heartbeat spot in 500..1000 Hz
@@ -467,6 +503,9 @@ pub struct Station {
     last_activity_ms: u64,
     idle_tripped: bool,
     last_tx_display: Option<String>,
+    /// The @APRSIS messages filed from "APRS" in the last minute, by `TO|TEXT|SENDER`, and when:
+    /// JS8Call files a repeat of one only after 60 s (`m_aprsRelayDedupCache`). Session-only.
+    aprs_filed: HashMap<String, u64>,
 }
 
 impl Station {
@@ -493,6 +532,7 @@ impl Station {
             last_activity_ms: 0,
             idle_tripped: false,
             last_tx_display: None,
+            aprs_filed: HashMap::new(),
         }
     }
 
@@ -569,6 +609,17 @@ impl Station {
             // `resetAutomaticIntervalTransmissions(stopCQ = true, …)` (mainwindow.cpp:8333,
             // 8788). Somebody answered the call, so stop calling; a beacon keeps beaconing.
             self.stop_cq_repeat();
+        }
+
+        // An APRS message relayed to @APRSIS is the inbound relay's, whole: filed from "APRS" when
+        // it names my call, and acted on in no other way (JS8Call `continue`s past both branches).
+        // Before the checksum gate, because JS8Call 3.0.3 keys these with NO checksum
+        // (`skipAprsChecksum`) — see `aprs_relay_text`.
+        if let Some(text) = aprs_relay_text(m) {
+            if !self.idle_tripped && self.lists_allow(&m.from) {
+                self.file_aprs_relay(m, &text, now_ms, &mut actions);
+            }
+            return actions;
         }
 
         // A directed message with a failed checksum is surfaced, never acted on.
@@ -1014,6 +1065,55 @@ impl Station {
         self.prune_inbox(now_ms, actions);
     }
 
+    /// The receive side of the APRS-IS relay (JS8Call 3.0.3, processCommandActivity.cpp:536-572
+    /// and :765-805): `text` is `<CALL> <message>`; when CALL is my call as set, the message is
+    /// filed UNREAD from "APRS", by the path "APRS", unless the same `TO|TEXT|SENDER` was filed in
+    /// the last 60 s. SENDER is the word after a closing `DE`, else "APRS"; the text keeps its
+    /// `DE <sender>`, as JS8Call files it.
+    fn file_aprs_relay(
+        &mut self,
+        m: &Message,
+        text: &str,
+        now_ms: u64,
+        actions: &mut Vec<StationAction>,
+    ) {
+        let (to, body) = text.split_once(' ').unwrap_or((text, ""));
+        let body = clamp_str(body.trim(), MAX_TEXT_LEN);
+        if !to.eq_ignore_ascii_case(self.cfg.mycall.trim()) || body.is_empty() {
+            return;
+        }
+        let words: Vec<&str> = body.split_whitespace().collect();
+        let sender = match words.as_slice() {
+            // `\s+DE\s+(\S+)\s*$`: a DE with a word before it and one after it, at the end.
+            [_, .., de, who] if *de == "DE" => who,
+            _ => "APRS",
+        };
+        let key = format!("{to}|{body}|{sender}").to_ascii_uppercase();
+        // Kept while it is at or after `now − 60 s`: JS8Call erases one only when it is OLDER than
+        // its cutoff (`it.value() < cutoff`).
+        self.aprs_filed
+            .retain(|_, at| now_ms.saturating_sub(*at) <= APRS_FILE_DEDUPE_MS);
+        if self.aprs_filed.contains_key(&key) {
+            return;
+        }
+        self.aprs_filed.insert(key, now_ms);
+        let id = self.next_inbox_id;
+        self.next_inbox_id += 1;
+        self.inbox.push(InboxEntry {
+            id,
+            from: "APRS".into(),
+            to: clamp_str(to, MAX_CALL_LEN).to_ascii_uppercase(),
+            text: body,
+            path: vec!["APRS".into()],
+            state: InboxState::Unread,
+            at_ms: now_ms,
+            freq_hz: m.freq_hz,
+            snr_db: m.snr_db,
+        });
+        actions.push(StationAction::InboxChanged);
+        self.prune_inbox(now_ms, actions);
+    }
+
     /// `mine`: addressed to my call or a group I joined (not @ALLCALL, not another station).
     fn handle_query_msg(
         &mut self,
@@ -1311,7 +1411,8 @@ impl Station {
     /// batch of decodes, after an answer and when the cockpit's box changes: once the box is free
     /// and nothing is going out (:9652-9659), the oldest waiting reply is taken. With AUTO on (or
     /// for a heartbeat acknowledgement, whose " HEARTBEAT " text JS8Call keys whatever AUTO says,
-    /// :9674-9685) it goes to the outbox, where the next period keys it; otherwise it is put in
+    /// :9674-9685, or for the APRS-IS relay's High-priority message, which it keys the same way)
+    /// it goes to the outbox, where the next period keys it; otherwise it is put in
     /// the compose box (`addMessageText`, :9671) and never keyed by itself. A delivery it carries
     /// is handed over then, as its callback runs once the reply is dequeued (:9687-9689). One at
     /// a time: the box holds one message.
@@ -1323,7 +1424,7 @@ impl Station {
         let Some(r) = self.queued.pop_front() else {
             return actions;
         };
-        if self.cfg.autoreply || r.origin == Origin::HbAck {
+        if self.cfg.autoreply || matches!(r.origin, Origin::HbAck | Origin::AprsRelay) {
             let Ok(out) = self.compose_out(r.origin, &r.text, r.freq_hint) else {
                 return actions;
             };
@@ -1773,6 +1874,33 @@ impl Station {
         self.pending.clear();
         self.queued.clear();
         self.composer = None;
+    }
+
+    /// Queue the APRS-IS relay's message (JS8Call 3.0.3's `AprsInboundRelay` →
+    /// `enqueueMessage(PriorityHigh, …)`, UI_Constructor.cpp:153-155): with no confirmation box,
+    /// on my own offset (`offset == -1` is `freq()`), ahead of every automatic reply waiting —
+    /// JS8Call's queue is ordered by priority and this one is High — and behind any relay already
+    /// there. `process_tx_queue` keys it whatever AUTO says, as JS8Call's `processTxQueue` keys a
+    /// High message (mainwindow.cpp:6650-6660). A full queue refuses it: returns false.
+    pub fn enqueue_aprs_relay(&mut self, text: &str) -> bool {
+        if self.queued.len() >= MAX_PENDING {
+            return false;
+        }
+        let at = self
+            .queued
+            .iter()
+            .position(|q| q.origin != Origin::AprsRelay)
+            .unwrap_or(self.queued.len());
+        self.queued.insert(
+            at,
+            Queued {
+                origin: Origin::AprsRelay,
+                text: text.to_string(),
+                freq_hint: FreqHint::Dial,
+                delivers: None,
+            },
+        );
+        true
     }
 
     /// The outbox alone: what waits to be keyed, the rest of a message already going out
@@ -5911,5 +6039,208 @@ mod tests {
             7 * 60_000,
         );
         assert_eq!(s.inbox().len(), 1, "the trip cleared: filed");
+    }
+
+    // ---- the APRS-IS relay (JS8Call 3.0.3): the receive side, and its message on the air ----
+
+    /// `W1RLY: @APRSIS <cmd> <text>` as the reassembler closes it: a checksum that verified, or
+    /// (`Checksum::Bad`) the raw body of one that did not.
+    fn aprsis(cmd: Command, text: &str, checksum: Checksum) -> MessageEvent {
+        let MessageEvent::Message(mut m) = directed("W1RLY", "@APRSIS", Some(cmd), None, text, -9)
+        else {
+            unreachable!("directed() builds a message")
+        };
+        m.checksum = checksum;
+        m.complete = checksum != Checksum::Bad;
+        m.frames = 3;
+        MessageEvent::Message(m)
+    }
+
+    #[test]
+    fn an_aprsis_msg_to_naming_me_is_filed_from_aprs_and_its_repeat_only_after_a_minute() {
+        let mut s = Station::new(cfg());
+        let ev = aprsis(
+            Command::MsgTo,
+            "KD9TAW HELLO THERE DE N0CALL-9",
+            Checksum::Ok,
+        );
+        let acts = s.on_event(&ev, 1_000);
+        assert!(acts.contains(&StationAction::InboxChanged));
+        assert_eq!(s.inbox().len(), 1);
+        let e = &s.inbox()[0];
+        assert_eq!(
+            (e.from.as_str(), e.to.as_str(), e.text.as_str()),
+            ("APRS", "KD9TAW", "HELLO THERE DE N0CALL-9")
+        );
+        assert_eq!(e.path, vec!["APRS".to_string()]);
+        assert_eq!(
+            (e.state, e.at_ms, e.snr_db),
+            (InboxState::Unread, 1_000, -9)
+        );
+        // JS8Call keeps the key while it is no older than the minute, and drops it after.
+        s.on_event(&ev, 61_000);
+        assert_eq!(
+            s.inbox().len(),
+            1,
+            "a repeat inside the minute is not filed"
+        );
+        s.on_event(&ev, 61_001);
+        assert_eq!(s.inbox().len(), 2, "past the minute it is");
+        // Nothing answers it: no ACK to the relay station, nothing held, nothing keyed.
+        assert!(keyed_in(&mut s, 75_000, 4).is_empty());
+    }
+
+    #[test]
+    fn a_relay_keyed_without_a_checksum_is_still_filed_and_so_is_the_msg_form() {
+        let mut s = Station::new(cfg());
+        // JS8Call 3.0.3 keys these with no checksum, so the body closes Bad, raw.
+        s.on_event(
+            &aprsis(Command::MsgTo, "KD9TAW QSL DE N0CALL", Checksum::Bad),
+            1_000,
+        );
+        assert_eq!(s.inbox().len(), 1);
+        assert_eq!(s.inbox()[0].text, "QSL DE N0CALL");
+        // Its other branch: a MSG whose text is `TO:<call> <message>`.
+        s.on_event(
+            &aprsis(Command::Msg, "TO:KD9TAW 73 DE N0CALL", Checksum::Bad),
+            2_000,
+        );
+        assert_eq!(s.inbox().len(), 2);
+        assert_eq!(
+            (s.inbox()[1].from.as_str(), s.inbox()[1].text.as_str()),
+            ("APRS", "73 DE N0CALL")
+        );
+        // CONTROL: a failed checksum on anything else is still refused, and said.
+        let MessageEvent::Message(mut bad) = directed(
+            "W1AW",
+            "KD9TAW",
+            Some(Command::MsgTo),
+            None,
+            "K1ABC HI XYZ",
+            -5,
+        ) else {
+            unreachable!()
+        };
+        bad.checksum = Checksum::Bad;
+        let acts = s.on_event(&MessageEvent::Message(bad), 3_000);
+        assert!(acts
+            .iter()
+            .any(|a| matches!(a, StationAction::ChecksumFailed { .. })));
+        assert_eq!(s.inbox().len(), 2, "nothing stored from it");
+    }
+
+    #[test]
+    fn an_aprsis_message_for_another_call_is_neither_filed_nor_stored_and_the_lists_hold() {
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &aprsis(Command::MsgTo, "W1AW HELLO DE N0CALL", Checksum::Ok),
+            1_000,
+        );
+        assert!(
+            s.inbox().is_empty(),
+            "not mine to file, and @APRSIS is no store-and-forward"
+        );
+        assert!(
+            keyed_in(&mut s, 15_000, 4).is_empty(),
+            "and nothing answers"
+        );
+        // No `DE <sender>`: filed all the same, its text as it came.
+        s.on_event(&aprsis(Command::MsgTo, "KD9TAW HELLO", Checksum::Ok), 2_000);
+        assert_eq!(s.inbox()[0].text, "HELLO");
+        // A relay station the deny list names is acted on in no way.
+        let mut d = Station::new(StationConfig {
+            autoreply_deny: vec!["W1RLY".into()],
+            ..cfg()
+        });
+        d.on_event(
+            &aprsis(Command::MsgTo, "KD9TAW HELLO DE N0CALL", Checksum::Ok),
+            1_000,
+        );
+        assert!(d.inbox().is_empty());
+        // …nor while the idle watchdog stands.
+        let mut t = Station::new(StationConfig {
+            idle_watchdog_min: 5,
+            ..cfg()
+        });
+        t.mark_active(1);
+        t.tick(6 * 60_000);
+        assert!(t.idle_tripped(), "control: tripped");
+        t.on_event(
+            &aprsis(Command::MsgTo, "KD9TAW HELLO DE N0CALL", Checksum::Ok),
+            6 * 60_000,
+        );
+        assert!(t.inbox().is_empty());
+    }
+
+    #[test]
+    fn the_aprs_relay_keys_its_msg_to_whatever_auto_says_ahead_of_a_waiting_reply() {
+        // AUTO off: an ordinary reply would go to the compose box, never keyed by itself.
+        let mut s = Station::new(StationConfig {
+            autoreply: false,
+            ..cfg()
+        });
+        assert!(s.enqueue_aprs_relay("@APRSIS MSG TO:W1AW HELLO DE N0CALL"));
+        let wire = keyed_wire(&mut s, 15_000);
+        let want_body = format!(
+            "W1AW HELLO DE N0CALL {}",
+            crate::proto::crc16::checksum3("W1AW HELLO DE N0CALL")
+        );
+        assert_eq!(
+            wire.first().map(|w| &w.0),
+            Some(&Frame::Directed {
+                from: CallRef::Base("KD9TAW".into()),
+                to: CallRef::parse("@APRSIS").expect("a group"),
+                cmd: Command::MsgTo,
+                num: None,
+                portable_from: false,
+                portable_to: false,
+            }),
+            "a directed MSG TO: to @APRSIS, from me"
+        );
+        let body: String = wire
+            .iter()
+            .skip(1)
+            .map(|(f, _, _)| match f {
+                Frame::Data { text, .. } => text.clone(),
+                other => panic!("only data follows: {other:?}"),
+            })
+            .collect();
+        assert_eq!(body, want_body, "the message and DE, then its checksum");
+        assert!(wire.first().is_some_and(|w| w.1) && wire.last().is_some_and(|w| w.2));
+
+        // Ahead of an automatic reply already waiting (High beats Normal in JS8Call's queue), and
+        // behind a relay already there. The reply is made first; nothing has left the queue yet.
+        let mut q = Station::new(cfg());
+        q.on_event(&snr_query("W1AW"), 1_000);
+        assert!(q.enqueue_aprs_relay("@APRSIS MSG TO:W1AW ONE DE N0CALL"));
+        assert!(q.enqueue_aprs_relay("@APRSIS MSG TO:W1AW TWO DE N0CALL"));
+        let firsts: Vec<(Origin, String)> = (0..16u64)
+            .filter_map(|k| drain(&mut q, 15_000 * (k + 1)))
+            .filter(|f| f.first)
+            .map(|f| (f.origin, f.display))
+            .collect();
+        assert_eq!(
+            firsts,
+            vec![
+                (
+                    Origin::AprsRelay,
+                    "KD9TAW: @APRSIS MSG TO:W1AW ONE DE N0CALL".to_string()
+                ),
+                (
+                    Origin::AprsRelay,
+                    "KD9TAW: @APRSIS MSG TO:W1AW TWO DE N0CALL".to_string()
+                ),
+                (Origin::AutoReply, "KD9TAW: W1AW SNR -07".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_full_queue_refuses_the_aprs_relay() {
+        let mut s = Station::new(cfg());
+        for k in 0..MAX_PENDING {
+            assert!(s.enqueue_aprs_relay(&format!("@APRSIS MSG TO:W1AW N{k} DE N0CALL")));
+        }
+        assert!(!s.enqueue_aprs_relay("@APRSIS MSG TO:W1AW OVER DE N0CALL"));
     }
 }

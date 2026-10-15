@@ -129,10 +129,21 @@ and a real callsign set, JS8 spots the way JS8Call's SPOT button does:
 A contest that allows spots only over RF (Winter Field Day) stops all of it while it runs, as it
 stops the PSK Reporter uploads.
 
+**Relay APRS-IS messages to heard stations** (JS8Call 3.0; off by default) **transmits with
+nobody at the radio.** While it is on and JS8 is open, Nexus listens to APRS-IS for messages; one
+addressed to a station you have heard on JS8 is acknowledged on APRS-IS in that station's name and
+keyed to it as `@APRSIS MSG TO:<call> <text> DE <sender>`. It goes out only while TX is on, one
+message at a time, ahead of any automatic reply waiting, and through every transmit guard: the TX
+latch, your license privileges, the idle watchdog and the TX watchdog. A message that could not
+be sent now is not acknowledged either, and none is relayed to a station on the never-spot
+list. A repeat of the same message within two minutes is acknowledged again but not sent again.
+When another station relays an APRS message to you this way, it lands in your Inbox from
+**APRS**.
+
 ## Compatibility
 
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and Turbo.
-Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0), and 3.0's
-relay of APRS-IS messages to heard stations. The full protocol reference is
+Not implemented: the "JS8 60" / Ultra speed (JS8Call has offered it since 3.0). The full
+protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see
 NOTICE.

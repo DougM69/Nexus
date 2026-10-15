@@ -544,7 +544,7 @@ impl Engine {
     /// THE actions match. Every path (ingest, tick, the verbs) funnels here so a new action
     /// is handled once. In the receive-only build the outbox actions cannot occur (the
     /// station's switches are forced off); the TX batch fills those arms.
-    fn js8_handle_actions(&mut self, actions: Vec<StationAction>) {
+    pub(super) fn js8_handle_actions(&mut self, actions: Vec<StationAction>) {
         for a in actions {
             match a {
                 StationAction::InboxChanged => self.js8_persist(),
@@ -744,7 +744,7 @@ impl Engine {
     /// refuses to save a malformed one (Configuration.cpp:2443), so between them it sends
     /// neither. Nexus's Settings field can hold either, so the gate refuses both, by JS8Call's
     /// own rule (`is_station_locator`) on the trimmed text it stores (Configuration.cpp:2749).
-    fn js8_no_usable_locator(&self) -> bool {
+    pub(super) fn js8_no_usable_locator(&self) -> bool {
         !::js8::proto::grid::is_station_locator(self.settings.mygrid.trim())
     }
 
@@ -1124,6 +1124,10 @@ impl Engine {
             Origin::HbAck => self.settings().js8_hb_ack,
             Origin::AutoReply => self.settings().js8_autoreply,
             Origin::Relay => self.settings().js8_relay,
+            // The inbound APRS-IS relay's switch and the two it hangs from (spotting, the
+            // @APRSIS gateway), re-read at the key: turn any off and a relay already queued
+            // never keys.
+            Origin::AprsRelay => self.js8_aprs_relay_switch(),
         };
         if !switch_on || self.js8_station.idle_tripped() {
             // Dropped, not deferred: a reply withheld now must not fire ten minutes later

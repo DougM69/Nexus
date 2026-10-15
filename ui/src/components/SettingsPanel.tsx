@@ -9333,8 +9333,9 @@ export function SettingsPanel({
             </div>
 
             {/* JS8Call's SPOT block: spotting rides the PSK Reporter switch, as JS8Call's SPOT
-                carries PSK Reporter and JS8NET together; these are the @APRSIS gateway and the
-                never-spot list. */}
+                carries PSK Reporter and JS8NET together; these are the @APRSIS gateway, the
+                inbound APRS-IS relay (it keys unattended, so it ships off) and the never-spot
+                list. */}
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.js8.spotting.title')}</span>
               <div className="settings-field">
@@ -9352,6 +9353,21 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.js8.spotAprs.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.aprsRelay.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8AprsRelay === true}
+                    className={`toggle${form.js8AprsRelay === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AprsRelay', form.js8AprsRelay !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.aprsRelay.hint')}</span>
               </div>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.js8.spotNever.label')}</span>
