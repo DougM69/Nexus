@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // The JS8 dock's heartbeat controls, as JS8Call 3.0.3 has them (components/Js8Heartbeat):
-//   · HB NET (heartbeat networking): HB exists only while it is on, and not at Turbo, where HB NET
+//   · HB NET (heartbeat networking): HB exists only while it is on, and not at JS8 40, where HB NET
 //     is disabled and says why. A sample with no `presence` (the Remote page's) shows HB as before.
 //   · HB's menu (▾, or a right-click on HB): "Send heartbeat now", and with an interval set,
 //     "Start / Stop heartbeat timer"; the dock is lifted while the menu stands on it.
@@ -149,13 +149,13 @@ describe('HB NET: heartbeat networking, and HB only while it is on', () => {
     expect(spies.js8Arm).toHaveBeenCalledWith('hbnet', false)
   })
 
-  it('at Turbo: no HB, and HB NET is disabled and says why, keeping its setting', async () => {
+  it('at JS8 40 (once Turbo): no HB, and HB NET is disabled and says why, keeping its setting', async () => {
     await renderCockpit(base({ speed: 'turbo', presence: presence({ hbSpeed: false }) }))
     expect(q('.js8-hb')).toBeNull()
     const net = q('.js8-hbnet') as HTMLButtonElement
     expect(net.disabled).toBe(true)
     expect(net.getAttribute('aria-pressed')).toBe('true')
-    expect(net.title).toBe(t('js8.dock.hbNet.title.speed', { speed: 'Turbo' }))
+    expect(net.title).toBe(t('js8.dock.hbNet.title.speed', { speed: 'JS8 40' }))
   })
 
   it('a sample with no presence (the Remote page) shows HB as it always was, and no HB NET', async () => {
@@ -254,7 +254,7 @@ describe('HB ACK: held back now, and the 55-minute rule', () => {
   it.each([
     ['qsoPause', 'normal', () => t('js8.dock.hbAck.suppressed.qsoPause')],
     ['arriving', 'normal', () => t('js8.dock.hbAck.suppressed.arriving')],
-    ['speed', 'turbo', () => t('js8.dock.hbAck.suppressed.speed', { speed: 'Turbo' })],
+    ['speed', 'turbo', () => t('js8.dock.hbAck.suppressed.speed', { speed: 'JS8 40' })],
   ] as const)('held back by %s: on but not armed, and it says why', async (why, speed, words) => {
     await renderCockpit(armedAck({ hbAckSuppressed: why }, speed))
     const ack = q('.js8-hback')!
