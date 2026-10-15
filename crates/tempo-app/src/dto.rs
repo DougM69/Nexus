@@ -504,6 +504,8 @@ impl Tier {
 
 /// The heard-station row, straight from the message layer (serde-derived there).
 pub use js8::proto::station::Heard as Js8Heard;
+/// A held message too long to hand over at the current speed, `{ id, frames, max, fitsAt }`.
+pub use js8::proto::station::HeldTooLong as Js8InboxTooLong;
 /// A message a cap took out of the inbox, `{ atMs, why: "count" | "bytes", entry }`.
 pub use js8::proto::station::InboxDrop as Js8InboxDrop;
 /// One inbox row (UNREAD / READ / STORE / DELIVERED), straight from the message layer.
@@ -656,6 +658,11 @@ pub struct Js8State {
     /// know the key reads the station's sample as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox_dropped: Vec<Js8InboxDrop>,
+    /// The held messages too long to hand over at the current speed, which the station does not
+    /// offer: which, the frames each needs, the cap, and the speed it would go at. Left out while
+    /// there are none, and off the Remote page's sample, whose parser does not list the key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_too_long: Vec<Js8InboxTooLong>,
     pub queue: Vec<Js8QueueRow>,
     pub pending_reply: Option<Js8PendingReply>,
     /// The last refused verb's reason (a send that would not compose, a forbidden
@@ -5018,6 +5025,7 @@ mod tests {
             stations: Vec::new(),
             inbox: Vec::new(),
             inbox_dropped: Vec::new(),
+            inbox_too_long: Vec::new(),
             queue: vec![Js8QueueRow {
                 origin: js8::Origin::HbAck,
                 display: "x".to_string(),

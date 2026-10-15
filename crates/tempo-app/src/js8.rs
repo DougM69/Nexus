@@ -255,9 +255,11 @@ impl Engine {
         if !add(self.js8_last_error.as_deref().unwrap_or("")) {
             return None;
         }
-        // The page's parser refuses a key it does not list, and none lists `presence` yet.
+        // The page's parser refuses a key it does not list, and none lists `presence` or
+        // `inboxTooLong` yet.
         let mut state = self.js8_state();
         state.presence = None;
+        state.inbox_too_long = Vec::new();
         Some(state)
     }
 
@@ -313,6 +315,7 @@ impl Engine {
             stations: self.js8_station.heard().to_vec(),
             inbox: self.js8_station.inbox().to_vec(),
             inbox_dropped: self.js8_station.inbox_dropped().to_vec(),
+            inbox_too_long: self.js8_station.held_too_long(),
             queue: self
                 .js8_station
                 .queue()
@@ -613,6 +616,13 @@ impl Engine {
                 StationAction::RateLimited { from } => tempo_core::applog::info(
                     "js8",
                     &format!("@ALLCALL from {from} not answered (15-minute cap)"),
+                ),
+                StationAction::HbAckHeldOff { from } => tempo_core::applog::info(
+                    "js8",
+                    &format!(
+                        "heartbeat from {from} not acknowledged: acknowledged or answered on \
+                         @ALLCALL in the last 15 minutes"
+                    ),
                 ),
                 StationAction::Relayed { path, text } => tempo_core::applog::info(
                     "js8",
@@ -4684,6 +4694,12 @@ mod tests {
         let mut e = hb_engine("EN52", 30, 1500.0);
         e.set_js8_journal_path(path.clone());
         with_rule(&mut e);
+        // The two heartbeats come a moment apart on the wall clock, inside the 15 minutes
+        // JS8Call's @ALLCALL cache holds a second acknowledgement off before the rule sees it:
+        // the cache is shortened here so the rule acts on the second.
+        let mut c = e.js8_station.config().clone();
+        c.allcall_reply_interval_ms = 0;
+        e.js8_station.set_config(c);
         heard_hb(&mut e, "W1AW");
         heard_hb(&mut e, "W1AW");
         run_js8_loop(&mut e, 60);
@@ -4723,3 +4739,7 @@ mod tests {
 #[cfg(test)]
 #[path = "js8_replies_tests.rs"]
 mod replies_tests;
+
+#[cfg(test)]
+#[path = "js8_followups_tests.rs"]
+mod followups_tests;

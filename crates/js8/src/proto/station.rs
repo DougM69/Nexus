@@ -31,7 +31,10 @@
 //!   arriving, no QSO pause, the caller on no deny list and not stopped by the 55-minute rule
 //!   (`hb_rate_limit`), answer a heard heartbeat `CALL HEARTBEAT SNR +NN [MSG ID n]`, on a free
 //!   heartbeat spot picked as the heartbeat's is but with no own-offset rule (`sendHeartbeatAck`,
-//!   :6299). An incoming `HEARTBEAT SNR` is never answered (no ack-of-an-ack loop).
+//!   :6299). An incoming `HEARTBEAT SNR` is never answered (no ack-of-an-ack loop). A heartbeat
+//!   is @ALLCALL traffic to JS8Call, so the HB-ACK both checks and enters its @ALLCALL cache: a
+//!   station is acknowledged at most once per `allcall_reply_interval_ms`, and one acknowledged
+//!   is held off @ALLCALL replies as long (processCommandActivity.cpp:303-311, :719-723).
 //! - Heartbeat networking (JS8Call 3.0.3's Mode menu, default off) and the speed: heartbeats and
 //!   HB-ACKs go out only with networking on, at Slow, Normal and Fast ([`heartbeat_speed`], an
 //!   allow-list); elsewhere the HB repeat stops and what of either waits is dropped. With
@@ -44,7 +47,8 @@
 //!   (JS8Call's `!isAllCall`, mainwindow.cpp:8834-8869), and only the autoreply subset
 //!   (`Command::is_autoreply`, = upstream `autoreply_cmds {0,2,3,4,6,9,10,11,12,13,14,16,30}`);
 //!   an empty INFO or grid draws no reply (:8841, :8861). `QUERY MSGS` on `@ALLCALL` is answered
-//!   only when a message waits, once per station per `allcall_reply_interval_ms` (:8812, :9275).
+//!   only when a message waits, once per station per `allcall_reply_interval_ms` (:8812, :9275),
+//!   the station keyed on its call as heard, as JS8Call's @ALLCALL cache keys it (`d.from`).
 //! - Every automatic reply asks the operator first while `autoreply_confirmation` is on
 //!   (JS8Call's default) and is No by itself after 89 s; off, it is queued as it is made. A
 //!   queued reply waits in JS8Call's message queue until the compose box is free and nothing is
@@ -64,7 +68,10 @@
 //!   the delivery read as JS8Call 3.0.3's (processCommandActivity.cpp:661-706, :938-1045, the
 //!   lookups in `held`): `YES MSG ID n +k` and the HB-ACK's `MSG ID n +k)` say k more wait, and a
 //!   delivery names the next one, `… FROM <from> NEXT MSG ID m +k`. A message held for one
-//!   station is kept until the operator deletes it or a cap drops it, as JS8Call keeps it.
+//!   station is kept until the operator deletes it or a cap drops it, as JS8Call keeps it. One
+//!   whose hand-over would not fit one transmission at the current speed (the §97.119 cap,
+//!   which JS8Call does not have) is not offered, counted, named next or handed over until the
+//!   speed allows it, and the Inbox is told why (`held_too_long`).
 //! - Group store-and-forward: a `MSG TO:@GROUP` is held 48 h and handed once to each station
 //!   that asks for it — offered when a QUERY MSGS (or a heartbeat) addressed to a group I joined
 //!   finds nothing held for the asker itself (`getNextGroupMessageIdForCallsign`, Inbox.cpp:468).
@@ -391,6 +398,19 @@ pub struct InboxDrop {
     pub entry: InboxEntry,
 }
 
+/// A held message whose hand-over would not fit one transmission at the current speed (the
+/// §97.119 cap, `compose::max_frames`): not offered, counted or handed over until the speed allows
+/// it. The Inbox says which, the frames its hand-over needs, the cap, and the slowest speed it
+/// fits at (`None`: none).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldTooLong {
+    pub id: u32,
+    pub frames: usize,
+    pub max: usize,
+    pub fits_at: Option<Speed>,
+}
+
 /// Why "Store message…" refused (`Station::store_message`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreRefusal {
@@ -452,6 +472,11 @@ pub enum StationAction {
     /// The 55-minute rule stopped acknowledging `from` (`hb_rate_limit`): the list it keeps
     /// changed, and is journaled.
     HbAckRateLimited {
+        from: String,
+    },
+    /// A heartbeat from `from` is not acknowledged: that station was acknowledged, or answered on
+    /// @ALLCALL, within the reply interval (JS8Call's @ALLCALL cache).
+    HbAckHeldOff {
         from: String,
     },
 }
@@ -832,7 +857,10 @@ impl Station {
                 }
                 return actions;
             }
-            if cmd == Command::QueryMsgs || is_query_msg(m) {
+            // QUERY MSGS, and QUERY with "MSG n", dispatched on the command as JS8Call dispatches
+            // them (` QUERY`, processCommandActivity.cpp:864; ` QUERY MSGS`, :983): a MSG whose
+            // text reads "MSG n" is a MSG, filed and acknowledged below.
+            if matches!(cmd, Command::QueryMsgs | Command::Query) {
                 if replies {
                     self.handle_query_msg(m, mine, now_ms, &mut actions);
                 }
@@ -1060,8 +1088,20 @@ impl Station {
         }
         // The station as heard, `/P` included (`sendHeartbeatAck(d.from, …)`, :9098); a message
         // held for it is found as JS8Call finds it (`getNextMessageIdForCallsign(d.from)`, :9082).
+        // A station the 55-minute rule stopped is on that deny list in JS8Call (`hb_blacklist`,
+        // processCommandActivity.cpp:655-661), turned away here as there.
         let to = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        if self.is_me(&to) {
+        if self.is_me(&to) || (self.cfg.hb_rate_limit && on_list(&self.hb_rate_blocked, &to)) {
+            return;
+        }
+        // A heartbeat is @ALLCALL traffic to JS8Call (`isAllCallIncluded` reads @HB as @ALLCALL,
+        // mainwindow.cpp:6088-6090), so its @ALLCALL cache holds off a station acknowledged or
+        // answered on @ALLCALL in the last 15 minutes (processCommandActivity.cpp:303-311), and
+        // every heartbeat that gets this far enters it, acknowledged or stopped by the 55-minute
+        // rule below (:719-723). Checked before that rule, as JS8Call checks it: a heartbeat held
+        // off here is not counted by the rule.
+        if self.allcall_held_off(&to, now_ms) {
+            actions.push(StationAction::HbAckHeldOff { from: to });
             return;
         }
         // JS8Call 3.0's 55-minute rule, the last check before it answers
@@ -1100,19 +1140,17 @@ impl Station {
     }
 
     /// JS8Call 3.0's 55-minute rule (`processHeartbeatRateLimit`, processHeartbeatRateLimit.cpp:
-    /// 8-38). A station it stopped acknowledging stays stopped, by its call as heard or its base
-    /// call, as JS8Call's HB blacklist keeps it (processCommandActivity.cpp:713-715). Otherwise a
-    /// station acknowledged less than [`HB_RATE_WINDOW_MS`] ago is stopped now, for good, and its
-    /// time forgotten (:26-33); any other has its time kept, and is acknowledged (:36-37).
+    /// 8-38), for a station it has not stopped: one it stopped stays stopped, by its call as heard
+    /// or its base call, as JS8Call's HB blacklist keeps it (processCommandActivity.cpp:655-661,
+    /// :713-715), and `maybe_hb_ack` turns it away first. A station acknowledged less than
+    /// [`HB_RATE_WINDOW_MS`] ago is stopped now, for good, and its time forgotten (:26-33); any
+    /// other has its time kept, and is acknowledged (:36-37).
     fn hb_rate_held_off(
         &mut self,
         who: &str,
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) -> bool {
-        if on_list(&self.hb_rate_blocked, who) {
-            return true;
-        }
         match self.hb_acked_at.get(who) {
             Some(&last) if now_ms.saturating_sub(last) < HB_RATE_WINDOW_MS => {
                 self.hb_acked_at.remove(who);
@@ -1362,11 +1400,10 @@ impl Station {
         actions: &mut Vec<StationAction>,
     ) {
         // The querier as heard names the reply (`replyPath = d.from`, mainwindow.cpp:9248,
-        // :9270-9285), and a held message is found for it as JS8Call finds one: under that call
-        // or its base call (QUERY MSG n, :9219; QUERY MSGS, :9268 → :9508-9533). `base` keys
-        // the @ALLCALL hold-off alone.
+        // :9270-9285) and keys the @ALLCALL hold-off (`d.from`), and a held message is found for
+        // it as JS8Call finds one: under that call or its base call (QUERY MSG n, :9219; QUERY
+        // MSGS, :9268 → :9508-9533), among those whose hand-over fits this speed (`offerable`).
         let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
-        let base = split_portable(&from).0.to_string();
         // The query addressed to a group I joined: JS8Call's `isGroupCall`
         // (processCommandActivity.cpp:31), which brings that group's messages in.
         let group = self.joined_group(&m.to_text);
@@ -1378,10 +1415,11 @@ impl Station {
             let Some(id) = query_msg_id(m).filter(|_| mine) else {
                 return;
             };
+            let inbox = self.offerable(&from);
             // A group's message goes to any station that asks for it (JS8Call: "allow any
             // message to a @GROUP to be retrieved by anybody", processCommandActivity.cpp:916-922)
             // and, as a message for one station does here, once to each.
-            if let Some(e) = self.inbox.iter().find(|e| {
+            if let Some(e) = inbox.iter().find(|e| {
                 e.id == id
                     && has_text(e)
                     && (held_for(e, &from)
@@ -1391,12 +1429,13 @@ impl Station {
             }) {
                 // 3.0's reply (:938-975): the message, then the next one waiting, `NEXT MSG ID m`,
                 // and `+k` when k more wait past that — counted before this one is marked.
-                let mut deliver = format!("{from} MSG {} FROM {}", e.text, e.from);
-                let next = held::lookahead_for(&self.inbox, &from, id).or_else(|| {
+                let bare = format!("{from} MSG {} FROM {}", e.text, e.from);
+                let mut deliver = bare.clone();
+                let next = held::lookahead_for(&inbox, &from, id).or_else(|| {
                     held::is_group(&e.to)
                         .then(|| {
                             held::group_lookahead_for(
-                                &self.inbox,
+                                &inbox,
                                 &self.group_recipients,
                                 &m.to_text,
                                 &from,
@@ -1408,7 +1447,7 @@ impl Station {
                 });
                 if let Some(next) = next {
                     let more = held::pending(
-                        &self.inbox,
+                        &inbox,
                         &self.group_recipients,
                         &from,
                         group.as_deref(),
@@ -1420,6 +1459,12 @@ impl Station {
                     } else {
                         format!(" NEXT MSG ID {next}")
                     });
+                    // A hand-over that fits one transmission at this speed only without its NEXT
+                    // MSG ID goes without it, rather than never; the next one is offered on the
+                    // next QUERY MSGS. (JS8Call, with no such cap, always names it.)
+                    if self.too_long(&deliver, self.cfg.speed).is_some() {
+                        deliver = bare;
+                    }
                 }
                 // Marked Delivered as the reply is released, not here: JS8Call marks it in the
                 // reply's callback (mainwindow.cpp:9227-9235), so a No leaves it held. A delivery
@@ -1453,7 +1498,8 @@ impl Station {
                 None if to_allcall => return,
                 None => format!("{from} NO"),
             };
-            if to_allcall && self.allcall_held_off(&base, now_ms, actions) {
+            if to_allcall && self.allcall_held_off(&from, now_ms) {
+                actions.push(StationAction::RateLimited { from });
                 return;
             }
             self.schedule_reply(
@@ -1467,20 +1513,14 @@ impl Station {
         }
     }
 
-    /// JS8Call's @ALLCALL cache: a station answered on @ALLCALL is held off for
-    /// `allcall_reply_interval_ms` (15 minutes; mainwindow.cpp:8812). True, and `RateLimited`,
-    /// while it is held off; otherwise it is recorded as answered now.
-    fn allcall_held_off(
-        &mut self,
-        from: &str,
-        now_ms: u64,
-        actions: &mut Vec<StationAction>,
-    ) -> bool {
+    /// JS8Call's @ALLCALL cache (`m_txAllcallCommandCache`): a station answered on @ALLCALL, or
+    /// whose heartbeat was acknowledged, is held off for `allcall_reply_interval_ms` (15 minutes;
+    /// processCommandActivity.cpp:303-311), keyed on its call as heard (`d.from`), so W1AW/P is
+    /// not W1AW. True while it is held off; otherwise it is recorded as answered now (:719-723,
+    /// :1097-1100, :1148-1150).
+    fn allcall_held_off(&mut self, from: &str, now_ms: u64) -> bool {
         if let Some(&last) = self.allcall_replied.get(from) {
             if now_ms.saturating_sub(last) < self.cfg.allcall_reply_interval_ms {
-                actions.push(StationAction::RateLimited {
-                    from: from.to_string(),
-                });
                 return true;
             }
         }
@@ -1522,14 +1562,14 @@ impl Station {
     /// What a heartbeat's acknowledgement or a `QUERY MSGS` offers `who` (the station as heard):
     /// the message held for it first, else, for a heartbeat or query addressed to a group I joined,
     /// that group's next one for it; with JS8Call 3.0's count of how many more wait past it
-    /// (processCommandActivity.cpp:661-706, :995-1045).
+    /// (processCommandActivity.cpp:661-706, :995-1045). Only those whose hand-over to `who` fits
+    /// one transmission at this speed (`offerable`).
     fn offer_for(&self, who: &str, group: Option<&str>, now_ms: u64) -> Option<(u32, i64)> {
-        let id = self.stored_for(who).or_else(|| {
-            group.and_then(|g| {
-                held::group_next_for(&self.inbox, &self.group_recipients, g, who, now_ms)
-            })
+        let inbox = self.offerable(who);
+        let id = Self::stored_for(&inbox, who).or_else(|| {
+            group.and_then(|g| held::group_next_for(&inbox, &self.group_recipients, g, who, now_ms))
         })?;
-        let more = held::pending(&self.inbox, &self.group_recipients, who, group, now_ms, 1);
+        let more = held::pending(&inbox, &self.group_recipients, who, group, now_ms, 1);
         Some((id, more))
     }
 
@@ -1582,7 +1622,8 @@ impl Station {
         );
         let from = clamp_str(&m.from, MAX_CALL_LEN).to_ascii_uppercase();
         let reply = format!("{from} YES {}", report.trim());
-        if allcall && self.allcall_held_off(split_portable(&from).0, now_ms, actions) {
+        if allcall && self.allcall_held_off(&from, now_ms) {
+            actions.push(StationAction::RateLimited { from });
             return;
         }
         self.schedule_reply(
@@ -1629,9 +1670,9 @@ impl Station {
     /// `getNextMessageIdForCallsign` finds it (mainwindow.cpp:9508-9533): one held under the
     /// call as heard, else one held under its base call (`Radio::base_callsign`), the oldest
     /// first in each, skipping any with no text (:9516-9520, :9525-9529).
-    fn stored_for(&self, who: &str) -> Option<u32> {
+    fn stored_for(inbox: &[InboxEntry], who: &str) -> Option<u32> {
         let held_under = |call: &str| {
-            self.inbox
+            inbox
                 .iter()
                 .find(|e| {
                     e.state == InboxState::Store && e.to.eq_ignore_ascii_case(call) && has_text(e)
@@ -1639,6 +1680,45 @@ impl Station {
                 .map(|e| e.id)
         };
         held_under(who).or_else(|| held_under(&radio_base_callsign(who)))
+    }
+
+    /// The frames `text` needs and the cap at `speed`, when it would not fit one transmission
+    /// there (the §97.119 cap, `compose::max_frames`).
+    fn too_long(&self, text: &str, speed: Speed) -> Option<(usize, usize)> {
+        match frames_with_grid(&self.cfg.mycall, &self.cfg.grid, None, text, speed) {
+            Err(ComposeError::TooLong { frames, max }) => Some((frames, max)),
+            _ => None,
+        }
+    }
+
+    /// The hand-over of held message `e` to `who`, `<who> MSG <text> FROM <from>` (the delivery
+    /// a QUERY MSG n draws), when it would not fit one transmission at `speed`: its frames and the
+    /// cap. Store… refuses such a message up front; one held from the air can be one, or become
+    /// one when the speed goes down.
+    fn hand_over_too_long(
+        &self,
+        e: &InboxEntry,
+        who: &str,
+        speed: Speed,
+    ) -> Option<(usize, usize)> {
+        self.too_long(&format!("{who} MSG {} FROM {}", e.text, e.from), speed)
+    }
+
+    /// The inbox as the held-message lookups see it for `who`: without a held message whose
+    /// hand-over to `who` would not fit one transmission at the current speed. Such a message is
+    /// not offered (QUERY MSGS, a heartbeat's acknowledgement), counted (`+k`), named next (NEXT
+    /// MSG ID) or handed over (QUERY MSG n) until the speed allows it, where it was offered and
+    /// then dropped without a word each time its delivery failed to compose. JS8Call has no such
+    /// cap. The Inbox says why (`held_too_long`).
+    fn offerable(&self, who: &str) -> Vec<InboxEntry> {
+        self.inbox
+            .iter()
+            .filter(|e| {
+                e.state != InboxState::Store
+                    || self.hand_over_too_long(e, who, self.cfg.speed).is_none()
+            })
+            .cloned()
+            .collect()
     }
 
     /// A set STATUS, or JS8Call's default, "IDLE <MYIDLE> VERSION <MYVERSION>"
@@ -1824,8 +1904,26 @@ impl Station {
             return actions;
         };
         if self.cfg.autoreply || r.origin == Origin::HbAck {
-            let Ok(out) = self.compose_out(r.origin, &r.text, r.freq_hint) else {
-                return actions;
+            // A reply that no longer composes (the speed went down while it asked, so it no longer
+            // fits one transmission) is not sent, and said, never dropped without a word; a
+            // delivery it carried stays held.
+            let out = match self.compose_out(r.origin, &r.text, r.freq_hint) {
+                Ok(out) => out,
+                Err(e) => {
+                    let why = match e {
+                        ComposeError::TooLong { frames, max } => format!(
+                            "it needs {frames} frames and one transmission at this speed holds \
+                             {max}"
+                        ),
+                        ComposeError::NoCallsign => "no callsign is set".to_string(),
+                        ComposeError::Empty => "it is empty".to_string(),
+                    };
+                    actions.push(StationAction::Toast {
+                        text: format!("Auto-reply not sent, {why}: {}", r.text),
+                        directed_to_me: false,
+                    });
+                    return actions;
+                }
             };
             if self.push_outbox(out) {
                 self.mark_delivered(r.delivers, &mut actions);
@@ -2497,6 +2595,27 @@ impl Station {
         &self.inbox_dropped
     }
 
+    /// The held messages too long to hand over at the current speed, for the Inbox: each counted
+    /// as its hand-over to the call (or group) it is held for, with the slowest speed it fits at.
+    pub fn held_too_long(&self) -> Vec<HeldTooLong> {
+        self.inbox
+            .iter()
+            .filter(|e| e.state == InboxState::Store && has_text(e))
+            .filter_map(|e| {
+                let (frames, max) = self.hand_over_too_long(e, &e.to, self.cfg.speed)?;
+                let fits_at = Speed::ALL
+                    .into_iter()
+                    .find(|&s| self.hand_over_too_long(e, &e.to, s).is_none());
+                Some(HeldTooLong {
+                    id: e.id,
+                    frames,
+                    max,
+                    fits_at,
+                })
+            })
+            .collect()
+    }
+
     /// The operator has read the notes: clear them. True when there were any.
     pub fn clear_inbox_dropped(&mut self) -> bool {
         let any = !self.inbox_dropped.is_empty();
@@ -2764,10 +2883,6 @@ fn find_free_freq_offset(busy: &dyn Fn(f32) -> bool, rng: &mut dyn FnMut() -> u3
 fn next_transmit_cycle_ms(now_ms: u64, period_s: u64) -> u64 {
     let secs = now_ms / 1000;
     (secs / period_s * period_s + period_s + 1) * 1000
-}
-
-fn is_query_msg(m: &Message) -> bool {
-    m.text.trim_start().to_ascii_uppercase().starts_with("MSG ") || query_msg_id(m).is_some()
 }
 
 /// Parse the `n` from a `QUERY MSG n` body.
@@ -6954,8 +7069,10 @@ mod tests {
             s.on_event(&heartbeat("K1ABC", -5), 1000);
             let selected = drain(&mut s, 15_000).map(|f| f.display);
             s.select_call(Some(""), 20_000);
-            s.on_event(&heartbeat("K1ABC", -5), 21_000);
-            let cleared = drain(&mut s, 30_000).map(|f| f.display);
+            // 16 minutes on: with the pause off, K1ABC was acknowledged at once, and JS8Call's
+            // @ALLCALL cache holds a second acknowledgement off for 15 minutes.
+            s.on_event(&heartbeat("K1ABC", -5), 16 * 60_000);
+            let cleared = drain(&mut s, 16 * 60_000 + 14_000).map(|f| f.display);
             assert_eq!(
                 (selected, cleared),
                 (while_selected, ack.clone()),
@@ -7140,18 +7257,20 @@ mod tests {
             hb_rate_limit: false,
             ..on()
         });
+        // 16 minutes apart: inside the rule's 55, past JS8Call's @ALLCALL cache, which holds a
+        // second acknowledgement off for 15 minutes whatever the rule says.
         assert_eq!(
             (
                 s.hb_rate_blocked().len(),
                 heard(&mut s, "W1AW", 130 * MIN).0,
-                heard(&mut s, "W1AW", 131 * MIN).0
+                heard(&mut s, "W1AW", 146 * MIN).0
             ),
             (0, ack("W1AW"), ack("W1AW")),
-            "the rule off: W1AW a minute apart, acknowledged both times"
+            "the rule off: W1AW 16 minutes apart, acknowledged both times"
         );
         s.set_config(on());
         assert_eq!(
-            heard(&mut s, "W1AW", 140 * MIN).0,
+            heard(&mut s, "W1AW", 162 * MIN).0,
             ack("W1AW"),
             "on again: W1AW starts afresh"
         );
@@ -7198,3 +7317,7 @@ mod tests {
 #[cfg(test)]
 #[path = "station_replies_tests.rs"]
 mod replies_tests;
+
+#[cfg(test)]
+#[path = "station_followups_tests.rs"]
+mod followups_tests;
