@@ -4192,6 +4192,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 callsignAgingMin={settings?.js8CallsignAgingMin ?? 0}
                 activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
+                txOffsetWhileSending={settings?.js8TxOffsetWhileSending === true}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
                 boxes={boxesFor('js8')}

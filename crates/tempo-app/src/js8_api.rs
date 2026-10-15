@@ -21,9 +21,8 @@
 //! `tcpNetworkMessage`/`udpNetworkMessage` return before `networkMessage`
 //! (mainwindow.cpp:6717-6739), and an unknown type falls through it unanswered
 //! (networkMessage.cpp:915). [`classify`] is an ALLOW-list, so a type JS8Call adds later stays
-//! refused until someone decides it only reads. `RX.GET_FILTER` stays refused too: Nexus has no
-//! JS8 band-pass filter to report yet. A TCP line that is no request is told why in JS8Call's
-//! `API.ERROR` ([`read_tcp_line`]); a datagram that is none is dropped, as in JS8Call.
+//! refused until someone decides it only reads. A TCP line that is no request is told why in
+//! JS8Call's `API.ERROR` ([`read_tcp_line`]); a datagram that is none is dropped, as in JS8Call.
 //!
 //! THE WIRE. A message is `{"params":{…},"type":"…","value":"…"}` in Qt's compact JSON: keys
 //! sorted (a `QJsonObject` is a sorted map, and every object here is built through [`object`]),
@@ -33,9 +32,10 @@
 //! MessageServer.cpp:209) and a STRING over UDP (the answer's own constructor makes it,
 //! Message.cpp:75-81). A fresh id counts milliseconds from JS8Call's epoch, 2017-07-06.
 //!
-//! WHAT NEXUS DOES NOT KEEP is reported as JS8Call reports an empty value: no station is
-//! selected (`RX.CALL_SELECTED` and `SELECTED` are ""), and an inbox message filed before this
-//! run, whose dial and speed the inbox does not record, reads `DIAL` 0 and `SUBMODE` 0.
+//! WHAT NEXUS DOES NOT KEEP is reported as JS8Call reports an empty value: an inbox message filed
+//! before this run, whose dial and speed the inbox does not record, reads `DIAL` 0 and `SUBMODE`
+//! 0. The selected call (`RX.CALL_SELECTED`, `SELECTED`) is the cockpit's To box, as the station's
+//! QSO pause reads it, and "" while the box is empty.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -278,6 +278,7 @@ pub enum Read {
     BandActivity,
     Text,
     FreeOffsets,
+    Filter,
     Callsign,
     Grid,
     Info,
@@ -304,6 +305,7 @@ pub fn classify(kind: &str) -> Option<Read> {
         "RX.GET_BAND_ACTIVITY" => Read::BandActivity,
         "RX.GET_TEXT" => Read::Text,
         "RX.GET_FREE_OFFSETS" => Read::FreeOffsets,
+        "RX.GET_FILTER" => Read::Filter,
         "STATION.GET_CALLSIGN" => Read::Callsign,
         "STATION.GET_GRID" => Read::Grid,
         "STATION.GET_INFO" => Read::Info,
@@ -366,6 +368,16 @@ pub fn answer(req: &Request, via: Via, snap: &Js8ApiSnapshot, now_ms: u64) -> Op
             wire("RX.CALL_ACTIVITY", "", with_id(calls))
         }
         Read::CallSelected => wire("RX.CALL_SELECTED", &snap.selected, only_id()),
+        // The decode filter as Settings hold it (networkMessage.cpp:665-675).
+        Read::Filter => wire(
+            "RX.FILTER",
+            "",
+            with_id(vec![
+                ("CENTER".into(), Value::from(snap.filter.center_hz)),
+                ("ENABLED".into(), Value::from(snap.filter.enabled)),
+                ("WIDTH".into(), Value::from(snap.filter.width_hz)),
+            ]),
+        ),
         Read::BandActivity => {
             let rows = snap
                 .band_activity
@@ -453,8 +465,8 @@ pub fn answer(req: &Request, via: Via, snap: &Js8ApiSnapshot, now_ms: u64) -> Op
                     ("HBACK".into(), Value::from(c.hb_ack)),
                     ("HB_INTERVAL".into(), Value::from(c.hb_interval_min)),
                     ("HB_TIMER_ACTIVE".into(), Value::from(c.hb_on)),
-                    // Heartbeat networking is always offered in Nexus; JS8Call makes it a mode.
-                    ("JS8HB".into(), Value::from(true)),
+                    // JS8Call's heartbeat networking (its Mode menu's `actionModeJS8HB`).
+                    ("JS8HB".into(), Value::from(c.js8hb)),
                     ("MONITOR".into(), Value::from(c.monitor)),
                     ("MULTI_DECODER".into(), Value::from(c.multi_decoder)),
                     (
@@ -1068,6 +1080,8 @@ pub struct ConfigRow {
     pub multi_decoder: bool,
     pub groups: Vec<String>,
     pub tx_enabled: bool,
+    /// Heartbeat networking (`JS8HB`): the Settings switch.
+    pub js8hb: bool,
 }
 
 /// Everything a read is answered from, copied out of the Engine.
@@ -1090,6 +1104,8 @@ pub struct Js8ApiSnapshot {
     pub calls: Vec<CallRow>,
     pub callsign_aging_min: u16,
     pub band_activity: Vec<(i32, BandRow)>,
+    /// The decode filter (`RX.FILTER`).
+    pub filter: crate::settings::Js8Filter,
     /// `RX.TEXT`: the last 1024 characters of the directed pane.
     pub text: String,
     pub inbox: Vec<InboxRow>,
@@ -1557,12 +1573,13 @@ impl Engine {
             dial_hz: s.dial_hz(),
             offset_hz: self.tx_offset_hz() as i64,
             speed: submode(speed),
-            selected: String::new(),
+            selected: self.js8_station.selected().unwrap_or_default().to_string(),
             transmitting,
             band: s.band.clone(),
             calls,
             callsign_aging_min: s.js8_callsign_aging_min,
             band_activity,
+            filter: s.js8_filter,
             text,
             inbox,
             config: ConfigRow {
@@ -1578,6 +1595,7 @@ impl Engine {
                 multi_decoder: rx.count_ones() > 1,
                 groups: s.js8_groups.clone(),
                 tx_enabled: self.tx_enabled(),
+                js8hb: s.js8_hb_networking,
             },
             on_air: on_air.map(|(text, _, _)| text.clone()).unwrap_or_default(),
             tx_text: going
@@ -1668,6 +1686,7 @@ mod tests {
         "TX.GET_TEXT",
         "TX.GET_QUEUE_DEPTH",
         "STATION.VERSION",
+        "RX.GET_FILTER",
     ];
 
     const NOW: u64 = 1_769_740_328_005;
@@ -1768,7 +1787,7 @@ mod tests {
     /// The allow-list is exactly the reads: of every type JS8Call 3.0.3 knows, the
     /// `RX.GET_*`/`STATION.GET_*`/`INBOX.GET_MESSAGES` reads and the six others that only read
     /// (`RIG.GET_FREQ`, `RIG.GET_PTT`, `MODE.GET_SPEED`, `TX.GET_TEXT`, `TX.GET_QUEUE_DEPTH`,
-    /// `STATION.VERSION`) are answered, bar `RX.GET_FILTER`, and all the rest are refused.
+    /// `STATION.VERSION`) are answered, `RX.GET_FILTER` among them, and all the rest are refused.
     #[test]
     fn only_the_reads_are_answered() {
         let answered: BTreeSet<String> = JS8CALL_TYPES
@@ -1904,7 +1923,6 @@ mod tests {
         refused_family(&[
             r#"{"params":{"CENTER":1500,"WIDTH":500},"type":"RX.SET_FILTER","value":""}"#,
             r#"{"params":{},"type":"RX.SET_FILTER_ENABLED","value":"true"}"#,
-            r#"{"params":{},"type":"RX.GET_FILTER","value":""}"#,
         ]);
     }
 
@@ -1962,8 +1980,8 @@ mod tests {
             line_for(&e, "STATION.VERSION"),
             r#"{"params":{"VERSION":"1.19.0","_ID":7},"type":"STATION.VERSION","value":""}"#
         );
-        // Each Nexus speed as JS8Call numbers it: Slow 4, Normal 0, Fast 1, Turbo 2.
-        for (idx, n) in [(0u8, 4), (1, 0), (2, 1), (3, 2)] {
+        // Each Nexus speed as JS8Call numbers it: Slow 4, Normal 0, Fast 1, JS8 40 2, JS8 60 8.
+        for (idx, n) in [(0u8, 4), (1, 0), (2, 1), (3, 2), (4, 8)] {
             e.js8_set_speed(idx).expect("a speed Nexus has");
             assert_eq!(
                 line_for(&e, "MODE.GET_SPEED"),
@@ -2056,6 +2074,86 @@ mod tests {
         assert_eq!(
             reads(&e),
             (ptt("", false), Value::from(second.as_str()), Value::from(1))
+        );
+    }
+
+    /// `RX.CALL_SELECTED` and `STATION.STATUS`'s `SELECTED` are JS8Call's selected call
+    /// (`callsignSelected`, networkMessage.cpp:552-559), which in Nexus is the call in the
+    /// cockpit's To box as the station holds it (`Station::select_call`): announced when it
+    /// changes, and "" once the box is empty.
+    #[test]
+    fn the_selected_call_is_the_to_box() {
+        let mut e = engine();
+        let selected = |e: &Engine| line_for(e, "RX.GET_CALL_SELECTED");
+        assert_eq!(
+            selected(&e),
+            r#"{"params":{"_ID":7},"type":"RX.CALL_SELECTED","value":""}"#
+        );
+        let mut watch = StateWatch::default();
+        watch.step(&e.js8_api_snapshot(), NOW);
+        let announced = |watch: &mut StateWatch, e: &Engine| -> Vec<(String, String)> {
+            let (before, after) = watch.step(&e.js8_api_snapshot(), NOW);
+            before
+                .iter()
+                .chain(&after)
+                .map(|o| json(&o.line))
+                .map(|v| {
+                    let kind = v["type"].as_str().unwrap_or_default().to_string();
+                    let call = v["params"]["SELECTED"].as_str().unwrap_or("-").to_string();
+                    (kind, call)
+                })
+                .collect()
+        };
+        e.js8_select_call(Some("w1aw".into()));
+        assert_eq!(
+            selected(&e),
+            r#"{"params":{"_ID":7},"type":"RX.CALL_SELECTED","value":"W1AW"}"#
+        );
+        assert_eq!(
+            announced(&mut watch, &e),
+            [("STATION.STATUS".to_string(), "W1AW".to_string())]
+        );
+        e.js8_select_call(None);
+        assert_eq!(
+            selected(&e),
+            r#"{"params":{"_ID":7},"type":"RX.CALL_SELECTED","value":""}"#
+        );
+        assert_eq!(
+            announced(&mut watch, &e),
+            [("STATION.STATUS".to_string(), String::new())]
+        );
+    }
+
+    /// `STATION.CONFIG`'s `JS8HB` is JS8Call's heartbeat networking (its Mode menu's
+    /// `actionModeJS8HB`, networkMessage.cpp:321): the Settings switch, off as JS8Call ships it.
+    #[test]
+    fn js8hb_is_the_heartbeat_networking_switch() {
+        let mut e = engine();
+        let js8hb =
+            |e: &Engine| json(&line_for(e, "STATION.GET_CONFIG"))["params"]["JS8HB"].clone();
+        assert_eq!(js8hb(&e), Value::from(false), "off, as JS8Call ships it");
+        e.settings.js8_hb_networking = true;
+        assert_eq!(js8hb(&e), Value::from(true));
+    }
+
+    /// `RX.GET_FILTER` is answered `RX.FILTER` as JS8Call 3.0.3 answers it
+    /// (networkMessage.cpp:665-675): the decode filter's centre, on/off and width as Settings
+    /// hold them, in whole hertz. Setting it stays refused (`an_rx_setting_does_nothing`).
+    #[test]
+    fn the_decode_filter_is_read_as_js8call_reads_it() {
+        let mut e = engine();
+        assert_eq!(
+            line_for(&e, "RX.GET_FILTER"),
+            r#"{"params":{"CENTER":1500,"ENABLED":true,"WIDTH":2000,"_ID":7},"type":"RX.FILTER","value":""}"#
+        );
+        e.js8_set_filter(crate::settings::Js8Filter {
+            enabled: false,
+            center_hz: 1210,
+            width_hz: 500,
+        });
+        assert_eq!(
+            line_for(&e, "RX.GET_FILTER"),
+            r#"{"params":{"CENTER":1210,"ENABLED":false,"WIDTH":500,"_ID":7},"type":"RX.FILTER","value":""}"#
         );
     }
 
@@ -2872,7 +2970,7 @@ mod tests {
             .iter()
             .map(|s| (submode(*s), bandwidth(*s)))
             .collect();
-        assert_eq!(numbers, vec![(4, 25), (0, 50), (1, 80), (2, 160)]);
+        assert_eq!(numbers, vec![(4, 25), (0, 50), (1, 80), (2, 160), (8, 250)]);
         let distinct: BTreeSet<i64> = numbers.iter().map(|n| n.0).collect();
         assert_eq!(distinct.len(), Js8Speed::ALL.len());
         for s in Js8Speed::ALL {

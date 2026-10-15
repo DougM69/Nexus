@@ -1,7 +1,7 @@
 // The JS8 lists' menus, as JS8Call 3.0.3 builds them: each list's ⋯ (its View menu and header menu:
 // Sort By…, Show Columns…, Show Band Heartbeats and ACKs, Clear, Clear All Lists) and a row's ⋯ (its
-// right-click menu: Jump to …Hz, Jump to … speed, Show Message Inbox, Add New Station or Group…,
-// Remove, Block, Remove Activity). UI_Constructor.cpp:781-1335 and mainwindow.cpp:4669-4800, read as
+// right-click menu: Jump to …Hz, Center Filter at …Hz, Jump to … speed, Show Message Inbox, Add New
+// Station or Group…, Remove, Block, Remove Activity). UI_Constructor.cpp:781-1335 and mainwindow.cpp:4669-4800, read as
 // the specification. Entries only: what each one does is the cockpit's, handed in.
 //
 // ⚠️ Migrated from birth (i18n/hardcoded-strings.test.ts): every word is in the catalog.
@@ -10,6 +10,7 @@ import type { Js8Speed } from '../types'
 import { JS8_BAND_SORTS, JS8_CALL_SORTS, speedName, type Js8BandSort, type Js8CallSort } from '../features/js8Lists'
 import { JS8_BAND_COLUMNS, JS8_CALL_COLUMNS, type Js8BandColumn, type Js8CallColumn, type Js8ViewPrefs } from '../features/js8View'
 import type { Js8MenuEntry } from './Js8ListMenu'
+import type { MenuItem } from './ui/Menu'
 
 /** Literal keys per order, so the orphan guard sees each referenced. */
 function bandSortLabel(sort: Js8BandSort): string {
@@ -161,20 +162,27 @@ export interface Js8Jump {
   speed: Js8Speed | null
   /** My transmit speed: no "Jump to … speed" to the one I am on (UI_Constructor.cpp:964). */
   current: Js8Speed | null
-  /** JS8Call refuses to move the offset while a message is queued or going out (`changeFreq`). */
+  /** JS8Call refuses to move the offset while a message is queued or going out, unless "Allow TX
+   *  offset changes while sending" is on (`changeFreq`, mainwindow.cpp:5381-5392). */
   offsetLocked: boolean
+  /** JS8Call's "Center filter at …Hz": the decode filter centred on the row's offset, offered only
+   *  while the filter is on (`js8CentreFilterItem`); null for none. */
+  centreFilter: MenuItem | null
   canJump: boolean
   canChangeSpeed: boolean
   onJump: (hz: number) => void
   onSpeed: (speed: Js8Speed) => void
 }
 
-/** "Jump to …Hz" and "Jump to … speed" (UI_Constructor.cpp:942-985, :1231-1263). */
+/** "Jump to …Hz", "Center filter at …Hz" and "Jump to … speed" (UI_Constructor.cpp:942-988,
+ *  :1231-1263). */
 export function js8JumpEntries(j: Js8Jump): Js8MenuEntry[] {
   const out: Js8MenuEntry[] = []
   if (j.hz != null) {
     const hz = j.hz
     out.push({ kind: 'item', label: t('js8.lists.jumpOffset', { offset: hz }), onSelect: () => j.onJump(hz), disabled: j.offsetLocked || !j.canJump })
+    const f = j.centreFilter
+    if (f) out.push({ kind: 'item', label: f.label, onSelect: f.onSelect, disabled: f.disabled })
   }
   if (j.speed && j.current && j.speed !== j.current) {
     const speed = j.speed

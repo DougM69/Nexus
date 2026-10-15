@@ -91,6 +91,7 @@ vi.mock('../api', async (importOriginal) => {
     getLicensedBandPlan: vi.fn(async () => []),
     setRxOffset: vi.fn(async () => ({})),
     setTxOffset: vi.fn(async () => ({})),
+    js8SetFilter: vi.fn(async () => state.current),
   }
 })
 vi.mock('../toast', () => ({
@@ -315,10 +316,53 @@ describe('Band activity is JS8Call’s', () => {
     expect(api.setRxOffset).toHaveBeenCalledWith(900)
     cleanup()
     vi.mocked(api.setTxOffset).mockClear()
+    vi.mocked(api.setRxOffset).mockClear()
     state.current = { ...js8Fixture(), queue: [{ origin: 'operator', display: 'X', first: true, last: true }] }
-    await renderCockpit()
-    const entries = await menuEntries(document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[1].querySelector('.js8-row-menu')!)
+    await renderCockpit({ txOffsetWhileSending: false })
+    const menu = () => document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[1].querySelector('.js8-row-menu')!
+    const entries = await menuEntries(menu())
     expect(entries.find(([name]) => name === 'Jump to 900 Hz')).toEqual(['Jump to 900 Hz', true])
+    cleanup()
+    await renderCockpit({ txOffsetWhileSending: false })
+    await pick(menu(), 'Jump to 900 Hz')
+    await poll()
+    expect(api.setRxOffset, 'refused whole: RX stays too').not.toHaveBeenCalled()
+    expect(api.setTxOffset).not.toHaveBeenCalled()
+  })
+
+  it('with “Allow TX offset changes while sending” on, a jump is taken while a message is queued, as JS8Call’s changeFreq takes it', async () => {
+    // JS8Call refuses only `isMessageQueuedForTransmit() && !tx_qsy_allowed()` (mainwindow.cpp:
+    // 5381-5392). The frame on the air moving with it is the engine's (js8_design_tests).
+    const api = await import('../api')
+    state.current = { ...js8Fixture(), sending: true, queue: [{ origin: 'operator', display: 'X', first: true, last: true }] }
+    await renderCockpit({ txOffsetWhileSending: true })
+    const menu = () => document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[1].querySelector('.js8-row-menu')!
+    expect((await menuEntries(menu())).find(([name]) => name === 'Jump to 900 Hz')).toEqual(['Jump to 900 Hz', false])
+    cleanup()
+    await renderCockpit({ txOffsetWhileSending: true })
+    await pick(menu(), 'Jump to 900 Hz')
+    await waitFor(() => expect(api.setTxOffset).toHaveBeenCalledWith(900))
+    expect(api.setRxOffset).toHaveBeenCalledWith(900)
+  })
+
+  it('offers “Centre filter at … Hz” after the jump while the decode filter is on, and centres it there, as JS8Call’s row menus do', async () => {
+    // UI_Constructor.cpp:981-988 (Band activity) and :1251-1258 (the call list): only while the
+    // filter is on, between "Jump to …Hz" and the speed.
+    const api = await import('../api')
+    const filter = { enabled: true, centerHz: 1500, widthHz: 500 }
+    state.current = { ...js8Fixture(), controls: { filter, qsyCenterHz: 1500, hop: null } }
+    await renderCockpit()
+    const names = (await menuEntries(stationRow('W0IND').querySelector('.js8-row-menu')!)).map(([n, off]) => (off ? `(${n})` : n))
+    expect(names.slice(0, 3)).toEqual(['Jump to 1503 Hz', 'Centre filter at 1503 Hz', 'Jump to Fast speed'])
+    cleanup()
+    await renderCockpit()
+    await pick(document.querySelectorAll('[data-pane="offsets"] .js8-offset-row')[1].querySelector('.js8-row-menu')!, 'Centre filter at 900 Hz')
+    await waitFor(() => expect(api.js8SetFilter).toHaveBeenCalledWith({ enabled: true, centerHz: 900, widthHz: 500 }))
+    cleanup()
+    state.current = { ...js8Fixture(), controls: { filter: { ...filter, enabled: false }, qsyCenterHz: 1500, hop: null } }
+    await renderCockpit()
+    const off = (await menuEntries(stationRow('W0IND').querySelector('.js8-row-menu')!)).map(([n]) => n)
+    expect(off.slice(0, 2), 'with the filter off it is not offered').toEqual(['Jump to 1503 Hz', 'Jump to Fast speed'])
   })
 
   it('from a Remote observer a jump moves only the receive offset, through the station’s receiver', async () => {

@@ -32,7 +32,7 @@ import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
 import { RotorStrip } from './RotorStrip'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
-import { Js8WaterfallControls } from './Js8WaterfallControls'
+import { Js8WaterfallControls, js8CentreFilterItem } from './Js8WaterfallControls'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
@@ -163,6 +163,10 @@ interface Props {
   /** JS8Call's band-activity aging, in minutes (Settings ▸ JS8; 0, the default here, is off):
    *  App hands down the station's setting. */
   activityAgingMin?: number
+  /** Settings ▸ JS8's "Allow TX offset changes while sending" (JS8Call's `tx_qsy_allowed`, off by
+   *  default): off, a list row's "Jump to …Hz" is refused while a message is queued or going out,
+   *  as JS8Call's `changeFreq` refuses it; on, it is taken. Absent (the Remote page): off. */
+  txOffsetWhileSending?: boolean
   /** Panel visibility record — host-owned (App) so it survives remounts. */
   panels?: PanelLayoutApi<Js8PanelId>
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -263,6 +267,7 @@ export function Js8Cockpit({
   wheelSensitivity,
   callsignAgingMin = 0,
   activityAgingMin = 0,
+  txOffsetWhileSending = false,
   onOpenLogbook,
   onEntryCall,
   panels,
@@ -948,6 +953,9 @@ export function Js8Cockpit({
   }, [active, canControl, myGrid])
 
   const sending = js8?.sending === true
+  // JS8Call's `isMessageQueuedForTransmit()` (mainwindow.cpp:3264-3266): a message waiting to go, or
+  // the key down. CQ and HB are greyed out meanwhile (`updateButtonDisplay`, :5675-5689).
+  const queued = sending || (js8?.queue.length ?? 0) > 0
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
   const selectedCall = toCall.trim().toUpperCase()
   const selected = js8?.stations.find((h) => h.call === selectedCall) ?? null
@@ -1245,7 +1253,8 @@ export function Js8Cockpit({
     hz,
     speed,
     current: js8?.speed ?? null,
-    offsetLocked: sending || (js8?.queue.length ?? 0) > 0,
+    offsetLocked: queued && !txOffsetWhileSending,
+    centreFilter: hz != null ? js8CentreFilterItem(js8?.controls?.filter, hz, setJs8, canControl) : null,
     canJump: canControl || receiverSettings.rxAllowed,
     canChangeSpeed: canControl || decoderSettings.allowed,
     onJump: jumpTo,
@@ -1962,7 +1971,7 @@ export function Js8Cockpit({
               type="button"
               className={`cw-macro rtty-arm js8-arm js8-cq js8-cq-repeat${js8?.cqOn ? ' on' : ''}${js8?.cqOn && js8.armed.cq ? ' armed' : ''}`}
               aria-pressed={js8?.cqOn === true}
-              disabled={!canControl} onClick={toggleCqRepeat}
+              disabled={!canControl || queued} onClick={toggleCqRepeat}
               title={cqRepeatTitle}
             >
               <span className="cw-macro-label">{cqCount ? `${CQ} (${cqCount})` : CQ}</span>
@@ -1971,7 +1980,7 @@ export function Js8Cockpit({
             <button
               type="button"
               className="cw-macro js8-cq"
-              disabled={!canControl}
+              disabled={!canControl || queued}
               onClick={callCq}
               title={compose.sendAtOnce ? t('js8.dock.cq.send', { text: cqLine() }) : t('js8.dock.cq.fill', { text: cqLine() })}
             >
@@ -1993,7 +2002,7 @@ export function Js8Cockpit({
               title={hbTitle}
               on={js8?.hbOn === true}
               armed={js8?.armed.hb === true}
-              canControl={canControl}
+              canControl={canControl && !queued}
               intervalMin={js8?.hbIntervalMin ?? 0}
               onToggle={toggleHb}
               onSendNow={sendHbNow}

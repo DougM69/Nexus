@@ -165,6 +165,47 @@ describe('HB NET: heartbeat networking, and HB only while it is on', () => {
   })
 })
 
+describe('CQ and HB wait while a message is queued or going out', () => {
+  // JS8Call's `updateButtonDisplay` greys both while `isMessageQueuedForTransmit()`
+  // (mainwindow.cpp:5675-5689, :3264-3266): something waiting to go, or the key down.
+  const greyed = () => ['.js8-cq', '.js8-hb', '.js8-hb-menu-btn'].map((s) => (q(s) as HTMLButtonElement).disabled)
+  const waiting = [{ origin: 'autoReply' as const, display: 'KD9TAW: W1AW SNR -05', first: true, last: true }]
+
+  beforeEach(async () => {
+    const api = await import('../api')
+    vi.mocked(api.js8CallCq).mockReset()
+    vi.mocked(api.js8CallCq).mockImplementation(async () => state.current)
+  })
+
+  it('a message waiting in the queue greys CQ, HB and HB’s menu, and a click on them sends nothing', async () => {
+    const api = await import('../api')
+    await renderCockpit(base({ queue: waiting }))
+    expect(greyed()).toEqual([true, true, true])
+    fireEvent.click(q('.js8-cq')!)
+    fireEvent.click(q('.js8-hb')!)
+    await settle()
+    expect(api.js8CallCq).not.toHaveBeenCalled()
+    expect(spies.js8Arm).not.toHaveBeenCalled()
+  })
+
+  it('the key down with the queue empty greys them too, and the repeating CQ with them', async () => {
+    await renderCockpit(base({ sending: true, cqIntervalMin: 5 }))
+    expect(q('.js8-cq-repeat'), 'premise: CQ repeats').not.toBeNull()
+    expect(greyed()).toEqual([true, true, true])
+  })
+
+  it('control: with nothing queued or going out, both can be pressed, and the same clicks send', async () => {
+    const api = await import('../api')
+    await renderCockpit(base())
+    expect(greyed()).toEqual([false, false, false])
+    fireEvent.click(q('.js8-cq')!)
+    fireEvent.click(q('.js8-hb')!)
+    await settle()
+    expect(api.js8CallCq).toHaveBeenCalledTimes(1)
+    expect(spies.js8Arm).toHaveBeenCalledWith('hb', true)
+  })
+})
+
 describe('HB’s menu: send one now, start or stop the timer', () => {
   it('▾ opens it; at interval 0 it offers Send heartbeat now alone, which sends one', async () => {
     await renderCockpit(base())

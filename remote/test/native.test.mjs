@@ -776,7 +776,9 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     assert.deepEqual(contest.fieldDay.log.map(q=>[q.call,q.dupe===true]),[['K9XYZ',false],['K9XYZ',true]])
     fd.close()
     const js8Fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-web/__fixtures__/js8.json',import.meta.url),'utf8'))
-    const nativeJs8=await probe.send({type:'seedJs8',journal:{inbox:js8Fixture.state.inbox,heard:js8Fixture.state.stations,allcallReplied:[],nextInboxId:2}})
+    // One station sent to me and called CQ, so the desktop's state carries its ★ and ☎ marks.
+    const heard=js8Fixture.state.stations.map((h,i)=>i===0?{...h,ackMs:h.lastMs,cqMs:h.lastMs}:h)
+    const nativeJs8=await probe.send({type:'seedJs8',journal:{inbox:js8Fixture.state.inbox,heard,allcallReplied:[],nextInboxId:2}})
     assert.equal(nativeJs8.state.inbox.length,1)
     assert.ok(nativeJs8.state.queue.length>1)
     const {value:js8Ticket}=await browser.post(`stations/${stationId}/ticket`)
@@ -791,13 +793,17 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
     const js8Frame=await frameSamples(js8,js8Request,['get_js8_state'])
     const js8Sample=js8Frame.samples.get('get_js8_state')
     assert.equal(js8Sample.type,'applicationResult',`the JS8 sample: ${js8Sample.error}`)
-    // The desktop's `presence` (heartbeat networking, the QSO pause) and `controls` (the waterfall controls and the band
-    // schedule's notice) are the keys the page's sample leaves out: its parser does not list them yet. Everything else is
-    // the native state as it stands.
+    // The keys the page's sample leaves out, one strip block in the station (`bounded_js8_state`): the desktop's
+    // `presence` (heartbeat networking, the QSO pause), `controls` (the waterfall controls and the band schedule's notice)
+    // and `inboxTooLong`, each activity row's `flags` (its place in its message) and each station's `ackMs` and `cqMs`
+    // (★ and ☎). The page's parser does not list them yet. Everything else is the native state as it stands.
     assert.ok(Object.hasOwn(nativeJs8.state,'presence'),'control: the desktop state carries presence')
     assert.ok(Object.hasOwn(nativeJs8.state,'controls'),'control: the desktop state carries controls')
-    const {presence:_presence,controls:_controls,...nativeJs8Sampled}=nativeJs8.state
-    assert.deepEqual(js8Sample.data.state,nativeJs8Sampled,'the station read is the native JS8 DTO, presence and controls left out')
+    assert.ok(nativeJs8.state.stations.some(h=>Object.hasOwn(h,'ackMs')&&Object.hasOwn(h,'cqMs')),'control: the desktop state carries a station’s marks')
+    const {presence:_presence,controls:_controls,inboxTooLong:_inboxTooLong,...nativeRest}=nativeJs8.state
+    const nativeJs8Sampled={...nativeRest,activity:nativeRest.activity.map(({flags:_flags,...row})=>row),
+      stations:nativeRest.stations.map(({ackMs:_ackMs,cqMs:_cqMs,...h})=>h)}
+    assert.deepEqual(js8Sample.data.state,nativeJs8Sampled,'the station read is the native JS8 DTO, the desktop’s own keys left out')
     assert.deepEqual(statsReference.parseJs8Sample(js8Sample.data,0,js8Sample.data.capturedAtMs),nativeJs8Sampled)
     js8.send({type:'applicationFrameAck',requestId:js8Frame.requestId,nextRequestId:crypto.randomUUID()})
     js8.send({type:'applicationSubscribe',topics:[],requestId:null})

@@ -3130,6 +3130,12 @@ impl Station {
     pub fn queued_len(&self) -> usize {
         self.queued.len()
     }
+
+    /// JS8Call's selected call (`callsignSelected`): the cockpit's To box, as
+    /// [`Station::select_call`] holds it.
+    pub fn selected(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
 }
 
 /// JS8Call's `<MYIDLE>` for an idle count: `since()` of the last activity (mainwindow.cpp:
