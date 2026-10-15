@@ -27454,6 +27454,14 @@ button.sat-chip:disabled {
   font-family: var(--font-mono);
   word-break: break-word;
 }
+/* REPLY · SNR · INFO · STATUS · Saved (Js8ComposeActions), leading the CQ row as one group that
+   wraps as a group when the row runs out of width. */
+.js8-quick-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
 /* Three faces for a second-act chip: off · on-but-not-armed (the switch is on but something
    else it needs is not: the session TX latch, a clear idle watchdog, HB or AUTOREPLY — nothing
    keys, and its title says which) · ARMED (it can go out now). Auto-armed must never LOOK

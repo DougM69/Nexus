@@ -6,8 +6,9 @@
 // "Immediately transmit…", on by default), is the cockpit's (Js8Cockpit); this draws the buttons
 // and says what they will do.
 //
-// A SENDER row in the TX dock, with no ⊞ id: nothing here stops a transmission, and every send it
-// asks for goes through the engine's JS8 send and its gates (THE STOP LINE, CLAUDE.md).
+// SENDERS in the TX dock's CQ row, with no ⊞ id: nothing here stops a transmission, and every send
+// it asks for goes through the engine's JS8 send and its gates (THE STOP LINE, CLAUDE.md). They lead
+// that row, so the dock keeps its two rows (JS8Call has them in one row with CQ and HB too).
 //
 // Migrated from birth (i18n/hardcoded-strings.test.ts): REPLY and the command words are the
 // mode's vocabulary; every sentence is from the catalog.
@@ -75,7 +76,7 @@ export function Js8ComposeActions(p: Props) {
       : t('js8.dock.quick.info.fill')
   const statusTitle = p.sendAtOnce ? t('js8.dock.quick.status.send') : t('js8.dock.quick.status.fill')
   return (
-    <div className="js8-dock-row js8-quick-row" role="group" aria-label={t('js8.dock.quick.aria')}>
+    <span className="js8-quick-group" role="group" aria-label={t('js8.dock.quick.aria')}>
       <button type="button" className="cw-macro js8-quick js8-reply" disabled={!p.canControl || noCall} onClick={p.onReply} title={replyTitle}>
         <span className="cw-macro-label">{REPLY}</span>
       </button>
@@ -102,8 +103,11 @@ export function Js8ComposeActions(p: Props) {
             disabled={!p.canControl}
             title={p.sendAtOnce ? t('js8.dock.saved.title.send') : t('js8.dock.saved.title.fill')}
           >
-            <span className="cw-macro-label">{t('js8.dock.saved.label')}</span>
-            <span aria-hidden="true"> ▾</span>
+            {/* One label, the ▾ inside it: a macro key stacks its children. */}
+            <span className="cw-macro-label">
+              {t('js8.dock.saved.label')}
+              <span aria-hidden="true"> ▾</span>
+            </span>
           </button>
         </RM.Trigger>
         <RM.Portal>
@@ -138,6 +142,6 @@ export function Js8ComposeActions(p: Props) {
           </RM.Content>
         </RM.Portal>
       </RM.Root>
-    </div>
+    </span>
   )
 }

@@ -1651,28 +1651,27 @@ export function Js8Cockpit({
           </button>
         </div>
 
-        {/* JS8Call's one-click buttons under its compose box: REPLY, SNR, INFO, STATUS and the
-            Saved menu (with "Restore previous message"). Senders, like Send: no ⊞ id, no stop. */}
-        <Js8ComposeActions
-          canControl={canControl}
-          toCall={toCall}
-          heard={heardSelected() !== null}
-          infoSet={compose.info.trim() !== ''}
-          sendAtOnce={compose.sendAtOnce}
-          saved={compose.savedMessages.map((m) => ({ text: m, shown: replaceJs8Macros(m, macroValues(), false) }))}
-          hasPrevious={previous !== null}
-          composing={text.trim() !== ''}
-          onReply={sendReply}
-          onSnr={sendSnr}
-          onInfo={sendInfo}
-          onStatus={sendStatus}
-          onSaved={sendSaved}
-          onRestore={restorePrevious}
-          onSaveCurrent={saveCurrent}
-          onEditSaved={onOpenSettings ? () => onOpenSettings('js8') : undefined}
-        />
-
         <div className="js8-dock-row js8-beacon-row">
+          {/* JS8Call's one-click buttons by its compose box: REPLY, SNR, INFO, STATUS and the
+              Saved menu (with "Restore previous message"). Senders, like Send: no ⊞ id, no stop. */}
+          <Js8ComposeActions
+            canControl={canControl}
+            toCall={toCall}
+            heard={heardSelected() !== null}
+            infoSet={compose.info.trim() !== ''}
+            sendAtOnce={compose.sendAtOnce}
+            saved={compose.savedMessages.map((m) => ({ text: m, shown: replaceJs8Macros(m, macroValues(), false) }))}
+            hasPrevious={previous !== null}
+            composing={text.trim() !== ''}
+            onReply={sendReply}
+            onSnr={sendSnr}
+            onInfo={sendInfo}
+            onStatus={sendStatus}
+            onSaved={sendSaved}
+            onRestore={restorePrevious}
+            onSaveCurrent={saveCurrent}
+            onEditSaved={onOpenSettings ? () => onOpenSettings('js8') : undefined}
+          />
           {/* CQ — one button, two behaviours, exactly as JS8Call's `cqMacroButton`: a plain
               one-shot at interval 0, and the checkable auto-repeat above it, carrying the
               live countdown in its own label. Turning the repeat off cancels the SCHEDULE;
