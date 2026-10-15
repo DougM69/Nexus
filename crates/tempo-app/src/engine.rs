@@ -1107,6 +1107,12 @@ pub mod js8;
 #[path = "js8_freq.rs"]
 pub mod js8_freq;
 
+/// JS8's internet links (`crates/tempo-app/src/js8_links.rs`): PSK Reporter and JS8NET spots, the
+/// @APRSIS gateway, the never-spot list and the inbound APRS-IS relay. A child of this module for
+/// the same reason as `js8`.
+#[path = "js8_links.rs"]
+pub mod js8_links;
+
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
 /// mean "not read yet / not reported". `cat_ok` mirrors the active radio's `(Option<bool>)` health.
 #[derive(Debug, Clone, Default)]
@@ -3148,6 +3154,8 @@ pub struct Engine {
     /// on the air (`js8_retune_on_air`): its slot, speed, word and offset, and whether that offset
     /// is the operator's TX offset.
     pub(crate) js8_on_air: Option<crate::engine::js8::Js8OnAir>,
+    /// JS8's internet links: the PSK Reporter, JS8NET and APRS-IS queues (`js8_links`).
+    js8_links: js8_links::Js8Links,
     /// One-shot: drop Enable-Tx once the CURRENT over finishes playing — set
     /// when our final 73 goes out with "Disable Tx after sending 73" on. The
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
@@ -5664,6 +5672,7 @@ impl Engine {
             js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
             js8_planned_slot: None,
             js8_on_air: None,
+            js8_links: Default::default(),
             pending_tx_disable: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),

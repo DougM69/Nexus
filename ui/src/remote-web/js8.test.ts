@@ -62,6 +62,14 @@ describe('JS8 observation values', () => {
     }
     expect(() => parseJs8Sample({...fixture,unreviewed:true},0)).toThrow()
   })
+  it('takes a queued APRS-IS relay, and still refuses an origin it does not know', () => {
+    const relay = structuredClone(fixture)
+    relay.state.queue[0].origin = 'aprsRelay'
+    expect(parseJs8Sample(relay,0,relay.capturedAtMs).queue[0].origin).toBe('aprsRelay')
+    const unknown = structuredClone(fixture)
+    unknown.state.queue[0].origin = 'aprsGateway'
+    expect(() => parseJs8Sample(unknown,0,unknown.capturedAtMs), 'control').toThrow()
+  })
   it('takes a switch that is on but not armed, with the station\'s reason, and no armed one with a reason', () => {
     const value = structuredClone(fixture)
     Object.assign(value.state, { txEnabled: true, hbOn: false, cqOn: false, hbAck: true })

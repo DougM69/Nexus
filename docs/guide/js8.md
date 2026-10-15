@@ -273,10 +273,43 @@ card already holds more than 20 seconds of it. A heartbeat or acknowledgement on
 on a Flex radio's own audio (DAX) the frame on the air finishes where it started. Moving RX is
 never held.
 
+## Spotting and APRS-IS
+
+With the **PSK Reporter** switch on
+([Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds))
+and a real callsign set, JS8 spots the way JS8Call's SPOT button does:
+
+- Every station you hear — a heartbeat, a CQ, a directed message, the first frame of a plain
+  message — goes to PSK Reporter as a JS8 spot, with the grid it sent or the one it sent before.
+  The same station heard again on the same band within the hour updates its spot rather than
+  adding one.
+- The same stations, and every command sent to a @group (heartbeats, CQs, @JS8NET and @APRSIS
+  messages), go to JS8NET, JS8Call's spotting network, once a minute.
+- **Spot @APRSIS messages to APRS-IS** (on by default, as in JS8Call): a station heard sending
+  `@APRSIS GRID` is put on the APRS map at that locator, and the text after `@APRSIS CMD` goes to
+  APRS-IS as a raw packet. They go up under your callsign: Nexus logs in to APRS-IS with the
+  passcode worked out from it, as the iGate does, only while JS8 is open and something is waiting
+  to go, and stores nothing.
+- **Never spot these callsigns** keeps a station off all three networks.
+
+A contest that allows spots only over RF (Winter Field Day) stops all of it while it runs, as it
+stops the PSK Reporter uploads.
+
+**Relay APRS-IS messages to heard stations** (JS8Call 3.0; off by default) **transmits with
+nobody at the radio.** While it is on and JS8 is open, Nexus listens to APRS-IS for messages; one
+addressed to a station you have heard on JS8 is acknowledged on APRS-IS in that station's name and
+keyed to it as `@APRSIS MSG TO:<call> <text> DE <sender>`. It goes out only while TX is on, one
+message at a time, ahead of any automatic reply waiting, and through every transmit guard: the TX
+latch, your license privileges, the idle watchdog and the TX watchdog. A message that could not
+be sent now is not acknowledged either, and none is relayed to a station on the never-spot
+list. A repeat of the same message within two minutes is acknowledged again but not sent again.
+When another station relays an APRS message to you this way, it lands in your Inbox from
+**APRS**.
+
 ## Compatibility
 
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and JS8 40
 (Turbo); JS8Call 3.0 and later at JS8 60 as well, a speed JS8Call 2.x does not decode.
-Not implemented: the APRS-IS and @JS8NET internet gateways. The full protocol reference is
+The full protocol reference is
 [JS8Call's source](https://github.com/js8call/js8call), read as the specification; see
 NOTICE.

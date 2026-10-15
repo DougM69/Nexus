@@ -212,6 +212,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JS8: DIRECTED.TXT.** With Write ALL.TXT decode log on, JS8 also writes JS8Call's DIRECTED.TXT
   beside ALL.TXT, as JS8Call writes it: one line per directed message heard, with the date and time
   (UTC), the dial, the offset, the SNR and the message, ♢ where it ended.
+- **JS8 spots the stations you hear, as JS8Call does.** With the PSK Reporter switch on, every
+  station heard on JS8 (a heartbeat, a CQ, a directed message, the first frame of a plain message)
+  now shows on PSK Reporter as a JS8 spot with its grid, where before almost none did. The same
+  stations, and every command sent to a @group, go to JS8NET, JS8Call's spotting network, once a
+  minute. Spots of every mode now carry the station's grid field to PSK Reporter, empty where none
+  was heard, as WSJT-X sends it.
+- **The JS8 @APRSIS gateway.** A station heard sending `@APRSIS GRID` is put on the APRS map at
+  that locator, and the text after `@APRSIS CMD` goes to APRS-IS as a raw packet, under your
+  callsign: Nexus logs in to APRS-IS with the passcode worked out from your callsign, as the iGate
+  does, only while JS8 is open and something waits to go. On by default, as in JS8Call; switch it
+  off in Settings ▸ Digital ▸ JS8. **Never spot these callsigns** there keeps a station off PSK
+  Reporter, JS8NET and APRS-IS. NEEDS-BENCH: seeing the spots arrive needs a station on the air.
+- **JS8 can relay APRS-IS messages to stations you hear (JS8Call 3.0), off by default.** Turned
+  on, it transmits with nobody at the radio: an APRS message for a station heard on JS8 is
+  acknowledged on APRS-IS in that station's name and keyed to it as `@APRSIS MSG TO:`, only while
+  TX is on and through every transmit guard. A message relayed to you this way lands in your JS8
+  Inbox from APRS. NEEDS-BENCH before it is used on the air.
 
 ### Changed
 

@@ -17,8 +17,10 @@
 //!   [`gate_check`] and the q-construct in [`gated_line`] — are the reason this module exists.
 //!   Every one of them is a documented APRS-IS obligation, not a preference.
 //!
-//! Nexus never gates internet→RF. That direction transmits unattended, which the alerts doctrine
-//! forbids; nothing in this module can key a radio.
+//! Nexus never gates APRS internet→RF. That direction transmits unattended, which the alerts
+//! doctrine forbids; nothing in this module can key a radio. (The app's one internet-to-air path is
+//! JS8's APRS-IS relay, `tempo_app::engine::js8_links`: off by default, the operator's own switch,
+//! keyed through the JS8 transmit route and its guards. It is not an APRS iGate.)
 //!
 //! References: <http://www.aprs-is.net/> — Connecting.aspx (login), javAPRSFilter.aspx (filters),
 //! q.aspx (q-constructs), IGateDetails.aspx (the gating prohibitions), ServerDesign.aspx (the

@@ -1850,8 +1850,16 @@ export interface PskState {
  * the enum's names for what JS8Call 3.0 calls JS8 40 and JS8 60 (js8Vocab). */
 export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo' | 'ultra'
 /** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
- * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
-export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
+ * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. An APRS-IS
+ * message relayed to a heard station (`js8AprsRelay`) is `aprsRelay`, automatic as well. */
+export type Js8Origin =
+  | 'operator'
+  | 'heartbeat'
+  | 'hbAck'
+  | 'autoReply'
+  | 'relay'
+  | 'cqRepeat'
+  | 'aprsRelay'
 /** The second act of the two-act rule: three persisted switches + the session-only HB, and the
  * persisted heartbeat networking (`hbnet`), which keys nothing by itself. */
 export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb' | 'hbnet'
@@ -4180,6 +4188,14 @@ export interface Settings {
    * default): off, the offset cannot be moved while a message is queued or going out; on, a move
    * applies from the next frame. */
   js8TxOffsetWhileSending: boolean
+  /** JS8Call's "spot @APRSIS messages to APRS-IS" (default on): a heard @APRSIS GRID becomes an
+   * APRS-IS position and an @APRSIS CMD a raw packet, under this callsign. Needs PSK Reporter on. */
+  js8SpotAprs: boolean
+  /** JS8Call 3.0's inbound APRS-IS relay (default OFF): an APRS message for a heard station is
+   * keyed as `@APRSIS MSG TO:<call> <text> DE <sender>` with nobody at the radio. */
+  js8AprsRelay: boolean
+  /** JS8Call's "never spot these callsigns": sent to no network, and relayed no APRS message. */
+  js8SpotNever: string[]
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number

@@ -2129,7 +2129,10 @@ export function SettingsPanel({
   }
   // JS8Call's allow/deny lists, one comma-separated field each, upper-cased as JS8Call's
   // `splitWords` reads them (Configuration.cpp:2416-2428).
-  const setJs8CallList = (key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny', raw: string) => {
+  const setJs8CallList = (
+    key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny' | 'js8SpotNever',
+    raw: string,
+  ) => {
     markDirty()
     const calls = raw
       .split(',')
@@ -9404,6 +9407,56 @@ export function SettingsPanel({
                 setForm((prev) => (prev ? { ...prev, ...patch } : prev))
               }}
             />
+
+            {/* JS8Call's SPOT block: spotting rides the PSK Reporter switch, as JS8Call's SPOT
+                carries PSK Reporter and JS8NET together; these are the @APRSIS gateway, the
+                inbound APRS-IS relay (it keys unattended, so it ships off) and the never-spot
+                list. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.spotting.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.spotAprs.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    // ⚠️ `!== false`, not `!!` — the default is ON, as in JS8Call, so an absent key reads as on.
+                    aria-checked={form.js8SpotAprs !== false}
+                    className={`toggle${form.js8SpotAprs !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('js8SpotAprs', form.js8SpotAprs === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.spotAprs.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.aprsRelay.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8AprsRelay === true}
+                    className={`toggle${form.js8AprsRelay === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AprsRelay', form.js8AprsRelay !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.aprsRelay.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.spotNever.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8SpotNever ?? []}
+                  onText={(raw) => setJs8CallList('js8SpotNever', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.spotNever.hint')}</span>
+              </label>
+            </div>
           </fieldset>
           )}
 

@@ -1093,6 +1093,24 @@ pub struct Settings {
     /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
     #[serde(default)]
     pub js8_tx_offset_while_sending: bool,
+    /// JS8Call's "Enable spotting @APRSIS messages to the APRS-IS network" (`SpotToAPRS`, on by
+    /// default, Configuration.cpp:2300): a heard `@APRSIS GRID` becomes an APRS-IS position and an
+    /// `@APRSIS CMD` a raw APRS packet, uploaded under this station's callsign on the APRS-IS
+    /// session, which logs in with the passcode computed from that callsign as the iGate's does.
+    /// Only while PSK Reporter uploads (JS8Call's SPOT) and the callsign is real.
+    #[serde(default = "default_js8_spot_aprs")]
+    pub js8_spot_aprs: bool,
+    /// JS8Call 3.0's "Relay APRS-IS messages to stations in the Heard List" (`APRSISRelay`, OFF by
+    /// default, Configuration.cpp:2301). It TRANSMITS with nobody at the radio: an APRS message for
+    /// a station heard on JS8 is keyed as `@APRSIS MSG TO:<call> <text> DE <sender>`, through the
+    /// JS8 transmit route and every guard. Needs `js8_spot_aprs` and PSK Reporter on.
+    #[serde(default)]
+    pub js8_aprs_relay: bool,
+    /// JS8Call's "Never spot these callsigns" (`SpotBlacklist`, default empty): a station on it, as
+    /// heard or by its base call, is spotted to no network (PSK Reporter, JS8NET, APRS-IS) and is
+    /// relayed no APRS message.
+    #[serde(default)]
+    pub js8_spot_never: Vec<String>,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -4867,6 +4885,11 @@ fn default_js8_relay() -> bool {
     true
 }
 
+/// JS8Call ships @APRSIS spotting ON (`SpotToAPRS`). See [`Settings::js8_spot_aprs`].
+fn default_js8_spot_aprs() -> bool {
+    true
+}
+
 /// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
 fn default_js8_idle_watchdog_min() -> u16 {
     60
@@ -4954,6 +4977,9 @@ impl Default for Settings {
             js8_avoid_allcall: false,
             js8_hold_ptt: false,
             js8_tx_offset_while_sending: false,
+            js8_spot_aprs: default_js8_spot_aprs(),
+            js8_aprs_relay: false,
+            js8_spot_never: Vec::new(),
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -10353,6 +10379,54 @@ mod tests {
             assert!(
                 body.lines().any(|l| l.trim_start() == key),
                 "ui/src/types.ts Settings lacks `{key}`"
+            );
+        }
+    }
+
+    /// JS8's internet links: JS8Call's defaults (@APRSIS spotting ON, the inbound APRS-IS relay
+    /// OFF, nobody on the never-spot list), on the wire under their own keys, an upgrader's file
+    /// loading those defaults, an explicit choice surviving the round trip, and the TS mirror.
+    #[test]
+    fn js8_link_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert!(s.js8_spot_aprs, "JS8Call SpotToAPRS default true");
+        assert!(
+            !s.js8_aprs_relay,
+            "JS8Call APRSISRelay default false: it keys unattended"
+        );
+        assert!(
+            s.js8_spot_never.is_empty(),
+            "JS8Call SpotBlacklist default empty"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8SpotAprs\":true",
+            "\"js8AprsRelay\":false",
+            "\"js8SpotNever\":[]",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.js8_spot_aprs && !old.js8_aprs_relay && old.js8_spot_never.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8SpotAprs":false,"js8AprsRelay":true,"js8SpotNever":["W1AW","K1ABC"]}"#,
+        )
+        .unwrap();
+        assert!(!chosen.js8_spot_aprs && chosen.js8_aprs_relay);
+        assert_eq!(chosen.js8_spot_never, vec!["W1AW", "K1ABC"]);
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in ["js8SpotAprs", "js8AprsRelay", "js8SpotNever"] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
             );
         }
     }
