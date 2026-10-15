@@ -357,7 +357,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
       'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
       'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
-      'outside 500', 'do not participate'],
+      'outside 500', 'do not participate',
+      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending'],
   },
   {
     id: 'sstv',

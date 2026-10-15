@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JS8: keep typing while your message goes out (typeahead), as in JS8Call.** After Send the
+  message stays in the message box while it is sent, and each frame's text moves out of the box to
+  the line beside it as it goes. Type more, or change what has not gone yet, and the frames still to
+  go send what the box holds, taken just before each frame; text typed after the last frame goes
+  straight after it. Enter and Send do not queue a second message meanwhile. MSG and relay messages
+  stay as sent (the box is read-only), as in JS8Call. NEEDS-BENCH.
+- **JS8: Hold PTT between frames, JS8Call's option (off by default).** On (Settings ▸ Digital ▸
+  JS8), the radio stays keyed from the end of one frame of a message to the start of the next,
+  instead of dropping PTT after each frame and keying again (about 1.6 s unkeyed between frames at
+  Normal, 4 s at Slow). PTT still drops after the message's last frame, never holds from one message
+  into the next, and drops at once on Stop TX or TX Off. NEEDS-BENCH: checked on the radio loop with
+  a simulated rig only.
 - **A Timeline card in Statistics.** A line chart of your QSOs over the past day (by hour), the
   past 30 days (by day) or the past year (by month), each ending with the current hour, day or month
   in UTC, as the log is. One line per mode, counted as the By mode card counts them (USB and LSB are
@@ -131,6 +143,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JS8: the TX offset stays put while a message is going out, as in JS8Call.** Moving the TX
+  offset between two frames of a message used to send the rest of the message on the new offset, so
+  one message went out on two. Now the move is refused while a message is waiting to go or going out,
+  and the screen says why; once it has gone, the offset moves as before. **Allow TX offset changes
+  while sending** in Settings ▸ Digital ▸ JS8 (JS8Call's option, off by default) brings the old
+  behaviour back: the frames still to go are sent at the new offset. NEEDS-BENCH.
 - **On Windows, Nexus follows your computer's light or dark setting until you pick a theme.** A new
   install there opens in System, so the very first screen already matches Windows, and it changes
   when Windows does. On Linux, the Raspberry Pi and macOS, Nexus opens Dark until you pick, as

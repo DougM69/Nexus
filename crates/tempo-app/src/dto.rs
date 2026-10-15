@@ -660,6 +660,17 @@ pub struct Js8State {
     pub presence: Option<Js8Presence>,
 }
 
+/// The JS8 compose box's typeahead, JS8Call's: what has gone of the operator's message going out
+/// and what is still to go, as its frames render, and whether the box may change it (not a MSG or
+/// relay). Native only, never part of [`Js8State`]: the Remote has no compose box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Typeahead {
+    pub sent: String,
+    pub unsent: String,
+    pub locked: bool,
+}
+
 /// A single chat message (inbound or outbound) within a conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

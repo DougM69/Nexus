@@ -4932,6 +4932,12 @@ export const JA: PartialCatalog = {
   "settings.js8.status.hint": "STATUS? への返答。空欄なら JS8Call の形式(IDLE、アイドル分数、アプリ名)を送ります。",
   "settings.js8.groups.label": "グループ",
   "settings.js8.groups.hint": "所属する @GROUP 名をカンマ区切りで — そのグループ宛てのメッセージは自局宛てとして扱います。@ALLCALL は全局宛てで常にオンです。",
+  // JS8 send options: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.sending.title": "送信",
+  "settings.js8.holdPtt.label": "フレーム間で PTT を保持",
+  "settings.js8.holdPtt.hint": "JS8Call と同じく既定はオフ。オンにすると、メッセージのあるフレームの終わりから次のフレームの開始まで送信状態を保ち、フレームごとに PTT を切って入れ直しません。最後のフレームの後と、送信を止めたときには PTT を切ります。",
+  "settings.js8.txOffsetWhileSending.label": "送信中の TX オフセット変更を許可",
+  "settings.js8.txOffsetWhileSending.hint": "JS8Call と同じく既定はオフ：メッセージの送信待ちまたは送信中は TX オフセットを動かしません。オンにすると動かせ、まだ送っていないフレームは新しいオフセットで送信します。",
   "settings.sstv.legend": "SSTV",
   "settings.sstv.receiving.title": "受信",
   "settings.sstv.rxAutoArm.label": "SSTVを開いたら受信開始",
@@ -6312,6 +6318,9 @@ export const JA: PartialCatalog = {
   "js8.dock.compose.placeholder": "メッセージを入力… （Enter でキューに入れ、1 周期に 1 フレーム送信）",
   "js8.dock.compose.aria": "JS8 メッセージ",
   "js8.dock.send.label": "送信",
+  // JS8 typeahead: MACHINE TRANSLATIONS, for a native speaker to check.
+  "js8.dock.typeahead.sent": "送信済み",
+  "js8.dock.typeahead.locked": "MSG やリレーのメッセージは、JS8Call と同じく送信中に変更できません。",
   "js8.dock.cq.aria": "CQ の種類",
   "js8.dock.cq.title": "CQ を出す — @ALLCALL 宛てのハートビートフレームを次の周期に送ります",
   "js8.dock.cqRepeat.title.off": "CQ の繰り返しは停止中。クリックすると誰かが応答するまで {{min}} 分ごとに CQ を出します — 次の送信までの秒数はボタン上でカウントダウンします。TX オンのときだけ送信し、次回起動には引き継がれません。",

@@ -1361,6 +1361,18 @@ nothing until you enable TX in the cockpit, every session.
   `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
   this field, and says so.
 
+**Sending**
+
+- **Hold PTT between frames** — off by default, as in JS8Call: PTT drops after each frame
+  of a message and keys again for the next (at Normal the radio is unkeyed for about 1.6
+  seconds between two frames). On, the radio stays keyed from the end of one frame to the
+  start of the next. It still drops after the message's last frame, never holds from one
+  message into the next, and drops at once on Stop TX or TX Off.
+- **Allow TX offset changes while sending** — off by default, as in JS8Call: while a
+  message is waiting to go or going out, the TX offset stays where it is, and the cockpit
+  says why when you try to move it. On, the move is taken and the frames still to go are
+  sent at the new offset.
+
 ### SSTV
 
 ![The SSTV group: "Start receiving when SSTV opens" on, ISS SSTV auto-arm off, Transmit mode set to "Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)", and an empty Transmit power percentage box.](../img/manual/settings-sstv.webp)

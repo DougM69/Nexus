@@ -1011,6 +1011,20 @@ pub struct Settings {
     /// CQ aside.
     #[serde(default)]
     pub js8_avoid_allcall: bool,
+    /// JS8Call's "Hold PTT between frames while there are more to be transmitted" (`HoldPTT`,
+    /// off by default, JS8_UI/Configuration.cpp:2404). On, the radio stays keyed from the end of
+    /// one frame of a message to the key of its next, as JS8Call's `stopTx2` leaves PTT up while
+    /// frames of the message remain (mainwindow.cpp:2919-2932); off, PTT drops after every frame
+    /// and keys again at the next boundary. Never past the message's last frame, and never once
+    /// anything stops it (`Engine::js8_holds_ptt_between_frames`).
+    #[serde(default)]
+    pub js8_hold_ptt: bool,
+    /// JS8Call's "Allow Tx frequency changes while transmitting" (`TxQSYAllowed`, off by default,
+    /// JS8_UI/Configuration.cpp:2305), for the TX offset. Off, the offset cannot be moved while a
+    /// message is queued or going out, as JS8Call's `changeFreq` refuses it
+    /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
+    #[serde(default)]
+    pub js8_tx_offset_while_sending: bool,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -4785,6 +4799,8 @@ impl Default for Settings {
             js8_hb_qso_pause: default_js8_hb_qso_pause(),
             js8_hb_ack_rate_limit: false,
             js8_avoid_allcall: false,
+            js8_hold_ptt: false,
+            js8_tx_offset_while_sending: false,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -9991,6 +10007,45 @@ mod tests {
                 body.lines()
                     .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
                 "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+    }
+
+    /// JS8Call's two send options, off by default as JS8Call ships them: Hold PTT between frames
+    /// (`HoldPTT`) and Allow Tx frequency changes while transmitting (`TxQSYAllowed`), the TX
+    /// offset's half. The wire keys, an upgrader's file (off), an explicit on that survives the
+    /// round trip, and the TS mirror.
+    #[test]
+    fn js8_send_options_default_off_and_round_trip() {
+        let s = Settings::default();
+        assert!(!s.js8_hold_ptt, "JS8Call HoldPTT default: off");
+        assert!(
+            !s.js8_tx_offset_while_sending,
+            "JS8Call TxQSYAllowed default: off"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in ["\"js8HoldPtt\":false", "\"js8TxOffsetWhileSending\":false"] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            !old.js8_hold_ptt && !old.js8_tx_offset_while_sending,
+            "an upgrader's file holds no PTT and moves no offset mid-message"
+        );
+        let on: Settings =
+            serde_json::from_str(r#"{"js8HoldPtt":true,"js8TxOffsetWhileSending":true}"#).unwrap();
+        assert!(on.js8_hold_ptt && on.js8_tx_offset_while_sending);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in ["js8HoldPtt: boolean", "js8TxOffsetWhileSending: boolean"] {
+            assert!(
+                body.lines().any(|l| l.trim_start() == key),
+                "ui/src/types.ts Settings lacks `{key}`"
             );
         }
     }

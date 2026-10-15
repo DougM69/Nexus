@@ -81,6 +81,10 @@ use crate::proto::frame::{encode_frame, format_snr, Frame};
 use crate::proto::reassembly::{Message, MessageEvent};
 use std::collections::HashMap;
 
+/// JS8Call's typeahead: the compose box's message while it goes out.
+mod typeahead;
+pub use typeahead::{TypeaheadError, TypeaheadView};
+
 // ---- resource bounds (hostile input: the station processes frames from anyone with a TX) -----
 //
 // Every collection here grows from air-sourced data, and JS8 stations run unattended for days, so
@@ -490,6 +494,8 @@ struct OutMsg {
     cursor: usize,
     freq_hint: FreqHint,
     display: String,
+    /// The compose box's message, which its typeahead changes while it goes out (at most one).
+    typeahead: bool,
 }
 
 /// An automatic reply waiting for the operator's Yes (JS8Call's AutoreplyConfirmation box):
@@ -563,6 +569,8 @@ pub struct Station {
     /// …and the stations the rule has stopped acknowledging, oldest first (JS8Call adds each to
     /// its HB blacklist, Configuration.cpp:1226-1231).
     hb_rate_blocked: Vec<String>,
+    /// The compose box's message while it goes out, for its typeahead.
+    typeahead: Option<typeahead::Typeahead>,
 }
 
 impl Station {
@@ -593,6 +601,7 @@ impl Station {
             hb_paused: false,
             hb_acked_at: HashMap::new(),
             hb_rate_blocked: Vec::new(),
+            typeahead: None,
         }
     }
 
@@ -1568,6 +1577,7 @@ impl Station {
     /// Once per second: advance the HB schedule and check the idle watchdog.
     pub fn tick(&mut self, now_ms: u64) -> Vec<StationAction> {
         let mut actions = Vec::new();
+        self.expire_typeahead(now_ms);
         // reclaim aged state each tick (inbox 48 h expiry + caps, allcall interval prune).
         self.prune_inbox(now_ms, &mut actions);
         self.prune_allcall(now_ms);
@@ -1622,6 +1632,7 @@ impl Station {
         self.hb_paused = false;
         self.stop_cq_repeat();
         self.outbox.clear();
+        self.typeahead = None;
         self.pending.clear();
         self.queued.clear();
         self.composer = None;
@@ -1700,6 +1711,10 @@ impl Station {
         // Nexus keys at the boundary, so the boundary releases it. A SCHEDULE, never a queue:
         // only into an EMPTY outbox. A reply still asking does not hold it: JS8Call's question
         // box holds nothing back (mainwindow.cpp:5227-5229).
+        //
+        // First, the compose box's newest text for the operator's message going out is framed,
+        // as JS8Call reads its box just before each frame (typeahead, `prepareNextMessageFrame`).
+        self.take_typeahead(period_start_ms);
         if self.hb_on && self.outbox.is_empty() {
             if let Some(next) = self.hb_next_ms {
                 if period_start_ms + 1000 >= next {
@@ -1737,6 +1752,7 @@ impl Station {
         };
         self.last_tx_display = Some(head.display.clone());
         head.cursor += 1;
+        typeahead::handed_out(&mut self.typeahead, head, &frame, period_start_ms);
         if head.cursor >= head.frames.len() {
             self.outbox.pop_front();
             // A whole message has gone out, whatever it was: JS8Call's `stopTx` calls
@@ -1756,6 +1772,7 @@ impl Station {
     ) -> Result<OutMsg, ComposeError> {
         let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, None, text, self.cfg.speed)?;
         Ok(OutMsg {
+            typeahead: false,
             origin,
             display: format!("{}: {text}", self.base()),
             frames: seq,
@@ -1777,6 +1794,7 @@ impl Station {
         let seq = frames_with_grid(&self.cfg.mycall, &self.cfg.grid, to, &text, self.cfg.speed)?;
         let n = seq.len();
         let out = OutMsg {
+            typeahead: false,
             origin: Origin::Operator,
             display: format!("{}: {text}", self.base()),
             frames: seq,
@@ -1810,6 +1828,7 @@ impl Station {
         )?;
         let n = seq.len();
         let out = OutMsg {
+            typeahead: false,
             origin: Origin::Operator,
             display: format!("{}: {line}", self.base()),
             frames: seq,
@@ -1844,6 +1863,7 @@ impl Station {
             self.cfg.speed,
         )?;
         Ok(OutMsg {
+            typeahead: false,
             origin,
             display: format!("{}: @ALLCALL {line}", self.base()),
             frames: seq,
@@ -1884,6 +1904,7 @@ impl Station {
             self.cfg.speed,
         )?;
         let out = OutMsg {
+            typeahead: false,
             origin: Origin::Heartbeat,
             display: format!("{}: @HB {line}", self.base()),
             frames: seq,
@@ -2039,6 +2060,7 @@ impl Station {
 
     pub fn drop_queue(&mut self) {
         self.outbox.clear();
+        self.typeahead = None;
         self.pending.clear();
         self.queued.clear();
         self.composer = None;
@@ -2051,7 +2073,17 @@ impl Station {
         let operator = self.outbox.iter().any(|o| o.origin == Origin::Operator);
         let held = self.outbox.len();
         self.outbox.clear();
+        self.typeahead = None;
         (held, operator)
+    }
+
+    /// Whether more frames of the message on the air follow the one handed out last: the outbox
+    /// head is part way through a message (JS8Call's `m_txFrameCount > 0` once a frame has gone,
+    /// mainwindow.cpp:2919-2932). Never across two messages: a message's last frame pops it, so a
+    /// head with a frame handed out still has frames to go. The compose box's typeahead is the one
+    /// way on past a last frame: text typed after it goes straight after it.
+    pub fn frames_follow(&self) -> bool {
+        self.outbox.front().is_some_and(|o| o.cursor > 0) || self.typeahead_follows()
     }
 
     pub fn note_tx_done(&mut self, f: &TxFrame, now_ms: u64) {
@@ -2075,6 +2107,7 @@ impl Station {
     /// Stop TX / set_tier / set_mode: drop the outbox, pending replies and the HB schedule.
     pub fn halt(&mut self) {
         self.outbox.clear();
+        self.typeahead = None;
         self.pending.clear();
         self.queued.clear();
         self.composer = None;

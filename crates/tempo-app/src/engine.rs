@@ -67,6 +67,9 @@ mod field_day_display;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
+/// JS8's send mechanics: the TX offset moved while a message goes out.
+#[cfg(test)]
+mod js8_send_tests;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
 mod kept_files_tests;
@@ -22635,6 +22638,11 @@ contact yourself."
     /// narrows the control itself for exactly that reason; a one-shot park on entry would
     /// leave the next drag free to walk back outside the sub-band.
     pub fn set_tx_offset(&mut self, hz: f32) {
+        // JS8 holds the offset while a message is waiting to go or going out, as JS8Call does
+        // unless the operator allows the move (`js8_refuses_tx_offset_move`).
+        if self.js8_refuses_tx_offset_move(hz) {
+            return;
+        }
         self.remote_ft_settings_epoch = self.remote_ft_settings_epoch.saturating_add(1);
         let (lo, hi) = Self::tx_offset_bounds(self.app.tier());
         self.tx_offset_hz = hz.clamp(lo, hi);

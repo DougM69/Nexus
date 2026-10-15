@@ -341,3 +341,15 @@ describe('a profile saved before Contest mode was named loads unchanged', () => 
     expect((merged as unknown as Record<string, unknown>).fdActive).toBe(false)
   })
 })
+
+// JS8Call's two send options travel with a profile as the rest of a station's JS8 settings do: a
+// profile that sets them loads them, and one saved before they existed leaves the current choice.
+describe('mergeProfile — the JS8 send options travel with a profile', () => {
+  it('loads Hold PTT and the TX offset while sending from a profile, and keeps them over an older one', () => {
+    const current = settings({ js8HoldPtt: false, js8TxOffsetWhileSending: false })
+    const merged = mergeProfile(current, settings({ js8HoldPtt: true, js8TxOffsetWhileSending: true }))
+    expect([merged.js8HoldPtt, merged.js8TxOffsetWhileSending]).toEqual([true, true])
+    const older = mergeProfile(settings({ js8HoldPtt: true, js8TxOffsetWhileSending: true }), settings({}))
+    expect([older.js8HoldPtt, older.js8TxOffsetWhileSending], 'a profile from before them').toEqual([true, true])
+  })
+})

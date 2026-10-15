@@ -1,6 +1,6 @@
 # Glossary — the words that come back over and over
 
-There are 7,081 rows in the CSV and about sixty words that appear in hundreds of them. If one of
+There are 7,089 rows in the CSV and about sixty words that appear in hundreds of them. If one of
 those words gets translated three different ways across the file, the program reads as though
 three people wrote it. So this is the list to settle **once**, before you start, and then not
 think about again.
@@ -24,7 +24,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | QSO / QSOs | 114 / 60 | The contact itself. Universal on the air; pluralises fine as *QSOs*. |
 | LoTW | 98 | ARRL's Logbook of The World — a service name. |
 | CAT | 95 | Computer Aided Transceiver — the radio control protocol. |
-| TX / RX | 127 / 72 | Transmit and receive. Printed on the radio itself. |
+| TX / RX | 129 / 72 | Transmit and receive. Printed on the radio itself. |
 | CW | 78 | The mode. Never "telegrafia" in a mode picker. |
 | QRZ | 75 | Both the Q-code and the callsign lookup site. |
 | CQ | 86 | The call. Translating it would be strange on the air and on screen. |
@@ -57,7 +57,7 @@ The checker (`verify-ptbr.py`) enforces this list per row, using the `do_not_tra
 | ARRL / RAC / IARU | 26 / 4 / 2 | Organisation names. |
 | SatNOGS | 21 | The satellite database. |
 | AOS / LOS | 19 / 12 | Acquisition and loss of signal, on a satellite pass. |
-| PTT | 35 | Push to talk. Printed on the microphone. |
+| PTT | 37 | Push to talk. Printed on the microphone. |
 | RBN | 19 | Reverse Beacon Network. |
 | QTH | 23 | Q-code: location. |
 | QSL | 18 | The confirmation, the card and the act. |
@@ -96,17 +96,17 @@ word in, and use only that word in the CSV.
 | English | Rows | Where it turns up | Your pt-BR word |
 |---|---:|---|---|
 | band | 374 | Band pickers, band map, per-band settings. The band *names* (20m, 40m) stay as they are. | |
-| radio | 312 | The rig itself, and the radio list in Settings. | |
+| radio | 313 | The rig itself, and the radio list in Settings. | |
 | mode | 252 | The emission mode. The mode *names* (FT8, USB, CW) stay as they are. | |
 | rig | 172 | Same object as "radio" — decide whether Portuguese keeps two words or one. | |
 | log / logbook | 198 / 98 | Both the noun and the verb ("log this contact"). Watch which one each row is. | |
-| settings | 172 | The Settings screen and every reference to it. | |
+| settings | 173 | The Settings screen and every reference to it. | |
 | grid | 141 | The Maidenhead locator. Many Brazilian operators say "grid" — your call. | |
 | audio | 136 | Sound cards, levels, routing. | |
 | station | 408 | Both your own station and the one you are working. | |
 | port | 104 | Serial and network ports. | |
 | dial | 105 | The dial frequency. A radio term, but the word itself is prose. | |
-| transmit / receive | 135 / 41 | The verbs. The abbreviations TX/RX stay English. | |
+| transmit / receive | 136 / 41 | The verbs. The abbreviations TX/RX stay English. | |
 | pass | 90 | A satellite pass. | |
 | callsign | 103 | Appears constantly. Whatever you choose, choose it once. | |
 | worked | 109 | "Worked before", "stations you have worked". | |
