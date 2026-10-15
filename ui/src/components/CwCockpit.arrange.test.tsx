@@ -182,16 +182,17 @@ async function mount() {
  *  (Phone's rule, `stockMerged`). */
 function expected(tracks: number) {
   const place = api!.layout.place
-  // The boxes (2026-10-07) ship hidden and none is added here: the columns without them.
+  // The boxes (2026-10-07) and the Stats pane (2026-10-14) ship hidden and none is added here: the columns
+  // without them. The log form heads its column (2026-10-14): a pane placed there stands under it.
   const all = placedColumns(CW_PANELS.arrange!, place)
-  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id))
+  const own = (ids: readonly CwPanelId[]) => ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats')
   const c = { a: own(all.a), b: own(all.b), log: own(all.log) }
   const mid = ['rigctl', ...c.b]
-  if (tracks === 3) return [[...c.a], mid, [...c.log, 'log']]
+  if (tracks === 3) return [[...c.a], mid, ['log', ...c.log]]
   if (isStockPlacement(CW_PANELS.arrange!, place)) {
     return [['decode', 'sent', 'rigctl', 'bandActivity', 'copilot', 'spots', 'needed'], ['log']]
   }
-  return [[...c.a, ...mid], [...c.log, 'log']]
+  return [[...c.a, ...mid], ['log', ...c.log]]
 }
 
 describe('CW renders the placement', () => {
@@ -212,7 +213,8 @@ describe('CW renders the placement', () => {
     )
     await mount()
     await tier(1800)
-    expect(rendered()).toEqual([['copilot', 'decode'], ['rigctl', 'bandActivity'], ['sent', 'log']])
+    // The log form heads its column (2026-10-14): Sent, placed there, stands under it.
+    expect(rendered()).toEqual([['copilot', 'decode'], ['rigctl', 'bandActivity'], ['log', 'sent']])
   })
 })
 

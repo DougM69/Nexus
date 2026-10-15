@@ -17,6 +17,7 @@ import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
+import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -125,6 +126,7 @@ const pskPanelLabels = (): Record<PskPanelId, string> => ({
   scope: t('psk.panel.waterfall'),
   rfScope: t('rfScope.title'),
   stream: t('psk.panel.stream'),
+  stats: t('callStats.pane.title'),
 })
 
 /** "+12 Hz" (signed) AFC readout. */
@@ -160,7 +162,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
   const host = panels
-    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: withStats(PSK_PANEL_IDS), side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -348,6 +350,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // exact quota burn LogEntry's own `settledCallRef` comment describes for the CW decoder.
   // One fill, one lookup, 500 ms after typing stops.
   const [settledHisCall, setSettledHisCall] = useState('')
+  // The call the Stats pane follows: the log strip's, once it has stood (LogEntry `onEntryCall`).
+  const [statsCall, setStatsCall] = useState('')
   useEffect(() => {
     const id = setTimeout(() => setSettledHisCall(hisCall.trim().toUpperCase()), 500)
     return () => clearTimeout(id)
@@ -957,7 +961,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           {!control ? psk && <RemoteRecallEntry snap={snap} mode={mode.name} onOpenLog={onOpenLogbook} /> : (
           <LogEntry
             onOpenLogbook={onOpenLogbook}
-            onEntryCall={onEntryCall}
+            onEntryCall={(c) => {
+              setStatsCall(c)
+              onEntryCall?.(c)
+            }}
             snap={snap}
             // The sub-mode table's names ARE the ADIF Mode tokens (PSK31 / QPSK31), so the
             // record says which waveform was actually on the air rather than folding QPSK
@@ -998,6 +1005,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           />
           )}
         </CockpitPaneFrame>
+      )}
+
+      {/* THE STATS PANE (CallStatsPane), under the log strip: what the log holds for the call typed
+          there. A third frame, content-height, so it takes from the two above only what it shows;
+          it ships hidden here, where the two are already short of room at the supported floor
+          (the measured table above), one tick away in ⊞ Panels. No stop control, nothing sent. */}
+      {snap && shown('stats') && statsHere() && (
+        <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={mode.name} logTick={snap.logTick} />
       )}
 
       {/* TX DOCK — the macros (each a one-click transmit), the continuous-TX latch, Stop

@@ -64,6 +64,7 @@ import {
 import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
+import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { SpotDialog } from './SpotDialog'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
@@ -343,6 +344,7 @@ const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   // The Spots and Needed boards as CW panes, named as the views they come from (Phone's words).
   spots: t('cw.panel.spots'),
   needed: t('cw.panel.needed'),
+  stats: t('callStats.pane.title'),
 })
 
 /** One F-key macro row as the dock renders it.
@@ -511,6 +513,8 @@ export function CwCockpit({
   // Spot-to-cluster popup, seeded from the LogEntry call field (operator ask: CW too).
   const [spotOpen, setSpotOpen] = useState(false)
   const [spotCall, setSpotCall] = useState('')
+  // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
+  const [statsCall, setStatsCall] = useState('')
   const scopeRef = useRef<HTMLElement>(null)
   useWheelTune(scopeRef, {
     remoteFrequency: true,
@@ -731,9 +735,11 @@ export function CwCockpit({
   // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
   const entries = panels && boxes ? boxEntries(CW_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
   const labels = { ...cwPanelLabels(), ...boxLabels(entries) }
+  // The Stats pane where the record says nothing: on where there is room (CallStatsPane `withStatsRoom`).
+  const statsRoom = useStatsRoom()
   const host = panels
-    ? panelHost(panels, {
-        menu: CW_MENU,
+    ? panelHost(withStatsRoom(panels, statsRoom), {
+        menu: withStats(CW_MENU),
         side: [],
         main: 'decode',
         labels,
@@ -1388,6 +1394,9 @@ export function CwCockpit({
   // (CW_PANELS.defaultRemoved), so a stock CW screen is exactly what it was.
   const hasSpotsPane = spotsBoard != null && shown('spots')
   const hasNeededPane = neededBoard != null && shown('needed')
+  // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
+  // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
+  const hasStatsPane = host != null && shown('stats') && statsHere()
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
   const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane || hasSubRow
@@ -1415,6 +1424,7 @@ export function CwCockpit({
           copilot: hasCopilotPane,
           spots: hasSpotsPane,
           needed: hasNeededPane,
+          stats: hasStatsPane,
         })[id as string] ?? false)
   const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
   // BELOW THREE TRACKS the leading and middle columns are one (regionGroups): column a then b once
@@ -1841,6 +1851,10 @@ export function CwCockpit({
         </CockpitPaneFrame>
   ) : null
 
+  const statsPane = (
+    <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode="CW" logTick={snap.logTick} />
+  )
+
   const logPane = (
     <CockpitPaneFrame
       title={quick && !fieldDay ? t('remote.quick.logbook') : t('cw.pane.log.title')}
@@ -1853,7 +1867,10 @@ export function CwCockpit({
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
       {control ? <LogEntry
         onOpenLogbook={onOpenLogbook}
-        onEntryCall={onEntryCall}
+        onEntryCall={(c) => {
+          setStatsCall(c)
+          onEntryCall?.(c)
+        }}
         snap={snap}
         mode="CW"
         defaultRst="599"
@@ -1978,6 +1995,7 @@ export function CwCockpit({
     copilot: copilotPane,
     spots: spotsPane,
     needed: neededPane,
+    stats: statsPane,
   }
   // THE BOXES (2026-10-07), as Phone's: each one on screen, its picker marking what is on screen
   // elsewhere — the other boxes' entries and the boards CW shows as its own panes (`sharedAs`).
@@ -2010,6 +2028,8 @@ export function CwCockpit({
     </Fragment>
   )
   const rigCtlSlot = <Fragment key="rigctl">{rigCtlPane}</Fragment>
+  // THE LOG FORM HEADS ITS COLUMN (2026-10-14): a pane placed in the log column — the Stats pane, a box —
+  // stands under it, so nothing placed there can push the call field down. Keyed, so the order is a move.
   const logSlot = <Fragment key="log-form">{logPane}</Fragment>
 
   // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY (the mode change
@@ -2467,7 +2487,7 @@ export function CwCockpit({
               {[rigCtlSlot, ...placed3[1].ids.map(placedPane)]}
             </div>
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
-              {[...placed3[2].ids.map(placedPane), logSlot]}
+              {[logSlot, ...placed3[2].ids.map(placedPane)]}
             </div>
           </>
         ) : (
@@ -2479,7 +2499,7 @@ export function CwCockpit({
               </div>
             )}
             <div className={`cockpit-col${quick ? ' cockpit-col--contact' : ''}`} key="log" ref={logColRef}>
-              {[...placed3[2].ids.map(placedPane), logSlot]}
+              {[logSlot, ...placed3[2].ids.map(placedPane)]}
             </div>
           </>
         )}

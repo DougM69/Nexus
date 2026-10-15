@@ -19,6 +19,7 @@ pub mod achievements;
 pub mod advisor;
 pub mod awards;
 pub mod beacons;
+pub mod callstats;
 pub mod chirp;
 pub mod dxcc;
 pub mod dxped;
@@ -64,7 +65,11 @@ pub mod live;
 
 pub use achievements::Achievement;
 pub use advisor::{BandReport, PropAdvisor, PropAdvisory, RegionReport};
-pub use awards::{AwardSummary, Awards, BandAward, DxccDisagreement, EntityNeed, RecordFields};
+pub use awards::{
+    AwardBandNeeds, AwardSummary, Awards, BandAward, BandNeed, DxccDisagreement, EntityNeed,
+    QslChannels, RecordFields,
+};
+pub use callstats::{CallStats, CallStatsIndex, StatsGrid};
 pub use dxped::{
     CalendarEntry, DxpedDashboard, DxpeditionPlan, DxpeditionTracker, Ft8DxpMode, LogNeeds,
     NeedKind, NeedsSet, OperatorNeeds, WorkStatus, WorkableCard,

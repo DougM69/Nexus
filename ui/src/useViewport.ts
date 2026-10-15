@@ -94,6 +94,22 @@ export function useEffectiveWidthAtLeast(minEffW: number): boolean {
   return useSyncExternalStore(subscribeEffWidth, () => (readEffWidth() ?? 0) >= minEffW, () => false)
 }
 
+/** `--vh-eff` as published on <html>, in effective CSS px; null where nothing is published. */
+function readEffHeight(): number | null {
+  const v = parseFloat(document.documentElement.style.getPropertyValue('--vh-eff'))
+  return Number.isFinite(v) && v > 0 ? v : null
+}
+
+/**
+ * Whether the EFFECTIVE window is at least `minEffH` CSS px tall — `useEffectiveWidthAtLeast`'s twin, for
+ * a default the stylesheet cannot set because it decides whether a pane is on screen at all (the Stats
+ * pane, on where there is room). Read from what useViewport publishes (the same style attribute, so the
+ * same subscription), never measured again; false while nothing is published.
+ */
+export function useEffectiveHeightAtLeast(minEffH: number): boolean {
+  return useSyncExternalStore(subscribeEffWidth, () => (readEffHeight() ?? 0) >= minEffH, () => false)
+}
+
 /** Read the live `--ui-zoom` (defaults to 1 if unset/invalid). */
 function currentZoom(): number {
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')

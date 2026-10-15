@@ -16,6 +16,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::achievements::{self, Achievement, AchievementStats};
+use crate::callstats::CallStatsIndex;
 use crate::dxcc;
 use crate::model::{Band, ModeClass};
 
@@ -343,6 +344,46 @@ pub struct RecordFields {
     /// When the contact was made, Unix seconds UTC — only to name it in
     /// [`AwardSummary::dxcc_disagreements`].
     pub when_unix: u64,
+    /// Which channels hold a confirmation of the contact. The award fold's own `confirmed` stays
+    /// the ARRL gate (LoTW or card); these add what a CQ award credits beyond it, and what the
+    /// Stats pane lists per source.
+    pub qsl: QslChannels,
+}
+
+/// The channels a contact's confirmation came through — the record's per-source truth
+/// (`QSL_RCVD`, `LOTW_QSL_RCVD`, `EQSL_QSL_RCVD`, the QRZ logbook's status).
+///
+/// What each award credits is a matrix, not one flag: the ARRL's (DXCC, WAS) take LoTW and the
+/// paper card only; CQ's WAZ also takes an eQSL from an Authenticity-Guaranteed member, and no
+/// award takes a basic eQSL or QRZ.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QslChannels {
+    pub card: bool,
+    pub lotw: bool,
+    pub eqsl: bool,
+    /// The eQSL confirmation came from an Authenticity-Guaranteed member (eQSL's
+    /// `APP_EQSL_AG:Y`). Meaningful only beside `eqsl`.
+    pub eqsl_ag: bool,
+    pub qrz: bool,
+}
+
+impl QslChannels {
+    /// An eQSL from an Authenticity-Guaranteed member — what WAZ credits beyond LoTW and the card.
+    pub fn eqsl_ag_confirmed(&self) -> bool {
+        self.eqsl && self.eqsl_ag
+    }
+
+    /// Every channel either holds.
+    pub fn or(self, o: QslChannels) -> QslChannels {
+        QslChannels {
+            card: self.card || o.card,
+            lotw: self.lotw || o.lotw,
+            eqsl: self.eqsl || o.eqsl,
+            eqsl_ag: self.eqsl_ag || o.eqsl_ag,
+            qrz: self.qrz || o.qrz,
+        }
+    }
 }
 
 /// A contact LoTW confirmed under another DXCC entity than the log records for it. The awards
@@ -360,6 +401,30 @@ pub struct DxccDisagreement {
     /// LoTW's, likewise.
     pub lotw_dxcc: u32,
     pub lotw_entity: Option<String>,
+}
+
+/// One band's chase for one award: what has never been worked on the band, and what has been
+/// worked there but not confirmed by anything the award credits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BandNeed {
+    pub band: String,
+    /// Entity names (alphabetical), state codes (alphabetical) or zone numbers (1 to 40).
+    pub unworked: Vec<String>,
+    pub unconfirmed: Vec<String>,
+}
+
+/// What DXCC, WAS and WAZ still need, band by band, counted from the same contacts as the totals:
+/// a contact fills a band's slot exactly when it counts toward that award at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AwardBandNeeds {
+    /// The current DXCC entities, on every band that earns DXCC credit (not 60 m, not 4 m).
+    pub dxcc: Vec<BandNeed>,
+    /// The 50 states, on every band.
+    pub was: Vec<BandNeed>,
+    /// The 40 CQ zones, on every band; confirmed also by an Authenticity-Guaranteed eQSL.
+    pub waz: Vec<BandNeed>,
 }
 
 /// DXCC-first award summary for the dashboard.
@@ -436,6 +501,9 @@ pub struct AwardSummary {
     /// most award bands but NOT yet on a few — the bands listed are ones to WORK
     /// (a new contact, not just a confirmation). Closest-to-complete first.
     pub band_targets: Vec<EntityNeed>,
+    /// DXCC, WAS and WAZ needed per band: never worked, and worked but not confirmed.
+    #[serde(default)]
+    pub band_needs: AwardBandNeeds,
 }
 
 /// Accumulates award progress from logged QSOs (fed one [`add`](Awards::add) per
@@ -455,10 +523,12 @@ pub struct Awards {
     per_band: HashMap<Band, (HashSet<&'static str>, HashSet<&'static str>)>,
     /// mode class → (worked entities, confirmed entities)
     per_mode: HashMap<ModeClass, (HashSet<&'static str>, HashSet<&'static str>)>,
-    /// CQ zones worked / confirmed (WAZ — 40 zones).
+    /// CQ zones worked / confirmed (WAZ — 40 zones), and per band.
     worked_zones: HashSet<u8>,
     confirmed_zones: HashSet<u8>,
-    /// US states worked / confirmed (WAS — 50 states), and per-award-band for 5BWAS.
+    worked_zone_band: HashSet<(u8, Band)>,
+    confirmed_zone_band: HashSet<(u8, Band)>,
+    /// US states worked / confirmed (WAS — 50 states), and per band (5BWAS reads the award bands).
     worked_states: HashSet<&'static str>,
     confirmed_states: HashSet<&'static str>,
     worked_provinces: HashSet<&'static str>,
@@ -490,6 +560,10 @@ pub struct Awards {
     /// The operator's own DXCC entity (resolved from mycall), so DX-oriented
     /// achievements can count entities OTHER than home. None until set.
     home_entity: Option<&'static str>,
+    /// The Stats pane's index, kept only by an accumulator made for it
+    /// ([`with_call_stats`](Self::with_call_stats)): each slot filled exactly where the fold
+    /// below credits one, so the pane's grids are the awards' own counts.
+    call_stats: Option<CallStatsIndex>,
 }
 
 /// The DXCC entity a contact counts toward ([`counted_entity`]).
@@ -570,6 +644,20 @@ pub fn counted_zone(resolved: Option<&dxcc::DxccInfo>, rec: &RecordFields) -> Op
 impl Awards {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An accumulator that also keeps the Stats pane's index ([`CallStatsIndex`]), taken with
+    /// [`take_call_stats`](Self::take_call_stats) once the log is folded.
+    pub fn with_call_stats() -> Self {
+        Self {
+            call_stats: Some(CallStatsIndex::default()),
+            ..Self::default()
+        }
+    }
+
+    /// The Stats pane's index, when this accumulator keeps one.
+    pub fn take_call_stats(&mut self) -> Option<CallStatsIndex> {
+        self.call_stats.take()
     }
 
     /// Record the operator's own callsign so DX-oriented achievements ("First DX")
@@ -687,6 +775,11 @@ impl Awards {
         let resolved = dxcc::resolve(call);
         // The entity DXCC and the WAS and WAP gates count by: the record's number, else the call's.
         let counted = counted_entity(resolved.as_ref(), &rec);
+        let on_band = Band::from_label(band);
+        let class = ModeClass::from_adif(mode);
+        if let Some(stats) = &mut self.call_stats {
+            stats.note_qsl(call, counted.map(|c| c.name), rec.qsl);
+        }
         if let (Some(lotw_dxcc), Some(logged_dxcc)) = (rec.lotw_dxcc, rec.dxcc) {
             if lotw_dxcc != logged_dxcc {
                 let name = |code| dxcc::entity_by_dxcc(code).map(|e| e.name.to_string());
@@ -715,11 +808,14 @@ impl Awards {
                 if confirmed {
                     self.confirmed_states.insert(code);
                 }
-                if let Some(b) = Band::from_label(band).filter(|b| AWARD_BANDS.contains(b)) {
+                if let Some(b) = on_band {
                     self.worked_state_band.insert((code, b));
                     if confirmed {
                         self.confirmed_state_band.insert((code, b));
                     }
+                }
+                if let Some(stats) = &mut self.call_stats {
+                    stats.note_was(code, on_band, class, confirmed);
                 }
             }
         }
@@ -745,11 +841,22 @@ impl Awards {
         // WAZ: CQ zones 1..=40 — [`counted_zone`]: the record's CQZ where it carries one, else
         // cty.dat's zone for the call (0 = cty.dat couldn't supply one — skip it). The zone is
         // valid even on a non-DXCC (WAE) entity — Sicily, African Italy etc. are real CQ-zone
-        // contacts — so this is OUTSIDE the DXCC gate.
+        // contacts — so this is OUTSIDE the DXCC gate. CQ credits what the ARRL does and an
+        // eQSL from an Authenticity-Guaranteed member as well.
         if let Some(zone) = counted_zone(resolved.as_ref(), &rec) {
+            let zone_confirmed = confirmed || rec.qsl.eqsl_ag_confirmed();
             self.worked_zones.insert(zone);
-            if confirmed {
+            if zone_confirmed {
                 self.confirmed_zones.insert(zone);
+            }
+            if let Some(b) = on_band {
+                self.worked_zone_band.insert((zone, b));
+                if zone_confirmed {
+                    self.confirmed_zone_band.insert((zone, b));
+                }
+            }
+            if let Some(stats) = &mut self.call_stats {
+                stats.note_waz(zone, on_band, class, zone_confirmed);
             }
         }
         // DXCC awards credit ARRL DXCC entities only ([`counted_entity`]): a WAE/CQ-only area
@@ -779,7 +886,7 @@ impl Awards {
         // total, WAZ, IOTA, the VUCC grids and WAS, so only DXCC is affected — see
         // [`earns_dxcc_credit`]. An unparseable band label still earns entity/mode credit as
         // before; only a band we recognise AND exclude is refused.
-        if Band::from_label(band).is_some_and(|b| !earns_dxcc_credit(b)) {
+        if on_band.is_some_and(|b| !earns_dxcc_credit(b)) {
             return;
         }
         // A deleted entity counts toward the totals and nothing else: no current count, Honor
@@ -806,12 +913,15 @@ impl Awards {
             self.credited_entity.insert(entity);
         }
         // Per-mode DXCC (CW/Phone/Digital are separate awards).
-        let pm = self.per_mode.entry(ModeClass::from_adif(mode)).or_default();
+        let pm = self.per_mode.entry(class).or_default();
         pm.0.insert(entity);
         if confirmed {
             pm.1.insert(entity);
         }
-        if let Some(b) = Band::from_label(band) {
+        if let Some(stats) = &mut self.call_stats {
+            stats.note_dxcc(entity, on_band, mode, confirmed);
+        }
+        if let Some(b) = on_band {
             self.worked_slot.insert((entity, b));
             let pb = self.per_band.entry(b).or_default();
             pb.0.insert(entity);
@@ -1106,6 +1216,8 @@ impl Awards {
                 .unwrap_or(0),
         };
 
+        let band_needs = self.band_needs();
+
         // Credited (granted) entities + the confirmed-but-not-credited gap.
         let dxcc_credited = self.credited_entity.len();
         let ready_to_submit = self
@@ -1153,6 +1265,76 @@ impl Awards {
             vucc,
             iota,
             band_targets,
+            band_needs,
+        }
+    }
+
+    /// DXCC, WAS and WAZ band by band ([`AwardBandNeeds`]): each band's never-worked and
+    /// worked-not-confirmed, from the slots the fold above filled — the DXCC ones of current
+    /// entities only, as every DXCC count here is.
+    fn band_needs(&self) -> AwardBandNeeds {
+        fn need<T: Copy>(
+            band: Band,
+            all: impl Iterator<Item = T>,
+            worked: impl Fn(T) -> bool,
+            confirmed: impl Fn(T) -> bool,
+            name: impl Fn(T) -> String,
+        ) -> BandNeed {
+            let (mut unworked, mut unconfirmed) = (Vec::new(), Vec::new());
+            for key in all {
+                if !worked(key) {
+                    unworked.push(name(key));
+                } else if !confirmed(key) {
+                    unconfirmed.push(name(key));
+                }
+            }
+            BandNeed {
+                band: band.label().to_string(),
+                unworked,
+                unconfirmed,
+            }
+        }
+        let entities = dxcc::dxcc_entity_names();
+        let none = (HashSet::new(), HashSet::new());
+        AwardBandNeeds {
+            dxcc: Band::ALL
+                .into_iter()
+                .filter(|b| earns_dxcc_credit(*b))
+                .map(|b| {
+                    let (w, c) = self.per_band.get(&b).unwrap_or(&none);
+                    need(
+                        b,
+                        entities.iter().copied(),
+                        |e| w.contains(e),
+                        |e| c.contains(e),
+                        str::to_string,
+                    )
+                })
+                .collect(),
+            was: Band::ALL
+                .into_iter()
+                .map(|b| {
+                    need(
+                        b,
+                        WAS_STATES.into_iter(),
+                        |s| self.worked_state_band.contains(&(s, b)),
+                        |s| self.confirmed_state_band.contains(&(s, b)),
+                        str::to_string,
+                    )
+                })
+                .collect(),
+            waz: Band::ALL
+                .into_iter()
+                .map(|b| {
+                    need(
+                        b,
+                        1..=40u8,
+                        |z| self.worked_zone_band.contains(&(z, b)),
+                        |z| self.confirmed_zone_band.contains(&(z, b)),
+                        |z| z.to_string(),
+                    )
+                })
+                .collect(),
         }
     }
 }

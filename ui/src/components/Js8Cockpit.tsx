@@ -30,6 +30,7 @@ import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, ty
 import { regionGroups, type PaneDrop } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
+import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
@@ -147,6 +148,7 @@ const js8PanelLabels = (): Record<Exclude<Js8PanelId, BoxId>, string> => ({
   stations: t('js8.panel.stations'),
   inbox: t('js8.panel.inbox'),
   log: t('js8.panel.log'),
+  stats: t('callStats.pane.title'),
 })
 
 /** Literal keys per state, so the orphan guard sees each of them referenced. */
@@ -198,6 +200,8 @@ export function Js8Cockpit({
   boxes,
 }: Props) {
   const canControl = useStationControl(), dataAvailable = useStationData()
+  // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
+  const [statsCall, setStatsCall] = useState('')
   const rotatorControl = useStationCapability('rotator')
   const decoderSettings = useDecoderSettings(snap, 'JS8')
   const receiverSettings = useReceiverSettings(snap, 'JS8')
@@ -207,9 +211,11 @@ export function Js8Cockpit({
   // Once per screen across the cockpit and the dashboard rail beside it: a box gives way to the rail (App).
   const entries = panels && boxes && active ? boxEntries(JS8_PANELS, panels.layout, panels.stateOf, boxes.rail?.shows) : {}
   const labels = { ...js8PanelLabels(), ...boxLabels(entries) }
+  // The Stats pane where the record says nothing: on where there is room (CallStatsPane `withStatsRoom`).
+  const statsRoom = useStatsRoom()
   const host = panels
-    ? panelHost(panels, {
-        menu: JS8_MENU,
+    ? panelHost(withStatsRoom(panels, statsRoom), {
+        menu: withStats(JS8_MENU),
         side: ['stations', 'inbox'],
         main: 'activity',
         labels,
@@ -516,7 +522,12 @@ export function Js8Cockpit({
   // or the stock grouping (features/panelPlace), and "has something to hold" is counted on them. The
   // log pane needs a snapshot to render, so that is part of whether it is on screen.
   const place = panels?.layout.place
-  const paneShown = (id: Js8PanelId): boolean => (isBoxId(id) ? entries[id] != null : shown(id) && (id !== 'log' || snap != null))
+  // The Stats pane follows the log pane's call, so it stands only while the log pane does (with its
+  // snapshot), and only in the station's own window: with the log hidden it would have nothing to follow.
+  const paneShown = (id: Js8PanelId): boolean =>
+    isBoxId(id)
+      ? entries[id] != null
+      : shown(id) && (id !== 'log' || snap != null) && (id !== 'stats' || (snap != null && shown('log') && statsHere()))
   const placed3 = regionGroups(JS8_PANELS.arrange!, place, 3, paneShown)
   // The DASHBOARD RAIL'S boxes, on a window too small for the rail (the operator's "They move into the
   // columns"), stand at the foot of the leading column, where JS8's own boxes stand until placed.
@@ -1071,6 +1082,11 @@ export function Js8Cockpit({
     </CockpitPaneFrame>
   )
 
+  // THE STATS PANE over the log pane: what the log holds for the call the strip reports, settled.
+  const statsPane = snap && paneShown('stats') && (
+    <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={JS8} logTick={snap.logTick} />
+  )
+
   // THE LOG STRIP — CW's shape (a LogEntry in the log column), prefilled from the selected
   // station through the live machine-fill channel (no focus steal — see PskCockpit for why).
   const logPane = snap && shown('log') && (
@@ -1082,7 +1098,10 @@ export function Js8Cockpit({
     >
       {!canControl ? <RemoteRecallEntry snap={snap} mode={JS8} selectedCall={selectedCall} onOpenLog={onOpenLogbook}/> : <LogEntry
         onOpenLogbook={onOpenLogbook}
-        onEntryCall={onEntryCall}
+        onEntryCall={(c) => {
+          setStatsCall(c)
+          onEntryCall?.(c)
+        }}
         snap={snap}
         // The ADIF token: written as MODE=MFSK SUBMODE=JS8 by the logbook (B5).
         mode={JS8}
@@ -1161,6 +1180,7 @@ export function Js8Cockpit({
     stations: stationsPane,
     inbox: inboxPane,
     log: logPane,
+    stats: statsPane,
     ...boxEls,
   }
   const slots = (ids: readonly Js8PanelId[]) =>

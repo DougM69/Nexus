@@ -285,10 +285,12 @@ impl LogNeeds {
             }
         }
         // WAZ zone is valid even on a WAE/CQ-only entity, so track it BEFORE the
-        // DXCC gate (need-aware spotting flags a new CQ zone independently).
+        // DXCC gate (need-aware spotting flags a new CQ zone independently). Confirmed as WAZ
+        // credits it, an Authenticity-Guaranteed eQSL included, so the board asks for no
+        // confirmation the Awards view already counts.
         if let (Some(zone), Some(b)) = (counted_zone(resolved.as_ref(), &rec), worked_on) {
             self.worked_zones.insert((zone, b));
-            if confirmed {
+            if confirmed || rec.qsl.eqsl_ag_confirmed() {
                 self.confirmed_zones.insert((zone, b));
             }
         }
