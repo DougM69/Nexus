@@ -9330,6 +9330,41 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.groups.hint')}</span>
               </label>
             </div>
+
+            {/* Sending: two of JS8Call's transmit options, both off by default as there. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.sending.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.holdPtt.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8HoldPtt === true}
+                    className={`toggle${form.js8HoldPtt === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8HoldPtt', form.js8HoldPtt !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.holdPtt.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.txOffsetWhileSending.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8TxOffsetWhileSending === true}
+                    className={`toggle${form.js8TxOffsetWhileSending === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8TxOffsetWhileSending', form.js8TxOffsetWhileSending !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.txOffsetWhileSending.hint')}</span>
+              </div>
+            </div>
           </fieldset>
           )}
 

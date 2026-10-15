@@ -2246,6 +2246,9 @@ export const ES: PartialCatalog = {
   "js8.dock.compose.placeholder": "Escribe un mensaje… (Intro lo pone en cola; sale una trama por periodo)",
   "js8.dock.compose.aria": "Mensaje JS8",
   "js8.dock.send.label": "Enviar",
+  // JS8 typeahead: MACHINE TRANSLATIONS, for a native speaker to check.
+  "js8.dock.typeahead.sent": "Enviado hasta ahora",
+  "js8.dock.typeahead.locked": "Un mensaje MSG o de retransmisión no se puede cambiar mientras sale, como en JS8Call.",
   "js8.dock.cq.aria": "Variante de CQ",
   "js8.dock.cq.title": "Llamar CQ — una trama de heartbeat dirigida a @ALLCALL, en el siguiente periodo",
   "js8.dock.cqRepeat.title.off": "Repetición de CQ desactivada. Pulsa para llamar CQ cada {{min}} min hasta que alguien responda — el botón hace la cuenta atrás hasta la siguiente. Solo transmite con TX activado y nunca se recuerda entre arranques.",
@@ -6088,6 +6091,12 @@ export const ES: PartialCatalog = {
   "settings.js8.status.hint": "Lo que devuelve una consulta STATUS?. Déjalo en blanco para la forma de JS8Call: IDLE, los minutos de inactividad y el nombre de la aplicación.",
   "settings.js8.groups.label": "Grupos",
   "settings.js8.groups.hint": "Los nombres @GROUP a los que perteneces, separados por comas — un mensaje a uno de ellos cuenta como dirigido a ti. @ALLCALL es todo el mundo y está siempre activo.",
+  // JS8 send options: MACHINE TRANSLATIONS, for a native speaker to check.
+  "settings.js8.sending.title": "Envío",
+  "settings.js8.holdPtt.label": "Mantener el PTT entre tramas",
+  "settings.js8.holdPtt.hint": "Desactivado por defecto, como en JS8Call. Activado, la radio sigue transmitiendo desde el final de una trama de un mensaje hasta que empieza la siguiente, en lugar de soltar el PTT tras cada trama y volver a activarlo. El PTT se suelta igualmente tras la última trama, y en el acto si detienes la transmisión.",
+  "settings.js8.txOffsetWhileSending.label": "Permitir cambiar el desplazamiento de TX durante el envío",
+  "settings.js8.txOffsetWhileSending.hint": "Desactivado por defecto, como en JS8Call: mientras un mensaje espera para salir o está saliendo, el desplazamiento de TX se queda donde está. Activado, puedes moverlo, y las tramas que faltan salen en el nuevo desplazamiento.",
   "settings.jt65.hint": "El clásico modo de señal débil y rebote lunar, se decodifica y se transmite. Los mensajes usan el formato antiguo de 22 caracteres, no el de 37 que usan FT8 y compañía.",
   "settings.jt65.legend": "JT65 — EME clásico",
   "settings.jt65.submode.a": "A — estándar en HF, el más estrecho",

@@ -135,6 +135,29 @@ frame in flight complete, as in the FT8 screen; what is still queued, the rest o
 included, is dropped, not sent when TX comes back on. So is what waits while the dial is outside
 your license privileges, and the screen says so.
 
+**Typeahead.** After **Send** the message stays in the message box while it goes out, as
+JS8Call's does: the box shows it as it goes on the air (with your callsign and the addressee in
+front), and as each frame is sent its text moves out of the box to the line beside it. Keep typing
+and the frames still to go carry what you typed; the change is taken just before the next frame.
+Text typed after the last frame has gone goes straight after it, as a message of its own. Delete
+everything still to go and the message ends after the frame on the air. **Enter** and **Send** do
+not queue a new message while yours is going out. A MSG or relay message cannot be changed while it
+goes out (the box is read-only), as in JS8Call. The box empties when the message has gone, or when
+you press **Stop TX**.
+
+**Between frames.** The radio drops PTT after each frame and keys again for the next, as JS8Call
+does by default: at Normal it is unkeyed for about 1.6 seconds between two frames (Slow about 4,
+Fast and Turbo about 1.7). Turn on **Hold PTT between frames** in Settings ▸ Digital ▸ JS8 and it
+stays keyed from the end of one frame of a message to the start of the next instead. It still drops
+after the message's last frame, never holds from one message into the next, and drops at once on
+**Stop TX** or **TX Off**.
+
+**Moving the TX offset while sending.** While a message is waiting to go or going out, the TX
+offset stays where it is, as in JS8Call: a right-click on the waterfall is refused and the screen
+says why. Turn on **Allow TX offset changes while sending** and the move is taken; the frames still
+to go are sent at the new offset (the frame on the air finishes where it started). Moving RX is
+never held.
+
 ## Compatibility
 
 On the air: JS8Call 2.2 and later, and JS8Call-improved, at Slow, Normal, Fast and JS8 40

@@ -27360,6 +27360,17 @@ button.sat-chip:disabled {
 .js8-compose {
   flex: 1 1 12em;
 }
+/* Typeahead, as JS8Call's: what has gone of the message going out, beside the box that holds the
+   rest. The end of it only (`sentTail`), in the estimate's face. */
+.js8-typeahead-sent {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
 .js8-cq-select {
   flex: 0 0 auto;
   width: auto;

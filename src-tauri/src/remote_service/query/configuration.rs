@@ -193,12 +193,14 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "js8HbAck",
     "js8HbAckDeny",
     "js8HbIntervalMin",
+    "js8HoldPtt",
     "js8IdleWatchdogMin",
     "js8Info",
     "js8Relay",
     "js8RxSpeeds",
     "js8Speed",
     "js8Status",
+    "js8TxOffsetWhileSending",
     "jt65Submode",
     "licenseClass",
     "logReportsToComments",
@@ -566,6 +568,9 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "js8Groups",
     "js8CallsignAgingMin",
     "js8ActivityAgingMin",
+    // JS8Call's two send options: transmit behaviour, set at the shack like the watchdog above.
+    "js8HoldPtt",
+    "js8TxOffsetWhileSending",
     "beacon",
     "beaconTxPercent",
     "beaconPowerDbm",
@@ -816,6 +821,11 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("js8Info", &self.0.js8_info)?;
         out.serialize_field("js8Status", &self.0.js8_status)?;
         out.serialize_field("js8Groups", &self.0.js8_groups)?;
+        out.serialize_field("js8HoldPtt", &self.0.js8_hold_ptt)?;
+        out.serialize_field(
+            "js8TxOffsetWhileSending",
+            &self.0.js8_tx_offset_while_sending,
+        )?;
         out.serialize_field("rptrOffsetOverrideHz", &self.0.rptr_offset_override_hz)?;
         out.serialize_field("fdActive", &self.0.fd_active)?;
         out.serialize_field("fdClass", &self.0.fd_class)?;

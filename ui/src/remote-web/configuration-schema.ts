@@ -37,6 +37,8 @@ export const SETTINGS_KEYS = [
   'js8Info',
   'js8Status',
   'js8Groups',
+  'js8HoldPtt',
+  'js8TxOffsetWhileSending',
   'rptrOffsetOverrideHz',
   'fdActive',
   'fdClass',
@@ -346,6 +348,10 @@ export const NEWER_SETTINGS = {
   js8AutoreplyAllow: [],
   js8AutoreplyDeny: [],
   js8HbAckDeny: [],
+  // …and one that predates JS8Call's two send options drops PTT after every frame (Hold PTT off)
+  // and lets the TX offset move while a message goes out (the move allowed).
+  js8HoldPtt: false,
+  js8TxOffsetWhileSending: true,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -426,6 +432,8 @@ export const SETTINGS_SHAPES = {
   "js8Info": "string",
   "js8Status": "string",
   "js8Groups": "array",
+  "js8HoldPtt": "boolean",
+  "js8TxOffsetWhileSending": "boolean",
   "rptrOffsetOverrideHz": "number",
   "fdActive": "boolean",
   "fdClass": "string",
