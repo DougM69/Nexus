@@ -399,6 +399,130 @@ fn an_ft2_late_start_keeps_its_whole_over_rule() {
     assert_eq!(s.sent("T 1"), 1, "and it keys at the next own boundary");
 }
 
+// ── An FT4 late start with no tone left: keyed, and held to the window ─────────────────────────────
+// FT4's tones end 5.54 s into its slot (Nexus's 0.5 s lead-in), before its latest key at 5.625 s.
+// WSJT-X keys a late start there all the same (`widgets/mainwindow.cpp:5126-5176`): its Modulator
+// finds every symbol behind it and sends none (`Modulator/Modulator.cpp:96-99`, `:281`), and PTT
+// falls only at the window's end (`widgets/mainwindow.cpp:5180`, `:5530`, `stopTx` `:5743-5753`,
+// `stopTx2` `:5758-5760`), 6.24 s into the slot. Nexus keyed it and dropped PTT on the next tick.
+
+/// ⭐ AN FT4 CALL CQ 5.58 s INTO THIS STATION'S OWN SLOT, PAST ITS LAST TONE AND UNDER 75 %: KEYED AT
+/// ONCE, NOTHING PLAYED, THE AUDIO STOPPED AT 6.04 s AND PTT OFF AT 6.24 s, WSJT-X'S WINDOW. It used
+/// to drop PTT on the next tick, 20 ms after the key. The controls: 5.0 s in, with tones still ahead,
+/// it keys and plays them; 5.7 s in, past 75 %, it waits for the next own slot.
+#[test]
+fn an_ft4_late_start_with_no_tone_left_keys_and_holds_ptt_to_the_window() {
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 5_560.0);
+    s.cq_now();
+    s.run_to(t0 + 5_580.0);
+    assert_eq!(s.sent("T 1"), 1, "a CQ 5.58 s in did not key at once");
+    // The tick, in ms into the slot, of the first flush (the audio stop) and of the unkey.
+    let (flushes, mut audio_stop, mut ptt_off) = (s.backend.flush_calls, None, None);
+    while ptt_off.is_none() && s.t < t0 + 7_500.0 {
+        let at = s.t;
+        s.run_to(at);
+        if audio_stop.is_none() && s.backend.flush_calls > flushes {
+            audio_stop = Some(at - t0);
+        }
+        if s.sent("T 0") > 0 {
+            ptt_off = Some(at - t0);
+        }
+    }
+    assert_eq!(
+        (audio_stop, ptt_off),
+        (Some(6_040.0), Some(6_240.0)),
+        "the audio stop and PTT off, ms into the slot"
+    );
+    assert!(
+        s.backend.played.is_empty(),
+        "{} samples played: FT4's tones end at 5.54 s",
+        s.backend.played.len()
+    );
+
+    let mut on_time = Over::new(Tier::Ft4);
+    on_time.cq();
+    let t0 = on_time.t;
+    on_time.run_to(t0);
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 4_980.0);
+    s.cq_now();
+    s.run_to(t0 + 5_000.0);
+    assert_eq!(
+        s.sent("T 1"),
+        1,
+        "control: a CQ 5.0 s in did not key at once"
+    );
+    if let Err(why) = same_audio(&s.backend.played, &on_time.backend.played[60_000..]) {
+        panic!("control: the CQ 5.0 s in is not the on-time over's audio from there on: {why}");
+    }
+    assert!(
+        s.backend.played.iter().any(|&x| x != 0.0),
+        "control: 5.0 s in, no tone played"
+    );
+    assert_eq!(s.state.tx_until_ms, Some(t0 + 6_240.0), "control: PTT off");
+
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 5_680.0);
+    s.cq_now();
+    s.run_to(t0 + 14_980.0);
+    assert_eq!(s.sent("T 1"), 0, "control: a CQ 5.7 s in keyed this slot");
+    s.run_to(t0 + 15_000.0);
+    assert_eq!(
+        s.sent("T 1"),
+        1,
+        "control: and it keys at the next own boundary"
+    );
+}
+
+/// THE HELD WINDOW ENDS AS ANY FT4 OVER'S DOES: Stop TX unkeys at once and nothing of it fires after;
+/// TX Off lets it end on the window, at 6.24 s, and keys nothing next.
+#[test]
+fn stop_tx_cuts_the_held_window_at_once_and_tx_off_lets_it_end_on_the_window() {
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 5_560.0);
+    s.cq_now();
+    s.run_to(t0 + 5_780.0);
+    assert_eq!(
+        (s.sent("T 1"), s.sent("T 0")),
+        (1, 0),
+        "premise: keyed 5.58 s in and held"
+    );
+    let flushes = s.backend.flush_calls;
+    s.engine.lock().unwrap().halt_tx();
+    s.run_to(t0 + 5_800.0);
+    assert_eq!(s.sent("T 0"), 1, "Stop TX did not unkey on the next tick");
+    assert_eq!(s.backend.flush_calls, flushes + 1, "Stop TX did not flush");
+    s.run_to(t0 + 7_480.0);
+    assert_eq!(
+        (s.sent("T 0"), s.backend.flush_calls),
+        (1, flushes + 1),
+        "the cut window unkeyed or flushed later"
+    );
+
+    let mut s = Over::new(Tier::Ft4);
+    let t0 = s.t;
+    s.run_to(t0 + 5_560.0);
+    s.cq_now();
+    s.run_to(t0 + 5_780.0);
+    assert_eq!(
+        (s.sent("T 1"), s.sent("T 0")),
+        (1, 0),
+        "premise: keyed 5.58 s in and held"
+    );
+    s.engine.lock().unwrap().set_tx_enabled_by_operator(false);
+    s.run_to(t0 + 6_220.0);
+    assert_eq!(s.sent("T 0"), 0, "TX Off cut the held window before 6.24 s");
+    s.run_to(t0 + 6_240.0);
+    assert_eq!(s.sent("T 0"), 1, "PTT did not drop at 6.24 s");
+    s.run_to(t0 + 15_100.0);
+    assert_eq!(s.sent("T 1"), 1, "TX Off keyed the next over");
+}
+
 /// ⭐ STOP TX MID-OVER STILL CUTS AT ONCE, AND NOTHING OF THE CUT OVER FIRES AFTER IT. The window's
 /// audio stop belongs to the over it was set for: once Stop TX has cut it, 13.64 s flushes nothing
 /// and 13.84 s unkeys nothing.
