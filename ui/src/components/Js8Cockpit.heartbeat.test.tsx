@@ -155,7 +155,7 @@ describe('HB NET: heartbeat networking, and HB only while it is on', () => {
     const net = q('.js8-hbnet') as HTMLButtonElement
     expect(net.disabled).toBe(true)
     expect(net.getAttribute('aria-pressed')).toBe('true')
-    expect(net.title).toBe(t('js8.dock.hbNet.title.speed', { speed: 'Turbo' }))
+    expect(net.title).toBe(t('js8.dock.hbNet.title.speed', { speed: 'JS8 40' }))
   })
 
   it('a sample with no presence (the Remote page) shows HB as it always was, and no HB NET', async () => {
@@ -254,7 +254,7 @@ describe('HB ACK: held back now, and the 55-minute rule', () => {
   it.each([
     ['qsoPause', 'normal', () => t('js8.dock.hbAck.suppressed.qsoPause')],
     ['arriving', 'normal', () => t('js8.dock.hbAck.suppressed.arriving')],
-    ['speed', 'turbo', () => t('js8.dock.hbAck.suppressed.speed', { speed: 'Turbo' })],
+    ['speed', 'turbo', () => t('js8.dock.hbAck.suppressed.speed', { speed: 'JS8 40' })],
   ] as const)('held back by %s: on but not armed, and it says why', async (why, speed, words) => {
     await renderCockpit(armedAck({ hbAckSuppressed: why }, speed))
     const ack = q('.js8-hback')!
