@@ -136,6 +136,41 @@ pub(crate) fn into_tick_slot_ms(reread_ms: f64, now_ms: f64, period_ms: f64) -> 
         - (now_ms / period_ms).floor() * period_ms
 }
 
+/// Where and when a tick decided to key an FT8 or FT4 over: how far into the tick's slot
+/// ([`into_tick_slot_ms`]) and the instant, on the monotonic clock. It is the last slot check
+/// before the key, and the key's own lateness is measured from it ([`Self::past_its_period`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KeyDecision {
+    pub into_slot_ms: f64,
+    pub at: std::time::Instant,
+}
+
+impl KeyDecision {
+    /// The decision a tick whose clock read `now_ms` makes now, the steered clock read again as
+    /// `reread_ms`.
+    pub(crate) fn now(reread_ms: f64, now_ms: f64, period_ms: f64) -> KeyDecision {
+        KeyDecision {
+            into_slot_ms: into_tick_slot_ms(reread_ms, now_ms, period_ms),
+            at: std::time::Instant::now(),
+        }
+    }
+
+    /// How far past the end of the slot this decision was for a carrier that came up now is, or
+    /// `None` while it is still inside that slot.
+    ///
+    /// ⭐ MEASURED ON THE MONOTONIC CLOCK FROM THE DECISION, NOT FROM A RE-READ OF THE WALL CLOCK.
+    /// Everything after the last slot check is in it: the build, Split Operation's CAT (three
+    /// commands on a slow link, each up to its 2.5 s deadline), the sound card's open and the key's
+    /// own round trip. A wall-clock re-read places the carrier as the tones are placed
+    /// ([`slot_clock_at`]), which takes the tick's clock when the two are a period or more apart:
+    /// an FT4 key 8 s late read as on time there. Measured from the decision it reads as what it
+    /// is, on a loop driven on a clock of its own too.
+    pub(crate) fn past_its_period(&self, period_ms: f64) -> Option<f64> {
+        let into_slot_ms = self.into_slot_ms + self.at.elapsed().as_secs_f64() * 1000.0;
+        (into_slot_ms >= period_ms).then_some(into_slot_ms - period_ms)
+    }
+}
+
 /// When an FT8/FT4 over stops its audio and drops PTT ([`wsjtx_over_end`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OverEnd {
@@ -422,6 +457,36 @@ pub(crate) fn key_slot_transmitter(
     true
 }
 
+/// ⛔ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT SENDS NOTHING AND IS UNKEYED AT
+/// ONCE ([`KeyDecision::past_its_period`]), what the caller does instead of playing the over. Its
+/// tones were laid on the clock where the carrier was, the other station's slot clock, so the rest
+/// of the over went out in their period, ending on their window. WSJT-X starts an over's audio only
+/// when the radio reports PTT on and the over is "still needed" (`widgets/mainwindow.cpp:8852`,
+/// `m_tx_when_ready && g_iptt`); its 100 ms GUI tick ends the over as soon as the clock leaves its
+/// window (`:870`, `:5055`, `:5180`, `:5530`), a window in this station's own period of the pair
+/// (`:5016-5019`), and `stopTx` clears `g_iptt` and lowers PTT 200 ms later (`:5743-5760`). A
+/// radio that answers in the other station's period sends nothing there and is unkeyed.
+///
+/// The output is flushed (it holds nothing of this over); the radio is unkeyed now, unless the loop
+/// already held the transmitter (`held`: the operator's own PTT stays theirs, and an over's hold
+/// is cut by the halt's slot abort); and TX halts with the reason on the refused key's line
+/// ([`Engine::halt_tx_for_key_past_its_period`]). An unkey the radio does not take halts TX as at
+/// an over's end ([`slot_unkey_failure`]), and the loop's idle self-heal goes on sending it.
+pub(crate) fn unkey_a_key_past_its_period(
+    eng: &mut Engine,
+    rig: &mut Rig,
+    backend: &mut impl AudioBackend,
+    held: bool,
+    past_ms: f64,
+) {
+    backend.flush_output();
+    let unkey = (!held).then(|| rig.ptt(false));
+    eng.halt_tx_for_key_past_its_period(past_ms);
+    if let Some(why) = unkey.and_then(|unkey| slot_unkey_failure(&unkey, true)) {
+        eng.halt_tx_for_failed_unkey(&why);
+    }
+}
+
 /// Why a slot over must not go out on its key's answer, or `None` when it goes out: WSJT-X's rule
 /// (3.0.2), on the ways a key ends here.
 ///
@@ -471,7 +536,6 @@ pub(crate) fn slot_key_failure(key: &std::io::Result<()>, held: bool) -> Option<
 /// (`Configuration.cpp:5434-5452`), and reopening it sends no PTT command (`:5055`,
 /// `TransceiverBase.cpp:133-137`). Here a failed unkey leaves `Rig::keyed` set, so the radio loop's
 /// idle self-heal sends the unkey every tick until the radio takes it, TX halted or not.
-#[cfg(feature = "device")]
 pub(crate) fn slot_unkey_failure(unkey: &std::io::Result<()>, slot_over: bool) -> Option<String> {
     let e = unkey.as_ref().err()?;
     if !slot_over || crate::rig::deadline_passed(e) {
@@ -588,12 +652,15 @@ pub fn slot_tx_phase(
     // either: nothing reaches the sequencer, ALL.TXT or the band feed, and the next own slot plans it
     // again, as WSJT-X's message waits for its next slot. An over planned and built before a wait
     // (`prebuilt`, the busy decoder's) is dropped with its dial shift, as `commit_tx` drops one whose
-    // slot has gone. Such a boundary used to key as long as one of its tones was still ahead.
-    let past_latest_key = wsjtx_tx_window_ms(eng.tier()).is_some() && {
+    // slot has gone. Such a boundary used to key as long as one of its tones was still ahead. The
+    // decision is kept: the key's own lateness is measured from it (below).
+    let decided = wsjtx_tx_window_ms(eng.tier()).map(|_| {
         let period_ms = eng.active_slot_secs() * 1000.0;
         let reread_ms = now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64;
-        !wsjtx_may_key_at(into_tick_slot_ms(reread_ms, now_ms, period_ms), period_ms)
-    };
+        KeyDecision::now(reread_ms, now_ms, period_ms)
+    });
+    let past_latest_key =
+        decided.is_some_and(|d| !wsjtx_may_key_at(d.into_slot_ms, eng.active_slot_secs() * 1000.0));
     let waves = if eng.poll_remote_transmit(std::time::Instant::now()) {
         Vec::new()
     } else if past_latest_key {
@@ -610,23 +677,24 @@ pub fn slot_tx_phase(
     if !waves.is_empty() {
         let period_ms = eng.active_slot_secs() * 1000.0;
         // AN FT8/FT4 OVER WHOSE TONES ARE ALL BEHIND THE SLOT CLOCK HAS NOTHING TO SEND (a boundary
-        // keyed very late: past 13.14 s of FT8, 5.54 s of FT4). Past WSJT-X's latest key it keys
-        // nothing, as `commit_tx` keys nothing once its slot has gone, and its dial shift goes with
-        // it: an over whose plan ran past the latest key, or whose clock has left the slot its tick
-        // decided for. It used to key and play the head of its message for the rest of the slot, a
-        // whole over late. Under the latest key, which only FT4 can be (its tones end before its
-        // 5.625 s; FT8's run past its 11.25 s), it keys, and [`play_keyed_over`] holds it silent to
-        // the window's end, as WSJT-X's GUI tick keys it (`widgets/mainwindow.cpp:5126-5176`) and
-        // holds it; it used to key nothing. The latest key is measured here on the clock as it is now,
-        // from the start of the tick's slot, with no fallback to the tick's clock (unlike
-        // [`into_tick_slot_ms`]): a re-read a period or more on, a clock step or a stall alike, is
-        // past it and keys nothing, as before.
-        if wsjtx_tx_window_ms(eng.tier()).is_some() {
+        // keyed very late: past 13.14 s of FT8, 5.54 s of FT4). Decided in time (above), it keys,
+        // and [`play_keyed_over`] holds it silent to the window's end, as WSJT-X's GUI tick keys an
+        // over at its decision (`widgets/mainwindow.cpp:5126-5176`) and holds it, however long its
+        // build took after the decision: an FT4 boundary decided 5.54-5.625 s in, or one whose
+        // build, waiting on the modem or on a slow computer, ran past its latest key. That one used
+        // to key nothing. Only an over with nothing left to hold either keys nothing, its clock past
+        // WSJT-X's PTT off for the slot its tick decided for (13.84 s of FT8, 6.24 s of FT4), as
+        // `commit_tx` keys nothing once its slot has gone, and its dial shift goes with it. The
+        // clock is read here as it is now, from the start of the tick's slot, with no fallback to
+        // the tick's clock (unlike [`into_tick_slot_ms`]): a re-read a period or more on, a clock
+        // step or a stall alike, is past it and keys nothing, as before.
+        if let Some(window_ms) = wsjtx_tx_window_ms(eng.tier()) {
             let now_wall = now_unix_ms() - eng.clock_offset_ms().unwrap_or(0) as f64;
             let at_ms = slot_clock_at(now_wall.max(now_ms), now_ms, period_ms);
-            let into_slot_ms = now_wall.max(now_ms) - (now_ms / period_ms).floor() * period_ms;
+            let slot_start_ms = (now_ms / period_ms).floor() * period_ms;
+            let hold_ends_ms = wsjtx_over_end(slot_start_ms, window_ms, period_ms).ptt_off_ms;
             if !tones_after(&waves, slot_clock_skip(at_ms, period_ms))
-                && !wsjtx_may_key_at(into_slot_ms, period_ms)
+                && now_wall.max(now_ms) >= hold_ends_ms
             {
                 let _ = eng.take_tx_dial_shift();
                 return SlotAction {
@@ -648,6 +716,24 @@ pub fn slot_tx_phase(
             // Preserve split cleanup even when permission disappears during
             // CAT preparation, or the radio refuses the key. The native loop restores it on its
             // next idle tick.
+            return SlotAction {
+                tx_until_ms: None,
+                audio_until_ms: None,
+                did_rx,
+                rx_frame,
+                tx_this_slot: false,
+                fake_it_restore: split.fake_it_restore,
+                fake_it_tx_dial: split.fake_it_tx_dial,
+                rig_split_engaged: split.rig_split_engaged,
+            };
+        }
+        // ⭐ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT PLAYED: the radio is
+        // unkeyed at once and TX halts ([`unkey_a_key_past_its_period`]). Split Operation's CAT and
+        // the key itself come after every slot check above, and on a slow link they took the
+        // carrier into the other station's period, where the rest of the over went out on their
+        // slot clock. The split cleanup is kept, as for a refused key.
+        if let Some(past_ms) = decided.and_then(|d| d.past_its_period(period_ms)) {
+            unkey_a_key_past_its_period(eng, rig, backend, held, past_ms);
             return SlotAction {
                 tx_until_ms: None,
                 audio_until_ms: None,
@@ -1799,12 +1885,17 @@ mod tests {
     }
 
     #[test]
-    fn an_over_with_no_tone_left_whose_build_ran_past_its_latest_key_keys_nothing() {
-        // The latest key is looked at again just before the key, after the build. An FT4 boundary
-        // decided 5.60 s into its slot (under 5.625 s, its tones already gone) whose build waits for a
-        // decode to let go of the modem until 5.70 s: past its latest key by then, with nothing to
-        // send, it keys nothing, as before. Only an over still under its latest key there is keyed
-        // with nothing to send.
+    fn an_over_with_no_tone_left_whose_build_ran_past_its_latest_key_is_keyed_and_held() {
+        // ⭐ A BOUNDARY DECIDED IN TIME IS KEYED HOWEVER LONG ITS BUILD THEN TAKES, AND HELD SILENT TO
+        // THE WINDOW'S END, as WSJT-X's GUI tick keys at its decision (`widgets/mainwindow.cpp:5126-
+        // 5176`) and holds it. An FT4 boundary decided 5.60 s into its slot (under 5.625 s, its tones
+        // already gone) whose build waits for a decode to let go of the modem until 5.70 s, past its
+        // latest key: the key, nothing played, the audio stop at 6.04 s and PTT off at 6.24 s. It
+        // used to key nothing.
+        //
+        // An FT8 or FT4 over is built without the modem (`modes::wsjt77`) unless its text is one the
+        // lock-free encoder leaves to the vendored one, which only typed text reaches: here in-QSO
+        // free text naming an unresolved hashed call.
         //
         // ⚠️ THE MODEM LOCK IS THE WHOLE PROCESS'S: held here for about 250 ms, the decision's build
         // only.
@@ -1857,12 +1948,18 @@ mod tests {
             returned >= let_go,
             "premise: the over was planned and its build waited for the decode"
         );
-        assert!(sent.is_empty(), "a command went on the wire: {sent:?}");
+        assert_eq!(sent, ["T 1"], "not keyed");
         assert!(
-            !act.tx_this_slot && act.tx_until_ms.is_none() && backend.played.is_empty(),
-            "keyed"
+            act.tx_this_slot && backend.played.is_empty(),
+            "{} samples played: FT4's tones end at 5.54 s",
+            backend.played.len()
         );
-        assert!(eng.tx_enabled(), "a missed over is not a halt");
+        assert_eq!(
+            (act.audio_until_ms, act.tx_until_ms),
+            (Some(slot_start + 6_040.0), Some(slot_start + 6_240.0)),
+            "not held to WSJT-X's window"
+        );
+        assert!(eng.tx_enabled(), "TX went off");
     }
 
     #[test]
@@ -1910,6 +2007,332 @@ mod tests {
                 assert!(backend.played.is_empty(), "no tone left: played");
             }
         }
+    }
+
+    // ── An FT8/FT4 key the radio answers past the end of its slot: nothing sent, unkeyed at once ──────
+    // Split Operation's CAT and the key itself come after the last slot check before an FT8/FT4 key,
+    // and on a slow link they take seconds: three split commands, each up to its 2.5 s deadline, and
+    // the key's own 700 ms. The tones are laid on the clock where the carrier is, so a carrier that
+    // came up in the other station's period sent the rest of the over there, on their slot clock.
+    // WSJT-X starts an over's audio only when the radio reports PTT on and the over is still needed
+    // (`widgets/mainwindow.cpp:8852`), and its GUI tick ends the over as soon as the clock has left its
+    // window (`:5055`, `:5180`, `:5530`), a window in this station's own period (`:5016-5019`).
+
+    type LinesWithTimes = std::sync::Arc<std::sync::Mutex<Vec<(String, std::time::Instant)>>>;
+
+    /// A rigctld on a slow link: each of Split Operation's commands (`S`, `I`, `X`) answered after
+    /// `split_ms`, the key after `key_ms`, everything else at once; every line logged with when it
+    /// came. Each connection is served on a thread of its own, so a command that outlives its
+    /// deadline (the client then drops the connection) holds up nothing after it.
+    fn slow_split_rigctld(split_ms: u64, key_ms: u64) -> (String, LinesWithTimes) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_w = log.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let log = log_w.clone();
+                std::thread::spawn(move || {
+                    let mut w = stream.try_clone().unwrap();
+                    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                        let t = line.trim().to_string();
+                        if t.is_empty() {
+                            continue;
+                        }
+                        log.lock()
+                            .unwrap()
+                            .push((t.clone(), std::time::Instant::now()));
+                        let stall = if ["S ", "I ", "X "].iter().any(|p| t.starts_with(p)) {
+                            split_ms
+                        } else if t == "T 1" {
+                            key_ms
+                        } else {
+                            0
+                        };
+                        std::thread::sleep(std::time::Duration::from_millis(stall));
+                        if w.write_all(b"RPRT 0\n").is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, log)
+    }
+
+    /// An engine on `tier` in Split Operation Rig with a CQ to send whose 750 Hz TX offset needs a
+    /// dial shift, so three split commands go out before its key; its clock steered to a slot start.
+    fn rig_split_engine(tier: tempo_app::dto::Tier) -> Engine {
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tier);
+        let _ = eng.take_slot_tx_abort();
+        let mut st = eng.settings().clone();
+        st.split_mode = tempo_app::settings::SplitMode::Rig;
+        eng.apply_settings(st);
+        eng.set_tx_enabled(true);
+        eng.set_tx_offset(750.0);
+        eng.broadcast("CQ TEST W9XYZ EN37");
+        align_to_slot_start(&mut eng, 0);
+        eng
+    }
+
+    /// A boundary of `tier` decided `decided_ms` into its slot, on the real (steered) clock, on a link
+    /// whose split commands answer after `split_ms` each and whose key after `key_ms`.
+    struct SlowSplit {
+        act: SlotAction,
+        eng: Engine,
+        played: Vec<f32>,
+        /// The over the scene sends, whole and slot-positioned.
+        wave: Vec<f32>,
+        /// Every line the rigctld got, with where the slot was when it came, ms from its start.
+        lines: Vec<(String, f64)>,
+        /// Where the slot was when the TX phase returned.
+        returned_ms: f64,
+        slot_start: f64,
+        period_ms: f64,
+    }
+
+    fn slow_split_boundary(
+        tier: tempo_app::dto::Tier,
+        decided_ms: f64,
+        split_ms: u64,
+        key_ms: u64,
+    ) -> SlowSplit {
+        let wave = rig_split_engine(tier).poll_tx(0).remove(0);
+        let mut eng = rig_split_engine(tier);
+        let period_ms = eng.active_slot_secs() * 1000.0;
+        let offset = eng.clock_offset_ms().unwrap_or(0) - decided_ms as i64;
+        eng.set_clock_offset_ms(Some(offset));
+        assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
+        let (addr, log) = slow_split_rigctld(split_ms, key_ms);
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+        let (base, tick) = (std::time::Instant::now(), steered_now_ms(&eng));
+        let slot_start = (tick / period_ms).floor() * period_ms;
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            tick,
+            false,
+            None,
+            None,
+            false,
+        );
+        let at = |t: std::time::Instant| tick - slot_start + (t - base).as_secs_f64() * 1000.0;
+        let returned_ms = at(std::time::Instant::now());
+        let lines = log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(l, t)| (l.clone(), at(*t)))
+            .collect();
+        SlowSplit {
+            act,
+            eng,
+            played: backend.played,
+            wave,
+            lines,
+            returned_ms,
+            slot_start,
+            period_ms,
+        }
+    }
+
+    impl SlowSplit {
+        /// The lines the rigctld got, without their times.
+        fn sent(&self) -> Vec<&str> {
+            self.lines.iter().map(|(l, _)| l.as_str()).collect()
+        }
+
+        /// Where in the slot `line` came, the first time.
+        fn came(&self, line: &str) -> f64 {
+            self.lines
+                .iter()
+                .find(|(l, _)| l == line)
+                .unwrap_or_else(|| panic!("no {line:?} on the wire: {:?}", self.sent()))
+                .1
+        }
+
+        /// The over went out in its own period: the key, the rest of its wave from where the
+        /// carrier came up (between the key's answer and the TX phase's return) and not a sample
+        /// after, the over ended on `window_ms` (`None`: it had nothing left, and ended at once).
+        fn played_in_its_own_period(&mut self, key_ms: u64, window_ms: Option<f64>, what: &str) {
+            assert_eq!(
+                self.sent()[3..],
+                ["T 1"],
+                "{what}: the split, the key, and no unkey"
+            );
+            let answered = self.came("T 1") + key_ms as f64;
+            assert!(
+                self.returned_ms < self.period_ms,
+                "premise, {what}: the carrier came up {answered}..{} ms into its slot",
+                self.returned_ms
+            );
+            let skipped = self.wave.len() - self.played.len();
+            assert!(
+                self.played == self.wave[skipped..],
+                "{what}: not the rest of the over"
+            );
+            match window_ms {
+                Some(window_ms) => {
+                    let (lo, hi) = (
+                        (answered * 12.0).floor() as usize,
+                        (self.returned_ms * 12.0).ceil() as usize,
+                    );
+                    assert!(
+                        self.played.iter().any(|&x| x != 0.0) && (lo..=hi).contains(&skipped),
+                        "{what}: {skipped} samples skipped, the carrier came up {lo}..={hi} samples in"
+                    );
+                    assert_eq!(
+                        (self.act.audio_until_ms, self.act.tx_until_ms),
+                        (
+                            Some(self.slot_start + window_ms),
+                            Some(self.slot_start + window_ms + 200.0)
+                        ),
+                        "{what}: not ended on WSJT-X's window"
+                    );
+                }
+                None => {
+                    let end = self.act.tx_until_ms.expect("keyed") - self.slot_start;
+                    assert!(
+                        self.played.is_empty()
+                            && self.act.audio_until_ms == self.act.tx_until_ms
+                            && (answered..=self.returned_ms).contains(&end),
+                        "{what}: {} samples played, the over ending {end} ms in",
+                        self.played.len()
+                    );
+                }
+            }
+            assert!(
+                self.act.tx_this_slot && self.eng.tx_enabled(),
+                "{what}: dropped"
+            );
+            assert_eq!(self.eng.snapshot().radio.slot_key_refused, None, "{what}");
+        }
+
+        /// The carrier came up past the end of its slot: nothing played, the unkey at once after
+        /// the key's answer, TX halted with how late on the refused key's line, and the split
+        /// handed back for the loop to tear down.
+        fn unkeyed_at_once(&mut self, key_ms: u64, what: &str) {
+            let answered = self.came("T 1") + key_ms as f64;
+            assert!(
+                answered >= self.period_ms,
+                "premise, {what}: the carrier came up {answered} ms into its slot"
+            );
+            assert!(
+                self.played.is_empty(),
+                "{what}: {} samples played in a later period, the over ending {:?} ms into it",
+                self.played.len(),
+                self.act
+                    .tx_until_ms
+                    .map(|t| t - self.slot_start - self.period_ms)
+            );
+            assert_eq!(
+                self.sent()[3..],
+                ["T 1", "T 0"],
+                "{what}: the split, the key, then the unkey"
+            );
+            assert!(
+                self.came("T 0") - answered < 250.0,
+                "{what}: the unkey came {} ms after the key's answer",
+                self.came("T 0") - answered
+            );
+            assert!(
+                !self.act.tx_this_slot && self.act.tx_until_ms.is_none(),
+                "{what}: held"
+            );
+            assert!(self.act.rig_split_engaged, "{what}: the split was lost");
+            assert!(!self.eng.tx_enabled(), "{what}: TX is still on");
+            assert!(
+                self.eng.take_slot_tx_abort(),
+                "{what}: no stop for the loop"
+            );
+            let refused = self
+                .eng
+                .snapshot()
+                .radio
+                .slot_key_refused
+                .unwrap_or_else(|| panic!("{what}: nothing on the refused key's line"));
+            let late_s: f64 = refused.why.trim_end_matches(" s").parse().unwrap();
+            let (lo, hi) = (
+                (answered - self.period_ms) / 1000.0 - 0.05,
+                (self.returned_ms - self.period_ms) / 1000.0 + 0.05,
+            );
+            assert!(
+                refused.keyed_past_period && (lo..=hi).contains(&late_s),
+                "{what}: {refused:?}, expected {lo:.2}..={hi:.2} s past its period"
+            );
+        }
+    }
+
+    /// The split's three commands and the key answered late enough that the carrier comes 2 s, 6 s
+    /// and 8 s after the decision: each command after `split_ms` (3 s outlives its 2.5 s deadline,
+    /// so the link gives up on it then), the key after `key_ms`.
+    const SLOW_SPLITS: [(u64, u64); 3] = [(600, 200), (1_900, 300), (3_000, 500)];
+
+    #[test]
+    fn an_ft8_key_a_slow_split_takes_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
+        // ⭐ A boundary decided 10.0 s into this station's FT8 slot (under 11.25 s), its split and key
+        // taking 2 s, 6 s and 8 s. 2 s: the carrier at 12.0 s, the rest of the over from there on the
+        // slot clock, ended at 13.64 / 13.84 s. 6 s and 8 s: the carrier at 16.0 s and 18.0 s, in the
+        // other station's period, where the over used to go out from their slot's 1.0 s and 3.0 s,
+        // its tones on their clock and PTT held to their 13.84 s; now nothing is played, the radio is
+        // unkeyed at once and TX halts with the reason.
+        let mut scenes = std::thread::scope(|s| {
+            SLOW_SPLITS
+                .map(|(split, key)| {
+                    s.spawn(move || {
+                        slow_split_boundary(tempo_app::dto::Tier::Ft8, 10_000.0, split, key)
+                    })
+                })
+                .map(|h| h.join().unwrap())
+        });
+        scenes[0].played_in_its_own_period(200, Some(13_640.0), "FT8, 2 s");
+        scenes[1].unkeyed_at_once(300, "FT8, 6 s");
+        scenes[2].unkeyed_at_once(500, "FT8, 8 s");
+    }
+
+    #[test]
+    fn an_ft4_key_a_slow_split_takes_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
+        // ⭐ A boundary decided 0.5 s into this station's FT4 slot, its split and key taking 2 s, 6 s
+        // and 8 s. 2 s: the carrier at 2.5 s, the rest of the over on the slot clock, ended at 6.04 /
+        // 6.24 s. 6 s: the carrier at 6.5 s, past its window but in its own period: nothing left to
+        // send, and PTT drops at once, as before. 8 s: the carrier at 8.5 s, in the other station's
+        // period, and more than a period after the tick, where the post-key clock read is laid on the
+        // tick's clock (`slot_clock_at`): the whole over used to go out from the tick's 0.5 s, in the
+        // other station's period. Now nothing is played, the radio is unkeyed at once and TX halts.
+        let mut scenes = std::thread::scope(|s| {
+            SLOW_SPLITS
+                .map(|(split, key)| {
+                    s.spawn(move || {
+                        slow_split_boundary(tempo_app::dto::Tier::Ft4, 500.0, split, key)
+                    })
+                })
+                .map(|h| h.join().unwrap())
+        });
+        scenes[0].played_in_its_own_period(200, Some(6_040.0), "FT4, 2 s");
+        scenes[1].played_in_its_own_period(300, None, "FT4, 6 s");
+        scenes[2].unkeyed_at_once(500, "FT4, 8 s");
+    }
+
+    #[test]
+    fn a_fast_key_on_split_still_plays_its_over_on_time() {
+        // Control: the same split answered at once. The FT8 over keyed on the boundary plays whole
+        // from the slot's start and ends on WSJT-X's window, as before.
+        let mut fast = slow_split_boundary(tempo_app::dto::Tier::Ft8, 0.0, 0, 0);
+        fast.played_in_its_own_period(0, Some(13_640.0), "FT8, a fast key");
+        assert!(
+            fast.played.len() + 12 * 100 > fast.wave.len(),
+            "{} of {} samples played: not the whole over",
+            fast.played.len(),
+            fast.wave.len()
+        );
     }
 
     #[test]

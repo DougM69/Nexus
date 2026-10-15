@@ -11073,6 +11073,12 @@ export const EN = {
   // sound card's own error, as data.
   'shell.lane.slotKeyRefused.txAudio':
     'Nexus did not key the radio at {{time}} UTC because the transmit audio output would not open ({{why}}). Nothing was sent and TX was turned off. Check Output Device (TX) in Settings (another program may be holding it, or it is unplugged), then turn TX on again.',
+  // The radio keyed an FT8 or FT4 over only after the period it was keyed for had ended, in the
+  // other station's (a slow CAT link, Split operation's commands before the key): Nexus unkeyed it at
+  // once and sent nothing. The radio refused nothing, so the PTT advice above would be wrong.
+  // `{{why}}` is how long after the period's end ("1.2 s"), as data.
+  'shell.lane.slotKeyRefused.pastPeriod':
+    'The radio keyed only at {{time}} UTC, {{why}} after the period it was keyed for had ended, so Nexus unkeyed it at once. Nothing was sent and TX was turned off. A slow CAT link holds up the key, more so with Split operation, which sends its commands first: check the CAT link and Split operation in Settings, then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.
