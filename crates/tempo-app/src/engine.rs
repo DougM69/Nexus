@@ -67,6 +67,9 @@ mod field_day_display;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
+/// JS8's send mechanics: the TX offset moved while a message goes out.
+#[cfg(test)]
+mod js8_send_tests;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
 mod kept_files_tests;

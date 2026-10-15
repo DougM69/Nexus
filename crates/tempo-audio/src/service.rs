@@ -16020,6 +16020,7 @@ mod tests {
     mod ft_window;
     mod ic905_ten_ghz;
     mod icom_lan;
+    mod js8_frames;
     mod omnirig_coverage;
     mod receive_source;
     mod refused_key;
